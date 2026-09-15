@@ -308,9 +308,10 @@ export function useLogChange(capability: LogCapability | 'log.manual'): boolean 
 export async function sendLogChange(client: OperationClient, change: LogChange): Promise<LogChangeOutcome | null> {
   try {
     const outcome = await client.change(change)
-    if (outcome.outcome === 'rejected')
-      pushToast(outcome.reason === 'contextChanged' ? t('remote.logChangeStale')
-        : outcome.reason === 'clusterUnavailable' ? t('remote.selfSpotNoCluster') : t('remote.logChangeFailed'), 'error', 6000)
+    // A self-spot neither target took names both reasons from its `spot`, told by the caller.
+    if (outcome.outcome === 'rejected' && outcome.reason !== 'spotNotPosted')
+      pushToast(outcome.reason !== 'contextChanged' ? t('remote.logChangeFailed')
+        : change.kind === 'selfSpot' ? t('ota.selfSpot.moved') : t('remote.logChangeStale'), 'error', 6000)
     return outcome
   } catch (e) {
     const failure = e instanceof OperationFailure ? e : null

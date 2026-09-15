@@ -1,6 +1,7 @@
 // Manual logging has a separate grammar from application observation. An
 // authenticated relay can route a request; it cannot issue a native grant.
 import { object, finite, integer, text } from './display-validation'
+import { CLUSTER_SPOT_RESULTS, POTA_SPOT_RESULTS, type SelfSpotReport } from '../selfSpot'
 import { controlContext, controlOutcome, stationAction, CONTROL_CAPABILITIES, type ControlCapability, type ControlContext, type ControlOutcome, type StationAction } from './station-operation'
 import { SETTINGS_SHAPES, WRITABLE_CONTROL_SETTINGS_KEYS, WRITABLE_LOGGING_SETTINGS_KEYS } from './configuration-schema'
 export const OPERATION_REQUEST_BYTES = 6144
@@ -68,11 +69,17 @@ export const logChangeCapabilities = (change: LogChange): LogCapability[] =>
   change.kind !== 'settings' ? [logChangeCapability(change)]
     : [...(Object.keys(change.values).some(loggingPreference) ? ['settingsLogging' as const] : []),
       ...(Object.keys(change.values).some(k => !loggingPreference(k)) ? ['settingsControl' as const] : [])]
-const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotQueued', 'settingsSaved'] as const
-const CHANGE_REFUSALS = ['contextChanged', 'invalidChange', 'clusterUnavailable'] as const
+const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotPosted', 'settingsSaved'] as const
+/** `clusterUnavailable` is gone: a self-spot now reports each target in `spot`, so the one refusal
+ * that named the cluster alone has no producer left. */
+const CHANGE_REFUSALS = ['contextChanged', 'invalidChange', 'spotNotPosted'] as const
+/** A self-spot's outcome, and only a self-spot's, carries `spot`: what pota.app and the cluster each
+ * did. `spotPosted` means at least one took it, `spotNotPosted` neither. */
 export type LogChangeOutcome = { operation: 'logChange'; operationId: string } & (
-  | { outcome: 'applied'; evidence: (typeof CHANGE_EVIDENCE)[number] }
-  | { outcome: 'rejected'; reason: (typeof CHANGE_REFUSALS)[number] }
+  | { outcome: 'applied'; evidence: 'fileSynced' | 'stationState' | 'settingsSaved' }
+  | { outcome: 'applied'; evidence: 'spotPosted'; spot: SelfSpotReport }
+  | { outcome: 'rejected'; reason: 'contextChanged' | 'invalidChange' }
+  | { outcome: 'rejected'; reason: 'spotNotPosted'; spot: SelfSpotReport }
   | { outcome: 'unknown'; reason: 'persistenceUnconfirmed' })
 export type OperationRequest =
   | { type: 'state'; requestId: string }
@@ -332,12 +339,17 @@ function activationExportValue(v: Record<string, unknown>): ActivationExportValu
   return v as ActivationExportValue
 }
 function logChangeOutcome(v: Record<string, unknown>): LogChangeOutcome {
-  object(v, ['operation', 'operationId', 'outcome', v.outcome === 'applied' ? 'evidence' : 'reason'])
+  const spot = v.evidence === 'spotPosted' || v.reason === 'spotNotPosted'
+  object(v, ['operation', 'operationId', 'outcome', v.outcome === 'applied' ? 'evidence' : 'reason', ...(spot ? ['spot'] : [])])
   if (v.operation !== 'logChange' || !operationId(v.operationId) ||
     !(v.outcome === 'applied' ? CHANGE_EVIDENCE.includes(v.evidence as never)
       : v.outcome === 'rejected' ? CHANGE_REFUSALS.includes(v.reason as never)
         : v.outcome === 'unknown' && v.reason === 'persistenceUnconfirmed'))
     invalid()
+  if (spot) {
+    const s = object(v.spot, ['pota', 'cluster'])
+    if (!POTA_SPOT_RESULTS.includes(s.pota as never) || !CLUSTER_SPOT_RESULTS.includes(s.cluster as never)) invalid()
+  }
   return v as LogChangeOutcome
 }
 export function operationRequest(raw: unknown): OperationRequest {

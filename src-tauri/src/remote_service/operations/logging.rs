@@ -181,9 +181,10 @@ pub(super) const CAPABILITIES: [&str; 6] = [
     "settingsLogging",
 ];
 
-/// ⛔ Self-spot posts a PUBLIC DX cluster spot from the station's own call and cluster login. On
-/// since the operator signed it off (2026-09-14), behind a confirm on every click. Setting this to
-/// false makes the station neither advertise nor accept it again.
+/// ⛔ Self-spot posts a PUBLIC spot of the station's own call to pota.app and to the station's DX
+/// cluster (policy in `crate::self_spot`). On since the operator signed it off (2026-09-14; both
+/// targets 2026-09-14), behind a confirm on every click. Setting this to false makes the station
+/// neither advertise nor accept it again.
 pub(super) const SELF_SPOT: bool = true;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -232,8 +233,9 @@ pub enum Change {
         reference: String,
     },
     ClearActivation {},
-    /// A public spot of the station's own call, on its current dial, naming its activation. Carries
-    /// what the operator's confirm showed, so it is refused if either has moved since.
+    /// A public spot of the station's own call, on its current dial and mode, naming its activation,
+    /// to pota.app and the DX cluster. Carries what the operator's confirm showed, so it is refused
+    /// if either has moved since.
     SelfSpot {
         reference: String,
         // `rename_all` above renames variants only, never the fields inside them.
@@ -335,8 +337,8 @@ impl Change {
 pub(super) enum ChangeEvidence {
     FileSynced,
     StationState,
-    /// Queued for the station's connected DX cluster node(s), which send it.
-    SpotQueued,
+    /// At least one target took the self-spot; the outcome's `spot` says what each did.
+    SpotPosted,
     /// Operating preferences saved to the station's settings file, then published.
     SettingsSaved,
 }
@@ -346,16 +348,29 @@ pub(super) enum ChangeEvidence {
 pub(super) enum ChangeReason {
     ContextChanged,
     InvalidChange,
-    ClusterUnavailable,
+    /// Neither target took the self-spot; the outcome's `spot` says why, per target.
+    SpotNotPosted,
     PersistenceUnconfirmed,
 }
 
+/// A self-spot's outcome carries `spot`, both targets' results, and so does its receipt: a replay
+/// answers with the same two results and posts nothing. Every other outcome has no `spot` key.
 #[derive(Clone, Serialize)]
 #[serde(tag = "outcome", rename_all = "camelCase")]
 pub(super) enum ChangeOutcome {
-    Applied { evidence: ChangeEvidence },
-    Rejected { reason: ChangeReason },
-    Unknown { reason: ChangeReason },
+    Applied {
+        evidence: ChangeEvidence,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spot: Option<crate::self_spot::Report>,
+    },
+    Rejected {
+        reason: ChangeReason,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spot: Option<crate::self_spot::Report>,
+    },
+    Unknown {
+        reason: ChangeReason,
+    },
 }
 
 pub(super) fn change_value(id: &str, outcome: &ChangeOutcome) -> Value {
@@ -433,12 +448,8 @@ pub(super) enum ChangeWork {
     },
     /// In-memory station context (a hunt), applied under the Engine lock. Nothing to sync.
     State,
-    /// A self-spot composed under the Engine lock, posted only after it is released.
-    Spot {
-        freq_mhz: f64,
-        call: String,
-        comment: String,
-    },
+    /// A self-spot read from the station under the Engine lock, posted only after it is released.
+    Spot(crate::self_spot::Context),
     /// Operating preferences saved atomically under the Engine lock, and published.
     SettingsSaved,
     /// A preference save that did not complete: nothing was published, and what the file holds is
@@ -480,16 +491,13 @@ pub(super) fn prepare_change(
             return Ok(ChangeWork::State);
         }
         Change::SelfSpot { reference, dial_hz } => {
-            let (program, active) = engine.activation().ok_or(ChangeReason::InvalidChange)?;
             // What the operator confirmed must still be true: the same activation, the same dial.
-            if active != *reference || engine.settings().dial_hz() != *dial_hz {
-                return Err(ChangeReason::ContextChanged);
-            }
-            return Ok(ChangeWork::Spot {
-                freq_mhz: *dial_hz as f64 / 1e6,
-                call: engine.settings().mycall.clone(),
-                comment: format!("{program} {active}"),
-            });
+            return crate::self_spot::Context::confirmed(engine, reference, *dial_hz)
+                .map(ChangeWork::Spot)
+                .map_err(|refusal| match refusal {
+                    crate::self_spot::Refusal::NoActivation => ChangeReason::InvalidChange,
+                    crate::self_spot::Refusal::Moved => ChangeReason::ContextChanged,
+                });
         }
         Change::Settings { revision, values } => {
             return super::settings::prepare(engine, revision, values)
@@ -581,10 +589,10 @@ fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {
 
 impl ChangeWork {
     /// Runs with Engine unlocked. Never retries and never writes the log itself.
-    /// `post` is used only by a self-spot, and only here, once per receipt.
+    /// `spot` is used only by a self-spot, and only here, once per receipt.
     pub(super) fn finish(
         self,
-        post: impl FnOnce(f64, &str, &str) -> Result<(), String>,
+        spot: impl FnOnce(&crate::self_spot::Context) -> crate::self_spot::Report,
     ) -> ChangeOutcome {
         let (path, expected, count) = match self {
             Self::Rewrite {
@@ -595,11 +603,13 @@ impl ChangeWork {
             Self::State => {
                 return ChangeOutcome::Applied {
                     evidence: ChangeEvidence::StationState,
+                    spot: None,
                 }
             }
             Self::SettingsSaved => {
                 return ChangeOutcome::Applied {
                     evidence: ChangeEvidence::SettingsSaved,
+                    spot: None,
                 }
             }
             Self::SettingsUnconfirmed => {
@@ -607,22 +617,18 @@ impl ChangeWork {
                     reason: ChangeReason::PersistenceUnconfirmed,
                 }
             }
-            Self::Spot {
-                freq_mhz,
-                call,
-                comment,
-            } => {
-                return match post(freq_mhz, &call, &comment) {
-                    Ok(()) => ChangeOutcome::Applied {
-                        evidence: ChangeEvidence::SpotQueued,
-                    },
-                    // `post_spot` names the cluster only when no node is connected.
-                    Err(e) if e.contains("cluster") => ChangeOutcome::Rejected {
-                        reason: ChangeReason::ClusterUnavailable,
-                    },
-                    Err(_) => ChangeOutcome::Rejected {
-                        reason: ChangeReason::InvalidChange,
-                    },
+            Self::Spot(context) => {
+                let report = spot(&context);
+                return if report.any_posted() {
+                    ChangeOutcome::Applied {
+                        evidence: ChangeEvidence::SpotPosted,
+                        spot: Some(report),
+                    }
+                } else {
+                    ChangeOutcome::Rejected {
+                        reason: ChangeReason::SpotNotPosted,
+                        spot: Some(report),
+                    }
                 };
             }
         };
@@ -632,6 +638,7 @@ impl ChangeWork {
         if proved {
             ChangeOutcome::Applied {
                 evidence: ChangeEvidence::FileSynced,
+                spot: None,
             }
         } else {
             ChangeOutcome::Unknown {

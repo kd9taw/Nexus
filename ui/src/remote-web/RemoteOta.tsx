@@ -2,8 +2,7 @@ import { useContext, useEffect, useState } from 'react'
 import { PotaSotaView, type OtaRemote, type OtaSpotClickArg } from '../components/PotaSotaView'
 import type { ObservedOta } from '../otaHunt'
 import { sendLogChange, useLogChange, useRemoteOperations } from './operations'
-import { confirmDialog } from '../confirm'
-import { pushToast } from '../toast'
+import { announceSelfSpot, confirmSelfSpot } from '../selfSpot'
 import type { AppSnapshot } from '../types'
 import { useStationData } from '../stationAccess'
 import { t } from '../i18n'
@@ -64,13 +63,13 @@ export function RemoteOta({ snap, onHunt }: { snap: AppSnapshot; onHunt?: (arg: 
     } : {}),
     ...(canSelfSpot && observed.activation.reference ? {
       // A public post from the station's own call: ask on every click, never remember the answer,
-      // and send exactly the reference and dial the question showed.
+      // and send exactly the reference and dial the question showed. The receipt names what
+      // pota.app and the cluster each did, whether one, both or neither took it.
       selfSpot: () => void (async () => {
         const reference = observed.activation.reference ?? '', dialHz = Math.round(snap.radio.dialMhz * 1e6)
-        if (!(await confirmDialog({ title: t('remote.selfSpotConfirm.title'), confirmLabel: t('remote.selfSpotConfirm.post'),
-          body: t('remote.selfSpotConfirm.body', { reference, freq: (dialHz / 1e6).toFixed(4) }) }))) return
+        if (!(await confirmSelfSpot(reference, dialHz))) return
         const outcome = await sendLogChange(client, { kind: 'selfSpot', reference, dialHz })
-        if (outcome?.outcome === 'applied') pushToast(t('remote.selfSpotPosted'), 'success')
+        if (outcome && 'spot' in outcome) announceSelfSpot(outcome.spot)
       })(),
     } : {}),
   } : undefined

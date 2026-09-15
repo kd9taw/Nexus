@@ -7,6 +7,7 @@
 import type { RemoteStationAction, RemoteStationStatus } from './remote-native/types'
 import { remoteApplicationTransport } from './applicationTransport'
 import { t } from './i18n'
+import type { SelfSpotReport } from './selfSpot'
 import type {
   AppSnapshot,
   AudioDevices,
@@ -2673,6 +2674,13 @@ export async function getSerialPortsDetailed(): Promise<SerialPortInfo[]> {
 /** Post your own DX spot to the connected human cluster (rejects if none connected). */
 export async function postSpot(freqMhz: number, call: string, comment: string): Promise<void> {
   return invoke('post_spot', { freqMhz, call, comment })
+}
+
+/** "Spot me": your own activation to pota.app and the DX cluster, once, with each result. The call,
+ *  park, dial and mode sent are the station's; `reference` and `dialHz` are what the confirm showed.
+ *  Rejects with `contextChanged` if either has moved since, `noActivation` with none on. */
+export async function selfSpot(reference: string, dialHz: number): Promise<SelfSpotReport> {
+  return invoke<SelfSpotReport>('self_spot_activation', { reference, dialHz })
 }
 
 /** Upcoming contests from the WA7BNM calendar (rejects if the feed is unreachable). */

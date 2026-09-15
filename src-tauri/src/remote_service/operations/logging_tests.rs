@@ -59,9 +59,9 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
             "qslMarks",
             "otaHunt",
             "otaActivation",
-            "selfSpot"
             "activationExport",
-            "settingsLogging"
+            "settingsLogging",
+            "selfSpot"
         ])
     );
     assert!(state["transmitEpoch"].is_null());
@@ -786,18 +786,44 @@ fn an_activation_the_station_cannot_normalize_is_refused_and_starts_nothing() {
     assert!(f.engine.lock().unwrap().activation().is_none());
 }
 
-/// Record every spot the station would post. Without one a test's self-spot is refused: the test
-/// build has no path to the shared cluster outbox.
-fn recorder(f: &mut Fixture) -> Arc<Mutex<Vec<(f64, String, String)>>> {
-    let posted = Arc::new(Mutex::new(Vec::new()));
-    let sink = posted.clone();
-    f.authority.self_spot = Some(Box::new(move |freq, call, comment| {
-        sink.lock()
+/// pota.app bodies (as JSON) and cluster spots a test's station posted.
+type Posted = Arc<Mutex<(Vec<Value>, Vec<(f64, String, String)>)>>;
+
+/// Record every spot the station would post, answering `pota` for pota.app and `cluster` for the
+/// cluster. Without posters a test's self-spot reaches neither: the test build has no path to them.
+fn posters(
+    f: &mut Fixture,
+    pota: Result<propagation::live::pota::SpotAnswer, String>,
+    cluster: Result<(), String>,
+) -> Posted {
+    let posted = Posted::default();
+    let (to_pota, to_cluster) = (posted.clone(), posted.clone());
+    f.authority.spot_pota = Some(Box::new(move |spot| {
+        to_pota
+            .lock()
             .unwrap()
+            .0
+            .push(serde_json::to_value(spot).unwrap());
+        pota.clone()
+    }));
+    f.authority.spot_cluster = Some(Box::new(move |freq, call, comment| {
+        to_cluster
+            .lock()
+            .unwrap()
+            .1
             .push((freq, call.to_string(), comment.to_string()));
-        Ok(())
+        cluster.clone()
     }));
     posted
+}
+
+fn recorder(f: &mut Fixture) -> Posted {
+    posters(f, Ok(propagation::live::pota::SpotAnswer::Posted), Ok(()))
+}
+
+fn nothing_posted(posted: &Posted) -> bool {
+    let posted = posted.lock().unwrap();
+    posted.0.is_empty() && posted.1.is_empty()
 }
 
 fn spot(f: &Fixture, reference: &str) -> Request {
@@ -837,7 +863,7 @@ fn self_spot_is_on_and_its_switch_still_refuses_before_anything_is_consumed() {
 }
 
 #[test]
-fn a_self_spot_posts_the_station_call_dial_and_reference_exactly_once() {
+fn a_self_spot_posts_both_targets_the_station_call_dial_park_and_mode_exactly_once() {
     let mut f = Fixture::new();
     let posted = recorder(&mut f);
     acquire(&f);
@@ -860,13 +886,22 @@ fn a_self_spot_posts_the_station_call_dial_and_reference_exactly_once() {
     let result = run(&f, &request).unwrap();
     assert_eq!(
         result,
-        json!({"operation":"logChange","operationId":request.id(),"outcome":"applied","evidence":"spotQueued"})
+        json!({"operation":"logChange","operationId":request.id(),"outcome":"applied","evidence":"spotPosted",
+            "spot":{"pota":"posted","cluster":"queued"}})
     );
     // A dropped reply is answered from the receipt: a public spot never posts twice.
     assert_eq!(run(&f, &request).unwrap(), result);
-    let posted = posted.lock().unwrap().clone();
+    let (pota, cluster) = posted.lock().unwrap().clone();
+    // The fixture station is on FT8 at its default dial. The body is the website's seven fields.
     assert_eq!(
-        posted,
+        pota,
+        vec![json!({
+            "activator": "W9XYZ", "spotter": "W9XYZ", "frequency": format!("{}", dial / 1000),
+            "reference": "US-0001", "mode": "FT8", "source": "Nexus", "comments": "QRV"
+        })]
+    );
+    assert_eq!(
+        cluster,
         vec![(
             dial as f64 / 1e6,
             "W9XYZ".to_string(),
@@ -913,24 +948,101 @@ fn a_self_spot_whose_context_moved_or_has_no_activation_posts_nothing() {
         e.apply_settings(settings);
     }
     assert_eq!(run(&f, &stale), Err("staleContext"));
-    assert!(posted.lock().unwrap().is_empty());
+    assert!(nothing_posted(&posted));
 }
 
-#[test]
-fn a_self_spot_with_no_cluster_connected_is_refused_as_cluster_unavailable() {
-    let mut f = Fixture::new();
-    f.authority.self_spot = Some(Box::new(|_, _, _| {
-        Err("no DX cluster connected — set a cluster host in Settings".into())
-    }));
-    acquire(&f);
+fn activating(f: &Fixture) {
     f.engine
         .lock()
         .unwrap()
         .set_activation("POTA", "US-0001")
         .unwrap();
+}
+
+#[test]
+fn a_pota_app_login_refusal_is_on_the_receipt_keeps_the_cluster_spot_and_stays_off() {
+    let mut f = Fixture::new();
+    let posted = posters(
+        &mut f,
+        Ok(propagation::live::pota::SpotAnswer::LoginRequired),
+        Ok(()),
+    );
+    acquire(&f);
+    activating(&f);
+    let request = spot(&f, "US-0001");
+    let result = run(&f, &request).unwrap();
+    assert_eq!(result["outcome"], "applied");
+    assert_eq!(result["evidence"], "spotPosted");
+    assert_eq!(
+        result["spot"],
+        json!({"pota":"loginRequired","cluster":"queued"})
+    );
+    assert_eq!(run(&f, &request).unwrap(), result);
+    // A later press on another frequency: pota.app is not asked again this session.
+    {
+        let mut e = f.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.dial_mhz += 0.005;
+        e.apply_settings(settings);
+    }
+    let later = run(&f, &spot(&f, "US-0001")).unwrap();
+    assert_eq!(
+        later["spot"],
+        json!({"pota":"loginRequired","cluster":"queued"})
+    );
+    let posted = posted.lock().unwrap();
+    assert_eq!((posted.0.len(), posted.1.len()), (1, 2));
+}
+
+#[test]
+fn a_failure_on_one_target_still_posts_and_reports_the_other() {
+    let mut f = Fixture::new();
+    let posted = posters(&mut f, Err("timed out".into()), Ok(()));
+    acquire(&f);
+    activating(&f);
     let result = run(&f, &spot(&f, "US-0001")).unwrap();
-    assert_eq!(result["outcome"], "rejected");
-    assert_eq!(result["reason"], "clusterUnavailable");
+    assert_eq!(result["outcome"], "applied");
+    assert_eq!(result["spot"], json!({"pota":"failed","cluster":"queued"}));
+    assert_eq!(posted.lock().unwrap().1.len(), 1);
+
+    let mut f = Fixture::new();
+    posters(
+        &mut f,
+        Ok(propagation::live::pota::SpotAnswer::Posted),
+        Err("no DX cluster connected — set a cluster host in Settings".into()),
+    );
+    acquire(&f);
+    activating(&f);
+    let result = run(&f, &spot(&f, "US-0001")).unwrap();
+    assert_eq!(result["outcome"], "applied");
+    assert_eq!(
+        result["spot"],
+        json!({"pota":"posted","cluster":"unavailable"})
+    );
+}
+
+#[test]
+fn a_self_spot_neither_target_took_is_refused_and_names_both_reasons() {
+    let mut f = Fixture::new();
+    posters(
+        &mut f,
+        Ok(propagation::live::pota::SpotAnswer::Refused {
+            status: 500,
+            excerpt: "down".into(),
+        }),
+        Err("no DX cluster connected — set a cluster host in Settings".into()),
+    );
+    acquire(&f);
+    activating(&f);
+    let request = spot(&f, "US-0001");
+    let result = run(&f, &request).unwrap();
+    assert_eq!(
+        result,
+        json!({"operation":"logChange","operationId":request.id(),"outcome":"rejected","reason":"spotNotPosted",
+            "spot":{"pota":"failed","cluster":"unavailable"}})
+    );
+    // The receipt answers the replay; it is not a second attempt.
+    assert_eq!(run(&f, &request).unwrap(), result);
 }
 
 #[test]
@@ -966,24 +1078,22 @@ fn a_self_spot_needs_logging_permission_and_current_control() {
         ),
         Err("notController")
     );
-    assert!(posted.lock().unwrap().is_empty());
-    // Positive control: the same request from the controller is accepted, and posts once.
+    assert!(nothing_posted(&posted));
+    // Positive control: the same request from the controller is accepted, and posts once to each.
     assert_eq!(run(&f, &request).unwrap()["outcome"], "applied");
-    assert_eq!(posted.lock().unwrap().len(), 1);
+    let posted = posted.lock().unwrap();
+    assert_eq!((posted.0.len(), posted.1.len()), (1, 1));
 }
 
 #[test]
 fn a_test_build_with_no_poster_refuses_a_self_spot_instead_of_posting_it() {
     let f = Fixture::new();
     acquire(&f);
-    f.engine
-        .lock()
-        .unwrap()
-        .set_activation("POTA", "US-0001")
-        .unwrap();
+    activating(&f);
     let result = run(&f, &spot(&f, "US-0001")).unwrap();
-    // `invalidChange`, not `clusterUnavailable`: no cluster is connected in a test, so reaching the
-    // real `crate::post_spot` would answer `clusterUnavailable` instead.
+    // Both `failed`. No cluster is connected in a test, so the real cluster door would have
+    // answered `unavailable`; the real pota.app door is not compiled into a test build at all.
     assert_eq!(result["outcome"], "rejected");
-    assert_eq!(result["reason"], "invalidChange");
+    assert_eq!(result["reason"], "spotNotPosted");
+    assert_eq!(result["spot"], json!({"pota":"failed","cluster":"failed"}));
 }
