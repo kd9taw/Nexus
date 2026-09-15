@@ -18,7 +18,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,ftOperating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true},{applicationVersion:14,operating:true,radioSelection:true},{applicationVersion:14,operating:true,radioSelection:true,routedTier:true},{applicationVersion:14,operating:true,radioSelection:true,routedWorkspace:true}]) test(`compiled hosted browser ${ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
-  let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, producer, applicationProducer
+  let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, observationPtt=true, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
     producing=false;station?.close()
@@ -248,7 +248,10 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       // The station's own PTT reading can be older than its 1 s window while the link itself is
       // healthy — the poll that took it simply ran late at the shack. Publish it that way rather
       // than slowing the stream, which would age the frame instead and trip the 3 s observation bound.
-      const aged=observationReadingAgeMs&&radio.readings.ptt?{...fixture.station,radio:{...radio,readings:{...radio.readings,ptt:{...radio.readings.ptt,ageMs:observationReadingAgeMs}}}}:fixture.station
+      // `observationPtt=false` is a station with no PTT sample at all — what an expired one becomes.
+      // The wire schema pairs a reading with its value, so `rigKeyed` goes with it.
+      const ptt=!observationPtt?null:observationReadingAgeMs&&radio.readings.ptt?{...radio.readings.ptt,ageMs:observationReadingAgeMs}:radio.readings.ptt
+      const aged=ptt===radio.readings.ptt?fixture.station:{...fixture.station,radio:{...radio,rigKeyed:ptt?radio.rigKeyed:null,readings:{...radio.readings,ptt}}}
       source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,station:aged,source:'native',sequence:++sequence}})}})()
     const applicationData = await applicationFixture()
     applicationData.get_settings.fdActive = true
@@ -2217,28 +2220,36 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           await browser.call('Input.dispatchMouseEvent',{type,...point,button,modifiers,clickCount:1},session)
         await sleep(300);assert.equal(stationRequests.length,before,'receive permission must not move TX or both markers')
         if(tab==='FT'){
-          // Authority and physical readings have separate clocks. An available
-          // controller cannot authorize an RX gesture using an old PTT sample.
-          pauseObservations=true
-          // The input also disables between short authority windows. Prove the
-          // independent hardware clock has expired before refreshing authority;
-          // an input's disabled state alone does not establish stale readings.
+          // Authority and physical readings have separate clocks. An available controller cannot
+          // authorize an RX gesture on readings the station no longer has. A reading merely PAST its
+          // 1 s window is carried by held control now (operator decision 2026-09-14, proved in the
+          // steady block above), so the refusal is proved with the reading GONE — which is what an
+          // expired one becomes at MEASUREMENT_STALE_MS, and is the stronger half of the pair.
+          // Expired AT THE STATION, not by silencing it: pausing the stream also drops this browser's
+          // socket within about two seconds ("Station control disconnected"), and a refusal on a dead
+          // link says nothing about readings. Publishing keeps the lease and the heartbeat alive, so
+          // the authority proved below really is fresh at the gesture.
+          observationPtt=false
+          // The input also disables between short authority windows. Prove the independent hardware
+          // clock is gone before refreshing authority; an input's disabled state alone does not
+          // establish missing readings.
           for(let attempt=0;attempt<100;attempt++){
-            const age=receiverRead?performance.now()-receiverRead.at+(receiverRead.radio?.readings?.ptt?.ageMs??Infinity):Infinity
-            if(Number.isFinite(age)&&age>=1250)break
-            if(attempt===99)assert.fail('The stale-reading negative control requires an expired, previously received PTT sample')
+            if(receiverRead&&receiverRead.radio&&receiverRead.radio.readings.ptt===null)break
+            if(attempt===99)assert.fail('The missing-reading negative control requires a station reporting no PTT sample')
             await sleep(50)
           }
           await until(`document.querySelector('${rxField}').disabled`)
           await freshLoggingWindow()
           assert.equal(await evaluate(`document.querySelector('.remote-logging-authority')?.textContent.includes('Station control active')`),true)
           const stale=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),x=r.left+r.width*${fraction},y=r.top+r.height/2;return {x,y,visible:e.contains(document.elementFromPoint(x,y)),disabled:document.querySelector('${rxField}').disabled}})()`)
-          const age=performance.now()-receiverRead.at+receiverRead.radio.readings.ptt.ageMs
-          assert.ok(age>=1000&&stale.disabled&&stale.visible,'expired readings and a real waterfall hit must precede the negative gesture')
+          assert.equal(receiverRead.radio.readings.ptt,null,'the station must still be reporting no PTT sample at the gesture')
+          assert.ok(stale.disabled&&stale.visible,'missing readings and a real waterfall hit must precede the negative gesture')
           for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:stale.x,y:stale.y,button:'left',clickCount:1},session)
           await sleep(150);assert.equal(stationRequests.length,before,'fresh control authority cannot replace missing fresh receiver readings')
-          if(artifacts)await writeFile(join(artifacts,'receiver-stale-reading.json'),JSON.stringify({age,stale,requestsBefore:before,requestsAfter:stationRequests.length},null,2))
-          pauseObservations=false
+          if(artifacts)await writeFile(join(artifacts,'receiver-stale-reading.json'),JSON.stringify({ptt:null,stale,requestsBefore:before,requestsAfter:stationRequests.length},null,2))
+          observationPtt=true
+          // Recovered, so the refusal above is about the missing reading and not a wedged view.
+          await until(`!document.querySelector('${rxField}').disabled`)
         }
         await freshLoggingWindow()
         // The positive gesture needs a fresh hardware sample as well as the
