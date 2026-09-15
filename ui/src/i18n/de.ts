@@ -4013,6 +4013,10 @@ export const DE: PartialCatalog = {
   "settings.sstv.txMode.hint": "Damit startet der SSTV-Bildschirm; für ein einzelnes Bild lässt es sich dort weiterhin ändern. <b>Automatisch</b> folgt dem Band: KW bekommt Scottie 1 (üblich auf der Anruffrequenz in Nordamerika — in Europa ist es Martin 1), 2 m bekommt PD-120, wie es ARISS sendet.",
   "settings.sstv.txPower.label": "Sendeleistung",
   "settings.sstv.txPower.aria": "SSTV-Sendeleistung in Prozent",
+  "settings.sstv.fskId.label":
+    "Rufzeichen nach jedem Bild senden",
+  "settings.sstv.fskId.hint":
+    "Hängt den FSK-Rufzeichenburst an, den andere SSTV-Software liest und unter dem empfangenen Bild anzeigt — denselben, den Nexus dir unter deinem anzeigt. Standardmäßig aus: Er verlängert jede Sendung um etwa {{seconds}} Sekunden Sendezeit. Dein Rufzeichen wird ohnehin ins Bild eingezeichnet.",
   "settings.sstv.txPower.hint": "Die Aussteuerung, mit der der SSTV-Bildschirm startet und mit der ein Bild gesendet wird. Leer lassen, dann rührt Nexus Ihre Leistung nie an. SSTV bedeutet bis zu 290 Sekunden Dauerträger bei vollem Tastverhältnis — die meisten fahren es daher deutlich unter ihrer SSB-Aussteuerung. Ihre Leistungsgrenze für Phone gilt zusätzlich.",
   "settings.sstv.callsignNote": "Ihr Rufzeichen wird in jedes gesendete Bild oben links eingebrannt, und dafür gibt es keinen Schalter: Ein SSTV-Durchgang ist ein langer Träger aus reinem Bild-Audio, also ist das Bild die Kennung ({{rule}}). Das Senden wird verweigert, solange unter Einstellungen ▸ Station kein Rufzeichen gesetzt ist. Zeigt ein Bild Ihr Rufzeichen bereits — etwa eine fertige QSO-Karte —, im SSTV-Bildschirm „Mein Bild zeigt mein Rufzeichen bereits“ ankreuzen: Das gilt absichtlich nur für dieses Bild und wird bei jedem neuen Bild zurückgesetzt.",
   "settings.aprs.legend": "APRS",

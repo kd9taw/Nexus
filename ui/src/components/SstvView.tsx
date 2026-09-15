@@ -74,7 +74,7 @@ import { t } from '../i18n'
 // The 15 transmittable modes, their rasters and their exact key-down seconds. A pure
 // module because Settings ▸ Digital ▸ SSTV picks the DEFAULT mode from the same rows —
 // see its header for why that is not a second hand-written table.
-import { MODE_BY_SLUG, SSTV_RX_MODES, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
+import { fskIdSeconds, MODE_BY_SLUG, SSTV_RX_MODES, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
 
 /** What the file picker offers. The magic-number sniff is what actually decides — an
  *  iPhone HEIC renamed `.jpg` has to be caught by its bytes — but the picker should
@@ -178,6 +178,11 @@ interface Props {
   /** Settings ▸ Digital ▸ SSTV — default transmit mode: a `sstvModes.ts` slug, or
    *  'auto'/undefined to keep the band-aware pick. */
   txModeDefault?: string
+  /** Settings ▸ Digital ▸ SSTV: append the operator's callsign as an FSK ID burst
+   *  after each transmitted picture (default off). Read here for ONE reason — the
+   *  key-down time this screen quotes before Send must include it. The burst itself
+   *  is appended in Rust, inside `sstv_send`, where no webview path can bypass it. */
+  txFskId?: boolean
   /** Settings ▸ Digital ▸ SSTV — transmit power, percent. null/undefined = leave the
    *  rig's power alone (the shipped behaviour). */
   txPowerPct?: number | null
@@ -556,7 +561,7 @@ function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) 
  * receiver keeps listening while the operator is on another section.
  * txState=false: nothing here transmits.
  */
-export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txPowerPct, panels, onOpenSettings }: Props) {
+export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txFskId, txPowerPct, panels, onOpenSettings }: Props) {
   const canControl=useStationControl(), receiverControl=useStationCapability('decoder'), dataAvailable=useStationData(), source=useContext(RemoteCollectionsContext), remote=!!source
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable (⊞ menu). They render through
@@ -649,6 +654,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const [manualMode, setManualMode] = useState<string>(() =>
     txModeDefault && MODE_BY_SLUG[txModeDefault] ? txModeDefault : 'scottie1',
   )
+  // Extra key-down from the FSK callsign burst, when the operator has it on. Their own
+  // callsign decides the length; a call the burst cannot carry costs nothing because no
+  // burst is sent (the Rust encoder makes the same judgement, from the same floor).
+  const idSecs =
+    txFskId === true && (snap?.mycall ?? '').trim().length >= 3
+      ? Math.round(fskIdSeconds((snap?.mycall ?? '').trim().length))
+      : 0
+
   const manualStart = () => {
     if (!receiverControl) return
     void sstvManualRx(manualMode)
@@ -2029,7 +2042,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   w: txMode.width,
                   h: txMode.height,
                   mode: txMode.name,
-                  clock: fmtClock(txMode.seconds),
+                  // The callsign burst is part of the over, so it is part of the
+                  // number that says how long the rig will be keyed. Quoting the
+                  // picture alone would be a second short of the truth, and this
+                  // figure is what an operator checks against their TX watchdog.
+                  clock: fmtClock(txMode.seconds + idSecs),
                 })}
               </span>
             )}

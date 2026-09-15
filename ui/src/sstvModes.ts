@@ -75,6 +75,32 @@ export const SSTV_RX_ONLY_MODES: TxMode[] = [
 /** Every mode the decoder handles — what a manual receive start may be asked for. */
 export const SSTV_RX_MODES: TxMode[] = [...SSTV_TX_MODES, ...SSTV_RX_ONLY_MODES]
 
+// ---------------------------------------------------------------------------
+// THE FSK CALLSIGN BURST — what it costs in airtime.
+//
+// Mirrored from `crates/tempo-sstv/src/fsk.rs`, and `sstv-modes.test.ts` parses
+// that file and checks these two numbers against it, for the same reason the
+// `seconds` column above is checked: this one is shown to the operator as
+// key-down time, and a mirror nothing compares is a mirror that drifts.
+// ---------------------------------------------------------------------------
+
+/** FSK-ID symbol rate (slowrx `fsk.c`: 45.45 baud, 22 ms/bit). */
+export const FSK_ID_BAUD = 45.45
+/** Data symbols are 6-bit bytes. */
+export const FSK_ID_BITS_PER_CHAR = 6
+
+/** Exact key-down seconds the burst adds for a callsign of `chars` characters:
+ *  a two-byte `20 2A` leader, the callsign, and a one-byte end marker. The same
+ *  arithmetic as `tempo_sstv::fsk_id_seconds`. */
+export function fskIdSeconds(chars: number): number {
+  return ((2 + chars + 1) * FSK_ID_BITS_PER_CHAR) / FSK_ID_BAUD
+}
+
+/** What the Settings hint quotes, to one decimal — a six-character callsign, which
+ *  is what most of them are. The operator's own call decides the real figure, and
+ *  the composer's key-down clock uses that rather than this. */
+export const FSK_ID_SECONDS_LABEL = fskIdSeconds(6).toFixed(1)
+
 /** Family order for the grouped pickers — both of them render `<optgroup>`s in this
  *  order, so the cockpit and Settings read the same way. */
 export const TX_MODE_GROUPS: TxMode['group'][] = ['Scottie', 'Martin', 'Robot', 'PD', 'Wraase', 'Pasokon']

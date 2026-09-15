@@ -285,6 +285,10 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "sstvDefaultTxMode",
     "sstvHoldDataSubmode",
     "sstvRxAutoArm",
+    // Readable, deliberately NOT in WRITABLE_CONTROL_KEYS: the callsign burst lengthens
+    // the station's transmissions, and a remote operator may see how the station is set
+    // up without being able to change that from a browser.
+    "sstvTxFskId",
     "sstvTxPowerPct",
     "stationPowerW",
     "tunePowerPct",
@@ -525,6 +529,9 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
     "maxPowerAm",
     "sstvDefaultTxMode",
     "sstvTxPowerPct",
+    // The callsign burst lengthens the station's transmissions; a browser may see how the
+    // station is set up without changing that, exactly like the mode and the drive above.
+    "sstvTxFskId",
     "cwWpm",
     "cwPitchHz",
     "rttyBaud",
@@ -942,6 +949,7 @@ impl Serialize for SettingsView<'_> {
         out.serialize_field("sstvRxAutoArm", &self.0.sstv_rx_auto_arm)?;
         out.serialize_field("sstvDefaultTxMode", &self.0.sstv_default_tx_mode)?;
         out.serialize_field("sstvTxPowerPct", &self.0.sstv_tx_power_pct)?;
+        out.serialize_field("sstvTxFskId", &self.0.sstv_tx_fsk_id)?;
         out.serialize_field("pskRxAutoArm", &self.0.psk_rx_auto_arm)?;
         out.serialize_field("rttyRxAutoArm", &self.0.rtty_rx_auto_arm)?;
         out.serialize_field("alertMyCall", &self.0.alert_my_call)?;

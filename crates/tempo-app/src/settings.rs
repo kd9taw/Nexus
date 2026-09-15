@@ -1955,6 +1955,28 @@ pub struct Settings {
     /// it can lower power past the operator's cap but never raise it past one.
     #[serde(default)]
     pub sstv_tx_power_pct: Option<u8>,
+    /// Send the operator's callsign as an FSK ID burst after each transmitted
+    /// picture. **Default OFF** (#FSK-ID, operator-approved 2026-09-15).
+    ///
+    /// The burst is the 45.45-baud two-tone trailer MMSSTV and slowrx read — the
+    /// same one Nexus has always DECODED and shown under a received thumbnail;
+    /// this is the transmit half. It costs about a second of extra key-down
+    /// (`tempo_sstv::fsk_id_seconds`), which is why it is opt-in rather than on:
+    /// an operator running a long mode close to their TX watchdog should not have
+    /// their over grow because of an upgrade.
+    ///
+    /// ⚠️ TRANSMIT PATH, and the reason it is safe is structural rather than
+    /// careful. The flag reaches exactly one place — `sstv_send` passes the
+    /// callsign to `encode_image_with_id` — and its only effect is a longer
+    /// sample buffer. The PTT deadline, the TX-watchdog budget check and the
+    /// progress denominator are all computed from THAT buffer's length, and Stop
+    /// TX / the latch / the abort flush the output ring regardless of what is in
+    /// it. Nothing here keys, re-keys, or extends a transmission already running.
+    ///
+    /// It does not replace the callsign burned into the picture (`draw_id`),
+    /// which is what satisfies §97.119 today; it rides alongside it.
+    #[serde(default)]
+    pub sstv_tx_fsk_id: bool,
     /// Whether opening the PSK view starts the receiver.
     ///
     /// The SSTV/APRS auto-arm doctrine, applied to PSK31 from day one (operator
@@ -3754,6 +3776,7 @@ impl Default for Settings {
             sstv_rx_auto_arm: true,
             sstv_default_tx_mode: default_sstv_default_tx_mode(),
             sstv_tx_power_pct: None,
+            sstv_tx_fsk_id: false,
             psk_rx_auto_arm: true,
             rtty_rx_auto_arm: true,
             alert_my_call: true,
@@ -7081,7 +7104,7 @@ mod tests {
         assert_eq!(s.dial_hz(), 14_074_000); // default = FT8 20 m (the default mode)
     }
 
-    /// The SSTV section's three fields, on the exact wire keys the UI hand-writes.
+    /// The SSTV section's four fields, on the exact wire keys the UI hand-writes.
     ///
     /// All three carry an interior two-letter acronym, which is the `decodeFlowHz` /
     /// `decodeFLowHz` shape: a TS key written `sstvRXAutoArm` or `sstvTXPowerPct`
@@ -7100,12 +7123,18 @@ mod tests {
             s.sstv_tx_power_pct, None,
             "None = never touch the operator's power"
         );
+        assert!(
+            !s.sstv_tx_fsk_id,
+            "the callsign burst is a TRANSMIT-PATH change and ships OFF — an upgrade \
+             must not lengthen anyone's over"
+        );
 
         let json = serde_json::to_string(&s).unwrap();
         for key in [
             "\"sstvRxAutoArm\":true",
             "\"sstvDefaultTxMode\":\"auto\"",
             "\"sstvTxPowerPct\":null",
+            "\"sstvTxFskId\":false",
         ] {
             assert!(json.contains(key), "missing wire key {key} in {json}");
         }
@@ -7116,16 +7145,24 @@ mod tests {
         assert!(old.sstv_rx_auto_arm);
         assert_eq!(old.sstv_default_tx_mode, "auto");
         assert_eq!(old.sstv_tx_power_pct, None);
+        assert!(
+            !old.sstv_tx_fsk_id,
+            "an upgrader's file predates the key and their transmission must not grow"
+        );
 
         // …and an explicit opt-out survives the round trip (the other direction of the
         // same gate — a `default_true` that ignored the file would pass the line above).
         let off: Settings = serde_json::from_str(
-            r#"{"sstvRxAutoArm":false,"sstvDefaultTxMode":"martin1","sstvTxPowerPct":40}"#,
+            r#"{"sstvRxAutoArm":false,"sstvDefaultTxMode":"martin1","sstvTxPowerPct":40,"sstvTxFskId":true}"#,
         )
         .unwrap();
         assert!(!off.sstv_rx_auto_arm);
         assert_eq!(off.sstv_default_tx_mode, "martin1");
         assert_eq!(off.sstv_tx_power_pct, Some(40));
+        assert!(
+            off.sstv_tx_fsk_id,
+            "an operator who switched it on keeps it on"
+        );
     }
 
     /// The PSK section's one field, on the exact wire key the UI hand-writes —

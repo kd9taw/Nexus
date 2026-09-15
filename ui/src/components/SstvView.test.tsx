@@ -468,6 +468,29 @@ describe('SstvView TX panel', () => {
     expect(setRfPower).not.toHaveBeenCalled()
   })
 
+  // #FSK-ID — the key-down time this screen quotes is what an operator checks against
+  // their TX watchdog before pressing Send, so it has to include the callsign burst when
+  // the burst is switched on. Quoting the picture alone would be about a second short.
+  it('the key-down time grows when the callsign burst is switched on', async () => {
+    const clock = () =>
+      (document.querySelector('.sstv-tx-name') as HTMLElement | null)?.textContent ?? ''
+    const { unmount } = render(<SstvView snap={snap} />)
+    await loadPicture()
+    const without = clock()
+    expect(without, 'the composer should quote a key-down time').toMatch(/key-down/)
+    unmount()
+    cleanup()
+
+    render(<SstvView snap={snap} txFskId />)
+    await loadPicture()
+    const with_ = clock()
+    expect(with_).toMatch(/key-down/)
+    expect(
+      with_,
+      'with the burst on, the quoted key-down time must not be the picture alone',
+    ).not.toBe(without)
+  })
+
   it('changing the mode re-crops to the new dimensions', async () => {
     render(<SstvView snap={snap} />)
     const send = await loadPicture()

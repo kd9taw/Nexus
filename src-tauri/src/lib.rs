@@ -11534,10 +11534,10 @@ fn sstv_send(
     // Pre-flight the TX gate under a SHORT lock so a refused send (wrong frequency, TX
     // off, another over in flight) fails fast BEFORE we spend CPU on the encode. The
     // operator callsign comes out of the same lock — it is a TX gate of its own.
-    let mycall = {
+    let (mycall, send_fsk_id) = {
         let eng = engine_lock(&state);
         eng.sstv_tx_gate()?;
-        eng.settings().mycall.clone()
+        (eng.settings().mycall.clone(), eng.settings().sstv_tx_fsk_id)
     };
 
     // ⭐ BURN THE STATION ID IN, HERE, WHERE IT CANNOT BE BYPASSED.
@@ -11575,8 +11575,24 @@ fn sstv_send(
         tempo_sstv::draw_id(&mut rgb, width, height, &mycall);
     }
     let img = tempo_sstv::SourceImage { width, height, rgb };
+    // THE FSK CALLSIGN BURST, off by default (`sstv_tx_fsk_id`). The 45.45-baud trailer
+    // MMSSTV and slowrx read, and that Nexus has always decoded and shown under a
+    // received thumbnail — this is the transmit half. It is a SECOND identification
+    // riding alongside the plate burned into the picture, never a replacement for it:
+    // the gate above still refuses a station with no callsign, and the plate is still
+    // drawn unless the operator affirmed the call is already in their artwork.
+    //
+    // ⚠️ It makes the buffer ~1.2 s longer and does nothing else. Everything that bounds
+    // the over is computed from THIS buffer — `Engine::sstv_send` derives the duration
+    // from `samples.len()`, and that one number sets the PTT deadline, the TX-watchdog
+    // budget check and the progress denominator — so an over with the burst on is
+    // budgeted, watched and stopped exactly like one without it. Nothing on this path
+    // keys a radio; the radio loop does that, behind every gate, and Stop TX / the latch
+    // / `sstv_abort` flush the output ring whatever is still queued.
+    let fsk_id = send_fsk_id.then(|| mycall.as_str());
     // Encode the whole 12 kHz waveform OFF the engine lock (tens of ms even for PD290).
-    let samples = tempo_sstv::encode_image(sstv_mode, &img, 12_000).map_err(|e| e.to_string())?;
+    let samples = tempo_sstv::encode_image_with_id(sstv_mode, &img, 12_000, fsk_id)
+        .map_err(|e| e.to_string())?;
     // Re-take the lock and hand it to the gated engine path (re-runs the full gate + the
     // duration-budget check; nothing keys until the radio loop takes it).
     let mut eng = engine_lock(&state);

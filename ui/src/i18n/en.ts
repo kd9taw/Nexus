@@ -5912,6 +5912,10 @@ export const EN = {
     'This is the mode the SSTV screen starts on; you can still change it there for one picture. <b>Automatic</b> follows the band: HF gets Scottie 1 (the NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120, which is what ARISS transmits.',
   'settings.sstv.txPower.label': 'Transmit power',
   'settings.sstv.txPower.aria': 'SSTV transmit power percent',
+  'settings.sstv.fskId.label':
+    'Send my callsign after each picture',
+  'settings.sstv.fskId.hint':
+    'Adds the FSK callsign burst other SSTV software reads and shows under the received picture — the same one Nexus shows you under yours. Off by default: it adds about {{seconds}} seconds of key-down to every transmission. Your callsign is still drawn into the picture either way.',
   'settings.sstv.txPower.hint':
     'The drive the SSTV screen starts on, and the level an image is sent at. Leave it blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous key-down at full duty, so most operators run it well below their SSB drive. Your Phone power cap still applies on top of this.',
   'settings.sstv.callsignNote':

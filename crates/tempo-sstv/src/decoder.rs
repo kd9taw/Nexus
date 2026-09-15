@@ -136,6 +136,10 @@ struct FskCapture {
     hedr_shift_hz: f64,
     /// Stop buffering and decode once `audio` reaches this many samples.
     cap_samples: usize,
+    /// How much of `audio` is carried-back IMAGE, ahead of where the burst can
+    /// start. The FSK decode begins here (less a small margin) rather than at
+    /// sample zero — see [`FSK_CAPTURE_SECONDS`].
+    image_tail_samples: usize,
 }
 
 /// Two-pass decoding state.
@@ -300,11 +304,30 @@ const FINDSYNC_AUDIO_HEADROOM: f64 = 1.00;
 /// for more audio.
 const MULTI_IMAGE_CARRYBACK_LINES: u32 = 4;
 
-/// How much trailing audio (seconds) to accumulate in `AwaitingFskId` before
-/// running the FSK-ID decode. The burst itself is short (<1 s); this absorbs
-/// the carried-back image tail ahead of it plus the burst, and comfortably
-/// exceeds slowrx's ≈2.2 s leader-scan horizon.
+/// How much audio (seconds) to accumulate PAST THE END OF THE IMAGE in
+/// `AwaitingFskId` before running the FSK-ID decode. The burst is short (≈1.2 s
+/// for a six-character call); three seconds covers it with room for a sender
+/// that pads before it, and comfortably exceeds slowrx's ≈2.2 s leader-scan
+/// horizon.
+///
+/// ⭐ **Past the end of the image — and it used to be from the start of the
+/// capture, which is not the same thing and was a bug.** The capture buffer is
+/// seeded with `MULTI_IMAGE_CARRYBACK_LINES` of the just-decoded picture (four
+/// lines, so the VIS detector can catch a back-to-back transmission's leader),
+/// and both the three-second cap and the leader scan used to start at sample
+/// zero of that. For any mode whose four carry-back lines run longer than the
+/// scan horizon, the window was full of picture before the burst arrived and
+/// the callsign was never read: PD-240 (4.0 s of carry-back), PD-290 (3.7 s),
+/// Scottie DX (4.2 s) and Pasokon P7 (3.3 s) — four modes in which no station's
+/// FSK ID had ever decoded. `tests/fsk_id_tx.rs` pins it; PD-240 fails there
+/// without this and passes with it, while Martin 2 and Scottie 1 pass either
+/// way, which is what says the fault was the window and not the burst.
 const FSK_CAPTURE_SECONDS: f64 = 3.0;
+
+/// How far BEFORE the image's last line the FSK-ID scan starts, seconds. A
+/// sender's burst begins as soon as the picture ends; a fifth of a second of
+/// slack costs nothing and covers a small disagreement about where that is.
+const FSK_SCAN_LEAD_SECONDS: f64 = 0.2;
 
 /// How long a manual start ([`SstvDecoder::start_manual`]) waits to hear its
 /// first sync pulse before giving up on aligning to one, in line periods.
@@ -553,10 +576,16 @@ impl SstvDecoder {
                         * d.spec.line_seconds
                         * work_rate) as usize;
                     let carry_from = d.target_audio_samples.saturating_sub(carryback);
+                    let carry_from = carry_from.min(d.audio.len());
+                    // Where the picture ends inside the capture buffer: the
+                    // carried-back tail is everything before it, the burst
+                    // (if any) everything after.
+                    let image_tail = d.target_audio_samples.saturating_sub(carry_from);
                     self.state = State::AwaitingFskId(Box::new(FskCapture {
                         audio: d.audio[carry_from..].to_vec(),
                         hedr_shift_hz: d.hedr_shift_hz,
-                        cap_samples: (FSK_CAPTURE_SECONDS * work_rate) as usize,
+                        cap_samples: image_tail + (FSK_CAPTURE_SECONDS * work_rate) as usize,
+                        image_tail_samples: image_tail,
                     }));
                     remaining = &[]; // already folded into d.audio → now inside the FSK capture
                 }
@@ -569,7 +598,17 @@ impl SstvDecoder {
                     // Best-effort decode; the sanity gate inside returns None
                     // for anything implausible, so a garbled/absent burst adds
                     // no event and the image stands on its own.
-                    if let Some(text) = crate::fsk::decode_fsk_id(&f.audio, f.hedr_shift_hz) {
+                    //
+                    // Scanned from the end of the picture, not from the start of
+                    // the buffer — the leading part is carried-back image, and
+                    // the leader scan gives up before it could get past it on a
+                    // long-line mode (see `FSK_CAPTURE_SECONDS`).
+                    let lead = (FSK_SCAN_LEAD_SECONDS
+                        * f64::from(crate::resample::WORKING_SAMPLE_RATE_HZ))
+                        as usize;
+                    let from = f.image_tail_samples.saturating_sub(lead).min(f.audio.len());
+                    if let Some(text) = crate::fsk::decode_fsk_id(&f.audio[from..], f.hedr_shift_hz)
+                    {
                         out.push(SstvEvent::FskId { text });
                     }
                     // Re-arm VIS over the WHOLE captured window so a

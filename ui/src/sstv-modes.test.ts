@@ -27,6 +27,7 @@ const repo = (rel: string) => readFileSync(fileURLToPath(new URL(`../../${rel}`,
 const MODESPEC_RS = repo('crates/tempo-sstv/src/modespec.rs')
 const ENCODE_RS = repo('crates/tempo-sstv/src/encode.rs')
 const ENGINE_RS = repo('crates/tempo-app/src/engine.rs')
+const FSK_RS = repo('crates/tempo-sstv/src/fsk.rs')
 
 /** The engine's hard ceiling on one SSTV over, read from `engine.rs` rather than
  *  restated. `sstv_send` refuses anything longer, so a mode past it must never reach
@@ -223,5 +224,34 @@ describe('the SSTV transmit-mode table mirrors modespec.rs', () => {
     expect(aspects.size).toBeGreaterThan(1)
     expect(aspects).toContain('1.250') // Scottie / Martin / PD-50 / PD-90
     expect(aspects).toContain('1.333') // Robot
+  })
+})
+
+
+// The FSK callsign burst's airtime is quoted to the operator in Settings and added to
+// the composer's key-down clock, so its two constants are a mirror like the mode table
+// — parsed from `fsk.rs`, never restated.
+describe('the FSK callsign burst mirrors fsk.rs', () => {
+  const rustConst = (name: string, re = '[0-9._]+') => {
+    const m = new RegExp(`const ${name}\\s*:\\s*\\w+\\s*=\\s*(${re})\\s*;`).exec(FSK_RS)
+    expect(m, `fsk.rs declares ${name}`).not.toBeNull()
+    return Number(m![1].replace(/_/g, ''))
+  }
+  const tsConst = (name: string) => {
+    const m = new RegExp(`export const ${name} = ([0-9.]+)`).exec(SSTV_MODES_TS)
+    expect(m, `sstvModes.ts exports ${name}`).not.toBeNull()
+    return Number(m![1])
+  }
+
+  it('baud and bits per character are the ones on the wire', () => {
+    expect(tsConst('FSK_ID_BAUD')).toBe(rustConst('BAUD'))
+    expect(tsConst('FSK_ID_BITS_PER_CHAR')).toBe(rustConst('BITS_PER_CHAR'))
+  })
+
+  it('a six-character callsign costs about a second and a quarter', () => {
+    // 2 leader bytes + 6 characters + 1 end marker, six bits each at 45.45 baud.
+    const secs = (9 * rustConst('BITS_PER_CHAR')) / rustConst('BAUD')
+    expect(secs).toBeGreaterThan(1)
+    expect(secs).toBeLessThan(1.5)
   })
 })

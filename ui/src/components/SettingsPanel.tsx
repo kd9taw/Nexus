@@ -170,7 +170,7 @@ import { SettingsSearch } from './SettingsSearch'
 import { resolveTarget } from '../settings/registry'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
-import { SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
+import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
 // The APRS channel list and the grid→channel derivation, shared with the APRS cockpit so the
 // picker's options and the derived default can never name different numbers.
 import { APRS_FREQS, BEACON_SYMBOLS, NORTH_AMERICA, aprsChannelForGrid } from '../aprsBeacon'
@@ -7824,6 +7824,30 @@ export function SettingsPanel({
                 </span>
                 <span className="settings-hint">{t('settings.sstv.txPower.hint')}</span>
               </label>
+              {/* The FSK callsign burst. A TRANSMIT-PATH control, and it ships OFF: it
+                  adds about a second of key-down to every picture, which an operator
+                  running a long mode near their TX watchdog has a right not to be given
+                  by an upgrade. It does not replace the callsign burned into the
+                  picture — that is what the note below this group is about — it rides
+                  alongside it, for the stations whose software reads the trailer. */}
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.sstv.fskId.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    disabled={remote || locked('sstvTxFskId')}
+                    aria-checked={form.sstvTxFskId === true}
+                    className={`toggle${form.sstvTxFskId === true ? ' on' : ''}`}
+                    onClick={() => updateBool('sstvTxFskId', form.sstvTxFskId !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  {t('settings.sstv.fskId.hint', { seconds: FSK_ID_SECONDS_LABEL })}
+                </span>
+              </div>
             </div>
             {/* Not a control — the answer to the question this section otherwise invites. The
                 plate is drawn in Rust before encoding so no webview path can bypass it, and its

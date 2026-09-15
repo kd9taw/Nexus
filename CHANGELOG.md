@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SSTV can send your callsign as an FSK ID after each picture — off by default.** Nexus has
+  always *read* the callsign burst that trails a received picture and shown it under the
+  thumbnail; it could not send one. Settings ▸ Digital ▸ SSTV ▸ "Send my callsign after each
+  picture" turns the transmit half on. It is off to begin with and stays off when you update,
+  because it adds about a second and a quarter of key-down to every transmission and nobody's
+  over should grow because they installed a new version. Your callsign is still drawn into the
+  picture either way — this rides alongside that, for the stations whose software shows the
+  trailer. The key-down time on the compose bar includes the burst when it is on.
+
+- **The callsign under a received picture now appears for the long modes too.** Nexus read the
+  FSK ID after a Scottie 1 or a Martin, but never after PD-240, PD-290, Scottie DX or Pasokon P7:
+  it stopped looking before the burst arrived on any mode with a line longer than about three
+  quarters of a second. Those four now report the sender's callsign like the rest.
+
 - **Start an SSTV receive by hand, without waiting for a header** (#202). Tune into a picture
   that is already halfway through, or one whose header was lost to a burst of noise, pick the
   mode beside the Arm button and press Start: the decode begins from the next line. The picture

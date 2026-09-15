@@ -4975,6 +4975,10 @@ export const FR: PartialCatalog = {
   "settings.sstv.txMode.hint": "C'est le mode sur lequel démarre l'écran SSTV ; vous pouvez toujours l'y changer pour une image. <b>Automatique</b> suit la bande : la HF prend Scottie 1 (la convention de la fréquence d'appel NA — Martin 1 est celle de l'EU), le 2 m prend PD-120, ce qu'émet ARISS.",
   "settings.sstv.txMode.label": "Mode d'émission",
   "settings.sstv.txPower.aria": "Puissance d'émission SSTV en pourcentage",
+  "settings.sstv.fskId.label":
+    "Envoyer mon indicatif après chaque image",
+  "settings.sstv.fskId.hint":
+    "Ajoute la salve FSK d'indicatif que les autres logiciels SSTV lisent et affichent sous l'image reçue — la même que Nexus t'affiche sous la tienne. Désactivé par défaut : cela allonge chaque émission d'environ {{seconds}} secondes. Ton indicatif est dessiné dans l'image dans tous les cas.",
   "settings.sstv.txPower.hint": "Le niveau sur lequel démarre l'écran SSTV, et celui auquel une image est envoyée. Laissez vide et Nexus ne touche jamais à votre puissance. Une image SSTV, c'est jusqu'à 290 secondes d'émission continue à plein rapport cyclique : la plupart des opérateurs restent bien en dessous de leur niveau SSB. Votre plafond de puissance Phone s'applique en plus.",
   "settings.sstv.txPower.label": "Puissance d'émission",
   "settings.station.callsign.hint": "L'indicatif de votre station (obligatoire).",

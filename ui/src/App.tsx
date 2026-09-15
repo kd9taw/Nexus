@@ -3331,6 +3331,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 onSetTxEnabled={handleSetTxEnabled}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 txModeDefault={settings?.sstvDefaultTxMode}
+                txFskId={settings?.sstvTxFskId}
                 txPowerPct={settings?.sstvTxPowerPct}
                 panels={sstvPanels}
                 onOpenSettings={openSettingsAt}

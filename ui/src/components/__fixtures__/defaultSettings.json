@@ -202,6 +202,7 @@
   "sstvRxAutoArm": true,
   "sstvDefaultTxMode": "auto",
   "sstvTxPowerPct": null,
+  "sstvTxFskId": false,
   "pskRxAutoArm": true,
   "rttyRxAutoArm": true,
   "tunePowerPct": null,
