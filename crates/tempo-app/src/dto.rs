@@ -783,6 +783,15 @@ pub struct RadioStatus {
     pub tx_po_w: Option<f32>,
     #[serde(default)]
     pub tx_comp_db: Option<f32>,
+    /// Can Nexus put a NUMBER to this radio's SWR — i.e. may the high-SWR cutoff be offered?
+    /// True only on the two paths that convert the raw meter with a scale we can point at:
+    /// the native Icom CI-V daemon, and a FlexRadio's own VITA meter stream. False everywhere
+    /// else, where `tx_swr` is whatever Hamlib's `l SWR` printed, unscaled (#292 — a Xiegu
+    /// reads 1.2:1 on its own meter and 6:1 here). Settings shows the cutoff disabled and says
+    /// so; the engine refuses it regardless of what the UI does
+    /// (`settings::swr_scale_verified`).
+    #[serde(default)]
+    pub swr_scale_verified: bool,
     /// The rig's actual mode read back over CAT (Hamlib name, e.g. "USB"/"LSB"/"FM").
     /// Display-only — the cockpit flags a mismatch with the commanded mode. `None` until
     /// the rig reports it.

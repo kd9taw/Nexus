@@ -229,6 +229,55 @@ pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 /// `tempo-audio`'s `the_native_capable_sat_rig_table_is_the_civ_scope_table`.
 pub const NATIVE_CIV_SAT_RIGS: [u32; 2] = [3081, 3090];
 
+/// The Icom models Nexus's own CI-V daemon serves — mirror of
+/// `tempo_audio::rigmodels::icom_scope_model`, pinned against it by that crate's
+/// `the_swr_verified_civ_rigs_are_the_civ_scope_rigs`.
+///
+/// ⭐ THIS IS THE LIST WHOSE **SWR NUMBER NEXUS CAN STAND BEHIND**, and it is a deliberate
+/// ALLOW-list. The daemon converts the rig's raw 0–255 SWR meter with a curve
+/// (`civ::commands::SWR_CAL`) that is Hamlib's IC-7300/IC-9700 table, and that file's own
+/// warning is the reason this constant exists: *"these are Icom curves and they are applied to
+/// EVERY CI-V rig. A Xiegu speaks CI-V but is not an Icom… a G90 reading 1.2:1 on its own
+/// meter has been reported as 6:1 here"* (#292). A deny-list would have to keep up with every
+/// CI-V radio that ever ships; this one cannot, so an unknown rig falls on the safe side —
+/// the cutoff is simply not offered — rather than inheriting a curve that was never its.
+pub const SWR_VERIFIED_CIV_RIGS: [u32; 5] = [3073, 3078, 3081, 3085, 3090];
+
+/// FlexRadio models whose SWR arrives on the native VITA meter stream, where the scale comes
+/// from FlexLib's own `Meter.cs` (`"SWR" => raw / 128.0`) rather than from a generic curve.
+///
+/// ⚠️ FlexLib is SOURCE, not a published Flex specification, and the sibling meter mappings
+/// are recorded as "verified on hardware pending". This entry is NEEDS-BENCH.
+pub const SWR_VERIFIED_FLEX_RIGS: [u32; 2] = [2036, 23005];
+
+/// Can Nexus put a number to this radio's SWR — i.e. may the high-SWR cutoff be offered at all?
+///
+/// TWO paths and nothing else, because those are the two places a raw meter reading is turned
+/// into a ratio by something we can point at:
+/// * **Native Icom CI-V** — the operator's `icom_native_cat` opt-in, on a transport the daemon
+///   can actually own (not network, not OmniRig — the same two refusals
+///   [`native_civ_reachable`] makes), for a model in [`SWR_VERIFIED_CIV_RIGS`].
+/// * **FlexRadio over the network**, for a model in [`SWR_VERIFIED_FLEX_RIGS`].
+///
+/// Everything else — every plain rigctld rig — reaches `Engine::observe_rig_tx_meters` with
+/// whatever float Hamlib's `l SWR` printed, unscaled, unclamped and per-model unknown. Half of
+/// them report nothing at all. A cutoff there would be a coin toss that unkeys the
+/// transmitter, so the setting is shown DISABLED instead, saying so.
+pub fn swr_scale_verified(
+    rig_model: u32,
+    rig_conn: &str,
+    rig_addr: &str,
+    icom_native_cat: bool,
+) -> bool {
+    let network = rig_conn_is_network(rig_conn, rig_addr);
+    let native_civ = icom_native_cat
+        && !network
+        && !rig_conn_is_omnirig(rig_conn)
+        && SWR_VERIFIED_CIV_RIGS.contains(&rig_model);
+    let flex_vita = network && SWR_VERIFIED_FLEX_RIGS.contains(&rig_model);
+    native_civ || flex_vita
+}
+
 /// Full-duplex satellite rigs with no Main/Sub CAT path in this build: the
 /// VFO pair is A/B and which one is the uplink is a station wiring choice no
 /// model string answers. FT-847, FT-736R, TS-2000, TS-790.
@@ -1670,6 +1719,29 @@ pub struct Settings {
     /// Enforced at the single `set_rf_power` chokepoint AND re-applied on mode change
     /// ([`Engine::set_operating_mode`]), so switching SSB→FT8 brings the rig DOWN to the cap
     /// instead of waiting for the operator to touch the slider. See [`Settings::rf_power_ceiling`].
+    /// Stop transmitting when the rig reports a high SWR. **Default OFF**, and it stays off
+    /// until an operator turns it on: this is the one thing in the transmit-meter subsystem
+    /// that ACTS on a reading rather than merely reporting it, against the project's standing
+    /// "notify, never act" rule (`service.rs` — *"notify loudly, never move the radio
+    /// unattended"*). Operator request and ruling, 2026-09-14.
+    ///
+    /// Honoured only while [`swr_scale_verified`] is true for the active radio; on every other
+    /// rig the control is shown disabled, because a cutoff driven by a number we cannot scale
+    /// would unkey the transmitter on a guess (#292 — a Xiegu reading 1.2:1 on its own meter
+    /// reports 6:1 here).
+    ///
+    /// Precedent, such as it is: stock WSJT-X has no SWR logic at all (full source checked); a
+    /// JTDX-derived fork carries "Halt Tx when SWR > 2.5", off by default.
+    #[serde(default)]
+    pub swr_stop_enabled: bool,
+    /// The SWR ratio above which two consecutive keyed readings halt transmit. 2.5:1 by
+    /// default, which is the JTDX-derived fork's number.
+    ///
+    /// ⚠️ CLAMPED ON READ, not on store ([`Settings::swr_stop_ratio`]) — the same shape as
+    /// [`Settings::rf_power_ceiling`], so a hand-edited `settings.json` carrying 0.0 (which
+    /// would halt every over instantly) or a NaN cannot reach the transmit path.
+    #[serde(default = "default_swr_stop_threshold")]
+    pub swr_stop_threshold: f32,
     #[serde(default)]
     pub max_power_phone: Option<f32>,
     #[serde(default)]
@@ -2336,6 +2408,13 @@ pub struct WorkingFreq {
 
 fn default_on() -> bool {
     true
+}
+
+/// 2.5:1 — see [`Settings::swr_stop_threshold`]. Must match the `Default` impl's value: a bare
+/// `#[serde(default)]` would hand an upgrader's older settings file 0.0, and 0.0 is a cutoff
+/// that fires on the first reading of every transmission.
+fn default_swr_stop_threshold() -> f32 {
+    2.5
 }
 
 fn default_tune_timeout() -> u32 {
@@ -3737,6 +3816,8 @@ impl Default for Settings {
             monitor_level: 0.5,
             station_power_w: None,
             units: default_units(),
+            swr_stop_enabled: false,
+            swr_stop_threshold: 2.5,
             max_power_phone: None,
             max_power_cw: None,
             max_power_digital: None,
@@ -4703,6 +4784,37 @@ impl Settings {
             }
         };
         cap.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0)
+    }
+
+    /// Is the ACTIVE radio's SWR reading one Nexus can put a number to?
+    /// [`swr_scale_verified`] over the flat mirror of the active profile.
+    pub fn swr_scale_is_verified(&self) -> bool {
+        swr_scale_verified(
+            self.rig_model,
+            &self.rig_conn,
+            &self.rig_addr,
+            self.icom_native_cat,
+        )
+    }
+
+    /// The SWR ratio the cutoff actually uses, or `None` when the cutoff is not in force —
+    /// switched off, or on a radio whose scale is not verified.
+    ///
+    /// ⚠️ CLAMPED HERE, THE `rf_power_ceiling` SHAPE. `settings.json` is an ordinary file an
+    /// operator can edit, and this value gates an automatic unkey: a 0.0 or a negative would
+    /// halt every transmission on its first SWR reading, and a NaN compares false against
+    /// everything, silently disabling a safety switch that reads as on. The floor is 1.0
+    /// because an SWR below 1:1 does not exist, so nothing sane can ask for one.
+    pub fn swr_stop_ratio(&self) -> Option<f32> {
+        if !self.swr_stop_enabled || !self.swr_scale_is_verified() {
+            return None;
+        }
+        let t = self.swr_stop_threshold;
+        Some(if t.is_finite() {
+            t.clamp(1.0, 99.0)
+        } else {
+            default_swr_stop_threshold()
+        })
     }
 
     /// The ceiling for a HIGH-DUTY transmission, whatever operating mode is nominally selected.
@@ -7285,6 +7397,101 @@ mod tests {
             !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:"))
                 && !body.lines().any(|l| l.trim_start().starts_with("js8CqOn:")),
             "HB and CQ-repeat on/off are session-only and must never be settings"
+        );
+    }
+
+    /// The high-SWR cutoff's two fields — defaults, the exact camelCase wire keys, an
+    /// upgrader's file, the read-time clamp, and the TS mirror read out of `types.ts` itself.
+    ///
+    /// ⚠️ `swrStopEnabled` / `swrStopThreshold`, NOT `SWRStop…`. The interior-acronym trap the
+    /// SSTV test above documents is live here: a hand-written `maxSWR` on one side compiles
+    /// clean on both and the control silently does nothing while the backend keeps the default
+    /// — and this particular default is a safety switch the operator believes they turned on.
+    #[test]
+    fn swr_stop_defaults_wire_keys_clamp_and_ts_mirror() {
+        let s = Settings::default();
+        assert!(!s.swr_stop_enabled, "ships OFF — the operator's ruling");
+        assert_eq!(s.swr_stop_threshold, 2.5);
+
+        let json = serde_json::to_string(&s).unwrap();
+        for key in ["\"swrStopEnabled\":false", "\"swrStopThreshold\":2.5"] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+
+        // An upgrader's file predates both keys. The threshold in particular MUST NOT come
+        // back 0.0 — that is a cutoff that fires on the first reading of every transmission,
+        // which is why the field carries `default = "default_swr_stop_threshold"` rather than
+        // a bare `#[serde(default)]`.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.swr_stop_enabled);
+        assert_eq!(old.swr_stop_threshold, 2.5);
+
+        // On a rig with no verified scale the cutoff is not in force whatever the file says —
+        // both halves, so neither alone can carry the assertion.
+        let mut on: Settings =
+            serde_json::from_str(r#"{"swrStopEnabled":true,"swrStopThreshold":3.0}"#).unwrap();
+        assert!(on.swr_stop_enabled);
+        assert_eq!(
+            on.swr_stop_ratio(),
+            None,
+            "a default profile is a plain rigctld rig — no verified scale, no cutoff"
+        );
+        on.rig_model = 3081; // IC-9700
+        on.rig_conn = "serial".into();
+        on.icom_native_cat = true;
+        assert_eq!(
+            on.swr_stop_ratio(),
+            Some(3.0),
+            "native CI-V IC-9700 qualifies"
+        );
+        on.swr_stop_enabled = false;
+        assert_eq!(on.swr_stop_ratio(), None, "…and the switch still rules");
+
+        // The read-time clamp, both directions of wrong.
+        let mut edited = on.clone();
+        edited.swr_stop_enabled = true;
+        edited.swr_stop_threshold = 0.0;
+        assert_eq!(edited.swr_stop_ratio(), Some(1.0), "floored at 1:1");
+        edited.swr_stop_threshold = f32::NAN;
+        assert_eq!(
+            edited.swr_stop_ratio(),
+            Some(2.5),
+            "a NaN falls back to the default — it must not silently disable the cutoff"
+        );
+
+        // Flex over the network is the other verified path.
+        let mut flex = Settings::default();
+        flex.swr_stop_enabled = true;
+        flex.rig_model = 2036;
+        flex.rig_conn = "network".into();
+        flex.rig_addr = "192.0.2.50:4992".into();
+        assert_eq!(flex.swr_stop_ratio(), Some(2.5));
+        // CONTROL: the same Flex WITHOUT an address is not a network transport at all.
+        flex.rig_addr.clear();
+        assert_eq!(flex.swr_stop_ratio(), None);
+
+        // The TS mirror, read from types.ts itself.
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        // `key:` or `key?:` — both fields are optional in TS, like every settings field
+        // added since the interface stopped being exhaustive.
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        for key in ["swrStopEnabled", "swrStopThreshold"] {
+            assert!(declares(key), "ui/src/types.ts Settings is missing `{key}`");
+        }
+        // CONTROL: the acronym-cased spellings must NOT be there, so the scan is not vacuous.
+        assert!(
+            !declares("swrStop") && !declares("maxSWR") && !declares("swrStopEnabledd"),
+            "the scan finds only what is really declared"
         );
     }
 

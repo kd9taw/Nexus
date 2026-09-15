@@ -2592,6 +2592,11 @@ pub struct Engine {
     /// over CAT — see [`Self::observe_rig_ptt`]. Also vetoes amplifier changes.
     rig_keyed: bool,
     rig_tx_swr: Option<f32>,
+    /// Consecutive keyed SWR readings above [`Settings::swr_stop_ratio`]. The cutoff fires at
+    /// TWO, never one — see [`Self::observe_rig_tx_meters`]. Zeroed by a reading at or below
+    /// the threshold, by any slot where the cutoff is not in force, and on unkey
+    /// ([`Self::clear_rig_tx_meters`]).
+    swr_over_count: u8,
     rig_tx_alc: Option<f32>,
     rig_tx_po_w: Option<f32>,
     rig_tx_comp_db: Option<f32>,
@@ -4463,6 +4468,7 @@ impl Engine {
             rig_smeter_db: None,
             rig_keyed: false,
             rig_tx_swr: None,
+            swr_over_count: 0,
             rig_tx_alc: None,
             rig_tx_po_w: None,
             rig_tx_comp_db: None,
@@ -8165,11 +8171,90 @@ impl Engine {
         if comp_db.is_some() {
             self.rig_tx_comp_db = comp_db;
         }
+        if let Some(v) = swr {
+            self.observe_swr_for_cutoff(v);
+        }
+    }
+
+    /// ⭐ THE HIGH-SWR CUTOFF (operator request and ruling, 2026-09-14). DEFAULT OFF.
+    ///
+    /// ⚠️ THIS IS THE ONE THING IN THE TRANSMIT-METER SUBSYSTEM THAT ACTS ON A READING. The
+    /// rule everywhere else here is *notify loudly, never move the radio unattended* — the
+    /// zero-forward-power watch a few lines away in the radio loop raises a status line and
+    /// does nothing else, and says so. The operator asked for this one and ruled on it
+    /// explicitly; it ships off, and it stays off on any radio whose SWR scale Nexus cannot
+    /// stand behind. Nothing here is inferred from that ruling beyond the switch itself.
+    ///
+    /// FOUR CONDITIONS, and each is the safe direction when it cannot be met:
+    /// * **Switched on** by the operator — [`Settings::swr_stop_ratio`] is `None` otherwise.
+    /// * **A verified scale** — [`settings::swr_scale_verified`], an allow-list. #292 is a rig
+    ///   reading 1.2:1 on its own meter and 6:1 here, and a cutoff on that number would unkey
+    ///   the transmitter of every operator it happens to.
+    /// * **Actually keyed** — the same composite the meter poll itself uses: a transmission
+    ///   Nexus owns ([`Self::tx_owner`], which is the tree's own enumeration of every keying
+    ///   source), or the rig keyed by its own mic (`rig_keyed`). Unkeyed, a stale reading in
+    ///   the window before [`Self::clear_rig_tx_meters`] must never trip anything.
+    /// * **TWO CONSECUTIVE READINGS**, never one. The meters are polled round-robin over four,
+    ///   so SWR refreshes about every 600 ms and two readings is roughly 1.2 s — long enough
+    ///   that a single spike (an ATU stepping, a relay, the first cycle of a keyup) cannot
+    ///   halt an over, short enough to matter into a real fault. Any reading at or below the
+    ///   threshold resets the count, so it is genuinely consecutive and not cumulative.
+    ///
+    /// The halt is [`Self::halt_tx`] itself — the Stop TX path, unweakened — so every kind of
+    /// transmission stops and every mode's abort is armed by the one call. It NEVER keys, arms
+    /// or re-arms anything.
+    fn observe_swr_for_cutoff(&mut self, swr: f32) {
+        let Some(limit) = self.settings.swr_stop_ratio() else {
+            self.swr_over_count = 0;
+            return;
+        };
+        if self.tx_owner().is_none() && !self.rig_keyed {
+            self.swr_over_count = 0;
+            return;
+        }
+        // ⚠️ THE TEST IS `swr > limit`, POSITIVELY, AND THE `else` IS LOAD-BEARING. Two values
+        // reach here that are not "a high SWR" and must not be treated as one:
+        // * `0.0` — reachable on the rigctld path (`read_meter_f32_within` accepts any finite
+        //   value >= 0), and everywhere else in this tree a zero SWR means ABSENCE, not 1:1.
+        // * a NaN — for which EVERY comparison is false. Written the other way round
+        //   (`if swr <= limit { reset }`) a NaN would fall through to the increment below and
+        //   two of them in a row would unkey the transmitter on no measurement at all.
+        // Both land in the `else` and reset the run, which is the safe direction.
+        if swr > limit {
+            self.swr_over_count = self.swr_over_count.saturating_add(1);
+        } else {
+            self.swr_over_count = 0;
+            return;
+        }
+        if self.swr_over_count < 2 {
+            return;
+        }
+        self.swr_over_count = 0;
+        tempo_core::applog::info(
+            "tx",
+            &format!("high SWR cutoff: {swr:.1}:1 over {limit:.1}:1 twice — transmit halted"),
+        );
+        self.halt_tx();
+        // Say why, in the lane the loop's own transmit-meter notices already use (the
+        // foreign-key notice and the zero-forward-power note are both here). The CAT health
+        // verdict is kept as it was — this is a transmit fault, not a CAT fault.
+        let ok = self.cat_status.0;
+        self.set_cat_status(
+            ok,
+            format!(
+                "transmit halted: the radio reported {swr:.1}:1 SWR twice, over the \
+                 {limit:.1}:1 cutoff. Check the antenna, the feedline and the tuner before \
+                 transmitting again"
+            ),
+        );
     }
 
     /// Blank the transmit meters — called on unkey and on a CAT breaker trip, so the bars
     /// don't freeze at the last keyed reading while receiving.
     pub fn clear_rig_tx_meters(&mut self) {
+        // The high-SWR run dies with the over it was measured on: two readings from either
+        // side of an unkey are not consecutive readings of anything.
+        self.swr_over_count = 0;
         self.rig_tx_swr = None;
         self.rig_tx_alc = None;
         self.rig_tx_po_w = None;
@@ -13612,15 +13697,64 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     pub fn set_tune(&mut self, on: bool) {
+        self.set_tune_with_reset(on, modes::reset_ft8_a7);
+    }
+
+    fn set_tune_with_reset(&mut self, on: bool, reset: impl FnOnce()) {
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.remote_actuation.revoke();
+        let was_tuning = self.tuning;
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tx_allowed();
         if self.tuning {
+            // Holding Tune is an operator action and restarts the idle clock — WSJT-X does the
+            // same, though incidentally: any click or keystroke anywhere in its window zeroes
+            // `m_idleMinutes` (mainwindow.cpp:2823-2827), and the Tune button is a click.
             self.reset_tx_watchdog();
+            return;
         }
+        if !was_tuning {
+            return; // not a release — nothing was held
+        }
+        // ⭐ D#295 — RELEASING TUNE STOPS THE SEQUENCER, AND WSJT-X IS WHY.
+        //
+        // `end_tuning` (mainwindow.cpp:8760-8771) opens with `on_stopTxButton_clicked()`
+        // (8762), whose body is `auto_tx_mode(false)` + `m_btxok = false` + `m_bCallingCQ =
+        // false` + `m_bAutoReply = false` (8787-8797). So in stock, coming off Tune leaves
+        // the auto-sequencer DISARMED — a tune can never extend a QSO's life. Nexus's Tune
+        // did nothing here, and a directed QSO whose call cap had spent itself stays armed
+        // with its `dxcall` still loaded as the decoder's AP hypothesis, bounded only by a
+        // wall clock this very method restarts. The operator ran the ATU and Nexus answered
+        // a station it had given up on, with no click anywhere.
+        //
+        // ⚠️ THE DIGITAL SECTION AND NOTHING ELSE, because that is the whole of what stock is
+        // talking about: `auto_tx_mode` IS the FT auto-sequencer, and WSJT-X has no Phone, CW,
+        // RTTY, PSK or SSTV cockpit to have an opinion about. In the manual modes the same
+        // latch is the PTT enable (`set_ptt` masks on it), so widening this would confiscate
+        // the operator's mic for pressing Tune; and a `halt_tx` there also DROPS a queued SSTV
+        // image and the CW/RTTY/PSK queues, which would quietly make Tune a stop control the
+        // stop-line census does not list. Measured, not assumed:
+        // `poll_sstv_tx_holds_the_job_while_a_gate_is_down` went red on the unscoped version.
+        //
+        // NOT the rig's own ATU tune-up: `atu_tune` does not come through here, matching
+        // upstream's `m_tuneup` exemption at mainwindow.cpp:8790.
+        if self.settings.operating_mode == crate::settings::OperatingMode::Digital {
+            self.halt_tx_for_context_change("tune ended");
+        }
+        // …and drop the cross-cycle a7 table with it. The tune cleared the RX ring on every
+        // tick it ran (`service.rs`, "don't decode our own carrier") and re-anchored the slot
+        // grid on release, so the period that follows is decoded from a TRUNCATED buffer —
+        // while the a7 replay table still holds the call pairs from before the tune, ours and
+        // the given-up partner's among them. `ft8_a7.f90` does not CRC-check what it rebuilds
+        // (342-373: best soft-distance match of 206 synthesised candidates, accepted on a
+        // threshold and a 1.3x runner-up margin), so those pairs are exactly what can come
+        // back looking like a fresh answer. Stock fences the same hazard after a band change
+        // with `no_a7_decodes` (mainwindow.cpp:8644-8646) and needs nothing here only because
+        // its Tune does not clear its ring. Nexus already resets this table on a band change
+        // and a radio handoff for the identical reason; a tune joins them.
+        reset();
     }
 
     /// Whether the operator is holding a steady tune carrier (read by the loop to key PTT).
@@ -17291,6 +17425,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         s.radio.tx_alc = self.rig_tx_alc;
         s.radio.tx_po_w = self.rig_tx_po_w;
         s.radio.tx_comp_db = self.rig_tx_comp_db;
+        s.radio.swr_scale_verified = self.settings.swr_scale_is_verified();
         s.radio.rig_mode = self.rig_mode.clone();
         s.radio.sideband_override = self.sideband_override.clone();
         // Phone sub-band the operator may legally use on the CURRENT band + class — the band-strip
@@ -25597,6 +25732,10 @@ mod tests {
         e.set_tune(true); // live tune carrier owns the rig
         assert!(!e.broker_ptt(true), "no foreign key mid-tune");
         e.set_tune(false);
+        // Coming off Tune disarms the Digital sequencer (D#295 — WSJT-X's `end_tuning` runs
+        // Stop Tx), and a foreign broker key is gated on the same arm switch. Re-arm, because
+        // what this test is about is the mid-tune and mid-over refusals, not the arm state.
+        e.set_tx_enabled(true);
         e.app.set_transmitting(true); // FT8 over in flight
         assert!(!e.broker_ptt(true), "no foreign key mid-over");
         e.app.set_transmitting(false);
@@ -43323,6 +43462,464 @@ mod tests {
             "precondition: {cap} overs should have spent the directed call cap"
         );
         slot
+    }
+
+    /// An AP-ASSISTED decode — `nap != 0`, the `a1`..`a7` annotation WSJT-X prints. A7 in
+    /// particular is NOT CRC-checked upstream: `ft8_a7.f90:277-287, 342-373` synthesises 206
+    /// candidate messages from the PREVIOUS same-parity period's call pairs and accepts the
+    /// best soft-distance match on a threshold plus a 1.3x runner-up margin. That is the
+    /// mechanism by which a partner who has stopped transmitting can appear to answer.
+    fn dec_ap(msg: &str, snr: i32, nap: i32) -> Decode {
+        Decode {
+            nap,
+            ..dec_snr(msg, snr)
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════
+    // D#295 — AFTER TUNE/ATU, NEXUS ANSWERED A STATION IT HAD GIVEN UP CALLING.
+    //
+    // The operator called a station, the call cap spent itself, he ran the ATU, and Nexus
+    // transmitted to that station again with no click anywhere. Five links, each read in the
+    // code before anything here was written:
+    //
+    //  1. A capped directed QSO stays ARMED — `tx_capped()` withholds the MESSAGE only, so
+    //     `Mode::Qso`, `dxcall` and `tx_enabled` all survive (`plan_tx`'s `None` arm).
+    //  2. Its ONLY bound is the wall-clock watchdog, applied in that arm since
+    //     `a_call_capped_station_is_still_bounded_by_the_wall_clock_watchdog`.
+    //  3. `set_tune(true)` calls `reset_tx_watchdog()` — so every tune restarted that clock.
+    //  4. `Mode::Qso` feeds `station.dxcall` to the decoder as the AP `hiscall` every period
+    //     (`decode_job`), so the given-up partner stays the decoder's hypothesis.
+    //  5. The tune CLEARS THE RX RING every tick (`service.rs` — "don't decode our own
+    //     carrier") and re-anchors the slot grid on release, so the period after a tune is
+    //     decoded from a truncated buffer with that hypothesis still loaded.
+    //
+    // WHAT WSJT-X ACTUALLY DOES (read in the real tree, not the vendored DSP copy —
+    // wsjtx-source 2.7.0.0). The triage note "WSJT-X drops the QSO on band change" is FALSE,
+    // and the fix does not implement it:
+    //
+    //  * `band_changed` (mainwindow.cpp:8642-8688) never touches m_hisCall, m_hisGrid or
+    //    m_QSOProgress. It sets `no_a7_decodes` for 1.5 TR periods (8644-8646, read at
+    //    4401-4402) "because they can be leftovers from the previous band", and halts TX only
+    //    on an operator-edited blind QSY outside the waterfall (8659-8670).
+    //  * ENDING A TUNE DOES STOP THE SEQUENCER. `end_tuning` (8760-8771) opens with
+    //    `on_stopTxButton_clicked()` (8762), which is `auto_tx_mode(false)` + `m_bAutoReply =
+    //    false` + `m_btxok = false` (8787-8797). Stock's Tune therefore CANNOT extend an
+    //    armed QSO: releasing it disarms the sequencer. Nexus's did not — that is the gap.
+    //    (The rig's own ATU tune-up is exempt upstream, `m_tuneup` at 8790, and is exempt
+    //    here too: `atu_tune` does not go through `set_tune`.)
+    //  * The watchdog reset on Tune is PARITY and stays: any click or keystroke anywhere in
+    //    WSJT-X's window zeroes m_idleMinutes (mainwindow.cpp:2823-2827), the Tune button
+    //    included. Upstream's bound on an idle QSO is the tune-release auto-off above, not
+    //    the watchdog, so that is the one we restore.
+    //  * The sequencer is BLIND to AP assistance upstream: `DecodedText` strips the `a<N>`
+    //    annotation at construction (Decoder/decodedtext.cpp:57-58), and neither
+    //    `auto_sequence` nor `processMessage` reads it. So Nexus must not start refusing
+    //    AP-assisted decodes wholesale — that would be a divergence, not a repair. The
+    //    upstream defence against a STALE one is exactly the a7 table, and Nexus already
+    //    resets it on a band change and a radio handoff (`modes::reset_ft8_a7`). A tune gets
+    //    the same reset, for the reason stock does not need it: stock does not clear its RX
+    //    ring while tuning, so it never decodes the truncated period that follows.
+    #[test]
+    fn tune_does_not_extend_an_armed_qso() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2);
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+
+        let slot = cap_a_directed_call(&mut e, 2);
+        assert!(
+            e.tx_enabled(),
+            "precondition: the capped QSO is still armed — that is link 1"
+        );
+
+        // The operator gives up on the station and runs the ATU. Hold and release, exactly as
+        // the cockpit's Tune button and the loop's own auto-release both do.
+        e.set_tune(true);
+        e.set_tune(false);
+
+        assert!(
+            !e.tx_enabled(),
+            "releasing Tune must disarm the sequencer, as WSJT-X's end_tuning does"
+        );
+
+        // …and now the given-up partner "answers" out of the truncated period, AP-assisted.
+        e.ingest_decodes_for_test(&[dec_ap("K2DEF W9XYZ RRR", -5, 7)], slot + 1);
+        for s in slot + 2..slot + 8 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "Nexus keyed a station it had given up calling, after a tune"
+            );
+        }
+    }
+
+    #[test]
+    fn tune_cannot_be_used_to_keep_an_armed_qso_alive_indefinitely() {
+        // The watchdog reset in `set_tune` stays (it is WSJT-X parity — see the block above),
+        // so this asserts the property that matters rather than the mechanism: however many
+        // times the operator tunes, a QSO they have stopped calling does not stay armed.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2);
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+        let slot = cap_a_directed_call(&mut e, 2);
+
+        for _ in 0..5 {
+            e.set_tune(true);
+            e.set_tune(false);
+            assert!(!e.tx_enabled(), "a tune left the capped QSO armed");
+        }
+        for s in slot..slot + 6 {
+            assert!(e.poll_tx(s).is_empty(), "the capped QSO keyed after tuning");
+        }
+    }
+
+    #[test]
+    fn a_tune_release_takes_the_sequencer_but_never_the_operators_mic() {
+        // THE SCOPE GUARD. `halt_tx_for_context_change` is the primitive precisely because
+        // WSJT-X has no Phone cockpit to have an opinion about: the FT sequencer is disarmed
+        // (stock's `auto_tx_mode(false)`), and the manual modes keep the arm switch they had,
+        // which is the rule `halt_tx_for_context_change` was written for in the first place.
+        use crate::settings::OperatingMode;
+        for (mode, keeps_tx) in [
+            (OperatingMode::Digital, false),
+            (OperatingMode::Phone, true),
+            (OperatingMode::Cw, true),
+            (OperatingMode::Rtty, true),
+        ] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            // The field directly, as the other mode-scoped tests here do: a full
+            // `apply_settings` re-seeds the tier, and an rx-only tier would make
+            // `set_tx_enabled(true)` a no-op — the arm below has to be real for the
+            // assertion to mean anything.
+            e.settings.operating_mode = mode;
+            e.set_tx_enabled(true);
+            assert!(e.tx_enabled(), "{mode:?}: precondition — TX really armed");
+            e.set_tune(true);
+            assert!(
+                e.tuning(),
+                "{mode:?}: precondition — the tune carrier is held"
+            );
+            e.set_tune(false);
+            assert_eq!(
+                e.tx_enabled(),
+                keeps_tx,
+                "{mode:?}: wrong arm state after a tune release"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tune_release_drops_the_cross_cycle_ap_table() {
+        // The a7 replay table holds the call pairs of the period BEFORE the tune, and the
+        // period AFTER one is decoded from a ring the tune truncated. Stock fences the
+        // equivalent hazard with `no_a7_decodes` after a band change (mainwindow.cpp:8644-8646);
+        // Nexus already resets the table itself on a band change and a radio handoff, so a
+        // tune takes the same reset rather than a second mechanism.
+        //
+        // Both directions, because a reset that fires on every call proves nothing.
+        use std::cell::Cell;
+        let hits = Cell::new(0u32);
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tx_enabled(true);
+        e.set_tune_with_reset(true, || hits.set(hits.get() + 1));
+        assert_eq!(hits.get(), 0, "holding Tune resets nothing");
+        e.set_tune_with_reset(false, || hits.set(hits.get() + 1));
+        assert_eq!(hits.get(), 1, "releasing Tune must drop the a7 table");
+
+        // A release with no tune held is not a release.
+        e.set_tune_with_reset(false, || hits.set(hits.get() + 1));
+        assert_eq!(hits.get(), 1, "a no-op release must not reset anything");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════
+    // THE HIGH-SWR CUTOFF (operator request + ruling, 2026-09-14). TX GATE, NEEDS-BENCH.
+    //
+    // ⚠️ This is the first thing in the transmit-meter subsystem that ACTS on a reading rather
+    // than reporting it — the standing rule there is "notify loudly, never move the radio
+    // unattended", written into the very poll this rides on. It ships OFF, it is refused on
+    // any radio whose SWR scale is not verified, and every one of those refusals is asserted
+    // below, because the failure mode of getting this wrong is an operator whose transmitter
+    // unkeys itself for no reason they can see.
+
+    /// An engine wired to an IC-9700 on native CI-V — a model the daemon serves, so the SWR
+    /// number comes off `civ::commands::SWR_CAL` rather than an unscaled `l SWR` — with the
+    /// cutoff switched on at `threshold` and the transmitter keyed.
+    fn swr_engine(threshold: f32) -> Engine {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.rig_model = 3081; // Icom IC-9700
+        e.settings.rig_conn = "serial".into();
+        e.settings.icom_native_cat = true;
+        e.settings.swr_stop_enabled = true;
+        e.settings.swr_stop_threshold = threshold;
+        e.set_tx_enabled(true);
+        e.app.set_transmitting(true); // an FT over on the air
+        assert!(e.tx_owner().is_some(), "precondition: the rig is keyed");
+        assert!(
+            e.settings.swr_stop_ratio().is_some(),
+            "precondition: the cutoff is in force on this radio"
+        );
+        e
+    }
+
+    /// One SWR reading, as the keyed-only meter poll delivers it (round-robin: the other three
+    /// are `None` on this cycle).
+    fn swr_reading(e: &mut Engine, v: f32) {
+        e.observe_rig_tx_meters(Some(v), None, None, None);
+    }
+
+    #[test]
+    fn two_readings_over_the_swr_cutoff_halt_the_transmitter() {
+        let mut e = swr_engine(2.5);
+
+        swr_reading(&mut e, 3.1);
+        assert!(
+            e.tx_owner().is_some() && e.tx_enabled(),
+            "ONE reading must never halt — an ATU stepping or a keyup transient reads high"
+        );
+
+        swr_reading(&mut e, 3.4);
+        assert!(
+            !e.tx_enabled(),
+            "two consecutive readings must halt transmit"
+        );
+        assert!(e.tx_owner().is_none(), "…and nothing is left keying");
+        assert!(
+            e.take_slot_tx_abort(),
+            "the halt must arm the loop's mid-over cut, not merely disarm the next cycle"
+        );
+        assert!(
+            e.snapshot().radio.cat_detail.contains("3.4"),
+            "the operator is told WHY, with the reading that did it: {:?}",
+            e.snapshot().radio.cat_detail
+        );
+    }
+
+    #[test]
+    fn a_single_swr_spike_never_halts() {
+        // The count is CONSECUTIVE, not cumulative: a good reading between two bad ones
+        // starts the run over. Three separate spikes must leave the operator on the air.
+        let mut e = swr_engine(2.5);
+        for v in [4.0, 1.2, 5.0, 1.1, 6.0, 1.3] {
+            swr_reading(&mut e, v);
+            assert!(
+                e.tx_enabled(),
+                "a spike bracketed by good readings halted transmit ({v})"
+            );
+        }
+        // …and the very next pair, uninterrupted, still trips. Without this the test above
+        // would pass just as well on a cutoff that never fires at all.
+        swr_reading(&mut e, 4.0);
+        swr_reading(&mut e, 4.0);
+        assert!(!e.tx_enabled(), "control: two in a row must still halt");
+    }
+
+    #[test]
+    fn a_reading_that_is_not_a_measurement_never_counts_toward_the_swr_cutoff() {
+        // TWO values arrive here that are not "a high SWR", and both would unkey the
+        // transmitter on no measurement at all if the comparison were written the other way
+        // round (`swr <= limit` treats a NaN as high, because every NaN comparison is false):
+        //  * 0.0 — `read_meter_f32_within` accepts any finite value >= 0, and everywhere else
+        //    in this tree a zero SWR means the meter said nothing, not a perfect match;
+        //  * NaN — a malformed `l SWR` reply that still parsed.
+        for junk in [0.0f32, f32::NAN] {
+            let mut e = swr_engine(2.5);
+            for _ in 0..6 {
+                swr_reading(&mut e, junk);
+            }
+            assert!(e.tx_enabled(), "a {junk:?} reading halted transmit");
+
+            // …and it does not merely fail to trip on its own: it RESETS a run in progress,
+            // so a real high reading either side of it is not two consecutive readings.
+            let mut split = swr_engine(2.5);
+            swr_reading(&mut split, 9.0);
+            swr_reading(&mut split, junk);
+            swr_reading(&mut split, 9.0);
+            assert!(
+                split.tx_enabled(),
+                "a {junk:?} reading between two high ones did not break the run"
+            );
+        }
+    }
+
+    #[test]
+    fn the_swr_cutoff_is_inert_off_unverified_and_unkeyed() {
+        // OFF — the shipped default.
+        let mut off = swr_engine(2.5);
+        off.settings.swr_stop_enabled = false;
+        swr_reading(&mut off, 9.0);
+        swr_reading(&mut off, 9.0);
+        assert!(off.tx_enabled(), "switched off, nothing may halt");
+
+        // UNVERIFIED SCALE — #292. A Xiegu speaks CI-V and takes Icom's curve, so it reports
+        // 6:1 while its own meter reads 1.2:1. Left to the plain rule it would halt every
+        // over that operator ever sent.
+        let mut xiegu = swr_engine(2.5);
+        xiegu.settings.rig_model = 3088; // Xiegu G90
+        assert!(
+            !xiegu.settings.swr_scale_is_verified(),
+            "a Xiegu's SWR scale is NOT verified — that is the whole point of the allow-list"
+        );
+        swr_reading(&mut xiegu, 6.0);
+        swr_reading(&mut xiegu, 6.0);
+        assert!(xiegu.tx_enabled(), "an unverified scale may never halt");
+
+        // A plain rigctld Icom — same model, native CI-V off, so `l SWR` arrives unscaled.
+        let mut hamlib = swr_engine(2.5);
+        hamlib.settings.icom_native_cat = false;
+        assert!(!hamlib.settings.swr_scale_is_verified());
+        swr_reading(&mut hamlib, 6.0);
+        swr_reading(&mut hamlib, 6.0);
+        assert!(hamlib.tx_enabled(), "an unscaled reading may never halt");
+
+        // UNKEYED — a stale reading in the window before `clear_rig_tx_meters` runs.
+        let mut idle = swr_engine(2.5);
+        idle.app.set_transmitting(false);
+        assert!(idle.tx_owner().is_none(), "precondition: nothing is keying");
+        swr_reading(&mut idle, 9.0);
+        swr_reading(&mut idle, 9.0);
+        assert!(idle.tx_enabled(), "an unkeyed reading may never halt");
+
+        // …and the run does not survive an unkey either: one high reading, the over ends,
+        // one more on the NEXT over is still only one.
+        let mut split = swr_engine(2.5);
+        swr_reading(&mut split, 9.0);
+        split.clear_rig_tx_meters(); // what the loop does on unkey
+        split.app.set_transmitting(true);
+        swr_reading(&mut split, 9.0);
+        assert!(
+            split.tx_enabled(),
+            "two readings from either side of an unkey are not consecutive"
+        );
+    }
+
+    #[test]
+    fn an_swr_halt_stops_every_kind_of_transmission() {
+        // `tx_owner` is the tree's own enumeration of every keying source (its doc: a new one
+        // is added there once and every gate learns it), so sweeping it is what makes this a
+        // completeness check rather than a list somebody remembered to keep up to date.
+        // `stopped` names what the halt must have done to THAT kind. For the queue-and-abort
+        // modes it is not "nothing owns the transmitter": `rtty_sending`/`psk_sending`/
+        // `sstv_sending` mean an over is physically on the air, and only the radio loop can
+        // clear them — the engine's whole part is to drop the queue and arm the one-shot the
+        // loop turns into a flush and an unkey on its next tick. Asserting `tx_owner().is_none()`
+        // there would be asserting something the engine cannot do, which is how a test comes to
+        // demand a weaker guard.
+        type Act = fn(&mut Engine);
+        type Check = fn(&Engine) -> bool;
+        let kinds: [(&str, Act, Check); 8] = [
+            (
+                "FT slot",
+                |e| e.app.set_transmitting(true),
+                |e| !e.app.radio.transmitting && e.tx_queue.is_empty(),
+            ),
+            ("tune", |e| e.set_tune(true), |e| !e.tuning),
+            (
+                "manual PTT",
+                |e| e.set_ptt(true),
+                |e| !e.manual_ptt && !e.broker_ptt,
+            ),
+            (
+                "voice",
+                |e| e.voice_tx = Some(vec![0.0; 16]),
+                |e| e.voice_tx.is_none(),
+            ),
+            (
+                "CW",
+                |e| e.cw_queue.push_back("K2DEF".into()),
+                |e| e.cw_queue.is_empty() && e.cw_abort,
+            ),
+            (
+                "RTTY",
+                |e| e.rtty_sending = true,
+                |e| e.rtty_queue.is_empty() && e.rtty_abort && !e.rtty_latched,
+            ),
+            (
+                "PSK",
+                |e| e.psk_sending = true,
+                |e| e.psk_queue.is_empty() && e.psk_abort && !e.psk_latched,
+            ),
+            (
+                "SSTV",
+                |e| e.sstv_sending = true,
+                |e| e.sstv_tx.is_none() && e.sstv_abort,
+            ),
+        ];
+        for (what, key, stopped) in kinds {
+            let mut e = swr_engine(2.5);
+            e.app.set_transmitting(false); // start from nothing keying…
+            e.set_tx_enabled(true);
+            key(&mut e); // …then key THIS way
+            assert!(
+                e.tx_owner().is_some(),
+                "{what}: precondition — this really is a live transmission"
+            );
+            assert!(
+                !stopped(&e),
+                "{what}: precondition — the stop evidence must not already be present, or \
+                 this case proves nothing"
+            );
+
+            swr_reading(&mut e, 4.0);
+            swr_reading(&mut e, 4.0);
+            assert!(!e.tx_enabled(), "{what}: TX must be left OFF");
+            assert!(stopped(&e), "{what}: the SWR halt did not stop this kind");
+            assert!(
+                e.take_slot_tx_abort(),
+                "{what}: the loop's universal mid-over cut must be armed too"
+            );
+        }
+    }
+
+    #[test]
+    fn the_swr_cutoff_never_keys_or_re_arms_anything() {
+        // The negative the operator's brief asks for in so many words. A cutoff is a stop; it
+        // has no business starting anything, and an engine that was NOT armed must come out
+        // of a high reading exactly as it went in.
+        let mut e = swr_engine(2.5);
+        e.set_tx_enabled(false);
+        e.app.set_transmitting(true); // an over still draining after a TX Off
+        let before = e.tx_enabled();
+        swr_reading(&mut e, 9.0);
+        swr_reading(&mut e, 9.0);
+        assert!(!before && !e.tx_enabled(), "the cutoff armed transmit");
+        assert!(
+            e.tx_owner().is_none(),
+            "…and it still stopped what was keying"
+        );
+    }
+
+    #[test]
+    fn a_hand_edited_swr_threshold_cannot_hair_trigger_or_silently_disarm() {
+        // `settings.json` is an ordinary file, and this number gates an automatic unkey.
+        // 0.0 would halt on the first reading of every transmission; a NaN compares false
+        // against everything, leaving a safety switch that reads ON and does nothing.
+        let mut zero = swr_engine(0.0);
+        assert_eq!(
+            zero.settings.swr_stop_ratio(),
+            Some(1.0),
+            "clamped to the floor — an SWR below 1:1 does not exist"
+        );
+        swr_reading(&mut zero, 1.0);
+        swr_reading(&mut zero, 1.0);
+        assert!(zero.tx_enabled(), "a perfect match must never halt");
+
+        let mut nan = swr_engine(f32::NAN);
+        assert_eq!(
+            nan.settings.swr_stop_ratio(),
+            Some(2.5),
+            "a NaN falls back to the default rather than disabling the cutoff in silence"
+        );
+        swr_reading(&mut nan, 3.0);
+        swr_reading(&mut nan, 3.0);
+        assert!(!nan.tx_enabled(), "…and the fallback really is in force");
     }
 
     #[test]

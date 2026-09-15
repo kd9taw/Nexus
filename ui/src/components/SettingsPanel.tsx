@@ -1571,6 +1571,18 @@ export function SettingsPanel({
   }
   const capPct = (v: number | null | undefined): string => (v == null ? '' : String(Math.round(v * 100)))
 
+  // The high-SWR cutoff's threshold. NOT nullable — blank means "the operator is mid-edit",
+  // not "no cutoff", and the switch beside it is what turns the feature off. So a blank or a
+  // junk entry KEEPS the previous value rather than storing 0, which would be a cutoff that
+  // fires on the first reading of every transmission. (Rust clamps again on read; this is the
+  // near guard, not the only one.)
+  const updateSwrThreshold = (raw: string) => {
+    markDirty()
+    const n = Number(raw.trim())
+    if (raw.trim() === '' || !Number.isFinite(n)) return
+    setForm((prev) => (prev ? { ...prev, swrStopThreshold: Math.min(99, Math.max(1, n)) } : prev))
+  }
+
   // SSTV drive, stored as a PERCENT (unlike the caps above, which are 0–1 fractions) because
   // the control it seeds is a percent slider. Blank = null = never touch the rig's power, which
   // is the shipped behaviour — `updateNum` cannot express that state, it would store 0.
@@ -6014,6 +6026,47 @@ export function SettingsPanel({
                 ))}
               </div>
               <span className="settings-hint">{t('settings.transmit.powerCaps.hint')}</span>
+            </div>
+
+            {/* The high-SWR cutoff. Off by default, and DISABLED outright on a radio whose SWR
+                scale Nexus cannot stand behind — `radio.swrScaleVerified` comes from the
+                engine (native Icom CI-V, or a Flex's own VITA meters), and #292 is why: a
+                Xiegu reads 1.2:1 on its own meter and reports 6:1 here, so a cutoff there
+                would unkey that operator's transmitter on every over. Absent `radio` (the
+                setup wizard, the Remote projection) reads as unverified, which is the safe
+                direction for a control that stops transmissions. The engine refuses it
+                independently — this is the explanation, not the guard. */}
+            <div className="settings-field">
+              <label className="settings-toggle">
+                <span className="settings-label">{t('settings.transmit.swrStop.label')}</span>
+                <button disabled={remote || !radio?.swrScaleVerified}
+                  type="button"
+                  role="switch"
+                  aria-checked={form.swrStopEnabled === true}
+                  className={`toggle${form.swrStopEnabled === true ? ' on' : ''}`}
+                  onClick={() => updateBool('swrStopEnabled', form.swrStopEnabled !== true)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+              <label className="settings-power-cap">
+                <span>{t('settings.transmit.swrStop.threshold')}</span>
+                <input disabled={remote || !radio?.swrScaleVerified || form.swrStopEnabled !== true}
+                  type="number"
+                  min={1}
+                  max={99}
+                  step={0.1}
+                  inputMode="decimal"
+                  value={form.swrStopThreshold ?? 2.5}
+                  onChange={(e) => updateSwrThreshold(e.target.value)}
+                />
+                <span className="settings-power-cap-unit">:1</span>
+              </label>
+              <span className="settings-hint">
+                {radio?.swrScaleVerified
+                  ? t('settings.transmit.swrStop.hint')
+                  : t('settings.transmit.swrStop.unverified')}
+              </span>
             </div>
 
             <p className="settings-note">

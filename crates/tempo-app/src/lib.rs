@@ -275,6 +275,7 @@ impl AppState {
                 tx_alc: None,
                 tx_po_w: None,
                 tx_comp_db: None,
+                swr_scale_verified: false,
                 rig_mode: None, // engine fills from CAT mode read-back (display-only)
                 sideband_override: None, // engine fills from the cockpit mode picker (transient)
                 phone_seg_lo: None, // engine fills from license privileges for the current band

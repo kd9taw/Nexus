@@ -1194,6 +1194,13 @@ export interface RadioStatus {
   txAlc?: number | null
   txPoW?: number | null
   txCompDb?: number | null
+  /** Can Nexus put a NUMBER to this radio's SWR — i.e. may the high-SWR cutoff be offered?
+   * True only on the native Icom CI-V daemon and a FlexRadio's own VITA meter stream, the two
+   * paths that convert the raw meter with a scale we can point at. Elsewhere `txSwr` is
+   * whatever Hamlib's `l SWR` printed, unscaled — a Xiegu reads 1.2:1 on its own meter and
+   * 6:1 here (#292) — so Settings shows the cutoff disabled and says so. The engine refuses it
+   * regardless of what the UI does. */
+  swrScaleVerified?: boolean
   /** The rig's actual mode read back over CAT (e.g. "USB"/"LSB"/"FM"); display-only,
    * used to flag when the rig's mode knob disagrees with the commanded mode. */
   rigMode?: string | null
@@ -3205,6 +3212,13 @@ export interface Settings {
    *  tunes at 25 %. It also declines entirely when Nexus has never commanded a level on this
    *  rig, because there would be nothing to put back afterwards. */
   tunePowerPct?: number | null
+  /** Stop transmitting when the rig reports a high SWR. Default OFF. Honoured only while
+   *  `radio.swrScaleVerified` is true for the active radio; elsewhere the control is disabled.
+   *  Two consecutive keyed readings above `swrStopThreshold` run the same halt as Stop TX. */
+  swrStopEnabled?: boolean
+  /** The SWR ratio the cutoff trips above (default 2.5). Clamped to 1.0–99.0 on READ in Rust,
+   *  so a hand-edited 0 or NaN can never reach the transmit path. */
+  swrStopThreshold?: number
   maxPowerPhone?: number | null
   maxPowerCw?: number | null
   maxPowerDigital?: number | null

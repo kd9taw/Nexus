@@ -36,6 +36,7 @@ import { bandLabelForMhz } from '../band'
 import {
   clampOffsetHz,
   cqDirFromText,
+  cqSuggestionFromText,
   genStdMessages,
   snrForCall,
   stdMessageList,
@@ -771,11 +772,30 @@ export function OperateCockpit({
   const doTx = (n: number) => {
     if (!(n === 6 ? cqControl : messageControl)) return
     if (n === 6) {
-      if (control) setLocalNext(5)
       const dir = cqDirFromText(tx6, snap.mycall)
-      // dir === undefined → parse failed / malformed → fall back to plain CQ
-      const resolved = dir === undefined ? null : dir
-      startCq(resolved).then((s) => onSnap?.(s)).catch((e) => { if (!control) pushToast(String(e), 'error') })
+      // ⭐ #254 — A MALFORMED CQ IS REFUSED, NOT REPLACED.
+      //
+      // `dir === undefined` means the Tx6 text is not a CQ in WSJT-X's grammar
+      // (`CQ [TOKEN] MYCALL [GRID4]`). This used to fall back to `startCq(null)` — a PLAIN
+      // CQ — while the box went on showing what the operator had typed, so "CQ KD9WES POTA"
+      // put a bare CQ on the air and said nothing. That breaks the transmit path's plainest
+      // rule: never transmit a message different from the one shown.
+      //
+      // Operator decision 2026-09-14: WARN ONLY. The grammar is WSJT-X's and is not widened,
+      // and nothing is auto-rewritten — we refuse before anything keys and name the form that
+      // would work when `cqSuggestionFromText` can derive one from the operator's OWN words.
+      if (dir === undefined) {
+        const fix = cqSuggestionFromText(tx6, snap.mycall)
+        pushToast(
+          fix
+            ? t('operate.tx.cq.malformed.try', { fix })
+            : t('operate.tx.cq.malformed', { mycall: snap.mycall.toUpperCase() }),
+          'error',
+        )
+        return
+      }
+      if (control) setLocalNext(5)
+      startCq(dir).then((s) => onSnap?.(s)).catch((e) => { if (!control) pushToast(String(e), 'error') })
       return
     }
     const call = dxCall.trim().toUpperCase()

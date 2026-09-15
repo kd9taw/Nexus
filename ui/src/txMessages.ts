@@ -214,6 +214,9 @@ export function clampOffsetHz(hz: number): number {
 // Directed CQ parsing: Tx6 editable field → startCq(dir | null).
 // ---------------------------------------------------------------------------
 
+/** A valid directed-CQ token: 1–4 letters, OR exactly 3 digits (contest/zone CQ). */
+const CQ_TOKEN_RE = /^([A-Z]{1,4}|\d{3})$/
+
 /**
  * Parse the Tx6 text and extract a directed CQ token for `startCq(dir)`.
  *
@@ -248,9 +251,6 @@ export function cqDirFromText(
   const myUp = myCall.trim().toUpperCase()
   if (!myUp) return undefined
 
-  // Regex for a valid directed token: 1–4 letters OR exactly 3 digits.
-  const TOKEN_RE = /^([A-Z]{1,4}|\d{3})$/
-
   // Check structure: parts after CQ are some of [TOKEN] MYCALL [GRID].
   // We walk the remaining tokens:
   //   idx 1: could be TOKEN or MYCALL
@@ -264,7 +264,7 @@ export function cqDirFromText(
     // No direction token: CQ MYCALL [GRID]
     callIdx = 1
     token = null
-  } else if (TOKEN_RE.test(parts[1]) && parts.length >= 3 && parts[2] === myUp) {
+  } else if (CQ_TOKEN_RE.test(parts[1]) && parts.length >= 3 && parts[2] === myUp) {
     // Has direction token: CQ TOKEN MYCALL [GRID]
     token = parts[1]
     callIdx = 2
@@ -279,5 +279,47 @@ export function cqDirFromText(
   if (remainder.length === 1 && !GRID4_RE.test(remainder[0])) return undefined
 
   return token
+}
+
+/**
+ * The valid WSJT-X CQ the operator probably MEANT, for a Tx6 text `cqDirFromText`
+ * refused — or `null` when none can be derived honestly.
+ *
+ * #254: the reporter typed `CQ <MYCALL> POTA`, the words the other way round. He is not
+ * wrong about what he wants; he is wrong about the word order, and WSJT-X's grammar is
+ * `CQ [TOKEN] MYCALL [GRID4]`. Naming the form that works turns a bare refusal into
+ * something the operator can act on without leaving the cockpit.
+ *
+ * ⚠️ ONLY A RE-ORDERING IS EVER OFFERED, NEVER AN INVENTION. Every word typed must be
+ * accounted for — the CQ keyword, exactly one valid direction token, OUR callsign, and at
+ * most one grid — and the suggestion is those same words in WSJT-X's order. A typo in the
+ * callsign, somebody else's callsign, two tokens, a word that is neither token nor grid:
+ * all return `null`. The whole point of #254 is that a message the operator did not type
+ * must never be put in front of them as though they had.
+ *
+ * This is a HINT for a refusal message. It is never sent, never auto-applied, and the Tx6
+ * box is not rewritten with it — the operator retypes it if they want it.
+ */
+export function cqSuggestionFromText(text: string, myCall: string): string | null {
+  const parts = text.trim().toUpperCase().split(/\s+/).filter(Boolean)
+  const myUp = myCall.trim().toUpperCase()
+  if (!myUp || parts[0] !== 'CQ') return null
+
+  const rest = parts.slice(1)
+  const callAt = rest.indexOf(myUp)
+  if (callAt < 0) return null // not our CQ — nothing to propose
+
+  const others = rest.filter((_, i) => i !== callAt)
+  const grids = others.filter((p) => GRID4_RE.test(p))
+  const tokens = others.filter((p) => !GRID4_RE.test(p) && CQ_TOKEN_RE.test(p))
+  // Every remaining word must be exactly one of those two kinds, or we cannot claim to
+  // know what the operator meant.
+  if (others.length !== grids.length + tokens.length) return null
+  if (tokens.length !== 1 || grids.length > 1) return null
+
+  const fixed = ['CQ', tokens[0], myUp, ...grids].join(' ')
+  // Already in the right order? Then this text was not malformed and there is nothing to
+  // suggest — `cqDirFromText` would have accepted it.
+  return fixed === parts.join(' ') ? null : fixed
 }
 
