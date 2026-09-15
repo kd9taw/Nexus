@@ -112,6 +112,17 @@ impl Row {
     }
 }
 
+/// The mode label "By mode" counts a QSO under: `USB`/`LSB` (either case) answer `SSB`,
+/// everything else is returned verbatim. The twin of `phoneModeLabel` in
+/// `ui/src/features/logStats.ts`; see the call site for why they must agree exactly.
+fn phone_mode_label(mode: &str) -> &str {
+    let m = mode.trim();
+    if m.eq_ignore_ascii_case("USB") || m.eq_ignore_ascii_case("LSB") {
+        "SSB"
+    } else {
+        m
+    }
+}
 fn tally(map: &mut BTreeMap<String, usize>, value: &str) -> Result<(), &'static str> {
     let value = value.trim();
     if value.is_empty() {
@@ -168,7 +179,14 @@ impl Statistics {
                 .1 += 1;
         }
         tally(&mut self.bands, &q.band)?;
-        tally(&mut self.modes, &q.mode)?;
+        // The sidebands fold into SSB, and ONLY the sidebands. A log holds SSB, USB and LSB
+        // rows for one mode — from any logger that writes the sideband in MODE, and now from
+        // Nexus's own phone contacts, which carry the sideband they were worked on — so the
+        // raw spelling split "By mode" into three entries, none of them the operator's phone
+        // total. This mirrors `ui/src/features/logStats.ts` `phoneModeLabel` EXACTLY, case
+        // handling included: `remote/test/insights-reference.mjs` runs that module as an
+        // independent comparator against this roll-up, so the two must agree input for input.
+        tally(&mut self.modes, phone_mode_label(&q.mode))?;
         // Existing UI Statistics gates WAS by the stored country, separately
         // from the resolved-entity headline. Do not silently change that rule.
         if matches!(

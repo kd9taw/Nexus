@@ -2552,6 +2552,35 @@ pub(crate) fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
         // JS8 is a registered ADIF SUBMODE under MFSK (JS8Call logs it that way too); a bare
         // MODE=JS8 misses the MODE enumeration and TQSL drops it, exactly as for FT2.
         "JS8" => Some(("MFSK", "JS8")),
+        // -- The phone SIDEBAND (operator report, 2026-09-15) ------------------------
+        // The sideband a phone contact was worked on is what HRD and the other loggers
+        // track, and until now nothing here recorded it: a phone QSO was stored and
+        // exported as plain SSB, so no record Nexus wrote — the local log, the export, or
+        // the QRZ/LoTW/ClubLog/eQSL push, which all share this writer — said upper or
+        // lower. What a given site then DISPLAYS for a submode-less SSB record is its own
+        // business and is not asserted here; the defect on this side is that the sideband
+        // was never emitted at all.
+        //
+        // This is the one entry in this table with NO guesswork in it. The parent is
+        // certain, and unlike TEMPOFAST or a bare VARA the submode spelling is REGISTERED:
+        // `SSB -> LSB, USB` is the Mode enumeration's own submode column (ADIF 3.0.4,
+        // 2013-08-04, the release that introduced SUBMODE; still so in 3.1.7).
+        //
+        // The direction that matters is the one the rest of the table already takes — the
+        // sideband must NOT reach MODE. MODE's data type is *Enumeration* and neither
+        // spelling is in it, so a bare `<MODE:3>USB` misses all three legs of TQSL's
+        // MODE%SUBMODE -> SUBMODE -> MODE cascade and the record is DROPPED; SUBMODE's data
+        // type is *String* ("use enumeration values for interoperability"), which is why the
+        // sideband is safe there. That trap was already REACHABLE before this entry existed:
+        // an imported Log4OM/N1MM row writes USB/LSB in MODE, `import_adif` stores it as-is,
+        // and the export re-emitted it verbatim straight into it.
+        //
+        // `APP_TEMPO_MODE` (emitted by the caller for every pair here) is what carries the
+        // sideband back through our own file on import — `promoted_submode` deliberately
+        // still does NOT promote a phone submode, so a FOREIGN logger's SSB+USB row keeps
+        // MODE=SSB and round-trips its submode verbatim through `extra`, exactly as before.
+        "USB" => Some(("SSB", "USB")),
+        "LSB" => Some(("SSB", "LSB")),
         // -- #68 (rogerloxton): FreeDV and VarAC ------------------------------------
         // Neither program's mode name is a MODE value; both are SUBMODE values whose
         // parent IS in the enumeration. FreeDV's parent is DIGITALVOICE (it is digital
@@ -4152,6 +4181,100 @@ mod tests {
                 "{mode}: {adif}"
             );
         }
+    }
+
+    /// ⭐ A PHONE CONTACT CARRIES THE SIDEBAND IT WAS ACTUALLY WORKED ON (operator report,
+    /// 2026-09-15). Every phone QSO reached QRZ, LoTW and the ADIF export as plain `SSB`, so
+    /// no record this writer produced said whether the contact was upper or lower. What a
+    /// given site DISPLAYS for a submode-less SSB record is its own business (the operator
+    /// sees "USB" on QRZ for all of them) and is not what this pins; what it pins is that the
+    /// sideband is now EMITTED. HRD and the loggers he compares against track U/L.
+    ///
+    /// MODE stays `SSB` — that half of the old reasoning is right and is not being undone.
+    /// USB and LSB are not in the closed ADIF Mode enumeration, so a bare `<MODE:3>USB` misses
+    /// all three legs of TQSL's MODE%SUBMODE -> SUBMODE -> MODE cascade and the record is
+    /// DROPPED, exactly as a bare `<MODE:9>TempoFast` is. The sideband belongs in SUBMODE,
+    /// where both spellings ARE registered.
+    #[test]
+    fn a_phone_qso_rides_as_mode_ssb_plus_the_sideband_as_submode() {
+        for (typed, golden) in [
+            ("LSB", "<MODE:3>SSB<SUBMODE:3>LSB"),
+            ("USB", "<MODE:3>SSB<SUBMODE:3>USB"),
+            ("lsb", "<MODE:3>SSB<SUBMODE:3>LSB"),
+            (" usb ", "<MODE:3>SSB<SUBMODE:3>USB"),
+        ] {
+            let mut r = rec("W1AW", "40m", 1_700_000_000);
+            r.mode = typed.into();
+            let adif = adif_record(&r);
+            assert!(
+                adif.contains(golden),
+                "{typed} must ride as {golden}: {adif}"
+            );
+            // The bare sideband must never reach MODE — that is the record TQSL drops.
+            assert!(
+                !adif.contains("<MODE:3>USB") && !adif.contains("<MODE:3>LSB"),
+                "{typed} emitted the bare invalid mode: {adif}"
+            );
+            assert_eq!(adif.matches("<MODE:").count(), 1, "{typed}: {adif}");
+            assert_eq!(adif.matches("<SUBMODE:").count(), 1, "{typed}: {adif}");
+        }
+        // AM AND FM ARE NOT SIDEBANDS AND MUST NOT GROW ONE — nor may plain SSB, which is
+        // what a record with no sideband evidence behind it still says.
+        //
+        // The POSITIVE CONTROL for these three "no SUBMODE" assertions is the loop above:
+        // it runs the SAME `adif_record` against USB/LSB and REQUIRES a SUBMODE, so a writer
+        // that had stopped emitting SUBMODE altogether fails there before it can pass here.
+        for mode in ["AM", "FM", "SSB"] {
+            let mut r = rec("W1AW", "40m", 1_700_000_000);
+            r.mode = mode.into();
+            let adif = adif_record(&r);
+            assert!(
+                adif.contains(&field("MODE", mode)),
+                "{mode} must ride as its own MODE: {adif}"
+            );
+            assert!(
+                !adif.contains("<SUBMODE:"),
+                "{mode} is not a sideband and must carry no SUBMODE: {adif}"
+            );
+        }
+    }
+
+    /// The sideband survives Nexus's own file, and re-exporting the record it read back emits
+    /// exactly one SUBMODE (the two-SUBMODE shape #68 found for FreeDV/VarAC).
+    #[test]
+    fn a_phone_sideband_survives_the_adif_round_trip() {
+        for typed in ["USB", "LSB"] {
+            let mut r = rec("W1AW", "40m", 1_700_000_000);
+            r.mode = typed.into();
+            let adif = adif_header() + &adif_record(&r);
+            let back = &parse_adif(&adif)[0];
+            assert_eq!(back.mode, typed, "the sideband must survive our own file");
+            let again = adif_record(back);
+            assert!(
+                again.contains(&field("MODE", "SSB")),
+                "{typed} re-export lost MODE=SSB: {again}"
+            );
+            assert!(
+                again.contains(&field("SUBMODE", typed)),
+                "{typed} re-export lost the sideband: {again}"
+            );
+            assert_eq!(
+                again.matches("<SUBMODE:").count(),
+                1,
+                "{typed}: exactly one SUBMODE on re-export: {again}"
+            );
+        }
+        // DEDUP STILL FOLDS THE SIDEBANDS. `dedup_mode` is what keeps a log round-tripped
+        // through a logger that writes USB/LSB in MODE from coming back as a second copy of
+        // every phone QSO, and a record now STORED as a sideband must meet a plain-SSB one on
+        // the same key — including the phone contacts already in the operator's log, which
+        // this change does not rewrite.
+        assert_eq!(dedup_mode("USB"), "SSB");
+        assert_eq!(dedup_mode("LSB"), "SSB");
+        assert_eq!(dedup_mode("SSB"), "SSB");
+        // The control: the fold is the sideband spellings only.
+        assert_eq!(dedup_mode("AM"), "AM");
+        assert_eq!(dedup_mode("FM"), "FM");
     }
 
     #[test]

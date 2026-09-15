@@ -25,6 +25,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Phone contacts now record which sideband you worked them on.** Every phone QSO was logged
+  as plain `SSB`, so nothing Nexus wrote down — your own Logbook, the ADIF export, or the
+  uploads to QRZ, LoTW, ClubLog, eQSL and the rest — said whether the contact was upper or
+  lower. The Logbook's Mode column now reads USB or LSB, the way HRD and the other loggers
+  show it, and the entry strip's "Logs to the shared logbook as …" line says which before you
+  commit the contact.
+
+  **In the ADIF it goes where the standard puts it**: the mode stays `SSB` and the sideband
+  rides as the `SUBMODE`, which is what ADIF has specified since 2013 and what LoTW accepts.
+  Writing USB or LSB into the mode field instead is what gets a record thrown out by LoTW, so
+  Nexus does not do that — and it no longer does it for *imported* contacts either. A log
+  brought in from a program that writes the sideband in the mode field (Log4OM and N1MM both
+  do) used to be exported straight back out that way, and every one of those records was
+  rejected on upload without ever saying so.
+
+  **The sideband comes from your radio or not at all.** Nexus writes one only when the rig has
+  actually told it over CAT which sideband it is on. Without CAT, or with the radio sitting in
+  CW or a data mode, the contact logs as plain SSB exactly as before — it will not guess a
+  sideband from the band, because a wrong one in a permanent record is worse than none. AM and
+  FM are modes in their own right, not sidebands, and are unchanged.
+
+  **This fixes contacts from here on.** Phone QSOs already in your log keep the SSB they were
+  written with — nothing goes back and guesses a sideband for a contact that is already made.
+  Duplicate checking still treats USB, LSB and SSB as one mode, so nothing you have already
+  worked stops counting as worked, and re-importing an old log still adds no second copy.
+
 - **A satellite you just opened no longer claims it has no transmitters.** Open a bird the
   Satellites section had not looked up yet (CO-57, say) and its transponder list read "no
   transmitters listed for this bird" for up to half an hour, because the SatNOGS lookup for it

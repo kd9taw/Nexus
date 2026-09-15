@@ -719,8 +719,35 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // A rig outside the phone family (CW, RTTY, PKTUSB…) names no mode this strip can log FROM, so
   // it keeps the commanded mode — unchanged behaviour for a state the chip is already shouting
   // about, and the log strip's own manual override is there for a genuine cross-mode contact.
-  const observedMode = catOk && phoneAdifMode(rigFamily) !== null ? rigFamily : commandedMode
-  const logMode = phoneAdifMode(observedMode) ?? 'SSB'
+  // The read-back, once it has passed both gates and names a phone mode — `null` when it does
+  // not, which is the single "the rig did not tell us" answer both lines below read.
+  const rigReadPhoneMode = catOk && phoneAdifMode(rigFamily) !== null ? rigFamily : null
+  const observedMode = rigReadPhoneMode ?? commandedMode
+
+  // ⭐ AND THE SIDEBAND IS PART OF THE CONTACT (operator report, 2026-09-15).
+  //
+  // The paragraph above fixed WHICH phone mode gets logged. It still could not say which
+  // SIDEBAND, because it logged the ADIF *Mode* and USB/LSB are ADIF SUBMODEs of SSB — so
+  // every phone QSO was written as plain SSB and NOTHING Nexus wrote recorded upper or lower:
+  // not the Logbook, not the export, not the QRZ/LoTW/ClubLog/eQSL push. What a given site
+  // then DISPLAYS for a submode-less SSB record is its own business and is not asserted here
+  // (the operator sees "USB" on QRZ for all of them); the defect on this side is that the
+  // sideband was never recorded at all, while HRD and the loggers he compares against track
+  // U/L.
+  //
+  // The record's mode label is now the sideband itself, and `logbook::adif_submode` turns it
+  // into the correct ADIF `<MODE:3>SSB<SUBMODE:3>LSB` on the way out — the MODE field does NOT
+  // change, so the closed Mode enumeration that keeps USB/LSB out of `LOG_MODES` is untouched.
+  //
+  // ⛔ THE SIDEBAND COMES FROM THE RIG OR NOT AT ALL, and that is the whole gate. The fallback
+  // this line does NOT use is `commandedMode`, whose AUTO face is `dialMhz < 10 ? LSB : USB` —
+  // a BAND DEFAULT. Writing that into a permanent record would be inventing the operator's
+  // sideband from the band, which is exactly the claim nobody can check later: the rig may have
+  // been on the other one all along. Without CAT, or with the rig sitting in CW/PKTUSB where
+  // the read-back names no phone mode, there IS no evidence of a sideband and the contact logs
+  // as plain SSB — unchanged from before, and no worse than the report. AM and FM are modes in
+  // their own right, not sidebands, and ride through this line as themselves.
+  const logMode = rigReadPhoneMode ?? phoneAdifMode(commandedMode) ?? 'SSB'
 
   // ⚠️ THE MIC IS DEAD AND ONLY THIS SCREEN CAN SAY SO (2026-08-17 Flex audit, critic gap #6).
   // Native Flex DAX audio sends `transmit set dax=1`, which is a RADIO-WIDE setting: while it

@@ -147,6 +147,27 @@ function bandForMhz(mhz: number): string {
  * The cockpits only ever pass SSB/FM/CW/PSK31/QPSK31 as the default, all present here. */
 const LOG_MODES = ['SSB', 'FM', 'AM', 'CW', 'RTTY', 'PSK31', 'QPSK31', 'FT8', 'FT4'] as const
 
+/** The `LOG_MODES` entry that covers `m` — what the override's `<select>` opens on.
+ *
+ * A cockpit's live mode is not always a MODE: the Phone cockpit logs the SIDEBAND a contact
+ * was worked on ("USB"/"LSB"), which is an ADIF SUBMODE and is deliberately not in the list
+ * above. Seeding the select with it left a CONTROLLED `<select>` holding a value no `<option>`
+ * matches — and the box does NOT go blank, which is the trap. Nothing ends up selected, so the
+ * HTML selectedness algorithm picks the FIRST option for a single-select: the operator reads
+ * **SSB** while React state still says LSB, no warning anywhere, and committing the contact
+ * writes a mode different from the one the strip is showing. A strip whose job is to state
+ * what will be written must not be able to do that.
+ *
+ * So the override opens on the parent MODE. That is the honest reading of what it is: opening
+ * it is an explicit "I am entering this contact by hand", it is all-or-nothing (band, freq,
+ * mode AND time come from it together), and its vocabulary is MODE values. The ordinary
+ * closed-override path is untouched and still carries the sideband. `modeKey` is the same fold
+ * the dupe check and the stats use, so there is one answer to "which mode is this" in the UI. */
+function overrideModeFor(m: string): string {
+  const k = modeKey(m)
+  return (LOG_MODES as readonly string[]).includes(k) ? k : m
+}
+
 /**
  * The invariant example values this strip shows in empty fields, gathered so the guard can prove
  * they never became catalog entries. Every one is drawn from a technical namespace — a callsign,
@@ -832,7 +853,7 @@ export function LogEntry({
     setOvTime(time)
     setOvBand(snap.radio.band)
     setOvFreq(String(snap.radio.dialMhz))
-    setOvMode(mode)
+    setOvMode(overrideModeFor(mode))
     setOverrideOpen(true)
   }
 

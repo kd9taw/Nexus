@@ -192,17 +192,63 @@ describe('the Phone cockpit logs the mode the rig is actually on', () => {
     )
   })
 
-  it('still logs an ordinary SSB contact as SSB — the control', async () => {
-    // The fix must not have swapped one default for another.
+  // ⭐ THE SIDEBAND IS PART OF THE CONTACT (operator report, 2026-09-15). Everything above
+  // fixed WHICH phone mode gets logged; it still could not say which SIDEBAND, because the
+  // log mode was the ADIF *Mode* and USB and LSB are ADIF SUBMODEs of SSB. So every phone
+  // QSO went to the logbook — and to QRZ, which shows a submode-less SSB record as "USB" —
+  // as plain SSB, and nothing recorded whether it was upper or lower. HRD tracks U/L.
+  //
+  // The wire value here is the record's mode LABEL, not its ADIF MODE field: the exporter
+  // (logbook.rs `adif_submode`) turns "LSB" into `<MODE:3>SSB<SUBMODE:3>LSB`, so MODE stays
+  // SSB and the closed-enumeration trap that keeps USB/LSB out of `LOG_MODES` is untouched.
+  it('logs a 20 m USB contact as USB, not bare SSB', async () => {
     renderPhone({ rigMode: 'USB' })
     await logContact('w1aw')
-    expect(loggedMode()).toBe('SSB')
+    expect(loggedMode(), 'the sideband was thrown away').toBe('USB')
   })
 
-  it('logs LSB as SSB too — USB/LSB are ADIF SUBMODEs, never Modes', async () => {
+  it('logs an 80 m LSB contact as LSB', async () => {
     renderPhone({ dialMhz: 3.885, band: '80m', rigMode: 'LSB', sideband: 'LSB' })
     await logContact('w1aw')
-    expect(loggedMode()).toBe('SSB')
+    expect(loggedMode(), 'the sideband was thrown away').toBe('LSB')
+  })
+
+  it('the hand-entry override logs the mode its own box is showing', async () => {
+    // ⚠️ THE OVERRIDE'S MODE BOX MUST NOT LIE. Its `<select>` is CONTROLLED and its options are
+    // `LOG_MODES`, which has no USB/LSB — they are SUBMODEs, and that ruling stands. Seeded
+    // with the cockpit's live "LSB" it holds a value no `<option>` matches, and the HTML
+    // selectedness algorithm then selects the FIRST option for a single-select with nothing
+    // selected: the box reads **SSB** while React state still says LSB, with no warning
+    // anywhere. Open the override, touch nothing, log — and the strip writes a mode different
+    // from the one it is showing.
+    //
+    // It is NOT blank, which is worth writing down: that was the guess, and a test asserting
+    // "the box is not blank" passes identically before and after the fix. What discriminates
+    // is whether the box and the RECORD agree.
+    //
+    // So the override opens on the parent MODE, which is what its vocabulary can express.
+    renderPhone({ dialMhz: 3.885, band: '80m', rigMode: 'LSB', sideband: 'LSB' })
+    fireEvent.click(screen.getByRole('button', { name: /another radio/i }))
+    const shown = (document.querySelector('select.le-ov-mode') as HTMLSelectElement).value
+    expect(shown).toBe('SSB')
+    await logContact('w1aw')
+    expect(loggedMode(), 'the override logged a mode its box was not showing').toBe(shown)
+
+    // THE CONTROL, and it is the whole reason this is not merely "logs SSB": with the override
+    // CLOSED the very same snapshot logs the sideband. Had the fix thrown the sideband away
+    // everywhere, this half would fail.
+    cleanup()
+    mockedLogQso.mockClear()
+    renderPhone({ dialMhz: 3.885, band: '80m', rigMode: 'LSB', sideband: 'LSB' })
+    await logContact('w1aw')
+    expect(loggedMode(), 'the closed-override path lost the sideband').toBe('LSB')
+  })
+
+  it('says the sideband on the line that states what will be written', async () => {
+    renderPhone({ dialMhz: 3.885, band: '80m', rigMode: 'LSB', sideband: 'LSB' })
+    await waitFor(() =>
+      expect(summaryText()).toMatch(/Logs to the shared logbook as LSB/),
+    )
   })
 
   it('logs an FM contact as FM', async () => {
@@ -220,11 +266,12 @@ describe('the Phone cockpit logs the mode the rig is actually on', () => {
 
   it('follows the RIG, not the pick, when the rig did not take the AM command', async () => {
     // The operator picked AM but the CAT set failed / the rig is still on LSB. What went out
-    // was an SSB emission and that is what the log must say — mislabelling SSB as AM is the
-    // same defect pointing the other way.
+    // was a lower-sideband emission and that is what the log must say — mislabelling SSB as AM
+    // is the same defect pointing the other way. The rig named the sideband, so the record
+    // carries it.
     renderPhone({ dialMhz: 7.29, band: '40m', sidebandOverride: 'AM', rigMode: 'LSB' })
     await logContact('w1aw')
-    expect(loggedMode()).toBe('SSB')
+    expect(loggedMode()).toBe('LSB')
   })
 
   it('ignores the read-back when there is no CAT to have read it', async () => {
@@ -234,6 +281,44 @@ describe('the Phone cockpit logs the mode the rig is actually on', () => {
     renderPhone({ catOk: false, rigMode: 'AM' })
     await logContact('w1aw')
     expect(loggedMode()).toBe('SSB')
+  })
+
+  it('never invents a sideband from the band when the rig did not name one', async () => {
+    // ⛔ The sideband comes from the RIG or not at all. The fallback the log mode must NOT use
+    // is the cockpit's AUTO face, `dialMhz < 10 ? LSB : USB` — a BAND DEFAULT. Writing that
+    // into a permanent record claims a sideband nobody measured, and the rig may have been on
+    // the other one all along.
+    //
+    // Both bands are exercised so a green cannot come from the band default happening to agree
+    // with the answer: on 80 m AUTO says LSB, on 20 m it says USB, and neither may appear.
+    for (const over of [
+      { catOk: false, dialMhz: 3.885, band: '80m', rigMode: '' }, // AUTO would say LSB
+      { catOk: false, dialMhz: 14.2, band: '20m', rigMode: '' }, // AUTO would say USB
+      { catOk: true, dialMhz: 3.885, band: '80m', rigMode: 'CW' }, // read-back names no phone mode
+      { catOk: true, dialMhz: 14.2, band: '20m', rigMode: 'PKTUSB' },
+    ]) {
+      mockedLogQso.mockClear()
+      renderPhone(over)
+      await logContact('w1aw')
+      expect(
+        loggedMode(),
+        `a sideband was invented on ${over.band} with rig "${over.rigMode}"`,
+      ).toBe('SSB')
+      cleanup()
+    }
+    // THE POSITIVE CONTROL. The same harness, the same two bands, with the rig actually
+    // reporting a sideband — these MUST come back USB/LSB, or the assertions above are passing
+    // because nothing can ever log a sideband rather than because the gate works.
+    for (const [over, want] of [
+      [{ catOk: true, dialMhz: 3.885, band: '80m', rigMode: 'LSB' }, 'LSB'],
+      [{ catOk: true, dialMhz: 14.2, band: '20m', rigMode: 'USB' }, 'USB'],
+    ] as const) {
+      mockedLogQso.mockClear()
+      renderPhone(over)
+      await logContact('w1aw')
+      expect(loggedMode(), 'the control did not trip').toBe(want)
+      cleanup()
+    }
   })
 
   it('ignores a read-back that does not name a phone mode', async () => {

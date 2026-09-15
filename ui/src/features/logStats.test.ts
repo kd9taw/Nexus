@@ -45,6 +45,34 @@ describe('computeLogStats', () => {
     expect(s.byState).toEqual([{ label: 'CT', count: 2 }]) // DL1ABC's blank state dropped
   })
 
+  it('counts phone as one mode however the sideband was spelled', () => {
+    // Once a phone contact carries the SIDEBAND it was worked on, a log holds SSB, USB and
+    // LSB rows for the same mode — as it already did for anyone who imported from a logger
+    // that writes the sideband in MODE. Tallying the raw spelling split the "By mode" bar
+    // list into three entries, none of which was the operator's phone total.
+    const phone = computeLogStats([
+      qso({ call: 'W1AW', band: '20m', mode: 'USB' }),
+      qso({ call: 'K9XYZ', band: '80m', mode: 'lsb' }), // either case is still a sideband
+      qso({ call: 'DL1ABC', band: '20m', mode: 'SSB' }),
+      qso({ call: 'JA1XYZ', band: '40m', mode: 'CW' }),
+      qso({ call: 'VK2DEF', band: '10m', mode: 'FM' }),
+      qso({ call: 'G0ABC', band: '20m', mode: 'AM' }),
+    ])
+    expect(phone.byMode[0]).toEqual({ label: 'SSB', count: 3 })
+    // The control: the fold is the sidebands only. FM and AM are modes in their own right
+    // and must still be counted apart — otherwise this passes on a tally that has merely
+    // stopped telling modes apart.
+    expect(phone.byMode.map((t) => t.label).sort()).toEqual(['AM', 'CW', 'FM', 'SSB'])
+    // …and nothing ELSE is normalised. Folding case across the board would merge "ft8" into
+    // "FT8", a wider change than this defect asks for and one that would put this roll-up out
+    // of step with the Remote-side twin the native gate compares it against.
+    const mixed = computeLogStats([
+      qso({ call: 'W1AW', band: '20m', mode: 'FT8' }),
+      qso({ call: 'K9XYZ', band: '20m', mode: 'ft8' }),
+    ])
+    expect(mixed.byMode.map((t) => t.label).sort()).toEqual(['FT8', 'ft8'])
+  })
+
   it('WAS by-state folds casing and excludes foreign subdivision codes', () => {
     const s2 = computeLogStats([
       qso({ call: 'W1AW', country: 'United States', state: 'CT' }),

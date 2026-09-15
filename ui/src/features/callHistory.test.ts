@@ -47,6 +47,32 @@ describe('callHistory', () => {
     expect(callHistory(LOG, 'W1AW', '').dupeThisBand).toBe(false) // no band → skip
   })
 
+  it('the mode-scoped dupe check goes through modeKey, so a sideband still meets SSB', () => {
+    // ⭐ The Dupe/B4 badge with Settings ▸ b4MatchMode on. The compare here was the one
+    // mode compare in this module that did NOT go through `modeKey` — `entitySlots` above it
+    // does, and its own comment says why ("USB against a log full of LSB read as a mode never
+    // worked"). Once the Phone cockpit logs the SIDEBAND a contact was worked on, the live
+    // mode is "USB"/"LSB" while a log full of history holds "SSB", and a raw compare takes the
+    // badge dark for every phone station the operator has ever worked.
+    for (const live of ['USB', 'LSB', 'SSB', 'ssb']) {
+      expect(
+        callHistory(LOG, 'W1AW', '20m', live, true).dupeThisBand,
+        `${live} did not meet the stored SSB contact`,
+      ).toBe(true)
+    }
+    // …and a stored sideband meets a live SSB, which is the same fold read the other way —
+    // every phone contact already in an operator's log stays matchable.
+    const stored = [qso('W1AW', '20m', 'LSB', 1800)]
+    expect(callHistory(stored, 'W1AW', '20m', 'SSB', true).dupeThisBand).toBe(true)
+    expect(callHistory(stored, 'W1AW', '20m', 'USB', true).dupeThisBand).toBe(true)
+    // THE CONTROL: the fold is the sidebands only. A genuinely different mode on the same
+    // band is not a dupe — without this the assertions above would pass on a compare that had
+    // simply stopped discriminating at all.
+    expect(callHistory(LOG, 'W1AW', '20m', 'CW', true).dupeThisBand).toBe(false)
+    expect(callHistory(LOG, 'W1AW', '20m', 'FM', true).dupeThisBand).toBe(false)
+    expect(callHistory(stored, 'W1AW', '20m', 'AM', true).dupeThisBand).toBe(false)
+  })
+
   it('counts confirmed QSOs and collects distinct bands + modes', () => {
     const h = callHistory(LOG, 'W1AW', '20m')
     expect(h.confirmedCount).toBe(2) // the 40m CW + 20m SSB are confirmed

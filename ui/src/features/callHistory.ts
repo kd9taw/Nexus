@@ -212,8 +212,14 @@ export function callHistory(
     // exports spell bands uppercase, so a raw compare left the dupe cue dark
     // for every imported contact.
     if (band && (q.band ?? '').trim().toLowerCase() === band.trim().toLowerCase()) {
-      const modeOk =
-        !matchMode || (q.mode ?? '').trim().toUpperCase() === mode.trim().toUpperCase()
+      // Through `modeKey` on BOTH sides, like `entitySlots` above and for its reason: this
+      // was the one mode compare in the module still reading the raw stored spelling. Once
+      // the Phone cockpit logs the SIDEBAND a contact was worked on, the live mode is
+      // "USB"/"LSB" against a history full of "SSB" (and against imported rows spelled either
+      // way), and a raw compare takes the Dupe/B4 badge dark for every phone station the
+      // operator has ever worked. The fold is the sidebands only — CW, FM and AM still count
+      // as the separate modes they are, which is the whole point of the mode-scoped check.
+      const modeOk = !matchMode || modeKey(q.mode) === modeKey(mode)
       if (modeOk) dupeThisBand = true
     }
   }

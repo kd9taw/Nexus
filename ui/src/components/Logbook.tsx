@@ -12,6 +12,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedActivation, LoggedQso } from '../types'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
+import { modeKey } from '../features/callHistory'
 import { SpotDialog } from './SpotDialog'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
@@ -819,6 +820,11 @@ export function Logbook({
         (q.grid?.toLowerCase().includes(t) ?? false) ||
         q.band.toLowerCase().includes(t) ||
         q.mode.toLowerCase().includes(t) ||
+        // …and under the name the operator thinks in. A phone contact carries the sideband
+        // it was worked on, so searching "ssb" would otherwise miss every USB/LSB row —
+        // Nexus's own phone contacts, and any imported from a logger that spells it that
+        // way. The raw spelling above still matches, so "usb" finds the USB rows alone.
+        modeKey(q.mode).toLowerCase().includes(t) ||
         fmtUtc(q.whenUnix).toLowerCase().includes(t)
       )
     },
