@@ -179,7 +179,11 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
         // in-flight picture the same way a `VisDetected` would. Collected here rather than in
         // `rx_step` so it happens before this tick's audio is drained, and so a request that
         // arrives while the decoder is being rebuilt is not lost.
-        if let Some(slug) = engine_lock(&engine).take_sstv_manual_rx() {
+        // Bound so the engine lock is RELEASED before the decoder work below — the whole
+        // `if let` body would otherwise hold it, and this thread must never be inside the
+        // engine mutex while it touches the decoder.
+        let manual_rx = engine_lock(&engine).take_sstv_manual_rx();
+        if let Some(slug) = manual_rx {
             match tempo_sstv::lookup_slug(&slug) {
                 Some(mode) => {
                     let spec = tempo_sstv::for_mode(mode);

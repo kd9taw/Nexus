@@ -11589,7 +11589,7 @@ fn sstv_send(
     // budgeted, watched and stopped exactly like one without it. Nothing on this path
     // keys a radio; the radio loop does that, behind every gate, and Stop TX / the latch
     // / `sstv_abort` flush the output ring whatever is still queued.
-    let fsk_id = send_fsk_id.then(|| mycall.as_str());
+    let fsk_id = send_fsk_id.then_some(mycall.as_str());
     // Encode the whole 12 kHz waveform OFF the engine lock (tens of ms even for PD290).
     let samples = tempo_sstv::encode_image_with_id(sstv_mode, &img, 12_000, fsk_id)
         .map_err(|e| e.to_string())?;
