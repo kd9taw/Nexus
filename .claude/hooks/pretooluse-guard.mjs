@@ -6,8 +6,10 @@
 // found 14 that record a rule which ALREADY EXISTED and was violated anyway — and found
 // that .githooks/pre-push, the only rule here that is both always-loaded and mechanised,
 // is the only hard rule that has not recurred. Prose has a measured failure rate in this
-// repo. Mechanism does not. So the five command shapes below, each of which has already
-// destroyed work or faked a result here, stop being advice and start being a refusal.
+// repo. Mechanism does not. So the six shapes below, each of which has already destroyed
+// work or faked a result here, stop being advice and start being a refusal. The sixth was
+// not an agent's mistake but the maintainer's, which is the best argument for all six:
+// knowing a rule is not what protects you from breaking it.
 //
 // It is NOT a git hook — git will never run it. It hangs off .claude/hooks/ because that
 // is where a Claude Code hook belongs and because .claude/ is already tracked here, so
@@ -15,7 +17,7 @@
 // MAINTAINER makes; see "ENABLING" at the bottom of this header. Shipping the script is
 // deliberately not the same act as switching it on.
 //
-// -- THE FIVE, and why each is block or ask -------------------------------------------
+// -- THE SIX, and why each is block or ask --------------------------------------------
 //
 //  1. WORKING-TREE-WIDE DESTRUCTIVE GIT OPS in a shared checkout — reset --hard,
 //     checkout . / restore ., clean -f, bare git stash / stash pop / stash clear.  BLOCK.
@@ -39,7 +41,7 @@
 //     A shell cwd persists between calls, so the edit lands in the right tree while the
 //     commit runs in the wrong one; a branch name resolves from any worktree, so a push
 //     "succeeds" carrying a tip that lacks the fix. ASK rather than BLOCK for one reason:
-//     this is the highest-frequency shape of the five by an order of magnitude, and a
+//     this is the highest-frequency shape of the six by an order of magnitude, and a
 //     guard that interrupts ordinary work gets switched off within a day and then
 //     protects nothing. Two precision cuts keep the noise survivable — only MUTATING
 //     subcommands are considered (a wrong-tree `git status` gives a wrong answer, but it
@@ -63,6 +65,22 @@
 //     call — so this guard cannot false-positive on the sanctioned use. Block.
 //                                              Override: NEXUS_ALLOW_PARTIAL_GATES=1
 //
+//  6. MUTATING A WORKTREE THAT HAS A VERIFICATION IN FLIGHT.                  ASK.
+//     A git merge / rebase / checkout / cherry-pick, or an Edit or Write to a file, while
+//     scripts/gates, cargo test, vitest or npm test is running with that tree as its cwd.
+//     The run then reports on a tree that no longer exists, and the reds it invents are
+//     indistinguishable from real ones. On 2026-09-15 a merge into a worktree mid-run
+//     produced five reds, four of them manufactured, and the result was briefly believed
+//     and reported as a verdict — a whole gate cycle wasted and, worse, a wrong answer
+//     trusted. ASK, not BLOCK, for two honest reasons: a merge into a tree whose run has
+//     already finished-but-not-been-read is legitimate and common, and the operator may
+//     genuinely mean to abandon the run. The prompt names WHAT is running, its pid and
+//     HOW LONG it has been going, so the answer can be informed rather than reflexive.
+//     This is the only rule that reaches the Edit/Write tools, and the only one not gated
+//     on a shared checkout — a run in flight is just as clobberable in a solo tree.
+//                                              Override: NEXUS_ALLOW_MUTATE_DURING_RUN=1
+//                                              (env-only for Edit/Write — see below)
+//
 // -- HOW AN OVERRIDE IS SPELLED --------------------------------------------------------
 //
 // Same shape as NEXUS_RELEASE_APPROVED=1 on the pre-push gate: a named, visible, per-
@@ -76,6 +94,11 @@
 // variable genuinely set in the hook's own process environment is honoured too, for a
 // maintainer who means to stand an exception up for a whole session. There is no silent
 // bypass and no --no-verify equivalent: the override names itself in the command you ran.
+//
+// ONE EXCEPTION, and it is a real limitation rather than a design: an Edit or Write has no
+// command line to carry a prefix, so rule 6's override on those tools can only come from
+// the environment Claude Code itself was started with. Answering "yes" to the prompt is
+// the practical way through; the env var is for standing the exception up deliberately.
 //
 // -- WHAT KEEPS IT FROM CRYING WOLF ----------------------------------------------------
 //
@@ -102,8 +125,18 @@
 //   - Heredoc bodies are skipped entirely, so writing documentation that CONTAINS
 //     `git add -A` does not trip rule 2. (This file is that document.)
 //
+//   - Rule 6 stands down completely when nothing is running, which is the normal case and
+//     costs one /proc scan with no subprocess. `git status` during a run passes; so does a
+//     merge into a DIFFERENT worktree from the one being verified; so does a long-running
+//     dev server, which is not a verification.
+//
 // -- KNOWN GAPS, written down rather than papered over ---------------------------------
-//   - Only the Bash tool is inspected. A destructive op reached some other way — an MCP
+//   - Rule 6 is Linux-only (/proc), never arms on macOS, and misses a runner that chdir'd
+//     away or was started from a parent directory. It also does not see a tree mutation
+//     made by an ordinary shell command (`rm -rf crates/x`, `sed -i`) — only git and the
+//     Edit/Write tools. Every one of those fails OPEN. See the block above rule 6's code.
+//   - Only the Bash tool is inspected, apart from rule 6's reach into Edit/Write. A
+//     destructive op reached some other way — an MCP
 //     server, a script the agent writes and then runs, `bash -c "$(...)"` — is invisible
 //     here. Rule 4's real siblings are the same: a gate run from inside a shell script is
 //     not seen. This guard covers the shape agents actually type, not every shape.
@@ -132,11 +165,15 @@
 // silence would be the failure it was written to prevent.
 //
 // -- ENABLING (the maintainer's call, not the hook's) ----------------------------------
-// Add to ~/.claude/settings.json (or the project .claude/settings.json):
+// Add to ~/.claude/settings.json (user-level, this machine) or .claude/settings.json
+// (repo-local, shared with anyone who clones). The matcher must name the edit tools as
+// well as Bash, or rule 6 sees merges but not the Edit that does the same damage:
 //
-//   { "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
-//       { "type": "command",
-//         "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-guard.mjs" } ] } ] } }
+//   { "hooks": { "PreToolUse": [ {
+//       "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+//       "hooks": [ { "type": "command",
+//                    "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-guard.mjs" } ]
+//   } ] } }
 //
 // Tests: node --test .claude/hooks/pretooluse-guard.test.mjs
 
@@ -395,6 +432,143 @@ function isGateCommand(argv) {
 }
 
 // ---------------------------------------------------------------------------
+// Rule 6 — is a verification RUNNING in this worktree right now?
+//
+// The honest signal, and the reason this rule is shippable at all: a process's cwd in
+// /proc is the kernel's own answer, and the entry DISAPPEARS the instant the process
+// exits. So "nothing is running" is a fact, not a stale cache — which is the property the
+// rule lives or dies on, because arming when nothing is running is the false positive
+// that would get all six switched off.
+//
+// Verified on this machine: cwd exact, elapsed accurate to ~1s against a known sleep, and
+// /proc/<pid> gone within 300ms of the process ending.
+//
+// WHAT IT MISSES, stated rather than implied:
+//   - Linux only. There is no /proc on macOS, so this rule NEVER arms there and the other
+//     five are unaffected. It fails open, silently, by design.
+//   - A runner that chdir'd away from the worktree after starting, or one started from a
+//     parent directory with --manifest-path/--prefix pointing inward. Its cwd is then not
+//     inside the tree and it is invisible here. (60 of 205 processes on this box have an
+//     unreadable cwd — all other users'; a run the operator started is this user's.)
+//   - Only the named verification runners count (the same transcribed list rule 4 uses),
+//     so a gate invoked some other way is not seen. Fails open, never closed.
+//   - Our own ancestors are excluded: you cannot be interrupted by the process that
+//     spawned you, and without this the suite would detect its own `node --test` run.
+// ---------------------------------------------------------------------------
+
+// A /proc cmdline is not a typed command line: the kernel records the EXECUTED image, so
+// `scripts/gates` (which is `#!/usr/bin/env node`) appears as `node /path/scripts/gates`,
+// and vitest as `node .../node_modules/.bin/vitest`. Matching argv[0] alone misses every
+// one of them — the first version of this did, and the suite caught it. Strip interpreters
+// and leading flags, then ask the ordinary matcher.
+const INTERPRETERS = new Set(['node', 'nodejs', 'sh', 'bash', 'dash', 'zsh', 'python', 'python3', 'ruby', 'deno', 'bun', 'env']);
+const CLI_ALIASES = new Map([['npm-cli.js', 'npm'], ['npx-cli.js', 'npx'], ['yarn.js', 'yarn'], ['pnpm.cjs', 'pnpm']]);
+
+function isVerificationProcess(argv) {
+  const direct = isGateCommand(argv);
+  if (direct) return direct;
+  let rest = argv;
+  for (let hop = 0; hop < 4 && rest.length > 1; hop++) {
+    const base = path.basename(rest[0]);
+    if (!INTERPRETERS.has(base)) break;
+    rest = rest.slice(1);
+    while (rest.length && rest[0].startsWith('-')) rest = rest.slice(1); // node --experimental-x
+    if (!rest.length) return null;
+    const alias = CLI_ALIASES.get(path.basename(rest[0]));
+    const probe = alias ? [alias, ...rest.slice(1)] : rest;
+    const hit = isGateCommand(probe);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function ancestorPids() {
+  const out = new Set();
+  let pid = process.pid;
+  for (let hop = 0; hop < 32 && pid > 0; hop++) {
+    out.add(pid);
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      // Field 4 is ppid, but field 2 (comm) may contain spaces/parens — split after ')'.
+      pid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+    } catch { break; }
+  }
+  return out;
+}
+
+let procScan = null;
+function verificationProcs() {
+  if (procScan) return procScan;
+  procScan = [];
+  let uptime;
+  try {
+    uptime = parseFloat(fs.readFileSync('/proc/uptime', 'utf8').split(' ')[0]);
+  } catch {
+    return procScan; // no /proc: this rule stands down entirely
+  }
+  const mine = ancestorPids();
+  let names;
+  try { names = fs.readdirSync('/proc'); } catch { return procScan; }
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    const pid = Number(name);
+    if (mine.has(pid)) continue;
+    let cwd;
+    try { cwd = fs.readlinkSync(`/proc/${pid}/cwd`); } catch { continue; }
+    let argv;
+    try {
+      argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+    } catch { continue; }
+    if (!argv.length) continue;
+    const gate = isVerificationProcess(argv);
+    if (!gate) continue;
+    let seconds = 0;
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      seconds = Math.max(0, Math.round(uptime - Number(fields[19]) / 100));
+    } catch { /* elapsed is a nicety, not the signal */ }
+    procScan.push({ pid, cwd, gate, seconds });
+  }
+  return procScan;
+}
+
+const overlaps = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+
+function runsTouching(dir) {
+  // A runner spawns children sharing its cwd (npm -> sh -> vitest). Keep the OLDEST per
+  // cwd: that is the top-level run, and reporting three lines for one gate is noise.
+  const hits = verificationProcs().filter((p) => overlaps(p.cwd, dir));
+  const byCwd = new Map();
+  for (const h of hits) {
+    const prev = byCwd.get(h.cwd);
+    if (!prev || h.seconds > prev.seconds) byCwd.set(h.cwd, h);
+  }
+  return [...byCwd.values()].sort((a, b) => b.seconds - a.seconds);
+}
+
+const humanElapsed = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
+
+// Tree-mutating git subcommands. `commit` and `add` are deliberately ABSENT: they change
+// the index and refs, not the files a running gate is compiling.
+const TREE_MUTATING_GIT = new Set([
+  'merge', 'rebase', 'cherry-pick', 'revert', 'pull', 'checkout', 'switch',
+  'reset', 'restore', 'apply', 'am', 'stash', 'clean',
+]);
+
+function inFlightFinding(dir, what) {
+  const runs = runsTouching(dir);
+  if (!runs.length) return null;
+  const detail = runs.map((r) => `${r.gate} (pid ${r.pid}, running ${humanElapsed(r.seconds)}, cwd ${r.cwd})`).join('; ');
+  return {
+    rule: 6, level: 'ask', override: 'NEXUS_ALLOW_MUTATE_DURING_RUN',
+    what: `${what} while a verification is IN FLIGHT in this worktree — ${detail}`,
+    why: 'changing files under a running gate makes it report on a tree that no longer exists, and the reds it invents are indistinguishable from real ones — on 2026-09-15 a merge into a worktree mid-run produced five reds, four of them manufactured, and the result was briefly believed',
+    instead: `let it finish and read its result first, or do this in a separate worktree; if you mean to abandon the run, kill ${runs.map((r) => r.pid).join(' ')} first so nobody reads its output as a verdict`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Overrides. Read from the command text first (the Bash tool does not persist env
 // between calls, so an `export` in an earlier call could never reach this process),
 // and from the real environment second.
@@ -559,6 +733,14 @@ function decide(command, cwd) {
       const g = parseGit(argv);
       if (!g) continue;
       const where = path.resolve(runningCwd, g.cDir || '.');
+
+      // Rule 6 is NOT gated on a shared checkout: a run in flight can be clobbered in a
+      // solo tree just as easily. Its precondition is that something is actually running.
+      if (TREE_MUTATING_GIT.has(g.sub)) {
+        const f = inFlightFinding(where, `git ${g.sub}`);
+        if (f) findings.push(f);
+      }
+
       if (!isSharedCheckout(where)) continue; // scratch repo / throwaway clone: nobody to rob
 
       const d = checkDestructive(g, where);
@@ -592,7 +774,36 @@ function render(verdict) {
     .join('\n\n');
 }
 
+// The file-editing tools. Rule 6 reaches them because an Edit to a tracked file under a
+// running gate corrupts that run exactly as a merge does — it is the same act with a
+// different verb. Only rule 6 applies here; the other five are about shell commands.
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+
+function decideEdit(payload) {
+  const target = payload?.tool_input?.file_path || payload?.tool_input?.notebook_path;
+  if (typeof target !== 'string' || !target) return null;
+  const abs = path.resolve(payload.cwd || process.cwd(), target);
+  const f = inFlightFinding(path.dirname(abs), `${payload.tool_name} ${path.basename(abs)}`);
+  if (!f) return null;
+  // No command text to carry an override here, so this one is env-only. Stated in the
+  // header as a real limitation rather than left for someone to discover.
+  if (overrideActive(f.override, '')) return null;
+  return { level: 'ask', findings: [f] };
+}
+
 function main(payload) {
+  if (EDIT_TOOLS.has(payload.tool_name)) {
+    const v = decideEdit(payload);
+    if (!v) return 0;
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'ask',
+        permissionDecisionReason: render(v),
+      },
+    }));
+    return 0;
+  }
   if (payload.tool_name !== 'Bash') return 0;
   const command = payload?.tool_input?.command;
   if (typeof command !== 'string' || !command.trim()) return 0;

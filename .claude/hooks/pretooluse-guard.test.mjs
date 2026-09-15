@@ -19,8 +19,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+
+// Block without spinning the CPU and without spawning a process per wait; these tests wait
+// on real process transitions and are called in loops.
+const SLEEPER = new Int32Array(new SharedArrayBuffer(4));
+const sleep = (ms) => Atomics.wait(SLEEPER, 0, 0, ms);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.join(HERE, 'pretooluse-guard.mjs');
@@ -54,10 +59,11 @@ git('init', '-q', SCRATCH);
 // --- driver -----------------------------------------------------------------
 // Feeds the REAL PreToolUse payload shape over stdin, so the tests exercise the
 // interface the harness uses rather than an exported function.
-function run(command, { cwd = SHARED, tool = 'Bash' } = {}) {
+function run(command, { cwd = SHARED, tool = 'Bash', filePath } = {}) {
   const payload = JSON.stringify({
     session_id: 'test', hook_event_name: 'PreToolUse', cwd,
-    tool_name: tool, tool_input: { command },
+    tool_name: tool,
+    tool_input: filePath ? { file_path: filePath, old_string: 'a', new_string: 'b' } : { command },
   });
   const r = spawnSync(process.execPath, [HOOK], { input: payload, encoding: 'utf8' });
   let decision = 'allow';
@@ -170,6 +176,126 @@ allows('a scoped run names what it skipped', 'scripts/gates --job ui,test');
 allows('listing what cannot run here', 'scripts/gates --list --unrunnable');
 allows('a plain full run', './scripts/gates');
 allows('the named override', 'NEXUS_ALLOW_PARTIAL_GATES=1 ./scripts/gates --allow-partial');
+
+// ===========================================================================
+// Rule 6 — mutating a worktree with a verification in flight.
+//
+// Tested against a REAL process with a REAL cwd, observed through /proc exactly as the
+// hook observes it. The negative direction matters more than the positive one here: the
+// failure that would sink this rule is arming when nothing is running, so the same command
+// is asserted to ASK with the run up and to pass once it has exited.
+// ===========================================================================
+
+// A stand-in gate: a real executable at a real scripts/gates path, carrying the SAME
+// `#!/usr/bin/env node` shebang the genuine article has, so its /proc cmdline is the real
+// shape — `node /…/scripts/gates`, not `scripts/gates`. That difference is not cosmetic:
+// the first version of the hook matched argv[0] only and therefore could not see the real
+// gate runner at all. These three cases failed and that is how it was found.
+const stubDir = path.join(SHARED, 'scripts');
+fs.mkdirSync(stubDir, { recursive: true });
+const IDLE = '#!/usr/bin/env node\nsetTimeout(() => {}, 120000);\n';
+const GATE_STUB = path.join(stubDir, 'gates');
+fs.writeFileSync(GATE_STUB, IDLE);
+fs.chmodSync(GATE_STUB, 0o755);
+// A long-running process that is NOT a verification — the control for "any old process".
+const SERVER_STUB = path.join(stubDir, 'devserver');
+fs.writeFileSync(SERVER_STUB, IDLE);
+fs.chmodSync(SERVER_STUB, 0o755);
+
+const spawned = [];
+function startInFlight(bin, cwd) {
+  const child = spawn(bin, [], { cwd, stdio: 'ignore' });
+  spawned.push(child);
+  // Wait for the kernel to publish cwd/cmdline before probing.
+  for (let i = 0; i < 40; i++) {
+    try { if (fs.readlinkSync(`/proc/${child.pid}/cwd`)) return child; } catch { /* not up yet */ }
+    sleep(50);
+  }
+  return child;
+}
+function waitGone(pid) {
+  for (let i = 0; i < 40 && fs.existsSync(`/proc/${pid}`); i++) sleep(50);
+}
+process.on('exit', () => spawned.forEach((c) => { try { c.kill('SIGKILL'); } catch { /* gone */ } }));
+
+const linuxOnly = { skip: fs.existsSync('/proc/uptime') ? false : 'rule 6 is /proc-based; no /proc here' };
+
+test('ASK    a merge into a worktree with a gate in flight', linuxOnly, () => {
+  const child = startInFlight(GATE_STUB, SHARED);
+  try {
+    const r = run(`git -C ${SHARED} merge origin/main`);
+    assert.equal(r.decision, 'ask', r.text);
+    assert.match(r.text, /IN FLIGHT/);
+    assert.match(r.text, new RegExp(`pid ${child.pid}`));
+    assert.match(r.text, /running \d+s/);           // says how long
+    assert.match(r.text, /NEXUS_ALLOW_MUTATE_DURING_RUN=1/);
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('ASK    an Edit to a file under a running gate', linuxOnly, () => {
+  const child = startInFlight(GATE_STUB, SHARED);
+  try {
+    const r = run(null, { tool: 'Edit', filePath: path.join(SHARED, 'README.md') });
+    assert.equal(r.decision, 'ask', r.text);
+    assert.match(r.text, /IN FLIGHT/);
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('ALLOW  the SAME merge once the run has exited (the control that matters)', linuxOnly, () => {
+  const child = startInFlight(GATE_STUB, SHARED);
+  const during = run(`git -C ${SHARED} merge origin/main`);
+  assert.equal(during.decision, 'ask', 'positive control: must arm while it is up');
+  child.kill('SIGKILL');
+  waitGone(child.pid);
+  const after = run(`git -C ${SHARED} merge origin/main`);
+  assert.equal(after.decision, 'allow', `must stand down once nothing is running\n${after.text}`);
+});
+
+test('ALLOW  a merge into a DIFFERENT worktree from the one being verified', linuxOnly, () => {
+  const child = startInFlight(GATE_STUB, SHARED);
+  try {
+    assert.equal(run(`git -C ${LINKED} merge origin/main`).decision, 'allow');
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('ALLOW  a long-running process that is not a verification', linuxOnly, () => {
+  const child = startInFlight(SERVER_STUB, SHARED);
+  try {
+    assert.equal(run(`git -C ${SHARED} merge origin/main`).decision, 'allow');
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('ALLOW  read-only git during a run', linuxOnly, () => {
+  const child = startInFlight(GATE_STUB, SHARED);
+  try {
+    assert.equal(run(`git -C ${SHARED} status --short`).decision, 'allow');
+    assert.equal(run(`git -C ${SHARED} log --oneline -5`).decision, 'allow');
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('ALLOW  an Edit outside the tree being verified', linuxOnly, () => {
+  const child = startInFlight(GATE_STUB, SHARED);
+  try {
+    const r = run(null, { tool: 'Edit', filePath: path.join(LINKED, 'README.md') });
+    assert.equal(r.decision, 'allow', r.text);
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('ALLOW  the named override during a run', linuxOnly, () => {
+  const child = startInFlight(GATE_STUB, SHARED);
+  try {
+    const r = run(`NEXUS_ALLOW_MUTATE_DURING_RUN=1 git -C ${SHARED} merge origin/main`);
+    assert.equal(r.decision, 'allow', r.text);
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('ALLOW  commit and add are not tree mutations, even mid-run', linuxOnly, () => {
+  const child = startInFlight(GATE_STUB, SHARED);
+  try {
+    assert.equal(run(`git -C ${SHARED} commit -- README.md -m "fix"`).decision, 'allow');
+    assert.equal(run(`git -C ${SHARED} add README.md`).decision, 'allow');
+  } finally { child.kill('SIGKILL'); }
+});
 
 // ===========================================================================
 // Harness contract.
