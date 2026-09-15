@@ -18076,11 +18076,12 @@ async fn qrz_correct_apply(
             *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) = recovery.clone();
         }
         // The sentence has already been through `scrub_key`, so it is safe to keep.
-        conn_log(
-            "QRZ Logbook",
-            if outcome.is_success() { "info" } else { "error" },
-            message.clone(),
-        );
+        let level = if outcome.is_success() {
+            "info"
+        } else {
+            "error"
+        };
+        conn_log("QRZ Logbook", level, message.clone());
         Ok(tempo_app::dto::QrzCorrectResultDto {
             ok: outcome.is_success(),
             message,
