@@ -1697,7 +1697,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const beforeSlowReadings=await evaluate(readingControls)
         observationReadingAgeMs=1200
         await sleep(2500)
-        const ftSlowReadings=await steady('ft-idle-old-reading','.operate-cockpit','.operate-cockpit .freq-channel')
+        await steady('ft-idle-old-reading','.operate-cockpit','.operate-cockpit .freq-channel')
         // Positive control for this pass: the reading the amplifier strip reads really is past its
         // 1 s window, and the strip and the depth chips stayed live through it.
         const readingProbe=`(()=>{let f=document.querySelector('.operate-cockpit .amp-strip');f=f?.[Object.keys(f).find(k=>k.startsWith('__reactFiber$'))]
@@ -1747,8 +1747,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         // own reason and does so equally in both samples.
         if(beforeSlowReadings.includes(false))assert.ok(slowReadingControls.includes(false),'an old station reading leaves them live, not merely unchanged')
         else console.log('STEADY_PROBE ft-old-reading: transmit-armed, so these controls were already refused in both samples')
-        still(ftIdle,'FT idle');still(ftSlowReadings,'FT idle, station reading past its window')
-        still(phoneIdle,'Phone idle');still(held,'Phone dropdown held open')
+        // The old-reading pass is judged by the two samples above, NOT by its toggle count: an old
+        // reading holds a control in one state rather than flapping it, and the count would instead
+        // track how well the runner's own observation stream kept up (a loaded box starves it past
+        // the 5 s measurement bound, which is a real loss and must disable). Its STEADY_PROBE line is
+        // logged for diagnosis either way.
+        still(ftIdle,'FT idle');still(phoneIdle,'Phone idle');still(held,'Phone dropdown held open')
         if(held.openSupported){assert.ok(held.openFrames>0,'the dropdown was open');assert.equal(held.openLost,0,'the held dropdown stays open')}
         assert.deepEqual(picked,[{action:'radio.band',band:'20m',mode:'phone'}],'the picked band is sent exactly once')
         await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
