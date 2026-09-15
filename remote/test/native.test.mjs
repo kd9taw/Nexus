@@ -847,24 +847,28 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
    assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning','fmReceiver','aiCw','redecode','splitTuning','ritTuning','workDigitalSpot','repeaterTuning','memoryRecall','aprsTuning','rotator','rigScope','workRttySpot','sstvGallery',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport','settingsLogging','selfSpot','settingsControl','postSpot','programExport','programEdit','audioListen']:[])]:['decoder','amplifier'])
-   if(operationVersion===4){
-    // The working channel list as a file, NOW that this browser holds station control. The station's
-    // profile is a fresh temp dir with no radioprog.json, so the honest answer is that there is
-    // nothing to export — and that answer proves the request reached the station's own reader,
-    // where the refusal above proved it could not without the grant.
-    assert.ok(controls.leaseId,JSON.stringify(controls))
-    const programmed=await allowed(()=>operation({type:'programExport',stationBootId:controls.stationBootId,leaseId:controls.leaseId,format:'chirp',nameCap:7,index:0}))
-    assert.deepEqual(programmed.response.value,{operation:'programExport',refused:'notFound'},JSON.stringify(programmed.response))
-    // Curating that same list, against a revision this station cannot be holding: refused as stale,
-    // which is the check reaching the station's own file rather than the relay parsing it away.
-    const curate=await allowed(async()=>{const s=(await heartbeat()).response.value;return operation({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change:{kind:'programEdit',revision:'a'.repeat(64),edit:{action:'clear'}}})})
-    assert.equal(curate.response.value?.outcome,'rejected',JSON.stringify(curate.response))
-    assert.equal(curate.response.value.reason,'contextChanged')
-   }
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+   if(operationVersion===4){
+    // Program, both halves, over the real relay and the real station — ONE state read shared by
+    // both, because this browser's access has a lifetime and every extra round trip spends it.
+    // Placed AFTER the clear above: that one uses the `controls` command window captured before it,
+    // so anything slipped in between leaves it stale.
+    //
+    // The station's profile is a fresh temp dir with no radioprog.json, so the export's honest
+    // answer is that there is nothing to export, and a curation against a revision this station
+    // cannot be holding is stale. Both are the station's own file reader replying; the refusal
+    // earlier in this run proved neither can be reached without station control. The export spends
+    // no sequence or window, so the curation after it can use the same state.
+    const s4=(await heartbeat()).response.value
+    const exported=await allowed(()=>operation({type:'programExport',stationBootId:s4.stationBootId,leaseId:s4.leaseId,format:'chirp',nameCap:7,index:0}))
+    assert.deepEqual(exported.response.value,{operation:'programExport',refused:'notFound'},JSON.stringify(exported.response))
+    const curate=await allowed(()=>operation({type:'logChange',stationBootId:s4.stationBootId,leaseId:s4.leaseId,expectedRevision:s4.revision,commandWindowId:s4.commandWindowId,clientSequence:s4.nextSequence,change:{kind:'programEdit',revision:'a'.repeat(64),edit:{action:'clear'}}}))
+    assert.equal(curate.response.value?.outcome,'rejected',JSON.stringify(curate.response))
+    assert.equal(curate.response.value.reason,'contextChanged')
+   }
    if(operationVersion>=3){
     // FT8/FT4 Work is its own v3 action. It must cross the real relay and native parser without
     // dropping the socket or the lease. The band does not match the dial, so the station answers a
