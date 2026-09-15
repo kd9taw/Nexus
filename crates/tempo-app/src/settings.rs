@@ -253,6 +253,33 @@ pub fn rig_conn_is_network(rig_conn: &str, rig_addr: &str) -> bool {
     rig_conn == "network" && !rig_addr.is_empty()
 }
 
+/// The CONVENTIONAL FM repeater offset magnitude (Hz) for a dial of `mhz` — 10 m 100 k,
+/// 6 m 1 M, 2 m 600 k, 1.25 m 1.6 M, 70 cm 5 M, 23 cm 12 M; `0` below 28 MHz, where FM
+/// repeaters are not used.
+///
+/// Free-standing because two callers need it about two DIFFERENT dials, and they must not
+/// drift: [`Settings::rptr_offset_hz`] asks about the rig's current dial, while
+/// `Engine::repeater_tune` has to ask about the OUTPUT frequency of a machine the radio has
+/// not moved to yet — the convention it would use once it got there is what decides where
+/// keying it would land.
+pub fn rptr_offset_for_dial(mhz: f64) -> i64 {
+    if mhz >= 1240.0 {
+        12_000_000
+    } else if mhz >= 420.0 {
+        5_000_000
+    } else if mhz >= 222.0 {
+        1_600_000
+    } else if mhz >= 144.0 {
+        600_000
+    } else if mhz >= 50.0 {
+        1_000_000
+    } else if mhz >= 28.0 {
+        100_000
+    } else {
+        0
+    }
+}
+
 /// Is this rig driven through **OmniRig** — VE3NEA's Windows COM rig-control
 /// server — instead of by a rigctld Nexus launches?
 ///
@@ -1116,8 +1143,9 @@ pub struct Settings {
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
-    /// Hold the FM DATA submode for as long as the SSTV receiver is running, for the active
-    /// radio (flat mirror — see [`RadioProfile::sstv_hold_data_submode`]). Default off.
+    /// Hold the DATA submode (FM-D on FM, USB-D/LSB-D on HF) for as long as the SSTV receiver
+    /// is running, for the active radio (flat mirror — see
+    /// [`RadioProfile::sstv_hold_data_submode`]). Default off.
     #[serde(default)]
     pub sstv_hold_data_submode: bool,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
@@ -2797,24 +2825,31 @@ pub struct RadioProfile {
     /// a DATA submode nor SSB.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
-    /// **Hold the FM DATA submode while the SSTV receiver is running** (#130, PA3GYQ).
+    /// **Hold the DATA submode while the SSTV receiver is running** (#130, PA3GYQ; widened to
+    /// HF by #191).
     ///
-    /// Default OFF, which is today's behaviour: [`Engine::fm_mode_word`] commands `PKTFM`
-    /// only while an image is QUEUED OR IN FLIGHT and plain `FM` the rest of the time, so a
-    /// rig parked on an FM SSTV channel drops out of FM-D between pictures. That revert is
+    /// Default OFF, which is today's behaviour: the DATA submode is commanded only while an
+    /// image is QUEUED OR IN FLIGHT and the plain mode the rest of the time, so a rig parked on
+    /// an SSTV calling channel drops out of the data mode between pictures. That revert is
     /// deliberate — an SSTV send once keyed a data mode into an FM repeater input — but it is
-    /// wrong for the operator who sits on an FM SSTV calling channel all evening.
+    /// wrong for the operator who sits on an SSTV calling channel all evening.
     ///
     /// ON, the DATA submode is held for as long as `Engine::sstv_armed` is true, i.e. from the
     /// moment the SSTV view starts the receiver until the operator stops it.
     ///
+    /// ⚠️ IT COVERS BOTH CLASSES, AND ONCE DID NOT. Shipped in 1.11.1 read by
+    /// [`Engine::fm_mode_word`] and nothing else, so it held `PKTFM` on an FM channel and did
+    /// nothing whatever on 14 MHz — where most SSTV is worked (#191). Both arms now ask the one
+    /// predicate `Engine::sstv_wants_data_submode`, so the switch means FM-D on an FM channel
+    /// and USB-D/LSB-D on HF.
+    ///
     /// ⚠️ THE COST, AND IT IS THE REASON THIS IS OPT-IN. The receiver stays armed after the
     /// operator leaves the SSTV view (only an explicit Stop, or the ISS LOS unwind, disarms
-    /// it). So with this on, an FM VOICE call made without stopping the receiver first is
-    /// commanded in the FM data submode, where a normally-wired rig takes transmit audio from
-    /// the data port and the microphone modulates nothing — the same "red light, no RF"
-    /// failure `data_modes_plain_ssb` exists for, one mode along. Stop the receiver before
-    /// going back to voice; the hint on the switch says so.
+    /// it). So with this on, a VOICE call made without stopping the receiver first is commanded
+    /// in the data submode, where a normally-wired rig takes transmit audio from the data port
+    /// and the microphone modulates nothing — the same "red light, no RF" failure
+    /// `data_modes_plain_ssb` exists for, one mode along. Stop the receiver before going back
+    /// to voice; the hint on the switch says so.
     ///
     /// PER RADIO, not global, for `data_modes_plain_ssb`'s reason: it is a property of how
     /// THAT rig is cabled and operated. A station can run SSTV on the 9700 and voice on the HF
@@ -2932,7 +2967,8 @@ pub struct RadioProfilePatch {
     /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
-    /// See `RadioProfile::sstv_hold_data_submode` — hold FM-D while the SSTV receiver runs.
+    /// See `RadioProfile::sstv_hold_data_submode` — hold the DATA submode while the SSTV
+    /// receiver runs.
     /// `#[serde(default)]` like its neighbour: a patch written before the field existed still
     /// deserializes, as OFF, which is the pre-field behaviour.
     #[serde(default)]
@@ -4649,22 +4685,7 @@ impl Settings {
         if self.rptr_offset_override_hz > 0 {
             return self.rptr_offset_override_hz;
         }
-        let f = self.dial_mhz;
-        if f >= 1240.0 {
-            12_000_000
-        } else if f >= 420.0 {
-            5_000_000
-        } else if f >= 222.0 {
-            1_600_000
-        } else if f >= 144.0 {
-            600_000
-        } else if f >= 50.0 {
-            1_000_000
-        } else if f >= 28.0 {
-            100_000
-        } else {
-            0
-        }
+        rptr_offset_for_dial(self.dial_mhz)
     }
 
     /// The RF-power ceiling (0.0–1.0) for the CURRENT operating mode, or 1.0 (uncapped) when the

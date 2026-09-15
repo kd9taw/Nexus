@@ -594,6 +594,24 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
   }, [snap?.radio.scopeError])
 
+  // #275: the radio REFUSED a scope span. Its own lane, not `scope` above: the scope is
+  // streaming perfectly and one control was rejected, which is a different fact with a different
+  // cure. Nexus does not fix it by flipping the rig's scope mode — that is the operator's pick —
+  // so the lane's job is to say what happened and what to do, and to go away by itself the moment
+  // a span is accepted (the backend writes this field in both directions).
+  useEffect(() => {
+    const refused = snap?.radio.scopeSpanRefused
+    if (refused) {
+      setStatus('scopeSpan', {
+        tier: 'warning',
+        message: t('shell.lane.scopeSpan.message'),
+        detail: refused,
+      })
+    } else {
+      setStatus('scopeSpan', null)
+    }
+  }, [snap?.radio.scopeSpanRefused])
+
   // Surface a serial COM-port collision (two radios on one port) in the status
   // lane — otherwise it only shows as an unexplained red radio pill.
   useEffect(() => {

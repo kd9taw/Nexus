@@ -5864,7 +5864,37 @@ impl RadioLoop {
                         )
                     };
                     if let Some(hz) = span {
-                        d.set_scope_span(hz);
+                        // ⭐ ISSUE #275: SAY SO WHEN THE RADIO REFUSES IT. The result used to be
+                        // dropped here and again in the cockpit's `.catch(() => {})`, so on an
+                        // IC-7300 with the scope in Fixed mode every span button did nothing at
+                        // all, with nothing anywhere to explain it. Written in BOTH directions,
+                        // so a span that lands clears the previous complaint by itself.
+                        //
+                        // ⚠️ AND NEXUS DOES NOT CHANGE THE SCOPE MODE FOR THEM (operator,
+                        // 2026-09-14). Fixed mode is a deliberate pick — it is how you watch a
+                        // band segment while the dial moves — and silently flipping it to make a
+                        // button work would trade one surprise for a bigger one.
+                        let note = match d.set_scope_span(hz) {
+                            Ok(()) => None,
+                            // ⚠️ THE VALUE IS A HALF-WIDTH — `take_scope_span_request` says so,
+                            // and the buttons are labelled `±25k`. Print the ± or the sentence
+                            // cannot be matched to the button that produced it.
+                            Err(crate::civ::engine::CivError::Nak) => Some(format!(
+                                "the radio refused a ±{:.1} kHz scope span. An Icom takes a span \
+                                 only while its scope is in Center mode — switch the scope to \
+                                 Center on the radio, then pick the span again.",
+                                f64::from(hz) / 1000.0
+                            )),
+                            Err(_) => Some(
+                                "the radio didn't answer the scope-span command — the CAT link \
+                                 to it may be down."
+                                    .to_string(),
+                            ),
+                        };
+                        if let Some(msg) = note.as_deref() {
+                            tempo_core::applog::info("cat", msg);
+                        }
+                        engine_lock(engine).set_scope_span_refused(note);
                     }
                     if let Some(t) = refl {
                         d.set_scope_ref(t);
@@ -6740,15 +6770,39 @@ impl RadioLoop {
                         {
                             let _ = rig.set_rit(hz);
                         }
-                        if let Some(hz) =
-                            Some(engine_lock(engine)).and_then(|mut e| e.take_xit_apply())
-                        {
-                            let _ = rig.set_xit(hz);
-                        }
-                        if let Some(vfo_b) =
-                            Some(engine_lock(engine)).and_then(|mut e| e.take_vfo_apply())
-                        {
-                            let _ = rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" });
+                        // ⚠️ XIT AND VFO ARE WITHHELD FROM A KEYED RIG, AND RIT ABOVE IS NOT.
+                        // The two here move the TRANSMIT frequency: a `Z` walks the carrier
+                        // that is already on the air, and a VFO change hands the transmitter
+                        // to a VFO nothing judged — the 1.10.2 stuck-TX shape arriving from
+                        // another direction. RIT moves the receiver and is free.
+                        //
+                        // The test is [`Self::operator_keyed`], never the block's own
+                        // `!rig_keyed`: that flag is a poll and is up to a second stale, which
+                        // is precisely the window a key-down lives in. The block is
+                        // deliberately not gated on the inference as a whole (the dial read
+                        // inside it is what RETIRES the inference — see the guard's comment
+                        // upstairs), so these writes take the tighter test on their own.
+                        //
+                        // WITHHELD, NOT DROPPED: the request is not drained while keyed, so it
+                        // lands on the first unkeyed tick — the same deferral the Doppler steer
+                        // uses. Dropping it would leave the snapshot, which mirrors the
+                        // commanded value optimistically, showing an offset the rig never got.
+                        //
+                        // ⚠️ THE BOUND: a rig keyed from its own mic with no PTT read-back and
+                        // no satellite pass to infer from is not visible here at all. This
+                        // closes the inference gap and the polled one; it cannot close what
+                        // nothing can observe.
+                        if !self.operator_keyed() {
+                            if let Some(hz) =
+                                Some(engine_lock(engine)).and_then(|mut e| e.take_xit_apply())
+                            {
+                                let _ = rig.set_xit(hz);
+                            }
+                            if let Some(vfo_b) =
+                                Some(engine_lock(engine)).and_then(|mut e| e.take_vfo_apply())
+                            {
+                                let _ = rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" });
+                            }
                         }
                         // DSP funcs (NB/NR/notch=ANF/COMP/VOX): one GET per still-supported func on
                         // the slow sub-cadence, mirroring the S-meter's lazy-capability + miss-
@@ -9138,21 +9192,61 @@ impl RadioLoop {
             // (`Engine::set_rf_power`), without this loop having to re-derive it.
             //
             // `None` on EITHER side means do nothing, which is today's behaviour: no setting, or
-            // no level Nexus has ever commanded on this rig, and there is then nothing to put
-            // back afterwards. Leaving a rig at 10 W for the rest of the session would be a worse
-            // bug than the one this fixes, so the feature declines rather than guess.
-            let tune_power = keying
-                .then(|| {
-                    eng.settings()
-                        .tune_power_pct
-                        .map(|pct| f32::from(pct.min(100)) / 100.0)
-                        .zip(eng.rf_power())
-                        .map(|(want, commanded)| want.min(commanded))
-                })
-                .flatten();
+            // no level this loop could learn, and there is then nothing to put back afterwards.
+            // Leaving a rig at 10 W for the rest of the session would be a worse bug than the one
+            // this fixes, so the feature declines rather than guess.
+            let tune_pct = eng
+                .settings()
+                .tune_power_pct
+                .map(|pct| f32::from(pct.min(100)) / 100.0);
             // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
             // freeze this tick, not every UI command sharing the mutex (the hang convoy).
             drop(eng);
+            // ⭐ ISSUE #234: HAND BACK THE LEVEL THE **RADIO** IS ON, not the last one Nexus
+            // sent. The restore below is structural — forget what we commanded and let the
+            // RF-power block re-command `Engine::rf_power` — and `rf_power` is the COMMANDED
+            // level, so a power dialled on the rig's own control was silently replaced by
+            // whatever Nexus last pushed, on every tune. Adopting the rig's level as the
+            // operator's HERE fixes both ends with one act: the structural restore hands that
+            // level back, and the tune level itself becomes the lower of the setting and the
+            // level actually in use rather than a stale commanded one.
+            //
+            // A FRESH READ, not the 750 ms poll's `rig_rf_power`. The poll reading can be a
+            // whole heavy cycle old, and adopting a stale one would undo a slider drag made
+            // inside that window — pushing the rig UP after the tune, which is the one
+            // direction this path has never done. One round-trip, on a tune key-down only, and
+            // only when tune power is switched on at all: a station without the setting pays
+            // nothing and sees today's behaviour to the byte.
+            //
+            // A rig that will not answer — or that answers ZERO, which `read_level` returns as a
+            // perfectly valid 0.0 — leaves `rf_power` as it was, `None` on a station that has
+            // never touched the slider, and the tune then declines to lower anything. That is
+            // the safe half twice over: nothing to put back means nothing may be taken away, and
+            // a radio reporting 0% must never have that adopted as the operator's level (see
+            // `Engine::adopt_rig_power`, which refuses it).
+            //
+            // ⚠️ NEEDS-BENCH, and this is a POWER COMMAND AROUND KEYING. What is proven here is
+            // the ORDER on the wire (read, then set, then PTT) and that the level that comes
+            // back is the one the radio reported. What no test on this box can show is a real
+            // radio's behaviour: whether its reported level is the same scale it accepts back,
+            // and whether the read costs enough time to be felt before the carrier comes up.
+            if keying && tune_pct.is_some() && self.level_supported[LVL_RFPOWER] != Some(false) {
+                if let Ok(frac) = rig.read_level("RFPOWER") {
+                    let mut e = engine_lock(engine);
+                    // Observed either way — a zero reading is exactly what the "keys and puts
+                    // nothing on the air" warning is built from. ADOPTED only if it is a level
+                    // worth putting back.
+                    e.observe_rig_power(frac);
+                    e.adopt_rig_power(frac);
+                }
+            }
+            let tune_power = keying
+                .then(|| {
+                    tune_pct
+                        .zip(engine_lock(engine).rf_power())
+                        .map(|(want, level)| want.min(level))
+                })
+                .flatten();
             if keying {
                 // Icom-native only: a plain-USB/LSB Icom takes TX audio from the MIC, so
                 // a keyed tune tone via the USB codec radiates ZERO RF ("red light, no
@@ -11519,8 +11613,34 @@ fn width_reassert_after_default_rung(rig: &mut Rig, md: &str, sent_pb: i32) -> O
             want / 1000
         ));
     }
+    // ── THE ESCALATION RUNG'S OWN WIDTH, AND IT IS VERIFIED NOW (#82, operator 2026-09-14:
+    // "never escalate to a zero/maximum passband on failure — fail honestly and tell the
+    // operator"). `M <mode> 0` is `RIG_PASSBAND_NORMAL` — the RIG's own default width, which on
+    // a Flex is 6000 Hz — so this rung DELIBERATELY parks the radio on a filter FT8 never wants,
+    // and the line below is what is supposed to take it off again.
+    //
+    // It used to believe a bare `RPRT 0`. ve3wej's Flex answers `RPRT 0` and keeps its own
+    // filter — that is the whole of #114, already handled on the accepted-but-ignored path
+    // above — so the escalation could still leave FT8 on a 6 kHz SSB filter while the app
+    // reported the mode set. Read it back, exactly as that path does.
+    //
+    // The RUNG ITSELF STAYS. It is what gets the MODE accepted from a backend choking on the
+    // width→DATA-filter mapping rather than on the mode; without it the ladder falls through to
+    // plain USB, which on an Icom means TX audio from the mic jack and no RF at all. What
+    // changes is that the rig is never LEFT there in silence.
     if rig.set_mode(md, want).is_ok() {
-        return None;
+        return match rig.read_mode_passband().1 {
+            // A rig that will not report its width is ignorance, not evidence of a fault — the
+            // same rule the accepted-but-ignored path applies.
+            None => None,
+            Some(a) if width_is_close_enough(a as i32, want) => None,
+            Some(a) => Some(format!(
+                "set {md} at the rig's own default filter, and it is still on a {a} Hz filter, \
+                 not the {want} Hz asked for — set the rig's DATA filter to about {} kHz by hand \
+                 (FT8 needs the full audio passband)",
+                want / 1000
+            )),
+        };
     }
     Some(format!(
         "set {md} but the rig kept its own filter width — it refused {want} Hz; set the rig's \
@@ -13327,6 +13447,107 @@ mod tests {
         assert!(
             !width_is_close_enough(3751, 3000),
             "one Hz past the quarter is not"
+        );
+    }
+
+    /// A logging rigctld stub that ACCEPTS every `M` and then reports whatever width it feels
+    /// like — the Flex 6400 of #82/#114 as a socket. `width` is what `m` answers.
+    fn mock_rigctld_with_width(
+        mode: &'static str,
+        width: u32,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let m = format!("{mode}\n{width}\n");
+                    let reply = if l == "m" { m.as_str() } else { "RPRT 0\n" };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// ⭐ ISSUE #82: THE ESCALATION RUNG MUST NEVER LEAVE THE RIG ON A 6 kHz FILTER IN SILENCE.
+    ///
+    /// After [`MODE_SET_PASSBAND0_AFTER`] failures the ladder sends `M PKTUSB 0` —
+    /// `RIG_PASSBAND_NORMAL`, "use YOUR own default width" — which on a Flex is 6000 Hz. That
+    /// rung stays: it is what gets the MODE accepted from a backend choking on the width→DATA-
+    /// filter mapping rather than on the mode, and removing it drops the ladder to plain USB,
+    /// which on an Icom means TX audio from the mic jack and no RF at all.
+    ///
+    /// What was missing is the CHECK. The `sent_pb != 0` path reads the width back and says so
+    /// when the rig ignored it; this rung believed a bare `RPRT 0` — and ve3wej's Flex answers
+    /// `RPRT 0` and keeps its own filter, which is the whole of #114. So the escalation could
+    /// still land FT8 on a 6 kHz SSB filter with the app reporting success.
+    #[test]
+    fn the_escalation_rung_never_leaves_a_six_kilohertz_filter_unsaid() {
+        // THE DEFECT: the rig takes the mode, answers RPRT 0 to the width, and stays at 6 kHz.
+        let (addr, log) = mock_rigctld_with_width("PKTUSB", 6000);
+        let mut rig = Rig::rigctld(&addr);
+        let note = width_reassert_after_default_rung(&mut rig, "PKTUSB", 0);
+        let seen = log.lock().unwrap().clone();
+        assert!(
+            seen.iter().any(|l| l == "M PKTUSB 3000"),
+            "control: the rung re-asserts the width it wanted: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|l| l == "m"),
+            "…and READS BACK what the rig took — believing RPRT 0 is the bug: {seen:?}"
+        );
+        let note = note.expect("a rig left on 6 kHz must be reported, not silently accepted");
+        assert!(
+            note.contains("6000") && note.contains("3000"),
+            "the note has to name both widths or the operator cannot act on it: {note}"
+        );
+
+        // CONTROL: a rig that actually TAKES the width says nothing at all. Without this the
+        // assertion above would pass for a function that complains unconditionally.
+        let (addr, _log) = mock_rigctld_with_width("PKTUSB", 3000);
+        let mut rig = Rig::rigctld(&addr);
+        assert_eq!(
+            width_reassert_after_default_rung(&mut rig, "PKTUSB", 0),
+            None,
+            "a width that landed is not a complaint"
+        );
+
+        // CONTROL: the rig picking its nearest filter is the radio doing its job, not a fault.
+        let (addr, _log) = mock_rigctld_with_width("PKTUSB", 2700);
+        let mut rig = Rig::rigctld(&addr);
+        assert_eq!(
+            width_reassert_after_default_rung(&mut rig, "PKTUSB", 0),
+            None,
+            "2.7 kHz for a 3 kHz ask must stay silent"
+        );
+
+        // CONTROL: a rig that will not report its width is IGNORANCE, not evidence of a fault —
+        // the same rule the accepted-but-ignored path already applies.
+        let (addr, _log) = mock_rigctld_with_width("PKTUSB", 0);
+        let mut rig = Rig::rigctld(&addr);
+        assert_eq!(
+            width_reassert_after_default_rung(&mut rig, "PKTUSB", 0),
+            None,
+            "no width read back is not a 6 kHz filter"
         );
     }
 
@@ -21578,6 +21799,254 @@ mod tests {
         );
     }
 
+    /// A logging rigctld stub whose RF-POWER LEVEL can be turned like a front-panel knob.
+    /// `f` answers `dial_hz`, `l RFPOWER` answers whatever the returned handle holds (as
+    /// rigctld prints it, a bare 0.0–1.0 line), everything else `RPRT 0`.
+    ///
+    /// The knob is the whole point of issue #234: there is no rig on this box, so the only way
+    /// to express "the operator turned the radio's own power control" is a stub that answers a
+    /// different number than Nexus last commanded.
+    /// `(address, command log, the rig's own power knob)`.
+    type PoweredStub = (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<f32>>);
+
+    fn mock_rigctld_with_power(dial_hz: u64, power: f32) -> PoweredStub {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        let knob = Arc::new(Mutex::new(power));
+        let knob2 = Arc::clone(&knob);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let dial = format!("{dial_hz}\n");
+                    let pwr = format!("{:.6}\n", *knob2.lock().unwrap());
+                    let reply = if l == "f" {
+                        dial.as_str()
+                    } else if l == "l RFPOWER" {
+                        pwr.as_str()
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log, knob)
+    }
+
+    /// ⭐ ISSUE #234: AFTER A TUNE, GIVE BACK THE LEVEL THE **RADIO** IS ON, not the last one
+    /// Nexus happened to send. The restore was structural — forget what we commanded, let the
+    /// RF-power block re-command `Engine::rf_power` — and `rf_power` is the COMMANDED level. So
+    /// an operator who set their power on the rig's own control had it silently replaced by
+    /// whatever Nexus last pushed, every time they tuned. Nexus reads the rig's power on the
+    /// heavy poll (`observe_rig_power`) and had `effective_rf_power()` sitting unused beside it.
+    ///
+    /// The fix adopts the rig's level as the operator's at tune key-down, so the same structural
+    /// restore hands THAT back — which also makes the tune level itself correct (it is the lower
+    /// of the tune setting and the level actually in use).
+    #[test]
+    fn a_tune_hands_back_the_level_the_radio_is_actually_on() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.tune_power_pct = Some(10);
+            e.apply_settings(s);
+            e.set_rf_power(0.8); // Nexus last commanded 80%…
+        }
+        // …and the operator then turned the rig's own power control down to 40%.
+        let (addr, log, knob) = mock_rigctld_with_power(14_074_000, 0.8);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, 0.0);
+        assert_eq!(state.last_rf_power, Some(0.8), "control: 80% was commanded");
+        *knob.lock().unwrap() = 0.4;
+
+        // THE TUNE.
+        engine.lock().unwrap().set_tune(true);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 20.0);
+        assert!(state.tuning_keyed, "control: the tune keyed");
+        let lines = log.lock().unwrap()[mark..].to_vec();
+        assert!(
+            lines.iter().any(|l| l == "l RFPOWER"),
+            "the tune has to ASK the radio what it is on — an up-to-750 ms-old poll reading \
+             would undo a slider drag made in that window: {lines:?}"
+        );
+        let keyed = lines
+            .iter()
+            .position(|l| l == "T 1")
+            .unwrap_or_else(|| panic!("control: the tune must key — {lines:?}"));
+        let set = lines
+            .iter()
+            .position(|l| l == "L RFPOWER 0.100")
+            .unwrap_or_else(|| panic!("the tune keys at ITS level: {lines:?}"));
+        assert!(set < keyed, "power before PTT, not after: {lines:?}");
+
+        // RELEASE — and 40% comes back, not 80%.
+        engine.lock().unwrap().set_tune(false);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 200.0);
+        assert!(!state.tuning_keyed, "the tune released");
+        run(&mut state, &mut rig, 220.0);
+        let after = log.lock().unwrap()[mark..].to_vec();
+        assert!(
+            after.iter().any(|l| l == "L RFPOWER 0.400"),
+            "THE BUG: the level the RADIO was on has to come back: {after:?}"
+        );
+        assert!(
+            !after.iter().any(|l| l == "L RFPOWER 0.800"),
+            "…and the stale commanded level must not be pushed over it: {after:?}"
+        );
+        assert_eq!(state.last_rf_power, Some(0.4));
+    }
+
+    /// THE SAFETY HALF OF #234, and the one that would be the worse bug: a rig whose level
+    /// cannot be learned must not be lowered to the tune level at all, because there would then
+    /// be nothing to hand back and the radio would sit at 10% for the rest of the session.
+    #[test]
+    fn a_tune_declines_to_lower_a_rig_whose_power_it_cannot_read() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.tune_power_pct = Some(10);
+            e.apply_settings(s);
+            // …and the operator has never touched the Pwr slider, which is most stations.
+        }
+        // This stub answers `RPRT 0` to `l RFPOWER` — no level, ever.
+        let (addr, log) = mock_rigctld_on(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, 0.0);
+        engine.lock().unwrap().set_tune(true);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 20.0);
+        assert!(state.tuning_keyed, "control: the tune keyed");
+        assert!(
+            !log.lock().unwrap()[mark..]
+                .iter()
+                .any(|l| l.starts_with("L RFPOWER ")),
+            "nothing is known to put back, so nothing may be taken away: {:?}",
+            log.lock().unwrap()
+        );
+    }
+
+    /// ⚠️ A RADIO REPORTING **ZERO** MUST NOT HAVE THAT ADOPTED AS THE OPERATOR'S LEVEL.
+    /// `Rig::read_level` accepts the whole 0.0–1.0 range, so 0% is `Ok(0.0)` and not an error —
+    /// and adopting it would key the tune at `min(want, 0)`, command 0% on the restore, and
+    /// leave the station there for the rest of the session and every over after it. A rig
+    /// genuinely at zero is the "keys and puts nothing on the air" case Nexus WARNS about; the
+    /// answer is never to adopt it as intent.
+    #[test]
+    fn a_tune_does_not_adopt_a_radio_reporting_zero_power() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.tune_power_pct = Some(10);
+            e.apply_settings(s);
+            // The operator has never touched the Pwr slider, which is most stations.
+        }
+        let (addr, log, _knob) = mock_rigctld_with_power(14_074_000, 0.0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, 0.0);
+        engine.lock().unwrap().set_tune(true);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 20.0);
+        assert!(state.tuning_keyed, "control: the tune keyed");
+        let lines = log.lock().unwrap()[mark..].to_vec();
+        assert!(
+            lines.iter().any(|l| l == "l RFPOWER"),
+            "control: the level really was asked for — otherwise this proves nothing: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("L RFPOWER ")),
+            "a 0% reading is not a level to put back, so nothing may be taken away: {lines:?}"
+        );
+        assert_eq!(
+            engine.lock().unwrap().rf_power(),
+            None,
+            "and 0% must never become the operator's commanded level"
+        );
+
+        // …and the radio still gets TOLD, which is the part that helps the operator.
+        assert!(
+            engine.lock().unwrap().snapshot().radio.tx_power_zero
+                || !engine.lock().unwrap().tx_enabled(),
+            "the zero is observed either way — it feeds the no-RF warning"
+        );
+    }
+
     /// The other direction of the tune-power gate, and the reason it is safe to ship without a
     /// bench: with no setting there is no extra command at all (today's behaviour to the byte),
     /// and the level can only ever go DOWN — an operator running below their tune level keeps
@@ -25481,6 +25950,123 @@ mod tests {
             after.iter().any(|l| l == "F 145801500"),
             "control: and the correction was WITHHELD, not lost — it reaches the rig on the \
              first unkeyed tick, which is what makes this a deferral: {after:?}"
+        );
+    }
+
+    /// ⭐ XIT AND VFO MOVE THE TRANSMIT FREQUENCY, SO THEY ARE WITHHELD FROM A KEYED RIG
+    /// (operator, 2026-09-14). The clarifier/VFO applies inherited the heavy poll's guards —
+    /// `tx_until_ms`, `tuning_keyed`, `manual_ptt_applied`, `rig_keyed` — and stopped there,
+    /// which is `rig_keyed` ALONE: exactly what [`RadioLoop::operator_keyed`]'s own header
+    /// forbids ("every guard that withholds a write because the operator is keyed asks THIS").
+    /// The block is deliberately NOT gated on the inference as a whole, because the dial read
+    /// inside it is the release path — so the WRITES take the tighter test on their own.
+    ///
+    /// A `V VFOB` mid-over is the 1.10.2 stuck-TX shape from another direction: the rig hands
+    /// the transmitter to a VFO nobody judged. A `Z` mid-over walks the transmit frequency
+    /// while the carrier is up. RIT is the control and stays free — it moves the receiver.
+    ///
+    /// Withheld, NOT dropped: the request stays pending and lands on the first unkeyed tick,
+    /// the same deferral the Doppler steer above uses. Dropping it would leave the snapshot —
+    /// which mirrors the commanded value optimistically — telling the operator a lie.
+    #[test]
+    fn xit_and_vfo_are_withheld_while_the_rig_is_keyed_and_rit_is_not() {
+        // The same scene as the blind-window test above: an FM pass with the uplink on the
+        // split TX dial, and a rig answering `f` with that uplink — which only a transmitting
+        // radio does. This stub never answers `t` at all, so `rig_keyed` is false throughout
+        // and the heavy poll (and with it the RIT/XIT/VFO applies) runs the whole time.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log, rig_dial) = mock_rigctld_switchable(145_800_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            let mut s = e.settings().clone();
+            s.phone_mode = "fm".into();
+            e.apply_settings(s);
+            e.set_sat_transponder(Some(("ISS|FM voice V/V".into(), 0, V_V_FM)));
+            e.sat_tune_nominal(FM_BIRD, 1_000_000);
+            e.request_split(Some(145.990));
+        }
+        run(&mut state, &mut rig, &mut backend, 6, &mut tick);
+
+        // ---- KEY DOWN, as the frequency reports it.
+        rig_dial.store(145_990_000, std::sync::atomic::Ordering::SeqCst);
+        assert!(!state.rig_keyed, "scene: the PTT poll believes RX");
+        run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+        assert!(
+            engine.lock().unwrap().sat_inferred_keyed(),
+            "scene: the rig is answering with the pass's transmit leg — it is keyed"
+        );
+
+        // The operator moves all three clarifier/VFO controls mid-over.
+        log.lock().unwrap().clear();
+        {
+            let mut e = engine.lock().unwrap();
+            e.request_rit(-300);
+            e.request_xit(500);
+            e.request_vfo(true);
+        }
+        run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+
+        let keyed = log.lock().unwrap().clone();
+        assert!(
+            keyed.iter().any(|l| l.starts_with("J ")),
+            "scene AND control: RIT is receive-only and must still reach a keyed rig — without \
+             it this test cannot tell a guard from a loop that never ran: {keyed:?}"
+        );
+        assert!(
+            !keyed.iter().any(|l| l.starts_with("Z ") || l == "U XIT 1"),
+            "XIT moves the TRANSMIT frequency — it must not reach a rig that is keying: {keyed:?}"
+        );
+        assert!(
+            !keyed.iter().any(|l| l.starts_with("V VFO")),
+            "and neither may a VFO change: it hands the transmitter to a different VFO \
+             mid-over: {keyed:?}"
+        );
+
+        // ---- UNKEY: the receive leg comes back, the inference retires, and the two withheld
+        // writes land. Withheld, not dropped.
+        rig_dial.store(145_800_000, std::sync::atomic::Ordering::SeqCst);
+        log.lock().unwrap().clear();
+        run(&mut state, &mut rig, &mut backend, 6, &mut tick);
+        let after = log.lock().unwrap().clone();
+        assert!(
+            !engine.lock().unwrap().sat_inferred_keyed(),
+            "control: the pass's receive leg retired the inference"
+        );
+        assert!(
+            after.iter().any(|l| l.starts_with("Z ")),
+            "the XIT the operator asked for was WITHHELD, not lost: {after:?}"
+        );
+        assert!(
+            after.iter().any(|l| l.starts_with("V VFO")),
+            "…and so was the VFO change: {after:?}"
         );
     }
 

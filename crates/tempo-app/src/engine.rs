@@ -2739,6 +2739,8 @@ pub struct Engine {
     /// explain a blank waterfall instead of failing silently.
     audio_error: Option<String>,
     scope_error: Option<String>,
+    /// See `RadioStatus::scope_span_refused`.
+    scope_span_refused: Option<String>,
     /// See `RadioStatus::scope_mode_code`.
     scope_mode_code: Option<u32>,
     /// See `RadioStatus::scope_fix_start_mhz`.
@@ -4504,6 +4506,7 @@ impl Engine {
             cat_reprobe: false,
             audio_error: None,
             scope_error: None,
+            scope_span_refused: None,
             scope_mode_code: None,
             scope_fix_start_mhz: None,
             recording_warning: None,
@@ -5380,6 +5383,24 @@ impl Engine {
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
+        // ⚠️ AND THE CLARIFIER BELIEFS, for the split's reason. RIT/XIT is a write-only
+        // optimistic path: `xit_hz` is what Nexus COMMANDED the OUTGOING radio, and nothing else
+        // ever writes it. Since XIT is part of the key-time licence gate
+        // ([`Self::tx_emission_mhz`]), carrying that belief across a handoff means judging the
+        // NEW rig's emission at an offset it was never given — and that fails OPEN: an offset
+        // believed to move the transmitter INTO privileges would unlock a radio about to key on
+        // the bare dial.
+        //
+        // CLEARED, AND DELIBERATELY NOT MARKED DIRTY — unlike the split above, which does
+        // command the new radio. `rit_dirty`/`xit_dirty` are part of Remote's station-busy
+        // predicate (`remote_radio_context_idle`): a pending local clarifier gesture is a reason
+        // to refuse a remote selection, so arming one here would make every routed handoff look
+        // like the operator had just reached for the clarifier. Clearing alone is enough for the
+        // gate — it puts the belief back to "no offset", which judges the bare dial. That is the
+        // same bound this path always had (`xit_offset_mhz`: an offset dialled on the rig's own
+        // knob is invisible to Nexus), and it is the conservative half of it.
+        self.rit_hz = 0;
+        self.xit_hz = 0;
         self.clear_decode_context();
         self.app.clear_stations();
         // The a7 cross-cycle AP table holds the OLD radio's decodes — replaying
@@ -7107,7 +7128,8 @@ impl Engine {
     /// The FM-class word to command right now: the FM **data** submode `PKTFM` (Hamlib's
     /// `RIG_MODE_PKTFM` → Yaesu FM-D, Icom FM-D) while an SSTV image is queued or in flight,
     /// plain `FM` otherwise — or, on a radio configured for it, for the whole time the SSTV
-    /// receiver is running ([`Self::sstv_holds_data_submode`], default off, #130).
+    /// receiver is running ([`Self::sstv_holds_data_submode`], default off, #130). The whole
+    /// question is [`Self::sstv_wants_data_submode`], which the HF arm asks too (#191).
     ///
     /// ⭐ THE ON-AIR BUG THIS EXISTS FOR (FTDX10 + IC-9700 owner, 2026-08-12): *"when I select
     /// preset frequency 144.500 for SSTV it switches to FM, but as soon as I start TXing it
@@ -7128,15 +7150,30 @@ impl Engine {
     /// `plain_ssb_if_configured` keeps the per-radio mic-jack opt-out working: it maps `PKTFM`
     /// back to plain `FM` exactly as it maps `PKTUSB` to `USB`.
     fn fm_mode_word(&self) -> String {
-        if self.sstv_in_flight() || self.sstv_holds_data_submode() {
+        if self.sstv_wants_data_submode() {
             self.settings.plain_ssb_if_configured("PKTFM")
         } else {
             "FM".to_string()
         }
     }
 
-    /// Is this radio configured to HOLD the FM data submode for the whole time the SSTV
-    /// receiver is running, rather than only around a send? (#130, PA3GYQ via the operator.)
+    /// Does SSTV need this radio in a DATA submode right now — either because a picture is
+    /// queued or on the air, or because this radio is configured to HOLD it for as long as the
+    /// receiver runs ([`Self::sstv_holds_data_submode`])?
+    ///
+    /// ⭐ ONE PREDICATE, AND #191 IS WHY. The hold arrived in 1.11.1 read by `fm_mode_word` and
+    /// by nothing else, so it held FM-D on an FM channel and did nothing at all on 14 MHz —
+    /// where most SSTV is actually worked. The HF arm below asked its own narrower question
+    /// ("is a picture in flight?"), which is precisely the dropping-out-of-data-mode behaviour
+    /// the switch exists to stop. Two call sites deriving "does SSTV want data mode" separately
+    /// is what produced a switch that covered half the bands; there is one now.
+    fn sstv_wants_data_submode(&self) -> bool {
+        self.sstv_in_flight() || self.sstv_holds_data_submode()
+    }
+
+    /// Is this radio configured to HOLD the data submode for the whole time the SSTV receiver
+    /// is running, rather than only around a send? (#130, PA3GYQ via the operator; widened from
+    /// FM-only to HF's USB-D/LSB-D by #191 — see [`Self::sstv_wants_data_submode`].)
     ///
     /// The default is `false` and the answer is then exactly today's: `PKTFM` around an image,
     /// plain `FM` otherwise. The reply that told the reporter this shipped in 1.10.2 was wrong
@@ -7219,7 +7256,7 @@ impl Engine {
             // signal"). Only while an image is queued or in flight, so live voice PTT keeps
             // plain SSB. Driving it through the continuous mode-apply commands DATA BEFORE the
             // SSTV PTT and restores plain SSB when the image ends — no Icom-only set_data_mode.
-            if self.sstv_in_flight() {
+            if self.sstv_wants_data_submode() {
                 // ⭐ FM IS A CLASS, NOT A SIDE — and asking only "which side?" here is what put
                 // an SSB emission on an FM channel (see `fm_mode_word`). The Phone section's
                 // own two FM authorities both sit BELOW this arm — the cockpit's explicit pick
@@ -7846,6 +7883,37 @@ impl Engine {
     /// Desired RF power, if the operator has set one (for the radio loop).
     pub fn rf_power(&self) -> Option<f32> {
         self.rf_power
+    }
+
+    /// ADOPT the level the RIG is actually running at as the operator's own (#234, the tune
+    /// path). Clamped to the active mode ceiling exactly as [`Self::set_rf_power`] is, so an
+    /// FT8 duty-cycle cap still binds a level that arrived from the radio's front panel.
+    ///
+    /// Beside `set_rf_power` rather than inside it, and the difference is the remote lease:
+    /// `set_rf_power` is an ACTUATION and revokes any outstanding Remote permit, because a hand
+    /// at the shack outranks a browser. Nobody actuated anything here — the loop read a number
+    /// off the radio — so revoking would drop a remote operator's permit on every tune.
+    ///
+    /// The CALLER owns the freshness question. The one caller reads the level from the rig on
+    /// the tick it adopts it; adopting the 750 ms poll's `rig_rf_power` instead would let a
+    /// reading up to a heavy cycle old overwrite a slider drag made inside that window.
+    ///
+    /// ⚠️ A ZERO IS NOT ADOPTED, and that is not tidiness — it is the difference between this
+    /// helping and this being a new way to silence a station. `Rig::read_level` accepts the
+    /// whole `0.0..=1.0` range, so a rig reporting 0% answers `Ok(0.0)`, not an error. Adopting
+    /// it would make 0% the operator's commanded level: the tune would key at `min(want, 0)`,
+    /// the restore afterwards would command 0%, and it would STAY there for the session and
+    /// every over after it. A radio genuinely sitting at zero is the "keys and puts nothing on
+    /// the air" case this app already has a warning lane for ([`Self::tx_power_is_zero`]) — the
+    /// answer to it is to TELL the operator, never to adopt it as their intent. Returns whether
+    /// the level was taken, so the caller can decline to lower a rig it learned nothing about.
+    pub fn adopt_rig_power(&mut self, frac: f32) -> bool {
+        if !frac.is_finite() || frac <= ZERO_RF_POWER {
+            return false;
+        }
+        let ceiling = self.active_power_ceiling();
+        self.rf_power = Some(frac.clamp(0.0, ceiling));
+        true
     }
 
     /// The operator's power level as it ACTUALLY stands: what we commanded, or failing that
@@ -14337,6 +14405,47 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 "This radio doesn't cover {output_mhz:.4} MHz, so it can't work that repeater."
             ));
         }
+        // ⭐ A REPEATER IS WORKED ON ITS **INPUT**, so that is where the licence question is
+        // (operator, 2026-09-14). Nothing here used to ask it at all, and the key-time gate that
+        // follows cannot stand in: it judges the DIAL — the machine's OUTPUT — through
+        // `emission_allowed`'s SSB-passband model, which only approximates an FM channel and in
+        // any case is looking at the wrong frequency. A minus-shift machine near a segment edge
+        // was tuned happily and the first over went out below the edge.
+        //
+        // Judged as PHONE explicitly, not `settings.operating_mode`: FM voice is a phone-class
+        // emission whatever section the operator tuned this machine out of, and the whole point
+        // of this verb is that it arrives from Program, Operate or CW.
+        //
+        // The CARRIER is what is judged, not an FM passband. Naming it: Nexus has no FM emission
+        // width model, and inventing one here would put a second, differently-shaped answer beside
+        // `emission_allowed`. A machine whose input sits within a few kHz of a segment edge is
+        // therefore not caught by this — the bench step says so.
+        let input_mhz = match shift {
+            "plus" | "minus" => {
+                let magnitude = if offset_hz > 0 {
+                    offset_hz
+                } else {
+                    crate::settings::rptr_offset_for_dial(output_mhz)
+                } as f64
+                    / 1e6;
+                if shift == "plus" {
+                    output_mhz + magnitude
+                } else {
+                    output_mhz - magnitude
+                }
+            }
+            _ => output_mhz, // simplex: the input IS the output
+        };
+        if !crate::privileges::tx_allowed(
+            self.settings.license_class,
+            input_mhz,
+            crate::settings::OperatingMode::Phone,
+        ) {
+            return Err(format!(
+                "That machine's input is {input_mhz:.4} MHz, which is outside your licence \
+                 privileges — you'd be transmitting there, not on {output_mhz:.4}."
+            ));
+        }
         // The FM plumbing lands BEFORE the QSY so the radio loop's first retune after it already
         // carries this machine's shift and tone (fm_repeater_config reads these three fields).
         self.settings.phone_mode = "fm".to_string();
@@ -16242,10 +16351,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.scope_mode_code = None;
         self.scope_fix_start_mhz = None;
         self.scope_error = None;
+        self.scope_span_refused = None;
     }
 
     pub fn set_scope_error(&mut self, err: Option<String>) {
         self.scope_error = err;
+    }
+
+    /// The radio's answer to the last scope-SPAN command it was sent: `Some(sentence)` when it
+    /// refused (or did not answer), `None` when it took it — issue #275.
+    ///
+    /// Written by the radio loop on EVERY span attempt, in both directions, so a span that
+    /// lands clears the previous complaint without the operator having to do anything. The
+    /// sentence is the loop's prose, carried through verbatim like `scope_error`'s.
+    pub fn set_scope_span_refused(&mut self, note: Option<String>) {
+        self.scope_span_refused = note;
     }
 
     pub fn set_audio_error(&mut self, err: Option<String>) {
@@ -16404,11 +16524,31 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
             return false;
         }
-        self.emission_allowed(
-            self.settings.operating_mode,
-            self.tx_emission_mhz(),
-            &self.settings.sideband,
-        )
+        let judge = |mhz: f64| {
+            self.emission_allowed(self.settings.operating_mode, mhz, &self.settings.sideband)
+        };
+        // `tx_emission_mhz` already carries XIT.
+        let emission = self.tx_emission_mhz();
+        // ⚠️ SPLIT **AND** XIT IS THE ONE COMBINATION NO DOCUMENT HERE SETTLES. Whether a radio
+        // adds its XIT offset on top of the split transmit VFO — or ignores the clarifier once
+        // split is on — is per-rig behaviour, and the two answers are different frequencies. So
+        // both are judged and both must be legal: the unknown falls on the safe side rather than
+        // picking a reading and hoping. Simplex needs no such test — there XIT *is* the transmit
+        // frequency, which is the whole of what XIT does.
+        if self.xit_hz != 0 && matches!(self.tx_freq_verdict(), TxFreqVerdict::Split(_)) {
+            return judge(emission) && judge(emission - self.xit_offset_mhz());
+        }
+        judge(emission)
+    }
+
+    /// The XIT (transmit incremental tuning) offset as MHz — 0.0 when the clarifier is off.
+    ///
+    /// ⚠️ THIS IS THE OFFSET **NEXUS COMMANDED**, and that is the whole extent of what the app
+    /// can know: the RIT/XIT path is write-only and optimistic (no read-back), so an offset
+    /// dialled on the radio's own clarifier knob is invisible here and the licence gate cannot
+    /// see it. Named rather than left implicit because it bounds the guarantee.
+    fn xit_offset_mhz(&self) -> f64 {
+        f64::from(self.xit_hz) / 1_000_000.0
     }
 
     /// The dial the next over will actually be EMITTED on — the confirmed split TX frequency
@@ -16420,12 +16560,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// a legal RX dial with the transmit VFO parked in an Extra-only segment, which shipped and
     /// keyed. Fixing this tightens the gate as much as it unlocks it.
     pub(crate) fn tx_emission_mhz(&self) -> f64 {
-        match self.tx_freq_verdict() {
+        let base = match self.tx_freq_verdict() {
             TxFreqVerdict::Simplex(f) | TxFreqVerdict::Split(f) => f,
             // Nothing legal to judge — the caller refuses on the verdict itself; this value is
             // only ever a display fallback.
             TxFreqVerdict::SplitUnverified => self.settings.dial_mhz,
-        }
+        };
+        // ⭐ AND XIT, because XIT is a transmit-frequency control (operator, 2026-09-14). The
+        // gate used to judge dial-or-split and stop, so an offset that carried the transmitter
+        // out of the operator's segment still keyed — the same fail-open the split fix above
+        // closed, arriving through the clarifier instead. RIT is deliberately absent: it moves
+        // the RECEIVER and nothing else.
+        base + self.xit_offset_mhz()
     }
 
     /// THE ONE DECISION: which frequency the next over is emitted on, and how sure we are.
@@ -17095,6 +17241,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // the radio loop.
         s.radio.amp = self.amp_live(self.settings.active_radio).cloned();
         s.radio.scope_error = self.scope_error.clone();
+        s.radio.scope_span_refused = self.scope_span_refused.clone();
         s.radio.scope_mode_code = self.scope_mode_code;
         s.radio.scope_fix_start_mhz = self.scope_fix_start_mhz;
         s.radio.recording_warning = self.recording_warning.clone();
@@ -22700,6 +22847,82 @@ mod tests {
         );
     }
 
+    /// ⭐ ISSUE #191: THE HOLD HAS TO COVER **HF** TOO. The 1.11.1 switch was consumed by
+    /// `fm_mode_word` alone, so it held FM-D on an FM channel and did nothing whatever on 14 MHz
+    /// — and HF is where most SSTV is worked. The USB-D arm asked only "is a picture in flight?",
+    /// which is exactly the dropping-out-of-data-mode behaviour the switch exists to stop, on the
+    /// band where it matters most.
+    ///
+    /// ⚠️ NEEDS-BENCH: this pins the mode WORD, which is all that can be pinned without a rig.
+    /// `PKTUSB` is not a new word here — the send path already commands it — so what is unproven
+    /// is a radio's behaviour when it is HELD there between pictures.
+    #[test]
+    fn the_hf_data_submode_is_held_while_sstv_receives_under_the_same_per_radio_switch() {
+        let hf = |hold: bool, armed: bool| {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            e.set_license_class("extra");
+            e.settings.sstv_hold_data_submode = hold;
+            e.sstv_tune(14.230, "20m", "USB");
+            if armed {
+                e.set_sstv_armed(true);
+            }
+            e.rig_mode_effective()
+        };
+
+        // (1) DEFAULT OFF, receiver armed: today's answer, unchanged — the control, without
+        // which "PKTUSB" below would pass on an engine that simply always says PKTUSB.
+        assert_eq!(
+            hf(false, true),
+            "USB",
+            "off by default: an armed receiver alone must change nothing on HF either"
+        );
+
+        // (2) SWITCH ON, receiver NOT armed: the switch alone holds nothing.
+        assert_eq!(hf(true, false), "USB", "gated on the receiver running");
+
+        // (3) THE ASK: switch on, receiver armed, no picture queued or in flight.
+        assert_eq!(
+            hf(true, true),
+            "PKTUSB",
+            "THE BUG: the HF arm never read the switch, so an operator on 14.230 kept dropping \
+             out of USB-D between pictures (#191)"
+        );
+
+        // (4) Stop hands the radio back — the off-ramp before voice, same as on FM.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.sstv_tune(14.230, "20m", "USB");
+        e.set_sstv_armed(true);
+        e.set_sstv_armed(false);
+        assert_eq!(e.rig_mode_effective(), "USB", "stopping ends the hold");
+
+        // (5) The mic-jack opt-out reaches the HELD word exactly as it reaches the sent one.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.settings.data_modes_plain_ssb = true;
+        e.sstv_tune(14.230, "20m", "USB");
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "a mic-jack rig is held in plain USB, never PKTUSB"
+        );
+
+        // (6) …and the LSB side of the same arm, since the sideband is dial-derived.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.sstv_tune(7.171, "40m", "LSB");
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTLSB",
+            "below 10 MHz the held word follows the same sideband rule as the sent one"
+        );
+    }
+
     /// The other two ways the Phone section can be in FM — neither of which arms `fm_channel`,
     /// so neither was reachable through the arm above. Both were PKTUSB on the air before the
     /// shared predicate existed: the tester's own "my custom-mode frequency (local FM
@@ -23530,6 +23753,132 @@ mod tests {
         e.settings.split_detect_enabled = true;
         e.observe_rig_split(true, None);
         assert!(!e.tx_allowed(), "split on, frequency unknown — refuse");
+    }
+
+    /// ⭐ XIT MOVES THE TRANSMIT FREQUENCY, SO THE LICENCE GATE HAS TO SEE IT (operator,
+    /// 2026-09-14). The key-time check judged the dial and the confirmed split and nothing
+    /// else, so an XIT offset large enough to carry the transmitter out of the operator's
+    /// segment still keyed — the same fail-open shape as the split bug above, from the other
+    /// clarifier. RIT is the control group and must stay untouched: it moves the RECEIVER.
+    #[test]
+    fn xit_is_judged_at_the_frequency_it_actually_transmits_on() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        assert!(
+            e.tx_allowed(),
+            "precondition: 14.030 CW is legal for a General"
+        );
+
+        // RIT first — the control. 20 kHz down would land in the Extra-only bottom if this
+        // were the transmit frequency, and it must change nothing at all.
+        e.request_rit(-20_000);
+        assert!(
+            e.tx_allowed(),
+            "RIT is receive-only; moving it must never touch the transmit gate"
+        );
+
+        // …and now XIT by the same amount, which DOES move the transmitter: 14.010 is
+        // Extra-only.
+        e.request_xit(-20_000);
+        assert!(
+            !e.tx_allowed(),
+            "FAIL-OPEN: XIT carried the transmitter into an Extra-only segment and the gate \
+             was still judging the dial"
+        );
+        assert!(
+            (e.tx_emission_mhz() - 14.010).abs() < 1e-9,
+            "and the emission the snapshot shows is the one being judged: {}",
+            e.tx_emission_mhz()
+        );
+
+        // Clearing XIT puts the permission back — the guard has to release, not latch.
+        e.request_xit(0);
+        assert!(e.tx_allowed(), "XIT off returns the gate to the dial");
+    }
+
+    /// ⚠️ A CLARIFIER BELIEF MUST NOT SURVIVE A RADIO HANDOFF. `xit_hz` is what Nexus
+    /// COMMANDED — nothing else ever writes it — and it is now part of the key-time licence
+    /// gate. Carried across a switch it judges the NEW radio's emission at an offset that radio
+    /// was never given, and that fails OPEN: an offset believed to move the transmitter INTO
+    /// privileges would unlock a rig about to key on the bare dial.
+    #[test]
+    fn a_radio_handoff_drops_the_clarifier_belief_it_cannot_carry() {
+        let (mut e, ic9700, _ft991a) = three_radio_engine();
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB"); // Extra-only
+        e.request_xit(15_000); // …which XIT "moves" to 14.030
+        assert!(
+            e.tx_allowed(),
+            "precondition: on THIS radio the offset is real and the gate opens"
+        );
+        // Drain the one-shots the way the loop does, so nothing is left pending by accident.
+        assert_eq!(e.take_xit_apply(), Some(15_000));
+
+        e.set_active_radio(ic9700);
+        assert_eq!(e.xit_hz, 0, "the belief belongs to the radio that had it");
+        assert_eq!(e.rit_hz, 0, "…and so does RIT's");
+        // THE FAIL-OPEN, shown on the new radio's own dial: 14.015 CW is Extra-only, and with
+        // the old rig's +15 kHz still believed the gate would judge 14.030 and unlock a radio
+        // about to key on the bare dial. (The handoff adopts the incoming rig's tune, so the
+        // dial has to be set again here — that is what makes this the new radio's question.)
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "an offset only the OUTGOING radio ever had must not open the gate here"
+        );
+        // …and NOTHING is queued for the incoming rig. `rit_dirty`/`xit_dirty` are part of
+        // Remote's station-busy predicate, so arming one here would make every routed handoff
+        // look like a local clarifier gesture in flight.
+        assert_eq!(
+            e.take_xit_apply(),
+            None,
+            "no clarifier write is queued by a handoff"
+        );
+        assert_eq!(e.take_rit_apply(), None);
+    }
+
+    /// THE OTHER DIRECTION. XIT that moves the transmitter INTO privileges is legal, because
+    /// the rig really is keying there — the gate must judge the emission, not refuse on the
+    /// mere presence of an offset.
+    #[test]
+    fn xit_that_moves_the_transmitter_into_privileges_is_allowed() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        assert!(!e.tx_allowed(), "precondition: 14.015 CW is Extra-only");
+
+        e.request_xit(15_000); // 14.030 — a General's segment
+        assert!(
+            e.tx_allowed(),
+            "the transmitter is at 14.030; judging the dial refuses a legal over"
+        );
+    }
+
+    /// ⚠️ SPLIT + XIT IS THE ONE COMBINATION WE CANNOT CONFIRM WITHOUT A RIG, so it falls on
+    /// the safe side: whether a given radio adds XIT on top of its split transmit VFO is a
+    /// per-rig behaviour no vendor document here settles. Both candidate frequencies must be
+    /// inside privileges before the gate opens, so neither reading can key out of band.
+    #[test]
+    fn split_plus_xit_requires_both_candidate_frequencies_to_be_legal() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        e.rig_split_applied(14_026_000);
+        assert!(e.tx_allowed(), "precondition: a General may key 14.026 CW");
+
+        // XIT would carry it to 14.011 — Extra-only. If the rig applies XIT, that is where it
+        // keys; if it does not, 14.026 is. One of the two is illegal, so refuse.
+        e.request_xit(-15_000);
+        assert!(
+            !e.tx_allowed(),
+            "unknown means the safe side: an XIT-shifted split that could land Extra-only locks"
+        );
     }
 
     /// STALENESS LOCKS. The operator cancels split at the front panel and the rig goes quiet;
@@ -35747,6 +36096,47 @@ mod tests {
         assert_eq!(
             e.settings.active_radio, 1,
             "the next 2 m digital QSY still routed on Digital"
+        );
+    }
+
+    /// ⭐ A REPEATER IS WORKED ON ITS **INPUT** (operator, 2026-09-14). `repeater_tune` parked
+    /// the rig on the machine's output and checked nothing about where keying it would land,
+    /// and the key-time gate that follows judges the DIAL — the output — through an SSB
+    /// passband model that only approximates FM. So a machine whose input sits in a segment the
+    /// operator may not key was tuned, and the first over went out there.
+    ///
+    /// The scene is a real one: 6 m repeaters run a 1 MHz shift, and 50.000–50.100 is CW-only
+    /// for every US class. A 51.000 output with a minus shift keys 50.000.
+    #[test]
+    fn repeater_tune_checks_privileges_at_the_input_frequency() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("technician");
+
+        // Control first: the same machine with a PLUS shift keys 52.000, which is fine — so
+        // this is not "6 m repeaters are refused", it is the input being judged.
+        assert!(
+            e.repeater_tune(51.000, "plus", 1_000_000, 0.0).is_ok(),
+            "control: a 52.000 input is inside a Technician's 6 m phone privileges"
+        );
+        let (dial, band) = (e.settings.dial_mhz, e.settings.band.clone());
+
+        let err = e
+            .repeater_tune(51.000, "minus", 1_000_000, 0.0)
+            .expect_err("a 50.000 input is CW-only — tuning this machine must be refused");
+        assert!(
+            err.contains("50.0"),
+            "the refusal has to NAME the input frequency, or it is unactionable: {err}"
+        );
+        assert!(
+            (e.settings.dial_mhz - dial).abs() < 1e-9 && e.settings.band == band,
+            "a refused repeater tune must leave the radio exactly where it was"
+        );
+
+        // And the BAND-CONVENTION offset (0 = "use the convention") is derived from the
+        // machine's own output, not from wherever the rig happens to be parked: 6 m is 1 MHz.
+        assert!(
+            e.repeater_tune(51.000, "minus", 0, 0.0).is_err(),
+            "offset 0 means the 6 m convention (1 MHz) — the same illegal 50.000 input"
         );
     }
 

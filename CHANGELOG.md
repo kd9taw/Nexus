@@ -136,6 +136,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second and a half for the link and then reports "Not sent" rather than arriving late, and Stop TX
   is still always live.
 
+- **XIT is counted when Nexus checks your licence privileges.** The key-time check judged the dial
+  (and a confirmed split) and stopped there, so an XIT offset big enough to carry the transmitter
+  out of your segment still keyed. It is now judged at the frequency XIT actually transmits on, in
+  both directions: an offset that moves you out of privileges locks transmit, and one that moves
+  you *into* them no longer refuses a legal over. RIT is untouched — it moves the receiver. If both
+  split and XIT are on, Nexus requires both candidate transmit frequencies to be legal, because
+  whether a given radio adds XIT on top of its split VFO differs by radio. Nexus can only see an
+  offset **it** set: one dialled on the radio's own clarifier knob is invisible to the check.
+
+- **Tuning an FM repeater checks your privileges at the machine's input.** A repeater is worked on
+  its input, and nothing was asking whether you may key there — the licence check that follows
+  looks at the dial, which is the machine's *output*. A machine whose input falls outside your
+  privileges is now refused, and the message names the input frequency. The check is on the input
+  carrier: a machine whose input sits within a few kHz of a segment edge is still your call.
+
+- **XIT and VFO changes are held back while the radio is transmitting.** Both move the transmit
+  frequency — a VFO change hands the transmitter to a different VFO mid-over — and they were only
+  being held back on the radio's own PTT read-back, which is a poll and can be up to a second
+  behind the key. They now also stand down when Nexus can tell from the frequency that the rig is
+  keying (a satellite pass reporting its uplink). Nothing is lost: the change you asked for is
+  held and goes out on the first tick after unkey. RIT is unaffected — it moves the receiver.
+
+- **After Tune, Nexus gives back the power the radio is actually on (#234).** It used to restore
+  the last level *it* had sent, so a level you set on the radio's own control was quietly replaced
+  every time you tuned. Nexus now asks the radio what it is running at just before the tune keys,
+  and hands that level back afterwards — which also means the tune level is the lower of your tune
+  setting and the power really in use, rather than a stale one. A radio that will not report its
+  power is left alone entirely: with nothing to put back, nothing is taken away.
+
+- **A scope span the radio refuses now says so (#275).** On an IC-7300 with its scope in Fixed
+  mode a span set is rejected, and the rejection was being dropped in three places — so the span
+  buttons did nothing at all, with no explanation anywhere. The refusal is now shown in the status
+  lane, naming the span and what to do about it, and it clears itself the moment a span is
+  accepted. **Nexus does not change the radio's scope mode for you:** Fixed is a deliberate choice,
+  and flipping it to make a button work would be a bigger surprise than the button not working.
+
+- **OmniRig: the dial is read from VFO A/B when the rig file has no plain frequency (#144, #161).**
+  OmniRig only fills its `Freq` property from a rig file that defines one; plenty of rig files
+  report the dial only through `FreqA`/`FreqB`, and for those Nexus read zero — no dial at all —
+  while other programs on the same OmniRig slot were fine. Nexus now falls back to VFO A, then VFO
+  B. If none of the three carries a frequency, that is a CAT error — never a radio shown sitting
+  at 0.000 MHz. On a radio parked on VFO B whose rig file reports both, VFO A is still what Nexus
+  reads.
+
+- **A mode change that ends up on the radio's own wide filter now says so (#82).** When a radio
+  keeps refusing a mode with an explicit filter width, Nexus falls back to setting the mode at the
+  radio's *default* width to get the mode accepted at all — which on a Flex is 6 kHz, far wider
+  than FT8 wants — and then puts the width it asked for back. It was taking the radio's "OK" for
+  that second step at face value, and a Flex answers OK while keeping its own filter. Nexus now
+  reads the width back and, if the radio is still on the wide one, says which filter it is on and
+  which one to set by hand. A radio that will not report its width is left alone rather than
+  warned about.
+
+- **"Hold the data mode while SSTV is receiving" now covers HF, not only FM (#191).** The
+  per-radio switch added in 1.11.1 held FM-D on an FM channel and did nothing at all on HF, where
+  most SSTV is worked — so a station on 14.230 kept dropping out of USB-D between pictures, which
+  is exactly what the switch exists to stop. One switch, both classes: FM-D on an FM channel,
+  USB-D/LSB-D on HF. It is still off by default and still per radio, and the mic-jack opt-out
+  still applies. The switch is renamed accordingly. **Stop the receiver before you go back to
+  voice** — while it runs, transmit audio comes from the data port on HF now too.
+
 ### Changed (60 m)
 
 - **The 60 m FT8 band button follows your country** (#175). If your callsign is a US one, 60 m
