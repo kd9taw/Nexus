@@ -5,7 +5,8 @@ import { t } from '../i18n'
 import { useStationData, RemoteOperationsContext } from '../stationAccess'
 export { RemoteOperationsContext } from '../stationAccess'
 import type { LoggedQso } from '../types'
-import { manualRecord, type ManualRecord } from './operation-protocol'
+import { manualRecord, type LogCapability, type LogChange, type LogChangeOutcome, type ManualRecord } from './operation-protocol'
+import { pushToast } from '../toast'
 import { OperationFailure, type OperationClient } from './operation-client'
 import { ObserverRecallEntry, RemoteRecall, type RemoteRecallEntryProps } from './RemoteRecall'
 // Radio units are invariant protocol tokens, never translated or locale-formatted.
@@ -288,4 +289,49 @@ export function RemoteLogEntry({
 }
 export function useRemoteOperations() {
   return useContext(RemoteOperationsContext)
+}
+const idleSubscribe = () => () => {}
+const idleView = () => null
+/** Whether a log write may be sent now: logging control is current and the station offers it (a
+ * manual entry as an action, a change as a v4 capability). A write still waiting for its result
+ * blocks every other one (see RemoteLogCheck). */
+export function useLogChange(capability: LogCapability | 'log.manual'): boolean {
+  const client = useContext(RemoteOperationsContext), available = useStationData()
+  const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleView)
+  const manual = capability === 'log.manual'
+  return !!(client && (manual || client.operationVersion >= 4) && available && view?.connected && view.fresh &&
+    view.requestReady !== false && !view.unresolved && !view.controlPending && view.state?.phase === 'controlling' &&
+    (manual ? view.state.actions.includes('log.manual') : view.state.controls?.capabilities.includes(capability)))
+}
+/** Send one log change and say what happened: a stale row, any other refusal, a busy station and a
+ * request that never left are told apart. An unknown outcome is left to RemoteLogCheck. */
+export async function sendLogChange(client: OperationClient, change: LogChange): Promise<LogChangeOutcome | null> {
+  try {
+    const outcome = await client.change(change)
+    if (outcome.outcome === 'rejected')
+      pushToast(outcome.reason === 'contextChanged' ? t('remote.logChangeStale')
+        : outcome.reason === 'clusterUnavailable' ? t('remote.selfSpotNoCluster') : t('remote.logChangeFailed'), 'error', 6000)
+    return outcome
+  } catch (e) {
+    const failure = e instanceof OperationFailure ? e : null
+    pushToast(failure?.busy ? t('remote.controlBusy') : failure && !failure.sent ? t('remote.controlNotSent') : t('remote.logChangeFailed'), 'error', 6000)
+    return null
+  }
+}
+/** A log write whose outcome never arrived. Nothing else may change the log until the operator
+ * checks the station's receipt, or says they checked the log at the station. */
+export function RemoteLogCheck({ client }: { client: OperationClient }) {
+  const view = useSyncExternalStore(client.subscribe, client.getSnapshot)
+  if (!client.enabled || !view.unresolved || view.submitting) return null
+  return (
+    <div className="remote-log-entry remote-log-check">
+      <p role="alert">{view.pendingDraft ? t('remote.loggingUnknown') : t('remote.logChangeUnknown')}</p>
+      <div className="remote-actions">
+        <button type="button" className="remote-button" disabled={view.busy || !view.connected || view.requestReady === false}
+          onClick={() => void client.resolve().catch(() => {})}>{t('remote.logChangeCheck')}</button>
+        <button type="button" className="remote-button" disabled={view.busy}
+          onClick={() => void client.acknowledgeAfterCheckingLog().catch(() => {})}>{t('remote.loggingCheckedLog')}</button>
+      </div>
+    </div>
+  )
 }

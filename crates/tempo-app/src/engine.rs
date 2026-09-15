@@ -20027,6 +20027,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.station.set_log_path(path)
     }
 
+    /// The general logbook file, when one is configured. Read-only: Remote re-reads it after a
+    /// rewrite to prove the change reached the disk before it reports one.
+    pub fn log_path(&self) -> Option<&std::path::Path> {
+        self.station.log_path.as_deref()
+    }
+
     /// See [`StationCore::set_fd_log_path`].
     pub fn set_fd_log_path(&mut self, path: PathBuf) {
         self.station.set_fd_log_path(path)

@@ -140,9 +140,21 @@ interface Props {
   detached?: boolean
   /** Ephemeral station data; native loaders and all station/file actions are disabled. */
   observation?: ObservedOta
+  /** Station actions for an observed view, each present only while the station offers it. The
+   *  view never tunes: a hunt hands the spot on once the station has tagged it. */
+  remote?: OtaRemote
 }
 
-export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observation }: Props) {
+export type OtaRemote = {
+  hunt?: (arg: OtaSpotClickArg) => void
+  clearHunt?: () => void
+  startActivation?: (program: string, reference: string) => void
+  stopActivation?: () => void
+  /** Public: the parent confirms on every click before anything is sent. */
+  selfSpot?: () => void
+}
+
+export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observation, remote }: Props) {
   const observed = observation !== undefined
   // Program + band filter persist for the same reason the sort and mode do: the operator
   // filed "leaving and returning resets all filters" as a bug. A stale/hand-edited value
@@ -293,9 +305,12 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   const activating = act != null && act.reference != null
 
   const handleStartActivation = async () => {
-    if (observed) return
     const ref = actRef.trim().toUpperCase()
     if (!ref) return
+    if (observed) {
+      remote?.startActivation?.(actProg, ref)
+      return
+    }
     const a = await withErrorToast(
       () => setActivation(actProg, ref),
       t('ota.activation.startFailed'),
@@ -310,7 +325,10 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     }
   }
   const handleStopActivation = async () => {
-    if (observed) return
+    if (observed) {
+      remote?.stopActivation?.()
+      return
+    }
     const a = await withErrorToast(() => clearActivation(), t('ota.activation.stopFailed'))
     if (a) {
       setAct(a)
@@ -392,10 +410,14 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   }
 
   const handleHunt = async (s: OtaSpot) => {
-    if (observed || !onHunt || !onSnap) return
     const freqMhz = s.freqKhz / 1000
     const band = bandFromKhz(s.freqKhz)
     const modeClass = spotModeClass(s.mode)
+    if (observed) {
+      remote?.hunt?.({ call: s.activator, freqMhz, band, modeClass, program: s.program, reference: s.reference })
+      return
+    }
+    if (!onHunt || !onSnap) return
 
     // Tag the next QSO with this activator's park/summit.
     const snap2 = await withErrorToast(
@@ -455,10 +477,10 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
               vals={{ reference: hunt.reference, call: hunt.call }}
             />
           </span>
-          {!observed && <button
+          {(!observed || remote?.clearHunt) && <button
             type="button"
             className="pota-hunt-clear"
-            onClick={() => void handleClearHunt()}
+            onClick={() => (observed ? remote?.clearHunt?.() : void handleClearHunt())}
             title={t('ota.hunt.clear')}
             aria-label={t('ota.hunt.clear')}
           >
@@ -468,7 +490,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
       )}
 
       {/* My activation — while active, every QSO I log is stamped with MY park (my_ref). */}
-      {(!observed || activating) && <div className={`pota-activation${activating ? ' active' : ''}`}>
+      {(!observed || activating || remote?.startActivation) && <div className={`pota-activation${activating ? ' active' : ''}`}>
         {activating ? (
           <>
             <span className="pota-act-text">
@@ -483,7 +505,10 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
               />
             </span>
             {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
-            {!observed && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
+            {observed && remote?.selfSpot && <button type="button" className="pota-hunt-clear" onClick={() => remote.selfSpot?.()}>
+              {t('remote.selfSpot')}
+            </button>}
+            {(!observed || remote?.stopActivation) && <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
               <X size={13} aria-hidden="true" /> {t('ota.activation.stop.label')}
             </button>}
           </>
@@ -760,7 +785,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                     </span>
                   </div>
                 </div>
-                {!observed && <button
+                {(!observed || remote?.hunt) && <button
                   type="button"
                   className="pota-hunt-btn"
                   onClick={() => void handleHunt(s)}

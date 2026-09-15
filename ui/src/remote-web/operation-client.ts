@@ -4,10 +4,14 @@ import { actionCapability, controlContext, stationAction, type StationAction, ty
 import { controlVersion, type OperationVersion } from './operation-version'
 import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
 import {
+  logChange,
+  logChangeCapability,
   manualRecord,
   operationId,
   operationRequest,
   operationResponse,
+  type LogChange,
+  type LogChangeOutcome,
   type ManualRecord,
   type OperationOutcome,
   type OperationRequest,
@@ -42,7 +46,7 @@ export type OperationView = {
   submitting: boolean
   unresolved: string | null
   pendingDraft: ManualRecord | null
-  resolved: OperationOutcome | null
+  resolved: OperationOutcome | LogChangeOutcome | null
   dismissed: string | null
   error: string | null
   controlPending: PendingControl | null
@@ -146,7 +150,7 @@ export class OperationClient {
   private update(value: Partial<OperationView>) {
     if ('unresolved' in value && value.unresolved !== this.view.unresolved) {
       try {
-        this.receiptStorage?.write(value.unresolved ?? null, value.pendingDraft ?? undefined)
+        this.receiptStorage?.write(value.unresolved ?? null, 'pendingDraft' in value ? value.pendingDraft : undefined)
       } catch (error) {
         if (value.unresolved) throw error
       }
@@ -186,10 +190,9 @@ export class OperationClient {
     if (p) {
       clearTimeout(p.timer)
       this.finishBudget(p.request.requestId)
-      if (p.request.type === 'logManual') this.update({ unresolved: p.request.requestId })
-      p.reject(
-        new Error(p.request.type === 'logManual' ? 'operationUnknown' : 'stationUnavailable')
-      )
+      const write = p.request.type === 'logManual' || p.request.type === 'logChange'
+      if (write) this.update({ unresolved: p.request.requestId })
+      p.reject(new Error(write ? 'operationUnknown' : 'stationUnavailable'))
     }
     this.stateUntil = 0
     this.leaseUntil = 0
@@ -266,7 +269,7 @@ export class OperationClient {
           this.heartbeatLeaseId = null
           this.leaseUntil = 0
           this.finishBudget(request.requestId)
-          const mutation = request.type === 'logManual' || request.type === 'stationControl'
+          const mutation = request.type === 'logManual' || request.type === 'stationControl' || request.type === 'logChange'
           this.update({
             busy: false,
             submitting: false,
@@ -274,16 +277,17 @@ export class OperationClient {
             retainedState: null,
             fresh: false,
             error: mutation ? 'operationUnknown' : 'stationUnavailable',
-            ...(request.type === 'logManual' ? { unresolved: request.requestId } : {})
+            ...(request.type === 'logManual' || request.type === 'logChange' ? { unresolved: request.requestId } : {})
           })
           reject(new Error(mutation ? 'operationUnknown' : 'stationUnavailable'))
         }, 7500)
       }
-      if (request.type === 'logManual') {
+      if (request.type === 'logManual' || request.type === 'logChange') {
         try {
+          // A change has no draft to show again; its receipt alone blocks the next write.
           this.update({
             unresolved: request.requestId,
-            pendingDraft: structuredClone(request.record)
+            pendingDraft: request.type === 'logManual' ? structuredClone(request.record) : null
           })
         } catch {
           clearTimeout(p.timer)
@@ -310,7 +314,7 @@ export class OperationClient {
           retainedState: null,
           fresh: false,
           error: 'stationUnavailable',
-          ...(request.type === 'logManual' ? { unresolved: null } : {})
+          ...(request.type === 'logManual' || request.type === 'logChange' ? { unresolved: null } : {})
         })
         reject(new Error('stationUnavailable'))
       }
@@ -366,7 +370,7 @@ export class OperationClient {
     if (!p || p.request.requestId !== r.requestId) return
     if ('value' in r) {
       if ('stop' in r.value) throw Error('invalidOperation')
-      const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'stationControl' || p.request.type === 'result'
+      const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'stationControl' || p.request.type === 'logChange' || p.request.type === 'result'
       if (expectsOutcome !== 'outcome' in r.value) throw new Error('invalidOperation')
       if (
         'outcome' in r.value &&
@@ -377,7 +381,9 @@ export class OperationClient {
       if ('outcome' in r.value) {
         const control = p.request.type === 'stationControl' ||
           (p.request.type === 'result' && p.request.operationId === this.view.controlPending?.operationId)
-        if (control !== ('operation' in r.value)) throw Error('invalidOperation')
+        if (control !== ('operation' in r.value && r.value.operation === 'stationControl')) throw Error('invalidOperation')
+        const change = 'operation' in r.value && r.value.operation === 'logChange'
+        if ((p.request.type === 'logChange' && !change) || (p.request.type === 'logManual' && 'operation' in r.value)) throw Error('invalidOperation')
       }
     }
     clearTimeout(p.timer)
@@ -386,7 +392,8 @@ export class OperationClient {
     if ('error' in r) {
       this.heartbeatLeaseId = null
       this.leaseUntil = 0
-      const unknown = p.request.type === 'logManual' && r.error === 'operationUnknown'
+      const write = p.request.type === 'logManual' || p.request.type === 'logChange'
+      const unknown = write && r.error === 'operationUnknown'
       if (p.request.type === 'stationControl' && r.error !== 'operationUnknown') {
         try { this.controlStorage?.write(null); this.update({ controlPending: null }) } catch {}
       }
@@ -397,7 +404,7 @@ export class OperationClient {
         retainedState: null,
         fresh: false,
         error: r.error,
-        ...(p.request.type === 'logManual'
+        ...(write
           ? { unresolved: unknown ? p.request.requestId : null }
           : {})
       })
@@ -419,6 +426,18 @@ export class OperationClient {
         fresh: this.now() < this.stateUntil,
         error: null
       })
+    } else if ('operation' in r.value && r.value.operation === 'logChange') {
+      // A change has no editable copy to keep, so only an unknown outcome holds the receipt.
+      this.update({
+        busy: false,
+        submitting: false,
+        state: null,
+        fresh: false,
+        error: null,
+        unresolved: r.value.outcome === 'unknown' ? r.value.operationId : null,
+        ...(p.request.type === 'result' ? { resolved: r.value } : {})
+      })
+      this.polledAt = -Infinity
     } else if ('operation' in r.value) {
       const result = r.value
       if (p.request.type === 'logManual') throw Error('invalidOperation')
@@ -435,7 +454,7 @@ export class OperationClient {
         ...(p.request.type === 'stationControl' ? { state: null, fresh: false } : {}), error: null })
       if (p.request.type === 'stationControl') this.polledAt = -Infinity
     } else {
-      if (p.request.type === 'stationControl') throw Error('invalidOperation')
+      if (p.request.type === 'stationControl' || p.request.type === 'logChange') throw Error('invalidOperation')
       this.finished = r.value
       const retain =
         r.value.outcome === 'unknown' ||
@@ -557,9 +576,36 @@ export class OperationClient {
     }
   }
   private async submitLog(record: ManualRecord, onSubmitted: ((id: string) => void) | undefined, attempt: { sent: boolean }): Promise<OperationOutcome> {
+    const draft = structuredClone(manualRecord(record))
+    const r = await this.submitWrite(s => s.actions.includes('log.manual'),
+      (intent, requestId) => ({ type: 'logManual', requestId, ...intent, record: draft }), onSubmitted, attempt)
+    if (!('outcome' in r) || 'operation' in r) throw new Error('invalidRequest')
+    return r
+  }
+  /** Change an existing log row, or the station's log context, under the same lease, window,
+   * logging permission and receipt rules as a manual entry. */
+  async change(change: LogChange): Promise<LogChangeOutcome> {
+    const attempt = { sent: false }
+    try {
+      const intent = structuredClone(logChange(change))
+      if (this.operationVersion < 4) throw Error('stationUnsupported')
+      const r = await this.submitWrite(s => !!s.controls?.capabilities.includes(logChangeCapability(intent)),
+        (base, requestId) => ({ type: 'logChange', requestId, ...base, change: intent }), undefined, attempt)
+      if (!('operation' in r) || r.operation !== 'logChange') throw Error('invalidRequest')
+      return r
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'stationUnavailable'
+      throw new OperationFailure(code, attempt.sent, stationWasBusy(code, attempt.sent))
+    }
+  }
+  private async submitWrite(
+    allowed: (s: OperationState) => boolean,
+    build: (intent: { stationBootId: string; leaseId: string; commandWindowId: string; expectedRevision: number; clientSequence: number }, requestId: string) => OperationRequest,
+    onSubmitted: ((id: string) => void) | undefined,
+    attempt: { sent: boolean }
+  ): Promise<OperationValue> {
     const s = this.view.state,
-      until = this.stateUntil,
-      draft = structuredClone(manualRecord(record))
+      until = this.stateUntil
     if (this.view.unresolved) throw new Error('operationUnknown')
     if (this.view.controlPending || this.controlIntent) throw new Error('operationUnknown')
     if (this.loggingIntent) throw new Error('remoteBusy')
@@ -569,7 +615,7 @@ export class OperationClient {
       s.phase !== 'controlling' ||
       !s.leaseId ||
       !s.commandWindowId ||
-      s.nextSequence === null || !s.actions.includes('log.manual')
+      s.nextSequence === null || !allowed(s)
     )
       throw new Error('notController')
     const intent = {
@@ -592,20 +638,13 @@ export class OperationClient {
         this.requireRequestCapacity()
         const requestId = crypto.randomUUID()
         onSubmitted?.(requestId)
-        const r = await this.request({
-          type: 'logManual',
-          requestId,
-          ...intent,
-          record: draft
-        }, () => { attempt.sent = true })
-        if (!('outcome' in r) || 'operation' in r) throw new Error('invalidRequest')
-        return r
+        return this.request(build(intent, requestId), () => { attempt.sent = true })
       })
     } finally {
       this.loggingIntent = false
     }
   }
-  async resolve(): Promise<OperationOutcome> {
+  async resolve(): Promise<OperationOutcome | LogChangeOutcome> {
     const id = this.view.unresolved
     if (!id) throw new Error('resultExpired')
     return this.withResultIntent(current => this.withReceiptLock(async () => {
@@ -616,7 +655,7 @@ export class OperationClient {
         requestId: crypto.randomUUID(),
         operationId: id
       })
-      if (!('outcome' in r) || 'operation' in r) throw new Error('invalidRequest')
+      if (!('outcome' in r) || ('operation' in r && r.operation !== 'logChange')) throw new Error('invalidRequest')
       return r
     }))
   }
@@ -688,7 +727,7 @@ export class OperationClient {
         this.controlStorage!.write(saved)
         this.update({ controlPending: saved, controlResult: null })
         const result = await this.request(request, () => { attempt.sent = true })
-        if (!('operation' in result)) throw Error('invalidOperation')
+        if (!('operation' in result) || result.operation !== 'stationControl') throw Error('invalidOperation')
         return result
       })
       if (first.outcome !== 'pending') return first
@@ -712,7 +751,7 @@ export class OperationClient {
       current()
       if (this.view.controlPending?.operationId !== entry.operationId) throw Error('resultExpired')
       const result = await this.request({ type: 'result', requestId: crypto.randomUUID(), operationId: entry.operationId })
-      if (!('operation' in result)) throw Error('invalidOperation')
+      if (!('operation' in result) || result.operation !== 'stationControl') throw Error('invalidOperation')
       return result
     }))
   }

@@ -1,6 +1,9 @@
 import { useContext, useEffect, useState } from 'react'
-import { PotaSotaView } from '../components/PotaSotaView'
+import { PotaSotaView, type OtaRemote, type OtaSpotClickArg } from '../components/PotaSotaView'
 import type { ObservedOta } from '../otaHunt'
+import { sendLogChange, useLogChange, useRemoteOperations } from './operations'
+import { confirmDialog } from '../confirm'
+import { pushToast } from '../toast'
 import type { AppSnapshot } from '../types'
 import { useStationData } from '../stationAccess'
 import { t } from '../i18n'
@@ -13,8 +16,10 @@ const EMPTY: ObservedOta = { feeds: [
   { program: 'SOTA', status: 'unavailable', sourceAgeMs: null, spots: [] },
 ], activation: { program: null, reference: null, qsoCount: 0 }, hunt: null, parkCount: 0, huntedCount: 0 }
 
-export function RemoteOta({ snap }: { snap: AppSnapshot }) {
+export function RemoteOta({ snap, onHunt }: { snap: AppSnapshot; onHunt?: (arg: OtaSpotClickArg) => void }) {
   const source = useContext(RemoteCollectionsContext), available = useStationData()
+  const client = useRemoteOperations(), canHunt = useLogChange('otaHunt'), canActivate = useLogChange('otaActivation')
+  const canSelfSpot = useLogChange('selfSpot')
   const supported = source?.client.supports(OTA_COMMAND) ?? false
   const [capture, setCapture] = useState<{ value: ObservedOta; at: number } | null>(null)
   const [phase, setPhase] = useState<'loading' | 'ready' | 'unavailable'>('loading')
@@ -42,6 +47,33 @@ export function RemoteOta({ snap }: { snap: AppSnapshot }) {
     return feed.status === 'ready' && Number(sourceAgeMs) >= OTA_SOURCE_TTL_MS
       ? { ...feed, status: 'expired', sourceAgeMs, spots: [] } : { ...feed, sourceAgeMs }
   }) } : EMPTY
+  // A hunt is a station change under the logging grant. Only once the station has tagged it does the
+  // spot go on to App's own tune path, which keeps its own permission; a refused hunt never tunes.
+  // Each action is present only while the station offers it; your activation is station context too.
+  const reread = (outcome: { outcome: string } | null) => { if (outcome?.outcome === 'applied') setRefresh(n => n + 1) }
+  const remote: OtaRemote | undefined = client ? {
+    ...(canHunt ? {
+      hunt: (arg: OtaSpotClickArg) => void sendLogChange(client, { kind: 'hunt', call: arg.call, program: arg.program as 'POTA' | 'SOTA', reference: arg.reference })
+        .then(outcome => { if (outcome?.outcome === 'applied') { setRefresh(n => n + 1); onHunt?.(arg) } }),
+      clearHunt: () => void sendLogChange(client, { kind: 'clearHunt' }).then(reread),
+    } : {}),
+    ...(canActivate ? {
+      startActivation: (program: string, reference: string) =>
+        void sendLogChange(client, { kind: 'activation', program: program as 'POTA' | 'SOTA', reference }).then(reread),
+      stopActivation: () => void sendLogChange(client, { kind: 'clearActivation' }).then(reread),
+    } : {}),
+    ...(canSelfSpot && observed.activation.reference ? {
+      // A public post from the station's own call: ask on every click, never remember the answer,
+      // and send exactly the reference and dial the question showed.
+      selfSpot: () => void (async () => {
+        const reference = observed.activation.reference ?? '', dialHz = Math.round(snap.radio.dialMhz * 1e6)
+        if (!(await confirmDialog({ title: t('remote.selfSpotConfirm.title'), confirmLabel: t('remote.selfSpotConfirm.post'),
+          body: t('remote.selfSpotConfirm.body', { reference, freq: (dialHz / 1e6).toFixed(4) }) }))) return
+        const outcome = await sendLogChange(client, { kind: 'selfSpot', reference, dialHz })
+        if (outcome?.outcome === 'applied') pushToast(t('remote.selfSpotPosted'), 'success')
+      })(),
+    } : {}),
+  } : undefined
   return <div className="remote-insights-view remote-ota-view">
     <div className="remote-insights-status" role="status">
       <span>{phase === 'loading' && available ? t('remote.collectionLoading') : value
@@ -55,7 +87,7 @@ export function RemoteOta({ snap }: { snap: AppSnapshot }) {
         : feed.status === 'expired' ? t('remote.otaFeedExpired') : t('remote.otaFeedUnavailable')}
     </span>)}</div>}
     <div className="remote-ota-bank" hidden={!value}>
-      <PotaSotaView snap={snap} observation={observed} />
+      <PotaSotaView snap={snap} observation={observed} remote={remote} />
     </div>
   </div>
 }

@@ -1,7 +1,18 @@
 //! QSO actions use the logging grant, shared native policy and durable receipts.
 //! Admission happens under the original controller window. Finishing an append
 //! cannot acquire TX authority, retry a write or clear a replacement contact.
+//!
+//! Log changes (edit, delete, QSL marks) follow the same rules. A row is found again by the key
+//! of the exact row the browser's log page showed, never by a position, so a row that changed at
+//! the station since that page is refused rather than overwritten. The engine's rewrite does not
+//! sync and reports a failed save only to stderr, so "applied" is claimed only after the log file
+//! itself has been re-read, shown to hold the change, and synced.
 use super::station::Action;
+use ring::digest::{digest, SHA256};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use tempo_app::engine::{
     remote_logging::{
         CurrentQsoLogOutcome, JournalSync, LogFailure, PendingJournalWrite, PendingLogConfirmation,
@@ -10,6 +21,7 @@ use tempo_app::engine::{
     Engine, LogWriteOutcome,
 };
 use tempo_app::remote_control::{Evidence, Outcome, Reason};
+use tempo_core::logbook::{adif_record, QslVia, QsoRecord};
 
 pub(super) enum Work {
     Append(LogWriteOutcome),
@@ -154,4 +166,446 @@ impl Work {
             Err(reason) => Outcome::Unknown { reason },
         }
     }
+}
+
+/// Station hints for log changes. Offered with the logging grant at operation v4, inside
+/// `controls.capabilities`, which older hosted pages filter; `actions` never changes.
+pub(super) const CAPABILITIES: [&str; 4] = ["logEdit", "qslMarks", "otaHunt", "otaActivation"];
+
+/// ⛔ Self-spot posts a PUBLIC DX cluster spot from the station's own call and cluster login. On
+/// since the operator signed it off (2026-09-14), behind a confirm on every click. Setting this to
+/// false makes the station neither advertise nor accept it again.
+pub(super) const SELF_SPOT: bool = true;
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Target {
+    call: String,
+    when_unix: u64,
+    key: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum Change {
+    Edit {
+        target: Target,
+        record: Box<super::ManualRecord>,
+    },
+    Delete {
+        target: Target,
+    },
+    QslSent {
+        target: Target,
+        /// The ADIF QSL_SENT_VIA letter, or null to withdraw the mark. Only an explicit null
+        /// withdraws, exactly as the desktop's `mark_qsl_sent` command rules. serde fills a
+        /// MISSING `Option` field with None, which would read an omitted `via` as a withdrawal;
+        /// `deserialize_with` turns that fallback off, so a missing key is a parse error.
+        #[serde(deserialize_with = "Option::deserialize")]
+        via: Option<String>,
+    },
+    QslCard {
+        target: Target,
+        received: bool,
+    },
+    /// Station context, not a row: the engine's own funnel tags the next contact logged with
+    /// `call` with this reference, then clears the hunt.
+    Hunt {
+        call: String,
+        program: String,
+        reference: String,
+    },
+    ClearHunt {},
+    /// Station context too: while an activation is on, the engine's funnel stamps your reference
+    /// on every contact it logs.
+    Activation {
+        program: String,
+        reference: String,
+    },
+    ClearActivation {},
+    /// A public spot of the station's own call, on its current dial, naming its activation. Carries
+    /// what the operator's confirm showed, so it is refused if either has moved since.
+    SelfSpot {
+        reference: String,
+        // `rename_all` above renames variants only, never the fields inside them.
+        #[serde(rename = "dialHz")]
+        dial_hz: u64,
+    },
+}
+
+impl Change {
+    fn target(&self) -> Option<&Target> {
+        match self {
+            Self::Edit { target, .. }
+            | Self::Delete { target }
+            | Self::QslSent { target, .. }
+            | Self::QslCard { target, .. } => Some(target),
+            Self::Hunt { .. }
+            | Self::ClearHunt {}
+            | Self::Activation { .. }
+            | Self::ClearActivation {}
+            | Self::SelfSpot { .. } => None,
+        }
+    }
+    /// An edit states when the contact happened; "station time" only means something for a new entry.
+    pub(super) fn valid(&self, now_unix: u64) -> bool {
+        self.target().is_none_or(|t| {
+            !t.call.is_empty()
+                && t.call.len() <= 32
+                && t.when_unix <= 253_402_300_799
+                && key(&t.key, 64)
+        }) && match self {
+            Self::Edit { record, .. } => record.when_unix.is_some() && record.valid(now_unix),
+            // Exactly the menu's letters. The empty placeholder is a non-choice, never a clear.
+            Self::QslSent { via, .. } => {
+                via.as_deref().is_none_or(|v| ["B", "D", "E"].contains(&v))
+            }
+            // The wire grammar only; the engine normalizes the reference for its program.
+            Self::Hunt {
+                call,
+                program,
+                reference,
+            } => {
+                (3..=32).contains(&call.len())
+                    && call
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/')
+                    && ["POTA", "SOTA"].contains(&program.as_str())
+                    && (1..=32).contains(&reference.len())
+                    && reference
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
+            }
+            Self::Activation { program, reference } => {
+                ["POTA", "SOTA"].contains(&program.as_str())
+                    && (1..=32).contains(&reference.len())
+                    && reference
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
+            }
+            Self::SelfSpot { reference, dial_hz } => {
+                (1..=250_000_000_000).contains(dial_hz)
+                    && (1..=32).contains(&reference.len())
+                    && reference
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
+            }
+            Self::Delete { .. }
+            | Self::QslCard { .. }
+            | Self::ClearHunt {}
+            | Self::ClearActivation {} => true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ChangeEvidence {
+    FileSynced,
+    StationState,
+    /// Queued for the station's connected DX cluster node(s), which send it.
+    SpotQueued,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ChangeReason {
+    ContextChanged,
+    InvalidChange,
+    ClusterUnavailable,
+    PersistenceUnconfirmed,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub(super) enum ChangeOutcome {
+    Applied { evidence: ChangeEvidence },
+    Rejected { reason: ChangeReason },
+    Unknown { reason: ChangeReason },
+}
+
+pub(super) fn change_value(id: &str, outcome: &ChangeOutcome) -> Value {
+    let mut value = serde_json::to_value(outcome)
+        .unwrap_or_else(|_| json!({"outcome":"unknown","reason":"persistenceUnconfirmed"}));
+    value["operation"] = json!("logChange");
+    value["operationId"] = json!(id);
+    value
+}
+
+/// The bytes a row key is the SHA-256 of. Mirrors `logRowCanonical` in
+/// ui/src/remote-web/operation-protocol.ts; one vector in both test suites holds them together.
+/// Numbers are compared in millionths, so a float and the same integer agree on both sides.
+pub(super) fn row_canonical(value: &Value) -> String {
+    fn walk(value: &Value, out: &mut String) {
+        match value {
+            Value::Null => out.push('z'),
+            Value::Bool(b) => out.push(if *b { 't' } else { 'f' }),
+            Value::Number(n) => {
+                let x = n.as_f64().unwrap_or(0.0);
+                let micro = (x.abs() * 1e6).round();
+                let sign = if x < 0.0 && micro != 0.0 { "-" } else { "" };
+                let _ = write!(out, "n{sign}{micro:.0};");
+            }
+            Value::String(s) => {
+                let _ = write!(out, "s{}:{s}", s.len());
+            }
+            Value::Array(items) => {
+                let _ = write!(out, "a{}[", items.len());
+                items.iter().for_each(|item| walk(item, out));
+                out.push(']');
+            }
+            Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                let _ = write!(out, "o{}{{", keys.len());
+                for k in keys {
+                    let _ = write!(out, "s{}:{k}", k.len());
+                    walk(&map[k], out);
+                }
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(value, &mut out);
+    out
+}
+
+pub(super) fn value_key(row: &Value) -> String {
+    digest(&SHA256, row_canonical(row).as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The key of a stored record, built as the log page builds its row (query.rs `Collection::Log`:
+/// the DTO plus the resolved entity). If that row shape changes, keys stop matching and every
+/// change is refused as stale — safe, and caught by the page-row test.
+pub(super) fn row_key(record: &QsoRecord) -> String {
+    let mut q = tempo_app::dto::LoggedQso::from(record.clone());
+    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+    serde_json::to_value(q)
+        .map(|v| value_key(&v))
+        .unwrap_or_default()
+}
+
+pub(super) enum ChangeWork {
+    /// A proven rewrite: the file must hold exactly `count` copies of `expected` afterwards.
+    Rewrite {
+        path: Option<PathBuf>,
+        expected: String,
+        count: usize,
+    },
+    /// In-memory station context (a hunt), applied under the Engine lock. Nothing to sync.
+    State,
+    /// A self-spot composed under the Engine lock, posted only after it is released.
+    Spot {
+        freq_mhz: f64,
+        call: String,
+        comment: String,
+    },
+}
+
+/// Apply under the Engine lock. Only the fields a remote edit carries change; everything else
+/// (confirmations, uploads, park refs, the split leg) is carried from the stored record, and the
+/// engine's own edit policy still applies on top (a callsign fix clears upload stamps).
+pub(super) fn prepare_change(
+    engine: &mut Engine,
+    change: &Change,
+) -> Result<ChangeWork, ChangeReason> {
+    match change {
+        // The engine validates and normalizes the reference for its program; a refusal changes nothing.
+        Change::Hunt {
+            call,
+            program,
+            reference,
+        } => {
+            return engine
+                .set_hunt_target(call, program, reference)
+                .map(|()| ChangeWork::State)
+                .map_err(|_| ChangeReason::InvalidChange)
+        }
+        Change::ClearHunt {} => {
+            engine.clear_hunt_target();
+            return Ok(ChangeWork::State);
+        }
+        Change::Activation { program, reference } => {
+            return engine
+                .set_activation(program, reference)
+                .map(|_| ChangeWork::State)
+                .map_err(|_| ChangeReason::InvalidChange)
+        }
+        Change::ClearActivation {} => {
+            engine.clear_activation();
+            return Ok(ChangeWork::State);
+        }
+        Change::SelfSpot { reference, dial_hz } => {
+            let (program, active) = engine.activation().ok_or(ChangeReason::InvalidChange)?;
+            // What the operator confirmed must still be true: the same activation, the same dial.
+            if active != *reference || engine.settings().dial_hz() != *dial_hz {
+                return Err(ChangeReason::ContextChanged);
+            }
+            return Ok(ChangeWork::Spot {
+                freq_mhz: *dial_hz as f64 / 1e6,
+                call: engine.settings().mycall.clone(),
+                comment: format!("{program} {active}"),
+            });
+        }
+        _ => {}
+    }
+    // Fold in another instance's appends first, so the index found below cannot shift under it.
+    engine.sync_shared_log_if_changed();
+    let t = change.target().ok_or(ChangeReason::ContextChanged)?;
+    let index = engine
+        .log_records()
+        .iter()
+        .position(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
+        .ok_or(ChangeReason::ContextChanged)?;
+    let stored = engine.log_records()[index].clone();
+    let copies = |records: &[QsoRecord], of: &QsoRecord, text: &str| {
+        records
+            .iter()
+            .filter(|r| r.call == of.call && r.when_unix == of.when_unix && adif_record(r) == text)
+            .count()
+    };
+    let (expected, count) = if let Change::Delete { .. } = change {
+        let text = adif_record(&stored);
+        if !engine.delete_qso(index) {
+            return Err(ChangeReason::ContextChanged);
+        }
+        let count = copies(engine.log_records(), &stored, &text);
+        (text, count)
+    } else {
+        // The row stays at `index`; prove the record the engine actually wrote there.
+        let applied = match change {
+            Change::Edit { record, .. } => engine.update_qso(index, edited(record, &stored)),
+            // `valid` admitted only B/D/E or null, so a letter always parses here.
+            Change::QslSent { via, .. } => {
+                engine.mark_qsl_sent(index, via.as_deref().and_then(QslVia::from_code))
+            }
+            Change::QslCard { received, .. } => engine.mark_qsl_card(index, *received),
+            Change::Delete { .. }
+            | Change::Hunt { .. }
+            | Change::ClearHunt {}
+            | Change::Activation { .. }
+            | Change::ClearActivation {}
+            | Change::SelfSpot { .. } => false,
+        };
+        if !applied {
+            return Err(ChangeReason::ContextChanged);
+        }
+        let written = engine
+            .log_records()
+            .get(index)
+            .cloned()
+            .ok_or(ChangeReason::ContextChanged)?;
+        let text = adif_record(&written);
+        let count = copies(engine.log_records(), &written, &text);
+        (text, count)
+    };
+    Ok(ChangeWork::Rewrite {
+        path: engine.log_path().map(Path::to_path_buf),
+        expected,
+        count,
+    })
+}
+
+fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {
+    let mut next = stored.clone();
+    next.call = record.call.clone();
+    next.grid = record.grid.clone();
+    next.state = record.state.clone();
+    next.band = record.band.clone();
+    next.freq_mhz = record.freq_mhz;
+    next.mode = record.mode.clone();
+    next.rst_sent = record.rst_sent.clone();
+    next.rst_rcvd = record.rst_rcvd.clone();
+    next.name = record.name.clone();
+    next.qth = record.qth.clone();
+    next.comment = record.comment.clone();
+    next.notes = record.notes.clone();
+    if let Some(at) = record.when_unix.filter(|at| *at != stored.when_unix) {
+        next.when_unix = at;
+        next.time_known = true; // the operator stated the time
+    }
+    if let Some(ota) = &record.ota {
+        next.ota.their_program = Some(ota.their_program.clone());
+        next.ota.their_ref = Some(ota.their_ref.clone());
+    }
+    next
+}
+
+impl ChangeWork {
+    /// Runs with Engine unlocked. Never retries and never writes the log itself.
+    /// `post` is used only by a self-spot, and only here, once per receipt.
+    pub(super) fn finish(
+        self,
+        post: impl FnOnce(f64, &str, &str) -> Result<(), String>,
+    ) -> ChangeOutcome {
+        let (path, expected, count) = match self {
+            Self::Rewrite {
+                path,
+                expected,
+                count,
+            } => (path, expected, count),
+            Self::State => {
+                return ChangeOutcome::Applied {
+                    evidence: ChangeEvidence::StationState,
+                }
+            }
+            Self::Spot {
+                freq_mhz,
+                call,
+                comment,
+            } => {
+                return match post(freq_mhz, &call, &comment) {
+                    Ok(()) => ChangeOutcome::Applied {
+                        evidence: ChangeEvidence::SpotQueued,
+                    },
+                    // `post_spot` names the cluster only when no node is connected.
+                    Err(e) if e.contains("cluster") => ChangeOutcome::Rejected {
+                        reason: ChangeReason::ClusterUnavailable,
+                    },
+                    Err(_) => ChangeOutcome::Rejected {
+                        reason: ChangeReason::InvalidChange,
+                    },
+                };
+            }
+        };
+        let proved = path
+            .as_deref()
+            .is_some_and(|path| on_disk(path, &expected, count).unwrap_or(false));
+        if proved {
+            ChangeOutcome::Applied {
+                evidence: ChangeEvidence::FileSynced,
+            }
+        } else {
+            ChangeOutcome::Unknown {
+                reason: ChangeReason::PersistenceUnconfirmed,
+            }
+        }
+    }
+}
+
+/// Read the file the log path names now, check it holds the change, then sync it and (on Unix) its
+/// directory, so the rename that published it survives a crash. A write handle: Windows flushes
+/// only through one. Anything short of that is unknown, never applied.
+fn on_disk(path: &Path, expected: &str, count: usize) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    if text.matches(expected).count() != count {
+        return Ok(false);
+    }
+    file.sync_all()?;
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    Ok(true)
 }

@@ -871,6 +871,43 @@ test('FT Stop crosses the real relay alongside pending operations and survives h
   live.browser.close(); live.station.close()
 })
 
+test('a log change crosses the real relay only at v4, survives hibernation, and old stations never see one', async () => {
+  const target = { call: 'W1AW', whenUnix: 1788940800, key: 'a'.repeat(64) }
+  const change = () => ({ type: 'logChange', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),
+    expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1, change: { kind: 'delete', target } })
+  // A station that predates FT control negotiates v3: the relay refuses before its wire.
+  const old = await app.paired(), legacy = await admitted(old, 1, { 'x-nexus-operation-version': '2', 'x-nexus-operation-max-version': '3' })
+  legacy.browser.send({ type: 'operationRequest', operationVersion: 4, request: change() })
+  assert.equal((await legacy.browser.take(type('operationResponse'))).error, 'stationUnsupported')
+  await assert.rejects(legacy.station.take(type('operationRequest'), 100), /timeout/)
+  assert.equal(legacy.station.closed, false)
+  legacy.browser.close(); legacy.station.close()
+  const pair = await app.paired(), live = await admitted(pair, 1, {
+    'x-nexus-operation-version': '2', 'x-nexus-operation-max-version': '3', 'x-nexus-operation-ft-version': '1'
+  })
+  const request = change()
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request })
+  const routed = await live.station.take(type('operationRequest'))
+  assert.deepEqual(routed.request, request)
+  assert.equal(routed.operationVersion, 4)
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request: change() })
+  assert.equal((await live.browser.take(type('operationResponse'))).error, 'remoteBusy')
+  await app.evict(pair.stationId)
+  const value = { operation: 'logChange', operationId: request.requestId, outcome: 'applied', evidence: 'fileSynced' }
+  live.station.send({ type: 'operationResponse', sessionId: routed.sessionId, requestId: request.requestId, value })
+  assert.deepEqual((await live.browser.take(type('operationResponse'))).value, value)
+  // A newer station naming a second action cannot break this page's control.
+  const state = { type: 'state', requestId: crypto.randomUUID() }
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request: state })
+  const forwarded = await live.station.take(type('operationRequest'))
+  live.station.send({ type: 'operationResponse', sessionId: forwarded.sessionId, requestId: state.requestId,
+    value: { stationBootId: crypto.randomUUID(), allowed: true, phase: 'available', leaseId: null, revision: 1, commandWindowId: null,
+      nextSequence: null, leaseRemainingMs: null, actions: ['log.manual', 'log.future'], txArmed: false } })
+  assert.deepEqual((await live.browser.take(type('operationResponse'))).value.actions, ['log.manual'])
+  assert.equal(live.station.closed, false)
+  live.browser.close(); live.station.close()
+})
+
 // A claim is durable on the enrollment row, but until it reached the wire the browser could only
 // remember "waiting for approval" in component state, so a reload lost it and re-entering the same
 // code was refused - the claim UPDATE requires account_id IS NULL. The operator concluded pairing

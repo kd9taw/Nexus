@@ -14,7 +14,8 @@ export type ReceiptStorage = {
   exclusive?: <T>(action: () => T | Promise<T>) => Promise<T>
   read: () => string | null
   readDraft?: () => ManualRecord | null
-  write: (id: string | null, record?: ManualRecord) => void
+  /** `record` undefined keeps the entry's draft; `null` records a station change that has none. */
+  write: (id: string | null, record?: ManualRecord | null) => void
 }
 type Entry = { version: 1; operationId: string; record: ManualRecord | null }
 export function pendingLogStorage(
@@ -81,8 +82,8 @@ export function pendingLogStorage(
       }
       if (storage().getItem(`nexus.remote.pending-control.${stationId}`) !== null) throw Error('operationUnknown')
       if (!operationId(id) || (e && e.operationId !== id)) throw Error('receiptStorageUnavailable')
-      const draft = record ? manualRecord(record) : (e?.record ?? null)
-      if (!draft) throw Error('receiptStorageUnavailable')
+      const draft = record === undefined ? e?.record : record && manualRecord(record)
+      if (draft === undefined) throw Error('receiptStorageUnavailable')
       const encoded = JSON.stringify({ version: 1, operationId: id, record: draft })
       if (new TextEncoder().encode(encoded).length > 6144) throw Error('receiptStorageUnavailable')
       storage().setItem(key, encoded)

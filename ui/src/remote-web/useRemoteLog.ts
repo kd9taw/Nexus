@@ -13,19 +13,33 @@ export function useRemoteLog(search: string, unconfirmed: boolean) {
   const [index, setIndex] = useState(0)
   const [phase, setPhase] = useState<'loading' | 'ready' | 'unavailable'>('loading')
   const [revision, setRevision] = useState(0)
-  const refresh = () => setRevision(v => v + 1)
+  // When this browser last changed the log (performance.now() as the change was sent). The station
+  // shares a recent page-zero capture between readers for a few seconds, so a refresh right after a
+  // change can be handed the log as it was. Such a page is fetched again, a bounded number of
+  // times; a change aimed at a stale row is still refused at the station either way.
+  const changedAt = useRef(-Infinity)
+  const refresh = (after?: number) => {
+    if (after !== undefined) changedAt.current = Math.max(changedAt.current, after)
+    setRevision(v => v + 1)
+  }
   useEffect(() => {
     const current = ++generation.current
     if (!source) return
     setPages([]); setIndex(0)
     if (!available) { setPhase('unavailable'); return }
     setPhase('loading')
-    let live = true
-    const timer = setTimeout(() => {
+    let live = true, retries = 0
+    const load = () => {
+      const started = performance.now()
       void source.page({ collection: 'log', cursor: null, search: search.trim(), unconfirmed, after: null })
-        .then(page => { if (live && current === generation.current) { setPages([page]); setPhase('ready') } })
+        .then(page => {
+          if (!live || current !== generation.current) return
+          if (started - page.ageMs < changedAt.current && retries < 8) { retries++; timer = setTimeout(load, 1000); return }
+          setPages([page]); setPhase('ready')
+        })
         .catch(() => { if (live && current === generation.current) setPhase('unavailable') })
-    }, 300)
+    }
+    let timer = setTimeout(load, 300)
     return () => { live = false; generation.current++; clearTimeout(timer) }
   }, [source, search, unconfirmed, revision, available])
   const page = pages[index]

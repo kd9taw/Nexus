@@ -23,6 +23,37 @@ export type ManualRecord = {
   awardConfirmed: false
   ota?: { theirProgram: 'POTA' | 'SOTA'; theirRef: string }
 }
+/** A log row as the station's log page sent it. The station finds the row again by this key and
+ * never by a position: a position is stale the moment anything else changes the log. */
+export type LogTarget = { call: string; whenUnix: number; key: string }
+export type LogChange =
+  | { kind: 'edit'; target: LogTarget; record: ManualRecord }
+  | { kind: 'delete'; target: LogTarget }
+  /** `via` is the ADIF QSL_SENT_VIA letter; only `null` withdraws the mark. */
+  | { kind: 'qslSent'; target: LogTarget; via: 'B' | 'D' | 'E' | null }
+  | { kind: 'qslCard'; target: LogTarget; received: boolean }
+  /** Station context, not a row: the station tags its next contact with `call` with this reference. */
+  | { kind: 'hunt'; call: string; program: 'POTA' | 'SOTA'; reference: string }
+  | { kind: 'clearHunt' }
+  /** Station context too: while it is on, the station stamps your reference on every contact it logs. */
+  | { kind: 'activation'; program: 'POTA' | 'SOTA'; reference: string }
+  | { kind: 'clearActivation' }
+  /** A public DX cluster spot of the station's own call. Carries the reference and dial the confirm
+   * showed, so the station refuses it if either has moved since. */
+  | { kind: 'selfSpot'; reference: string; dialHz: number }
+/** Station hints for log changes. They ride in `controls.capabilities`, which every hosted page
+ * since operation v3 filters, so a newer station can offer them without breaking an older page. */
+export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation', 'selfSpot'] as const
+export type LogCapability = (typeof LOG_CAPABILITIES)[number]
+export const logChangeCapability = (change: LogChange): LogCapability =>
+  ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks', hunt: 'otaHunt', clearHunt: 'otaHunt',
+    activation: 'otaActivation', clearActivation: 'otaActivation', selfSpot: 'selfSpot' } as const)[change.kind]
+const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotQueued'] as const
+const CHANGE_REFUSALS = ['contextChanged', 'invalidChange', 'clusterUnavailable'] as const
+export type LogChangeOutcome = { operation: 'logChange'; operationId: string } & (
+  | { outcome: 'applied'; evidence: (typeof CHANGE_EVIDENCE)[number] }
+  | { outcome: 'rejected'; reason: (typeof CHANGE_REFUSALS)[number] }
+  | { outcome: 'unknown'; reason: 'persistenceUnconfirmed' })
 export type OperationRequest =
   | { type: 'state'; requestId: string }
   | { type: 'stopTransmit'; requestId: string; stationBootId: string; leaseId: string; transmitEpoch: string }
@@ -50,6 +81,16 @@ export type OperationRequest =
       context: ControlContext
       action: StationAction
     }
+  | {
+      type: 'logChange'
+      requestId: string
+      stationBootId: string
+      leaseId: string
+      expectedRevision: number
+      commandWindowId: string
+      clientSequence: number
+      change: LogChange
+    }
 export type OperationState = {
   stationBootId: string
   allowed: boolean
@@ -62,7 +103,7 @@ export type OperationState = {
   actions: 'log.manual'[]
   txArmed: boolean
   transmitEpoch?: string | null
-  controls?: { context: ControlContext; capabilities: ControlCapability[] }
+  controls?: { context: ControlContext; capabilities: (ControlCapability | LogCapability)[] }
 }
 export type OperationOutcome =
   | { outcome: 'applied'; evidence: 'fileSynced'; uploads: 'stationPipeline'; operationId: string }
@@ -72,7 +113,7 @@ export type OperationOutcome =
       operationId: string
     }
 export type StopOutcome = { stop: 'accepted' }
-export type OperationValue = OperationState | OperationOutcome | ControlOutcome | StopOutcome
+export type OperationValue = OperationState | OperationOutcome | ControlOutcome | StopOutcome | LogChangeOutcome
 export const transmitEpoch = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{16}$/.test(v)
 export type OperationResponse =
   | { type: 'operationResponse'; requestId: string; value: OperationValue }
@@ -143,6 +184,71 @@ export function manualRecord(raw: unknown): ManualRecord {
   }
   return raw as ManualRecord
 }
+/** The exact bytes a row key is the SHA-256 of. Mirrored by `row_canonical` in src-tauri's
+ * remote_service logging module; a shared vector in both test suites holds them together.
+ * Numbers are compared in millionths so a float and the same integer agree on both sides. */
+export function logRowCanonical(v: unknown): string {
+  if (v === null) return 'z'
+  if (typeof v === 'boolean') return v ? 't' : 'f'
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) invalid()
+    const micro = Math.round(Math.abs(v) * 1e6)
+    return `n${v < 0 && micro !== 0 ? '-' : ''}${BigInt(micro)};`
+  }
+  if (typeof v === 'string') return `s${new TextEncoder().encode(v).length}:${v}`
+  if (Array.isArray(v)) return `a${v.length}[${v.map(logRowCanonical).join('')}]`
+  if (typeof v === 'object') {
+    const keys = Object.keys(v).sort()
+    return `o${keys.length}{${keys.map(k => logRowCanonical(k) + logRowCanonical((v as Record<string, unknown>)[k])).join('')}}`
+  }
+  return invalid()
+}
+export async function logTarget(row: { call: string; whenUnix: number }): Promise<LogTarget> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(logRowCanonical(row)))
+  return { call: row.call, whenUnix: row.whenUnix, key: [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('') }
+}
+export function logChange(raw: unknown): LogChange {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
+  const c = raw as Record<string, unknown>
+  const shapes: Record<string, string[]> = { edit: ['kind', 'target', 'record'], delete: ['kind', 'target'],
+    qslSent: ['kind', 'target', 'via'], qslCard: ['kind', 'target', 'received'],
+    hunt: ['kind', 'call', 'program', 'reference'], clearHunt: ['kind'],
+    activation: ['kind', 'program', 'reference'], clearActivation: ['kind'],
+    selfSpot: ['kind', 'reference', 'dialHz'] }
+  if (typeof c.kind !== 'string' || !Object.prototype.hasOwnProperty.call(shapes, c.kind)) invalid()
+  object(c, shapes[c.kind as string])
+  // A row change names the exact row (its shape requires the target); a hunt names none.
+  if ('target' in c) {
+    const t = object(c.target, ['call', 'whenUnix', 'key'])
+    if (!text(t.call, 32) || !t.call || !integer(t.whenUnix) || t.whenUnix > 253402300799 ||
+      typeof t.key !== 'string' || !/^[0-9a-f]{64}$/.test(t.key))
+      invalid()
+  }
+  if (c.kind === 'hunt' && (typeof c.call !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(c.call)))
+    invalid()
+  // The wire grammar only; the station normalizes the reference for its program and may refuse it.
+  if ((c.kind === 'hunt' || c.kind === 'activation') && ((c.program !== 'POTA' && c.program !== 'SOTA') ||
+    typeof c.reference !== 'string' || !/^[A-Za-z0-9/-]{1,32}$/.test(c.reference)))
+    invalid()
+  if (c.kind === 'selfSpot' && (typeof c.reference !== 'string' || !/^[A-Za-z0-9/-]{1,32}$/.test(c.reference) ||
+    !integer(c.dialHz) || c.dialHz < 1 || c.dialHz > 250_000_000_000))
+    invalid()
+  // An edit states when the contact happened; "station time" only means something for a new entry.
+  if (c.kind === 'edit' && manualRecord(c.record).whenUnix === null) invalid()
+  // The empty string is the QSL menu's placeholder, a non-choice: never read it as a withdrawal.
+  if (c.kind === 'qslSent' && !(c.via === null || c.via === 'B' || c.via === 'D' || c.via === 'E')) invalid()
+  if (c.kind === 'qslCard' && typeof c.received !== 'boolean') invalid()
+  return raw as LogChange
+}
+function logChangeOutcome(v: Record<string, unknown>): LogChangeOutcome {
+  object(v, ['operation', 'operationId', 'outcome', v.outcome === 'applied' ? 'evidence' : 'reason'])
+  if (v.operation !== 'logChange' || !operationId(v.operationId) ||
+    !(v.outcome === 'applied' ? CHANGE_EVIDENCE.includes(v.evidence as never)
+      : v.outcome === 'rejected' ? CHANGE_REFUSALS.includes(v.reason as never)
+        : v.outcome === 'unknown' && v.reason === 'persistenceUnconfirmed'))
+    invalid()
+  return v as LogChangeOutcome
+}
 export function operationRequest(raw: unknown): OperationRequest {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const r = raw as Record<string, unknown>
@@ -154,6 +260,7 @@ export function operationRequest(raw: unknown): OperationRequest {
     release: ['leaseId'],
     result: ['operationId'],
     stationControl: ['stationBootId', 'leaseId', 'expectedRevision', 'commandWindowId', 'clientSequence', 'context', 'action'],
+    logChange: ['stationBootId', 'leaseId', 'expectedRevision', 'commandWindowId', 'clientSequence', 'change'],
     logManual: [
       'stationBootId',
       'leaseId',
@@ -169,7 +276,7 @@ export function operationRequest(raw: unknown): OperationRequest {
   for (const key of ['stationBootId', 'leaseId', 'operationId', 'commandWindowId'])
     if (key in r && !operationId(r[key])) invalid()
   if (r.type === 'stopTransmit' && !transmitEpoch(r.transmitEpoch)) invalid()
-  if (r.type === 'logManual' || r.type === 'stationControl') {
+  if (r.type === 'logManual' || r.type === 'stationControl' || r.type === 'logChange') {
     if (
       !integer(r.expectedRevision) ||
       r.expectedRevision < 0 ||
@@ -178,6 +285,7 @@ export function operationRequest(raw: unknown): OperationRequest {
     )
       invalid()
     if (r.type === 'logManual') manualRecord(r.record)
+    else if (r.type === 'logChange') logChange(r.change)
     else { controlContext(r.context); stationAction(r.action) }
   }
   if (new TextEncoder().encode(JSON.stringify(r)).length > 4096) invalid()
@@ -191,7 +299,7 @@ export function operationValue(raw: unknown): OperationValue {
     if (v.stop !== 'accepted') invalid()
     return raw as StopOutcome
   }
-  if ('operation' in v) return controlOutcome(v)
+  if ('operation' in v) return v.operation === 'logChange' ? logChangeOutcome(v) : controlOutcome(v)
   if ('outcome' in v) {
     object(
       v,
@@ -239,8 +347,9 @@ export function operationValue(raw: unknown): OperationValue {
     v.revision < 0 ||
     typeof v.txArmed !== 'boolean' ||
     !Array.isArray(v.actions) ||
-    v.actions.length > 1 ||
-    v.actions.some((a) => a !== 'log.manual')
+    v.actions.length > 32 ||
+    new Set(v.actions).size !== v.actions.length ||
+    v.actions.some((a) => typeof a !== 'string' || !/^[a-z][a-zA-Z0-9]{0,31}(\.[a-z][a-zA-Z0-9]{0,31})?$/.test(a))
   )
     invalid()
   const owned = v.phase === 'controlling'
@@ -260,13 +369,17 @@ export function operationValue(raw: unknown): OperationValue {
   )
     invalid()
   if (!v.allowed && (v.actions as unknown[]).length) invalid()
+  // A bounded action a newer station names is a hint for a newer page, exactly like an unknown
+  // capability: drop it. Refusing the whole state for it broke control for every older page the
+  // moment a station learned a second action.
+  const actions = (v.actions as string[]).filter((a): a is 'log.manual' => a === 'log.manual')
   if ('controls' in v) {
     const controls = v.controls as { context: ControlContext; capabilities: string[] }
     // An unknown bounded capability is only a hint for a newer UI. Ignore it;
     // never widen the closed action grammar or reject existing capabilities.
-    return { ...v, controls: { ...controls, capabilities: controls.capabilities.filter(c => CONTROL_CAPABILITIES.includes(c as ControlCapability)) } } as OperationState
+    return { ...v, actions, controls: { ...controls, capabilities: controls.capabilities.filter(c => CONTROL_CAPABILITIES.includes(c as ControlCapability) || LOG_CAPABILITIES.includes(c as LogCapability)) } } as OperationState
   }
-  return raw as OperationState
+  return { ...v, actions } as OperationState
 }
 export const OPERATION_ERRORS = [
   'invalidRequest',

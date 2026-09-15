@@ -281,6 +281,9 @@ function defaultAsc(k: SortKey): boolean {
 
 import { useStationControl } from '../stationAccess'
 import { useRemoteLog } from '../remote-web/useRemoteLog'
+import { RemoteLogCheck, sendLogChange, useLogChange, useRemoteOperations } from '../remote-web/operations'
+import { OperationFailure } from '../remote-web/operation-client'
+import { logTarget, manualRecord, type LogChange, type ManualRecord } from '../remote-web/operation-protocol'
 
 export function Logbook({
   defaultBand,
@@ -290,6 +293,11 @@ export function Logbook({
   onConsumeFocusCall,
 }: Props) {
   const control = useStationControl()
+  // Remote: the station offers edit/delete as a capability; each change is found again by row key.
+  const operations = useRemoteOperations()
+  const canEdit = useLogChange('logEdit')
+  const canLog = useLogChange('log.manual')
+  const canQsl = useLogChange('qslMarks')
   const [log, setLog] = useState<LoggedQso[]>([])
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
@@ -696,6 +704,15 @@ export function Logbook({
   // send entries vanish and nothing put them back. Same reversal the inbound card has had
   // since #152 — a declaration the operator made by hand, they can unmake by hand.
   const onMarkQslSent = async (q: LoggedQso, i: number, via: 'B' | 'D' | 'E' | null) => {
+    if (remoteLog) {
+      const at = performance.now()
+      const outcome = await remoteChange({ kind: 'qslSent', target: await logTarget(q), via })
+      if (outcome?.outcome === 'applied') {
+        pushToast(via ? t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via }) : t('logbook.qsl.sentCleared', { call: q.call }), 'success')
+        remoteLog.refresh(at)
+      }
+      return
+    }
     const snap = await withErrorToast(() => markQslSent(i, via), t('logbook.qsl.markFailed'))
     if (snap) {
       // Two literal keys, not one interpolated one — same reason as onMarkQslCard below.
@@ -710,6 +727,15 @@ export function Logbook({
   }
 
   const onMarkQslCard = async (q: LoggedQso, i: number, received: boolean) => {
+    if (remoteLog) {
+      const at = performance.now()
+      const outcome = await remoteChange({ kind: 'qslCard', target: await logTarget(q), received })
+      if (outcome?.outcome === 'applied') {
+        pushToast(received ? t('logbook.qsl.cardMarked', { call: q.call }) : t('logbook.qsl.cardCleared', { call: q.call }), 'success')
+        remoteLog.refresh(at)
+      }
+      return
+    }
     const snap = await withErrorToast(
       () => markQslCard(i, received),
       t('logbook.qsl.markFailed'),
@@ -728,6 +754,9 @@ export function Logbook({
     }
   }
 
+  // A remote change reports its own outcome. An unknown one is held by RemoteLogCheck until checked.
+  const remoteChange = (change: LogChange) => (operations ? sendLogChange(operations, change) : Promise.resolve(null))
+
   const onDelete = async (q: LoggedQso, i: number) => {
     if (
       !(await confirmDialog({
@@ -738,6 +767,16 @@ export function Logbook({
       }))
     )
       return
+    if (remoteLog) {
+      const at = performance.now()
+      const outcome = await remoteChange({ kind: 'delete', target: await logTarget(q) })
+      if (outcome?.outcome === 'applied') {
+        pushToast(t('logbook.delete.done', { call: q.call }), 'success')
+        if (editIndex === i) cancelForm()
+        remoteLog.refresh(at)
+      }
+      return
+    }
     const snap = await withErrorToast(() => deleteQso(i), t('logbook.delete.failed'))
     if (snap) {
       pushToast(t('logbook.delete.done', { call: q.call }), 'success')
@@ -857,6 +896,50 @@ export function Logbook({
     const existing = editIndex !== null ? log[editIndex] : undefined
     const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
     const parkMyRef = draft.parkMyRef.trim().toUpperCase() || null
+    if (remoteLog) {
+      // An edit: the station carries every field this form does not send (confirmations, uploads,
+      // power, your own park) and finds the row by the key of the row the edit started from.
+      // A new entry: the station's own manual log, at station time unless a time is typed.
+      let record: ManualRecord
+      try {
+        record = manualRecord({
+          call, grid: draft.grid.trim() || null, country: existing?.country ?? null,
+          state: draft.state.trim().toUpperCase() || null, band: draft.band.trim(), freqMhz: freq, mode: draft.mode.trim(),
+          rstSent: parseReport(draft.rstSent), rstRcvd: parseReport(draft.rstRcvd), name: draft.name.trim() || null,
+          qth: draft.qth.trim() || null, comment: draft.comment.trim() || null, notes: draft.notes.trim() || null,
+          whenUnix: parseUtcLocal(draft.whenUtc) ?? existing?.whenUnix ?? null, confirmed: false, awardConfirmed: false,
+          ...(parkTheirRef ? { ota: { theirProgram: existing?.ota?.theirProgram === 'SOTA' ? 'SOTA' : 'POTA', theirRef: parkTheirRef } } : {}),
+        })
+      } catch {
+        setErr(t('remote.logEntryInvalid'))
+        return
+      }
+      const at = performance.now()
+      if (existing) {
+        const outcome = await remoteChange({ kind: 'edit', target: await logTarget(existing), record })
+        if (outcome?.outcome === 'applied') {
+          pushToast(t('logbook.form.updated', { call: record.call }), 'success')
+          cancelForm()
+          remoteLog.refresh(at)
+        }
+        return
+      }
+      if (!operations) return
+      try {
+        // An unknown outcome keeps the draft and holds further writes (RemoteLogCheck).
+        const outcome = await operations.log(record)
+        if (outcome.outcome === 'applied') {
+          pushToast(t('remote.loggingSaved'), 'success')
+          setShowForm(false)
+          setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', parkTheirRef: '' }))
+          remoteLog.refresh(at)
+        } else if (outcome.outcome === 'rejected') pushToast(t('remote.loggingRefused'), 'error', 6000)
+      } catch (e) {
+        const failure = e instanceof OperationFailure ? e : null
+        pushToast(failure?.busy ? t('remote.loggingBusy') : failure && !failure.sent ? t('remote.loggingNotSent') : t('remote.loggingRefused'), 'error', 6000)
+      }
+      return
+    }
     // Only the two park REFS are editable. The program (POTA/SOTA/WWFF) and any IOTA reference
     // ride through from the stored record: a park-only `ota` would trip the backend's ota-preserve
     // guard, which tests only the four park fields and would silently drop `iota`. With both refs
@@ -970,6 +1053,11 @@ export function Logbook({
           <span className="count-badge">{remoteLog?.total ?? log.length}</span>
           <span className="log-sub">{control ? t('logbook.subtitle') : t('remote.collectionObserver')}</span>
         </div>
+        {!control && remoteLog && (canLog || showForm) && (
+          <button type="button" className="export-btn remote-log-open" onClick={() => (showForm ? cancelForm() : setShowForm(true))}>
+            {showForm ? t('logbook.form.close') : t('logbook.form.open')}
+          </button>
+        )}
         {control && <div className="log-actions">
           <input
             ref={fileRef}
@@ -1271,7 +1359,8 @@ export function Logbook({
       </div>
 
 
-      {control && showForm && (
+      {remoteLog && operations && <RemoteLogCheck client={operations} />}
+      {(control || remoteLog) && showForm && (
         <form className="logbook-form" onSubmit={submit}>
           <div className="logbook-form-grid">
             <label className="logbook-field logbook-field-call">
@@ -1285,7 +1374,7 @@ export function Logbook({
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <button
+                {control && <button
                   type="button"
                   className="settings-refresh"
                   onClick={onQrzLookup}
@@ -1293,7 +1382,7 @@ export function Logbook({
                   title={t('logbook.field.qrz.title')}
                 >
                   {qrzBusy ? '…' : QRZ_LABEL}
-                </button>
+                </button>}
               </div>
             </label>
             <label className="logbook-field">
@@ -1342,7 +1431,7 @@ export function Logbook({
                 title={t('logbook.field.state.title')}
               />
             </label>
-            <label className="logbook-field">
+            {control && <label className="logbook-field">
               <span>{t('logbook.field.txPower.label')}</span>
               <input
                 className="settings-input"
@@ -1353,7 +1442,7 @@ export function Logbook({
                 placeholder={LOG_EXAMPLES.txPower}
                 autoComplete="off"
               />
-            </label>
+            </label>}
             <label className="logbook-field">
               <span>{t('logbook.field.parkTheirs.label')}</span>
               <input
@@ -1365,7 +1454,7 @@ export function Logbook({
                 title={t('logbook.field.parkTheirs.title')}
               />
             </label>
-            <label className="logbook-field">
+            {control && <label className="logbook-field">
               <span>{t('logbook.field.parkMine.label')}</span>
               <input
                 className="settings-input"
@@ -1375,7 +1464,7 @@ export function Logbook({
                 autoComplete="off"
                 title={t('logbook.field.parkMine.title')}
               />
-            </label>
+            </label>}
             <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>
               <input className="settings-input" value={draft.name} onChange={(e) => setField('name', e.target.value)} placeholder={t('logbook.field.name.placeholder')} autoComplete="off" />
@@ -1484,7 +1573,7 @@ export function Logbook({
           {remoteLog.retained < remoteLog.total && <span>{t('remote.logWindow', { count: remoteLog.retained })}</span>}
           <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasPrevious} onClick={remoteLog.previous}>{t('remote.previousPage')}</button>
           <button type="button" className="log-filter-chip" disabled={remoteLog.phase !== 'ready' || !remoteLog.hasNext} onClick={() => void remoteLog.next()}>{t('remote.nextPage')}</button>
-          <button type="button" className="log-filter-chip" onClick={remoteLog.refresh}>{t('remote.refreshCollection')}</button>
+          <button type="button" className="log-filter-chip" onClick={() => remoteLog.refresh()}>{t('remote.refreshCollection')}</button>
         </>}
         <input
           className="settings-input log-search"
@@ -1790,7 +1879,7 @@ export function Logbook({
                       to record could never be recorded. `q.qslSent?.sent` now hides only the
                       three SEND entries — you still cannot send twice — while the inbound
                       entries stay reachable for the life of the contact. */}
-                  {(
+                </>}{(control || canQsl) && (
                     <select
                       className="log-rowbtn"
                       style={{ fontSize: '0.85em' }}
@@ -1835,7 +1924,7 @@ export function Logbook({
                         <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
                       )}
                     </select>
-                  )}
+                  )}{(control || canEdit) && <>
                   <button
                     type="button"
                     className="log-rowbtn"
