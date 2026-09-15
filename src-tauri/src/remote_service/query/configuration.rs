@@ -492,6 +492,11 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
     "tuneTimeoutSecs",
     "tunePowerPct",
     "txWatchdogMin",
+    // The SWR cutoff is a transmit PROTECTION: turning it off, or raising its limit, removes a
+    // guard on the operator's own antenna. Denied like the watchdog above — it is set at the
+    // shack, where whoever changes it can see the rig.
+    "swrStopEnabled",
+    "swrStopThreshold",
     "txLevel",
     "specialOp",
     "q65PeriodS",
