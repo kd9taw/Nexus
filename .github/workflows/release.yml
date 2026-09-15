@@ -19,6 +19,15 @@
 # silently absent (14 MB light, no error anywhere). "Automatic on tag" here does NOT mean
 # "unchecked" — every artifact is proven (arch, model present + digest, version == tag)
 # before the release is created.
+#
+# AND WHY THAT WAS NOT ENOUGH. Every gate in the paragraph above proves the ARTIFACT is
+# well-formed. Not one of them runs a test, a lint or a typecheck — that is ci.yml's job,
+# and until the `ci-evidence` job below, ci.yml was not in the release path at all. A
+# release could publish having never been proven green: 1.12.0 shipped from a commit whose
+# only ci.yml run was CANCELLED, which is not an outlier but the ordinary case here (153 of
+# the last 356 main runs, 43%, because ci.yml cancels superseded runs on the same ref). So
+# there are now two kinds of gate here: the artifact gates, and one SOURCE gate that asks
+# whether the commit being released ever passed. Both must hold.
 
 name: Release
 
@@ -63,6 +72,75 @@ env:
   GLIBC_FLOOR: '2.39'
 
 jobs:
+  # ---------------------------------------------------------------------------------------
+  # THE CI-EVIDENCE GATE — nothing here publishes until ci.yml has actually passed on the
+  # commit the tag points at.
+  #
+  # WHY IT IS A JOB AND NOT A STEP IN `publish`. Two reasons, and the first is the important
+  # one. A step inside `publish` runs AFTER every build job, so the run spends forty minutes
+  # building four platforms before anyone is told the commit was never proven — and a gate
+  # that costs forty minutes to hear from is a gate people learn to skip. Standing alone with
+  # no `needs:`, this starts in the first seconds of the run alongside the builds. Second, as
+  # a job it appears in the run's job list by name whether it passed, failed or was skipped;
+  # a step buried in a job that was itself skipped tells nobody anything.
+  #
+  # WHAT THIS CLOSES. Until it existed, release.yml ran no tests and asked for no evidence
+  # that any had ever run. The build jobs prove the tree COMPILES and that the bundles
+  # contain what they should; not one of them runs a test, a lint or a typecheck. 1.12.0
+  # published from a commit whose only ci.yml run was CANCELLED, and cancelled is the
+  # ordinary case here rather than the exception — ci.yml cancels superseded runs on the
+  # same ref, and 153 of the last 356 main runs (43%) ended that way.
+  #
+  # The decision lives in scripts/require-green-ci, which has its own regression suite and
+  # can be run by hand against any commit. Keep it there: a copy of the predicate inlined
+  # here would be a second implementation that nobody can exercise before a real release.
+  # ---------------------------------------------------------------------------------------
+  ci-evidence:
+    name: Gate — green CI on the released commit
+    # Only a tag push publishes anything, and only a tag push has a ref to key the override
+    # to. A workflow_dispatch dry-run builds and verifies without publishing, so it has
+    # nothing to gate; `publish` skips on that path for the same reason and this skips with
+    # it, which is what keeps the two in step.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # A job-level block REPLACES the workflow-level one, so `contents: read` is repeated.
+    # `actions: read` is the addition: reading another workflow's run history needs it, and
+    # without it `gh run list` returns an empty list rather than an error — which would look
+    # exactly like "this commit has no CI run" and refuse every release for a reason nobody
+    # could find. The script's own positive-control demo is what caught that shape.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Require a completed, successful ci.yml run on this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # THE BREAK-GLASS OVERRIDE, and its shape is the point. A repository VARIABLE (not
+          # a secret — it is meant to be read, and it shows in the run log), whose value must
+          # be the exact tag being released. `=1` does nothing. That makes it single-use by
+          # construction: one left set to v1.12.1 cannot wave v1.12.2 through, so the switch
+          # cannot quietly become permanent the way a boolean does, and the repository
+          # settings carry the name of the release that went out unverified. Set it under
+          # Settings -> Secrets and variables -> Actions -> Variables, and unset it after.
+          NEXUS_ALLOW_UNVERIFIED_CI: ${{ vars.NEXUS_ALLOW_UNVERIFIED_CI }}
+        run: |
+          set -euo pipefail
+          # GITHUB_SHA on a tag push is the commit the tag dereferences to, but the release is
+          # cut from the TAG, so ask the API what the tag actually points at and refuse if the
+          # two disagree. They cannot today; this costs one API call and means a future change
+          # to how this workflow is triggered cannot silently gate the wrong commit.
+          tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
+          if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+            echo "tag $GITHUB_REF_NAME points at $tag_sha but this run is on $GITHUB_SHA"
+            exit 1
+          fi
+          bash scripts/require-green-ci \
+            --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" --sha "$tag_sha"
+
   # ---------------------------------------------------------------------------------------
   # Linux x86_64 — .deb + AppImage via the same scripts/build-linux.sh developers use.
   # ---------------------------------------------------------------------------------------
@@ -890,7 +968,13 @@ jobs:
     # Windows + Linux gate the release (operator's release order); the Pi .debs attach
     # in publish-pi as they finish and can never hold the primary artifacts hostage.
     # smoke-windows gates too: an installer that dies at launch must never publish.
-    needs: [linux-x86, windows, smoke-windows, macos, smoke-macos, manual]
+    #
+    # ci-evidence is first in the list because it is the only one that gates the SOURCE
+    # rather than an artifact: every other entry proves that what was built is well-formed,
+    # and none of them runs a test. A skipped or failed `needs` job skips this one, which is
+    # what makes the gate unskippable — there is no path that creates the Release without it.
+    # publish-pi needs `publish`, so it is behind this too and deliberately not gated again.
+    needs: [ci-evidence, linux-x86, windows, smoke-windows, macos, smoke-macos, manual]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # `actions: write` is for the downstream hand-off at the end of this job. Job-level

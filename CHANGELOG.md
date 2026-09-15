@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A release can no longer be published from a commit whose tests never passed.** The release
+  pipeline now refuses to publish unless the exact commit being released has a completed,
+  successful CI run — not merely one that did not fail. A cancelled or still-running run does not
+  count, and neither does a green run on a parent commit. 1.12.0 went out on a cancelled run; that
+  cannot happen again. Break-glass releases are still possible and now leave a record of which
+  release skipped the check.
+
 - **The callsign card no longer squeezes Band Activity off the screen.** Click a station with a
   long history — eleven previous contacts was the case reported — and the card grew until it took
   half the right-hand rail, leaving Band Activity a couple of rows and shortening Rx Frequency to

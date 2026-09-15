@@ -101,6 +101,14 @@ jobs:
   resolve:
     name: Resolve the release + check the secrets
     runs-on: ubuntu-latest
+    # A job-level block REPLACES the workflow-level one, so `contents: read` is repeated.
+    # `actions: read` is the addition, needed by the CI-evidence gate at the end of this job:
+    # reading another workflow's run history requires it, and WITHOUT it `gh run list` hands
+    # back an empty array rather than an error — which reads exactly like "this commit has no
+    # CI run" and would refuse every publish for a reason nobody could find.
+    permissions:
+      contents: read
+      actions: read
     # The four deploy secrets live on the `production` environment, not repo-wide, so only
     # this workflow can read them — a repo-wide secret is readable by any workflow anyone
     # adds. Both jobs must opt in or `secrets.*` resolves to empty and the run blocks with
@@ -197,6 +205,52 @@ jobs:
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
           echo "publishing $tag ($ver) downstream"
+
+      # ── THE CI-EVIDENCE GATE ──────────────────────────────────────────────────────────
+      # This is the SECOND door into a publish and it has to be gated separately, because it
+      # is reachable without the first. release.yml's gate stops a tag push from creating a
+      # Release; it does nothing about a hand dispatch of THIS workflow, which is the
+      # documented recovery path (see TRIGGERING above) and takes an arbitrary existing tag.
+      # A Release that predates the gate, or one published by hand from the web UI, reaches
+      # SourceForge and moves hamradiotools.io/nexus/version.json — the feed every operator's
+      # "Check for updates" reads — with nothing having asked whether its commit passed CI.
+      # Gating only release.yml would leave that route open and look closed.
+      #
+      # The predicate is scripts/require-green-ci, the same file release.yml and the pre-push
+      # hook call. Not a copy: a second implementation of "is this commit green" is a second
+      # thing to get wrong, and only one of the two would ever be exercised.
+      #
+      # AT THE TAG, deliberately. The gate script that runs is the one committed at the tag
+      # being published, so the check cannot be relaxed after the fact for a release already
+      # cut. A tag predating the script fails this step, which is correct and is what the
+      # override is for.
+      - name: Check out the gate script at the tag
+        if: steps.rel.outputs.proceed == 'true'
+        uses: actions/checkout@v7
+        with:
+          # Safe as a `ref:`: the step above refuses anything that is not
+          # ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ before it ever becomes this output.
+          ref: ${{ steps.rel.outputs.tag }}
+          persist-credentials: false
+          sparse-checkout: scripts/require-green-ci
+          sparse-checkout-cone-mode: false
+
+      - name: The tag's commit must have a completed, successful ci.yml run
+        if: steps.rel.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Through env, not interpolated into the script body — the tag is validated above,
+          # but the house rule here is that event-derived text is data and never code.
+          TAG: ${{ steps.rel.outputs.tag }}
+          # Break-glass, keyed to the exact tag. See release.yml's ci-evidence job for why it
+          # is a ref-valued repository variable and not a boolean.
+          NEXUS_ALLOW_UNVERIFIED_CI: ${{ vars.NEXUS_ALLOW_UNVERIFIED_CI }}
+        run: |
+          set -euo pipefail
+          # Dereference the tag to the commit it names. `repos/.../commits/<tag>` follows an
+          # annotated tag through to its commit, which is the object CI runs against.
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+          bash scripts/require-green-ci --repo "$GITHUB_REPOSITORY" --ref "$TAG" --sha "$sha"
 
   # ---------------------------------------------------------------------------------------
   # Publish — one job on purpose. The ~460 MB of release assets are downloaded once and used
