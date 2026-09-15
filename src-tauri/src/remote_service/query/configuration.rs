@@ -287,6 +287,8 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "sstvRxAutoArm",
     "sstvTxPowerPct",
     "stationPowerW",
+    "swrStopEnabled",
+    "swrStopThreshold",
     "tunePowerPct",
     "tuneTimeoutSecs",
     "txEven",
@@ -612,6 +614,8 @@ impl Serialize for SettingsView<'_> {
         out.serialize_field("clearDxAfterLog", &self.0.clear_dx_after_log)?;
         out.serialize_field("doubleClickSetsTx", &self.0.double_click_sets_tx)?;
         out.serialize_field("tuneTimeoutSecs", &self.0.tune_timeout_secs)?;
+        out.serialize_field("swrStopEnabled", &self.0.swr_stop_enabled)?;
+        out.serialize_field("swrStopThreshold", &self.0.swr_stop_threshold)?;
         out.serialize_field("tunePowerPct", &self.0.tune_power_pct)?;
         out.serialize_field("splitMode", &self.0.split_mode)?;
         out.serialize_field("decodeDepth", &self.0.decode_depth)?;

@@ -2582,6 +2582,11 @@ pub struct Engine {
     /// over CAT — see [`Self::observe_rig_ptt`]. Also vetoes amplifier changes.
     rig_keyed: bool,
     rig_tx_swr: Option<f32>,
+    /// Consecutive keyed SWR readings above [`Settings::swr_stop_ratio`]. The cutoff fires at
+    /// TWO, never one — see [`Self::observe_rig_tx_meters`]. Zeroed by a reading at or below
+    /// the threshold, by any slot where the cutoff is not in force, and on unkey
+    /// ([`Self::clear_rig_tx_meters`]).
+    swr_over_count: u8,
     rig_tx_alc: Option<f32>,
     rig_tx_po_w: Option<f32>,
     rig_tx_comp_db: Option<f32>,
@@ -4443,6 +4448,7 @@ impl Engine {
             rig_smeter_db: None,
             rig_keyed: false,
             rig_tx_swr: None,
+            swr_over_count: 0,
             rig_tx_alc: None,
             rig_tx_po_w: None,
             rig_tx_comp_db: None,
@@ -8023,11 +8029,90 @@ impl Engine {
         if comp_db.is_some() {
             self.rig_tx_comp_db = comp_db;
         }
+        if let Some(v) = swr {
+            self.observe_swr_for_cutoff(v);
+        }
+    }
+
+    /// ⭐ THE HIGH-SWR CUTOFF (operator request and ruling, 2026-09-14). DEFAULT OFF.
+    ///
+    /// ⚠️ THIS IS THE ONE THING IN THE TRANSMIT-METER SUBSYSTEM THAT ACTS ON A READING. The
+    /// rule everywhere else here is *notify loudly, never move the radio unattended* — the
+    /// zero-forward-power watch a few lines away in the radio loop raises a status line and
+    /// does nothing else, and says so. The operator asked for this one and ruled on it
+    /// explicitly; it ships off, and it stays off on any radio whose SWR scale Nexus cannot
+    /// stand behind. Nothing here is inferred from that ruling beyond the switch itself.
+    ///
+    /// FOUR CONDITIONS, and each is the safe direction when it cannot be met:
+    /// * **Switched on** by the operator — [`Settings::swr_stop_ratio`] is `None` otherwise.
+    /// * **A verified scale** — [`settings::swr_scale_verified`], an allow-list. #292 is a rig
+    ///   reading 1.2:1 on its own meter and 6:1 here, and a cutoff on that number would unkey
+    ///   the transmitter of every operator it happens to.
+    /// * **Actually keyed** — the same composite the meter poll itself uses: a transmission
+    ///   Nexus owns ([`Self::tx_owner`], which is the tree's own enumeration of every keying
+    ///   source), or the rig keyed by its own mic (`rig_keyed`). Unkeyed, a stale reading in
+    ///   the window before [`Self::clear_rig_tx_meters`] must never trip anything.
+    /// * **TWO CONSECUTIVE READINGS**, never one. The meters are polled round-robin over four,
+    ///   so SWR refreshes about every 600 ms and two readings is roughly 1.2 s — long enough
+    ///   that a single spike (an ATU stepping, a relay, the first cycle of a keyup) cannot
+    ///   halt an over, short enough to matter into a real fault. Any reading at or below the
+    ///   threshold resets the count, so it is genuinely consecutive and not cumulative.
+    ///
+    /// The halt is [`Self::halt_tx`] itself — the Stop TX path, unweakened — so every kind of
+    /// transmission stops and every mode's abort is armed by the one call. It NEVER keys, arms
+    /// or re-arms anything.
+    fn observe_swr_for_cutoff(&mut self, swr: f32) {
+        let Some(limit) = self.settings.swr_stop_ratio() else {
+            self.swr_over_count = 0;
+            return;
+        };
+        if self.tx_owner().is_none() && !self.rig_keyed {
+            self.swr_over_count = 0;
+            return;
+        }
+        // ⚠️ THE TEST IS `swr > limit`, POSITIVELY, AND THE `else` IS LOAD-BEARING. Two values
+        // reach here that are not "a high SWR" and must not be treated as one:
+        // * `0.0` — reachable on the rigctld path (`read_meter_f32_within` accepts any finite
+        //   value >= 0), and everywhere else in this tree a zero SWR means ABSENCE, not 1:1.
+        // * a NaN — for which EVERY comparison is false. Written the other way round
+        //   (`if swr <= limit { reset }`) a NaN would fall through to the increment below and
+        //   two of them in a row would unkey the transmitter on no measurement at all.
+        // Both land in the `else` and reset the run, which is the safe direction.
+        if swr > limit {
+            self.swr_over_count = self.swr_over_count.saturating_add(1);
+        } else {
+            self.swr_over_count = 0;
+            return;
+        }
+        if self.swr_over_count < 2 {
+            return;
+        }
+        self.swr_over_count = 0;
+        tempo_core::applog::info(
+            "tx",
+            &format!("high SWR cutoff: {swr:.1}:1 over {limit:.1}:1 twice — transmit halted"),
+        );
+        self.halt_tx();
+        // Say why, in the lane the loop's own transmit-meter notices already use (the
+        // foreign-key notice and the zero-forward-power note are both here). The CAT health
+        // verdict is kept as it was — this is a transmit fault, not a CAT fault.
+        let ok = self.cat_status.0;
+        self.set_cat_status(
+            ok,
+            format!(
+                "transmit halted: the radio reported {swr:.1}:1 SWR twice, over the \
+                 {limit:.1}:1 cutoff. Check the antenna, the feedline and the tuner before \
+                 transmitting again"
+            ),
+        );
     }
 
     /// Blank the transmit meters — called on unkey and on a CAT breaker trip, so the bars
     /// don't freeze at the last keyed reading while receiving.
     pub fn clear_rig_tx_meters(&mut self) {
+        // The high-SWR run dies with the over it was measured on: two readings from either
+        // side of an unkey are not consecutive readings of anything.
+        self.swr_over_count = 0;
         self.rig_tx_swr = None;
         self.rig_tx_alc = None;
         self.rig_tx_po_w = None;
@@ -17017,6 +17102,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         s.radio.tx_alc = self.rig_tx_alc;
         s.radio.tx_po_w = self.rig_tx_po_w;
         s.radio.tx_comp_db = self.rig_tx_comp_db;
+        s.radio.swr_scale_verified = self.settings.swr_scale_is_verified();
         s.radio.rig_mode = self.rig_mode.clone();
         s.radio.sideband_override = self.sideband_override.clone();
         // Phone sub-band the operator may legally use on the CURRENT band + class — the band-strip
@@ -42669,7 +42755,10 @@ mod tests {
             e.set_tx_enabled(true);
             assert!(e.tx_enabled(), "{mode:?}: precondition — TX really armed");
             e.set_tune(true);
-            assert!(e.tuning(), "{mode:?}: precondition — the tune carrier is held");
+            assert!(
+                e.tuning(),
+                "{mode:?}: precondition — the tune carrier is held"
+            );
             e.set_tune(false);
             assert_eq!(
                 e.tx_enabled(),
@@ -42701,6 +42790,289 @@ mod tests {
         // A release with no tune held is not a release.
         e.set_tune_with_reset(false, || hits.set(hits.get() + 1));
         assert_eq!(hits.get(), 1, "a no-op release must not reset anything");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════
+    // THE HIGH-SWR CUTOFF (operator request + ruling, 2026-09-14). TX GATE, NEEDS-BENCH.
+    //
+    // ⚠️ This is the first thing in the transmit-meter subsystem that ACTS on a reading rather
+    // than reporting it — the standing rule there is "notify loudly, never move the radio
+    // unattended", written into the very poll this rides on. It ships OFF, it is refused on
+    // any radio whose SWR scale is not verified, and every one of those refusals is asserted
+    // below, because the failure mode of getting this wrong is an operator whose transmitter
+    // unkeys itself for no reason they can see.
+
+    /// An engine wired to an IC-9700 on native CI-V — a model the daemon serves, so the SWR
+    /// number comes off `civ::commands::SWR_CAL` rather than an unscaled `l SWR` — with the
+    /// cutoff switched on at `threshold` and the transmitter keyed.
+    fn swr_engine(threshold: f32) -> Engine {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.rig_model = 3081; // Icom IC-9700
+        e.settings.rig_conn = "serial".into();
+        e.settings.icom_native_cat = true;
+        e.settings.swr_stop_enabled = true;
+        e.settings.swr_stop_threshold = threshold;
+        e.set_tx_enabled(true);
+        e.app.set_transmitting(true); // an FT over on the air
+        assert!(e.tx_owner().is_some(), "precondition: the rig is keyed");
+        assert!(
+            e.settings.swr_stop_ratio().is_some(),
+            "precondition: the cutoff is in force on this radio"
+        );
+        e
+    }
+
+    /// One SWR reading, as the keyed-only meter poll delivers it (round-robin: the other three
+    /// are `None` on this cycle).
+    fn swr_reading(e: &mut Engine, v: f32) {
+        e.observe_rig_tx_meters(Some(v), None, None, None);
+    }
+
+    #[test]
+    fn two_readings_over_the_swr_cutoff_halt_the_transmitter() {
+        let mut e = swr_engine(2.5);
+
+        swr_reading(&mut e, 3.1);
+        assert!(
+            e.tx_owner().is_some() && e.tx_enabled(),
+            "ONE reading must never halt — an ATU stepping or a keyup transient reads high"
+        );
+
+        swr_reading(&mut e, 3.4);
+        assert!(
+            !e.tx_enabled(),
+            "two consecutive readings must halt transmit"
+        );
+        assert!(e.tx_owner().is_none(), "…and nothing is left keying");
+        assert!(
+            e.take_slot_tx_abort(),
+            "the halt must arm the loop's mid-over cut, not merely disarm the next cycle"
+        );
+        assert!(
+            e.snapshot().radio.cat_detail.contains("3.4"),
+            "the operator is told WHY, with the reading that did it: {:?}",
+            e.snapshot().radio.cat_detail
+        );
+    }
+
+    #[test]
+    fn a_single_swr_spike_never_halts() {
+        // The count is CONSECUTIVE, not cumulative: a good reading between two bad ones
+        // starts the run over. Three separate spikes must leave the operator on the air.
+        let mut e = swr_engine(2.5);
+        for v in [4.0, 1.2, 5.0, 1.1, 6.0, 1.3] {
+            swr_reading(&mut e, v);
+            assert!(
+                e.tx_enabled(),
+                "a spike bracketed by good readings halted transmit ({v})"
+            );
+        }
+        // …and the very next pair, uninterrupted, still trips. Without this the test above
+        // would pass just as well on a cutoff that never fires at all.
+        swr_reading(&mut e, 4.0);
+        swr_reading(&mut e, 4.0);
+        assert!(!e.tx_enabled(), "control: two in a row must still halt");
+    }
+
+    #[test]
+    fn a_reading_that_is_not_a_measurement_never_counts_toward_the_swr_cutoff() {
+        // TWO values arrive here that are not "a high SWR", and both would unkey the
+        // transmitter on no measurement at all if the comparison were written the other way
+        // round (`swr <= limit` treats a NaN as high, because every NaN comparison is false):
+        //  * 0.0 — `read_meter_f32_within` accepts any finite value >= 0, and everywhere else
+        //    in this tree a zero SWR means the meter said nothing, not a perfect match;
+        //  * NaN — a malformed `l SWR` reply that still parsed.
+        for junk in [0.0f32, f32::NAN] {
+            let mut e = swr_engine(2.5);
+            for _ in 0..6 {
+                swr_reading(&mut e, junk);
+            }
+            assert!(e.tx_enabled(), "a {junk:?} reading halted transmit");
+
+            // …and it does not merely fail to trip on its own: it RESETS a run in progress,
+            // so a real high reading either side of it is not two consecutive readings.
+            let mut split = swr_engine(2.5);
+            swr_reading(&mut split, 9.0);
+            swr_reading(&mut split, junk);
+            swr_reading(&mut split, 9.0);
+            assert!(
+                split.tx_enabled(),
+                "a {junk:?} reading between two high ones did not break the run"
+            );
+        }
+    }
+
+    #[test]
+    fn the_swr_cutoff_is_inert_off_unverified_and_unkeyed() {
+        // OFF — the shipped default.
+        let mut off = swr_engine(2.5);
+        off.settings.swr_stop_enabled = false;
+        swr_reading(&mut off, 9.0);
+        swr_reading(&mut off, 9.0);
+        assert!(off.tx_enabled(), "switched off, nothing may halt");
+
+        // UNVERIFIED SCALE — #292. A Xiegu speaks CI-V and takes Icom's curve, so it reports
+        // 6:1 while its own meter reads 1.2:1. Left to the plain rule it would halt every
+        // over that operator ever sent.
+        let mut xiegu = swr_engine(2.5);
+        xiegu.settings.rig_model = 3088; // Xiegu G90
+        assert!(
+            !xiegu.settings.swr_scale_is_verified(),
+            "a Xiegu's SWR scale is NOT verified — that is the whole point of the allow-list"
+        );
+        swr_reading(&mut xiegu, 6.0);
+        swr_reading(&mut xiegu, 6.0);
+        assert!(xiegu.tx_enabled(), "an unverified scale may never halt");
+
+        // A plain rigctld Icom — same model, native CI-V off, so `l SWR` arrives unscaled.
+        let mut hamlib = swr_engine(2.5);
+        hamlib.settings.icom_native_cat = false;
+        assert!(!hamlib.settings.swr_scale_is_verified());
+        swr_reading(&mut hamlib, 6.0);
+        swr_reading(&mut hamlib, 6.0);
+        assert!(hamlib.tx_enabled(), "an unscaled reading may never halt");
+
+        // UNKEYED — a stale reading in the window before `clear_rig_tx_meters` runs.
+        let mut idle = swr_engine(2.5);
+        idle.app.set_transmitting(false);
+        assert!(idle.tx_owner().is_none(), "precondition: nothing is keying");
+        swr_reading(&mut idle, 9.0);
+        swr_reading(&mut idle, 9.0);
+        assert!(idle.tx_enabled(), "an unkeyed reading may never halt");
+
+        // …and the run does not survive an unkey either: one high reading, the over ends,
+        // one more on the NEXT over is still only one.
+        let mut split = swr_engine(2.5);
+        swr_reading(&mut split, 9.0);
+        split.clear_rig_tx_meters(); // what the loop does on unkey
+        split.app.set_transmitting(true);
+        swr_reading(&mut split, 9.0);
+        assert!(
+            split.tx_enabled(),
+            "two readings from either side of an unkey are not consecutive"
+        );
+    }
+
+    #[test]
+    fn an_swr_halt_stops_every_kind_of_transmission() {
+        // `tx_owner` is the tree's own enumeration of every keying source (its doc: a new one
+        // is added there once and every gate learns it), so sweeping it is what makes this a
+        // completeness check rather than a list somebody remembered to keep up to date.
+        // `stopped` names what the halt must have done to THAT kind. For the queue-and-abort
+        // modes it is not "nothing owns the transmitter": `rtty_sending`/`psk_sending`/
+        // `sstv_sending` mean an over is physically on the air, and only the radio loop can
+        // clear them — the engine's whole part is to drop the queue and arm the one-shot the
+        // loop turns into a flush and an unkey on its next tick. Asserting `tx_owner().is_none()`
+        // there would be asserting something the engine cannot do, which is how a test comes to
+        // demand a weaker guard.
+        type Act = fn(&mut Engine);
+        type Check = fn(&Engine) -> bool;
+        let kinds: [(&str, Act, Check); 8] = [
+            (
+                "FT slot",
+                |e| e.app.set_transmitting(true),
+                |e| !e.app.radio.transmitting && e.tx_queue.is_empty(),
+            ),
+            ("tune", |e| e.set_tune(true), |e| !e.tuning),
+            (
+                "manual PTT",
+                |e| e.set_ptt(true),
+                |e| !e.manual_ptt && !e.broker_ptt,
+            ),
+            (
+                "voice",
+                |e| e.voice_tx = Some(vec![0.0; 16]),
+                |e| e.voice_tx.is_none(),
+            ),
+            (
+                "CW",
+                |e| e.cw_queue.push_back("K2DEF".into()),
+                |e| e.cw_queue.is_empty() && e.cw_abort,
+            ),
+            (
+                "RTTY",
+                |e| e.rtty_sending = true,
+                |e| e.rtty_queue.is_empty() && e.rtty_abort && !e.rtty_latched,
+            ),
+            (
+                "PSK",
+                |e| e.psk_sending = true,
+                |e| e.psk_queue.is_empty() && e.psk_abort && !e.psk_latched,
+            ),
+            (
+                "SSTV",
+                |e| e.sstv_sending = true,
+                |e| e.sstv_tx.is_none() && e.sstv_abort,
+            ),
+        ];
+        for (what, key, stopped) in kinds {
+            let mut e = swr_engine(2.5);
+            e.app.set_transmitting(false); // start from nothing keying…
+            e.set_tx_enabled(true);
+            key(&mut e); // …then key THIS way
+            assert!(
+                e.tx_owner().is_some(),
+                "{what}: precondition — this really is a live transmission"
+            );
+            assert!(
+                !stopped(&e),
+                "{what}: precondition — the stop evidence must not already be present, or \
+                 this case proves nothing"
+            );
+
+            swr_reading(&mut e, 4.0);
+            swr_reading(&mut e, 4.0);
+            assert!(!e.tx_enabled(), "{what}: TX must be left OFF");
+            assert!(stopped(&e), "{what}: the SWR halt did not stop this kind");
+            assert!(
+                e.take_slot_tx_abort(),
+                "{what}: the loop's universal mid-over cut must be armed too"
+            );
+        }
+    }
+
+    #[test]
+    fn the_swr_cutoff_never_keys_or_re_arms_anything() {
+        // The negative the operator's brief asks for in so many words. A cutoff is a stop; it
+        // has no business starting anything, and an engine that was NOT armed must come out
+        // of a high reading exactly as it went in.
+        let mut e = swr_engine(2.5);
+        e.set_tx_enabled(false);
+        e.app.set_transmitting(true); // an over still draining after a TX Off
+        let before = e.tx_enabled();
+        swr_reading(&mut e, 9.0);
+        swr_reading(&mut e, 9.0);
+        assert!(!before && !e.tx_enabled(), "the cutoff armed transmit");
+        assert!(
+            e.tx_owner().is_none(),
+            "…and it still stopped what was keying"
+        );
+    }
+
+    #[test]
+    fn a_hand_edited_swr_threshold_cannot_hair_trigger_or_silently_disarm() {
+        // `settings.json` is an ordinary file, and this number gates an automatic unkey.
+        // 0.0 would halt on the first reading of every transmission; a NaN compares false
+        // against everything, leaving a safety switch that reads ON and does nothing.
+        let mut zero = swr_engine(0.0);
+        assert_eq!(
+            zero.settings.swr_stop_ratio(),
+            Some(1.0),
+            "clamped to the floor — an SWR below 1:1 does not exist"
+        );
+        swr_reading(&mut zero, 1.0);
+        swr_reading(&mut zero, 1.0);
+        assert!(zero.tx_enabled(), "a perfect match must never halt");
+
+        let mut nan = swr_engine(f32::NAN);
+        assert_eq!(
+            nan.settings.swr_stop_ratio(),
+            Some(2.5),
+            "a NaN falls back to the default rather than disabling the cutoff in silence"
+        );
+        swr_reading(&mut nan, 3.0);
+        swr_reading(&mut nan, 3.0);
+        assert!(!nan.tx_enabled(), "…and the fallback really is in force");
     }
 
     #[test]

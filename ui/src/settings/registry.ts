@@ -221,7 +221,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // than no keyword at all. What stays here is what this section still does.
     keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
       'share rig', 'rigctld address', 'other programs',
-      'foreign ptt', 'wsjt-x share', 'n1mm share'],
+      'foreign ptt', 'wsjt-x share', 'n1mm share',
+      // The high-SWR cutoff. NOT the bare word 'swr' — that belongs to the amplifier
+      // section's own SWR read-out, and one term cannot land the operator on two sections.
+      'high swr', 'swr cutoff', 'stop on swr', 'antenna fault'],
   },
 
   // ---- Modes -------------------------------------------------------------------

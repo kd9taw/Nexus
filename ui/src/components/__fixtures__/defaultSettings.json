@@ -155,6 +155,8 @@
   "monitorDevice": "",
   "monitorLevel": 0.5,
   "stationPowerW": null,
+  "swrStopEnabled": false,
+  "swrStopThreshold": 2.5,
   "maxPowerPhone": null,
   "maxPowerCw": null,
   "maxPowerDigital": null,

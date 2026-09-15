@@ -315,6 +315,8 @@
     "sstvRxAutoArm": true,
     "sstvTxPowerPct": null,
     "stationPowerW": null,
+    "swrStopEnabled": false,
+    "swrStopThreshold": 2.5,
     "tunePowerPct": null,
     "tuneTimeoutSecs": 12,
     "txEven": true,

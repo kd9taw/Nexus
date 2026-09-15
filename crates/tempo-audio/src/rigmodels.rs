@@ -767,6 +767,45 @@ mod tests {
     }
 
     #[test]
+    fn the_swr_verified_civ_rigs_are_exactly_the_civ_scope_rigs() {
+        // The high-SWR cutoff may only be offered where the raw 0–255 SWR meter is converted
+        // by a curve derived for THAT rig, and the only place that happens is the native CI-V
+        // daemon — i.e. `icom_scope_model`. `tempo_app` cannot call this function (the crate
+        // arrow points the other way), so it carries a copy; this pins the two together.
+        use tempo_app::settings::SWR_VERIFIED_CIV_RIGS;
+        for m in SWR_VERIFIED_CIV_RIGS {
+            assert!(
+                icom_scope_model(m).is_some(),
+                "model {m} claims a verified SWR scale but the CI-V daemon does not serve it"
+            );
+        }
+        // The other direction, against the whole catalog, so a model ADDED to the daemon
+        // cannot silently miss the list — and so this cannot pass by both sides being empty.
+        let served: Vec<u32> = rig_models()
+            .iter()
+            .map(|(m, _)| *m)
+            .filter(|m| icom_scope_model(*m).is_some())
+            .collect();
+        assert!(!served.is_empty(), "control: the daemon serves somebody");
+        for m in served {
+            assert!(
+                SWR_VERIFIED_CIV_RIGS.contains(&m),
+                "model {m} is served by the CI-V daemon but is missing from \
+                 SWR_VERIFIED_CIV_RIGS — decide deliberately, do not drift"
+            );
+        }
+        // ⭐ THE ONE THAT MATTERS, named rather than implied (#292): a Xiegu speaks CI-V, takes
+        // Icom's curve, and reports 6:1 where its own meter reads 1.2:1. It must never be
+        // verified, so the cutoff is never offered for it.
+        for xiegu in [3076u32, 3087, 3088, 3089, 3091] {
+            assert!(
+                !SWR_VERIFIED_CIV_RIGS.contains(&xiegu),
+                "Xiegu {xiegu} must never count as a verified SWR scale"
+            );
+        }
+    }
+
+    #[test]
     fn slow_serial_rig_flags_xiegu_and_vintage_kenwood_only() {
         // Xiegu family (slow CI-V backend) → the long deadline.
         for m in [3088u32, 3087, 3091, 3089, 3076] {

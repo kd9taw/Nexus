@@ -5311,6 +5311,16 @@ export const EN = {
   'settings.transmit.powerCaps.hint':
     'A ceiling on RF output per mode — leave blank for full power. FT8/FT4/RTTY run ~100% duty cycle, so capping the Digital modes (e.g. 30%) protects your finals and any amplifier. The rig is brought down to the cap the moment you enter a capped mode, not only when you touch the power slider.',
 
+  // The high-SWR cutoff. Off by default, and offered only where Nexus can put a number to the
+  // rig's SWR — the `.unverified` line is what a rig outside that set is told, and it says
+  // "not yet" because the cure is a bench measurement, not a missing feature.
+  'settings.transmit.swrStop.label': 'Stop transmitting when SWR is high',
+  'settings.transmit.swrStop.threshold': 'Stop above',
+  'settings.transmit.swrStop.hint':
+    'Two readings in a row above this and Nexus stops transmitting, exactly as Stop TX does, and tells you why. It never starts a transmission and never turns TX back on — you do that once the antenna is sorted out. Off by default; a high reading on one poll is ignored, so a tuner stepping or a keyup transient will not cut you off.',
+  'settings.transmit.swrStop.unverified':
+    'This radio\'s SWR reading isn\'t verified yet, so Nexus won\'t stop your transmission on it. Nexus only trusts the number where it knows the radio\'s own scale — Icom over native CI-V, and FlexRadio. On other radios the figure can be far out: some show a near-perfect match on their own meter while reporting a fault here.',
+
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
   // `rigctld` is the daemon's own; the call site supplies the emphasis for each.
   'settings.transmit.note':

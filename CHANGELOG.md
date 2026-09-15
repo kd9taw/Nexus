@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Stop transmitting when SWR is high** (Settings ▸ Radio ▸ Transmit limits & sharing). Off by
+  default. Turn it on and two readings in a row above your threshold — 2.5:1 unless you change it
+  — stop the transmission exactly as Stop TX does, and Nexus tells you why. It never starts a
+  transmission and never turns TX back on: that is yours to do once the antenna is sorted out. A
+  single high reading is ignored, so a tuner stepping or a keyup transient will not cut you off.
+
+  **The switch is greyed out on most radios, and that is on purpose.** Nexus only trusts an SWR
+  figure where it knows the radio's own scale — Icom over native CI-V, and FlexRadio. Everywhere
+  else the number arrives with no scale Nexus can vouch for and can be far out: some radios show a
+  near-perfect match on their own meter while reporting a fault here. A cut-off driven by that
+  would take you off the air for nothing, so it is not offered.
+
 ### Fixed
 
 - **Tune no longer keeps a finished FT contact alive.** If you called a station, it stopped coming

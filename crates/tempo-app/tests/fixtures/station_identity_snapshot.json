@@ -95,6 +95,7 @@
     "source": "native",
     "sourceLabel": "Native (FT8)",
     "splitTxMhz": null,
+    "swrScaleVerified": false,
     "timeSyncOk": true,
     "trPeriodSecs": 15.0,
     "transmitting": false,
