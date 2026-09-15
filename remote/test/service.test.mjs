@@ -1780,3 +1780,93 @@ test('extending a trial by hand records that it began as self-serve', async () =
     assert.equal(granted.source, 'manual', 'never earned, so never claims to have been')
   } finally { await locked.mf.dispose() }
 })
+
+// --- receive audio ------------------------------------------------------------------
+// The lane is deliberately outside every ACK'd relay, so what these cases prove is what
+// the relay does NOT do: no credit, no checkpoint, no parse of the payload, and no path
+// by which audio can delay a control message.
+const audioBundle = (sessionId, seq) => ({ type: 'audioRx', sessionId, seq, epoch: '0000000000000001',
+  firstFrameMs: seq * 60, frameMs: 20, count: 3,
+  payload: Buffer.from([0, 2, 0xaa, 0xbb, 0, 2, 0xcc, 0xdd, 0, 2, 0xee, 0xff]).toString('base64') })
+
+test('the audio lane carries a listen request with the identity the relay stamps, and bundles back', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, { 'x-nexus-audio-version': '1' })
+  const leaseId = crypto.randomUUID()
+  live.browser.send({ type: 'audioListen', listening: true, leaseId })
+  const asked = await live.station.take(type('audioListen'))
+  assert.equal(asked.leaseId, leaseId)
+  assert.equal(asked.sessionId, live.session.sessionId, 'the session comes from the admission, not the message')
+  assert.equal(asked.deviceId, live.deviceId, 'and so does the device')
+
+  live.station.send(audioBundle(live.session.sessionId, 0))
+  const heard = await live.browser.take(type('audioRx'))
+  assert.equal(heard.seq, 0)
+  assert.equal(heard.sessionId, undefined, 'the routing id never reaches the browser')
+  assert.equal(heard.payload, audioBundle('x', 0).payload, 'and the payload arrives byte-identical, never re-encoded')
+
+  // A bundle for a session that is not this browser is dropped, not misrouted.
+  live.station.send(audioBundle(crypto.randomUUID(), 1))
+  live.station.send(audioBundle(live.session.sessionId, 2))
+  const next = await live.browser.take(type('audioRx'))
+  assert.equal(next.seq, 2, 'seq 1 was addressed elsewhere and simply never arrived')
+})
+
+const OPERATION_HEADERS = { 'x-nexus-operation-version': '2', 'x-nexus-operation-max-version': '3', 'x-nexus-operation-ft-version': '1' }
+// One heartbeat round trip across the real relay, timed. Used both as a liveness control
+// and as the measurement of what audio load does to the control path.
+async function controlRoundTrip(live) {
+  const requestId = crypto.randomUUID(), leaseId = crypto.randomUUID(), boot = crypto.randomUUID()
+  const at = performance.now()
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request: { type: 'heartbeat', requestId, leaseId } })
+  const request = await live.station.take(value => value.type === 'operationRequest' && value.request.requestId === requestId)
+  live.station.send({ type: 'operationResponse', sessionId: request.sessionId, requestId,
+    value: { stationBootId: boot, allowed: true, phase: 'controlling', leaseId, revision: 2,
+      commandWindowId: crypto.randomUUID(), nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false } })
+  await live.browser.take(value => value.type === 'operationResponse' && value.requestId === requestId)
+  return performance.now() - at
+}
+
+test('a station that never advertised audio is not handed a listen request, and stays up', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, OPERATION_HEADERS)
+  live.browser.send({ type: 'audioListen', listening: true, leaseId: crypto.randomUUID() })
+  const state = await live.browser.take(type('audioState'))
+  assert.deepEqual(state, { type: 'audioState', listening: false, reason: 'audioUnavailable' })
+  assert.equal(live.station.closed, false, 'and the control socket is untouched')
+  // Positive control on the same instrument: the station really can still be reached, so
+  // "it was not handed the message" is a statement about routing, not about a dead socket.
+  await controlRoundTrip(live)
+})
+
+test('an oversized or malformed audio message is refused at the lane, never forwarded', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, { 'x-nexus-audio-version': '1' })
+  live.station.send({ ...audioBundle(live.session.sessionId, 0), payload: 'A'.repeat(2048) })
+  await live.station.take(type('closed'))
+  const fresh = await admitted(await app.paired(), 1, { 'x-nexus-audio-version': '1' })
+  fresh.station.send(audioBundle(fresh.session.sessionId, 0))
+  await fresh.browser.take(type('audioRx'))
+  assert.equal(fresh.station.closed, false, 'control: the same shape inside the bound goes through')
+})
+
+test('control messages still arrive on time while audio flows', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, { 'x-nexus-audio-version': '1', ...OPERATION_HEADERS })
+  // Spaced, because the relay's own admission limit is four operations a second and
+  // tripping it would measure the rate limiter rather than the audio lane.
+  const worst = async () => {
+    const times = []
+    for (let i = 0; i < 3; i++) { times.push(await controlRoundTrip(live)); await delay(400) }
+    return Math.max(...times)
+  }
+  // A quiet baseline first, so the loaded number below has something to be compared to.
+  const quiet = await worst()
+  // 100 bundles is about six seconds of listening delivered as fast as the socket takes it.
+  for (let seq = 0; seq < 100; seq++) live.station.send(audioBundle(live.session.sessionId, seq))
+  const loaded = await worst()
+  // The control path's own deadline is 2 s (WINDOW). This asserts the lane cannot push a
+  // round trip anywhere near it, and prints both numbers so a regression is readable.
+  assert.ok(loaded < 500, `control round trip under audio load ${loaded.toFixed(1)} ms (quiet ${quiet.toFixed(1)} ms)`)
+  console.log(`  control round trip: quiet ${quiet.toFixed(1)} ms, under audio load ${loaded.toFixed(1)} ms`)
+})

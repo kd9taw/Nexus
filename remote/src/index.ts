@@ -41,6 +41,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     operationVersion: 2,
     operationMaxVersion: 3,
     operationFtVersion: 1,
+    // A service rolled back past the audio lane reports nothing here, and a browser
+    // that cannot see this number never offers listening at all.
+    audioVersion: 1,
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   if (request.method === 'GET' && match && ['connect', 'observe'].includes(match[2])) {
@@ -69,6 +72,11 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
           request.headers.get('x-nexus-operation-max-version') === '3' ? 3 : 0,
           request.headers.get('x-nexus-operation-ft-version') === '1' ? 1 : 0,
         ),
+        // Receive audio. Its own advertisement, independent of every other version:
+        // a station that does not send this header never gets handed an `audioListen`,
+        // whose unknown fields its message parser would refuse - taking the whole
+        // control socket down with it.
+        audioVersion: request.headers.get('x-nexus-audio-version') === '1' ? 1 : 0,
         identity: { stationId, accountId: row.account_id, generation: row.generation, expiresAt: now + 86400000 } })
     }
     browserOrigin(request, env)
