@@ -1071,6 +1071,17 @@ pub(super) fn settings(s: &Settings) -> Result<Value, &'static str> {
 }
 // A static station-owned sidecar only. Distinguish never-saved from unreadable
 // or malformed: a broken file must not look like an empty channel list.
+/// The revision of the `programming` document this file produces. Taken OUT of the document itself
+/// rather than recomputed, so the curation path (`operations::program_edit`) checks a browser's
+/// echo against exactly the string that browser was sent. The grid is not in the digest, so it does
+/// not matter which one is passed here.
+pub(super) fn programming_revision(path: &Path) -> Result<String, &'static str> {
+    programming(path, "")?["revision"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or("applicationUnavailable")
+}
+
 fn programming(path: &Path, grid: &str) -> Result<Value, &'static str> {
     // Refuse special files before opening (a FIFO can block in open itself).
     match std::fs::metadata(path) {

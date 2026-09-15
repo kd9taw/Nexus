@@ -24,7 +24,7 @@ use std::io::Read;
 use std::path::Path;
 
 /// The single auto-saved working project — `WORKING_PROJECT_ID` in `RadioProgView.tsx`.
-const WORKING_PROJECT_ID: &str = "working";
+pub(super) const WORKING_PROJECT_ID: &str = "working";
 /// `radioprog.json` is read with the same ceiling the `programming` collection reads it with.
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -66,13 +66,25 @@ pub(super) fn respond(
 }
 
 /// The working project's channels, or `None` when the file has no working project yet.
-///
-/// ⚠️ NOT `crate::load_radioprog`: that one turns an unreadable or half-written file into an empty
-/// default, which here would export a blank list as though the operator's channels were gone. A
-/// file that cannot be read is an error, and the browser is told so rather than handed nothing.
 fn working_channels(
     path: &Path,
 ) -> Result<Option<Vec<propagation::memchan::Channel>>, &'static str> {
+    Ok(radioprog(path)?.and_then(|file| {
+        file.projects
+            .into_iter()
+            .find(|p| p.id == WORKING_PROJECT_ID)
+            .map(|p| p.channels)
+    }))
+}
+
+/// `radioprog.json` as the Remote service reads it, or `None` when there is no file yet. Shared
+/// with the curation path (`program_edit`), so both halves of Program see one file the same way.
+///
+/// ⚠️ NOT `crate::load_radioprog`: that one turns an unreadable or half-written file into an empty
+/// default. Exporting that would hand the operator a blank CSV as though their channels were gone,
+/// and writing through it would then SAVE the blank list over them. A file that cannot be read is
+/// an error here, and the browser is told so rather than handed nothing.
+pub(super) fn radioprog(path: &Path) -> Result<Option<crate::RadioProgFile>, &'static str> {
     // Refuse special files before opening — a FIFO can block in `open` itself.
     match std::fs::metadata(path) {
         Ok(meta) if !meta.is_file() => return Err("applicationUnavailable"),
@@ -106,11 +118,7 @@ fn working_channels(
     if file.version != 1 {
         return Err("applicationUnavailable");
     }
-    Ok(file
-        .projects
-        .into_iter()
-        .find(|p| p.id == WORKING_PROJECT_ID)
-        .map(|p| p.channels))
+    Ok(Some(file))
 }
 
 #[cfg(test)]

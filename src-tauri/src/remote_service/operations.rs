@@ -20,6 +20,7 @@ use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome
 
 mod export;
 mod logging;
+mod program_edit;
 mod program_export;
 mod settings;
 mod station;
@@ -794,10 +795,11 @@ impl Authority {
                 if c.control_grants.contains(device) {
                     capabilities.push("settingsControl");
                     capabilities.push("postSpot");
-                    // Rendering the working channel list to a CHIRP/CSV file the browser saves.
-                    // The hint is what lets an older station stay silent and an older page never
-                    // offer the button.
+                    // Rendering the working channel list to a CHIRP/CSV file the browser saves,
+                    // and curating that list. The hints are what let an older station stay silent
+                    // and an older page never offer the buttons.
                     capabilities.push("programExport");
+                    capabilities.push("programEdit");
                     // Listening to the station's receive audio. The hint is what makes
                     // the negotiation work in BOTH directions: a browser that has never
                     // heard of it never offers a listen control, and a station built

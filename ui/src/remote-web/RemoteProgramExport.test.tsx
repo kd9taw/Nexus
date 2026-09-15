@@ -20,6 +20,16 @@ import { navigationPages } from './__fixtures__/navigation-page'
 import configurationProgramming from './__fixtures__/configuration-programming.json'
 import { t } from '../i18n'
 
+/** The station's own programming document, trimmed to four rows. The shipped fixture carries 1200
+ *  channels, and rendering 1200 rows in jsdom several times over turns every assertion below into a
+ *  wall-clock race on a busy machine. Four rows exercise the same code; the revision string is the
+ *  document's, unchanged, because that is what a change has to echo back. */
+const programming = {
+  ...(configurationProgramming as any),
+  projects: [{ ...(configurationProgramming as any).projects[0],
+    channels: (configurationProgramming as any).projects[0].channels.slice(0, 4) }]
+}
+
 const toasts = vi.hoisted(() => [] as [string, string][])
 vi.mock('../toast', async (actual) => ({ ...(await actual<typeof import('../toast')>()), pushToast: (text: string, kind: string) => { toasts.push([text, kind]) } }))
 
@@ -73,7 +83,7 @@ function program(capabilities: string[], station?: Station) {
   const invoke = vi.fn(async () => { throw new Error('applicationUnsupported') })
   dispose = installApplicationTransport({ kind: 'remote', invoke: invoke as unknown as ApplicationTransport['invoke'] })
   const source = new RemoteCollections({ supports: () => false, invoke } as unknown as ApplicationClient)
-  const pages = navigationPages('programming', configurationProgramming)
+  const pages = navigationPages('programming', programming)
   vi.spyOn(source, 'page').mockImplementation(async args => pages[args.cursor ? Number(args.cursor.split(':')[1]) : 0])
   const ops = operations(capabilities, station)
   const view = render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>

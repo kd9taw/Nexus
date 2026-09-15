@@ -63,30 +63,46 @@ export type LogChange =
    * page showed. Station control writes station preferences and the logging grant writes logging
    * ones; a change carrying both needs both. */
   | { kind: 'settings'; revision: string; values: Record<string, unknown> }
+  /** Curating the station's working channel list, against the `programming` document revision the
+   * page showed. Station control, not the logging grant: it writes the station's programming file.
+   * A row is named by its channel ID and never by a position — a position is stale the moment
+   * anything else touches the list. */
+  | { kind: 'programEdit'; revision: string; edit: ProgramEdit }
+/** The four curation gestures the channel list offers. Nothing here can name a path, a project, or
+ * a whole list of channels: adding rows is acquisition (a directory fetch or a CSV import) and does
+ * not travel this way. */
+export type ProgramEdit =
+  | { action: 'rename'; id: string; name: string }
+  | { action: 'remove'; id: string }
+  /** One place up or down — the ▲▼ buttons, the only reorder the view offers. */
+  | { action: 'move'; id: string; by: -1 | 1 }
+  | { action: 'clear' }
+export const PROGRAM_EDIT_ACTIONS = ['rename', 'remove', 'move', 'clear'] as const
 /** Station hints for log changes. They ride in `controls.capabilities`, which every hosted page
  * since operation v3 filters, so a newer station can offer them without breaking an older page. */
 export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation', 'selfSpot', 'activationExport',
-  'settingsControl', 'settingsLogging', 'postSpot', 'programExport'] as const
+  'settingsControl', 'settingsLogging', 'postSpot', 'programExport', 'programEdit'] as const
 export type LogCapability = (typeof LOG_CAPABILITIES)[number]
 const loggingPreference = (key: string) => (WRITABLE_LOGGING_SETTINGS_KEYS as readonly string[]).includes(key)
 export const logChangeCapability = (change: LogChange): LogCapability =>
   change.kind === 'settings'
     ? Object.keys(change.values).every(loggingPreference) ? 'settingsLogging' : 'settingsControl'
     : ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks', hunt: 'otaHunt', clearHunt: 'otaHunt',
-      activation: 'otaActivation', clearActivation: 'otaActivation', selfSpot: 'selfSpot', spot: 'postSpot' } as const)[change.kind]
+      activation: 'otaActivation', clearActivation: 'otaActivation', selfSpot: 'selfSpot', spot: 'postSpot',
+      programEdit: 'programEdit' } as const)[change.kind]
 /** Every hint a change needs. Only a settings change carrying both kinds of preference needs two. */
 export const logChangeCapabilities = (change: LogChange): LogCapability[] =>
   change.kind !== 'settings' ? [logChangeCapability(change)]
     : [...(Object.keys(change.values).some(loggingPreference) ? ['settingsLogging' as const] : []),
       ...(Object.keys(change.values).some(k => !loggingPreference(k)) ? ['settingsControl' as const] : [])]
-const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotPosted', 'clusterQueued', 'settingsSaved'] as const
+const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotPosted', 'clusterQueued', 'settingsSaved', 'programSaved'] as const
 /** `clusterUnavailable` is gone: a self-spot now reports each target in `spot`, so the one refusal
  * that named the cluster alone has no producer left. */
 const CHANGE_REFUSALS = ['contextChanged', 'invalidChange', 'spotNotPosted', 'clusterUnavailable'] as const
 /** A self-spot's outcome, and only a self-spot's, carries `spot`: what pota.app and the cluster each
  * did. `spotPosted` means at least one took it, `spotNotPosted` neither. */
 export type LogChangeOutcome = { operation: 'logChange'; operationId: string } & (
-  | { outcome: 'applied'; evidence: 'fileSynced' | 'stationState' | 'settingsSaved' | 'clusterQueued' }
+  | { outcome: 'applied'; evidence: 'fileSynced' | 'stationState' | 'settingsSaved' | 'clusterQueued' | 'programSaved' }
   | { outcome: 'applied'; evidence: 'spotPosted'; spot: SelfSpotReport }
   | { outcome: 'rejected'; reason: 'contextChanged' | 'invalidChange' | 'clusterUnavailable' }
   | { outcome: 'rejected'; reason: 'spotNotPosted'; spot: SelfSpotReport }
@@ -295,7 +311,7 @@ export function logChange(raw: unknown): LogChange {
     hunt: ['kind', 'call', 'program', 'reference'], clearHunt: ['kind'],
     activation: ['kind', 'program', 'reference'], clearActivation: ['kind'],
     selfSpot: ['kind', 'reference', 'dialHz'], spot: ['kind', 'call', 'freqMhz', 'comment'],
-    settings: ['kind', 'revision', 'values'] }
+    settings: ['kind', 'revision', 'values'], programEdit: ['kind', 'revision', 'edit'] }
   if (typeof c.kind !== 'string' || !Object.prototype.hasOwnProperty.call(shapes, c.kind)) invalid()
   object(c, shapes[c.kind as string])
   // A row change names the exact row (its shape requires the target); a hunt names none.
@@ -340,6 +356,20 @@ export function logChange(raw: unknown): LogChange {
         : shape !== 'object' || !value || typeof value !== 'object' || Array.isArray(value))
         invalid()
     }
+  }
+  // One curation gesture, naming one row by its channel ID. The id and name bounds are the
+  // `programming` document's own (`configuration.ts`), so a value that could never have been read
+  // out cannot be written back in; a newline in a name would also plant a row in the exported CSV.
+  if (c.kind === 'programEdit') {
+    if (typeof c.revision !== 'string' || !/^[0-9a-f]{64}$/.test(c.revision)) invalid()
+    const e = c.edit as Record<string, unknown>
+    if (!e || typeof e !== 'object' || Array.isArray(e) ||
+      !PROGRAM_EDIT_ACTIONS.includes(e.action as never)) invalid()
+    object(e, { rename: ['action', 'id', 'name'], remove: ['action', 'id'], move: ['action', 'id', 'by'],
+      clear: ['action'] }[e.action as ProgramEdit['action']])
+    if (e.action !== 'clear' && (!text(e.id, 256) || !e.id)) invalid()
+    if (e.action === 'rename' && (!text(e.name, 1024) || /[\r\n]/.test(e.name as string))) invalid()
+    if (e.action === 'move' && e.by !== -1 && e.by !== 1) invalid()
   }
   return raw as LogChange
 }

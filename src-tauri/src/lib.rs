@@ -20321,10 +20321,12 @@ fn load_radioprog() -> RadioProgFile {
         .unwrap_or_default()
 }
 
-fn store_radioprog(f: &RadioProgFile) -> Result<(), String> {
+/// The ONE writer of `radioprog.json`. `path` is a parameter rather than `radioprog_path()` so a
+/// test can point it at a scratch file — the remote curation path (`remote_service::operations::
+/// program_edit`) writes through this same function, so there is never a second writer to drift.
+fn store_radioprog(path: &Path, f: &RadioProgFile) -> Result<(), String> {
     let json = serde_json::to_string_pretty(f).map_err(|e| e.to_string())?;
-    std::fs::write(radioprog_path(), json)
-        .map_err(|e| format!("couldn't save programming projects: {e}"))
+    std::fs::write(path, json).map_err(|e| format!("couldn't save programming projects: {e}"))
 }
 
 /// All saved programming projects.
@@ -20346,7 +20348,7 @@ fn radioprog_save_project(mut project: RadioProgProject) -> Result<(), String> {
         project.created_utc = now_unix();
         f.projects.push(project);
     }
-    store_radioprog(&f)
+    store_radioprog(&radioprog_path(), &f)
 }
 
 /// Delete one project by id (missing id is a no-op success).
@@ -20354,7 +20356,7 @@ fn radioprog_save_project(mut project: RadioProgProject) -> Result<(), String> {
 fn radioprog_delete_project(id: String) -> Result<(), String> {
     let mut f = load_radioprog();
     f.projects.retain(|p| p.id != id);
-    store_radioprog(&f)
+    store_radioprog(&radioprog_path(), &f)
 }
 
 /// Render a channel list to an export format: "chirp" (the CHIRP generic CSV, analog rows only)

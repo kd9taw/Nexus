@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would be a guess. Exporting still needs station control, and the buttons stay dark against a
   Nexus at the shack that is too old to offer it.
 
+- **Tidy the channel list from a browser too.** Still in Nexus Remote's Program section: rename a
+  channel, move it up or down, drop a row, or clear the list. Each one is a single change the
+  station applies to its own file, and it names the row by its channel ID rather than by where it
+  sat on screen — so a list that changed at the shack while you were looking at it is refused
+  rather than edited in the wrong place. A name is sent when you leave the field (or press Enter),
+  not per keystroke; Escape puts it back. Adding channels still happens at the shack: the
+  RepeaterBook search needs the station's API key, and importing a CHIRP CSV means sending a file
+  up, which Nexus Remote has no path for yet.
+
 
 ### Changed
 

@@ -846,7 +846,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning','fmReceiver','aiCw','redecode','splitTuning','ritTuning','workDigitalSpot','repeaterTuning','memoryRecall','aprsTuning','rotator','rigScope','workRttySpot','sstvGallery',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport','settingsLogging','selfSpot','settingsControl','postSpot','programExport','audioListen']:[])]:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning','fmReceiver','aiCw','redecode','splitTuning','ritTuning','workDigitalSpot','repeaterTuning','memoryRecall','aprsTuning','rotator','rigScope','workRttySpot','sstvGallery',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport','settingsLogging','selfSpot','settingsControl','postSpot','programExport','programEdit','audioListen']:[])]:['decoder','amplifier'])
    if(operationVersion===4){
     // The working channel list as a file, NOW that this browser holds station control. The station's
     // profile is a fresh temp dir with no radioprog.json, so the honest answer is that there is
@@ -855,6 +855,11 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
     assert.ok(controls.leaseId,JSON.stringify(controls))
     const programmed=await allowed(()=>operation({type:'programExport',stationBootId:controls.stationBootId,leaseId:controls.leaseId,format:'chirp',nameCap:7,index:0}))
     assert.deepEqual(programmed.response.value,{operation:'programExport',refused:'notFound'},JSON.stringify(programmed.response))
+    // Curating that same list, against a revision this station cannot be holding: refused as stale,
+    // which is the check reaching the station's own file rather than the relay parsing it away.
+    const curate=await allowed(async()=>{const s=(await heartbeat()).response.value;return operation({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change:{kind:'programEdit',revision:'a'.repeat(64),edit:{action:'clear'}}})})
+    assert.equal(curate.response.value?.outcome,'rejected',JSON.stringify(curate.response))
+    assert.equal(curate.response.value.reason,'contextChanged')
    }
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
