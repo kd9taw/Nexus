@@ -32,6 +32,11 @@
 #      licence BODY text anywhere, must also touch NOTICE. This is the mechanical half of the
 #      OSS-integration checklist; it does not prove the checklist was run.
 #                                                  Override: NEXUS_ALLOW_VENDOR=1
+#   6. Operator review, ADVISORY: if the push touches a transmit, CAT, logbook, upload, ADIF
+#      or band-plan path, `scripts/operator-review` prints which lens was owed and whether a
+#      receipt is on file. It NEVER blocks today — operator ruling 2026-09-15, advisory first.
+#      It also runs the tool's own test suite when the push changes the tool.
+#                                                  Override: NEXUS_SKIP_OPREVIEW=1
 #
 # WHY CHECK 4 IS PER-COMMIT: it used to scan only the endpoint diff, so content added and
 # then removed inside one pushed range was invisible to it. Pushing such a range publishes
@@ -231,6 +236,44 @@ A genuine outside contributor is added, deliberately, to .githooks/contributors.
         echo "pre-push:   NEXUS_ALLOW_VENDOR=1 git push ..." >&2
         exit 1
       fi
+    fi
+  fi
+
+  # 6. Operator review — ADVISORY. See scripts/operator-review's header for the why.
+  #
+  #    WHY IT IS HERE AND NOT IN CI. The receipt it checks lives under tasks/, which is
+  #    gitignored because this repo is public and a finding names rigs, incidents and bench
+  #    steps. CI can never see one. More importantly CI could not do this check even if it
+  #    could see the file: an operator review is a judgement against ground truth CI has no
+  #    access to — the WSJT-X source, the vendor's CAT reference, the ADIF spec, and a rig on
+  #    a bench. A green tick over a receipt would be a proxy for the artifact, which is this
+  #    project's most-repeated defect class. So it sits on the same seam as the identity scrub
+  #    and the licence guard: the last moment before anything becomes public.
+  #
+  #    IT IS FAIL-OPEN, AND THAT IS DELIBERATE TODAY, NOT AN OVERSIGHT. A missing tool, a
+  #    missing receipt and a tool that errors all wave the push through, because the tool is
+  #    advisory (and because the regression suite's throwaway clone has no scripts/ at all).
+  #    The moment it becomes binding this branch has to answer what a push from a machine with
+  #    no tasks/ directory should do — that is condition 3 at BINDING_DEFAULT in the tool, and
+  #    it is an operator ruling, not a thing to decide in a hook.
+  TOP=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  if [ "${NEXUS_SKIP_OPREVIEW:-}" != "1" ] && [ -n "$TOP" ] && [ -x "$TOP/scripts/operator-review" ]; then
+    # The tool gates its own correctness, the way scripts/gates.test.mjs does: a push that
+    # changes the reviewer's data or its script runs its suite. This one DOES block — it is an
+    # ordinary test gate, not the advisory review policy.
+    if git log --name-only --format='' "${rspec[@]}" 2>/dev/null \
+         | grep -qE '^scripts/operator-review'; then
+      echo "pre-push: this push changes the operator-review tool — running its suite." >&2
+      if ! node --test "$TOP/scripts/operator-review.test.mjs" >&2; then
+        fail "scripts/operator-review.test.mjs is RED. The reviewer's own gate has to be green
+before it is pushed; a review tool nobody can trust is worse than none."
+      fi
+    fi
+    if [ "$rsha" = "$ZERO" ]; then
+      git log --name-only --format='' "${rspec[@]}" 2>/dev/null | sort -u \
+        | "$TOP/scripts/operator-review" --files-from - >&2 || true
+    else
+      "$TOP/scripts/operator-review" --range "$rsha..$lsha" >&2 || true
     fi
   fi
 done
