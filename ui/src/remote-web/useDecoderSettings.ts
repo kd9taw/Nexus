@@ -18,11 +18,11 @@ export function useSavedReceiverSetting<A extends StationAction>(
   snap: AppSnapshot | null | undefined, tier: Tier | undefined, permission: 'decoderSettings' | 'receiverSettings',
 ) {
   const client = useContext(RemoteOperationsContext), capability = useStationCapability(permission)
-  const observation = useRemoteStation(snap?.activeRadioId), radio = observation.station?.radio
+  const observation = useRemoteStation(snap?.activeRadioId)
   const allowed = !!(capability && client && observation.context && snap && tier && snap.link.tier === tier &&
     snap.radio.operatingMode?.toLowerCase() === 'digital' && snap.radio.source === 'native' && snap.radio.catOk === true &&
     !snap.radio.txEnabled && !snap.radio.transmitting && !snap.radio.rigKeyed && !snap.radio.tuning && !snap.radio.txBusyReason &&
-    radio?.catConnected && radio.rigKeyed === false && !radio.nexusBusy && radio.readings.ptt && radio.readings.ptt.ageMs < 1000)
+    observation.ready)
   const change = (action: A) => {
     if (!allowed || !client || !observation.context) return
     void client.control(action, observation.context).then(result => {

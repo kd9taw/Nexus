@@ -13,22 +13,34 @@ export function useStationData(): boolean { return useContext(StationDataContext
 export const RemoteOperationsContext = createContext<OperationClient | null>(null)
 const idleSubscribe = () => () => {}
 const idleSnapshot = () => null
-/** A permission for an explicit gesture. Never enables native-only TX controls
- * or the effects which automatically arm receivers on local view entry.
- * A brief control lapse (a heartbeat reply landing after the 1.2 s freshness window, most seconds on a
- * real WAN) keeps the permission while the latest station state still shows this browser controlling,
- * so a control does not disable under the operator and an open dropdown is not closed (operator
- * decision 2026-09-14). The send never borrows it: OperationClient waits for current control, at most
- * CONTROL_RESUME_MS, and otherwise refuses as not sent; a transmit action is refused at once; stale
- * readings (StationDataContext) still refuse here. Pass `lapse = false` where the gesture must begin
- * on current control (a scope press captures its command window at pointer-down). */
-export function useStationCapability(capability: ControlCapability, lapse = true): boolean {
+/** STATION CONTROL HELD by this browser: connected, the latest station state showing this browser
+ * controlling, with nothing unresolved and no command in flight. It is the part of
+ * useStationCapability that names no capability, and it is THE ONE ANSWER a control's enabled
+ * state follows (operator decision 2026-09-14) — so it is deliberately lapse-tolerant: a
+ * heartbeat reply landing after the 1.2 s freshness window (most seconds on a real WAN) leaves
+ * this true, and a control does not disable under the operator. The send never borrows it:
+ * OperationClient waits for current control, at most CONTROL_RESUME_MS, and otherwise refuses as
+ * not sent. Stale application readings (StationDataContext) still refuse here at once. */
+export function useStationHeld(): boolean {
   const local = useStationControl(), available = useStationData()
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
+  return local || !!(available && view?.connected && view.requestReady !== false && !view.unresolved &&
+    !view.controlPending && view.state?.phase === 'controlling')
+}
+
+/** A permission for an explicit gesture. Never enables native-only TX controls
+ * or the effects which automatically arm receivers on local view entry.
+ * Held control (above) carries it through a brief lapse, so an open dropdown is not closed; a
+ * transmit action is still refused at once. Pass `lapse = false` where the gesture must begin
+ * on current control (a scope press captures its command window at pointer-down). */
+export function useStationCapability(capability: ControlCapability, lapse = true): boolean {
+  const local = useStationControl(), held = useStationHeld()
+  const client = useContext(RemoteOperationsContext)
+  const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
   const expanded = ['frequency', 'mode', 'tier', 'workspace', 'ampFollowBand', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability)
-  return local || !!(available && (!['ftRuntime', 'ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages'].includes(capability) || (client?.operationVersion ?? 0) >= 4) && (!expanded || (client?.operationVersion ?? 0) >= 3) && (lapse || view?.fresh) && view?.connected && view.requestReady !== false && !view.unresolved && !view.controlPending &&
-    view.state?.phase === 'controlling' && (!['frequency', 'mode', 'tier', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
+  return local || !!(held && (!['ftRuntime', 'ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages'].includes(capability) || (client?.operationVersion ?? 0) >= 4) && (!expanded || (client?.operationVersion ?? 0) >= 3) && (lapse || view?.fresh) &&
+    (!['frequency', 'mode', 'tier', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability) || !view?.state?.txArmed) && view?.state?.controls?.capabilities.includes(capability))
 }
 
 /** Local tier changes retain their native conditions. Remote selection needs

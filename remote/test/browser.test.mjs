@@ -18,7 +18,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating} of [...[1,2,3,4,5,6,7,8,9,10,11,12,13,14].map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:14,operating:true},{applicationVersion:14,operating:true,ftOperating:true},{applicationVersion:14,operating:true,sessionLayout:true},{applicationVersion:14,operating:true,quickLayout:true},{applicationVersion:14,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:14,operating:true,contactContinuity:true},{applicationVersion:14,operating:true,workSpot:true},{applicationVersion:14,operating:true,radioSelection:true},{applicationVersion:14,operating:true,radioSelection:true,routedTier:true},{applicationVersion:14,operating:true,radioSelection:true,routedWorkspace:true}]) test(`compiled hosted browser ${ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
-  let browser, station, producing=true, pauseObservations=false, producer, applicationProducer
+  let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, producer, applicationProducer
   const results=[]
   const stop = cleanupAfterTest(context, async () => {
     producing=false;station?.close()
@@ -244,7 +244,12 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     if(artifacts){await mkdir(artifacts,{recursive:true});await geometry(390,844);const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-account.png'),Buffer.from(shot.data,'base64'))}
     const fixture=JSON.parse(await readFile(new URL('../../ui/src/remote-monitor/fixtures.v2.json',import.meta.url),'utf8')).spe
     let sequence=0
-    producer=(async()=>{while(producing){const source=station;let watch;try{watch=await source.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);while(producing&&pauseObservations)await sleep(50);if(!producing)break;if(source!==station||source.closed)continue;source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,source:'native',sequence:++sequence}})}})()
+    producer=(async()=>{while(producing){const source=station;let watch;try{watch=await source.take(value=>value.type==='watch'&&value.enabled,1000)}catch{continue}await sleep(200);while(producing&&pauseObservations)await sleep(50);if(!producing)break;if(source!==station||source.closed)continue;const radio=fixture.station.radio
+      // The station's own PTT reading can be older than its 1 s window while the link itself is
+      // healthy — the poll that took it simply ran late at the shack. Publish it that way rather
+      // than slowing the stream, which would age the frame instead and trip the 3 s observation bound.
+      const aged=observationReadingAgeMs&&radio.readings.ptt?{...fixture.station,radio:{...radio,readings:{...radio.readings,ptt:{...radio.readings.ptt,ageMs:observationReadingAgeMs}}}}:fixture.station
+      source.send({type:'publication',requestId:watch.requestId,frame:{...fixture,station:aged,source:'native',sequence:++sequence}})}})()
     const applicationData = await applicationFixture()
     applicationData.get_settings.fdActive = true
     if(operating)applicationData.get_settings.bandChoices=Object.fromEntries(['cw','phone'].map(mode=>[mode,
@@ -1680,6 +1685,30 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const radio=applicationData.get_snapshot.radio,prior={operatingMode:radio.operatingMode,dialMhz:radio.dialMhz,band:radio.band}
         await click(button('FT'));await settledLayout();await sleep(1500)
         const ftIdle=await steady('ft-idle','.operate-cockpit','.operate-cockpit .freq-channel')
+        // THE OTHER CLOCK (operator decision 2026-09-14, the remainder of the steady view). Station
+        // control is not the only freshness a control used to hang off: the amplifier buttons, the
+        // decode-depth chips, the RX offset box and the RX gain slider required the station's OWN PTT
+        // reading to be under a second old, and an observation publication landing late crosses that
+        // most seconds on a real WAN. This pass publishes that reading already past its window (the
+        // shack's poll ran late; the stream itself is healthy, so the frame is not what aged) while the
+        // lease and the 5 s measurement bound both hold, and nothing in the cockpit may remount,
+        // toggle `disabled`, drop an option or fade.
+        const readingControls=`[...document.querySelectorAll('.operate-cockpit .amp-strip button, .operate-cockpit .cockpit-depth-chip')].map(e=>e.disabled)`
+        const beforeSlowReadings=await evaluate(readingControls)
+        observationReadingAgeMs=1200
+        await sleep(2500)
+        const ftSlowReadings=await steady('ft-idle-old-reading','.operate-cockpit','.operate-cockpit .freq-channel')
+        // Positive control for this pass: the reading the amplifier strip reads really is past its
+        // 1 s window, and the strip and the depth chips stayed live through it.
+        const readingProbe=`(()=>{let f=document.querySelector('.operate-cockpit .amp-strip');f=f?.[Object.keys(f).find(k=>k.startsWith('__reactFiber$'))]
+          for(;f;f=f.return)for(let d=f.dependencies?.firstContext;d;d=d.next){const v=d.memoizedValue;if(v?.frame&&v?.status)return {found:true,ageMs:v.frame.station.radio.readings.ptt?.ageMs??null}}
+          return {found:false,ageMs:null}})()`
+        let oldestReading=0,readingProbeFound=true
+        for(let i=0;i<40;i++){const r=await evaluate(readingProbe);if(!r.found)readingProbeFound=false;else if(typeof r.ageMs==='number')oldestReading=Math.max(oldestReading,r.ageMs);await sleep(100)}
+        const slowReadingControls=await evaluate(readingControls)
+        console.log('STEADY_PROBE ft-old-reading',JSON.stringify({oldestReading,readingProbeFound,beforeSlowReadings,slowReadingControls}))
+        observationReadingAgeMs=0
+        await sleep(1500)
         Object.assign(radio,{operatingMode:'phone',dialMhz:7.255,band:'40m'});applicationRevision++
         const phoneSelect='.phone-cockpit .band-picker-select'
         await click(button('Phone'));await settledLayout()
@@ -1710,7 +1739,16 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok(control.selectDisabled>=1&&control.remounts.select>=2,'positive control: the probe counts a forced disable and a forced remount')
         if(control.openSupported)assert.ok(control.openLost>=1,'positive control: a forced disable closes the held dropdown and the probe sees it')
         assert.ok(ftIdle.lapses+phoneIdle.lapses+held.lapses>0,'positive control: control really lapsed during the probes')
-        still(ftIdle,'FT idle');still(phoneIdle,'Phone idle');still(held,'Phone dropdown held open')
+        assert.equal(readingProbeFound,true,'positive control: the probe must find the observation the amplifier strip reads')
+        assert.ok(oldestReading>1000,`positive control: the station reading really aged past its 1 s window (oldest ${oldestReading} ms)`)
+        assert.ok(beforeSlowReadings.length>0,'the amplifier buttons and the decode-depth chips must be on screen for this pass to mean anything')
+        assert.deepEqual(slowReadingControls,beforeSlowReadings,'an old station reading leaves the amplifier buttons and the decode-depth chips exactly as live as they were')
+        // Not vacuous — unless the cockpit is armed for transmit, which refuses all of these for its
+        // own reason and does so equally in both samples.
+        if(beforeSlowReadings.includes(false))assert.ok(slowReadingControls.includes(false),'an old station reading leaves them live, not merely unchanged')
+        else console.log('STEADY_PROBE ft-old-reading: transmit-armed, so these controls were already refused in both samples')
+        still(ftIdle,'FT idle');still(ftSlowReadings,'FT idle, station reading past its window')
+        still(phoneIdle,'Phone idle');still(held,'Phone dropdown held open')
         if(held.openSupported){assert.ok(held.openFrames>0,'the dropdown was open');assert.equal(held.openLost,0,'the held dropdown stays open')}
         assert.deepEqual(picked,[{action:'radio.band',band:'20m',mode:'phone'}],'the picked band is sent exactly once')
         await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)

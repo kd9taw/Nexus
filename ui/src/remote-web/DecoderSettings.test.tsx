@@ -117,8 +117,16 @@ it.each(['JS8', 'MSK144'] as const)('%s refuses old capability/version, lost obs
     const frame = structuredClone(h.frame); Object.assign(frame.station.radio, patch)
     h.rerender(h.view(h.snap, frame)); await tick(); expect(h.widget().disabled).toBe(true)
   }
+  // A reading past its 1 s window is a LAPSE, not a loss (operator decision 2026-09-14): an
+  // observation poll landing late used to grey this chip out under the operator every second or so
+  // on a real WAN. Held station control carries it, and the command still waits for current control.
   const frame = structuredClone(h.frame); frame.station.radio.readings.ptt!.ageMs = 1000
-  h.rerender(h.view(h.snap, frame)); await tick(); expect(h.widget().disabled).toBe(true)
+  h.rerender(h.view(h.snap, frame)); await tick(); expect(h.widget().disabled).toBe(false)
+  // Gone altogether: past MEASUREMENT_STALE_MS the frame drops the reading, and `rigKeyed` with it,
+  // so there is no observation left to act on however firmly control is held.
+  const gone = structuredClone(h.frame)
+  gone.station.radio.readings.ptt = null; gone.station.radio.rigKeyed = null
+  h.rerender(h.view(h.snap, gone)); await tick(); expect(h.widget().disabled).toBe(true)
   h.rerender(h.view(h.snap, h.frame, false)); await tick(); expect(h.widget().disabled).toBe(true)
   h.rerender(h.view()); await tick(); expect(h.widget().disabled).toBe(false)
   act(() => h.client.disconnected()); await tick(); expect(h.widget().disabled).toBe(true)
