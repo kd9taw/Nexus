@@ -63,6 +63,9 @@ mod rx_gain;
 #[path = "scope_tests.rs"]
 mod scope;
 #[cfg(feature = "radio")]
+#[path = "sstv_gallery_tests.rs"]
+mod sstv_gallery;
+#[cfg(feature = "radio")]
 #[path = "workspace_tests.rs"]
 mod workspace;
 const DEVICE: &str = "10000000-0000-4000-8000-000000000001";
@@ -424,7 +427,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "aprsTuning",
             "rotator",
             "rigScope",
-            "workRttySpot"
+            "workRttySpot",
+            "sstvGallery"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

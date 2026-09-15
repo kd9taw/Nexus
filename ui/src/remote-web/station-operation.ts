@@ -46,6 +46,9 @@ export type StationAction =
   | { action: 'rotator.point'; azimuthDeg: number }
   | { action: 'rotator.pointAtCall'; call: string }
   | { action: 'rotator.stop' }
+  // ⛔ Delete one received SSTV picture, permanently. The station finds the row; this page names
+  // only what its own gallery row showed, never a path.
+  | { action: 'sstv.deleteImage'; finishedUtc: string; mode: string }
   // The native panadapter: one closed setting and exactly its own field. The station judges which
   // scope family is live, never this page.
   | { action: 'radio.scope'; setting: 'span'; hz: number }
@@ -98,10 +101,10 @@ export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'f
   // station never names them and this page never sends their actions to it.
   'aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator',
   // The parity leftovers. Same rule: a station advertises each one only with its action.
-  'workRttySpot'] as const
+  'workRttySpot', 'sstvGallery'] as const
 /** The hints added after operation v3 froze — batch 1 and the parity leftovers after it. An older
  * page does not know these names and drops them as hints. */
-export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator', 'workRttySpot'] as const satisfies readonly ControlCapability[]
+export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator', 'workRttySpot', 'sstvGallery'] as const satisfies readonly ControlCapability[]
 /** Batch-1 controls that move the transmit frequency, start a retune or feed the FT sequencer.
  * They stay disabled while this browser's transmission is armed; the station refuses them too. */
 export const TX_IDLE_CAPABILITIES = ['redecode', 'workDigitalSpot', 'workRttySpot', 'splitTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning'] as const satisfies readonly ControlCapability[]
@@ -124,6 +127,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.repeater': 'repeaterTuning',
   'radio.aprsTune': 'aprsTuning',
   'rotator.point': 'rotator', 'rotator.pointAtCall': 'rotator', 'rotator.stop': 'rotator',
+  'sstv.deleteImage': 'sstvGallery',
   'radio.scope': 'rigScope',
   'radio.memoryRecall': 'memoryRecall',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
@@ -383,6 +387,13 @@ export function stationAction(raw: unknown): StationAction {
       break
     case 'rotator.stop':
       object(a, ['action'])
+      break
+    case 'sstv.deleteImage':
+      object(a, ['action', 'finishedUtc', 'mode'])
+      // Exactly the two display fields a gallery row carries, bounded; the station matches them
+      // against its own gallery and refuses anything but one row.
+      if (typeof a.finishedUtc !== 'string' || !a.finishedUtc || a.finishedUtc.length > 64 || /[^ -~]/.test(a.finishedUtc) ||
+        typeof a.mode !== 'string' || !a.mode || a.mode.length > 80 || /[^ -~]/.test(a.mode)) invalid()
       break
     case 'radio.split':
       // null is simplex. Both values are always named: a missing one is not simplex by omission.

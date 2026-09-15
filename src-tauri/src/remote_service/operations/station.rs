@@ -414,6 +414,15 @@ pub enum Action {
     /// Stop the rotator.
     #[serde(rename = "rotator.stop")]
     RotatorStop {},
+    /// ⛔ Delete one received SSTV picture, permanently. The browser names the picture by what its
+    /// own gallery row showed — the finish time and the mode — never by a path: the station finds
+    /// the row itself, and refuses anything but exactly one match.
+    #[serde(rename = "sstv.deleteImage")]
+    SstvDeleteImage {
+        #[serde(rename = "finishedUtc")]
+        finished_utc: String,
+        mode: String,
+    },
     /// The native panadapter's span, reference or position: one setting and exactly its own field.
     /// The station decides which scope family is live; a browser's view of the feed is never used.
     #[serde(rename = "radio.scope")]
@@ -946,6 +955,23 @@ pub fn execute(
             )?;
             return Ok(station_state());
         }
+        // A destructive change to the operator's own received pictures, so it is the row the
+        // browser showed or nothing: zero matches and more than one are both ContextChanged, and
+        // the path is resolved here from the station's own gallery.
+        Action::SstvDeleteImage { finished_utc, mode } => {
+            let mut found = engine
+                .sstv_gallery()
+                .iter()
+                .filter(|g| g.finished_utc == *finished_utc && g.mode == *mode);
+            let path = found.next().map(|g| g.path.clone());
+            if found.next().is_some() {
+                return Err(Reason::ContextChanged);
+            }
+            let path = path.ok_or(Reason::ContextChanged)?;
+            crate::delete_sstv_gallery_image(engine, &path)
+                .map_err(|_| Reason::PersistenceFailed)?;
+            return Ok(station_state());
+        }
         Action::ReceiverArm { receiver, on } => match receiver {
             Receiver::Rtty => engine.set_rtty_armed(*on),
             Receiver::Psk => engine.set_psk_armed(*on),
@@ -1300,6 +1326,7 @@ impl Action {
             | Self::RotatorPoint { .. }
             | Self::RotatorPointAtCall { .. }
             | Self::RotatorStop { .. }
+            | Self::SstvDeleteImage { .. }
             | Self::MemoryRecall { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
@@ -1362,6 +1389,7 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 // Remote parity leftovers: each hint ships with its action, so a station that
                 // predates one never names it and a page never sends that action to it.
                 "workRttySpot",
+                "sstvGallery",
             ]
         }
     }

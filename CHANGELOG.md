@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deliberately not something a logging-only browser can do. If no cluster node is connected the
   browser is told so plainly instead of being left to guess.
 
+- **Delete a received SSTV picture from a browser.** Saving one already worked; deleting it was
+  desktop-only, so a browser could fill the gallery and never tidy it. The ✕ on a gallery card now
+  works from a browser with station control, with the same confirm the desktop asks for — it is
+  permanent, and a received picture is the only copy of what somebody sent. The browser names the
+  picture by the card it is looking at and the station finds the file itself; no file path is ever
+  sent, and a card the station no longer has is refused rather than guessed at.
+
 
 
 ### Changed

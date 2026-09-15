@@ -1327,6 +1327,12 @@ export async function sstvDeleteImage(path: string): Promise<void> {
   await invoke('sstv_delete_image', { path })
 }
 
+/** The same delete FROM A BROWSER, which has no station path to name and must never be given one:
+ * it names the picture by what its own gallery row showed and the station resolves the file. */
+export async function sstvDeleteImageRemote(finishedUtc: string, mode: string): Promise<void> {
+  await invoke('sstv_delete_image', { finishedUtc, mode })
+}
+
 /** Toggle Skip Tx1 (WSJT-X parity) — a session-only flag, resets each launch. */
 export async function setSkipTx1(enabled: boolean, context?: FtRuntimeGesture): Promise<void> {
   await invoke('set_skip_tx1', { enabled, ...ftRuntimeArgs(context) })

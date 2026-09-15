@@ -63,6 +63,7 @@ import {
   sstvArm,
   sstvAutoArm,
   sstvDeleteImage,
+  sstvDeleteImageRemote,
   sstvSend,
   sstvStop,
 } from '../api'
@@ -557,6 +558,9 @@ function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) 
  */
 export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txPowerPct, panels, onOpenSettings }: Props) {
   const canControl=useStationControl(), receiverControl=useStationCapability('decoder'), dataAvailable=useStationData(), source=useContext(RemoteCollectionsContext), remote=!!source
+  // Deleting a received picture is permanent and it is the operator's only copy, so a browser may
+  // do it only while the station advertises its gallery verb.
+  const galleryControl=useStationCapability('sstvGallery')
   // Panels (Phase 3): the RX canvas + the TX bar are pinned chrome (never panels); only the
   // Transmit composer and the Gallery are removable (⊞ menu). They render through
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
@@ -821,7 +825,9 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // "are you sure", so the operator can tell which one they are about to lose — the tiles are
   // small and several look alike.
   const deleteImage = async (g: { path: string; mode: string; finishedUtc: string }) => {
-    if (!canControl) return
+    // Destructive, so it takes the same confirm on both sides; a browser needs the station's own
+    // gallery hint on top of that, and without it the ✕ is dead rather than refused at the station.
+    if (!galleryControl) return
     if (
       !(await confirmDialog({
         title: t('sstv.gallery.delete.confirm.title', {
@@ -835,7 +841,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     )
       return
     await withErrorToast(async () => {
-      await sstvDeleteImage(g.path)
+      if (remote) await sstvDeleteImageRemote(g.finishedUtc, g.mode)
+      else await sstvDeleteImage(g.path)
       setSstv(await getSstvState())
     }, t('sstv.gallery.delete.failed'))
   }
@@ -2101,7 +2108,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                       when: fmtUtc(g.finishedUtc),
                     })}
                     title={t('sstv.gallery.delete.title')}
-                    disabled={!canControl}
+                    disabled={!galleryControl}
                     onClick={() => void deleteImage(g)}
                   >
                     ✕
