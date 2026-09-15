@@ -11,10 +11,6 @@
 
 /** One Opus frame. Also the station's RX DSP tick. */
 export const AUDIO_FRAME_MS = 20
-/** Frames per message. 3 x 20 ms: at one packet per message the TCP+TLS+WS header
- *  alone is ~30 kbit/s against a 24 kbit/s payload, which is the whole argument for
- *  bundling (design 3.3). At 3 the header cost falls to ~10 kbit/s. */
-export const AUDIO_BUNDLE_FRAMES = 3
 /** Hard ceiling for one station -> browser bundle. A 3-frame bundle at 24 kbit/s is
  *  ~240 base64 bytes plus ~160 of envelope; this is room for any VBR excursion and is
  *  still far inside every byte bound the relay and the station already impose. */
@@ -85,6 +81,10 @@ export function parseAudioBundle(raw: unknown): AudioBundle {
   if (value.type !== 'audioRx') throw Error('invalidAudio')
   if (typeof value.epoch !== 'string' || !EPOCH.test(value.epoch)) throw Error('invalidAudio')
   if (typeof value.payload !== 'string' || !BASE64.test(value.payload) || value.payload.length % 4 !== 0) throw Error('invalidAudio')
+  // The station bundles three 20 ms frames per message (at one packet per message the
+  // TCP+TLS+WebSocket header alone runs about 30 kbit/s against a 24 kbit/s payload). The
+  // number is the station's to choose and is stated on every message, so this bounds the
+  // range rather than pinning a value the two ends would then have to agree on twice.
   const count = counted(value.count, 1, 5)
   const frameMs = counted(value.frameMs, AUDIO_FRAME_MS, AUDIO_FRAME_MS)
   // 0xffffffff is the encoder's own ceiling; it ends a stream rather than wrapping,

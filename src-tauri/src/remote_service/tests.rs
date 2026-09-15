@@ -332,12 +332,14 @@ fn cloud_runtime_probe() {
         origin.clone(),
         Box::new(vault.clone()),
         engine.clone(),
-        crate::remote_monitor::Publisher::default(),
-        Some(scope_feed.clone()),
-        Default::default(),
-        Some(sources.clone()),
-        #[cfg(feature = "radio")]
-        None,
+        transport::Feeds {
+            monitor: crate::remote_monitor::Publisher::default(),
+            spectrum: Some(scope_feed.clone()),
+            meters: Default::default(),
+            sources: Some(sources.clone()),
+            #[cfg(feature = "radio")]
+            audio: None,
+        },
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     println!("REMOTE_TEST:{{\"ready\":true}}");
@@ -853,12 +855,14 @@ fn cloud_runtime_probe() {
                     origin.clone(),
                     Box::new(vault.clone()),
                     engine.clone(),
-                    crate::remote_monitor::Publisher::default(),
-                    Some(scope_feed.clone()),
-                    Default::default(),
-                    Some(sources.clone()),
-                    #[cfg(feature = "radio")]
-                    None,
+                    transport::Feeds {
+                        monitor: crate::remote_monitor::Publisher::default(),
+                        spectrum: Some(scope_feed.clone()),
+                        meters: Default::default(),
+                        sources: Some(sources.clone()),
+                        #[cfg(feature = "radio")]
+                        audio: None,
+                    },
                 );
                 std::thread::sleep(Duration::from_millis(100));
                 service.status()
