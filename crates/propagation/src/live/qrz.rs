@@ -44,6 +44,60 @@ pub fn post_form(url: &str, body: String) -> Result<String, String> {
     read_body(resp)
 }
 
+/// The live QRZ Logbook API for the operator-invoked **"correct at QRZ"** action.
+///
+/// It exists so that the pure orchestration in [`tempo_core::qrz_correct`] can name the four
+/// calls it is allowed to make instead of posting an arbitrary body: a STATUS, a SINGLE-CALLSIGN
+/// FETCH, an INSERT carrying `OPTION=REPLACE`, and a SINGLE-RECORD DELETE. Two of those are new
+/// to Nexus's QRZ surface, and they are the read-and-undo half of the feature — they exist
+/// BEFORE the first replace is ever sent, not after.
+///
+/// ⚠️ **The DELETE is destructive at a third party and has no undo** ("Deleted records cannot be
+/// recovered" — QRZ's own spec). It is reachable only from the miss-recovery path, and that is
+/// enforced by type, not by prose: [`delete_missed_replace`](QrzLogbook::delete_missed_replace)
+/// takes a [`tempo_core::qrz::QrzMissRecovery`], whose only constructor is a `RESULT=OK` answer
+/// to a replace — QRZ saying its matcher missed and it inserted a duplicate. The value also
+/// carries the record's operator-readable name, so nothing can delete a record it cannot name;
+/// the name is what the caller logs.
+///
+/// Every body carries the per-logbook API key, so the same rule as [`post_form`] holds: never
+/// log a body, and let [`redact`] own the error text.
+pub struct LogbookApi;
+
+impl tempo_core::qrz_correct::QrzLogbook for LogbookApi {
+    fn status(&self, api_key: &str) -> Result<String, String> {
+        post_form(
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            tempo_core::qrz::build_status_body(api_key),
+        )
+    }
+
+    fn fetch_callsign(&self, api_key: &str, callsign: &str) -> Result<String, String> {
+        post_form(
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            tempo_core::qrz::build_fetch_call_body(api_key, callsign),
+        )
+    }
+
+    fn replace(&self, api_key: &str, adif: &str) -> Result<String, String> {
+        post_form(
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            tempo_core::qrz::build_insert_body(api_key, adif, true),
+        )
+    }
+
+    fn delete_missed_replace(
+        &self,
+        api_key: &str,
+        recovery: &tempo_core::qrz::QrzMissRecovery,
+    ) -> Result<String, String> {
+        post_form(
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            tempo_core::qrz::build_delete_body(api_key, recovery),
+        )
+    }
+}
+
 fn client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -105,6 +159,31 @@ mod tests {
             !err.contains("logbook.qrz.example"),
             "host/URL leaked: {err}"
         );
+        assert!(err.starts_with("QRZ: "), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn a_delete_body_never_reaches_an_error_message() {
+        // The DELETE is the destructive call, so its body gets the same proof the others do.
+        // No network: `.https_only(true)` refuses an http URL before any I/O, which is how
+        // every test on this transport stays offline.
+        let recovery = tempo_core::qrz::QrzMissRecovery::from_missed_replace(
+            &tempo_core::qrz::QrzPush {
+                result: tempo_core::qrz::QrzPushResult::Ok,
+                logid: Some("130877825".into()),
+                count: 1,
+                reason: None,
+            },
+            "W1AW on 2024-03-01 at 1432Z",
+        )
+        .expect("a missed replace authorises the delete");
+        let body = tempo_core::qrz::build_delete_body("SECRETKEY-1234", &recovery);
+        // POSITIVE CONTROL: the body really does carry the key, so a clean error below is the
+        // redaction working rather than a fixture with nothing in it.
+        assert!(body.contains("SECRETKEY-1234"), "{body}");
+        let err = post_form("http://logbook.qrz.example/api", body).unwrap_err();
+        assert!(!err.contains("SECRETKEY-1234"), "API key leaked: {err}");
+        assert!(!err.contains("130877825"), "log id leaked: {err}");
         assert!(err.starts_with("QRZ: "), "unexpected message: {err}");
     }
 }

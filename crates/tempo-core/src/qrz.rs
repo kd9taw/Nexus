@@ -582,6 +582,11 @@ pub struct QrzStatus {
     pub book: Option<String>,
     /// QSO count in the logbook (QRZ `COUNT`).
     pub count: u32,
+    /// First date the logbook accepts (`YYYY-MM-DD`), when reported. QRZ rejects a QSO
+    /// outside the book's configured range outright, so a correction has to check it.
+    pub start_date: Option<String>,
+    /// Last date the logbook accepts (`YYYY-MM-DD`), when reported.
+    pub end_date: Option<String>,
     /// Failure reason (auth errors etc.).
     pub reason: Option<String>,
 }
@@ -592,6 +597,8 @@ pub fn parse_status_response(body: &str) -> QrzStatus {
     let mut owner = None;
     let mut book = None;
     let mut count = 0u32;
+    let mut start_date = None;
+    let mut end_date = None;
     let mut reason = None;
     for pair in body.split('&') {
         let Some((k, v)) = pair.split_once('=') else {
@@ -604,6 +611,8 @@ pub fn parse_status_response(body: &str) -> QrzStatus {
             "BOOK_NAME" if !val.is_empty() => book = Some(val),
             "BOOKID" if book.is_none() && !val.is_empty() => book = Some(format!("book {val}")),
             "COUNT" => count = val.parse().unwrap_or(0),
+            "START_DATE" | "DATE_START" if !val.is_empty() => start_date = Some(val),
+            "END_DATE" | "DATE_END" if !val.is_empty() => end_date = Some(val),
             "REASON" if !val.is_empty() => reason = Some(val),
             _ => {}
         }
@@ -613,6 +622,8 @@ pub fn parse_status_response(body: &str) -> QrzStatus {
         owner,
         book,
         count,
+        start_date,
+        end_date,
         reason,
     }
 }
@@ -692,6 +703,126 @@ pub fn fetch_since_date(last_ok_unix: Option<u64>, overlap_days: u64) -> Option<
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// A **single-callsign** FETCH: QRZ's own stored copies of every QSO with `callsign`.
+///
+/// This is the read half of the "correct at QRZ" action, and it exists so a replace can be
+/// built from QRZ's record rather than from ours — the only defence available against
+/// `OPTION=REPLACE` turning out to rebuild the row from the uploaded ADIF alone (QRZ does not
+/// document which it does; see the action's module header).
+///
+/// ⚠️ **ONE option, for the reason [`build_fetch_since_body`] gives at length** — QRZ's guide
+/// contradicts itself about how options combine, so `CALL:` rides alone and the caller narrows
+/// to band/mode/time itself. That is not a workaround: the narrowing has to happen in Nexus
+/// anyway, because deciding which of QRZ's rows we are aiming at IS the match-key check.
+///
+/// Carries the API key — never log it.
+pub fn build_fetch_call_body(api_key: &str, callsign: &str) -> String {
+    format!(
+        "KEY={}&ACTION=FETCH&OPTION={}",
+        pct(api_key.trim()),
+        pct(&format!("CALL:{}", callsign.trim().to_ascii_uppercase())),
+    )
+}
+
+/// The authority to delete exactly one QRZ log record — **and the only way to build a DELETE.**
+///
+/// QRZ's DELETE is irreversible ("There is no 'undo' from this operation. Deleted records
+/// cannot be recovered") and it acts on a third party's copy of the operator's log, so the
+/// question is not "is the call site careful" but "can a careless call site exist at all".
+/// The answer here is no, by type: [`build_delete_body`] takes one of these, and the only
+/// constructor is [`QrzMissRecovery::from_missed_replace`], which returns `Some` **only** for a
+/// `RESULT=OK` answer to a replace — QRZ's own statement that its matcher disagreed with ours
+/// and it inserted a duplicate instead of overwriting. There is no `new`, no `Default`, no
+/// public field and no `From<&str>`: a `logid` alone cannot become a delete.
+///
+/// It also carries [`QrzMissRecovery::subject`] — the operator-readable name of the record
+/// (callsign, date, time). Nothing may issue a delete it cannot name, so `from_missed_replace`
+/// refuses an empty subject as well as an absent `LOGID`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QrzMissRecovery {
+    logid: String,
+    subject: String,
+}
+
+impl QrzMissRecovery {
+    /// The ONLY constructor. `Some` iff `push` is a replace that **missed**
+    /// ([`QrzPushResult::Ok`] — QRZ inserted rather than overwrote), QRZ named the new record's
+    /// `LOGID`, and the caller can say what the record is.
+    ///
+    /// Every other outcome yields `None`, including the successful
+    /// [`QrzPushResult::Replace`]: a replace that hit must never be followed by a delete.
+    pub fn from_missed_replace(push: &QrzPush, subject: &str) -> Option<Self> {
+        if push.result != QrzPushResult::Ok {
+            return None;
+        }
+        let logid =
+            push.logid.as_deref().map(str::trim).filter(|s| {
+                !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) && s.len() <= 32
+            })?;
+        let subject = subject.trim();
+        if subject.is_empty() {
+            return None;
+        }
+        Some(QrzMissRecovery {
+            logid: logid.to_string(),
+            subject: subject.to_string(),
+        })
+    }
+
+    /// The QRZ `logid` of the duplicate the missed replace created.
+    pub fn logid(&self) -> &str {
+        &self.logid
+    }
+
+    /// What is being deleted, in the operator's words — for the confirmation and the log line.
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+}
+
+/// Build the body of a QRZ Logbook **DELETE** for the one duplicate a missed replace created.
+///
+/// `LOGIDS` is a list in QRZ's API; this deliberately sends exactly one id and has no shape
+/// that can express more, so there is no bulk delete to reach for. Carries the API key — never
+/// log it.
+pub fn build_delete_body(api_key: &str, recovery: &QrzMissRecovery) -> String {
+    format!(
+        "KEY={}&ACTION=DELETE&LOGIDS={}",
+        pct(api_key.trim()),
+        pct(recovery.logid()),
+    )
+}
+
+/// What QRZ said about a DELETE.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct QrzDelete {
+    /// `RESULT=OK`.
+    pub ok: bool,
+    /// Records QRZ says it removed (`COUNT`) — 1 for the single id we ever send.
+    pub count: u32,
+    /// Failure reason, when not OK. ⚠️ QRZ echoes the failing request, which carried the API
+    /// key — scrub before this reaches an operator (see `qrz_correct::scrub_key`).
+    pub reason: Option<String>,
+}
+
+/// Parse a QRZ Logbook DELETE `name=value` response.
+pub fn parse_delete_response(body: &str) -> QrzDelete {
+    let mut out = QrzDelete::default();
+    for pair in body.split('&') {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        let val = urldecode(v.trim());
+        match k.trim().to_ascii_uppercase().as_str() {
+            "RESULT" | "STATUS" => out.ok = val.eq_ignore_ascii_case("OK"),
+            "COUNT" => out.count = val.parse().unwrap_or(0),
+            "REASON" if !val.is_empty() => out.reason = Some(val),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Split a FETCH response at the `ADIF=` field boundary. The ADIF payload itself contains `&`,
@@ -1537,6 +1668,57 @@ mod tests {
         assert!(body.contains("ADIF=%3Ccall%3A4%3EW1AW%3Ceor%3E"));
         assert!(!body.contains("&OPTION="));
         assert!(build_insert_body("k", "<eor>", true).ends_with("&OPTION=REPLACE"));
+    }
+
+    #[test]
+    fn fetch_by_callsign_asks_for_one_call_and_nothing_else() {
+        let body = build_fetch_call_body(" my-key ", " w1aw ");
+        assert!(body.starts_with("KEY=my-key&ACTION=FETCH&"), "{body}");
+        // ONE option — QRZ's guide contradicts itself about how options combine.
+        assert_eq!(body.matches("&OPTION=").count(), 1, "{body}");
+        assert!(body.contains("OPTION=CALL%3AW1AW"), "{body}");
+        // Control: the whole-book fetch really does differ, so the above is not vacuous.
+        assert!(!build_fetch_body("my-key").contains("OPTION="));
+    }
+
+    #[test]
+    fn status_carries_the_books_date_range() {
+        let st = parse_status_response(
+            "RESULT=OK&COUNT=12&START_DATE=2014-01-01&END_DATE=2026-09-15&OWNER=KD9TAW",
+        );
+        assert!(st.ok);
+        assert_eq!(st.start_date.as_deref(), Some("2014-01-01"));
+        assert_eq!(st.end_date.as_deref(), Some("2026-09-15"));
+        // Control: a STATUS without one leaves both None rather than inventing a range.
+        let bare = parse_status_response("RESULT=OK&COUNT=12");
+        assert_eq!((bare.start_date, bare.end_date), (None, None));
+    }
+
+    #[test]
+    fn a_delete_body_names_exactly_one_logid() {
+        let push = QrzPush {
+            result: QrzPushResult::Ok,
+            logid: Some("130877825".into()),
+            count: 1,
+            reason: None,
+        };
+        let rec = QrzMissRecovery::from_missed_replace(&push, "W1AW on 2024-03-01 at 1432Z")
+            .expect("a missed replace authorises exactly one delete");
+        let body = build_delete_body(" my-key ", &rec);
+        assert_eq!(body, "KEY=my-key&ACTION=DELETE&LOGIDS=130877825");
+        // There is no shape here that can express a list: the id is validated as digits only.
+        assert!(!body.contains('+') && !body.contains("%2B"), "{body}");
+    }
+
+    #[test]
+    fn delete_response_reports_what_qrz_did() {
+        let d = parse_delete_response("RESULT=OK&COUNT=1");
+        assert!(d.ok);
+        assert_eq!(d.count, 1);
+        // Control: a refusal is not read as a success.
+        let bad = parse_delete_response("RESULT=FAIL&REASON=not+found");
+        assert!(!bad.ok);
+        assert_eq!(bad.reason.as_deref(), Some("not found"));
     }
 
     #[test]
