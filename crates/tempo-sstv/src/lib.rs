@@ -13,7 +13,7 @@
 //!
 //! Upstream `0.5.3` + Nexus PD additions. PD50/90/120/160/180/240/290 +
 //! Robot 24/36/72 + Scottie 1 / Scottie 2 / Scottie DX + Martin 1 /
-//! Martin 2 decoding from raw audio. PD120/PD180 validated against ARISS Dec-2017;
+//! Martin 2 + Wraase SC-2 180 + Pasokon P5 / P7 decoding from raw audio. PD120/PD180 validated against ARISS Dec-2017;
 //! Robot 36 validated against the ARISS Fram2 corpus (see
 //! `tests/ariss_fram2_validation.md`). Scottie and Martin families
 //! are synthetic round-trip-validated only — no Scottie or Martin
@@ -24,7 +24,7 @@
 //!
 //! The **transmitter** ([`encode`]) is original Nexus code: it synthesizes
 //! the full on-air transmission — standard two-segment calibration/VIS
-//! header + per-mode scanlines — for all 15 modes, directly at the caller's
+//! header + per-mode scanlines — for all 18 modes, directly at the caller's
 //! sample rate. Every mode is TX↔RX self-loopback-validated against the
 //! decoder (`tests/tx_loopback.rs`). See [`encode_image`] and
 //! [`tx_duration_secs`].

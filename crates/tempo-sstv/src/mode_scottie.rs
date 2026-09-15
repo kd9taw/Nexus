@@ -1,9 +1,19 @@
-//! RGB-sequential mode decoder — Scottie 1/2/DX and Martin 1/2.
+//! Sequential three-channel mode decoder — Scottie 1/2/DX, Martin 1/2,
+//! and (since 1.13.0, #264) Wraase SC-2 180 and Pasokon P5/P7.
 //!
-//! Both families use [`crate::modespec::ChannelLayout::RgbSequential`]:
-//! three GBR channels per radio line, written to the image in-place
-//! via `image.put_pixel`. The two families differ in **where the sync
-//! pulse sits within a radio line**:
+//! Scottie and Martin use [`crate::modespec::ChannelLayout::RgbSequential`]:
+//! three **G→B→R** channels per radio line, written to the image in-place
+//! via `image.put_pixel`. Wraase and Pasokon use
+//! [`crate::modespec::ChannelLayout::SequentialRgb`] — the same geometry as
+//! Martin, but the three channels arrive **R→G→B** (slowrx `ColorEnc = RGB`
+//! against Scottie/Martin's `GBR`). Only the colour each slot carries
+//! differs, so both share this decoder; [`channel_colours`] is the whole of
+//! the difference. Getting it backwards does not fail a test by crashing —
+//! it swaps red and blue in every picture — so the mapping is read off the
+//! layout rather than assumed.
+//!
+//! The families also differ in **where the sync pulse sits within a radio
+//! line**:
 //!
 //! - **Scottie** ([`crate::modespec::SyncPosition::Scottie`]): sync
 //!   sits between the B and R channels (mid-line). `find_sync`
@@ -26,6 +36,13 @@
 //!   ^
 //!   |
 //!   line start (sync at line start; standard PD/Robot path)
+//!
+//! Wraase SC-2 / Pasokon line layout (#264):
+//!   [SYNC][porch][R pixels][septr][G pixels][septr][B pixels]
+//!   ^                                                        ^
+//!   |                                                        |
+//!   line start                       Pasokon's trailing gap lives here
+//!                                    (W2180 has no separator at all)
 //! ```
 //!
 //! Translated from slowrx's `video.c:72-79` (Scottie `ChanStart`) and
@@ -35,7 +52,30 @@
 //!
 //! See `NOTICE.md` for full slowrx attribution.
 
-use crate::modespec::ModeSpec;
+use crate::modespec::{ChannelLayout, ModeSpec};
+
+/// Which colour each of the three transmitted channel slots carries, as
+/// indices into an `[R, G, B]` pixel — the single point where the two
+/// sequential families differ (#264).
+///
+/// `RgbSequential` (Scottie, Martin) sends G, then B, then R, so slot 0 is
+/// green (index 1), slot 1 blue (2), slot 2 red (0). `SequentialRgb`
+/// (Wraase SC-2, Pasokon) sends them in plain R, G, B order. Shared by the
+/// decoder below and by `crate::encode_scottie`, so a transmitted picture
+/// and a received one can never disagree about the order.
+///
+/// # Panics
+/// Never for a sequential mode. A non-sequential layout (PD, Robot) has no
+/// channel order to state and is a caller bug — `decode_line` and
+/// `emit_scottie_scanlines` are only reachable through the layout dispatch.
+#[must_use]
+pub(crate) fn channel_colours(layout: ChannelLayout) -> [usize; 3] {
+    match layout {
+        ChannelLayout::RgbSequential => [1, 2, 0], // G, B, R
+        ChannelLayout::SequentialRgb => [0, 1, 2], // R, G, B
+        other => unreachable!("{other:?} is not a sequential three-channel layout"),
+    }
+}
 
 /// Decode one RGB-sequential radio line (Scottie or Martin) into
 /// `image`. Per-channel start times are line-start-relative and
@@ -104,10 +144,12 @@ pub(crate) fn decode_line(
 
     let width_us = width as usize;
 
-    // Decode each channel into its own buffer.
-    let mut g = vec![0_u8; width_us];
-    let mut b = vec![0_u8; width_us];
-    let mut r = vec![0_u8; width_us];
+    // Decode each transmitted channel slot into its own buffer, then scatter
+    // the slots into RGB by the mode's channel order (#264) — Scottie/Martin
+    // send G,B,R; Wraase/Pasokon send R,G,B.
+    let mut first = vec![0_u8; width_us];
+    let mut second = vec![0_u8; width_us];
+    let mut third = vec![0_u8; width_us];
 
     let ctx = crate::demod::ChannelDecodeCtx {
         audio,
@@ -117,7 +159,7 @@ pub(crate) fn decode_line(
         spec,
     };
 
-    let buffers: [&mut [u8]; 3] = [&mut g, &mut b, &mut r];
+    let buffers: [&mut [u8]; 3] = [&mut first, &mut second, &mut third];
     for (chan_idx, buf) in buffers.into_iter().enumerate() {
         crate::demod::decode_one_channel_into(
             buf,
@@ -128,9 +170,14 @@ pub(crate) fn decode_line(
         );
     }
 
-    // Compose RGB and write to the image. Scottie is already RGB; no
-    // chroma conversion needed (cf. Robot's YCrCb→RGB).
+    // Compose RGB and write to the image. Both families carry RGB directly;
+    // no chroma conversion needed (cf. Robot's YCrCb→RGB).
+    let colours = channel_colours(spec.channel_layout);
     for x in 0..width_us {
-        image.put_pixel(x as u32, line_index, [r[x], g[x], b[x]]);
+        let mut px = [0_u8; 3];
+        px[colours[0]] = first[x];
+        px[colours[1]] = second[x];
+        px[colours[2]] = third[x];
+        image.put_pixel(x as u32, line_index, px);
     }
 }

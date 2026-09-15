@@ -11438,8 +11438,8 @@ fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String
 /// "scottiedx", "martin1", …) to its [`tempo_sstv::SstvMode`]. Case-insensitive.
 fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
     use tempo_sstv::SstvMode::{
-        Martin1, Martin2, Pd120, Pd160, Pd180, Pd240, Pd290, Pd50, Pd90, Robot24, Robot36, Robot72,
-        Scottie1, Scottie2, ScottieDx,
+        Martin1, Martin2, PasokonP5, Pd120, Pd160, Pd180, Pd240, Pd290, Pd50, Pd90, Robot24,
+        Robot36, Robot72, Scottie1, Scottie2, ScottieDx, WraaseSc2180,
     };
     Some(match slug.trim().to_ascii_lowercase().as_str() {
         "pd50" => Pd50,
@@ -11457,6 +11457,13 @@ fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
         "scottiedx" => ScottieDx,
         "martin1" => Martin1,
         "martin2" => Martin2,
+        // #264. Pasokon P7 is DECODED but deliberately absent here: one P7 picture is
+        // 407 s of key-down against the engine's 330 s `SSTV_MAX_TX_SECS`, so the send
+        // would be refused anyway — and this table is what the operator's saved default
+        // mode is validated against, so a slug that resolves here and then fails at the
+        // gate is worse than one that never resolved. Same list as `SSTV_TX_MODES`.
+        "w2180" => WraaseSc2180,
+        "p5" => PasokonP5,
         _ => return None,
     })
 }
@@ -29709,6 +29716,12 @@ mod tests {
         assert!(parse_sstv_mode("pd120").is_some());
         assert!(parse_sstv_mode("martin2").is_some());
         assert!(parse_sstv_mode("robot36").is_some());
+        // #264 — the two new modes the engine can actually key.
+        assert!(parse_sstv_mode("w2180").is_some());
+        assert!(parse_sstv_mode("P5").is_some());
+        // Pasokon P7 decodes but is past the engine's per-over ceiling, so the transmit
+        // path must not accept it (`SSTV_TX_MODES` does not offer it either).
+        assert!(parse_sstv_mode("p7").is_none());
         assert!(parse_sstv_mode("nonsense").is_none());
     }
 

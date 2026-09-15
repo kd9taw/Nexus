@@ -8,7 +8,7 @@ The **transmitter** (`src/encode.rs`, `encode_image` / `tx_duration_secs`)
 is original Nexus code that synthesizes a full on-air transmission —
 standard two-segment 1900/1200 Hz calibration + VIS header followed by the
 per-mode scanlines — directly at the caller's sample rate (12 kHz for
-Nexus), for all 15 modes. Every mode is TX↔RX self-loopback-validated
+Nexus), for all 18 modes. Every mode is TX↔RX self-loopback-validated
 against the decoder (`tests/tx_loopback.rs`).
 
 ## Provenance
@@ -34,6 +34,13 @@ changes below.
   timings row-for-row from slowrx C `modespec.c`; the shared PD decode
   path handles them unchanged. Upstream baseline already had PD120 (the
   ISS mode) / PD180 / PD240, Robot 24/36/72, Scottie 1/2/DX, Martin 1/2.
+- **Wraase SC-2 180 / Pasokon P5 / Pasokon P7 added** (#264), likewise from
+  slowrx C `modespec.c`. They are sequential three-channel modes with sync
+  at line start — the same shape as Martin — but transmit their channels
+  in R→G→B order rather than G→B→R, which is what the new
+  `ChannelLayout::SequentialRgb` carries. `tests/mode_timings.rs` holds the
+  published timings and the channel order as written-down literals, because
+  a round trip through our own encoder cannot check either.
 - `test-support` is enabled for tests via a self-dev-dependency so plain
   `cargo test -p tempo-sstv` runs the whole suite (no `--features` flag).
 - `tests/nexus_acceptance.rs` added: an independent test-local modulator

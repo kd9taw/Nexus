@@ -69,8 +69,11 @@ fn scanline_secs(mode: SstvMode) -> f64 {
         ChannelLayout::PdYcbcr => {
             spec.sync_seconds + spec.porch_seconds + 4.0 * w * spec.pixel_seconds
         }
-        // Scottie / Martin: 2 septr + sync + porch + 3 channels (G, B, R).
-        ChannelLayout::RgbSequential => {
+        // Scottie / Martin (G,B,R) and Wraase SC-2 / Pasokon (R,G,B):
+        // 2 septr + sync + porch + 3 channels. The emitter writes two
+        // separators either way; a mode with a third (Pasokon's trailing
+        // gap) reaches `line_seconds` through the pad below.
+        ChannelLayout::RgbSequential | ChannelLayout::SequentialRgb => {
             2.0 * spec.septr_seconds
                 + spec.sync_seconds
                 + spec.porch_seconds
@@ -95,7 +98,9 @@ fn scanline_secs(mode: SstvMode) -> f64 {
     };
     let radio_frames = match spec.channel_layout {
         ChannelLayout::PdYcbcr => f64::from(spec.image_lines) / 2.0,
-        ChannelLayout::RobotYuv | ChannelLayout::RgbSequential => f64::from(spec.image_lines),
+        ChannelLayout::RobotYuv | ChannelLayout::RgbSequential | ChannelLayout::SequentialRgb => {
+            f64::from(spec.image_lines)
+        }
     };
     radio_frames * content.max(spec.line_seconds)
 }
@@ -152,7 +157,7 @@ pub fn encode_image(mode: SstvMode, img: &SourceImage, sample_rate_hz: u32) -> R
             }
             crate::encode_robot::emit_robot_scanlines(&mut tone, mode, &ycrcb);
         }
-        ChannelLayout::RgbSequential => {
+        ChannelLayout::RgbSequential | ChannelLayout::SequentialRgb => {
             crate::encode_scottie::emit_scottie_scanlines(&mut tone, mode, &img.rgb);
         }
     }

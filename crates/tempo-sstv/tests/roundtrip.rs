@@ -286,6 +286,10 @@ fn run_scottie_roundtrip(mode: SstvMode) {
         SstvMode::ScottieDx => 0x4C,
         SstvMode::Martin1 => 0x2C,
         SstvMode::Martin2 => 0x28,
+        // #264 — the R,G,B-ordered half of the same family.
+        SstvMode::WraaseSc2180 => 0x37,
+        SstvMode::PasokonP5 => 0x72,
+        SstvMode::PasokonP7 => 0x73,
         _ => unreachable!(),
     };
     let mut audio = tempo_sstv::__test_support::vis::synth_vis(vis_code, 0.0);
@@ -353,4 +357,31 @@ fn martin1_roundtrip() {
 #[test]
 fn martin2_roundtrip() {
     run_scottie_roundtrip(SstvMode::Martin2);
+}
+
+// ---------------------------------------------------------------------------
+// #264 — Wraase SC-2 180 and Pasokon P5/P7.
+//
+// Same synthetic round trip as Scottie/Martin above, and it is the test that
+// actually decides the channel order: `test_scottie_image` paints a smooth red
+// RAMP and two out-of-phase green/blue stripe patterns, so R, G and B are all
+// different at almost every pixel. Decode the three slots into the wrong
+// colours and the mean per-channel error is tens of counts, nowhere near the
+// bar. A round trip against a flat or grey image would pass with the order
+// reversed, which is why the image is not flat.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn wraase_sc2_180_roundtrip() {
+    run_scottie_roundtrip(SstvMode::WraaseSc2180);
+}
+
+#[test]
+fn pasokon_p5_roundtrip() {
+    run_scottie_roundtrip(SstvMode::PasokonP5);
+}
+
+#[test]
+fn pasokon_p7_roundtrip() {
+    run_scottie_roundtrip(SstvMode::PasokonP7);
 }

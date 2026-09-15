@@ -26,6 +26,16 @@ import { fileURLToPath } from 'node:url'
 const repo = (rel: string) => readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), 'utf8')
 const MODESPEC_RS = repo('crates/tempo-sstv/src/modespec.rs')
 const ENCODE_RS = repo('crates/tempo-sstv/src/encode.rs')
+const ENGINE_RS = repo('crates/tempo-app/src/engine.rs')
+
+/** The engine's hard ceiling on one SSTV over, read from `engine.rs` rather than
+ *  restated. `sstv_send` refuses anything longer, so a mode past it must never reach
+ *  the picker — the operator would choose it, wait for the encode, and be told no. */
+const MAX_TX_SECS = (() => {
+  const m = /const SSTV_MAX_TX_SECS\s*:\s*f64\s*=\s*([0-9._]+)\s*;/.exec(ENGINE_RS)
+  expect(m, 'engine.rs declares SSTV_MAX_TX_SECS').not.toBeNull()
+  return Number(m![1].replace(/_/g, ''))
+})()
 const SSTV_MODES_TS = readFileSync(
   fileURLToPath(new URL('./sstvModes.ts', import.meta.url)),
   'utf8',
@@ -98,8 +108,9 @@ function txSeconds(s: RustSpec): number {
     // sync + porch + 4 channels (Y_odd, Cr, Cb, Y_even); two image rows per radio line.
     content = s.sync + s.porch + 4 * w * s.pixel
     frames = s.h / 2
-  } else if (s.layout === 'RgbSequential') {
-    // Scottie / Martin: 2 septr + sync + porch + 3 channels (G, B, R).
+  } else if (s.layout === 'RgbSequential' || s.layout === 'SequentialRgb') {
+    // Scottie / Martin (G,B,R) and Wraase SC-2 / Pasokon (R,G,B):
+    // 2 septr + sync + porch + 3 channels.
     content = 2 * s.septr + s.sync + s.porch + 3 * w * s.pixel
     frames = s.h
   } else if (s.mode === 'Robot72') {
@@ -133,32 +144,57 @@ describe('the SSTV transmit-mode table mirrors modespec.rs', () => {
   const ts = tsModes()
 
   it('parsed both sides', () => {
-    expect(rust.length, 'modespec.rs ModeSpec blocks').toBe(15)
-    expect(ts.length, 'SSTV_TX_MODES rows').toBe(15)
+    expect(rust.length, 'modespec.rs ModeSpec blocks').toBe(18)
+    expect(ts.length, 'SSTV_TX_MODES rows').toBe(17)
   })
 
-  it('offers exactly the modes the crate implements — no more, no fewer', () => {
-    expect(ts.map((m) => m.slug).sort()).toEqual(rust.map((s) => s.slug).sort())
+  it('⭐ offers exactly the modes the crate implements AND the engine will key', () => {
+    // Was "no more, no fewer" against the whole crate table, until #264 added a mode
+    // the crate DECODES and the engine refuses to TRANSMIT (Pasokon P7, 407 s against
+    // engine.rs's 330 s cap). The rule is now derived from that cap on both sides, so
+    // neither a new mode nor a changed cap can leave the picker quietly wrong: a mode
+    // under the cap that is missing here is a mode the operator cannot send, and a
+    // mode over it that is present is a send the backend will refuse after the wait.
+    const sendable = rust.filter((s) => txSeconds(s) < MAX_TX_SECS).map((s) => s.slug)
+    expect(ts.map((m) => m.slug).sort()).toEqual(sendable.sort())
+    expect(sendable, 'the cap must actually exclude something, or this test is vacuous')
+      .not.toEqual(rust.map((s) => s.slug))
   })
 
-  it('⭐ every raster matches — the backend REFUSES anything else, so a drift here is a refused send', () => {
+  it('every mode the crate decodes is either offered for transmit or over the cap', () => {
+    // The other direction, stated plainly: nothing may fall out of both lists by
+    // accident. A mode absent from the picker has to be absent BECAUSE of its length.
     for (const spec of rust) {
-      const row = ts.find((m) => m.slug === spec.slug)
-      expect(row, `no UI row for ${spec.slug}`).toBeDefined()
-      expect([row!.w, row!.h], `${spec.slug} raster`).toEqual([spec.w, spec.h])
+      const offered = ts.some((m) => m.slug === spec.slug)
+      if (!offered) {
+        expect(txSeconds(spec), `${spec.slug} is not offered, so it must be over the cap`)
+          .toBeGreaterThanOrEqual(MAX_TX_SECS)
+      }
+    }
+  })
+
+  // Both sweeps walk the OFFERED rows, not the whole crate table: a mode the picker
+  // deliberately omits (over the engine cap — see above) has no row to compare, and
+  // the pair of membership tests above is what proves the omission is deliberate.
+  it('⭐ every raster matches — the backend REFUSES anything else, so a drift here is a refused send', () => {
+    for (const row of ts) {
+      const spec = rust.find((s) => s.slug === row.slug)
+      expect(spec, `${row.slug} is offered but modespec.rs has no such mode`).toBeDefined()
+      expect([row.w, row.h], `${row.slug} raster`).toEqual([spec!.w, spec!.h])
     }
   })
 
   it('⭐ every airtime matches the encoder — this is what the composer tells the operator to expect key-down', () => {
-    for (const spec of rust) {
-      const row = ts.find((m) => m.slug === spec.slug)!
-      expect(row.seconds, `${spec.slug} airtime`).toBe(Math.round(txSeconds(spec)))
+    for (const row of ts) {
+      const spec = rust.find((s) => s.slug === row.slug)!
+      expect(row.seconds, `${row.slug} airtime`).toBe(Math.round(txSeconds(spec)))
     }
   })
 
-  it('the longest over is under the engine cap (engine.rs refuses past 330 s)', () => {
-    for (const spec of rust) {
-      expect(txSeconds(spec), `${spec.slug}`).toBeLessThan(330)
+  it('the longest OFFERED over is under the engine cap (engine.rs refuses past it)', () => {
+    for (const row of ts) {
+      const spec = rust.find((s) => s.slug === row.slug)!
+      expect(txSeconds(spec), `${spec.slug}`).toBeLessThan(MAX_TX_SECS)
     }
   })
 

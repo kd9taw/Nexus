@@ -23,7 +23,7 @@
 export interface TxMode {
   slug: string
   name: string
-  group: 'Scottie' | 'Martin' | 'Robot' | 'PD'
+  group: 'Scottie' | 'Martin' | 'Robot' | 'PD' | 'Wraase' | 'Pasokon'
   width: number
   height: number
   /** Exact key-down seconds: header + scanlines, rounded. NOT approximate — the
@@ -32,9 +32,17 @@ export interface TxMode {
   seconds: number
 }
 
-/** The 15 modes, grouped by family. Five distinct rasters and five distinct aspect
- * ratios, which is why the crop box re-derives its shape on every mode change and
- * not just its pixel size. */
+/** Every mode the crate implements AND the engine will key, grouped by family.
+ * Several distinct rasters and aspect ratios, which is why the crop box re-derives
+ * its shape on every mode change and not just its pixel size.
+ *
+ * ⚠️ NOT the same list as `modespec.rs` — the crate DECODES one more. Pasokon P7 is
+ * 407 s of key-down, past `SSTV_MAX_TX_SECS` (330 s) in `engine.rs`, so a send would
+ * be refused after the operator had already picked it and waited for the encode.
+ * `sstv-modes.test.ts` derives that exclusion from the engine's own constant rather
+ * than trusting this comment: every mode under the cap must be here, and every mode
+ * over it must not. A raised cap therefore shows up as a red test, not as a mode
+ * quietly missing from the picker. */
 export const SSTV_TX_MODES: TxMode[] = [
   { slug: 'scottie1', name: 'Scottie 1', group: 'Scottie', width: 320, height: 256, seconds: 111 },
   { slug: 'scottie2', name: 'Scottie 2', group: 'Scottie', width: 320, height: 256, seconds: 72 },
@@ -51,11 +59,13 @@ export const SSTV_TX_MODES: TxMode[] = [
   { slug: 'pd180', name: 'PD-180', group: 'PD', width: 640, height: 496, seconds: 188 },
   { slug: 'pd240', name: 'PD-240', group: 'PD', width: 640, height: 496, seconds: 249 },
   { slug: 'pd290', name: 'PD-290', group: 'PD', width: 800, height: 616, seconds: 290 },
+  { slug: 'w2180', name: 'Wraase SC-2 180', group: 'Wraase', width: 320, height: 256, seconds: 183 },
+  { slug: 'p5', name: 'Pasokon P5', group: 'Pasokon', width: 640, height: 496, seconds: 305 },
 ]
 
 /** Family order for the grouped pickers — both of them render `<optgroup>`s in this
  *  order, so the cockpit and Settings read the same way. */
-export const TX_MODE_GROUPS: TxMode['group'][] = ['Scottie', 'Martin', 'Robot', 'PD']
+export const TX_MODE_GROUPS: TxMode['group'][] = ['Scottie', 'Martin', 'Robot', 'PD', 'Wraase', 'Pasokon']
 
 /** Slug → mode. Also the validity test both surfaces use: a slug that is not a key
  *  here is one this build cannot send (a hand-edited or downgraded settings file). */

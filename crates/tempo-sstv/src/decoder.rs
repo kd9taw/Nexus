@@ -353,7 +353,8 @@ impl SstvDecoder {
                                 // Robot (RobotYuv) and Scottie (RgbSequential)
                                 // both pack one image row per radio line.
                                 crate::modespec::ChannelLayout::RobotYuv
-                                | crate::modespec::ChannelLayout::RgbSequential => spec.image_lines,
+                                | crate::modespec::ChannelLayout::RgbSequential
+                                | crate::modespec::ChannelLayout::SequentialRgb => spec.image_lines,
                             };
                             let nominal_samples =
                                 (f64::from(radio_frames_per_image) * spec.line_seconds * work_rate)
@@ -590,7 +591,8 @@ impl SstvDecoder {
         let (frames, rows_per_frame) = match d.spec.channel_layout {
             crate::modespec::ChannelLayout::PdYcbcr => (d.spec.image_lines / 2, 2),
             crate::modespec::ChannelLayout::RobotYuv
-            | crate::modespec::ChannelLayout::RgbSequential => (d.spec.image_lines, 1),
+            | crate::modespec::ChannelLayout::RgbSequential
+            | crate::modespec::ChannelLayout::SequentialRgb => (d.spec.image_lines, 1),
         };
         while d.preview_next_frame < frames {
             let frame = d.preview_next_frame;
@@ -627,18 +629,21 @@ impl SstvDecoder {
                     &mut d.preview_snr,
                     d.hedr_shift_hz,
                 ),
-                crate::modespec::ChannelLayout::RgbSequential => crate::mode_scottie::decode_line(
-                    d.spec,
-                    frame,
-                    &d.audio,
-                    0,
-                    offset,
-                    work_rate,
-                    &mut d.preview,
-                    &mut d.preview_demod,
-                    &mut d.preview_snr,
-                    d.hedr_shift_hz,
-                ),
+                crate::modespec::ChannelLayout::RgbSequential
+                | crate::modespec::ChannelLayout::SequentialRgb => {
+                    crate::mode_scottie::decode_line(
+                        d.spec,
+                        frame,
+                        &d.audio,
+                        0,
+                        offset,
+                        work_rate,
+                        &mut d.preview,
+                        &mut d.preview_demod,
+                        &mut d.preview_snr,
+                        d.hedr_shift_hz,
+                    );
+                }
             }
             let first_row = frame * rows_per_frame;
             for row in first_row..first_row + rows_per_frame {
@@ -735,8 +740,10 @@ impl SstvDecoder {
                     });
                 }
             }
-            crate::modespec::ChannelLayout::RgbSequential => {
-                // Scottie family. Mid-line sync handling lives inside
+            crate::modespec::ChannelLayout::RgbSequential
+            | crate::modespec::ChannelLayout::SequentialRgb => {
+                // Scottie/Martin and (#264) Wraase SC-2 / Pasokon. Mid-line sync
+                // handling and the per-family channel ORDER both live inside
                 // mode_scottie::decode_line. No chroma_planes — RGB is composed
                 // in-place per line (no deferred chroma like R36/R24).
                 for line in 0..d.spec.image_lines {

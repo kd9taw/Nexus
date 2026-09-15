@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SSTV receives two more mode families: Wraase SC-2 180 and Pasokon P5 and P7** (#264). Nexus
+  recognises their VIS headers and decodes them like any other mode — the picture paints line by
+  line and lands in the gallery with its mode name. Wraase SC-2 180 and Pasokon P5 can also be
+  sent; Pasokon P7 cannot, because one P7 picture is nearly seven minutes of key-down and Nexus
+  will not key the rig that long for one image, so it is not in the transmit picker. A VIS code
+  Nexus still does not know — Pasokon P3, Wraase SC-2 120 — is reported as an unrecognised mode
+  exactly as before, rather than being decoded as a neighbour and coming out slanted.
 
 
 ### Changed
