@@ -10,6 +10,7 @@ import type { MonitorSource } from '../remote-monitor/session'
 import { APPLICATION_VERSIONS } from './application-capabilities'
 import { ApplicationClient } from './application-client'
 import { APPLICATION_MAX_BYTES } from './application-protocol'
+import { AudioLink, browserAudio } from './audio-listen'
 
 export type AccountSession = {
   accountId: string
@@ -27,6 +28,8 @@ export type AccountSession = {
    *  state that a refresh throws away. Never carries the pairing credentials. */
   pending: { id: string; name: string; expiresAt: number; confirmed: boolean } | null
 }
+/** The audio lane's own send budget. Small on purpose - see where it is used. */
+const AUDIO_BUDGET_BYTES = 512
 export class RemoteError extends Error {
   // `code` is the service's own word for what it refused - trialEnded, trialDisabled,
   // stationLimit, pairingExpired. Without it every refusal arrives as a bare status number and
@@ -138,6 +141,10 @@ export class HostedConnection {
   readonly source: MonitorSource
   readonly application: ApplicationClient
   readonly operations: OperationClient
+  /** Listening. It shares this socket and nothing else: no ACK, no credit, no retry,
+   *  and its own byte budget, so a bundle can never consume the allowance an operation
+   *  response or an observation ACK needs. */
+  readonly audio: AudioLink
   private socket: WebSocket | null = null
   private latest: { frame: MonitorFrame; at: number } | null = null
   private disposed = false
@@ -164,6 +171,15 @@ export class HostedConnection {
       if(!this.applicationMode||this.socket?.readyState!==WebSocket.OPEN||this.socket.bufferedAmount+new TextEncoder().encode(message).length>OPERATION_REQUEST_BYTES)throw new RemoteError(503)
       this.socket.send(message)
     },applicationMode&&client.operationVersion>=1,()=>performance.now(),pendingLogStorage(()=>localStorage,stationId),parseOperationVersion(client.operationVersion)??1,pendingControlStorage(()=>localStorage,stationId))
+    this.audio = new AudioLink(message => {
+      const text = JSON.stringify(message)
+      // Its own budget, deliberately small: a listen request is ~130 bytes and this is
+      // room for it and nothing more. Audio must never be able to spend the queue an
+      // acknowledgement needs, because that queue is what carries Stop.
+      if (!this.applicationMode || this.socket?.readyState !== WebSocket.OPEN
+        || this.socket.bufferedAmount + new TextEncoder().encode(text).length > AUDIO_BUDGET_BYTES) throw new RemoteError(503)
+      this.socket.send(text)
+    }, browserAudio())
     this.source = { id: `hosted-${stationId}`, kind: 'native', read: async signal => {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)
@@ -171,13 +187,13 @@ export class HostedConnection {
   }
   start(): void { void this.connect() }
   stop(): void {
-    this.application.disconnected(); this.operations.disconnected()
+    this.application.disconnected(); this.operations.disconnected(); this.audio.close()
     this.disposed = true; this.abort.abort(); this.latest = null
     clearTimeout(this.reconnectTimer); clearInterval(this.renewal)
     this.socket?.close(1000, 'disconnected'); this.socket = null
   }
   private retry(): void {
-    this.application.disconnected(); this.operations.disconnected()
+    this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected()
     this.latest = null; clearInterval(this.renewal)
     if (this.disposed || this.reconnectTimer) return
     const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempt++, 5))
@@ -225,6 +241,11 @@ export class HostedConnection {
           const message = JSON.parse(event.data) as Record<string, unknown>
           // Only a chunk of the activation file this page asked for may pass the ordinary operation
           // bound; the operation client refuses any other reply over it.
+          // Before the operation and application branches, and it never throws: an audio
+          // message that is wrong costs the audio, never the session this socket carries.
+          if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('audio')) {
+            this.audio.receive(message); return
+          }
           if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';const bytes=new TextEncoder().encode(event.data).length;if(bytes>OPERATION_EXPORT_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message,bytes);return}
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
             reason = 'invalidApplication'; this.application.receive(message); return
@@ -270,7 +291,7 @@ export class HostedConnection {
             if (socket.bufferedAmount + new TextEncoder().encode(ack).length > (this.applicationMode ? (this.operations.enabled?OPERATION_REQUEST_BYTES:2048) : 512)) throw new RemoteError(503)
             socket.send(ack)
           } else throw new RemoteError(403)
-        } catch { this.latest = null; this.application.disconnected(); this.operations.disconnected(); socket.close(1000, reason) }
+        } catch { this.latest = null; this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected(); socket.close(1000, reason) }
       }
       socket.onclose = () => { if (this.socket === socket) { this.socket = null; this.retry() } }
       socket.onerror = () => { this.latest = null; this.application.disconnected(); this.operations.disconnected() }

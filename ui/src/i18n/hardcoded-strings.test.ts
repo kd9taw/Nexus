@@ -63,6 +63,7 @@ const MIGRATED = [
   'remote-web/RemoteOta.tsx',
   'remote-web/RemoteFieldDay.tsx',
   'remote-web/BrowserApplication.tsx',
+  'remote-web/AudioListen.tsx',
   'remote-web/SessionStatus.tsx',
   'remote-web/useNeedAlerts.ts',
   'remote-web/useRareDxAlerts.ts',

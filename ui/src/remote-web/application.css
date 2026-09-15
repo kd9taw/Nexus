@@ -17,6 +17,17 @@
 .remote-session-row > :first-child { flex: 1 1 0; min-width: 0; }
 .remote-session-row .remote-logging-authority { min-width: 0; }
 .remote-session-row .remote-logging-authority button { min-width: 0; white-space: normal; }
+/* The listen control and its state, in the session row. `flex: 0 0 auto` so a long state
+   line wraps inside the control rather than squeezing the logging authority beside it. */
+.remote-audio { display: flex; align-items: center; gap: .4em; flex: 0 0 auto; flex-wrap: wrap; }
+.remote-audio-toggle { display: inline-flex; align-items: center; gap: .35em; }
+.remote-audio-state { font-size: .85em; color: var(--text-dim); }
+/* Every colour here is a variable defined in BOTH themes (styles.css :root and the light
+   override), never a bare hex, so the control reads the same way in either. */
+.remote-audio-state--live { color: var(--snr-strong); }
+.remote-audio-state--gap, .remote-audio-state--stalled { color: var(--alert-warning); }
+.remote-audio-state--ended { color: var(--alert-critical); }
+.remote-audio--off { font-size: .85em; color: var(--text-dim); }
 .remote-session-toggle { display: flex; align-items: center; justify-content: center; gap: .5em; flex: 0 0 auto; }
 .remote-session-toggle svg { flex: 0 0 auto; }
 .remote-session-info { padding-top: .5em; min-width: 0; }

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Listen to the radio from Nexus Remote.** The browser workspace has a Listen button in its
+  header, beside the station-control line. Press it and you hear what the receiver hears; press it
+  again and it stops. It is muted until you ask for it, it stops on its own when you hide the tab
+  or lose station control, and only a browser that holds station control can start it — a browser
+  approved for logging alone cannot listen. A station nobody is listening to sends nothing at all.
+  The line beside the button tells you what the audio is doing: connecting, listening, a gap while
+  the link is losing packets, or stalled. That distinction is the point. A gap is filled with a
+  faint synthetic hiss rather than silence, so a dropping link never sounds like a dead band. If
+  your browser cannot play the audio (Firefox on Android, and Safari before 26), the page says so
+  instead of offering a button that does nothing.
 
 
 ### Changed

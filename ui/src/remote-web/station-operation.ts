@@ -93,7 +93,12 @@ export type ControlContext = {
 export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver',
   // Remote parity batch 1. A station advertises each one only with its action, so an older
   // station never names them and this page never sends their actions to it.
-  'aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator'] as const
+  'aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator',
+  // Listening to the station's receive audio. The one hint here that names no ACTION: it
+  // is answered on the audio lane, not by a station control, so it appears in no action
+  // map. It rides this list because it is given under the same station-control grant, and
+  // because a station that does not name it must never be offered the control.
+  'audioListen'] as const
 /** The batch-1 hints. An older page does not know these names and drops them as hints. */
 export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator'] as const satisfies readonly ControlCapability[]
 /** Batch-1 controls that move the transmit frequency, start a retune or feed the FT sequencer.

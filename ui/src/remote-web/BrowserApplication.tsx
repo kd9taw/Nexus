@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import App from '../App'
 import {RemoteOperationsContext} from './operations'
+import { AudioListen } from './AudioListen'
 import { SessionStatus } from './SessionStatus'
 import { RemotePresentationContext, type RemotePresentation } from './presentation'
 import { controlTransport } from './control-transport'
@@ -113,8 +114,9 @@ export function BrowserApplication({ connection, disconnect, signOut }: { connec
   const potaAlerts = usePotaAlerts(collections, !stale, stale || client.supports(OTA_COMMAND))
   // Stable props: the 500 ms tick re-renders this component to re-read the sample age, and a fresh
   // `remote` object every tick re-rendered the whole workspace with it.
-  const status = useMemo(() => <SessionStatus client={connection.operations} stale={staleShown} disconnect={disconnect} signOut={signOut} display={display} alerts={alerts} rareAlerts={rareAlerts} potaAlerts={potaAlerts} />,
-    [connection.operations, staleShown, disconnect, signOut, display, alerts, rareAlerts, potaAlerts])
+  const status = useMemo(() => <SessionStatus client={connection.operations} stale={staleShown} disconnect={disconnect} signOut={signOut} display={display} alerts={alerts} rareAlerts={rareAlerts} potaAlerts={potaAlerts}
+    audio={<AudioListen audio={connection.audio} client={connection.operations} />} />,
+    [connection.operations, connection.audio, staleShown, disconnect, signOut, display, alerts, rareAlerts, potaAlerts])
   const remote = useMemo(() => boot && { ...boot, status, stale, staleShown }, [boot, status, stale, staleShown])
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
     {status}
