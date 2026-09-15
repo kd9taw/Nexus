@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keying (a satellite pass reporting its uplink). Nothing is lost: the change you asked for is
   held and goes out on the first tick after unkey. RIT is unaffected — it moves the receiver.
 
+- **After Tune, Nexus gives back the power the radio is actually on (#234).** It used to restore
+  the last level *it* had sent, so a level you set on the radio's own control was quietly replaced
+  every time you tuned. Nexus now asks the radio what it is running at just before the tune keys,
+  and hands that level back afterwards — which also means the tune level is the lower of your tune
+  setting and the power really in use, rather than a stale one. A radio that will not report its
+  power is left alone entirely: with nothing to put back, nothing is taken away.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection

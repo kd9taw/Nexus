@@ -7774,6 +7774,23 @@ impl Engine {
         self.rf_power
     }
 
+    /// ADOPT the level the RIG is actually running at as the operator's own (#234, the tune
+    /// path). Clamped to the active mode ceiling exactly as [`Self::set_rf_power`] is, so an
+    /// FT8 duty-cycle cap still binds a level that arrived from the radio's front panel.
+    ///
+    /// Beside `set_rf_power` rather than inside it, and the difference is the remote lease:
+    /// `set_rf_power` is an ACTUATION and revokes any outstanding Remote permit, because a hand
+    /// at the shack outranks a browser. Nobody actuated anything here — the loop read a number
+    /// off the radio — so revoking would drop a remote operator's permit on every tune.
+    ///
+    /// The CALLER owns the freshness question. The one caller reads the level from the rig on
+    /// the tick it adopts it; adopting the 750 ms poll's `rig_rf_power` instead would let a
+    /// reading up to a heavy cycle old overwrite a slider drag made inside that window.
+    pub fn adopt_rig_power(&mut self, frac: f32) {
+        let ceiling = self.active_power_ceiling();
+        self.rf_power = Some(frac.clamp(0.0, ceiling));
+    }
+
     /// The operator's power level as it ACTUALLY stands: what we commanded, or failing that
     /// what the rig last reported. `None` only when neither exists — no command, no poll.
     ///

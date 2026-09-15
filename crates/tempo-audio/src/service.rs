@@ -9145,21 +9145,55 @@ impl RadioLoop {
             // (`Engine::set_rf_power`), without this loop having to re-derive it.
             //
             // `None` on EITHER side means do nothing, which is today's behaviour: no setting, or
-            // no level Nexus has ever commanded on this rig, and there is then nothing to put
-            // back afterwards. Leaving a rig at 10 W for the rest of the session would be a worse
-            // bug than the one this fixes, so the feature declines rather than guess.
-            let tune_power = keying
-                .then(|| {
-                    eng.settings()
-                        .tune_power_pct
-                        .map(|pct| f32::from(pct.min(100)) / 100.0)
-                        .zip(eng.rf_power())
-                        .map(|(want, commanded)| want.min(commanded))
-                })
-                .flatten();
+            // no level this loop could learn, and there is then nothing to put back afterwards.
+            // Leaving a rig at 10 W for the rest of the session would be a worse bug than the one
+            // this fixes, so the feature declines rather than guess.
+            let tune_pct = eng
+                .settings()
+                .tune_power_pct
+                .map(|pct| f32::from(pct.min(100)) / 100.0);
             // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
             // freeze this tick, not every UI command sharing the mutex (the hang convoy).
             drop(eng);
+            // ⭐ ISSUE #234: HAND BACK THE LEVEL THE **RADIO** IS ON, not the last one Nexus
+            // sent. The restore below is structural — forget what we commanded and let the
+            // RF-power block re-command `Engine::rf_power` — and `rf_power` is the COMMANDED
+            // level, so a power dialled on the rig's own control was silently replaced by
+            // whatever Nexus last pushed, on every tune. Adopting the rig's level as the
+            // operator's HERE fixes both ends with one act: the structural restore hands that
+            // level back, and the tune level itself becomes the lower of the setting and the
+            // level actually in use rather than a stale commanded one.
+            //
+            // A FRESH READ, not the 750 ms poll's `rig_rf_power`. The poll reading can be a
+            // whole heavy cycle old, and adopting a stale one would undo a slider drag made
+            // inside that window — pushing the rig UP after the tune, which is the one
+            // direction this path has never done. One round-trip, on a tune key-down only, and
+            // only when tune power is switched on at all: a station without the setting pays
+            // nothing and sees today's behaviour to the byte.
+            //
+            // A rig that will not answer leaves `rf_power` as it was — `None` on a station that
+            // has never touched the slider — and the tune then declines to lower anything,
+            // which is the safe half: nothing to put back means nothing may be taken away.
+            //
+            // ⚠️ NEEDS-BENCH, and this is a POWER COMMAND AROUND KEYING. What is proven here is
+            // the ORDER on the wire (read, then set, then PTT) and that the level that comes
+            // back is the one the radio reported. What no test on this box can show is a real
+            // radio's behaviour: whether its reported level is the same scale it accepts back,
+            // and whether the read costs enough time to be felt before the carrier comes up.
+            if keying && tune_pct.is_some() && self.level_supported[LVL_RFPOWER] != Some(false) {
+                if let Ok(frac) = rig.read_level("RFPOWER") {
+                    let mut e = engine_lock(engine);
+                    e.observe_rig_power(frac);
+                    e.adopt_rig_power(frac);
+                }
+            }
+            let tune_power = keying
+                .then(|| {
+                    tune_pct
+                        .zip(engine_lock(engine).rf_power())
+                        .map(|(want, level)| want.min(level))
+                })
+                .flatten();
             if keying {
                 // Icom-native only: a plain-USB/LSB Icom takes TX audio from the MIC, so
                 // a keyed tune tone via the USB codec radiates ZERO RF ("red light, no
@@ -21532,6 +21566,190 @@ mod tests {
                 .iter()
                 .any(|l| l == "L RFPOWER 0.800"),
             "an ABORTED tune must hand the level back too: {:?}",
+            log.lock().unwrap()
+        );
+    }
+
+    /// A logging rigctld stub whose RF-POWER LEVEL can be turned like a front-panel knob.
+    /// `f` answers `dial_hz`, `l RFPOWER` answers whatever the returned handle holds (as
+    /// rigctld prints it, a bare 0.0–1.0 line), everything else `RPRT 0`.
+    ///
+    /// The knob is the whole point of issue #234: there is no rig on this box, so the only way
+    /// to express "the operator turned the radio's own power control" is a stub that answers a
+    /// different number than Nexus last commanded.
+    fn mock_rigctld_with_power(
+        dial_hz: u64,
+        power: f32,
+    ) -> (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<f32>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        let knob = Arc::new(Mutex::new(power));
+        let knob2 = Arc::clone(&knob);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let dial = format!("{dial_hz}\n");
+                    let pwr = format!("{:.6}\n", *knob2.lock().unwrap());
+                    let reply = if l == "f" {
+                        dial.as_str()
+                    } else if l == "l RFPOWER" {
+                        pwr.as_str()
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log, knob)
+    }
+
+    /// ⭐ ISSUE #234: AFTER A TUNE, GIVE BACK THE LEVEL THE **RADIO** IS ON, not the last one
+    /// Nexus happened to send. The restore was structural — forget what we commanded, let the
+    /// RF-power block re-command `Engine::rf_power` — and `rf_power` is the COMMANDED level. So
+    /// an operator who set their power on the rig's own control had it silently replaced by
+    /// whatever Nexus last pushed, every time they tuned. Nexus reads the rig's power on the
+    /// heavy poll (`observe_rig_power`) and had `effective_rf_power()` sitting unused beside it.
+    ///
+    /// The fix adopts the rig's level as the operator's at tune key-down, so the same structural
+    /// restore hands THAT back — which also makes the tune level itself correct (it is the lower
+    /// of the tune setting and the level actually in use).
+    #[test]
+    fn a_tune_hands_back_the_level_the_radio_is_actually_on() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.tune_power_pct = Some(10);
+            e.apply_settings(s);
+            e.set_rf_power(0.8); // Nexus last commanded 80%…
+        }
+        // …and the operator then turned the rig's own power control down to 40%.
+        let (addr, log, knob) = mock_rigctld_with_power(14_074_000, 0.8);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, 0.0);
+        assert_eq!(state.last_rf_power, Some(0.8), "control: 80% was commanded");
+        *knob.lock().unwrap() = 0.4;
+
+        // THE TUNE.
+        engine.lock().unwrap().set_tune(true);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 20.0);
+        assert!(state.tuning_keyed, "control: the tune keyed");
+        let lines = log.lock().unwrap()[mark..].to_vec();
+        assert!(
+            lines.iter().any(|l| l == "l RFPOWER"),
+            "the tune has to ASK the radio what it is on — an up-to-750 ms-old poll reading \
+             would undo a slider drag made in that window: {lines:?}"
+        );
+        let keyed = lines
+            .iter()
+            .position(|l| l == "T 1")
+            .unwrap_or_else(|| panic!("control: the tune must key — {lines:?}"));
+        let set = lines
+            .iter()
+            .position(|l| l == "L RFPOWER 0.100")
+            .unwrap_or_else(|| panic!("the tune keys at ITS level: {lines:?}"));
+        assert!(set < keyed, "power before PTT, not after: {lines:?}");
+
+        // RELEASE — and 40% comes back, not 80%.
+        engine.lock().unwrap().set_tune(false);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 200.0);
+        assert!(!state.tuning_keyed, "the tune released");
+        run(&mut state, &mut rig, 220.0);
+        let after = log.lock().unwrap()[mark..].to_vec();
+        assert!(
+            after.iter().any(|l| l == "L RFPOWER 0.400"),
+            "THE BUG: the level the RADIO was on has to come back: {after:?}"
+        );
+        assert!(
+            !after.iter().any(|l| l == "L RFPOWER 0.800"),
+            "…and the stale commanded level must not be pushed over it: {after:?}"
+        );
+        assert_eq!(state.last_rf_power, Some(0.4));
+    }
+
+    /// THE SAFETY HALF OF #234, and the one that would be the worse bug: a rig whose level
+    /// cannot be learned must not be lowered to the tune level at all, because there would then
+    /// be nothing to hand back and the radio would sit at 10% for the rest of the session.
+    #[test]
+    fn a_tune_declines_to_lower_a_rig_whose_power_it_cannot_read() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.tune_power_pct = Some(10);
+            e.apply_settings(s);
+            // …and the operator has never touched the Pwr slider, which is most stations.
+        }
+        // This stub answers `RPRT 0` to `l RFPOWER` — no level, ever.
+        let (addr, log) = mock_rigctld_on(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, 0.0);
+        engine.lock().unwrap().set_tune(true);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 20.0);
+        assert!(state.tuning_keyed, "control: the tune keyed");
+        assert!(
+            !log.lock().unwrap()[mark..]
+                .iter()
+                .any(|l| l.starts_with("L RFPOWER ")),
+            "nothing is known to put back, so nothing may be taken away: {:?}",
             log.lock().unwrap()
         );
     }
