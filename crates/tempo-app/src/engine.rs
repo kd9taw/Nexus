@@ -16228,11 +16228,31 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
             return false;
         }
-        self.emission_allowed(
-            self.settings.operating_mode,
-            self.tx_emission_mhz(),
-            &self.settings.sideband,
-        )
+        let judge = |mhz: f64| {
+            self.emission_allowed(self.settings.operating_mode, mhz, &self.settings.sideband)
+        };
+        // `tx_emission_mhz` already carries XIT.
+        let emission = self.tx_emission_mhz();
+        // ⚠️ SPLIT **AND** XIT IS THE ONE COMBINATION NO DOCUMENT HERE SETTLES. Whether a radio
+        // adds its XIT offset on top of the split transmit VFO — or ignores the clarifier once
+        // split is on — is per-rig behaviour, and the two answers are different frequencies. So
+        // both are judged and both must be legal: the unknown falls on the safe side rather than
+        // picking a reading and hoping. Simplex needs no such test — there XIT *is* the transmit
+        // frequency, which is the whole of what XIT does.
+        if self.xit_hz != 0 && matches!(self.tx_freq_verdict(), TxFreqVerdict::Split(_)) {
+            return judge(emission) && judge(emission - self.xit_offset_mhz());
+        }
+        judge(emission)
+    }
+
+    /// The XIT (transmit incremental tuning) offset as MHz — 0.0 when the clarifier is off.
+    ///
+    /// ⚠️ THIS IS THE OFFSET **NEXUS COMMANDED**, and that is the whole extent of what the app
+    /// can know: the RIT/XIT path is write-only and optimistic (no read-back), so an offset
+    /// dialled on the radio's own clarifier knob is invisible here and the licence gate cannot
+    /// see it. Named rather than left implicit because it bounds the guarantee.
+    fn xit_offset_mhz(&self) -> f64 {
+        f64::from(self.xit_hz) / 1_000_000.0
     }
 
     /// The dial the next over will actually be EMITTED on — the confirmed split TX frequency
@@ -16244,12 +16264,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// a legal RX dial with the transmit VFO parked in an Extra-only segment, which shipped and
     /// keyed. Fixing this tightens the gate as much as it unlocks it.
     pub(crate) fn tx_emission_mhz(&self) -> f64 {
-        match self.tx_freq_verdict() {
+        let base = match self.tx_freq_verdict() {
             TxFreqVerdict::Simplex(f) | TxFreqVerdict::Split(f) => f,
             // Nothing legal to judge — the caller refuses on the verdict itself; this value is
             // only ever a display fallback.
             TxFreqVerdict::SplitUnverified => self.settings.dial_mhz,
-        }
+        };
+        // ⭐ AND XIT, because XIT is a transmit-frequency control (operator, 2026-09-14). The
+        // gate used to judge dial-or-split and stop, so an offset that carried the transmitter
+        // out of the operator's segment still keyed — the same fail-open the split fix above
+        // closed, arriving through the clarifier instead. RIT is deliberately absent: it moves
+        // the RECEIVER and nothing else.
+        base + self.xit_offset_mhz()
     }
 
     /// THE ONE DECISION: which frequency the next over is emitted on, and how sure we are.
@@ -23342,6 +23368,89 @@ mod tests {
         e.settings.split_detect_enabled = true;
         e.observe_rig_split(true, None);
         assert!(!e.tx_allowed(), "split on, frequency unknown — refuse");
+    }
+
+    /// ⭐ XIT MOVES THE TRANSMIT FREQUENCY, SO THE LICENCE GATE HAS TO SEE IT (operator,
+    /// 2026-09-14). The key-time check judged the dial and the confirmed split and nothing
+    /// else, so an XIT offset large enough to carry the transmitter out of the operator's
+    /// segment still keyed — the same fail-open shape as the split bug above, from the other
+    /// clarifier. RIT is the control group and must stay untouched: it moves the RECEIVER.
+    #[test]
+    fn xit_is_judged_at_the_frequency_it_actually_transmits_on() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        assert!(
+            e.tx_allowed(),
+            "precondition: 14.030 CW is legal for a General"
+        );
+
+        // RIT first — the control. 20 kHz down would land in the Extra-only bottom if this
+        // were the transmit frequency, and it must change nothing at all.
+        e.request_rit(-20_000);
+        assert!(
+            e.tx_allowed(),
+            "RIT is receive-only; moving it must never touch the transmit gate"
+        );
+
+        // …and now XIT by the same amount, which DOES move the transmitter: 14.010 is
+        // Extra-only.
+        e.request_xit(-20_000);
+        assert!(
+            !e.tx_allowed(),
+            "FAIL-OPEN: XIT carried the transmitter into an Extra-only segment and the gate \
+             was still judging the dial"
+        );
+        assert!(
+            (e.tx_emission_mhz() - 14.010).abs() < 1e-9,
+            "and the emission the snapshot shows is the one being judged: {}",
+            e.tx_emission_mhz()
+        );
+
+        // Clearing XIT puts the permission back — the guard has to release, not latch.
+        e.request_xit(0);
+        assert!(e.tx_allowed(), "XIT off returns the gate to the dial");
+    }
+
+    /// THE OTHER DIRECTION. XIT that moves the transmitter INTO privileges is legal, because
+    /// the rig really is keying there — the gate must judge the emission, not refuse on the
+    /// mere presence of an offset.
+    #[test]
+    fn xit_that_moves_the_transmitter_into_privileges_is_allowed() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        assert!(!e.tx_allowed(), "precondition: 14.015 CW is Extra-only");
+
+        e.request_xit(15_000); // 14.030 — a General's segment
+        assert!(
+            e.tx_allowed(),
+            "the transmitter is at 14.030; judging the dial refuses a legal over"
+        );
+    }
+
+    /// ⚠️ SPLIT + XIT IS THE ONE COMBINATION WE CANNOT CONFIRM WITHOUT A RIG, so it falls on
+    /// the safe side: whether a given radio adds XIT on top of its split transmit VFO is a
+    /// per-rig behaviour no vendor document here settles. Both candidate frequencies must be
+    /// inside privileges before the gate opens, so neither reading can key out of band.
+    #[test]
+    fn split_plus_xit_requires_both_candidate_frequencies_to_be_legal() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        e.rig_split_applied(14_026_000);
+        assert!(e.tx_allowed(), "precondition: a General may key 14.026 CW");
+
+        // XIT would carry it to 14.011 — Extra-only. If the rig applies XIT, that is where it
+        // keys; if it does not, 14.026 is. One of the two is illegal, so refuse.
+        e.request_xit(-15_000);
+        assert!(
+            !e.tx_allowed(),
+            "unknown means the safe side: an XIT-shifted split that could land Extra-only locks"
+        );
     }
 
     /// STALENESS LOCKS. The operator cancels split at the front panel and the rig goes quiet;

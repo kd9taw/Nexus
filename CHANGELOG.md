@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **XIT is counted when Nexus checks your licence privileges.** The key-time check judged the dial
+  (and a confirmed split) and stopped there, so an XIT offset big enough to carry the transmitter
+  out of your segment still keyed. It is now judged at the frequency XIT actually transmits on, in
+  both directions: an offset that moves you out of privileges locks transmit, and one that moves
+  you *into* them no longer refuses a legal over. RIT is untouched — it moves the receiver. If both
+  split and XIT are on, Nexus requires both candidate transmit frequencies to be legal, because
+  whether a given radio adds XIT on top of its split VFO differs by radio. Nexus can only see an
+  offset **it** set: one dialled on the radio's own clarifier knob is invisible to the check.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
