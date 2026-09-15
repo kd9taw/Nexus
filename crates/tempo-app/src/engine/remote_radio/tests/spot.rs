@@ -27,7 +27,14 @@ fn queue(
 
 #[test]
 fn spot_commit_matches_native_context_and_exact_frequency_without_arming() {
-    for (mode, dial, band) in [("cw", 7.02345, "40m"), ("phone", 7.19876, "40m")] {
+    for (mode, dial, band) in [
+        ("cw", 7.02345, "40m"),
+        ("phone", 7.19876, "40m"),
+        // RTTY shares this path, so the equivalence below is the whole proof it needs: the
+        // settings the browser Work leaves are byte for byte the desktop Work's, and the
+        // TX-enable latch below is down on the browser's side where the desktop's is up.
+        ("rtty", 7.04321, "40m"),
+    ] {
         let mut s = Station::new(OperatingMode::Digital);
         let mut native = Station::new(OperatingMode::Digital);
         let before = serde_json::to_value(&s.engine.settings).unwrap();
@@ -88,6 +95,7 @@ fn spot_commit_matches_native_context_and_exact_frequency_without_arming() {
 fn spot_rejects_invalid_targets_before_changing_the_station() {
     for (mode, dial, band, call) in [
         ("digital", 14.074, "20m", "N2SPOT"),
+        ("keyboard", 14.07, "20m", "N2SPOT"),
         ("phone", f64::NAN, "20m", "N2SPOT"),
         ("cw", 14.025, "40m", "N2SPOT"),
         ("cw", 10.0, "", "N2SPOT"),

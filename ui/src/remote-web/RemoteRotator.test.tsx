@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 // Remote parity batch 1: the rotator from a browser. Pointing and stopping are operator gestures
 // only, live while the station advertises `rotator` AND has a rotator configured. Nothing points or
-// polls the rotator on mount: the heading has no remote read path yet, so it shows as "—".
+// polls the rotator on mount, and with no collections source (an older station, or one that does
+// not offer the v17 heading read) the readout stays "—". The heading itself is pinned separately,
+// in RemoteRotatorHeading.test.tsx.
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
@@ -61,7 +63,7 @@ it('shows a live remote Stop and the point-at slew with the hint and a configure
   await waitFor(() => expect(stopButton()).not.toBeNull())
   await settle()
   expect(stopButton()!.disabled).toBe(false)
-  // No heading read path exists remotely: the strip says so instead of polling into refusals.
+  // No heading from this station: the strip says so instead of inventing one.
   expect(screen.getByTitle(t('remote.b1.rotatorNoHeading'))).toBeTruthy()
   expect(api.readRotator).not.toHaveBeenCalled()
   expect(api.getSatTrackStatus).not.toHaveBeenCalled()

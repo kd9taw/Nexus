@@ -297,6 +297,12 @@ pub async fn connected(
         "x-nexus-application-alerts-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    // Where the rotator is pointing. A v16 service ignores this header and keeps the exact v16
+    // contract, so a browser on an older service simply never sees a heading.
+    request.headers_mut().insert(
+        "x-nexus-application-rotator-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     request.headers_mut().insert(
         "x-nexus-operation-version",
         "2".parse().map_err(|_| "invalidResponse")?,

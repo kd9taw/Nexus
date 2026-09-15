@@ -242,6 +242,16 @@ pub enum Change {
         #[serde(rename = "dialHz")]
         dial_hz: u64,
     },
+    /// ⛔ A public DX cluster spot of ANOTHER station: exactly the desktop Spot dialog's three
+    /// fields, posted from this station's cluster login. Station control only (see `grants`), and
+    /// confirmed on every click at the browser. Nothing here reads or writes the log.
+    Spot {
+        call: String,
+        // `rename_all` above renames variants only, never the fields inside them.
+        #[serde(rename = "freqMhz")]
+        freq_mhz: f64,
+        comment: String,
+    },
     /// Operating preferences from the station's allow-list (see `settings.rs`), against the Settings
     /// document revision the browser showed.
     Settings {
@@ -262,6 +272,7 @@ impl Change {
             | Self::Activation { .. }
             | Self::ClearActivation {}
             | Self::SelfSpot { .. }
+            | Self::Spot { .. }
             | Self::Settings { .. } => None,
         }
     }
@@ -308,6 +319,25 @@ impl Change {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
             }
+            // The wire grammar only. `crate::post_spot` judges the callsign by the cluster's own
+            // rule and refuses when no node is connected; neither is second-guessed here.
+            Self::Spot {
+                call,
+                freq_mhz,
+                comment,
+            } => {
+                (3..=32).contains(&call.len())
+                    && call
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/')
+                    && freq_mhz.is_finite()
+                    && *freq_mhz > 0.0
+                    && *freq_mhz <= 250_000.0
+                    // The Spot dialog's own comment field length, printable ASCII only: the line
+                    // goes to a public cluster verbatim.
+                    && comment.len() <= 30
+                    && comment.bytes().all(|b| (0x20..=0x7e).contains(&b))
+            }
             Self::Settings { revision, values } => {
                 key(revision, 64)
                     && (1..=32).contains(&values.len())
@@ -327,6 +357,9 @@ impl Change {
             Self::Settings { values, .. } => {
                 super::settings::grants(values).unwrap_or((true, true))
             }
+            // A public spot of someone else is not a log change: it posts from this station's
+            // cluster login, so it needs station control and not the logging grant.
+            Self::Spot { .. } => (false, true),
             _ => (true, false),
         }
     }
@@ -339,6 +372,8 @@ pub(super) enum ChangeEvidence {
     StationState,
     /// At least one target took the self-spot; the outcome's `spot` says what each did.
     SpotPosted,
+    /// A spot of another station reached the station's DX cluster queue, which sends it.
+    ClusterQueued,
     /// Operating preferences saved to the station's settings file, then published.
     SettingsSaved,
 }
@@ -350,6 +385,8 @@ pub(super) enum ChangeReason {
     InvalidChange,
     /// Neither target took the self-spot; the outcome's `spot` says why, per target.
     SpotNotPosted,
+    /// No DX cluster node is connected at the station, so nothing was queued and nothing sent.
+    ClusterUnavailable,
     PersistenceUnconfirmed,
 }
 
@@ -450,6 +487,13 @@ pub(super) enum ChangeWork {
     State,
     /// A self-spot read from the station under the Engine lock, posted only after it is released.
     Spot(crate::self_spot::Context),
+    /// A spot of another station, posted only after the Engine lock is released. Carries exactly
+    /// what the operator confirmed; the station resolves nothing further.
+    ClusterSpot {
+        call: String,
+        freq_mhz: f64,
+        comment: String,
+    },
     /// Operating preferences saved atomically under the Engine lock, and published.
     SettingsSaved,
     /// A preference save that did not complete: nothing was published, and what the file holds is
@@ -499,6 +543,19 @@ pub(super) fn prepare_change(
                     crate::self_spot::Refusal::Moved => ChangeReason::ContextChanged,
                 });
         }
+        Change::Spot {
+            call,
+            freq_mhz,
+            comment,
+        } => {
+            // Nothing is read from the station: a spot of another station is the operator's own
+            // three fields. Uppercased here exactly as the desktop dialog uppercases them.
+            return Ok(ChangeWork::ClusterSpot {
+                call: call.to_ascii_uppercase(),
+                freq_mhz: *freq_mhz,
+                comment: comment.clone(),
+            });
+        }
         Change::Settings { revision, values } => {
             return super::settings::prepare(engine, revision, values)
         }
@@ -541,6 +598,7 @@ pub(super) fn prepare_change(
             | Change::Activation { .. }
             | Change::ClearActivation {}
             | Change::SelfSpot { .. }
+            | Change::Spot { .. }
             | Change::Settings { .. } => false,
         };
         if !applied {
@@ -589,10 +647,12 @@ fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {
 
 impl ChangeWork {
     /// Runs with Engine unlocked. Never retries and never writes the log itself.
-    /// `spot` is used only by a self-spot, and only here, once per receipt.
+    /// `spot` is used only by a self-spot and `cluster` only by a spot of another station, each
+    /// only here and once per receipt.
     pub(super) fn finish(
         self,
         spot: impl FnOnce(&crate::self_spot::Context) -> crate::self_spot::Report,
+        cluster: impl FnOnce(f64, &str, &str) -> Result<(), String>,
     ) -> ChangeOutcome {
         let (path, expected, count) = match self {
             Self::Rewrite {
@@ -616,6 +676,28 @@ impl ChangeWork {
                 return ChangeOutcome::Unknown {
                     reason: ChangeReason::PersistenceUnconfirmed,
                 }
+            }
+            Self::ClusterSpot {
+                call,
+                freq_mhz,
+                comment,
+            } => {
+                return match cluster(freq_mhz, &call, &comment) {
+                    Ok(()) => ChangeOutcome::Applied {
+                        evidence: ChangeEvidence::ClusterQueued,
+                        spot: None,
+                    },
+                    // The station's own verb names the cluster only when no node is connected;
+                    // anything else is the callsign or the frequency being refused.
+                    Err(e) if e.contains("cluster") => ChangeOutcome::Rejected {
+                        reason: ChangeReason::ClusterUnavailable,
+                        spot: None,
+                    },
+                    Err(_) => ChangeOutcome::Rejected {
+                        reason: ChangeReason::InvalidChange,
+                        spot: None,
+                    },
+                };
             }
             Self::Spot(context) => {
                 let report = spot(&context);

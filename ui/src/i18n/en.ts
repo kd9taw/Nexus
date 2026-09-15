@@ -118,7 +118,7 @@ export const EN = {
   // remote parity batch 1
   "remote.b1.outsidePrivileges": "Not changed. That transmit frequency is outside your license privileges.",
   "remote.b1.workUnavailable": "This spot can’t be worked from a browser. Nothing changed at the station.",
-  "remote.b1.rotatorNoHeading": "Heading isn’t shown remotely yet.",
+  "remote.b1.rotatorNoHeading": "No heading from the station — nothing is configured, or the rotator control isn’t answering.",
   "remote.b1.rotatorPointing": "Pointing the rotator at {{call}}.",
   "remote.transmitAllow": "Allow FT8/FT4 transmission",
   "remote.transmitRevoke": "Revoke transmission permission",
@@ -2498,6 +2498,10 @@ export const EN = {
   'spots.post.busy': 'Spotting…',
   'spots.post.done': 'Spotted {{call}} on the cluster',
   'spots.post.failed': 'Spot failed',
+  'spots.post.confirm.title': 'Spot {{call}} to the DX cluster?',
+  'spots.post.confirm.body': '{{call}} on {{freq}} MHz, posted from the station\u2019s cluster login. Everyone on the cluster sees it.',
+  'spots.post.confirm.post': 'Post spot',
+  'remote.spotNoCluster': 'The station has no DX cluster connected, so nothing was sent.',
 
   // The colour + type key, rendered by BOTH the band strip and the band map from one
   // component — the two surfaces must explain their dots identically, so they share these

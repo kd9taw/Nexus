@@ -22,7 +22,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear(); Element
 
 const browser = (children: ReactNode) => <StationControlContext.Provider value={false}>{children}</StationControlContext.Provider>
 const grants = (over: Partial<Parameters<typeof remoteWorkable>[2]> = {}) =>
-  ({ workSpot: true, workDigitalSpot: true, cwEnabled: true, phoneEnabled: true, ...over })
+  ({ workSpot: true, workDigitalSpot: true, workRttySpot: true, cwEnabled: true, phoneEnabled: true, rttyEnabled: true, ...over })
 
 const spot = (over: Partial<SpotRow>): SpotRow => ({
   call: 'JA2DEF', entity: 'Japan', zone: 25, band: '20m', freqMhz: 14.0765, mode: 'Digital', submode: 'FT8',
@@ -38,13 +38,20 @@ it('admits CW and Phone under workSpot and only FT8/FT4 under workDigitalSpot', 
   expect(remoteWorkable(need({ mode: 'FT4' }), [], grants())).toBe(true)
   expect(remoteWorkable(need({ mode: 'CW', freqMhz: 14.025 }), [], grants())).toBe(true)
   expect(remoteWorkable(need({ mode: 'Phone', freqMhz: 14.250 }), [], grants())).toBe(true)
+  expect(remoteWorkable(need({ mode: 'RTTY', freqMhz: 14.0865 }), [], grants())).toBe(true)
   // Digital needs without a named FT8/FT4 tier have no remote transaction.
-  for (const mode of ['Digital', 'JS8', 'FT2', 'RTTY', 'MSK144']) expect(remoteWorkable(need({ mode }), [], grants()), mode).toBe(false)
+  for (const mode of ['Digital', 'JS8', 'FT2', 'MSK144']) expect(remoteWorkable(need({ mode }), [], grants()), mode).toBe(false)
   // Each hint admits only its own rows: an older desktop without workDigitalSpot keeps CW/Phone.
   expect(remoteWorkable(need({ mode: 'FT8' }), [], grants({ workDigitalSpot: false }))).toBe(false)
   expect(remoteWorkable(need({ mode: 'CW', freqMhz: 14.025 }), [], grants({ workDigitalSpot: false }))).toBe(true)
   expect(remoteWorkable(need({ mode: 'CW', freqMhz: 14.025 }), [], grants({ workSpot: false }))).toBe(false)
   expect(remoteWorkable(need({ mode: 'CW', freqMhz: 14.025 }), [], grants({ cwEnabled: false }))).toBe(false)
+  // RTTY needs its own hint AND its own cockpit switch; neither stands in for the other, and
+  // neither the CW/Phone hint nor the FT8/FT4 one admits it.
+  expect(remoteWorkable(need({ mode: 'RTTY', freqMhz: 14.0865 }), [], grants({ workRttySpot: false }))).toBe(false)
+  expect(remoteWorkable(need({ mode: 'RTTY', freqMhz: 14.0865 }), [], grants({ rttyEnabled: false }))).toBe(false)
+  expect(remoteWorkable(need({ mode: 'RTTY', freqMhz: 14.0865 }), [], grants({ workSpot: false, workDigitalSpot: false }))).toBe(true)
+  expect(remoteWorkable(need({ mode: 'CW', freqMhz: 14.025 }), [], grants({ workRttySpot: false }))).toBe(true)
   expect(remoteWorkable(need({ mode: 'FT8', freqMhz: null, band: '17m' }), [], grants())).toBe(false)
   expect(remoteWorkTier(need({ mode: 'ft4' }))).toBe('FT4')
   expect(remoteWorkTier(need({ mode: 'Digital' }))).toBeNull()

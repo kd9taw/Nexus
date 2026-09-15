@@ -310,7 +310,8 @@ export async function sendLogChange(client: OperationClient, change: LogChange):
     const outcome = await client.change(change)
     // A self-spot neither target took names both reasons from its `spot`, told by the caller.
     if (outcome.outcome === 'rejected' && outcome.reason !== 'spotNotPosted')
-      pushToast(outcome.reason !== 'contextChanged' ? t('remote.logChangeFailed')
+      pushToast(outcome.reason === 'clusterUnavailable' ? t('remote.spotNoCluster')
+        : outcome.reason !== 'contextChanged' ? t('remote.logChangeFailed')
         : change.kind === 'selfSpot' ? t('ota.selfSpot.moved') : t('remote.logChangeStale'), 'error', 6000)
     return outcome
   } catch (e) {

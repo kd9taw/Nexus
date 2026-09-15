@@ -260,6 +260,7 @@ import { RemoteMemories } from './remote-web/RemoteMemories'
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const remoteWorkAllowed = useStationCapability('workSpot')
   const remoteDigitalWorkAllowed = useStationCapability('workDigitalSpot')
+  const remoteRttyWorkAllowed = useStationCapability('workRttySpot')
   const remoteRotatorAllowed = useStationCapability('rotator')
   const remoteRecallAllowed = useStationCapability('memoryRecall')
   const display = useRemotePresentation()
@@ -1902,8 +1903,9 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   }, [!!remote])
 
   const canRemoteWork = useCallback((alert: NeedAlert) => remoteWorkable(alert, bandPlan,
-    { workSpot: remoteWorkAllowed, workDigitalSpot: remoteDigitalWorkAllowed, cwEnabled, phoneEnabled }),
-  [remoteWorkAllowed, remoteDigitalWorkAllowed, bandPlan, cwEnabled, phoneEnabled])
+    { workSpot: remoteWorkAllowed, workDigitalSpot: remoteDigitalWorkAllowed, workRttySpot: remoteRttyWorkAllowed,
+      cwEnabled, phoneEnabled, rttyEnabled }),
+  [remoteWorkAllowed, remoteDigitalWorkAllowed, remoteRttyWorkAllowed, bandPlan, cwEnabled, phoneEnabled, rttyEnabled])
   const canRemoteWorkSpot = useCallback((s: SpotRow) => canRemoteWork(spotNeed(s)), [canRemoteWork])
 
   // resolvable frequency at all falls back to a plain band QSY.
@@ -2867,7 +2869,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           selectedCall={activePeer}
           onSelectCall={handleMapSelect}
           needByCall={needByCall}
-          onWorkSpot={remote && !remoteWorkAllowed && !remoteDigitalWorkAllowed ? undefined : handleWorkMapSpot}
+          onWorkSpot={remote && !remoteWorkAllowed && !remoteDigitalWorkAllowed && !remoteRttyWorkAllowed ? undefined : handleWorkMapSpot}
           needAlerts={visibleAlerts}
           // The amplifier rides the snapshot App already polls at 300 ms — no fourth poller,
           // no new command. Absent when none is configured, and the pane then renders nothing.
@@ -2893,7 +2895,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       )
       break
     case 'dxped':
-      workspace = remote ? <RemoteDxpeditions onWorkSpot={remoteWorkAllowed || remoteDigitalWorkAllowed ? handleWorkMapSpot : undefined} /> : (
+      workspace = remote ? <RemoteDxpeditions onWorkSpot={remoteWorkAllowed || remoteDigitalWorkAllowed || remoteRttyWorkAllowed ? handleWorkMapSpot : undefined} /> : (
         <main className="layout single">
           <DxpeditionsView
             snap={prop}

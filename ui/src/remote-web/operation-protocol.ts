@@ -52,6 +52,10 @@ export type LogChange =
   /** A public DX cluster spot of the station's own call. Carries the reference and dial the confirm
    * showed, so the station refuses it if either has moved since. */
   | { kind: 'selfSpot'; reference: string; dialHz: number }
+  /** ⛔ A public DX cluster spot of ANOTHER station — the desktop Spot dialog's three fields,
+   * posted from the station's own cluster login. Station control, not the logging grant, and
+   * confirmed on every click. */
+  | { kind: 'spot'; call: string; freqMhz: number; comment: string }
   /** Operating preferences from the station's allow-list, against the Settings document revision the
    * page showed. Station control writes station preferences and the logging grant writes logging
    * ones; a change carrying both needs both. */
@@ -59,29 +63,29 @@ export type LogChange =
 /** Station hints for log changes. They ride in `controls.capabilities`, which every hosted page
  * since operation v3 filters, so a newer station can offer them without breaking an older page. */
 export const LOG_CAPABILITIES = ['logEdit', 'qslMarks', 'otaHunt', 'otaActivation', 'selfSpot', 'activationExport',
-  'settingsControl', 'settingsLogging'] as const
+  'settingsControl', 'settingsLogging', 'postSpot'] as const
 export type LogCapability = (typeof LOG_CAPABILITIES)[number]
 const loggingPreference = (key: string) => (WRITABLE_LOGGING_SETTINGS_KEYS as readonly string[]).includes(key)
 export const logChangeCapability = (change: LogChange): LogCapability =>
   change.kind === 'settings'
     ? Object.keys(change.values).every(loggingPreference) ? 'settingsLogging' : 'settingsControl'
     : ({ edit: 'logEdit', delete: 'logEdit', qslSent: 'qslMarks', qslCard: 'qslMarks', hunt: 'otaHunt', clearHunt: 'otaHunt',
-      activation: 'otaActivation', clearActivation: 'otaActivation', selfSpot: 'selfSpot' } as const)[change.kind]
+      activation: 'otaActivation', clearActivation: 'otaActivation', selfSpot: 'selfSpot', spot: 'postSpot' } as const)[change.kind]
 /** Every hint a change needs. Only a settings change carrying both kinds of preference needs two. */
 export const logChangeCapabilities = (change: LogChange): LogCapability[] =>
   change.kind !== 'settings' ? [logChangeCapability(change)]
     : [...(Object.keys(change.values).some(loggingPreference) ? ['settingsLogging' as const] : []),
       ...(Object.keys(change.values).some(k => !loggingPreference(k)) ? ['settingsControl' as const] : [])]
-const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotPosted', 'settingsSaved'] as const
+const CHANGE_EVIDENCE = ['fileSynced', 'stationState', 'spotPosted', 'clusterQueued', 'settingsSaved'] as const
 /** `clusterUnavailable` is gone: a self-spot now reports each target in `spot`, so the one refusal
  * that named the cluster alone has no producer left. */
-const CHANGE_REFUSALS = ['contextChanged', 'invalidChange', 'spotNotPosted'] as const
+const CHANGE_REFUSALS = ['contextChanged', 'invalidChange', 'spotNotPosted', 'clusterUnavailable'] as const
 /** A self-spot's outcome, and only a self-spot's, carries `spot`: what pota.app and the cluster each
  * did. `spotPosted` means at least one took it, `spotNotPosted` neither. */
 export type LogChangeOutcome = { operation: 'logChange'; operationId: string } & (
-  | { outcome: 'applied'; evidence: 'fileSynced' | 'stationState' | 'settingsSaved' }
+  | { outcome: 'applied'; evidence: 'fileSynced' | 'stationState' | 'settingsSaved' | 'clusterQueued' }
   | { outcome: 'applied'; evidence: 'spotPosted'; spot: SelfSpotReport }
-  | { outcome: 'rejected'; reason: 'contextChanged' | 'invalidChange' }
+  | { outcome: 'rejected'; reason: 'contextChanged' | 'invalidChange' | 'clusterUnavailable' }
   | { outcome: 'rejected'; reason: 'spotNotPosted'; spot: SelfSpotReport }
   | { outcome: 'unknown'; reason: 'persistenceUnconfirmed' })
 export type OperationRequest =
@@ -262,7 +266,8 @@ export function logChange(raw: unknown): LogChange {
     qslSent: ['kind', 'target', 'via'], qslCard: ['kind', 'target', 'received'],
     hunt: ['kind', 'call', 'program', 'reference'], clearHunt: ['kind'],
     activation: ['kind', 'program', 'reference'], clearActivation: ['kind'],
-    selfSpot: ['kind', 'reference', 'dialHz'], settings: ['kind', 'revision', 'values'] }
+    selfSpot: ['kind', 'reference', 'dialHz'], spot: ['kind', 'call', 'freqMhz', 'comment'],
+    settings: ['kind', 'revision', 'values'] }
   if (typeof c.kind !== 'string' || !Object.prototype.hasOwnProperty.call(shapes, c.kind)) invalid()
   object(c, shapes[c.kind as string])
   // A row change names the exact row (its shape requires the target); a hunt names none.
@@ -281,6 +286,12 @@ export function logChange(raw: unknown): LogChange {
   if (c.kind === 'selfSpot' && (typeof c.reference !== 'string' || !/^[A-Za-z0-9/-]{1,32}$/.test(c.reference) ||
     !integer(c.dialHz) || c.dialHz < 1 || c.dialHz > 250_000_000_000))
     invalid()
+  // The wire grammar only: the station judges the callsign by its cluster's own rule and refuses
+  // when no node is connected. The comment is the dialog's own length, printable ASCII, because the
+  // line reaches a public cluster verbatim.
+  if (c.kind === 'spot' && (typeof c.call !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(c.call) ||
+    !finite(c.freqMhz) || c.freqMhz <= 0 || c.freqMhz > 250000 ||
+    typeof c.comment !== 'string' || c.comment.length > 30 || /[^ -~]/.test(c.comment))) invalid()
   // An edit states when the contact happened; "station time" only means something for a new entry.
   if (c.kind === 'edit' && manualRecord(c.record).whenUnix === null) invalid()
   // The empty string is the QSL menu's placeholder, a non-choice: never read it as a withdrawal.

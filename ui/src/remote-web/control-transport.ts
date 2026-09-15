@@ -183,6 +183,13 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             if (args && Object.keys(args).length) throw Error('invalidOperation')
             action = stationAction({ action: 'rotator.stop' })
             break
+          case 'sstv_delete_image':
+            // A browser names the picture by the row it was shown, never by a path: the desktop
+            // command's `path` argument is deliberately not reachable from here.
+            if (!args || Object.keys(args).length !== 2 || !('finishedUtc' in args) || !('mode' in args)) throw Error('applicationUnsupported')
+            action = stationAction({ action: 'sstv.deleteImage', finishedUtc: args.finishedUtc, mode: args.mode })
+            read = 'get_sstv_state'
+            break
           case 'set_scope_span': case 'set_scope_ref': case 'set_yaesu_scope_mode': case 'set_flex_pan_span': case 'set_flex_pan_ref': {
             const key = command === 'set_scope_ref' ? 'tenthsDb' : command === 'set_yaesu_scope_mode' ? 'position' : command === 'set_flex_pan_ref' ? 'refDbm' : 'hz'
             if (!args || Object.keys(args).length !== 1 || !(key in args)) throw Error('invalidOperation')
@@ -195,7 +202,13 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
           }
           case 'work_spot':
             if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k))) throw Error('applicationUnsupported')
-            if (args.tier === null || args.tier === undefined) action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
+            // RTTY carries no tier and is its own action, for the same reason FT8/FT4 is: an older
+            // desktop reads workSpot's mode as cw or phone exactly and refuses a third word.
+            if (args.mode === 'rtty') {
+              if (args.tier !== null && args.tier !== undefined) throw Error('applicationUnsupported')
+              action = stationAction({ action: 'radio.workRttySpot', dialMhz: args.freqMhz, band: args.band, call: args.call })
+            }
+            else if (args.tier === null || args.tier === undefined) action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
             // FT8/FT4 carries its tier in its own action, never as a workSpot field an older desktop cannot parse.
             else if (args.mode === 'digital') action = stationAction({ action: 'radio.workDigitalSpot', tier: args.tier, dialMhz: args.freqMhz, band: args.band, call: args.call })
             else throw Error('applicationUnsupported')
@@ -309,10 +322,12 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if ((action.action === 'qso.confirm' || action.action === 'qso.discard') &&
           (result.outcome !== 'applied' || result.evidence !== (action.action === 'qso.confirm' ? 'fileSynced' : 'pendingDiscarded'))) throw Error('operationUnknown')
         if (action?.action === 'radio.workSpot' && result.outcome === 'applied' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
+        if (action.action === 'radio.workRttySpot' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'radio.workDigitalSpot' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'radio.repeater' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'radio.aprsTune' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action.startsWith('rotator.') && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
+        if (action.action === 'sstv.deleteImage' && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
         if (action.action === 'radio.scope' && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
         if (action.action === 'radio.memoryRecall' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
         if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
@@ -333,6 +348,10 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
           if (action?.action === 'radio.workSpot') {
             const radio = (value as import('../types').AppSnapshot)?.radio
             if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.mode) throw Error('readingUnavailable')
+          }
+          if (action?.action === 'radio.workRttySpot') {
+            const radio = (value as import('../types').AppSnapshot)?.radio
+            if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== 'rtty') throw Error('readingUnavailable')
           }
           if (action?.action === 'radio.workDigitalSpot') {
             const snapshot = value as import('../types').AppSnapshot

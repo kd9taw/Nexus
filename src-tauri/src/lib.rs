@@ -2736,8 +2736,23 @@ fn legacy_sstv_gallery_dir() -> PathBuf {
 /// stall the whole window on a slow disk. Caught by `no_engine_locking_command_runs_on_the_ui_thread`.
 #[tauri::command(async)]
 fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(), String> {
+    delete_sstv_gallery_image(&mut engine_lock(&state), &path)
+}
+
+/// Delete one received picture and reconcile the gallery index, for the desktop command above and
+/// for the Remote gallery delete, which resolves the path from its own gallery row and never takes
+/// one from a browser. The caller holds the Engine lock; the file removal is inside it, which the
+/// directory read below already was.
+///
+/// ⛔ The containment check is load-bearing whichever caller arrives: only a file inside the
+/// station's own gallery folder can be removed, and a path that does not resolve there is refused
+/// rather than followed.
+pub(crate) fn delete_sstv_gallery_image(
+    eng: &mut tempo_app::engine::Engine,
+    path: &str,
+) -> Result<(), String> {
     let dir = sstv_gallery_dir();
-    let target = std::path::Path::new(&path);
+    let target = std::path::Path::new(path);
     let canon_dir = dir
         .canonicalize()
         .map_err(|e| format!("no gallery folder: {e}"))?;
@@ -2749,21 +2764,18 @@ fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(),
     }
     std::fs::remove_file(&canon)
         .map_err(|e| format!("Could not delete {}: {e}", canon.display()))?;
-    {
-        let mut eng = engine_lock(&state);
-        eng.remove_sstv_gallery(&path);
-        // Rewrite the index from what the directory now holds, rather than from the entry we just
-        // dropped: it costs one directory read and it also sweeps up any other drift.
-        let entries = reconcile_gallery(&dir, eng.sstv_gallery().to_vec());
-        if let Ok(text) = serde_json::to_string(&entries) {
-            let p = dir.join("gallery.json");
-            let tmp = p.with_extension("json.tmp");
-            if std::fs::write(&tmp, text).is_ok() {
-                let _ = std::fs::rename(&tmp, &p);
-            }
+    eng.remove_sstv_gallery(path);
+    // Rewrite the index from what the directory now holds, rather than from the entry we just
+    // dropped: it costs one directory read and it also sweeps up any other drift.
+    let entries = reconcile_gallery(&dir, eng.sstv_gallery().to_vec());
+    if let Ok(text) = serde_json::to_string(&entries) {
+        let p = dir.join("gallery.json");
+        let tmp = p.with_extension("json.tmp");
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, &p);
         }
-        eng.load_sstv_gallery(entries);
     }
+    eng.load_sstv_gallery(entries);
     Ok(())
 }
 
@@ -5812,6 +5824,17 @@ static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// legacy in-config location, which keeps them hermetic and writes nothing into a real home dir.
 static DOCUMENTS_DIR: OnceLock<PathBuf> = OnceLock::new();
 static PICTURES_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Point the gallery at a scratch directory for the duration of a test process, so a test can
+/// exercise the real delete without touching the operator's own pictures. Set once, as at launch.
+#[cfg(test)]
+pub(crate) fn test_pictures_dir() -> &'static PathBuf {
+    PICTURES_DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("nexus-test-pictures-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Nexus SSTV")).unwrap();
+        dir
+    })
+}
 
 /// The bundled TLE seed snapshot — `resources/tles/tles.json`, the mirror
 /// payload verbatim. Resource dir first (the packaged app), then the

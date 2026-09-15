@@ -54,11 +54,17 @@ mod repeater;
 #[path = "rotator_tests.rs"]
 mod rotator;
 #[cfg(feature = "radio")]
+#[path = "rtty_spot_tests.rs"]
+mod rtty_spot;
+#[cfg(feature = "radio")]
 #[path = "rx_gain_tests.rs"]
 mod rx_gain;
 #[cfg(feature = "radio")]
 #[path = "scope_tests.rs"]
 mod scope;
+#[cfg(feature = "radio")]
+#[path = "sstv_gallery_tests.rs"]
+mod sstv_gallery;
 #[cfg(feature = "radio")]
 #[path = "workspace_tests.rs"]
 mod workspace;
@@ -420,7 +426,9 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "memoryRecall",
             "aprsTuning",
             "rotator",
-            "rigScope"
+            "rigScope",
+            "workRttySpot",
+            "sstvGallery"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

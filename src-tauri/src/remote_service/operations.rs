@@ -378,6 +378,23 @@ impl Authority {
             },
         )
     }
+    /// A public spot of ANOTHER station, through the station's own `post_spot` verb — the same
+    /// door the desktop Spot dialog uses, with its callsign rule and its no-node-connected refusal.
+    #[cfg(not(test))]
+    fn cluster_spot(&self, freq_mhz: f64, call: &str, comment: &str) -> Result<(), String> {
+        crate::post_spot(freq_mhz, call.into(), comment.into())
+    }
+    /// The test build reaches no cluster at all: the poster a test installed answers, and with none
+    /// installed the spot is refused. This is the self-spot's own hook, so a test can never put a
+    /// real spot in front of the world.
+    #[cfg(test)]
+    fn cluster_spot(&self, freq_mhz: f64, call: &str, comment: &str) -> Result<(), String> {
+        self.spot_cluster
+            .as_ref()
+            .map_or(Err("test build: no spot poster installed".into()), |post| {
+                post(freq_mhz, call, comment)
+            })
+    }
     fn revoke_execution(&self) {
         self.hardware.revoke();
         self.transmit.revoke();
@@ -719,9 +736,12 @@ impl Authority {
                         capabilities.push("selfSpot");
                     }
                 }
-                // Station preferences are changed under station control (see `settings.rs`).
+                // Station preferences are changed under station control (see `settings.rs`), and
+                // so is a public spot of another station: it posts from this station's cluster
+                // login rather than touching the log.
                 if c.control_grants.contains(device) {
                     capabilities.push("settingsControl");
+                    capabilities.push("postSpot");
                 }
                 value["txArmed"] = json!(owned && tx_owned);
                 if ft_available
@@ -1006,7 +1026,10 @@ impl Authority {
                     }
                     let outcome = match prepared {
                         // Engine is released; a spot is posted only now, and only once per receipt.
-                        Ok(work) => work.finish(|context| self.self_spot(context)),
+                        Ok(work) => work.finish(
+                            |context| self.self_spot(context),
+                            |freq_mhz, call, comment| self.cluster_spot(freq_mhz, call, comment),
+                        ),
                         Err(reason) => logging::ChangeOutcome::Rejected { reason, spot: None },
                     };
                     let value = logging::change_value(request.id(), &outcome);
