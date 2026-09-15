@@ -533,9 +533,17 @@ function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) 
       {image.url ? <GalleryThumb entry={entry} remoteSrc={image.url}/> : <span role="status" className="dim">{image.failed?t('remote.sstvImageUnavailable'):t('remote.collectionLoading')}</span>}
       {image.failed && <button type="button" className="cw-macro" onClick={image.retry}>{t('remote.refreshCollection')}</button>}
     </div>
-    {/* Saves the verified picture this page is already showing; nothing is asked of the station. */}
-    {image.url && <a className="cw-macro sstv-thumb-save" href={image.url} download={sstvDownloadName(entry)}
-      aria-label={t('remote.b3.sstvSaveAria',{mode:entry.mode,when:fmtUtc(entry.finishedUtc)})}>{t('remote.b3.sstvSave')}</a>}
+    {/* Saves the verified picture this page is already showing; nothing is asked of the station.
+        The picture itself is fetched lazily as the thumbnail scrolls into view, so this row
+        appears LATE — and appearing grew the card 27.4 px and shoved the rest of the gallery
+        down under the reader's finger, mid-scroll, every time one landed (and back up again
+        when the blob was released on the way out). Hold the row's space with the same
+        `.cw-macro` box from the first paint; `visibility:hidden` keeps the placeholder out of
+        the reading order and off the tab ring, so only the picture arrives, never a reflow. */}
+    {image.url
+      ? <a className="cw-macro sstv-thumb-save" href={image.url} download={sstvDownloadName(entry)}
+        aria-label={t('remote.b3.sstvSaveAria',{mode:entry.mode,when:fmtUtc(entry.finishedUtc)})}>{t('remote.b3.sstvSave')}</a>
+      : <span className="cw-macro sstv-thumb-save-slot" aria-hidden="true">{t('remote.b3.sstvSave')}</span>}
   </>
 }
 

@@ -21205,6 +21205,12 @@ button.sat-chip:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Remote only: holds the Save link's exact box while its picture is still on the way. It carries
+   `.cw-macro` too, so the reserved height is the link's own height at any zoom or font size — no
+   number here to drift — and the card never changes height when the picture lands. */
+.sstv-thumb-save-slot {
+  visibility: hidden;
+}
 /* --- Transmit panel: intake + live preview + mode picker + Send/Stop/progress.
    Nothing here keys the rig until Send (the backend enforces this too). --- */
 /* The Transmit composer (image intake/preview + file picker + name). Renamed from

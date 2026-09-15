@@ -53,15 +53,28 @@ it('offers each loaded station picture as a download of the verified image, name
     expect(name).not.toContain(gallery[i].path.slice(0, 8))
     expect(link.getAttribute('aria-label')).toBeTruthy()
   }
+  // The reserved row becomes the real link — it is never both, so the card keeps its height.
+  expect(view.container.querySelector('.sstv-thumb-save-slot')).toBeNull()
 })
 
 it('offers nothing to save until the picture has loaded, and nothing on the desktop', async () => {
   const view = remote(null)
   await waitFor(() => expect(view.container.querySelectorAll('.sstv-thumb')).toHaveLength(gallery.length))
   expect(view.container.querySelector('.sstv-thumb-save')).toBeNull()
+  // …but the row it will occupy is already there, or the card grows when the picture lands and
+  // shoves the rest of the gallery down mid-scroll (the remote browser suite measured 27.4 px).
+  // The placeholder carries `.cw-macro`, the link's own box, so the height matches at any zoom.
+  const slots = [...view.container.querySelectorAll('.sstv-thumb-save-slot')]
+  expect(slots).toHaveLength(gallery.length)
+  for (const slot of slots) {
+    expect(slot.classList.contains('cw-macro')).toBe(true)
+    expect(slot.textContent).toBe('Save')
+    expect(slot.getAttribute('aria-hidden')).toBe('true')
+  }
   cleanup()
   vi.mocked(getSstvState).mockResolvedValue(parseSstvSample(structuredClone(sstvFixture), 0))
   const desktop = render(<SstvView snap={snap} active />)
   await waitFor(() => expect(desktop.container.querySelectorAll('.sstv-thumb')).toHaveLength(gallery.length))
   expect(desktop.container.querySelector('.sstv-thumb-save')).toBeNull()
+  expect(desktop.container.querySelector('.sstv-thumb-save-slot')).toBeNull()
 })
