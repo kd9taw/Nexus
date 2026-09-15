@@ -1,7 +1,10 @@
 // Manual logging has a separate grammar from application observation. An
 // authenticated relay can route a request; it cannot issue a native grant.
 import { object, finite, integer, text } from './display-validation'
-import { CLUSTER_SPOT_RESULTS, POTA_SPOT_RESULTS, type SelfSpotReport } from '../selfSpot'
+// From the leaf module, never from `../selfSpot`: the Cloudflare Worker compiles this file with no
+// DOM lib and no JSX, so an import that reached the confirm dialog, toasts or the catalog would
+// break `npm --prefix remote run check` and pull the browser app into the Worker's bundle.
+import { CLUSTER_SPOT_RESULTS, POTA_SPOT_RESULTS, type SelfSpotReport } from '../selfSpotReport'
 import { controlContext, controlOutcome, stationAction, CONTROL_CAPABILITIES, type ControlCapability, type ControlContext, type ControlOutcome, type StationAction } from './station-operation'
 import { SETTINGS_SHAPES, WRITABLE_CONTROL_SETTINGS_KEYS, WRITABLE_LOGGING_SETTINGS_KEYS } from './configuration-schema'
 export const OPERATION_REQUEST_BYTES = 6144

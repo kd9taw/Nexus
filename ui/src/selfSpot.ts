@@ -4,14 +4,12 @@
 import { confirmDialog } from './confirm'
 import { pushToast } from './toast'
 import { t } from './i18n'
+// The two result lists live in their own leaf module: the protocol validator that reads them is
+// also compiled by the Cloudflare Worker, which has neither DOM nor JSX. See selfSpotReport.ts.
+import type { SelfSpotReport } from './selfSpotReport'
 
-/** What each target did — mirrors `self_spot::Report` in src-tauri. */
-export const POTA_SPOT_RESULTS = ['posted', 'loginRequired', 'failed', 'throttled', 'notPark', 'unknownMode', 'invalid'] as const
-export const CLUSTER_SPOT_RESULTS = ['queued', 'unavailable', 'failed', 'throttled', 'invalid'] as const
-export type SelfSpotReport = {
-  pota: (typeof POTA_SPOT_RESULTS)[number]
-  cluster: (typeof CLUSTER_SPOT_RESULTS)[number]
-}
+export { POTA_SPOT_RESULTS, CLUSTER_SPOT_RESULTS } from './selfSpotReport'
+export type { SelfSpotReport } from './selfSpotReport'
 
 function potaMessage(result: SelfSpotReport['pota']): string {
   switch (result) {
