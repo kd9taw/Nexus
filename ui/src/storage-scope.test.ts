@@ -144,6 +144,10 @@ const SHARED = [
   // Remote need alerts, opted in per browser. SHARED like autopop: whether this operator wants
   // to be told about new needs is not a fact about one window (remote-web/useNeedAlerts).
   'nexus.remote.needAlerts',
+  // Remote rare-DX and new-POTA-activation alerts: the same per-browser opt-in, SHARED for the
+  // same reason (remote-web/useRareDxAlerts, remote-web/usePotaAlerts).
+  'nexus.remote.potaAlerts',
+  'nexus.remote.rareDxAlerts',
   'nexus.operate.tuneStep',
   'nexus.panels.wfDetached.v1',
   'nexus.phone.tuneStep',

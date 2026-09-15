@@ -260,6 +260,7 @@ mod tests {
             navigation: Default::default(),
             sstv: Default::default(),
             parks: Default::default(),
+            pounces: Default::default(),
         }
     }
     fn spot(program: &str, reference: &str) -> OtaSpot {

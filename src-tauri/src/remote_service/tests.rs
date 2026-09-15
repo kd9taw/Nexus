@@ -318,6 +318,7 @@ fn cloud_runtime_probe() {
         region_paths: crate::SharedRegionPaths(Default::default()),
         ota: Default::default(),
         parks: Default::default(),
+        pounces: Default::default(),
         health: Default::default(),
         propagation: prop_cache.clone(),
         memories: Default::default(),
@@ -326,6 +327,7 @@ fn cloud_runtime_probe() {
     };
     let ota_cache = sources.ota.clone();
     let park_index = sources.parks.clone();
+    let pounce_recent = sources.pounces.clone();
     let mut service = Service::start(
         origin.clone(),
         Box::new(vault.clone()),
@@ -743,6 +745,30 @@ fn cloud_runtime_probe() {
             let exact = index.lookup(search).map(crate::ParkDto::from);
             *park_index.lock().unwrap() = index;
             println!("REMOTE_TEST:{}", json!({ "parks": parks, "exact": exact }));
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
+        // Test-only rare-DX input: spots run through the desktop's own Pounce detector. The
+        // response is what the desktop raised (its `pounce` event payloads), for parity checks.
+        if value["type"] == "seedPounce" {
+            let mut e = engine.lock().unwrap();
+            let mut settings = e.settings().clone();
+            settings.pounce_threshold = tempo_app::settings::PounceThreshold::Atno;
+            e.apply_settings(settings);
+            drop(e);
+            let (tx, rx) = crate::pouncer::channel();
+            for spot in value["spots"].as_array().unwrap() {
+                tx.offer(crate::pouncer::SpotHint {
+                    call: spot["call"].as_str().unwrap().into(),
+                    freq_mhz: spot["freqMhz"].as_f64().unwrap(),
+                    mode: spot["mode"].as_str().unwrap().into(),
+                    spotted_unix: crate::now_unix(),
+                });
+            }
+            drop(tx);
+            let mut fired = Vec::new();
+            crate::pouncer::run(engine.clone(), rx, pounce_recent.clone(), |p| fired.push(p));
+            println!("REMOTE_TEST:{}", json!({ "fired": fired }));
             std::io::stdout().flush().unwrap();
             continue;
         }

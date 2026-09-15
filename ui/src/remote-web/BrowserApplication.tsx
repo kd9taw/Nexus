@@ -9,7 +9,7 @@ import { RemoteWheelTuningContext } from './wheel-tuning-context'
 import { pushToast } from '../toast'
 import { RemoteCollections, RemoteCollectionsContext, RemoteHistoryContext } from './collections'
 import type { HistoryRow, RemoteHistory } from './collections'
-import { CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND } from './application-query-protocol'
+import { POUNCE_COMMAND, CONFIGURATION_COMMAND, NAVIGATION_COMMAND, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND } from './application-query-protocol'
 import type { AppSnapshot, BandChannel, Settings } from '../types'
 import { installApplicationTransport } from '../applicationTransport'
 import { ErrorBoundary } from '../components/ErrorBoundary'
@@ -23,6 +23,8 @@ import { initialState, startMonitor } from '../remote-monitor/session'
 import { APPLICATION_TIMEOUT_MS } from './application-protocol'
 import type { HostedConnection } from './client'
 import { useNeedAlerts } from './useNeedAlerts'
+import { useRareDxAlerts } from './useRareDxAlerts'
+import { usePotaAlerts } from './usePotaAlerts'
 import '../cockpit-panes.css'
 import './application.css'
 
@@ -106,10 +108,13 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   // and clear on recovery, so a brief gap shows nothing (operator decision 2026-09-14).
   const staleShown = useStaleDisplay(stale)
   const alerts = useNeedAlerts(collections, !stale && client.supports(QUERY_COMMAND), boot?.settings ?? null)
+  // While the link is down nothing is offered or refused yet, so a connecting station is not called old.
+  const rareAlerts = useRareDxAlerts(collections, !stale, stale || client.supports(POUNCE_COMMAND))
+  const potaAlerts = usePotaAlerts(collections, !stale, stale || client.supports(OTA_COMMAND))
   // Stable props: the 500 ms tick re-renders this component to re-read the sample age, and a fresh
   // `remote` object every tick re-rendered the whole workspace with it.
-  const status = useMemo(() => <SessionStatus client={connection.operations} stale={staleShown} disconnect={disconnect} display={display} alerts={alerts} />,
-    [connection.operations, staleShown, disconnect, display, alerts])
+  const status = useMemo(() => <SessionStatus client={connection.operations} stale={staleShown} disconnect={disconnect} display={display} alerts={alerts} rareAlerts={rareAlerts} potaAlerts={potaAlerts} />,
+    [connection.operations, staleShown, disconnect, display, alerts, rareAlerts, potaAlerts])
   const remote = useMemo(() => boot && { ...boot, status, stale, staleShown }, [boot, status, stale, staleShown])
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
     {status}

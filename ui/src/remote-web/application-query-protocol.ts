@@ -6,6 +6,8 @@ import { streamExact, streamId } from './application-stream-protocol'
 
 export const PARKS_COMMAND = 'get_remote_parks'
 export const CONFIRMATIONS_COMMAND = 'get_remote_confirmations'
+/** The rare-DX (Pounce) alerts the station raised: argument-free, one bounded page. */
+export const POUNCE_COMMAND = 'get_remote_pounce'
 /** A park directory search: a reference prefix or name fragment, never a path or a live fetch. */
 export const parkSearch = (v: unknown): v is string => typeof v === 'string' && v.trim() === v && new TextEncoder().encode(v).length >= 2 &&
   new TextEncoder().encode(v).length <= 32 && !/[\p{Cc}\uD800-\uDFFF]/u.test(v)
@@ -28,7 +30,7 @@ export const MEMORIES_COMMAND = 'get_remote_memories'
 export const DXPEDITIONS_COMMAND = 'get_remote_dxpeditions'
 export const COLLECTIONS = ['decodes', 'needs', 'spots', 'log', 'entities', 'health'] as const
 export type InsightCollection = 'awards' | 'statistics'
-export type Collection = typeof COLLECTIONS[number] | 'recall' | InsightCollection | 'dxpeditions' | 'memories' | 'ota' | 'fieldDay' | 'js8Context' | 'sstvImage' | 'aprs' | DocumentCollection | 'parks' | 'confirmations'
+export type Collection = typeof COLLECTIONS[number] | 'recall' | InsightCollection | 'dxpeditions' | 'memories' | 'ota' | 'fieldDay' | 'js8Context' | 'sstvImage' | 'aprs' | DocumentCollection | 'parks' | 'confirmations' | 'pounce'
 export const QUERY_MAX_BYTES = 256 * 1024
 export const QUERY_ROWS = 128
 export const QUERY_MAX_ROWS = 3000
@@ -39,8 +41,8 @@ export type QueryPage = { type: 'applicationPage'; requestId: string; collection
   offset: number; total: number; retained: number; nextCursor: string | null; ageMs: number; rows: Json[]; meta: Json }
 export const insightCollection = (v: unknown): v is InsightCollection => v === 'awards' || v === 'statistics'
 export const collection = (v: unknown, version = 3): v is Collection => COLLECTIONS.includes(v as typeof COLLECTIONS[number]) ||
-  ([4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(version) && v === 'recall') || ([6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(version) && insightCollection(v)) || ([7, 8, 9, 10, 11, 12, 13, 14, 15].includes(version) && v === 'dxpeditions') || ([8, 9, 10, 11, 12, 13, 14, 15].includes(version) && v === 'memories') || ([9, 10, 11, 12, 13, 14, 15].includes(version) && v === 'ota') || ([10, 11, 12, 13, 14, 15].includes(version) && v === 'fieldDay') || ([11, 12, 13, 14, 15].includes(version) && v === 'js8Context') || ([12, 13, 14, 15].includes(version) && (v === 'sstvImage' || v === 'aprs')) || ([13, 14, 15].includes(version) && navigationCollection(v)) || ([14, 15].includes(version) && configurationCollection(v)) ||
-  (version === 15 && (v === 'parks' || v === 'confirmations'))
+  ([4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(version) && v === 'recall') || ([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(version) && insightCollection(v)) || ([7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(version) && v === 'dxpeditions') || ([8, 9, 10, 11, 12, 13, 14, 15, 16].includes(version) && v === 'memories') || ([9, 10, 11, 12, 13, 14, 15, 16].includes(version) && v === 'ota') || ([10, 11, 12, 13, 14, 15, 16].includes(version) && v === 'fieldDay') || ([11, 12, 13, 14, 15, 16].includes(version) && v === 'js8Context') || ([12, 13, 14, 15, 16].includes(version) && (v === 'sstvImage' || v === 'aprs')) || ([13, 14, 15, 16].includes(version) && navigationCollection(v)) || ([14, 15, 16].includes(version) && configurationCollection(v)) ||
+  ((version === 15 || version === 16) && (v === 'parks' || v === 'confirmations')) || (version === 16 && v === 'pounce')
 export const sstvImageId = (v: unknown): v is string => typeof v === 'string' && /\.(png|bmp)$/.test(v) && streamId(v.slice(0,-4))
 const integer = (v: unknown) => Number.isSafeInteger(v) && Number(v) >= 0
 export function queryCursor(v: unknown): v is string {
@@ -59,7 +61,7 @@ export function queryRequest(v: Record<string, unknown>, version = 3): QueryRequ
       v.collection === 'satellite' ? !v.search || new TextEncoder().encode(v.search).length > 80 || v.search.trim() !== v.search || v.unconfirmed :
       v.collection === 'sstvImage' ? !sstvImageId(v.search) || v.unconfirmed :
       v.collection === 'parks' ? !parkSearch(v.search) || v.unconfirmed : v.collection !== 'log' && (v.search !== '' || v.unconfirmed)) ||
-    ((insightCollection(v.collection) || v.collection === 'parks' || v.collection === 'confirmations' || v.collection === 'dxpeditions' || v.collection === 'memories' || v.collection === 'ota' || v.collection === 'fieldDay' || v.collection === 'js8Context') && v.cursor !== null) ||
+    ((insightCollection(v.collection) || v.collection === 'parks' || v.collection === 'confirmations' || v.collection === 'pounce' || v.collection === 'dxpeditions' || v.collection === 'memories' || v.collection === 'ota' || v.collection === 'fieldDay' || v.collection === 'js8Context') && v.cursor !== null) ||
     (v.after !== null && (v.collection !== 'decodes' || !integer(v.after)))) throw new Error('invalidApplicationQuery')
   return v as QueryRequest
 }

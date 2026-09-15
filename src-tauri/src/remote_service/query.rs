@@ -16,6 +16,7 @@ pub(super) mod memories;
 pub(crate) mod navigation;
 mod ota;
 mod parks;
+mod pounce;
 mod recall;
 
 /// The same bounded public projection used by the Settings document. Neither
@@ -59,6 +60,7 @@ pub enum Collection {
     Satellite,
     Parks,
     Confirmations,
+    Pounce,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -106,6 +108,7 @@ impl Request {
                     | Collection::Js8Context
                     | Collection::Parks
                     | Collection::Confirmations
+                    | Collection::Pounce
             ) || self.cursor.is_none())
             && self
                 .cursor
@@ -140,6 +143,7 @@ pub struct Sources {
     pub propagation: crate::PropCache,
     pub memories: memories::Bank,
     pub parks: crate::SharedParks,
+    pub pounces: crate::pouncer::SharedRecent,
     pub sstv: super::sstv::Source,
     pub navigation: navigation::Source,
 }
@@ -471,6 +475,9 @@ impl Publisher {
                     &sources.ok_or("applicationUnavailable")?.parks,
                     &request.search,
                 );
+            }
+            Collection::Pounce => {
+                return pounce::read(&sources.ok_or("applicationUnavailable")?.pounces, engine);
             }
             Collection::SstvImage => {
                 return super::sstv::capture(

@@ -32,7 +32,7 @@ const POTA_BEEP_HZ = 880
  */
 export function newlySpottedRefs(
   prev: Set<string>,
-  current: OtaMapSpot[],
+  current: Pick<OtaMapSpot, 'reference'>[],
 ): { fresh: string[]; next: Set<string> } {
   const fresh: string[] = []
   const next = new Set<string>()
