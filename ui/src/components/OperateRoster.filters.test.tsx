@@ -9,6 +9,8 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { OperateRoster } from './OperateRoster'
 import { ROSTER_FILTER_KEY, loadRosterFilters } from '../operateFilters'
 import type { NeedAlert, NeedTag, Station } from '../types'
+import { boardNeeds, isActivityTag, NEED_TIER } from '../features/needs'
+import { DEFAULT_FILTERS, filterAlerts } from '../neededFilters'
 
 vi.mock('../api', () => ({
   getDeclination: vi.fn(() => Promise.resolve(0)),
@@ -122,45 +124,52 @@ describe('Call Roster filters are written when ticked', () => {
 // ── Hide worked vs. a live park/summit activation ────────────────────────────────────
 //
 // The defect (operator, 2026-09-15): "Hide worked" hid a station he had worked before even
-// while that station was RIGHT NOW activating a different park. The Needed board and the
-// Roster gave opposite answers about the same station in the same state — `activation_alert`
-// (needalert.rs) always yields a board row for a live activator, while this filter kept a
-// worked station only when `need` was non-null, and `need` deliberately excludes the
-// Dxped/Pota/Sota activity tags (the 2026-08-23 ruling).
+// while that station was RIGHT NOW activating a different park. `worked` means "this callsign
+// is in the logbook" — ever, not per band, not per park — while the Needed board was listing
+// the activation, so the two panes disagreed about one station at one moment.
 //
-// What the ruling protected must survive: a DXPEDITION chip still does not rescue a worked
-// station, because a DXpedition is not something you can *need* — it is a label. The
-// difference is not "activity tags are needs after all"; it is that a live park/summit
-// activation is a board ROW in its own right and a DXpedition decoration never is.
-describe('Hide worked keeps a station that is on the air from a park or summit', () => {
-  const alerts = (call: string, tags: NeedTag[]): NeedAlert => ({
+// The fix is not a rule of this pane's own. The backend now decides park-level worked state
+// once (`HuntedActivations`, needalert.rs) and hands both surfaces the SAME alerts, so a park
+// still to be worked arrives here as a real need tag — `NewPark` — and survives for exactly
+// the reason it appears on the board. These tests therefore assert on the tag, which is the
+// thing that is shared; if they were written against a roster-only predicate they would go on
+// passing after the two surfaces had drifted apart again.
+//
+// What the 2026-08-23 ruling protected still holds: a DXPEDITION chip does not rescue a worked
+// station, because being a DXpedition is not something you can need.
+describe('Hide worked and the Needed board agree about a park activator', () => {
+  const alert = (call: string, tags: NeedTag[], reference = 'US-0002'): NeedAlert => ({
     call,
     entity: 'United States',
     band: '20m',
     zone: 4,
     tags,
-    priority: 20,
-    headline: 'POTA US-0002',
+    priority: NEED_TIER[tags[0]],
+    headline: `POTA ${reference}`,
     mode: 'Digital',
     freqMhz: 14.074,
   })
 
   const ACTIVITY_STATIONS = [
     station('PLAIN1'),
-    // Worked before, nothing to gain, no activity — the CONTROL that proves the filter
-    // still filters. If this row ever survives, the fix has simply disabled Hide worked.
+    // Worked before, nothing to gain, no activity — the CONTROL that proves the filter still
+    // filters. If this row ever survives, the fix has simply disabled Hide worked.
     station('WORKED1', { worked: true }),
-    // Worked before, and on the air from a park right now.
-    station('POTA1', { worked: true }),
-    // Worked before, and on a summit right now.
-    station('SOTA1', { worked: true }),
+    // Worked yesterday at park A; on the air from park B now. The operator's own case.
+    station('NEWPARK1', { worked: true }),
+    // Worked before, on a summit not yet worked in this activation.
+    station('NEWSUMMIT1', { worked: true }),
+    // Worked before, activating a park ALREADY worked today — the backend withheld NewPark,
+    // so this one has nothing left to offer and must go quiet.
+    station('SAMEPARK1', { worked: true }),
     // Worked before and part of an announced DXpedition — the 2026-08-23 ruling's case.
     station('DXPED1', { worked: true }),
   ]
   const ACTIVITY_ALERTS = new Map<string, NeedAlert[]>([
-    ['POTA1', [alerts('POTA1', ['Pota'])]],
-    ['SOTA1', [alerts('SOTA1', ['Sota'])]],
-    ['DXPED1', [alerts('DXPED1', ['Dxped'])]],
+    ['NEWPARK1', [alert('NEWPARK1', ['NewPark', 'Pota'])]],
+    ['NEWSUMMIT1', [alert('NEWSUMMIT1', ['NewPark', 'Sota'], 'W7A/MN-001')]],
+    ['SAMEPARK1', [alert('SAMEPARK1', ['Pota'])]],
+    ['DXPED1', [alert('DXPED1', ['Dxped'])]],
   ])
 
   function mountActivity() {
@@ -185,14 +194,19 @@ describe('Hide worked keeps a station that is on the air from a park or summit',
     )
   })
 
-  it('keeps a worked call that is activating a park', () => {
+  it('keeps a worked call that is at a park it has not worked in this activation', () => {
     mountActivity()
-    expect(screen.queryByText('POTA1')).not.toBeNull()
+    expect(screen.queryByText('NEWPARK1')).not.toBeNull()
   })
 
-  it('keeps a worked call that is activating a summit', () => {
+  it('keeps a worked call that is on a summit it has not worked in this activation', () => {
     mountActivity()
-    expect(screen.queryByText('SOTA1')).not.toBeNull()
+    expect(screen.queryByText('NEWSUMMIT1')).not.toBeNull()
+  })
+
+  it('hides a call already worked at that park in this activation', () => {
+    mountActivity()
+    expect(screen.queryByText('SAMEPARK1')).toBeNull()
   })
 
   it('still hides a worked call with no activity and no need (the filter still filters)', () => {
@@ -204,5 +218,23 @@ describe('Hide worked keeps a station that is on the air from a park or summit',
   it('still hides a worked DXpedition — a DXped chip is a label, not a need', () => {
     mountActivity()
     expect(screen.queryByText('DXPED1')).toBeNull()
+  })
+
+  // BY CONSTRUCTION, not by coincidence. Feed the identical alerts to the board's own pipeline
+  // and assert the two surfaces reach the same verdict about each station. The defect was
+  // precisely that these two answers were computed from different things.
+  it('reaches the same verdict as the Needed board on every one of them', () => {
+    mountActivity()
+    const board = filterAlerts(boardNeeds([...ACTIVITY_ALERTS.values()].flat()), DEFAULT_FILTERS)
+    const boardSaysNeeded = (call: string) =>
+      board.some((a) => a.call === call && a.tags.some((t) => !isActivityTag(t)))
+    for (const call of ['NEWPARK1', 'NEWSUMMIT1']) {
+      expect(boardSaysNeeded(call), `${call} on the board`).toBe(true)
+      expect(screen.queryByText(call), `${call} on the roster`).not.toBeNull()
+    }
+    for (const call of ['SAMEPARK1', 'DXPED1']) {
+      expect(boardSaysNeeded(call), `${call} on the board`).toBe(false)
+      expect(screen.queryByText(call), `${call} on the roster`).toBeNull()
+    }
   })
 })

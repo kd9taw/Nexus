@@ -177,6 +177,7 @@ const NEED_TYPE_OPTS: NeedTypeFilter[] = [
   'newZone',
   'newGrid',
   'newState',
+  'newPark',
   'confirm',
   'dxped',
   'pota',
@@ -206,6 +207,8 @@ function needTypeLabel(value: NeedTypeFilter): string {
       return t('needed.filter.newGrid')
     case 'newState':
       return t('needed.filter.newState')
+    case 'newPark':
+      return t('needed.filter.newPark')
     case 'confirm':
       return t('needed.filter.confirm')
     case 'dxped':

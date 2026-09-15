@@ -1529,6 +1529,7 @@ export const EN = {
   'needed.filter.newZone': 'New zone',
   'needed.filter.newGrid': 'New grid',
   'needed.filter.newState': 'New state',
+  'needed.filter.newPark': 'New park',
   'needed.filter.confirm': 'Needs confirm',
   'needed.filter.dxped': 'DXped',
   // `{{mode}}` is a mode-class name — the tooltip is prose, the mode is not.
@@ -1632,6 +1633,9 @@ export const EN = {
   'need.badge.state.label': 'STATE',
   'need.badge.state.title':
     'New US state on this band (5BWAS) — a hint from the grid; confirm from the log',
+  'need.badge.park.label': 'PARK',
+  'need.badge.park.title':
+    'A park or summit you have not worked in the activation running right now — POTA credits a reference once per activator per UTC day, so the same park tomorrow counts again',
   'need.badge.dxped.label': 'DXPED',
   'need.badge.dxped.title': 'Active DXpedition — limited-time window',
   'need.badge.confirm.label': 'LoTW',
@@ -1662,6 +1666,10 @@ export const EN = {
   'need.chip.newState.label': 'STATE',
   'need.chip.newState.short': 'ST',
   'need.chip.newState.title': 'New US state on this band — best-guess from the grid',
+  'need.chip.newPark.label': 'NEW PARK',
+  'need.chip.newPark.short': 'PARK',
+  'need.chip.newPark.title':
+    'A park or summit you have not worked in this activation. An activator comes back to the same reference again and again and each visit is a fresh contact, so this clears when you log them today and returns next time they are out.',
   'need.chip.confirm.label': 'LoTW',
   'need.chip.confirm.short': 'LoTW',
   'need.chip.confirm.title':
@@ -7404,7 +7412,7 @@ export const EN = {
   'operate.roster.filter.neededOnly': 'Needed only',
   'operate.roster.filter.hideWorked': 'Hide worked',
   'operate.roster.filter.hideWorked.title':
-    'Hide stations you have already worked — EXCEPT two kinds, which stay on the list: the ones that still fill a need, and the ones on the air from a park or summit right now. That is why a B4 chip can survive this filter — you worked that call on another band or mode and this is still a new slot, or that call is out activating and the Needed board is listing it too. Turn on Needed only to see just the needs.',
+    'Hide stations you have already worked — EXCEPT the ones that still fill a need, which stay on the list. That is why a B4 chip can survive this filter: you worked that call on another band or mode and this is still a new slot, or that call is on a park or summit you have not worked in the activation running right now. Turn on Needed only to see just those.',
   'operate.roster.filter.hideBlocked': 'Hide blocked',
   'operate.roster.filter.hideBlocked.title':
     'Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.',

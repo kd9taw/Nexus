@@ -14416,6 +14416,26 @@ fn read_need_alerts(
             )
         })
         .collect();
+    // The hunter side of the log, indexed by ACTIVATION — which park/summit reference has
+    // already been worked, from which activator, on which UTC day. Copied out under the same
+    // lock as `contacts` above; `HuntedActivations` owns the "what counts as this activation"
+    // rule and its reasoning. Base-called here because propagation has no callsign parser in
+    // the default build, and because the log writes `K1ABC/P` where the spot says `K1ABC`.
+    //
+    // ONE index, built ONCE, feeding both the program-chip pass and `activation_alert` below —
+    // which is why the roster and the Needed board can no longer give opposite answers about
+    // the same station: they read the same alerts, and those alerts read this.
+    let hunted =
+        propagation::HuntedActivations::from_log(eng.log_records().iter().filter_map(|q| {
+            let r = q.ota.their_ref.as_deref()?.trim();
+            (!r.is_empty()).then(|| {
+                (
+                    r.to_ascii_uppercase(),
+                    tempo_core::message::base_call(&q.call),
+                    q.when_unix,
+                )
+            })
+        }));
     let snap = eng.snapshot();
     // Operator "wanted" watch list (W1.5) — captured before the lock drops.
     let wanted_calls = eng.settings().wanted_calls.clone();
@@ -14601,12 +14621,29 @@ fn read_need_alerts(
                     } else {
                         propagation::NeedTag::Pota
                     };
+                    // The park NEED rides here too, not only on `activation_alert` rows. An
+                    // activator that ALSO hit the cluster arrives as a cluster row and never
+                    // reaches that branch (it is deduped away), so tagging only there would
+                    // have left exactly those stations without the need that keeps them
+                    // through Hide worked — the original defect, moved one row along.
+                    if hunted.needed(
+                        &sp.reference,
+                        &tempo_core::message::base_call(&sp.activator),
+                        now_unix(),
+                    ) && !a.tags.contains(&propagation::NeedTag::NewPark)
+                    {
+                        a.tags.push(propagation::NeedTag::NewPark);
+                        a.priority = a.priority.max(propagation::NeedTag::NewPark.tier());
+                    }
                     if !a.tags.contains(&tag) {
                         a.tags.push(tag);
                         a.headline = format!("{} · {} {}", a.headline, sp.program, sp.reference);
                     }
                 }
             }
+            // A park need raises priority, so the board must re-rank — same reason the
+            // DXpedition pass above re-sorts.
+            alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
         }
     }
     // Feed LIVE POTA/SOTA activators onto the board as chase opportunities in their OWN
@@ -14632,7 +14669,14 @@ fn read_need_alerts(
             .collect();
         drop(cache);
         for sp in &fresh {
-            let Some(alert) = propagation::activation_alert(sp, &needs, &needs.slots()) else {
+            let reference_needed = hunted.needed(
+                &sp.reference,
+                &tempo_core::message::base_call(&sp.activator),
+                now,
+            );
+            let Some(alert) =
+                propagation::activation_alert(sp, &needs, &needs.slots(), reference_needed)
+            else {
                 continue;
             };
             if alert.call == me_up {

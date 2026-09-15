@@ -20,9 +20,15 @@ import { bandRangeForLabel } from '../band'
  *
  * The gradient: a call the operator asked for by name > a new entity > new zone > new state
  * > new grid > new band (entity worked, this band not) > new mode (band worked, this mode
- * class not) > worked-but-unconfirmed. Dxped/Pota/Sota are never a primary tier — the
+ * class not) > a park/summit not yet worked in the activation running now >
+ * worked-but-unconfirmed. Dxped/Pota/Sota are never a primary tier — the
  * backend appends them onto an existing award need and expresses their pull as a priority
  * bump instead, so they weigh 0 here exactly as they do there.
+ *
+ * NewPark is the one that is easy to confuse with those three and is NOT one of them: Pota
+ * and Sota say a station is activating, NewPark says you have something to gain by working
+ * it. It carries the backend's live-activation floor (20), so a park need never outranks a
+ * DX award and always outranks a bare confirmation.
  *
  * NOTE there is no "new band-mode" rank, here or in the backend: `LogNeeds::need` decides
  * the DXCC axis with a short-circuit that never consults mode once the band is missing, so
@@ -37,6 +43,7 @@ export const NEED_TIER: Record<NeedTag, number> = {
   NewGrid: 55,
   NewBand: 50,
   NewMode: 30,
+  NewPark: 20,
   Confirm: 10,
   Dxped: 0,
   Pota: 0,
@@ -113,36 +120,6 @@ const ACTIVITY_TAGS: ReadonlySet<string> = new Set(['Dxped', 'Pota', 'Sota'])
 /** True for a tag that only LABELS the station, rather than giving a reason to work it. */
 export function isActivityTag(tag: NeedTag | null | undefined): boolean {
   return tag != null && ACTIVITY_TAGS.has(tag)
-}
-
-/**
- * The subset of the activity tags that means SOMEONE IS ON THE AIR FROM A PLACE right now —
- * a park or a summit. Deliberately NOT Dxped.
- *
- * The two are not the same kind of thing on the backend, which is why they are not the same
- * kind of thing here. `activation_alert` (needalert.rs) mints a Needed-board ROW for every
- * live POTA/SOTA activator, award or no award — the activation is itself the opportunity.
- * The DXpedition tag is only ever APPENDED to a row some award already earned (lib.rs), so a
- * DXpedition the operator has already worked on the band produces no board row at all.
- *
- * That asymmetry is exactly the defect the operator hit on 2026-09-15: the Needed board
- * showed a station activating a new park while the roster's Hide-worked stripped it, because
- * the roster asked "does this row fill a need" and the program tag honestly answers no. The
- * 2026-08-23 ruling stands untouched — DXped/POTA/SOTA are still never *needs*, still never
- * colour a row, still never appear in the chip cluster. This predicate answers a different
- * question: is this station on the air from somewhere, which is a reason to keep it VISIBLE.
- */
-const ACTIVATION_TAGS: ReadonlySet<string> = new Set(['Pota', 'Sota'])
-
-/** True for a tag that says the station is activating a park or summit right now. */
-export function isActivationTag(tag: NeedTag | null | undefined): boolean {
-  return tag != null && ACTIVATION_TAGS.has(tag)
-}
-
-/** True when any of a call's alerts says it is on the air from a park or summit. Pass the
- * SURFACE-GATED alerts — the program tags are band-agnostic, so nothing is lost by it. */
-export function isActivating(alerts: NeedAlert[] | null | undefined): boolean {
-  return (alerts ?? []).some((a) => a.tags.some(isActivationTag))
 }
 
 /**
@@ -295,9 +272,14 @@ export function visibleNeeds(
     const isActivity = a.tags.some(isActivityTag)
     const modeGated = (a.mode === 'CW' && !enabled.cw) || (a.mode === 'Phone' && !enabled.phone)
     if (modeGated && !isActivity) continue // Digital/unknown always visible
-    // A row that only survived on its activity exemption keeps ONLY the activity tag(s) —
-    // its need tags describe exactly the mode the operator disabled.
-    const baseTags = modeGated ? a.tags.filter(isActivityTag) : a.tags
+    // A row that only survived on its activity exemption keeps ONLY the activity tag(s) and
+    // the park need — its AWARD tags describe exactly the mode the operator disabled, but
+    // "a park you have not worked in this activation" is a property of the park, not of the
+    // mode. It rides the same exemption for the same reason the programme tag does: the
+    // station is out there to hunt.
+    const baseTags = modeGated
+      ? a.tags.filter((t) => isActivityTag(t) || t === 'NewPark')
+      : a.tags
     if (!scopes) {
       out.push(modeGated ? retag(a, baseTags) : a)
       continue
@@ -400,6 +382,9 @@ export function sameBand(a: string | null | undefined, b: string | null | undefi
 const BAND_AGNOSTIC_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>([
   'NewEntity',
   'NewMode',
+  // A park is hunted once per activation on whatever band you catch it — the same reason the
+  // backend's worked-parks index is a flat set and not a per-band one.
+  'NewPark',
   'Dxped',
   'Pota',
   'Sota',

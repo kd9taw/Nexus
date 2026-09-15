@@ -9,7 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nexus now knows which parks and summits you have already worked, and when.** A park you have
+  not worked is a genuine need on the Needed board and in the Call Roster — a NEW PARK chip
+  alongside the award chips, with its own filter chip on the board — so an activator you have
+  worked before still stands out when they are somewhere new. It works off the reference your log
+  already stores for every hunted contact, POTA and SOTA alike, so there is nothing to set up.
 
+  The board also stops nagging. A park you have already worked in the activation that is running
+  now drops to the bottom and keeps only its POTA/SOTA chip: you logged them, you are done with
+  them. Tomorrow is a different matter — an activator who goes back to the same park is a fresh
+  contact for a hunter, so the park is needed again. The line between "this activation" and "the
+  next one" is UTC midnight, the same boundary POTA credits an activation on and the same one the
+  activation export already splits your log at, and it counts each activator separately: two
+  operators at one park on one day are two visits and two contacts to be had.
+
+  Two things it cannot see, both honest gaps rather than bugs. A hunt made in a mode that never
+  passes the reference over the air — CW, usually — leaves nothing in the log to go on, so the
+  park keeps reading as needed; the imported Hunted Parks.CSV cannot fill that in because it has
+  no dates, though it still drives the hunter panel's NEW PARK badge as before.
 
 ### Changed
 
@@ -31,10 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, years ago, on any band — the Call Roster's Hide worked dropped that station even while it
   was on the air right then from a park or a summit. The Needed board listed the activation and
   the roster threw it away, so the two panes disagreed about the same station at the same moment.
-  Hide worked now keeps a station that is activating, whatever the log says about the call. It
-  still hides a worked station with nothing to offer, and a DXpedition you have already worked on
-  the band still does not count as a reason to keep the row — that is a label, not something you
-  can need.
+  Hide worked now keeps a station that is at a park or summit you have not worked in the
+  activation running right now, whatever the log says about the call — and it is the same fact
+  the Needed board is reading, so the two panes cannot drift apart again. It still hides a worked
+  station with nothing to offer, and a DXpedition you have already worked on the band still does
+  not count as a reason to keep the row — that is a label, not something you can need.
 
 - **A satellite you just opened no longer claims it has no transmitters.** Open a bird the
   Satellites section had not looked up yet (CO-57, say) and its transponder list read "no
