@@ -49,6 +49,16 @@ struct RigIds {
     status: i32,
     status_str: i32,
     freq: i32,
+    /// Per-VFO dial properties, `None` when this server does not expose them.
+    ///
+    /// ⭐ ISSUES #144 / #161 / D#150 / D#196. `Freq` is only populated for rigs whose OmniRig
+    /// *rig file* defines `pmFreq`; plenty define only `pmFreqA`/`pmFreqB`, and for those OmniRig
+    /// leaves `Freq` at zero. Nexus asked for `Freq` and nothing else, so it read 0 — a dead
+    /// radio, as far as the CAT layer could tell — while other programs on the same OmniRig slot
+    /// worked. OPTIONAL rather than required: a missing property must not fail the whole connect
+    /// the way a mis-typed required name deliberately does.
+    freq_a: Option<i32>,
+    freq_b: Option<i32>,
     mode: i32,
     tx: i32,
     split: i32,
@@ -244,6 +254,8 @@ impl OmniRigCom {
             status: dispid(&rig, "Status")?,
             status_str: dispid(&rig, "StatusStr")?,
             freq: dispid(&rig, "Freq")?,
+            freq_a: dispid(&rig, "FreqA").ok(),
+            freq_b: dispid(&rig, "FreqB").ok(),
             mode: dispid(&rig, "Mode")?,
             tx: dispid(&rig, "Tx")?,
             split: dispid(&rig, "Split")?,
@@ -277,10 +289,39 @@ impl OmniRigClient for OmniRigCom {
         Ok((OmniStatus::from_code(code), text))
     }
 
+    /// ⭐ `Freq`, THEN `FreqA`, THEN `FreqB` — issues #144 / #161 / D#150 / D#196, all the same
+    /// complaint: Nexus shows no dial (or 0.000) on an OmniRig rig whose file reports only
+    /// per-VFO frequencies, while WSJT-X on the same slot is fine. OmniRig populates `Freq` only
+    /// from a rig file's `pmFreq` command; a file that defines just `pmFreqA`/`pmFreqB` leaves it
+    /// at zero, and zero was being returned as if it were a reading.
+    ///
+    /// ⚠️ AND A FAILURE IS A FAILURE, NEVER A 0 Hz DIAL. `Err` here becomes `OmniBackend::
+    /// freq_hz`'s 0, which `Rig::read_freq` rejects — so the operator gets a CAT error, not a
+    /// green pill reading 0.000 MHz. That is the existing contract; what changes is only that
+    /// "the rig file has no `pmFreq`" stops looking like it.
+    ///
+    /// ⚠️ **A KNOWN LIMIT, AND IT NEEDS A RIG TO SETTLE.** A is preferred over B because A is the
+    /// receive VFO on OmniRig's own split model, and this call means "the dial". On a rig sitting
+    /// on VFO B whose file reports both, `FreqA` may hold a stale number and win. Fixing that
+    /// properly means reading OmniRig's `Vfo` property, whose parameter constants are not
+    /// confirmed here against the type library and are themselves unimplemented by many rig
+    /// files — so it is deliberately NOT guessed at. There are no OmniRig rig files on the
+    /// machine this was written on; nothing about this function is proven anywhere but a bench.
     fn freq_hz(&self) -> Result<u64, OmniError> {
-        let hz = self.get_i32(self.ids.freq, "the dial frequency")?;
-        // OmniRig reports 0 before the rig has answered; negative is not a frequency.
-        Ok(hz.max(0) as u64)
+        // A property that cannot be READ is the same as one that is not there: try the next.
+        let read = |id: Option<i32>, what: &str| id.and_then(|id| self.get_i32(id, what).ok());
+        super::pick_dial_hz(
+            read(Some(self.ids.freq), "the dial frequency"),
+            read(self.ids.freq_a, "VFO A's frequency"),
+            read(self.ids.freq_b, "VFO B's frequency"),
+        )
+        .ok_or_else(|| {
+            OmniError::Com(
+                "OmniRig reports no frequency for this rig — its rig file defines none of Freq, \
+                 FreqA or FreqB, or the radio has not answered yet"
+                    .to_string(),
+            )
+        })
     }
 
     fn set_freq_hz(&self, hz: u64) -> Result<(), OmniError> {

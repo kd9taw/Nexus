@@ -341,6 +341,48 @@ impl OmniMode {
     }
 }
 
+/// ⭐ WHICH OF OMNIRIG'S THREE FREQUENCY PROPERTIES IS THE DIAL — issues #144 / #161 / D#150 /
+/// D#196, all one complaint: Nexus shows no dial (or 0.000) on an OmniRig rig while WSJT-X on the
+/// same slot is fine.
+///
+/// OmniRig fills `Freq` only from a rig file's `pmFreq` command. A file that defines just
+/// `pmFreqA`/`pmFreqB` — and many do — leaves `Freq` at zero for ever, and Nexus asked for `Freq`
+/// and nothing else, so zero was being handed onward as if it were a reading.
+///
+/// Each argument is what that property READ BACK, or `None` when the property is absent or would
+/// not read. The rule, in order:
+///
+/// * **Zero is not a frequency.** It is OmniRig's "nothing here" — the value a rig file that
+///   never defines the command leaves behind, and the value every property holds before the
+///   radio has answered. A negative is not one either.
+/// * **`Freq` wins when it has a value**, because a rig file that defines `pmFreq` means it.
+/// * **Then `FreqA`, then `FreqB`.** A before B because A is the receive VFO in OmniRig's split
+///   model and this answer means "the dial".
+/// * **Nothing usable answers `None`**, which the caller turns into an error rather than a 0 Hz
+///   dial: `Rig::read_freq` rejects 0, so the operator sees a CAT fault instead of a green pill
+///   reading 0.000 MHz.
+///
+/// ⚠️ **A KNOWN LIMIT, AND IT NEEDS A RIG TO SETTLE.** On a radio parked on VFO B whose file
+/// reports BOTH, `FreqA` may hold a stale number and win here. Reading it correctly means
+/// OmniRig's `Vfo` property, whose parameter constants are not confirmed against the type library
+/// on this machine and which many rig files do not implement either — so it is deliberately not
+/// guessed at. There are no OmniRig rig files on the machine this was written on; the ORDER below
+/// is tested, the behaviour against a real rig file is not.
+/// Compiled for Windows (where [`com`] calls it) and for tests (where the rule is pinned). On a
+/// non-Windows release build there is no OmniRig client to ask, so there is nothing to choose.
+#[cfg(any(windows, test))]
+pub(crate) fn pick_dial_hz(
+    freq: Option<i32>,
+    freq_a: Option<i32>,
+    freq_b: Option<i32>,
+) -> Option<u64> {
+    [freq, freq_a, freq_b]
+        .into_iter()
+        .flatten()
+        .find(|&hz| hz > 0)
+        .map(|hz| hz as u64)
+}
+
 /// **The COM boundary.** Everything Nexus asks of OmniRig, and nothing else.
 ///
 /// Implemented once for real by [`com::OmniRigCom`] (`#[cfg(windows)]`) and once by a mock
@@ -793,6 +835,44 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::Mutex as StdMutex;
+
+    /// ⭐ ISSUES #144 / #161 / D#150 / D#196 — the DIAL CHOICE, which is the whole decidable
+    /// half of the OmniRig frequency bug. The COM plumbing around it compiles only on Windows;
+    /// this rule does not, deliberately, because a Windows-only fix with no test on the dev box
+    /// is how the bug shipped in the first place.
+    #[test]
+    fn the_dial_falls_back_to_the_per_vfo_frequencies_and_never_fabricates_a_zero() {
+        // THE REPORTED CASE: a rig file with no `pmFreq`, so OmniRig leaves `Freq` at zero and
+        // only the per-VFO properties carry the dial. This read 0 — a dead radio, as far as the
+        // CAT layer could tell — while WSJT-X on the same slot worked.
+        assert_eq!(
+            pick_dial_hz(Some(0), Some(14_074_000), Some(14_080_000)),
+            Some(14_074_000),
+            "a zero Freq must fall through to VFO A, not be served as the dial"
+        );
+        // …and the same when the property is not on the object at all.
+        assert_eq!(pick_dial_hz(None, Some(14_074_000), None), Some(14_074_000));
+        // B only — the one number there is, so it is the answer.
+        assert_eq!(
+            pick_dial_hz(Some(0), Some(0), Some(432_100_000)),
+            Some(432_100_000)
+        );
+
+        // CONTROL: a rig file that DOES define pmFreq is unchanged — `Freq` wins outright, so
+        // this fix cannot move a dial that was already right.
+        assert_eq!(
+            pick_dial_hz(Some(7_074_000), Some(14_074_000), Some(21_074_000)),
+            Some(7_074_000),
+            "Freq wins when it has a value — today's behaviour for every rig that worked"
+        );
+
+        // NOTHING USABLE IS NOT 0 Hz. The caller turns None into a CAT error; a fabricated
+        // 0.000 MHz dial beside a green pill is the failure this must never become.
+        assert_eq!(pick_dial_hz(Some(0), Some(0), Some(0)), None);
+        assert_eq!(pick_dial_hz(None, None, None), None);
+        // A negative is not a frequency either (OmniRig's dial is a signed 32-bit Hz value).
+        assert_eq!(pick_dial_hz(Some(-1), None, None), None);
+    }
 
     /// The whole COM boundary, faked. Everything above the [`OmniRigClient`] trait is real
     /// code — the protocol mapping, the online gate, the worker thread, the daemon and the

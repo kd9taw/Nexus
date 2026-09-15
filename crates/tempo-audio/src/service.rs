@@ -21604,10 +21604,10 @@ mod tests {
     /// The knob is the whole point of issue #234: there is no rig on this box, so the only way
     /// to express "the operator turned the radio's own power control" is a stub that answers a
     /// different number than Nexus last commanded.
-    fn mock_rigctld_with_power(
-        dial_hz: u64,
-        power: f32,
-    ) -> (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<f32>>) {
+    /// `(address, command log, the rig's own power knob)`.
+    type PoweredStub = (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<f32>>);
+
+    fn mock_rigctld_with_power(dial_hz: u64, power: f32) -> PoweredStub {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
