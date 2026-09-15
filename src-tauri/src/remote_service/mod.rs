@@ -2,6 +2,10 @@
 //! bounded observation, reviewed application reads and separately approved manual logging.
 mod application;
 mod aprs;
+/// Receive audio for a listening browser. Gated with the radio feature because the
+/// encoder lives in tempo-audio, which a build without it does not have at all.
+#[cfg(feature = "radio")]
+mod audio;
 mod operations;
 pub(crate) mod query;
 pub(crate) mod sstv;
@@ -362,6 +366,9 @@ impl Service {
         spectrum: tempo_app::engine::SpectrumFeed,
         meters: tempo_app::engine::MeterFeed,
         sources: Option<query::Sources>,
+        // `audio`: the station's bounded receive-audio copy, for a listening browser.
+        // `None` leaves the audio lane unadvertised, so nothing is ever offered it.
+        #[cfg(feature = "radio")] audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
@@ -373,6 +380,8 @@ impl Service {
             Some(spectrum),
             meters,
             sources,
+            #[cfg(feature = "radio")]
+            audio,
         )
     }
     #[cfg(test)]
@@ -390,6 +399,8 @@ impl Service {
             None,
             Default::default(),
             None,
+            #[cfg(feature = "radio")]
+            None,
         )
     }
     fn start(
@@ -400,6 +411,7 @@ impl Service {
         spectrum: Option<tempo_app::engine::SpectrumFeed>,
         meters: tempo_app::engine::MeterFeed,
         sources: Option<query::Sources>,
+        #[cfg(feature = "radio")] audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
     ) -> Self {
         let vault: Arc<dyn Vault> = Arc::from(vault);
         let status = Arc::new(Mutex::new(Status {
@@ -453,6 +465,8 @@ impl Service {
                                 spectrum,
                                 meters,
                                 sources,
+                                #[cfg(feature = "radio")]
+                                audio,
                             },
                             restore: None,
                         }

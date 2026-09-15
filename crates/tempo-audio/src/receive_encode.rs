@@ -294,6 +294,49 @@ impl ReceiveEncoder {
 /// measurement runs against the code that actually ships instead of against a
 /// re-implementation of it, which is the whole difference between measuring the
 /// artifact and measuring a proxy for it. See `examples/remote_audio_frames.rs`.
+/// A [`ReceiveAudioFeed`] that is attached to no capture device, with the only way to
+/// push samples into it.
+///
+/// **Not a production path, and it cannot become one.** It builds its OWN feed, so it
+/// can never inject audio into the station's real tee — the producer there stays
+/// crate-private, which is the whole point of `receive_audio`'s seam. It exists so a
+/// consumer in another crate (the Remote audio lane) can be tested against the real
+/// feed, the real encoder and real libopus instead of against a re-implementation of
+/// all three, which is the difference between measuring the artifact and measuring a
+/// proxy for it.
+#[doc(hidden)]
+pub struct DetachedFeed {
+    pub feed: Arc<ReceiveAudioFeed>,
+    source: ReceiveSource,
+}
+
+impl DetachedFeed {
+    pub fn new(rate: u32) -> Self {
+        let feed = Arc::new(ReceiveAudioFeed::default());
+        let source = ReceiveSource { epoch: 1, rate };
+        feed.replace_source(Some(source));
+        Self { feed, source }
+    }
+    pub fn source(&self) -> ReceiveSource {
+        self.source
+    }
+    pub fn publish(&self, at: Instant, samples: &[f32]) {
+        self.feed.publish(self.source, at, samples);
+    }
+    /// Retire the source, exactly as a capture device change does. Every reader ends.
+    pub fn end(&self) {
+        self.feed.replace_source(None);
+    }
+    /// Replace the source with a new generation, as reopening a device does.
+    pub fn restart(&mut self, rate: u32) {
+        self.source = ReceiveSource {
+            epoch: self.source.epoch + 1,
+            rate,
+        };
+        self.feed.replace_source(Some(self.source));
+    }
+}
+
 pub fn encode_offline(rate: u32, samples: &[f32]) -> Result<Vec<EncodedFrame>, EncodeError> {
     let feed = Arc::new(ReceiveAudioFeed::default());
     let source = ReceiveSource { epoch: 1, rate };

@@ -606,6 +606,41 @@ impl Authority {
         self.sync_stop_owner(&c);
         Ok(())
     }
+    /// May this browser listen to the station's receive audio right now?
+    ///
+    /// Two things, and both are the operator's: the local **control** grant, and this
+    /// browser's own live lease. A logging-only browser holds `grants` and a perfectly
+    /// valid lease and is refused here — hearing a shack is not a consequence of being
+    /// allowed to write to its log, and the two permissions are given separately at the
+    /// radio precisely so they can be withheld separately.
+    ///
+    /// Nothing here can key anything. It is a read of permission state, and the caller
+    /// it serves holds no transmit authority at all.
+    ///
+    /// `remoteBusy` means the authority lock was held, not that the browser was refused.
+    /// The audio lane re-asks on a cadence, and treating contention as a refusal would
+    /// drop a listener every time an operation happened to be in flight.
+    pub fn audio_admitted(
+        &self,
+        session: &str,
+        device: &str,
+        lease_id: &str,
+        now: Instant,
+    ) -> Result<(), &'static str> {
+        if !identifier(session) || !identifier(device) || !identifier(lease_id) {
+            return Err("invalidRequest");
+        }
+        let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
+        self.reconcile(&mut c, now)?;
+        if !c.control_grants.contains(device) {
+            return Err("notController");
+        }
+        let lease = c.lease.as_ref().ok_or("notController")?;
+        if lease.id != lease_id || lease.session != session || lease.device != device {
+            return Err("notController");
+        }
+        Ok(())
+    }
     /// Any admitted browser departure ends the shared logging lease. This is
     /// deliberately conservative and cannot wait behind a file append. Grants
     /// survive; a controller must explicitly acquire a fresh lease afterward.
@@ -722,6 +757,14 @@ impl Authority {
                 // Station preferences are changed under station control (see `settings.rs`).
                 if c.control_grants.contains(device) {
                     capabilities.push("settingsControl");
+                    // Listening to the station's receive audio. The hint is what makes
+                    // the negotiation work in BOTH directions: a browser that has never
+                    // heard of it never offers a listen control, and a station built
+                    // without the audio lane never advertises it, so nobody is ever
+                    // asked for something the other end cannot do. It is under the
+                    // CONTROL grant, not the logging one — see `audio_admitted`.
+                    #[cfg(feature = "radio")]
+                    capabilities.push("audioListen");
                 }
                 value["txArmed"] = json!(owned && tx_owned);
                 if ft_available
