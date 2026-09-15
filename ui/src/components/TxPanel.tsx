@@ -4,6 +4,7 @@ import { useStationCapability } from '../stationAccess'
 // grid, and the 73/RR73 macro suggestions are tokens and stay in the code. What moved is the
 // prose around them.
 import { t } from '../i18n'
+import { PaneCloseButton } from './panes/PaneCloseButton'
 import type { StdMessages } from '../txMessages'
 
 /** WSJT-X's own name for a message slot — `Tx 1`…`Tx 6`, the token the Alt+N hints and the
@@ -39,6 +40,15 @@ interface Props {
   /** Narrow single-column layout for the side rail (Classic two-pane): DX
    * fields wrap on one row, the six Tx rows stack below — no wide dead space. */
   compact?: boolean
+  /** THE PANE'S OWN ✕ (panelHost.closeProps) — the SAME setPanelState the ⊞ Panels
+   * `txmsgs` tick makes. It rides the DX Call / DX Grid row because that row is this
+   * panel's head; there is no other. Hiding this pane mid-CQ ends NOTHING — the over in
+   * flight completes and Stop TX stays in the QSO strip, where no ⊞ id reaches it (THE
+   * STOP LINE) — so it carries no consequence note, and must not. */
+  onRemove?: () => void
+  hideNote?: string
+  /** This pane's ⊞ label, for the ✕'s accessible name. */
+  paneTitle?: string
 }
 
 /**
@@ -64,6 +74,9 @@ export function TxPanel({
   onClear,
   qsoMacros,
   compact = false,
+  onRemove,
+  hideNote,
+  paneTitle,
 }: Props) {
   const messagesControl = useStationCapability('ftMessages')
   const cqControl = useStationCapability('ftOperate')
@@ -111,6 +124,10 @@ export function TxPanel({
             onChange={(e) => onDxGrid(e.target.value.toUpperCase())}
           />
         </label>
+        {/* THE PANE'S OWN ✕, last on the DX row — `.cockpit-popout` carries
+            `margin-left: auto`, so in the compact (row) layout Operate uses it parks at the
+            right edge of the row the operator's eye already ends on. */}
+        <PaneCloseButton title={paneTitle ?? t('operate.tx.aria')} onRemove={onRemove} hideNote={hideNote} />
         <div className="txp-dx-actions">
           <button
             type="button"

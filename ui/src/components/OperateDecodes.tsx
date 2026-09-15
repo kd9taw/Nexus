@@ -5,6 +5,7 @@
 // can see the whole set at once. What moved is the prose around them.
 import { Fragment, useContext, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
+import { PaneCloseButton } from './panes/PaneCloseButton'
 import { RemoteHistoryContext, RemoteCollectionsContext } from '../remote-web/collections'
 import { useStationControl, useStationCapability, useStationData } from '../stationAccess'
 import { useRovingList } from '../useRovingList'
@@ -120,6 +121,17 @@ interface Props {
   compact?: boolean
   /** Header title (default "Band Activity"). */
   title?: string
+  /** THE PANE'S OWN ✕ (panelHost.closeProps) — the SAME setPanelState the ⊞ Panels tick
+   *  makes. This component renders TWO ⊞ panes (Band Activity and Rx Frequency) and the
+   *  Tempo rail's unremovable copy, so the button is a prop rather than a fact about the
+   *  component: omitted ⇒ no ✕, which is what the rail wants. */
+  onRemove?: () => void
+  /** What this hide ENDS. Neither decode pane ends anything (they are feeds), so it is
+   *  unset today — the prop exists so the ✕ speaks the same way wherever it renders. */
+  hideNote?: string
+  /** This pane's ⊞ label, for the ✕'s accessible name — the pane's title is a heading the
+   *  operator reads, and "Hide Rx Frequency" is what a screen reader must say. */
+  paneTitle?: string
   /**
    * The operator's own Maidenhead square — the origin every row's azimuth is
    * measured FROM. Optional and defaulting to empty: a host that doesn't pass it
@@ -227,6 +239,9 @@ export function OperateDecodes({
   // A DEFAULT PARAMETER, so the lookup happens on every render rather than at import — a
   // module-level constant would freeze whichever locale loaded this file first.
   title = t('operate.decodes.title'),
+  onRemove,
+  hideNote,
+  paneTitle,
   highlights = NO_HIGHLIGHTS,
   needAlertsByCall = NO_NEEDS,
   needScopes,
@@ -523,7 +538,13 @@ export function OperateDecodes({
     <section className={`operate-decodes${compact ? ' compact' : ''}`}>
       {remoteCollections && <span className="dim" role="status">{!remoteHistory ? t('remote.historyUnavailable') : remoteHistory.dropped ? t('remote.historyGap', { count: remoteHistory.dropped }) : t('remote.historySession')}</span>}
       <div className="od-head">
-        <h2>{title}</h2>
+        {/* Title + ✕ on one line, so the close button sits at the pane's top-right in BOTH
+            head layouts — the full head is a flex COLUMN (title over the filter row) and a
+            bare button appended to it would take a row of its own. */}
+        <div className="od-titlerow">
+          <h2>{title}</h2>
+          <PaneCloseButton title={paneTitle ?? title} onRemove={onRemove} hideNote={hideNote} />
+        </div>
         {compact ? (
           // #268: a pane that LOCKS its filter (Rx Frequency) still applies −B4, so it carries
           // its own chip — a filter with no control on screen is what hid a worked station's

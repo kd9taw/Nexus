@@ -31,6 +31,7 @@ import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { PaneCloseButton } from './panes/PaneCloseButton'
 import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
@@ -967,11 +968,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           dsp: canDsp ? undefined : NO_DSP_FUNCS_REASON,
           dspLevels: canDspLevels ? undefined : NO_DSP_LEVELS_REASON,
           txmeters: TX_METERS_WHEN,
-          voiceKeyer: VOICE_KEYER_STOPS_ON_HIDE,
         },
+        // The ONE hide in the app that ends something in flight. In `endsOnHide` rather
+        // than `notes` so the pane's own ✕ carries the same sentence the ⊞ entry prints —
+        // one wording, two doors (panelHost).
+        endsOnHide: { voiceKeyer: VOICE_KEYER_STOPS_ON_HIDE },
       })
     : null
   const shown = (id: PhonePanelId) => (host ? host.shown(id) : true)
+  // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes. `{}` with no panel record
+  // (the remote observer), so the button simply is not there rather than being dead.
+  const closeProps = (id: PhonePanelId) => (host ? host.closeProps(id) : {})
   if (shown('dsp') && liveDspFuncs.length > 0) seenDspFuncs.current = liveDspFuncs.map((f) => f.key)
   const dspFuncs =
     liveDspFuncs.length > 0
@@ -1009,7 +1016,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
 
   const bandPane =
     hasBandPane && onWorkSpot ? (
-      <CockpitPaneFrame title={t('phone.pane.bandActivity.title')} paneId="bandActivity" fit="content">
+      <CockpitPaneFrame title={t('phone.pane.bandActivity.title')} paneId="bandActivity" fit="content" {...closeProps('bandActivity')}>
         {control || spotsRead?.phase === 'ready' ? <BandStrip
           band={snap.radio.band}
           dialMhz={snap.radio.dialMhz}
@@ -1058,7 +1065,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // fiber across that. Guarded by PhoneCockpit.structure.test.tsx (tier flips, ⊞ toggles
   // of other panels, and the restore back to stock).
   const keyerPane = hasKeyerPane ? (
-    <CockpitPaneFrame title={t('phone.pane.voiceKeyer.title')} paneId="voiceKeyer" fit="content">
+    <CockpitPaneFrame title={t('phone.pane.voiceKeyer.title')} paneId="voiceKeyer" fit="content" {...closeProps('voiceKeyer')}>
       {control ? <VoiceKeyer
         txEnabled={snap.radio.txEnabled}
         keyed={keyed}
@@ -1078,7 +1085,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           changes the hardware sweep width, ref sets weak-signal visibility. Distinct from the
           view-zoom chips on the scope itself, which only zoom what's already streamed. */}
       {hasRigScopePane && civScope && (
-        <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content">
+        <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content" {...closeProps('rigscope')}>
           <div className="ph-rigscope" role="group" aria-label={t('phone.rigScope.aria')}>
             <span className="ph-rigscope-lbl" title={t('phone.rigScope.title')}>
               {t('phone.rigScope.label')}
@@ -1121,7 +1128,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
 
       {/* FlexRadio SmartSDR panadapter controls — command the Flex pan's real bandwidth + ref. */}
       {hasRigScopePane && flexScope && (
-        <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content">
+        <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content" {...closeProps('rigscope')}>
           <div className="ph-rigscope" role="group" aria-label={t('phone.flexPan.aria')}>
             <span className="ph-rigscope-lbl" title={t('phone.flexPan.title')}>
               {t('phone.flexPan.label')}
@@ -1158,7 +1165,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       )}
 
       {hasDspPane && (
-        <CockpitPaneFrame title={t('phone.pane.dsp.title')} paneId="dsp" fit="content">
+        <CockpitPaneFrame title={t('phone.pane.dsp.title')} paneId="dsp" fit="content" {...closeProps('dsp')}>
           <div className="ph-dsp" role="group" aria-label={t('phone.dsp.aria')}>
             <span className="ph-dsp-label">{DSP}</span>
             {dspFuncs.map((f) => {
@@ -1186,7 +1193,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
 
       {/* RX DSP levels — NR level slider + AGC speed, each shown only when the rig reports it. */}
       {hasDspLevelsPane && (
-        <CockpitPaneFrame title={t('phone.pane.dspLevels.title')} paneId="dspLevels" fit="content">
+        <CockpitPaneFrame title={t('phone.pane.dspLevels.title')} paneId="dspLevels" fit="content" {...closeProps('dspLevels')}>
           <div className="ph-dsp-levels" role="group" aria-label={t('phone.rxDsp.aria')}>
             {snap.radio.nrLevel != null && (
               <label className="ph-dsplev" title={t('phone.rxDsp.nr.title')}>
@@ -1565,6 +1572,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               aria-label="Waterfall color palette (applies to all modes)" and the matching
               tooltip, so the word was the third statement of the same thing on one row. */}
           <PalettePicker />
+          {/* THE STRIP'S OWN ✕ (⊞ `scope`), last in the head — the title carries
+              `margin-right: auto`, so this row's tail is its right edge, where every other
+              pane in the app keeps its close button. Nothing on this strip stops a
+              transmission (THE STOP LINE), so its hide ends nothing and it warns of nothing. */}
+          <PaneCloseButton title={phonePanelLabels().scope} {...closeProps('scope')} />
         </div>
         <div className="ph-scope-wrap" ref={scopeRef} title={t('phone.scope.tuneHint')}>
           {yaesuScope ? (

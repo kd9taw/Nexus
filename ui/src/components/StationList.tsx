@@ -10,6 +10,7 @@ import { StationCard } from './StationCard'
 import { tagsForSurface } from '../features/needs'
 import { matchAnyTerm } from '../searchQuery'
 import { t, type MessageKey } from '../i18n'
+import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useStationControl } from '../stationAccess'
 
 type Presence = Station['presence'] | 'offline'
@@ -17,6 +18,13 @@ type Presence = Station['presence'] | 'offline'
 type Filter = 'all' | 'heard-now' | 'beaconing' | 'needed'
 
 interface Props {
+  /** THE PANE'S OWN ✕ (Operate's ⊞ `stations` entry) — the SAME setPanelState the tick
+   *  makes. Only Operate's Classic rail passes it; every other host of this list has no ⊞
+   *  entry for it and so gets no button. */
+  onRemove?: () => void
+  hideNote?: string
+  /** The ⊞ label, for the ✕'s accessible name. */
+  paneTitle?: string
   stations: Station[]
   myGrid: string
   currentSlot: number
@@ -71,6 +79,9 @@ const FILTERS: { id: Filter; labelKey: MessageKey }[] = [
 ]
 
 export function StationList({
+  onRemove,
+  hideNote,
+  paneTitle,
   stations,
   myGrid,
   currentSlot,
@@ -181,6 +192,9 @@ export function StationList({
             {t('roster.countFiltered', { count: stations.length })}
           </span>
         )}
+        {/* THE PANE'S OWN ✕, last in the panel header — `.cockpit-popout`'s margin-left:auto
+            parks it at the right edge, the same corner every other pane keeps it in. */}
+        <PaneCloseButton title={paneTitle ?? t('roster.title')} onRemove={onRemove} hideNote={hideNote} />
       </div>
       <button
         type="button"

@@ -610,18 +610,19 @@ export function OperateCockpit({
     ? [...CLASSIC_COLUMNS.slice(0, 2), ['recall', 'stations']]
     : CLASSIC_COLUMNS
   const { stateOf, setPanelState } = panels
+  const labels = panelLabels()
   const panelSpec: PanelHostSpec<OperatePanelId> = {
     menu: LAYOUT_PANELS[layoutMode],
     side: sidePanels,
     main: layoutMode === 'roster' ? 'callRoster' : 'bandActivity',
-    labels: panelLabels(),
+    labels,
     // The meters read on transmit — here as the pinned strip, which holds the last
     // readings dimmed between overs, so the entry says WHEN it is populated rather than
     // leaving an operator to guess mid-menu (the same words the strip shows when idle).
     notes: { txmeters: TX_METERS_WHEN },
     ...(layoutMode === 'classic' ? { columns: classicColumns } : {}),
   }
-  const { shown, sideShown, dataCols, menuItems } = panelHost(panels, panelSpec)
+  const { shown, sideShown, dataCols, menuItems, closeProps } = panelHost(panels, panelSpec)
   const wfState = stateOf('waterfall')
 
   // Waterfall pop-out: 'popped' unmounts the docked copy so the decode lists + roster
@@ -954,8 +955,8 @@ export function OperateCockpit({
     ? (snap.qso?.dxcall ?? null)
     : null
   const recallCard = shownRecallCall && shown('recall') ? (control
-    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} onShowCall={setCardCall} />
-    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded />
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} onShowCall={setCardCall} {...closeProps('recall')} paneTitle={labels.recall} />
+    : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded {...closeProps('recall')} paneTitle={labels.recall} />
   ) : null
 
   // #204: S&P clears the callsign card, as F4 does — the operator is leaving the station the card
@@ -1323,6 +1324,8 @@ export function OperateCockpit({
                 />
               ) : (
                 <Waterfall
+                  {...closeProps('waterfall')}
+                  paneTitle={labels.waterfall}
                   onPopOut={popOutWaterfall}
                   fixedWindow={tier === 'WSPR' ? WSPR_WATERFALL_WINDOW : undefined}
                   transmitting={snap.radio.transmitting}
@@ -1443,6 +1446,8 @@ export function OperateCockpit({
               {shown('callRoster') && (
                 <div className="cockpit-roster-main panel">
                   <OperateRoster
+                    {...closeProps('callRoster')}
+                    paneTitle={labels.callRoster}
                     stations={snap.stations}
                     myGrid={snap.mygrid}
                     currentSlot={snap.radio.slot}
@@ -1479,6 +1484,8 @@ export function OperateCockpit({
                           strip — roster mode = decode window + roster on one page
                           (operator request); only Rx Frequency stays compact. */}
                       <OperateDecodes
+                        {...closeProps('bandActivity')}
+                        paneTitle={labels.bandActivity}
                         history={bandHistRef.current}
                         decodes={snap.recentDecodes}
                         slot={snap.radio.slot}
@@ -1509,6 +1516,8 @@ export function OperateCockpit({
                   {shown('rxfreq') && (
                     <div className="cockpit-rxfreq panel" ref={rxfreqRef} style={shareStyle('rxfreq')}>
                       <OperateDecodes
+                        {...closeProps('rxfreq')}
+                        paneTitle={labels.rxfreq}
                         history={rxHistRef.current}
                         decodes={snap.recentDecodes}
                         slot={snap.radio.slot}
@@ -1551,6 +1560,8 @@ export function OperateCockpit({
               {shown('bandActivity') && (
                 <div className="cockpit-decodes panel">
                   <OperateDecodes
+                    {...closeProps('bandActivity')}
+                    paneTitle={labels.bandActivity}
                     history={bandHistRef.current}
                     decodes={snap.recentDecodes}
                     slot={snap.radio.slot}
@@ -1576,6 +1587,8 @@ export function OperateCockpit({
                           parity is free and STAYS free because the props are shared,
                           never forked (guarded by OperateCockpit.structure.test). */}
                       <OperateDecodes
+                        {...closeProps('rxfreq')}
+                        paneTitle={labels.rxfreq}
                         history={rxHistRef.current}
                         decodes={snap.recentDecodes}
                         slot={snap.radio.slot}
@@ -1604,6 +1617,8 @@ export function OperateCockpit({
                   )}
                   {shown('txmsgs') && (
                     <TxPanel
+                      {...closeProps('txmsgs')}
+                      paneTitle={labels.txmsgs}
                       compact
                       dxCall={dxCall}
                       dxGrid={dxGrid}
@@ -1699,10 +1714,17 @@ function OperateRecall({
   mode,
   onOpenLog,
   onShowCall,
+  onRemove,
+  hideNote,
+  paneTitle,
 }: {
   snap: AppSnapshot
   call: string
   mode: string
+  /** The card's own ✕ — #204 made the card a ⊞ entry (`recall`); this is the same tick. */
+  onRemove?: () => void
+  hideNote?: string
+  paneTitle?: string
   onOpenLog?: (call: string) => void
   /** #204: open the card of the station this one is calling. */
   onShowCall?: (call: string) => void
@@ -1812,6 +1834,9 @@ function OperateRecall({
       // #204: the station this one is calling, when its last frame named one.
       calling={station?.calling ?? null}
       onShowCall={onShowCall}
+      onRemove={onRemove}
+      hideNote={hideNote}
+      paneTitle={paneTitle}
     />
   )
 }

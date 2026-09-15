@@ -564,6 +564,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // here and was removed with the 50/50 `.sstv-lower` split (census #10).
   const host = panels ? panelHost(panels, { menu: SSTV_PANEL_IDS, side: [], main: 'gallery', labels: sstvPanelLabels() }) : null
   const shown = (id: SstvPanelId) => (host ? host.shown(id) : true)
+  // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
+  const closeProps = (id: SstvPanelId) => (host ? host.closeProps(id) : {})
   // Live decoder state — polled at 1 Hz while this is the visible view (the
   // backend keeps decoding while hidden; the first tick catches the display up).
   const [sstv, setSstv] = useState<SstvState | null>(null)
@@ -1708,6 +1710,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           // the image.
           <div className="sstv-band">
             <Waterfall
+              {...closeProps('scope')}
+              paneTitle={sstvPanelLabels().scope}
               theme={theme}
               active={active}
               rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
@@ -1766,7 +1770,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           composer is a content-height strip and the gallery is the fill grower beside
           the RX stage, with deficit flowing to the shell's own overflow-y:auto valve. */}
       {shown('txcompose') && (
-        <CockpitPaneFrame title={t('sstv.panel.txcompose')} paneId="txcompose" fit="content">
+        <CockpitPaneFrame title={t('sstv.panel.txcompose')} paneId="txcompose" fit="content" {...closeProps('txcompose')}>
           {/* Unnamed section: the frame above is the landmark ("Transmit"); the wrapper
               stays for its column layout, with `.pane-body > .panel` stripping the
               card-in-card chrome. */}
@@ -2066,6 +2070,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         <CockpitPaneFrame
           title={t('sstv.panel.gallery')}
           paneId="gallery"
+          {...closeProps('gallery')}
           // #130: open the folder the pictures are saved in. Local only — a Remote browser has no
           // file manager on the station's computer to open.
           actions={

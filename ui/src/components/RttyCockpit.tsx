@@ -168,6 +168,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: rttyPanelLabels() })
     : null
   const shown = (id: RttyPanelId) => (host ? host.shown(id) : true)
+  // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
+  const closeProps = (id: RttyPanelId) => (host ? host.closeProps(id) : {})
   // Live decoder state — polled at 2 Hz while this is the visible view. The
   // backend ring keeps decoding while we're hidden; the first tick on
   // re-activation catches the display up.
@@ -544,6 +546,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           With this and `stream` both unticked the cockpit still holds all four. */}
       {rtty && shown('scope') && (
         <Waterfall
+          {...closeProps('scope')}
+          paneTitle={rttyPanelLabels().scope}
           theme={theme}
           active={active}
           rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
@@ -597,7 +601,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           itself. Do NOT add the Auto toggle to stop-line.test.tsx's RTTY stopControls; that
           would demand this cockpit's only ⊞ entry be unhideable. */}
       {shown('stream') && (
-      <CockpitPaneFrame title={t('rtty.pane.stream.title')} paneId="stream">
+      <CockpitPaneFrame title={t('rtty.pane.stream.title')} paneId="stream" {...closeProps('stream')}>
       <div className="cw-decode rtty-stream" title={t('rtty.stream.title')}>
         <div className="cw-decode-head">
           <span className="cw-decode-label">{RX_PLATE}</span>

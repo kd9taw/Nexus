@@ -9,7 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every panel you can remove now has an × in its own corner.** Panels could always be taken off
+  a screen from the ⊞ Panels menu, but there was nothing on the panel itself to say so — if you
+  did not already know the menu was there, there was no way to close anything. Now each removable
+  panel carries a small × in its own header: on the FT8 screen that is Band Activity, Rx Frequency,
+  Tx Messages, the Call Roster, Stations, the callsign card and the waterfall, and the same goes
+  for the CW, Phone, RTTY, PSK, SSTV and JS8 screens. The × does exactly what unticking the panel
+  in ⊞ Panels does — same setting, remembered the same way — and ⊞ Panels is still where you put a
+  panel back, with Undo one click away if you close the wrong one. Panels that are part of
+  something else rather than a panel of their own (the TX meters strip, CW's merged Rig controls
+  frame, the log strips) have no × and are unchanged. Phone's Voice Keyer × warns, before you
+  press it, that closing the keyer stops a voice message that is playing and throws away a
+  recording in progress — the same warning its menu entry has always carried.
+
 ### Changed
+
+- **The callsign card no longer squeezes Band Activity off the screen.** Click a station with a
+  long history — eleven previous contacts was the case reported — and the card grew until it took
+  half the right-hand rail, leaving Band Activity a couple of rows and shortening Rx Frequency to
+  match. The card is now capped at about a third of the rail, and the list of previous contacts
+  scrolls inside it instead of pushing its neighbours around; nothing is lost, you just scroll for
+  the older contacts. Measured at 1024×768, 1366×768, 1600×900 and 1920×1080 and at 100 %, 110 %
+  and 125 % zoom: at 1920×1080 Band Activity goes from 197 px to 258 px and Rx Frequency from
+  128 px to 166 px with the card up.
 
 - **Tune is always right next to the band picker** (#287). In Phone, CW, RTTY, PSK, SSTV and JS8,
   the Tune button (and the ATU button, on radios that have one) now sits directly after the band

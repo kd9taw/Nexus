@@ -2480,6 +2480,12 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   )
   const operateStationsPanel = (
     <StationList
+      // Operate's Classic rail hosts this list as the ⊞ `stations` pane, and this is that
+      // entry's tick — the same setPanelState, the same record. The node is built here
+      // rather than in the cockpit (it is passed down as `roster`), so the wiring is here
+      // too; nothing else renders a StationList with a ⊞ entry, so nothing else passes it.
+      onRemove={() => operatePanels.setPanelState('stations', 'removed')}
+      paneTitle={t('operate.panel.stations')}
       stations={rosterStations}
       myGrid={snap.mygrid}
       currentSlot={snap.radio.slot}
