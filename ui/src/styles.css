@@ -10146,11 +10146,40 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--accent);
   padding: 0 6px;
 }
+/* A disabling group INSIDE a `.settings-section`, with no box of its own. It exists because
+   `disabled` is the only way to switch off a set of controls at once, and HTML gives that to
+   `<fieldset>` alone — but a control inside a disabled fieldset is disabled whatever its own
+   `disabled` attribute says, so a section that has ONE writable control (Operator & radio: Units
+   is on the Remote allow-list, the rest is not) cannot put the attribute on the section itself.
+   The section keeps its border, legend and id; this carries the disabling and nothing else, so
+   the children lay out exactly as they did when they were the section's own children. Add no
+   border, padding, margin or display here — that is the whole point of the class. */
+.settings-fieldgroup {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
   align-content: start;
+}
+/* A `.settings-grid` holding ONE field, which the base rule's `auto-fit` blows up: auto-fit
+   collapses the tracks that ended up empty and hands the space to the survivor, so a lone field
+   becomes as wide as the whole section. MEASURED at the 1024 floor (viewport `sm`, layout harness,
+   real Chrome): the Units row came out 955.9px — `955.938px 0px 0px 0px` — beside station fields
+   of 227.7px. The 520px lone-control cap in the prose audit below does NOT catch it, and the reason
+   is worth writing down rather than rediscovering: that cap is scoped to `[data-viewport='md'|
+   'lg'|'xl']`, and the 1024 floor is `sm`, so at the one width the floor is defined at, it is not
+   applied at all — which is also why this needs fixing at the grid rather than with a max-width.
+   auto-fill
+   keeps the empty tracks, so the field is one track wide and lines up with the fields above it.
+   Must sit AFTER the base rule to win at xs/sm; at md+ the `[data-viewport]` rule below is more
+   specific and already auto-fill, which is the behaviour this wants. */
+.settings-grid--lone {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
 }
 /* `auto-fit` IS A TRAP ONCE THE PANEL IS UNBOUND (2026-08-12, with the md+ widening).
    auto-fit collapses the tracks that ended up empty and hands the freed space to the

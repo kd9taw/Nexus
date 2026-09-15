@@ -113,8 +113,14 @@ interface Props {
 
 export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked }: Props) {
   return (
-    <fieldset disabled={readOnly} className="settings-section" id="settings-operator-radio">
+    // The SECTION is never disabled; the groups inside it are. A form control inside a disabled
+    // <fieldset> is disabled whatever its own `disabled` says, and a nested fieldset cannot take
+    // that back — so the one control a Remote browser may write (Units) has to render OUTSIDE the
+    // disabled group, not merely with `disabled={false}`. The id and class stay here so the
+    // settings registry, the deep link and the generated manual still resolve the section.
+    <fieldset className="settings-section" id="settings-operator-radio">
       <legend>{t('settings.station.legend')}</legend>
+      <fieldset disabled={readOnly} className="settings-fieldgroup">
       <div className="settings-grid">
         {STATION_FIELDS.map((f) => {
           const value = form[f.key]
@@ -151,10 +157,16 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
           </select>
           <span className="settings-hint">{t('settings.station.licenseClass.hint')}</span>
         </label>
-        {/* #248: km or miles, °C or °F, for the whole app. It sat under Digital ▸ Station
-            Housekeeping, where nobody looking for miles would look. The option VALUES are
-            persisted tokens; only the labels are prose. A separate <label htmlFor> keeps the
-            select's accessible name exactly "Units" (a wrapping label would fold the hint in). */}
+      </div>
+      </fieldset>
+      {/* #248: km or miles, °C or °F, for the whole app. It sat under Digital ▸ Station
+          Housekeeping, where nobody looking for miles would look. The option VALUES are
+          persisted tokens; only the labels are prose. A separate <label htmlFor> keeps the
+          select's accessible name exactly "Units" (a wrapping label would fold the hint in).
+          It renders here, between the two disabled groups, because it is the one setting in
+          this section on the Remote writable allow-list: inside either group it would be dead
+          however `unitsLocked` read. */}
+      <div className="settings-grid settings-grid--lone">
         <div className="settings-field">
           <label className="settings-label" htmlFor="units">
             {t('settings.digital.units.label')}
@@ -173,6 +185,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
           <span className="settings-hint">{t('settings.digital.units.hint')}</span>
         </div>
       </div>
+      <fieldset disabled={readOnly} className="settings-fieldgroup">
       <div className="settings-freq">
         <span className="settings-label">{t('settings.station.frequency.label')}</span>
         <FrequencyControl
@@ -185,6 +198,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
         />
         <span className="settings-hint">{t('settings.station.frequency.hint')}</span>
       </div>
+      </fieldset>
     </fieldset>
   )
 }
