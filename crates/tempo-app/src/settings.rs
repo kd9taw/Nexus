@@ -1143,8 +1143,9 @@ pub struct Settings {
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
-    /// Hold the FM DATA submode for as long as the SSTV receiver is running, for the active
-    /// radio (flat mirror — see [`RadioProfile::sstv_hold_data_submode`]). Default off.
+    /// Hold the DATA submode (FM-D on FM, USB-D/LSB-D on HF) for as long as the SSTV receiver
+    /// is running, for the active radio (flat mirror — see
+    /// [`RadioProfile::sstv_hold_data_submode`]). Default off.
     #[serde(default)]
     pub sstv_hold_data_submode: bool,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
@@ -2824,24 +2825,31 @@ pub struct RadioProfile {
     /// a DATA submode nor SSB.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
-    /// **Hold the FM DATA submode while the SSTV receiver is running** (#130, PA3GYQ).
+    /// **Hold the DATA submode while the SSTV receiver is running** (#130, PA3GYQ; widened to
+    /// HF by #191).
     ///
-    /// Default OFF, which is today's behaviour: [`Engine::fm_mode_word`] commands `PKTFM`
-    /// only while an image is QUEUED OR IN FLIGHT and plain `FM` the rest of the time, so a
-    /// rig parked on an FM SSTV channel drops out of FM-D between pictures. That revert is
+    /// Default OFF, which is today's behaviour: the DATA submode is commanded only while an
+    /// image is QUEUED OR IN FLIGHT and the plain mode the rest of the time, so a rig parked on
+    /// an SSTV calling channel drops out of the data mode between pictures. That revert is
     /// deliberate — an SSTV send once keyed a data mode into an FM repeater input — but it is
-    /// wrong for the operator who sits on an FM SSTV calling channel all evening.
+    /// wrong for the operator who sits on an SSTV calling channel all evening.
     ///
     /// ON, the DATA submode is held for as long as `Engine::sstv_armed` is true, i.e. from the
     /// moment the SSTV view starts the receiver until the operator stops it.
     ///
+    /// ⚠️ IT COVERS BOTH CLASSES, AND ONCE DID NOT. Shipped in 1.11.1 read by
+    /// [`Engine::fm_mode_word`] and nothing else, so it held `PKTFM` on an FM channel and did
+    /// nothing whatever on 14 MHz — where most SSTV is worked (#191). Both arms now ask the one
+    /// predicate `Engine::sstv_wants_data_submode`, so the switch means FM-D on an FM channel
+    /// and USB-D/LSB-D on HF.
+    ///
     /// ⚠️ THE COST, AND IT IS THE REASON THIS IS OPT-IN. The receiver stays armed after the
     /// operator leaves the SSTV view (only an explicit Stop, or the ISS LOS unwind, disarms
-    /// it). So with this on, an FM VOICE call made without stopping the receiver first is
-    /// commanded in the FM data submode, where a normally-wired rig takes transmit audio from
-    /// the data port and the microphone modulates nothing — the same "red light, no RF"
-    /// failure `data_modes_plain_ssb` exists for, one mode along. Stop the receiver before
-    /// going back to voice; the hint on the switch says so.
+    /// it). So with this on, a VOICE call made without stopping the receiver first is commanded
+    /// in the data submode, where a normally-wired rig takes transmit audio from the data port
+    /// and the microphone modulates nothing — the same "red light, no RF" failure
+    /// `data_modes_plain_ssb` exists for, one mode along. Stop the receiver before going back
+    /// to voice; the hint on the switch says so.
     ///
     /// PER RADIO, not global, for `data_modes_plain_ssb`'s reason: it is a property of how
     /// THAT rig is cabled and operated. A station can run SSTV on the 9700 and voice on the HF
@@ -2959,7 +2967,8 @@ pub struct RadioProfilePatch {
     /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
-    /// See `RadioProfile::sstv_hold_data_submode` — hold FM-D while the SSTV receiver runs.
+    /// See `RadioProfile::sstv_hold_data_submode` — hold the DATA submode while the SSTV
+    /// receiver runs.
     /// `#[serde(default)]` like its neighbour: a patch written before the field existed still
     /// deserializes, as OFF, which is the pre-field behaviour.
     #[serde(default)]

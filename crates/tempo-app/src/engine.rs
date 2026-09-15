@@ -7064,7 +7064,8 @@ impl Engine {
     /// The FM-class word to command right now: the FM **data** submode `PKTFM` (Hamlib's
     /// `RIG_MODE_PKTFM` → Yaesu FM-D, Icom FM-D) while an SSTV image is queued or in flight,
     /// plain `FM` otherwise — or, on a radio configured for it, for the whole time the SSTV
-    /// receiver is running ([`Self::sstv_holds_data_submode`], default off, #130).
+    /// receiver is running ([`Self::sstv_holds_data_submode`], default off, #130). The whole
+    /// question is [`Self::sstv_wants_data_submode`], which the HF arm asks too (#191).
     ///
     /// ⭐ THE ON-AIR BUG THIS EXISTS FOR (FTDX10 + IC-9700 owner, 2026-08-12): *"when I select
     /// preset frequency 144.500 for SSTV it switches to FM, but as soon as I start TXing it
@@ -7085,15 +7086,30 @@ impl Engine {
     /// `plain_ssb_if_configured` keeps the per-radio mic-jack opt-out working: it maps `PKTFM`
     /// back to plain `FM` exactly as it maps `PKTUSB` to `USB`.
     fn fm_mode_word(&self) -> String {
-        if self.sstv_in_flight() || self.sstv_holds_data_submode() {
+        if self.sstv_wants_data_submode() {
             self.settings.plain_ssb_if_configured("PKTFM")
         } else {
             "FM".to_string()
         }
     }
 
-    /// Is this radio configured to HOLD the FM data submode for the whole time the SSTV
-    /// receiver is running, rather than only around a send? (#130, PA3GYQ via the operator.)
+    /// Does SSTV need this radio in a DATA submode right now — either because a picture is
+    /// queued or on the air, or because this radio is configured to HOLD it for as long as the
+    /// receiver runs ([`Self::sstv_holds_data_submode`])?
+    ///
+    /// ⭐ ONE PREDICATE, AND #191 IS WHY. The hold arrived in 1.11.1 read by `fm_mode_word` and
+    /// by nothing else, so it held FM-D on an FM channel and did nothing at all on 14 MHz —
+    /// where most SSTV is actually worked. The HF arm below asked its own narrower question
+    /// ("is a picture in flight?"), which is precisely the dropping-out-of-data-mode behaviour
+    /// the switch exists to stop. Two call sites deriving "does SSTV want data mode" separately
+    /// is what produced a switch that covered half the bands; there is one now.
+    fn sstv_wants_data_submode(&self) -> bool {
+        self.sstv_in_flight() || self.sstv_holds_data_submode()
+    }
+
+    /// Is this radio configured to HOLD the data submode for the whole time the SSTV receiver
+    /// is running, rather than only around a send? (#130, PA3GYQ via the operator; widened from
+    /// FM-only to HF's USB-D/LSB-D by #191 — see [`Self::sstv_wants_data_submode`].)
     ///
     /// The default is `false` and the answer is then exactly today's: `PKTFM` around an image,
     /// plain `FM` otherwise. The reply that told the reporter this shipped in 1.10.2 was wrong
@@ -7176,7 +7192,7 @@ impl Engine {
             // signal"). Only while an image is queued or in flight, so live voice PTT keeps
             // plain SSB. Driving it through the continuous mode-apply commands DATA BEFORE the
             // SSTV PTT and restores plain SSB when the image ends — no Icom-only set_data_mode.
-            if self.sstv_in_flight() {
+            if self.sstv_wants_data_submode() {
                 // ⭐ FM IS A CLASS, NOT A SIDE — and asking only "which side?" here is what put
                 // an SSB emission on an FM channel (see `fm_mode_word`). The Phone section's
                 // own two FM authorities both sit BELOW this arm — the cockpit's explicit pick
@@ -22608,6 +22624,82 @@ mod tests {
             e.rig_mode_effective(),
             "FM",
             "a mic-jack rig is held in plain FM, never PKTFM"
+        );
+    }
+
+    /// ⭐ ISSUE #191: THE HOLD HAS TO COVER **HF** TOO. The 1.11.1 switch was consumed by
+    /// `fm_mode_word` alone, so it held FM-D on an FM channel and did nothing whatever on 14 MHz
+    /// — and HF is where most SSTV is worked. The USB-D arm asked only "is a picture in flight?",
+    /// which is exactly the dropping-out-of-data-mode behaviour the switch exists to stop, on the
+    /// band where it matters most.
+    ///
+    /// ⚠️ NEEDS-BENCH: this pins the mode WORD, which is all that can be pinned without a rig.
+    /// `PKTUSB` is not a new word here — the send path already commands it — so what is unproven
+    /// is a radio's behaviour when it is HELD there between pictures.
+    #[test]
+    fn the_hf_data_submode_is_held_while_sstv_receives_under_the_same_per_radio_switch() {
+        let hf = |hold: bool, armed: bool| {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            e.set_license_class("extra");
+            e.settings.sstv_hold_data_submode = hold;
+            e.sstv_tune(14.230, "20m", "USB");
+            if armed {
+                e.set_sstv_armed(true);
+            }
+            e.rig_mode_effective()
+        };
+
+        // (1) DEFAULT OFF, receiver armed: today's answer, unchanged — the control, without
+        // which "PKTUSB" below would pass on an engine that simply always says PKTUSB.
+        assert_eq!(
+            hf(false, true),
+            "USB",
+            "off by default: an armed receiver alone must change nothing on HF either"
+        );
+
+        // (2) SWITCH ON, receiver NOT armed: the switch alone holds nothing.
+        assert_eq!(hf(true, false), "USB", "gated on the receiver running");
+
+        // (3) THE ASK: switch on, receiver armed, no picture queued or in flight.
+        assert_eq!(
+            hf(true, true),
+            "PKTUSB",
+            "THE BUG: the HF arm never read the switch, so an operator on 14.230 kept dropping \
+             out of USB-D between pictures (#191)"
+        );
+
+        // (4) Stop hands the radio back — the off-ramp before voice, same as on FM.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.sstv_tune(14.230, "20m", "USB");
+        e.set_sstv_armed(true);
+        e.set_sstv_armed(false);
+        assert_eq!(e.rig_mode_effective(), "USB", "stopping ends the hold");
+
+        // (5) The mic-jack opt-out reaches the HELD word exactly as it reaches the sent one.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.settings.data_modes_plain_ssb = true;
+        e.sstv_tune(14.230, "20m", "USB");
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "a mic-jack rig is held in plain USB, never PKTUSB"
+        );
+
+        // (6) …and the LSB side of the same arm, since the sideband is dial-derived.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.sstv_tune(7.171, "40m", "LSB");
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTLSB",
+            "below 10 MHz the held word follows the same sideband rule as the sent one"
         );
     }
 

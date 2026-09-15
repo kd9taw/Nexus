@@ -62,6 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which one to set by hand. A radio that will not report its width is left alone rather than
   warned about.
 
+- **"Hold the data mode while SSTV is receiving" now covers HF, not only FM (#191).** The
+  per-radio switch added in 1.11.1 held FM-D on an FM channel and did nothing at all on HF, where
+  most SSTV is worked — so a station on 14.230 kept dropping out of USB-D between pictures, which
+  is exactly what the switch exists to stop. One switch, both classes: FM-D on an FM channel,
+  USB-D/LSB-D on HF. It is still off by default and still per radio, and the mic-jack opt-out
+  still applies. The switch is renamed accordingly. **Stop the receiver before you go back to
+  voice** — while it runs, transmit audio comes from the data port on HF now too.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
