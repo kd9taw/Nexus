@@ -2729,6 +2729,8 @@ pub struct Engine {
     /// explain a blank waterfall instead of failing silently.
     audio_error: Option<String>,
     scope_error: Option<String>,
+    /// See `RadioStatus::scope_span_refused`.
+    scope_span_refused: Option<String>,
     /// See `RadioStatus::scope_mode_code`.
     scope_mode_code: Option<u32>,
     /// See `RadioStatus::scope_fix_start_mhz`.
@@ -4486,6 +4488,7 @@ impl Engine {
             cat_reprobe: false,
             audio_error: None,
             scope_error: None,
+            scope_span_refused: None,
             scope_mode_code: None,
             scope_fix_start_mhz: None,
             recording_warning: None,
@@ -16128,10 +16131,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.scope_mode_code = None;
         self.scope_fix_start_mhz = None;
         self.scope_error = None;
+        self.scope_span_refused = None;
     }
 
     pub fn set_scope_error(&mut self, err: Option<String>) {
         self.scope_error = err;
+    }
+
+    /// The radio's answer to the last scope-SPAN command it was sent: `Some(sentence)` when it
+    /// refused (or did not answer), `None` when it took it — issue #275.
+    ///
+    /// Written by the radio loop on EVERY span attempt, in both directions, so a span that
+    /// lands clears the previous complaint without the operator having to do anything. The
+    /// sentence is the loop's prose, carried through verbatim like `scope_error`'s.
+    pub fn set_scope_span_refused(&mut self, note: Option<String>) {
+        self.scope_span_refused = note;
     }
 
     pub fn set_audio_error(&mut self, err: Option<String>) {
@@ -17003,6 +17017,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // the radio loop.
         s.radio.amp = self.amp_live(self.settings.active_radio).cloned();
         s.radio.scope_error = self.scope_error.clone();
+        s.radio.scope_span_refused = self.scope_span_refused.clone();
         s.radio.scope_mode_code = self.scope_mode_code;
         s.radio.scope_fix_start_mhz = self.scope_fix_start_mhz;
         s.radio.recording_warning = self.recording_warning.clone();

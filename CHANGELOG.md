@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setting and the power really in use, rather than a stale one. A radio that will not report its
   power is left alone entirely: with nothing to put back, nothing is taken away.
 
+- **A scope span the radio refuses now says so (#275).** On an IC-7300 with its scope in Fixed
+  mode a span set is rejected, and the rejection was being dropped in three places — so the span
+  buttons did nothing at all, with no explanation anywhere. The refusal is now shown in the status
+  lane, naming the span and what to do about it, and it clears itself the moment a span is
+  accepted. **Nexus does not change the radio's scope mode for you:** Fixed is a deliberate choice,
+  and flipping it to make a button work would be a bigger surprise than the button not working.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection

@@ -5098,6 +5098,7 @@ export const ES: PartialCatalog = {
   "shell.halt.failed": "No se pudo detener la transmisión",
   "shell.holdTx.failed": "No se pudo activar/desactivar Hold Tx",
   "shell.lane.audio.message": "EQUIPO DETENIDO",
+  "shell.lane.scopeSpan.message": "SPAN RECHAZADO",
   "shell.lane.prop.cached.detail": "Falló la actualización de propagación — se muestra la última copia buena.",
   "shell.lane.prop.cached.message": "Prop: caché {{minutes}}m",
   "shell.lane.prop.offline.detail": "Aún no hay datos de propagación en vivo — pon tu indicativo en Ajustes y revisa la conexión a internet.",

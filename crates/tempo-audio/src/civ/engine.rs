@@ -416,6 +416,12 @@ pub(crate) mod tests_support {
         /// Fault injection — swallow the next N `16 5A` READ replies: a lost
         /// CI-V reply (the request times out while the rig's state stands).
         pub drop_satmode_reads: u32,
+        /// Scope CENTER/FIXED position (`27 14`): false = Center, true = Fixed. Modelled so a
+        /// scope SPAN (`27 15`) can be REFUSED — issue #275 reports an IC-7300 rejecting a span
+        /// while its scope is in Fixed mode, and a fixture that acks everything cannot exercise
+        /// what Nexus does with a refusal. The rule here is the field report's, not a reading of
+        /// Icom's CI-V document; what the tests assert is the handling of a NAK.
+        pub scope_fixed: bool,
         /// Every command frame received, as (cmd, data) — lets a test assert a
         /// verb was NOT sent (e.g. "no `0F` under the satellite-mode contract").
         pub log: Vec<(u8, Vec<u8>)>,
@@ -465,6 +471,7 @@ pub(crate) mod tests_support {
                         nak_main_select: 0,
                         nak_satmode_set: 0,
                         drop_satmode_reads: 0,
+                        scope_fixed: false,
                         log: Vec::new(),
                     })),
                     mute: false,
@@ -614,7 +621,17 @@ pub(crate) mod tests_support {
                             None => Some((0x1A, vec![0x06, u8::from(r.data_mode), 0x01])),
                         },
                         (0x15, Some(0x02)) => Some((0x15, vec![0x02, 0x01, 0x20])), // raw 120 = S9
-                        (0x27, _) => None,             // scope enable/disable
+                        // Scope CENTER/FIXED (`27 14`) — remembered so the span below can be
+                        // refused. The mode is the LAST payload byte on both frame shapes
+                        // (`27 14 <fixed>` single-scope, `27 14 <main_sub> <fixed>` dual).
+                        (0x27, Some(0x14)) => {
+                            r.scope_fixed = f.data.last().is_some_and(|&b| b == 0x01);
+                            None
+                        }
+                        // Scope SPAN (`27 15`) — NAKed while the scope is in Fixed mode, which
+                        // is the #275 refusal this fixture exists to produce.
+                        (0x27, Some(0x15)) if r.scope_fixed => Some((0xFA, Vec::new())),
+                        (0x27, _) => None, // scope enable/disable, span in centre
                         _ => Some((0xFA, Vec::new())), // NAK anything unknown
                     }
                 };

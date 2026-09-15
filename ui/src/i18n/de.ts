@@ -5118,6 +5118,7 @@ export const DE: PartialCatalog = {
   "shell.crash.retry": "Erneut versuchen",
   "shell.crash.back": "Zurück zu {{section}}",
   "shell.lane.audio.message": "GERÄT GESTOPPT",
+  "shell.lane.scopeSpan.message": "SPANNE ABGELEHNT",
   "shell.lane.radioConfig.message": "GERÄTE-KONFIG",
   "shell.lane.recording.message": "AUFNAHME",
   "shell.lane.prop.offline.message": "Ausbreitung: keine Livedaten",

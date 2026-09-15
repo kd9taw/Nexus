@@ -1114,7 +1114,12 @@ export function CwCockpit({
                   type="button"
                   className="theme-chip"
                   title={t('cw.rigScope.span.title', { span: sp.label })}
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                  /* #275: a failure here was swallowed, matching the backend's own swallow —
+                     between them a span button on an IC-7300 in Fixed mode did nothing with no
+                     explanation anywhere. The rig's OWN refusal arrives a tick later in
+                     `radio.scopeSpanRefused` (the status lane); this catch is the nearer half,
+                     the command itself failing. */
+                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))}
                 >
                   {sp.label}
                 </button>

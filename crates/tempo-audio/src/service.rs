@@ -5851,7 +5851,34 @@ impl RadioLoop {
                         )
                     };
                     if let Some(hz) = span {
-                        d.set_scope_span(hz);
+                        // ⭐ ISSUE #275: SAY SO WHEN THE RADIO REFUSES IT. The result used to be
+                        // dropped here and again in the cockpit's `.catch(() => {})`, so on an
+                        // IC-7300 with the scope in Fixed mode every span button did nothing at
+                        // all, with nothing anywhere to explain it. Written in BOTH directions,
+                        // so a span that lands clears the previous complaint by itself.
+                        //
+                        // ⚠️ AND NEXUS DOES NOT CHANGE THE SCOPE MODE FOR THEM (operator,
+                        // 2026-09-14). Fixed mode is a deliberate pick — it is how you watch a
+                        // band segment while the dial moves — and silently flipping it to make a
+                        // button work would trade one surprise for a bigger one.
+                        let note = match d.set_scope_span(hz) {
+                            Ok(()) => None,
+                            Err(crate::civ::engine::CivError::Nak) => Some(format!(
+                                "the radio refused a {:.1} kHz scope span. An Icom takes a span \
+                                 only while its scope is in Center mode — switch the scope to \
+                                 Center on the radio, then pick the span again.",
+                                f64::from(hz) / 1000.0
+                            )),
+                            Err(_) => Some(
+                                "the radio didn't answer the scope-span command — the CAT link \
+                                 to it may be down."
+                                    .to_string(),
+                            ),
+                        };
+                        if let Some(msg) = note.as_deref() {
+                            tempo_core::applog::info("cat", msg);
+                        }
+                        engine_lock(engine).set_scope_span_refused(note);
                     }
                     if let Some(t) = refl {
                         d.set_scope_ref(t);

@@ -5098,6 +5098,7 @@ export const FR: PartialCatalog = {
   "shell.halt.failed": "Impossible d'arrêter l'émission",
   "shell.holdTx.failed": "Impossible de basculer Hold Tx",
   "shell.lane.audio.message": "RADIO ARRÊTÉE",
+  "shell.lane.scopeSpan.message": "SPAN REFUSÉ",
   "shell.lane.prop.cached.detail": "Échec du rafraîchissement de la propagation — dernier instantané valide affiché.",
   "shell.lane.prop.cached.message": "Prop : cache {{minutes}}m",
   "shell.lane.prop.offline.detail": "Aucune donnée de propagation en direct — indiquez votre indicatif dans les Réglages et vérifiez votre connexion internet.",

@@ -1290,6 +1290,13 @@ export interface RadioStatus {
    * working on sound-card audio throughout.
    */
   scopeError?: string | null
+  /**
+   * The radio's answer to the last scope-SPAN command Nexus sent it: a sentence when the rig
+   * refused it (or did not answer), null when it took it. Separate from `scopeError`, which is
+   * about the scope SOURCE not delivering — here the scope streams fine and one CONTROL was
+   * rejected (#275: an IC-7300 with its scope in Fixed mode rejects a span).
+   */
+  scopeSpanRefused?: string | null
   /** The rig scope's MODE code (`SS` P3) as read back, or null before one is known. */
   scopeModeCode?: number | null
   /** The FIX start the operator stated, in MHz — null until they do. */

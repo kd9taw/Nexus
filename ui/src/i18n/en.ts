@@ -8284,6 +8284,7 @@ export const EN = {
   // stares at. `detail` is the backend's own message where one exists and is interpolated as
   // data, never translated.
   'shell.lane.audio.message': 'RADIO STOPPED',
+  'shell.lane.scopeSpan.message': 'SCOPE SPAN REFUSED',
   'shell.lane.radioConfig.message': 'RADIO CONFIG',
   'shell.lane.txPowerZero.message': 'NO RF POWER',
   'shell.lane.txPowerZero.detail':

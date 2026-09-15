@@ -311,6 +311,7 @@ impl AppState {
                 split_tx_mhz: None,
                 audio_error: None,
                 scope_error: None,
+                scope_span_refused: None,
                 scope_mode_code: None,
                 scope_fix_start_mhz: None,
                 radio_config_warning: None,

@@ -5046,6 +5046,7 @@ export const JA: PartialCatalog = {
   "shell.crash.retry": "再試行",
   "shell.crash.back": "{{section}}に戻る",
   "shell.lane.audio.message": "無線停止",
+  "shell.lane.scopeSpan.message": "スパン拒否",
   "shell.lane.radioConfig.message": "無線機設定",
   "shell.lane.txPowerZero.message": "RF出力ゼロ",
   "shell.lane.txPowerZero.detail": "無線機の出力が0%のまま送信が有効になっています — このままではキーイングしても電波が出ません。Pwrスライダーと、無線機側のこのモードの出力設定を確認してください。Yaesu機はSSB・DATA・CW・AMごとに別々の出力レベルを記憶します。",

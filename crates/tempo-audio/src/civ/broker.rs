@@ -940,12 +940,29 @@ impl CivDaemon {
     }
 
     /// Set the rig's scope SPAN (`27 15`) — the ± half-width in Hz (rig table 2.5k..500k).
-    /// Best-effort transact; a NAK (unsupported / in fixed mode) is fine.
-    pub fn set_scope_span(&self, span_hz: u32) {
-        let _ = self.engine.handle().transact(
-            commands::set_scope_span(self.civ_addr, self.scope_ms(), span_hz),
-            Expect::Ack,
-        );
+    ///
+    /// ⚠️ RETURNS THE RIG'S ANSWER, and issue #275 is why it no longer swallows it. "A NAK
+    /// (unsupported / in fixed mode) is fine" was this function's own comment, and it was fine
+    /// for the daemon and invisible to the operator: on an IC-7300 with the scope in Fixed mode
+    /// every span button did nothing, silently, three layers deep (here, and again in the
+    /// cockpit's `.catch(() => {})`). A refusal is a FACT ABOUT THE RADIO and belongs in front
+    /// of the person holding it.
+    ///
+    /// The caller decides what to say; `Nak` (the rig rejected it, `FA`) and `Timeout` (nobody
+    /// answered) have different cures and must not be collapsed into one message.
+    ///
+    /// ⚠️ NEEDS-BENCH, and the refusal RULE is not from a vendor document. The frame layout is
+    /// read off Hamlib (see `commands`), and "a span is only taken in Center mode" is the
+    /// field report's claim, not something confirmed here against Icom's CI-V reference. What
+    /// this code does is report what the rig said, which is true either way.
+    pub fn set_scope_span(&self, span_hz: u32) -> Result<(), CivError> {
+        self.engine
+            .handle()
+            .transact(
+                commands::set_scope_span(self.civ_addr, self.scope_ms(), span_hz),
+                Expect::Ack,
+            )
+            .map(|_| ())
     }
 
     /// Set the rig's scope REFERENCE level (`27 19`), in tenths of a dB (−200..+200).
@@ -1048,6 +1065,47 @@ mod tests {
         line.clear();
         rd.read_line(&mut line).unwrap();
         assert_eq!(line, "0\n");
+    }
+
+    /// ⭐ ISSUE #275: A SCOPE SPAN THE RADIO REFUSES HAS TO COME BACK AS A REFUSAL. The daemon
+    /// dropped the transact result on the floor ("a NAK … is fine"), so on an IC-7300 with the
+    /// scope in Fixed mode the span buttons did nothing, silently, and nothing anywhere in the
+    /// app could say why.
+    ///
+    /// The fixture's rule — Fixed mode NAKs `27 15` — reproduces the reported refusal; it is
+    /// the field report's claim, not a reading of Icom's CI-V document. What this test pins is
+    /// what Nexus does with a NAK, which is true whatever provokes one.
+    #[test]
+    fn a_scope_span_the_radio_rejects_is_reported_rather_than_swallowed() {
+        let (d, _port, regs) = daemon_with_regs();
+
+        // CONTROL FIRST: in Center mode the same span is accepted, so a later refusal is the
+        // rig's answer and not "this path never reaches the radio".
+        d.set_scope_center_mode(false);
+        assert_eq!(
+            d.set_scope_span(25_000),
+            Ok(()),
+            "control: a span in Center mode is taken"
+        );
+        assert!(
+            !regs.lock().unwrap().scope_fixed,
+            "control: the fixture really is in Center mode"
+        );
+
+        // …and in Fixed mode the radio rejects it.
+        d.set_scope_center_mode(true);
+        assert_eq!(
+            d.set_scope_span(25_000),
+            Err(CivError::Nak),
+            "a refused span must reach the caller — swallowing it is the whole of #275"
+        );
+
+        // Nexus must NOT put the scope back to Center to make the button work (operator,
+        // 2026-09-14): Fixed is a deliberate pick, and flipping it would be a bigger surprise.
+        assert!(
+            regs.lock().unwrap().scope_fixed,
+            "the refusal must leave the rig's scope mode exactly where the operator put it"
+        );
     }
 
     #[test]

@@ -942,6 +942,15 @@ pub struct RadioStatus {
     /// external display) are enabled in its EX menu, and Nexus CANNOT set those over CAT — so a
     /// silent scope is an instruction to the operator, not a fault to retry.
     pub scope_error: Option<String>,
+    /// The radio's answer to the last scope-SPAN command Nexus sent it: `Some(sentence)` when
+    /// the rig refused it (or did not answer), `None` when it took it. `None` = nothing to say.
+    ///
+    /// Separate from `scope_error`, which is about the scope SOURCE not delivering: here the
+    /// scope is streaming perfectly and one CONTROL was rejected. Issue #275 — an IC-7300 with
+    /// its scope in Fixed mode rejects a span, and the refusal was swallowed in three places, so
+    /// the span buttons simply did nothing with no explanation anywhere.
+    #[serde(default)]
+    pub scope_span_refused: Option<String>,
     /// Where the rig's own scope currently sits — the `SS` P3 MODE code as the ASCII byte the radio
     /// sent, widened for JSON. `None` until one has been read.
     ///
