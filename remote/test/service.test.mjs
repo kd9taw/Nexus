@@ -54,6 +54,36 @@ test('a retired service announces where Remote moved, then refuses new pairings,
     })
   })
 
+test('station lookups require all extensions, preserve v14 refusal and survive hibernation', async () => {
+  const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
+  assert.equal(config.applicationVersion, 15)
+  const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
+    'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
+    'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1' }
+  for (const [missing, expected] of [[null, 15], ['lookups', 14], ['configuration', 13], ['navigation', 12], ['stream', 1]]) {
+    const advertisement = { ...headers }
+    if (missing) delete advertisement[`x-nexus-application-${missing}-version`]
+    const pair = await app.paired(), live = await admitted(pair, 1, advertisement)
+    live.browser.send({ type: 'applicationHello', version: 15 })
+    const capabilities = await live.browser.take(type('applicationCapabilities'))
+    assert.equal(capabilities.version, expected)
+    assert.equal(capabilities.commands.includes('get_remote_parks'), expected === 15)
+    assert.equal(capabilities.commands.includes('get_remote_confirmations'), expected === 15)
+    const requestId = crypto.randomUUID()
+    live.browser.send({ type: 'applicationQuery', requestId, collection: 'parks', cursor: null, search: 'US-0001', unconfirmed: false, after: null })
+    if (expected === 15) {
+      const request = await live.station.take(type('applicationQuery'))
+      assert.equal(request.search, 'US-0001')
+      await app.evict(pair.stationId)
+      live.station.send({ type: 'applicationPage', requestId: request.requestId, collection: 'parks', snapshotId: crypto.randomUUID(),
+        offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { source: { testCall: 'LOOKUPS-FIXTURE' } } })
+      const page = await live.browser.take(type('applicationPage'))
+      assert.equal(page.requestId, requestId); assert.equal(page.meta.source.testCall, 'LOOKUPS-FIXTURE')
+      live.browser.send({ type: 'applicationQueryAck', requestId })
+    } else await live.browser.take(type('closed'))
+    live.browser.close(); live.station.close()
+  }
+})
 test('full-log insights require the complete extension advertisement and survive room hibernation', async () => {
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1', 'x-nexus-application-insights-version': '1' }
@@ -392,7 +422,7 @@ test('v2 subscriptions share native samples across approved browsers and recover
 
 test('keyboard observation needs the complete native advertisement and survives room hibernation', async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
-  assert.equal(config.applicationVersion, 14)
+  assert.equal(config.applicationVersion, 15)
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1' }
   for (const [missing, expected] of [[null, 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {

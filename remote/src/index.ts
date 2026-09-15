@@ -37,7 +37,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, clientId: env.AUTH0_CLIENT_ID,
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
     revision: env.REMOTE_BUILD_REVISION ?? 'local',
-    applicationVersion: 14,
+    applicationVersion: 15,
     operationVersion: 2,
     operationMaxVersion: 3,
     operationFtVersion: 1,
@@ -58,7 +58,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
                   ? request.headers.get('x-nexus-application-memories-version') === '1'
                     ? request.headers.get('x-nexus-application-ota-version') === '1'
                       ? request.headers.get('x-nexus-application-field-day-version') === '1'
-                        ? request.headers.get('x-nexus-application-js8-version') === '1' ? request.headers.get('x-nexus-application-station-modes-version') === '1' ? request.headers.get('x-nexus-application-navigation-version') === '1' ? request.headers.get('x-nexus-application-configuration-version') === '1' ? 14 : 13 : 12 : 11 : 10 : 9 : 8 : 7 : 6
+                        ? request.headers.get('x-nexus-application-js8-version') === '1' ? request.headers.get('x-nexus-application-station-modes-version') === '1' ? request.headers.get('x-nexus-application-navigation-version') === '1' ? request.headers.get('x-nexus-application-configuration-version') === '1' ? request.headers.get('x-nexus-application-lookups-version') === '1' ? 15 : 14 : 13 : 12 : 11 : 10 : 9 : 8 : 7 : 6
                 : 5
               : 4
             : 3

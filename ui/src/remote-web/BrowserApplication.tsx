@@ -22,6 +22,7 @@ import { RemoteObservationContext } from './amplifier-observation'
 import { initialState, startMonitor } from '../remote-monitor/session'
 import { APPLICATION_TIMEOUT_MS } from './application-protocol'
 import type { HostedConnection } from './client'
+import { useNeedAlerts } from './useNeedAlerts'
 import '../cockpit-panes.css'
 import './application.css'
 
@@ -104,10 +105,11 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   // Only the DISPLAY waits: the fade and the unavailable wording follow five seconds of continuous loss
   // and clear on recovery, so a brief gap shows nothing (operator decision 2026-09-14).
   const staleShown = useStaleDisplay(stale)
+  const alerts = useNeedAlerts(collections, !stale && client.supports(QUERY_COMMAND), boot?.settings ?? null)
   // Stable props: the 500 ms tick re-renders this component to re-read the sample age, and a fresh
   // `remote` object every tick re-rendered the whole workspace with it.
-  const status = useMemo(() => <SessionStatus client={connection.operations} stale={staleShown} disconnect={disconnect} display={display} />,
-    [connection.operations, staleShown, disconnect, display])
+  const status = useMemo(() => <SessionStatus client={connection.operations} stale={staleShown} disconnect={disconnect} display={display} alerts={alerts} />,
+    [connection.operations, staleShown, disconnect, display, alerts])
   const remote = useMemo(() => boot && { ...boot, status, stale, staleShown }, [boot, status, stale, staleShown])
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
     {status}

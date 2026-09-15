@@ -24,6 +24,8 @@ export async function insightsReference() {
     ...await module('remote-web/aprs.ts',{'./display-validation':display}), ...await module('remote-web/insights.ts', { '../features/logStats': statistics }),
     ...await module('remote-web/dxpeditions.ts'),
     ...await module('remote-web/ota.ts'),
+    ...await module('remote-web/parks.ts'),
+    ...await module('remote-web/confirmations.ts'),
     ...await module('remote-web/field-day.ts'),
     ...await module('remote-web/js8.ts', { './application-protocol': await module('remote-web/application-protocol.ts') }),
     ...await module('remote-web/memories.ts', { '../remote-native/memoryBank': await module('remote-native/memoryBank.ts') }) }

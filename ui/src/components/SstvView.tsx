@@ -518,16 +518,25 @@ function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc
   )
 }
 
+// A browser download name from the picture's own caption, never the station's file path.
+const sstvDownloadName = (g: SstvGalleryEntry) =>
+  `nexus-sstv-${`${g.finishedUtc}-${g.mode}`.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')}${g.path.slice(-4).toLowerCase()}`
+
 function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) {
   const source=useContext(RemoteCollectionsContext), available=useStationData()
   const ref=useRef<HTMLDivElement>(null)
   const image=useSstvImage(source,entry.path,ref,active&&available)
   if(!source)return <GalleryThumb entry={entry}/>
   const mode=SSTV_TX_MODES.find(m=>m.name===entry.mode)
-  return <div ref={ref} className="sstv-remote-image" style={{aspectRatio:mode?`${mode.width} / ${mode.height}`:'4 / 3'}}>
-    {image.url ? <GalleryThumb entry={entry} remoteSrc={image.url}/> : <span role="status" className="dim">{image.failed?t('remote.sstvImageUnavailable'):t('remote.collectionLoading')}</span>}
-    {image.failed && <button type="button" className="cw-macro" onClick={image.retry}>{t('remote.refreshCollection')}</button>}
-  </div>
+  return <>
+    <div ref={ref} className="sstv-remote-image" style={{aspectRatio:mode?`${mode.width} / ${mode.height}`:'4 / 3'}}>
+      {image.url ? <GalleryThumb entry={entry} remoteSrc={image.url}/> : <span role="status" className="dim">{image.failed?t('remote.sstvImageUnavailable'):t('remote.collectionLoading')}</span>}
+      {image.failed && <button type="button" className="cw-macro" onClick={image.retry}>{t('remote.refreshCollection')}</button>}
+    </div>
+    {/* Saves the verified picture this page is already showing; nothing is asked of the station. */}
+    {image.url && <a className="cw-macro sstv-thumb-save" href={image.url} download={sstvDownloadName(entry)}
+      aria-label={t('remote.b3.sstvSaveAria',{mode:entry.mode,when:fmtUtc(entry.finishedUtc)})}>{t('remote.b3.sstvSave')}</a>}
+  </>
 }
 
 /**

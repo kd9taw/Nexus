@@ -7,6 +7,7 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 mod configuration;
+mod confirmations;
 mod dxpeditions;
 mod field_day;
 mod insights;
@@ -14,6 +15,7 @@ mod js8;
 pub(super) mod memories;
 pub(crate) mod navigation;
 mod ota;
+mod parks;
 mod recall;
 
 /// The same bounded public projection used by the Settings document. Neither
@@ -55,6 +57,8 @@ pub enum Collection {
     Path,
     Satellites,
     Satellite,
+    Parks,
+    Confirmations,
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -83,6 +87,8 @@ impl Request {
                 navigation::valid_search(self.collection, &self.search) && !self.unconfirmed
             } else if self.collection == Collection::SstvImage {
                 super::sstv::identifier(&self.search) && !self.unconfirmed
+            } else if self.collection == Collection::Parks {
+                parks::valid_search(&self.search) && !self.unconfirmed
             } else {
                 self.collection == Collection::Log || (self.search.is_empty() && !self.unconfirmed)
             })
@@ -98,6 +104,8 @@ impl Request {
                     | Collection::Ota
                     | Collection::FieldDay
                     | Collection::Js8Context
+                    | Collection::Parks
+                    | Collection::Confirmations
             ) || self.cursor.is_none())
             && self
                 .cursor
@@ -320,6 +328,10 @@ impl Publisher {
                     | Collection::Satellite
             ) {
                 0 // Explicit selection/Refresh must see intervening local log changes.
+            } else if request.collection == Collection::Confirmations {
+                // Diagnosing holds the engine for the whole log, as on the desktop.
+                // Refreshes share one capture so a browser cannot hold it repeatedly.
+                10_000
             } else if request.collection == Collection::Decodes {
                 500
             } else if request.collection == Collection::Needs {
@@ -451,6 +463,15 @@ impl Publisher {
                 return sources.navigation.read(request, engine, sources);
             }
             Collection::Aprs => return super::aprs::capture(engine),
+            Collection::Confirmations => {
+                return Ok((Vec::new(), 0, confirmations::read_engine(engine)?));
+            }
+            Collection::Parks => {
+                return parks::read(
+                    &sources.ok_or("applicationUnavailable")?.parks,
+                    &request.search,
+                );
+            }
             Collection::SstvImage => {
                 return super::sstv::capture(
                     &self.sstv_images,

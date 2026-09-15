@@ -5,7 +5,7 @@
 // "translated" one would have broken an example of a wire format. See the invariant-token rule in
 // `i18n/index.ts`.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppSnapshot,
   ContestFieldSpec,
@@ -20,6 +20,8 @@ import { inDomain } from '../features/contestDomains'
 import { composingSlot } from '../features/contestExchange'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
+import { RemoteCollectionsContext } from '../remote-web/collections'
+import { PARKS_COMMAND } from '../remote-web/application-query-protocol'
 import { pushToast, withErrorToast } from '../toast'
 
 // ---------------------------------------------------------------------------
@@ -331,6 +333,9 @@ export function LogEntry({
   remote,
 }: Props) {
   const remoteMode = remote != null
+  // A station that offers its park directory answers the two offline park reads below.
+  // Nothing else here reaches the station, and the live POTA lookup never does.
+  const remoteParks = useContext(RemoteCollectionsContext)?.client.supports(PARKS_COMMAND) ?? false
   type DraftContext = { band: string; freqMhz: number; mode: string }
   const [remoteDraftContext, setRemoteDraftContext] = useState<DraftContext | null>(null)
   const [remoteWorkOffer, setRemoteWorkOffer] = useState<({ call: string; ts: number } & { context: DraftContext }) | null>(null)
@@ -545,7 +550,7 @@ export function LogEntry({
   // also why no test here reddens on removing this line alone: `parkPicked` still catches
   // it. The guard's value is that the property no longer depends on that.)
   useEffect(() => {
-    if (remoteMode || !asksForPark) {
+    if ((remoteMode && !remoteParks) || !asksForPark) {
       setParkHits([])
       return
     }
@@ -565,7 +570,7 @@ export function LogEntry({
     }, 180)
     return () => clearTimeout(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logParkRef, logParkProgram, asksForPark, remoteMode])
+  }, [logParkRef, logParkProgram, asksForPark, remoteMode, remoteParks])
 
   // Auto-load a park's details the moment a COMPLETE valid POTA reference is entered (like HRD):
   // instant offline lookup first, then the live POTA directory if it's not in the local list. Purely
@@ -576,7 +581,7 @@ export function LogEntry({
   // it never renders.
   useEffect(() => {
     const ref = logParkRef.trim().toUpperCase()
-    if (remoteMode || !asksForPark || logParkProgram !== 'POTA' || !/^[A-Z0-9]{1,4}-\d{4,5}$/.test(ref)) {
+    if ((remoteMode && !remoteParks) || !asksForPark || logParkProgram !== 'POTA' || !/^[A-Z0-9]{1,4}-\d{4,5}$/.test(ref)) {
       setParkDetail(null)
       return
     }
@@ -588,6 +593,11 @@ export function LogEntry({
           if (local) {
             setParkDetail(local)
             setParkDetailLive(false)
+            return
+          }
+          // From a browser only the station's own list is read; the live directory is not.
+          if (remoteMode) {
+            setParkDetail(null)
             return
           }
           // Not in the local list (empty/stale) → try the live POTA directory (also brings coords).
@@ -606,7 +616,7 @@ export function LogEntry({
       cancelled = true
       clearTimeout(id)
     }
-  }, [logParkRef, logParkProgram, asksForPark, remoteMode])
+  }, [logParkRef, logParkProgram, asksForPark, remoteMode, remoteParks])
 
   const refreshLog = () => !remoteMode && void getLog().then(setAllLog).catch(() => {})
   useEffect(() => {

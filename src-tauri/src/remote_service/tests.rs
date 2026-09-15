@@ -325,6 +325,7 @@ fn cloud_runtime_probe() {
         sstv: sstv_files.source(),
     };
     let ota_cache = sources.ota.clone();
+    let park_index = sources.parks.clone();
     let mut service = Service::start(
         origin.clone(),
         Box::new(vault.clone()),
@@ -725,6 +726,40 @@ fn cloud_runtime_probe() {
                 "REMOTE_TEST:{}",
                 json!({ "rtty": crate::rtty_state_dto(&e), "psk": crate::psk_state_dto(&e),
                 "txEnabled": e.snapshot().radio.tx_enabled, "logCount": e.get_log().len() })
+            );
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
+        // Test-only park directory. The response is the desktop search_parks and
+        // lookup_park answer for the same search, for parity checks.
+        if value["type"] == "seedParks" {
+            let index = tempo_core::pota::ParkIndex::parse_csv(value["csv"].as_str().unwrap());
+            let search = value["search"].as_str().unwrap();
+            let parks: Vec<_> = index
+                .search(search, 12)
+                .into_iter()
+                .map(crate::ParkDto::from)
+                .collect();
+            let exact = index.lookup(search).map(crate::ParkDto::from);
+            *park_index.lock().unwrap() = index;
+            println!("REMOTE_TEST:{}", json!({ "parks": parks, "exact": exact }));
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
+        // Test-only desktop truth for the hosted Awards diagnostics: the report the
+        // desktop get_confirmation_diagnostics command returns for the seeded log.
+        if value["type"] == "confirmationDiagnostics" {
+            let e = engine.lock().unwrap();
+            let report = tempo_app::dto::DiagnosticsReportDto::from(
+                e.confirmation_diagnostics(crate::now_unix(), |call| {
+                    propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+                }),
+            );
+            let log_count = e.get_log().len();
+            drop(e);
+            println!(
+                "REMOTE_TEST:{}",
+                json!({ "report": report, "logCount": log_count })
             );
             std::io::stdout().flush().unwrap();
             continue;

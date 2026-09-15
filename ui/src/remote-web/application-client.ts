@@ -15,7 +15,7 @@ import { parseAprsLive } from './aprs'
 import { parseSatelliteLive } from './navigation'
 import { shareStructure } from './stable-share'
 import { ApplicationQueryClient } from './application-query-client'
-import { CONFIGURATION_COMMAND, configurationCollection, NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
+import { PARKS_COMMAND, CONFIRMATIONS_COMMAND, CONFIGURATION_COMMAND, configurationCollection, NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
 type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -63,6 +63,10 @@ export class ApplicationClient implements ApplicationTransport {
     this.setPhase('unavailable')
   }
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    if (this.phase === 'ready' && this.version >= 15 && (command === PARKS_COMMAND || command === CONFIRMATIONS_COMMAND)) {
+      if (args?.collection !== (command === PARKS_COMMAND ? 'parks' : 'confirmations')) return Promise.reject(new Error('applicationUnsupported'))
+      return this.query.read(args, 15) as Promise<T>
+    }
     if (this.phase === 'ready' && this.version >= 14 && command === CONFIGURATION_COMMAND) {
       if (!configurationCollection(args?.collection)) return Promise.reject(new Error('applicationUnsupported'))
       return this.query.read(args!, 14) as Promise<T>

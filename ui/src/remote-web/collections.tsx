@@ -3,9 +3,10 @@ import type { ApplicationTransport } from '../applicationTransport'
 import type { DecodeRow, Tier } from '../types'
 import { t } from '../i18n'
 import type { Json } from './application-protocol'
-import { CONFIGURATION_COMMAND, configurationCollection, NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
+import { PARKS_COMMAND, CONFIRMATIONS_COMMAND, parkSearch, CONFIGURATION_COMMAND, configurationCollection, NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 import type { Collection, QueryArgs, QueryPage } from './application-query-protocol'
 import type { ApplicationClient } from './application-client'
+import { PARK_ROWS, parseParks } from './parks'
 
 type State = { phase: 'loading' | 'ready' | 'unavailable'; total: number; retained: number; at: number }
 const INITIAL: State = { phase: 'loading', total: 0, retained: 0, at: 0 }
@@ -40,6 +41,20 @@ export class RemoteCollections implements ApplicationTransport {
       window.open(`https://www.qrz.com/db/${base}`, '_blank', 'noopener,noreferrer')
       return undefined as T
     }
+    // The log form's park suggestions and detail chip, answered from the station's offline
+    // directory. The live POTA lookup is not mapped: an older station, or that lookup, reaches
+    // only the ordinary allowlist below, which refuses it.
+    if ((command === 'search_parks' || command === 'lookup_park') && this.client.supports(PARKS_COMMAND)) {
+      const search = command === 'search_parks', keys = search ? ['query', 'limit'] : ['reference']
+      const raw = search ? args?.query : args?.reference, limit = args?.limit ?? PARK_ROWS
+      if (!args || Object.keys(args).some(k => !keys.includes(k)) || typeof raw !== 'string' ||
+        (search && (!Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > PARK_ROWS))) throw new Error('applicationUnsupported')
+      const text = raw.trim().toUpperCase()
+      if (new TextEncoder().encode(text).length < 2) return (search ? [] : null) as T
+      if (!parkSearch(text)) throw new Error('applicationUnsupported')
+      const found = parseParks(await this.page({ collection: 'parks', cursor: null, search: text, unconfirmed: false, after: null }))
+      return structuredClone(search ? found.parks.slice(0, Number(limit)) : found.exact) as T
+    }
     const name = READS[command]
     if (!name || !this.client.supports(QUERY_COMMAND)) return this.client.invoke<T>(command, args)
     if (args && Object.keys(args).length) throw new Error('applicationUnsupported')
@@ -51,7 +66,7 @@ export class RemoteCollections implements ApplicationTransport {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
-        const page = await this.client.invoke<QueryPage>(configurationCollection(args.collection) ? CONFIGURATION_COMMAND : navigationCollection(args.collection) ? NAVIGATION_COMMAND : args.collection === 'sstvImage' ? SSTV_IMAGE_COMMAND : args.collection === 'aprs' ? APRS_COMMAND : args.collection === 'js8Context' ? JS8_CONTEXT_COMMAND : args.collection === 'fieldDay' ? FIELD_DAY_COMMAND : args.collection === 'ota' ? OTA_COMMAND : args.collection === 'memories' ? MEMORIES_COMMAND : args.collection === 'dxpeditions' ? DXPEDITIONS_COMMAND : args.collection === 'recall' ? RECALL_COMMAND : insightCollection(args.collection) ? INSIGHTS_COMMAND : QUERY_COMMAND, args)
+        const page = await this.client.invoke<QueryPage>(args.collection === 'parks' ? PARKS_COMMAND : args.collection === 'confirmations' ? CONFIRMATIONS_COMMAND : configurationCollection(args.collection) ? CONFIGURATION_COMMAND : navigationCollection(args.collection) ? NAVIGATION_COMMAND : args.collection === 'sstvImage' ? SSTV_IMAGE_COMMAND : args.collection === 'aprs' ? APRS_COMMAND : args.collection === 'js8Context' ? JS8_CONTEXT_COMMAND : args.collection === 'fieldDay' ? FIELD_DAY_COMMAND : args.collection === 'ota' ? OTA_COMMAND : args.collection === 'memories' ? MEMORIES_COMMAND : args.collection === 'dxpeditions' ? DXPEDITIONS_COMMAND : args.collection === 'recall' ? RECALL_COMMAND : insightCollection(args.collection) ? INSIGHTS_COMMAND : QUERY_COMMAND, args)
         if (!this.live || generation !== this.generation) throw new Error('applicationUnavailable')
         return page
       }
