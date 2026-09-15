@@ -219,6 +219,37 @@ pub fn encode_qso_logged(id: &str, q: &QsoLogged) -> Vec<u8> {
     w.into_bytes()
 }
 
+/// The ADIF version and program id [`encode_logged_adif`] puts in its header — Nexus's own
+/// logbook writer's (`tempo_core::logbook::adif_header`), since the record is Nexus's.
+const LOGGED_ADIF_VERSION: &str = "3.1.4";
+const LOGGED_ADIF_PROGRAM_ID: &str = "Nexus";
+
+/// **LoggedADIF (type 12).** One completed contact as ADIF text, sent right after
+/// [`encode_qso_logged`] for the same contact, as WSJT-X does (`MainWindow::acceptQSO` sends
+/// `qso_logged` then `logged_ADIF`). Some loggers (Log4OM's ADIF inbound) read only this one.
+///
+/// The field is `MessageClient::logged_ADIF`'s envelope byte for byte:
+/// `"\n<adif_ver:N>V\n<programid:N>P\n<EOH>\n" + record + " <EOR>"`. `adif_record` is one
+/// record; a trailing `<EOR>` on it (our writer ends every record with one) is dropped first
+/// so the envelope's own does not double it.
+pub fn encode_logged_adif(id: &str, adif_record: &str) -> Vec<u8> {
+    let body = adif_record.trim_end();
+    let body = match body.len().checked_sub(5) {
+        Some(cut) if body.is_char_boundary(cut) && body[cut..].eq_ignore_ascii_case("<eor>") => {
+            body[..cut].trim_end()
+        }
+        _ => body,
+    };
+    let text = format!(
+        "\n<adif_ver:{}>{LOGGED_ADIF_VERSION}\n<programid:{}>{LOGGED_ADIF_PROGRAM_ID}\n<EOH>\n{body} <EOR>",
+        LOGGED_ADIF_VERSION.len(),
+        LOGGED_ADIF_PROGRAM_ID.len(),
+    );
+    let mut w = header(id, msg_type::LOGGED_ADIF);
+    w.put_utf8(Some(&text));
+    w.into_bytes()
+}
+
 /// **Close (type 6).** Tells consumers Tempo is shutting down. Fields: just `id`.
 pub fn encode_close(id: &str) -> Vec<u8> {
     header(id, msg_type::CLOSE).into_bytes()
@@ -612,6 +643,32 @@ mod tests {
         assert_eq!(r.read_utf8(), Some(Some("3A EMA".to_string())));
         assert_eq!(r.read_utf8(), Some(Some("".to_string())));
         assert_eq!(r.remaining(), 0);
+    }
+
+    /// #267: WSJT-X follows every QSOLogged with a LoggedADIF (type 12) for the same contact
+    /// (`mainwindow.cpp` acceptQSO → `logged_ADIF`), and some Log4OM inbound setups listen
+    /// only for that one. The envelope is `MessageClient::logged_ADIF`'s, byte for byte:
+    /// `"\n<adif_ver:5>…\n<programid:N>…\n<EOH>\n" + record + " <EOR>"` in one utf8 field.
+    #[test]
+    fn logged_adif_layout_matches_wsjtx_message_client() {
+        // `adif_record` output: our record ends with its own "<EOR>\n", which must not be
+        // doubled by the envelope's " <EOR>".
+        let record = "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<EOR>\n";
+        let bytes = encode_logged_adif("Tempo", record);
+        let mut r = check_header(&bytes, msg_type::LOGGED_ADIF);
+        assert_eq!(
+            r.read_utf8(),
+            Some(Some(
+                "\n<adif_ver:5>3.1.4\n<programid:5>Nexus\n<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8 <EOR>"
+                    .to_string()
+            ))
+        );
+        assert_eq!(r.remaining(), 0);
+        // Our own inbound reader (companion mode) takes it as one LoggedAdif.
+        assert!(matches!(
+            parse_inbound(&bytes),
+            Some(Inbound::LoggedAdif { ref adif, .. }) if adif.ends_with("FT8 <EOR>")
+        ));
     }
 
     #[test]

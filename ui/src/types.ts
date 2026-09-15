@@ -1830,6 +1830,10 @@ export interface LoggedQso {
   satName?: string | null
   operator?: string | null
   stationCallsign?: string | null
+  /** #239: the operator's own grid square for this contact (ADIF MY_GRIDSQUARE). */
+  myGrid?: string | null
+  /** #239: the radio used for this contact (ADIF MY_RIG). */
+  myRig?: string | null
   extra?: [string, string][]
 }
 
@@ -2167,6 +2171,12 @@ export interface SpotRow {
    *  is "not judged" and must be KEPT rather than silently filtered out. The panel tests
    *  `=== false`, never falsiness, for exactly that reason. */
   spotterLocal?: boolean
+  /** #174: continent codes (AF/AS/EU/NA/OC/SA) of every voice for this spot — spotter, then
+   *  corroborators — de-duplicated and cty.dat-resolved in Rust. Optional for the same reason
+   *  as `spotterLocal`; the spotted-from filter treats a missing list as matching nothing. */
+  spotterConts?: string[]
+  /** #174: the DXCC entity names of those voices, same order and rules. */
+  spotterEntities?: string[]
   /** Set when this spot is a ONE-WAY transmission and so not workable: an NCDXF/IARU beacon
    * slot or a W1AW bulletin. Still displayed (an audible beacon is real propagation evidence)
    * but badged, and never painted with a need colour. Score suppression happens in the

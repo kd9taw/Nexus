@@ -165,6 +165,8 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
         prop_mode: None,
         sat_name: None,
         operator: None,
+        my_grid: None,
+        my_rig: None,
         station_callsign: Some(log.mycall.clone()).filter(|c| !c.trim().is_empty()),
         extra: Vec::new(),
         contest: Some(Box::new(contest)),

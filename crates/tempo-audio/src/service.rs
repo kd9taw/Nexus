@@ -1410,6 +1410,19 @@ fn parse_wsjtx_targets(addr: &str) -> Vec<std::net::SocketAddr> {
         .collect()
 }
 
+/// One logged contact to the WSJT-X sink, in WSJT-X's order (#267): QSOLogged (type 5), then
+/// LoggedADIF (type 12) carrying the same contact as `adif_record` — `MainWindow::acceptQSO`
+/// sends `qso_logged` and then `logged_ADIF`. Loggers pick one: JTAlert and GridTracker read
+/// the structured message, while a Log4OM set up for the ADIF message reads only type 12 and
+/// saw the callsign from Status but never the contact.
+///
+/// No self-import: the sink's socket is bound to an ephemeral port and every datagram goes to
+/// the configured targets, so the companion handler's `LoggedAdif` import cannot receive this.
+fn send_logged_contact(server: &WsjtxServer, qso: &WsjtxQso, adif_record: &str) {
+    let _ = server.send_qso_logged(qso);
+    let _ = server.send_logged_adif(adif_record);
+}
+
 fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
     if !enabled {
         return None;
@@ -9029,28 +9042,32 @@ impl RadioLoop {
             };
             for q in &logged_qsos {
                 let time_on = q.when_unix as i64;
-                let _ = server.send_qso_logged(&WsjtxQso {
-                    time_off: q.time_off_unix.unwrap_or(q.when_unix) as i64,
-                    dx_call: &q.call,
-                    dx_grid: q.grid.as_deref().unwrap_or(""),
-                    // The contact's own frequency, not the rig's current dial — by the time this
-                    // drains the operator may have moved on, and a logger stamping the wrong band
-                    // on a contact is worse than one stamping none.
-                    tx_freq: (q.freq_mhz * 1e6).round().max(0.0) as u64,
-                    mode: &q.mode,
-                    report_sent: q.rst_sent.as_deref().unwrap_or(""),
-                    report_recvd: q.rst_rcvd.as_deref().unwrap_or(""),
-                    tx_power: "",
-                    comments: q.comment.as_deref().unwrap_or(""),
-                    name: q.name.as_deref().unwrap_or(""),
-                    time_on,
-                    op_call: q.operator.as_deref().unwrap_or(&mycall),
-                    my_call: q.station_callsign.as_deref().unwrap_or(&mycall),
-                    my_grid: &mygrid,
-                    exchange_sent: "",
-                    exchange_recvd: "",
-                    adif_propmode: q.prop_mode.as_deref().unwrap_or(""),
-                });
+                send_logged_contact(
+                    server,
+                    &WsjtxQso {
+                        time_off: q.time_off_unix.unwrap_or(q.when_unix) as i64,
+                        dx_call: &q.call,
+                        dx_grid: q.grid.as_deref().unwrap_or(""),
+                        // The contact's own frequency, not the rig's current dial — by the time this
+                        // drains the operator may have moved on, and a logger stamping the wrong band
+                        // on a contact is worse than one stamping none.
+                        tx_freq: (q.freq_mhz * 1e6).round().max(0.0) as u64,
+                        mode: &q.mode,
+                        report_sent: q.rst_sent.as_deref().unwrap_or(""),
+                        report_recvd: q.rst_rcvd.as_deref().unwrap_or(""),
+                        tx_power: "",
+                        comments: q.comment.as_deref().unwrap_or(""),
+                        name: q.name.as_deref().unwrap_or(""),
+                        time_on,
+                        op_call: q.operator.as_deref().unwrap_or(&mycall),
+                        my_call: q.station_callsign.as_deref().unwrap_or(&mycall),
+                        my_grid: &mygrid,
+                        exchange_sent: "",
+                        exchange_recvd: "",
+                        adif_propmode: q.prop_mode.as_deref().unwrap_or(""),
+                    },
+                    &tempo_core::logbook::adif_record(q),
+                );
             }
         }
 
@@ -13156,6 +13173,55 @@ mod tests {
         assert_eq!(tier_mode(Tier::Ft4), "FT4");
         // Not an ADIF name, and reported anyway — see the arm's note.
         assert_eq!(tier_mode(Tier::Ft2), "FT2");
+    }
+
+    /// #267: WSJT-X follows every QSOLogged with a LoggedADIF for the same contact
+    /// (`MainWindow::acceptQSO`), and a Log4OM set up for the ADIF message never saw a Nexus
+    /// contact. The QSOLogged datagram itself must not change by a byte.
+    #[test]
+    fn a_logged_contact_goes_out_as_qso_logged_then_logged_adif() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let qso = WsjtxQso {
+            time_off: 1_700_000_060,
+            dx_call: "W1AW",
+            dx_grid: "FN31",
+            tx_freq: 14_074_000,
+            mode: "FT8",
+            report_sent: "-10",
+            report_recvd: "-12",
+            time_on: 1_700_000_000,
+            my_call: "KD9TAW",
+            my_grid: "EN52",
+            ..Default::default()
+        };
+        send_logged_contact(&server, &qso, "<CALL:4>W1AW<MODE:3>FT8<EOR>\n");
+
+        let mut buf = [0u8; 4096];
+        let (n, _) = listener
+            .recv_from(&mut buf)
+            .expect("the QSOLogged datagram");
+        assert_eq!(
+            &buf[..n],
+            tempo_net::wsjtx::encode_qso_logged(tempo_net::server::APP_ID, &qso).as_slice(),
+            "QSOLogged goes first and is byte-identical to what was sent before"
+        );
+        let (n, _) = listener
+            .recv_from(&mut buf)
+            .expect("a LoggedADIF datagram must follow the QSOLogged one");
+        match tempo_net::wsjtx::parse_inbound(&buf[..n]) {
+            Some(WsjtxInbound::LoggedAdif { adif, .. }) => {
+                assert!(adif.contains("<CALL:4>W1AW<MODE:3>FT8 <EOR>"), "{adif:?}")
+            }
+            other => panic!("expected LoggedAdif, got {other:?}"),
+        }
     }
 
     #[test]

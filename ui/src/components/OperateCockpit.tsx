@@ -274,13 +274,14 @@ const panelLabels = (): Record<OperatePanelId, string> => ({
   txmsgs: t('operate.panel.txmsgs'),
   stations: t('operate.panel.stations'),
   txmeters: t('operate.panel.txmeters'),
+  recall: t('operate.panel.recall'),
 })
 
 /** What each layout actually renders — the menu lists only these, so a panel the
  *  current layout has no place for can't be ticked into nowhere. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'txmeters'],
-  roster: ['waterfall', 'callRoster', 'bandActivity', 'rxfreq', 'txmeters'],
+  classic: ['waterfall', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'recall', 'txmeters'],
+  roster: ['waterfall', 'callRoster', 'bandActivity', 'rxfreq', 'recall', 'txmeters'],
 }
 
 /** Side-rail occupants per layout — the rail unmounts when all of them are removed.
@@ -553,6 +554,13 @@ export function OperateCockpit({
   // and the one that would get missed is the CQ auto-answer, where a QSO starts with no click
   // anywhere. Comparing against the current call needs no reset at all.
   const [dismissedCall, setDismissedCall] = useState<string | null>(null)
+  // #204: the station the card's own "Calling …" button opened. It leads the card until the
+  // operator selects someone else or clears the selection, which drops it — a local override
+  // rather than a backend selection, so a station heard only as the one being CALLED still shows.
+  const [cardCall, setCardCall] = useState<string | null>(null)
+  useEffect(() => {
+    setCardCall(null)
+  }, [selectedCall])
   // The card's current subject, readable from `clearDx` — which is created once, like `keyRef`.
   const recallCallRef = useRef<string | null>(null)
   // The blocked-callsigns set (Alt-double-click a decode/roster row). PERSISTED and
@@ -572,17 +580,43 @@ export function OperateCockpit({
   // only read it and render accordingly. A panel with no stored state is docked. The
   // render glue (shown/sideShown/mainShown/dataCols/menuItems) is derived by the reusable
   // panelHost primitive from this layout's spec — so a new cockpit is a spec, not a copy.
+  // WHICH station the card is about, and the order is the whole of it: an explicit
+  // click WINS over the sequencer. `selectedCall` is the operator saying "show me this
+  // one"; `snap.qso.dxcall` is the station the sequencer is actually working, and it
+  // fills in when they have not clicked — which is most of an FT8 session, because
+  // double-clicking a decode starts a QSO without ever selecting a peer. Reading only
+  // the click left the card blank through every contact the operator ran; reading only
+  // the QSO would yank it away from a station they had deliberately opened mid-run.
+  // Same field the roster highlights as `workingCall`, so the two can never disagree
+  // about who is being worked.
+  // #204: the card's own "Calling …" pick (`cardCall`) leads, until the selection changes.
+  const recallCall = cardCall || selectedCall || snap.qso?.dxcall || null
+  // #204 — what F4 / Clear actually empties. `dismissedCall` holds the call the operator
+  // dismissed; the card reappears by itself as soon as `recallCall` names a DIFFERENT station,
+  // so a clear never outlives the thing it cleared. The ref exists so `clearDx` (created once)
+  // can read the current value without taking it as a dependency.
+  recallCallRef.current = recallCall
+  const shownRecallCall = recallCall && recallCall === dismissedCall ? null : recallCall
+  // #204: the callsign card joins the side rail — and Classic's third column — only while
+  // there is a card to show. panelHost counts any listed side panel that is not removed, so a
+  // standing 'recall' entry would mount an EMPTY rail with Stations hidden and nothing selected.
+  const sidePanels: readonly OperatePanelId[] = shownRecallCall
+    ? [...SIDE_PANELS[layoutMode], 'recall']
+    : SIDE_PANELS[layoutMode]
+  const classicColumns: readonly (readonly OperatePanelId[])[] = shownRecallCall
+    ? [...CLASSIC_COLUMNS.slice(0, 2), ['recall', 'stations']]
+    : CLASSIC_COLUMNS
   const { stateOf, setPanelState } = panels
   const panelSpec: PanelHostSpec<OperatePanelId> = {
     menu: LAYOUT_PANELS[layoutMode],
-    side: SIDE_PANELS[layoutMode],
+    side: sidePanels,
     main: layoutMode === 'roster' ? 'callRoster' : 'bandActivity',
     labels: panelLabels(),
     // The meters read on transmit — here as the pinned strip, which holds the last
     // readings dimmed between overs, so the entry says WHEN it is populated rather than
     // leaving an operator to guess mid-menu (the same words the strip shows when idle).
     notes: { txmeters: TX_METERS_WHEN },
-    ...(layoutMode === 'classic' ? { columns: CLASSIC_COLUMNS } : {}),
+    ...(layoutMode === 'classic' ? { columns: classicColumns } : {}),
   }
   const { shown, sideShown, dataCols, menuItems } = panelHost(panels, panelSpec)
   const wfState = stateOf('waterfall')
@@ -883,22 +917,6 @@ export function OperateCockpit({
   // longer fits. Two known limits, stated rather than papered over: with the whole side rail
   // ⊞-hidden the card goes with it, and in Roster layout the rail is opposite the roster the
   // click happened in.
-  // WHICH station the card is about, and the order is the whole of it: an explicit
-  // click WINS over the sequencer. `selectedCall` is the operator saying "show me this
-  // one"; `snap.qso.dxcall` is the station the sequencer is actually working, and it
-  // fills in when they have not clicked — which is most of an FT8 session, because
-  // double-clicking a decode starts a QSO without ever selecting a peer. Reading only
-  // the click left the card blank through every contact the operator ran; reading only
-  // the QSO would yank it away from a station they had deliberately opened mid-run.
-  // Same field the roster highlights as `workingCall`, so the two can never disagree
-  // about who is being worked.
-  const recallCall = selectedCall || snap.qso?.dxcall || null
-  // #204 — what F4 / Clear actually empties. `dismissedCall` holds the call the operator
-  // dismissed; the card reappears by itself as soon as `recallCall` names a DIFFERENT station,
-  // so a clear never outlives the thing it cleared. The ref exists so `clearDx` (created once)
-  // can read the current value without taking it as a dependency.
-  recallCallRef.current = recallCall
-  const shownRecallCall = recallCall && recallCall === dismissedCall ? null : recallCall
   // The decode panes' hide-filter exemption: the station the sequencer is actively working,
   // and nobody after Done — the same "engaged" line the alerts draw.
   const partnerCall = engagedInQso({
@@ -907,10 +925,22 @@ export function OperateCockpit({
   })
     ? (snap.qso?.dxcall ?? null)
     : null
-  const recallCard = shownRecallCall ? (control
-    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} />
+  const recallCard = shownRecallCall && shown('recall') ? (control
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} onShowCall={setCardCall} />
     : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded />
   ) : null
+
+  // #204: S&P clears the callsign card, as F4 does — the operator is leaving the station the card
+  // was about to go and find the next one. UI only: the mode request goes on exactly as the strip
+  // sent it, so the sequencer sees no difference.
+  const onSetModeFromStrip: typeof onSetMode = (mode, expectedQso) => {
+    if (mode === 'qso-monitor') {
+      setDismissedCall(recallCallRef.current)
+      onClearSelection?.()
+    }
+    if (expectedQso === undefined) onSetMode(mode)
+    else onSetMode(mode, expectedQso)
+  }
 
   return (
     <main className="layout single operate-cockpit">
@@ -1321,7 +1351,7 @@ export function OperateCockpit({
           remoteFtRuntime={ftRuntime}
           remoteFtSettings={ftSettings}
           onSetHoldTxFreq={onSetHoldTxFreq}
-          onSetMode={onSetMode}
+          onSetMode={onSetModeFromStrip}
           onCallCq={() => {
             // The labelled "Call CQ" is always a PLAIN run — it also clears a
             // sticky directed token so a leftover "CQ DX" can't surprise.
@@ -1637,11 +1667,14 @@ function OperateRecall({
   call,
   mode,
   onOpenLog,
+  onShowCall,
 }: {
   snap: AppSnapshot
   call: string
   mode: string
   onOpenLog?: (call: string) => void
+  /** #204: open the card of the station this one is calling. */
+  onShowCall?: (call: string) => void
 }) {
   const cu = call.trim().toUpperCase()
   const [log, setLog] = useState<LoggedQso[]>([])
@@ -1741,6 +1774,9 @@ function OperateRecall({
       // ~2 rows at 1024x768 and off-screen at 175 % zoom. See `.cockpit-recall`.
       bounded
       onOpenLog={onOpenLog}
+      // #204: the station this one is calling, when its last frame named one.
+      calling={station?.calling ?? null}
+      onShowCall={onShowCall}
     />
   )
 }

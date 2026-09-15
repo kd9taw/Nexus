@@ -1651,6 +1651,28 @@ export async function getDxccEntityNames(): Promise<string[]> {
   return invoke<string[]>('dxcc_entity_names')
 }
 
+/** Every cty.dat entity name with its continent code (`[entity, 'EU']`), for band activity's
+ *  hide-by-continent (#229) — a decode row carries the entity name, never the continent. */
+export async function getDxccEntityContinents(): Promise<[string, string][]> {
+  return invoke<[string, string][]>('dxcc_entity_continents')
+}
+
+/** #226: one station location offered by the Cloudlog/Wavelog picker. */
+export interface CloudlogStation {
+  stationId: string
+  profileName: string
+  callsign: string
+  gridsquare: string
+  active: boolean
+}
+
+/** #226: ask the operator's OWN Cloudlog/Wavelog for its station locations, so Settings can fill
+ *  the station profile id. ⛔ The request carries the API key — call this ONLY from an explicit
+ *  operator press, never on mount and never on a timer. */
+export async function getCloudlogStations(): Promise<CloudlogStation[]> {
+  return invoke<CloudlogStation[]>('cloudlog_station_info')
+}
+
 /** Every entity's cty.dat representative location as `[name, lat, lon]` — the azimuth
  *  fallback for a station that never sent a grid. Keyed by the same `country`/`entity`
  *  string a decode/spot row carries. WAE/CQ-only entities are included: `resolve()`

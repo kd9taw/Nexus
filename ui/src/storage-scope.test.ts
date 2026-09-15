@@ -93,8 +93,14 @@ const SHARED = [
   'nexus.decodes.hideCalls',
   // Arbitrary-entity country excludes, stored beside the curated keys (F4MQS).
   'nexus.decodes.countryExclude.entities',
+  // Whole continents hidden from band activity (#229), stored beside the entity picks and
+  // SHARED on the same ruling as the country exclude below.
+  'nexus.decodes.countryExclude.continents',
   'nexus.navOrder', // left-rail section order — a person/station preference, same in every window
   'nexus-density',
+  // The Logbook's "More columns" wide table (#239): a standing display preference, the same in
+  // every window, like density.
+  'nexus.logbook.moreColumns',
   // Field mode: being outdoors is a fact about the STATION, not a window — a pop-out beside
   // the main window in the same sunlight must follow it (DetachedPanel mirrors the hook).
   'nexus-field-mode',
@@ -188,6 +194,9 @@ const SESSION_SCOPED = [
   'nexus.spots.localOnly',
   'nexus.spots.query',
   'nexus.spots.sort',
+  // Spotted-from filter (#174): the reporting voices' continents and countries.
+  'nexus.spots.spotterConts',
+  'nexus.spots.spotterEntities',
   'nexus.spots.states',
 ]
 

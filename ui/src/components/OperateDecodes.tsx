@@ -554,7 +554,7 @@ export function OperateDecodes({
               {t('operate.decodes.hideConfirmed.label')}
             </button>
             {hideB4Chip}
-            <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} paused={countries.paused} onPauseChange={countries.setPaused} entities={countries.entities} onToggleEntity={countries.toggleEntity} />
+            <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} paused={countries.paused} onPauseChange={countries.setPaused} entities={countries.entities} onToggleEntity={countries.toggleEntity} continents={countries.continents} onToggleContinent={countries.toggleContinent} />
             <HideCallsPicker />
             <label className="od-sort">
               <span className="od-sort-label">{t('operate.decodes.sort.label')}</span>
@@ -582,7 +582,8 @@ export function OperateDecodes({
             compact panes, which render no chip bar to notice the picker in. */}
         {hideExcludedCountries && (
           <CountryHiddenChip
-            count={countries.keys.size}
+            count={countries.keys.size + countries.entities.size}
+            continents={countries.continents.size}
             onClear={countries.clear}
             testId="od-hidden"
           />

@@ -84,11 +84,35 @@ interface DraftQso {
    * edit never clobbers a non-POTA program or drops an island reference. */
   parkTheirRef: string
   parkMyRef: string
+  /** #239: your own grid square and rig for this contact (ADIF MY_GRIDSQUARE / MY_RIG). */
+  myGrid: string
+  myRig: string
+  /** #239: QSL sent via '' | 'B' | 'D' | 'E', or 'SENT' for a stored "sent" with no route; and
+   * a paper card received ('1' | ''). Strings, like every draft field, so `setField` serves them. */
+  qslSentVia: string
+  qslCard: string
 }
 
 /** The word the operator must type to arm the full-log purge (irreversible). It is COMPARED
  * against what they type, so it is a token and not prose — translating it would move the gate. */
 const PURGE_WORD = 'DELETE'
+
+/** #239 "More columns" — a per-viewer convenience, so browser storage; any failure reads as off. */
+const MORE_COLUMNS_KEY = 'nexus.logbook.moreColumns'
+function loadMoreColumns(): boolean {
+  try {
+    return window.localStorage.getItem(MORE_COLUMNS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+function saveMoreColumns(on: boolean): void {
+  try {
+    window.localStorage.setItem(MORE_COLUMNS_KEY, on ? '1' : '0')
+  } catch {
+    /* unavailable — the choice still holds for this session */
+  }
+}
 
 /**
  * The invariant example values the hand-log form shows in empty fields, gathered so the guard can
@@ -285,6 +309,10 @@ export function Logbook({
     txPower: '',
     parkTheirRef: '',
     parkMyRef: '',
+    myGrid: '',
+    myRig: '',
+    qslSentVia: '',
+    qslCard: '',
   }))
   const [err, setErr] = useState<string | null>(null)
   // Operators present in the log (#25) — drives whether the per-operator export is offered.
@@ -348,6 +376,8 @@ export function Logbook({
   // Filter to contacts still lacking an award-eligible confirmation (the DX
   // chaser's "who do I still need a card/LoTW from" view).
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
+  // #239: the wide table, off unless this viewer turned it on.
+  const [moreColumns, setMoreColumns] = useState(loadMoreColumns)
   const remoteLog = useRemoteLog(deferredSearch, needsConfirmOnly)
   useEffect(() => { if (remoteLog) setLog(remoteLog.rows) }, [remoteLog?.rows])
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
@@ -550,6 +580,10 @@ export function Logbook({
       txPower: q.txPower != null ? String(q.txPower) : '',
       parkTheirRef: q.ota?.theirRef ?? '',
       parkMyRef: q.ota?.myRef ?? '',
+      myGrid: q.myGrid ?? '',
+      myRig: q.myRig ?? '',
+      qslSentVia: q.qslSent?.sent ? (q.qslSent.via ?? 'SENT') : '',
+      qslCard: q.qslRcvd?.card ? '1' : '',
     })
     setShowForm(true)
   }
@@ -868,14 +902,29 @@ export function Logbook({
       // dropped by JSON.stringify, refilled by serde's default, and overwritten
       // from the stored record anyway.
       upload: existing?.upload,
+      // #239: your own grid and rig for this contact. Left empty on an edit, the backend keeps
+      // what the record had (Logbook::update_record), as it does for the park refs.
+      myGrid: draft.myGrid.trim().toUpperCase() || null,
+      myRig: draft.myRig.trim() || null,
     }
     if (editIndex !== null) {
       const idx = editIndex
       const snap = await withErrorToast(() => editQso(idx, record), t('logbook.form.saveFailed'))
       if (snap) {
+        // #239: QSL sent / card received from the form — only what changed, through the row
+        // menu's own commands, once the record itself has saved.
+        const origVia = existing?.qslSent?.sent ? (existing.qslSent.via ?? 'SENT') : ''
+        if (draft.qslSentVia !== origVia && draft.qslSentVia !== 'SENT') {
+          const via = draft.qslSentVia ? (draft.qslSentVia as 'B' | 'D' | 'E') : null
+          await withErrorToast(() => markQslSent(idx, via), t('logbook.qsl.markFailed'))
+        }
+        if ((draft.qslCard === '1') !== !!existing?.qslRcvd?.card) {
+          const received = draft.qslCard === '1'
+          await withErrorToast(() => markQslCard(idx, received), t('logbook.qsl.markFailed'))
+        }
         pushToast(t('logbook.form.updated', { call: record.call }), 'success')
         cancelForm()
-        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '' }))
+        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
         load()
       }
       return
@@ -884,7 +933,7 @@ export function Logbook({
     if (snap) {
       load()
       setShowForm(false)
-      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '' }))
+      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', myGrid: '', myRig: '' }))
       // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
       // (every log path, the engine auto-log included); outcomes toast via the
       // snapshot uploadTick.
@@ -1339,6 +1388,61 @@ export function Logbook({
               <span>{t('logbook.field.comment.label')}</span>
               <input className="settings-input" value={draft.comment} onChange={(e) => setField('comment', e.target.value)} placeholder={t('logbook.field.comment.placeholder')} autoComplete="off" />
             </label>
+            {/* #239: your own location and rig for THIS contact (ADIF MY_GRIDSQUARE / MY_RIG). */}
+            <label className="logbook-field">
+              <span>{t('logbook.field.myGrid.label')}</span>
+              <input
+                className="settings-input"
+                value={draft.myGrid}
+                onChange={(e) => setField('myGrid', e.target.value)}
+                title={t('logbook.field.myGrid.title')}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <label className="logbook-field">
+              <span>{t('logbook.field.myRig.label')}</span>
+              <input
+                className="settings-input"
+                value={draft.myRig}
+                onChange={(e) => setField('myRig', e.target.value)}
+                title={t('logbook.field.myRig.title')}
+                autoComplete="off"
+              />
+            </label>
+            {/* #239: QSL status where the rest of the contact is edited — the row QSL menu's two
+                commands, run after the save, only for what changed. LoTW and eQSL confirmations
+                stay the services'; only the card is the operator's to mark. Edit mode only: both
+                commands address a logged record. */}
+            {editIndex !== null && (
+              <>
+                <div className="logbook-field">
+                  <label htmlFor="logbook-qsl-sent">{t('logbook.field.qslSent.label')}</label>
+                  <select
+                    id="logbook-qsl-sent"
+                    className="settings-input"
+                    value={draft.qslSentVia}
+                    onChange={(e) => setField('qslSentVia', e.target.value)}
+                  >
+                    <option value="">{t('logbook.field.qslSent.none')}</option>
+                    {draft.qslSentVia === 'SENT' && (
+                      <option value="SENT">{t('logbook.field.qslSent.sent')}</option>
+                    )}
+                    <option value="B">{qslViaLabel('B')}</option>
+                    <option value="D">{qslViaLabel('D')}</option>
+                    <option value="E">{qslViaLabel('E')}</option>
+                  </select>
+                </div>
+                <label className="logbook-field">
+                  <span>{t('logbook.field.qslCard.label')}</span>
+                  <input
+                    type="checkbox"
+                    checked={draft.qslCard === '1'}
+                    onChange={(e) => setField('qslCard', e.target.checked ? '1' : '')}
+                  />
+                </label>
+              </>
+            )}
             <label className="logbook-field logbook-field-wide">
               <span>{t('logbook.field.notes.label')}</span>
               <textarea
@@ -1362,7 +1466,7 @@ export function Logbook({
         </form>
       )}
 
-      <div className="log-table logbook-table" role="table">
+      <div className={`log-table logbook-table${moreColumns ? ' wide' : ''}`} role="table">
         <div className="log-scroll" ref={scrollRef}>
           {globeShown && (
             <div className="log-globe-band">
@@ -1400,6 +1504,20 @@ export function Logbook({
         >
           {t('logbook.filter.needsConfirmation.label')}
         </button>
+        <button
+          type="button"
+          className={`log-filter-chip${moreColumns ? ' active' : ''}`}
+          onClick={() =>
+            setMoreColumns((v) => {
+              saveMoreColumns(!v)
+              return !v
+            })
+          }
+          aria-pressed={moreColumns}
+          title={t('logbook.columns.more.title')}
+        >
+          {t('logbook.columns.more.label')}
+        </button>
         {search.trim() && (
           <button type="button" className="log-search-clear" onClick={() => setSearch('')} title={t('logbook.search.clear')}>
             ✕
@@ -1420,6 +1538,18 @@ export function Logbook({
           {th('QSL', 'qsl')}
           {/* Not sortable: free text, and sorting a log by remark answers no question an
               operator asks. Plain header cell, same shape as the actions column's. */}
+          {/* #239 "More columns": your side of the contact, and what the compact table leaves out. */}
+          {moreColumns && (
+            <>
+              <span className="log-cell" role="columnheader">{t('logbook.column.myGrid')}</span>
+              <span className="log-cell" role="columnheader">{t('logbook.column.myRig')}</span>
+              <span className="log-cell" role="columnheader">{t('logbook.column.name')}</span>
+              <span className="log-cell" role="columnheader">{t('logbook.column.qth')}</span>
+              <span className="log-cell" role="columnheader">{t('logbook.column.state')}</span>
+              <span className="log-cell" role="columnheader">{t('logbook.column.power')}</span>
+              <span className="log-cell" role="columnheader">{t('logbook.column.operator')}</span>
+            </>
+          )}
           <span className="log-cell" role="columnheader">{t('logbook.column.notes')}</span>
           <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
@@ -1553,6 +1683,17 @@ export function Logbook({
                     The comment is short by design and shows inline; the private note is
                     multi-line and gets a 📝 marker with the text in the tooltip, the same
                     idiom the callsign-recall card already uses. */}
+                {moreColumns && (
+                  <>
+                    <span className="log-cell mono">{q.myGrid ?? '—'}</span>
+                    <span className="log-cell" title={q.myRig ?? ''}>{q.myRig ?? '—'}</span>
+                    <span className="log-cell" title={q.name ?? ''}>{q.name ?? '—'}</span>
+                    <span className="log-cell" title={q.qth ?? ''}>{q.qth ?? '—'}</span>
+                    <span className="log-cell mono">{q.state ?? '—'}</span>
+                    <span className="log-cell mono">{q.txPower ?? '—'}</span>
+                    <span className="log-cell mono">{q.operator ?? '—'}</span>
+                  </>
+                )}
                 <span
                   className={`log-cell log-note${openComments.has(`${q.call}-${q.whenUnix}-${i}`) ? ' expanded' : ''}`}
                   title={[
@@ -1601,7 +1742,9 @@ export function Logbook({
                     title={t('logbook.row.pushQrz.title', { call: q.call })}
                     aria-label={t('logbook.row.pushQrz.aria', { call: q.call })}
                   >
-                    ↥
+                    {/* #270: this was a bare ↥, and an operator looking for "Upload to QRZ"
+                        reported the button as gone. Named like its CL / HL / WRL siblings. */}
+                    {QRZ_LABEL}
                   </button>
                   <button
                     type="button"

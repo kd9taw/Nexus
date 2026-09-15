@@ -13159,6 +13159,17 @@ fn dxcc_entity_names() -> Vec<String> {
         .collect()
 }
 
+/// Every cty.dat entity name with its continent code, `(entity, "EU")` — for band activity's
+/// hide-by-continent (#229). A decode row carries the entity NAME `resolve` gave it, never a
+/// continent, and the UI has no cty.dat, so a continent tick expands through this table.
+#[tauri::command]
+fn dxcc_entity_continents() -> Vec<(String, String)> {
+    propagation::dxcc::entity_continents()
+        .into_iter()
+        .map(|(name, cont)| (name.to_string(), cont.to_string()))
+        .collect()
+}
+
 /// Edit logbook entry `index` (oldest-first, as returned by `get_log`) — a
 /// correction. Confirmation/credit/upload state is preserved by the engine.
 /// Returns the refreshed snapshot.
@@ -13507,6 +13518,13 @@ struct SpotRow {
     /// is `hf_admit_spotters`'s own fail-open posture: an empty panel is a worse answer than
     /// an unfiltered one.
     spotter_local: bool,
+    /// #174: the continent code of every voice for this spot — the spotter first, then each
+    /// corroborator — de-duplicated, from `propagation::needalert::spotter_origin`, the very
+    /// resolver behind `spotter_local`. A voice that doesn't resolve adds nothing. Lets the panel
+    /// offer "spotted from Europe only"; like `spotter_local`, a flag for the UI, not a filter.
+    spotter_conts: Vec<String>,
+    /// #174: the DXCC entity of every voice, same order and rules — "spotted from France only".
+    spotter_entities: Vec<String>,
     /// Set when this spot is a ONE-WAY transmission — an NCDXF/IARU beacon slot or a W1AW
     /// bulletin — and therefore not workable. The row is still shown (an audible beacon is
     /// real propagation evidence); the UI badges it and never paints a need colour on it.
@@ -13521,6 +13539,25 @@ struct SpotRow {
 #[tauri::command(async)]
 fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) -> Vec<SpotRow> {
     read_all_spots(&spots, &state, false).unwrap_or_default()
+}
+
+/// #174: where the voices for one spot are — `(continent codes, DXCC entities)` of the spotter
+/// and then each corroborator, each list de-duplicated in first-seen order. A voice that does
+/// not resolve adds nothing. Uses `spotter_origin`, the resolver behind `spotter_local`, so the
+/// two answers about one spot can never disagree.
+fn spot_voice_origins(spotter: &str, corroborators: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut conts: Vec<String> = Vec::new();
+    let mut entities: Vec<String> = Vec::new();
+    let voices = std::iter::once(spotter).chain(corroborators.iter().map(String::as_str));
+    for (cont, entity) in voices.filter_map(propagation::needalert::spotter_origin) {
+        if !conts.iter().any(|c| c == cont) {
+            conts.push(cont.to_string());
+        }
+        if !entities.iter().any(|e| e == entity) {
+            entities.push(entity.to_string());
+        }
+    }
+    (conts, entities)
 }
 
 fn read_all_spots(
@@ -13627,6 +13664,8 @@ fn read_all_spots(
                     _ => OperatingMode::Digital,
                 },
             );
+            let (spotter_conts, spotter_entities) =
+                spot_voice_origins(&cs.spotter, &cs.corroborators);
             SpotRow {
                 call: cs.dx_call.clone(),
                 entity,
@@ -13651,6 +13690,8 @@ fn read_all_spots(
                     voices.extend(cs.corroborators.iter().map(String::as_str));
                     propagation::hf_admit_spotters(&voices, &my_call).is_some()
                 },
+                spotter_conts,
+                spotter_entities,
                 beacon: propagation::beacons::classify(&cs.dx_call, freq),
             }
         })
@@ -14238,6 +14279,54 @@ fn cap_hrdlog_retries(failed: u8, retries_so_far: u8) -> u8 {
     } else {
         failed
     }
+}
+
+/// The QSO a give-up line names, borrowed from the record the worker is holding.
+struct GivenUpQso<'a> {
+    call: &'a str,
+    band: &'a str,
+    mode: &'a str,
+    when_unix: u64,
+}
+
+/// #290: one connection-log line per QRZ / eQSL leg that this failure takes past the shared
+/// retry budget, naming the QSO and how to push it again.
+///
+/// `retries` is the attempt count the worker is about to re-queue with. The queue drops a
+/// record once that reaches [`MAX_UPLOAD_RETRIES`](tempo_app::engine::MAX_UPLOAD_RETRIES)
+/// (`StationCore::requeue_upload_at`) and says nothing, so this line is the only way an
+/// operator learns a contact never reached the service. The HRDLog leg has its own shorter
+/// budget and its own line; ClubLog has a catch-up sweep, so neither is repeated here.
+fn upload_give_up_lines(failed: u8, retries: u8, qso: &GivenUpQso) -> Vec<(&'static str, String)> {
+    use tempo_app::engine::{upload_legs as legs, MAX_UPLOAD_RETRIES};
+    if retries < MAX_UPLOAD_RETRIES {
+        return Vec::new();
+    }
+    let (y, mo, d, h, mi, _) = tempo_core::logbook::datetime_utc(qso.when_unix);
+    let what = format!(
+        "{} ({} {}, {y:04}-{mo:02}-{d:02} {h:02}:{mi:02}Z)",
+        qso.call, qso.band, qso.mode
+    );
+    let mut lines = Vec::new();
+    if failed & legs::QRZ != 0 {
+        lines.push((
+            "QRZ Logbook",
+            format!(
+                "gave up on the QSO with {what} after {MAX_UPLOAD_RETRIES} retries — push it \
+                 again from the Logbook with the QRZ button on its row"
+            ),
+        ));
+    }
+    if failed & legs::EQSL != 0 {
+        lines.push((
+            "eQSL",
+            format!(
+                "gave up on the QSO with {what} after {MAX_UPLOAD_RETRIES} retries — push it \
+                 again from Awards ▸ Confirmations with Push to eQSL on its row"
+            ),
+        ));
+    }
+    lines
 }
 
 /// Session-level kill-switch for ClubLog auto-push: set on a 403 (bad creds) so we
@@ -15684,6 +15773,10 @@ fn entered_credential(raw: &str) -> &str {
 fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<(), String> {
     let key = entered_credential(&key); // #224
     let entry = qrz_logbook_keychain()?;
+    // #291: a different key can unlock a different book, so the owner learned for the old one
+    // (and whether this session already asked) no longer applies.
+    *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    QRZ_BOOK_OWNER_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
     if key.is_empty() {
         clear_keychain_entry(&entry)?;
         conn_log(
@@ -16790,6 +16883,25 @@ fn callbook_candidates(call: &str) -> Vec<String> {
     }
 }
 
+/// #293: the name a resolved lookup gives the log — the same rule the log strip applies
+/// (`LogEntry.tsx`): the QRZ nickname when the station set one, else the full name. `None`
+/// rather than a blank, so an empty answer never stamps an empty NAME.
+fn callbook_log_name(dto: &tempo_app::dto::QrzLookupDto) -> Option<&str> {
+    fn usable(s: &Option<String>) -> Option<&str> {
+        s.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    }
+    usable(&dto.nickname).or_else(|| usable(&dto.name))
+}
+
+/// #293: hand a resolved lookup's name to the engine, so a contact the FT sequencer logs with
+/// this call carries it (`Engine::note_callbook_name`). The lookup already happened — the
+/// callsign card or the log strip asked for it — so the logging path never makes one.
+fn note_lookup_name(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::QrzLookupDto) {
+    if let Some(name) = callbook_log_name(dto) {
+        engine_lock(engine).note_callbook_name(call, name);
+    }
+}
+
 /// Look up a callsign, enriching with name / grid / QTH / state. QRZ is tried first
 /// (its paid tier carries grid/state); when QRZ is **unconfigured** (no username or
 /// no stored password) or has **no match**, the lookup falls through to the FREE
@@ -16860,6 +16972,7 @@ async fn qrz_lookup(
                     _ => {}
                 }
                 if let QrzOutcome::Found(dto, _) = attempt.map_err(|f| f.message.into_string())? {
+                    note_lookup_name(&state, &call, &dto);
                     return Ok(*dto);
                 }
             }
@@ -16876,6 +16989,7 @@ async fn qrz_lookup(
                     &password,
                     hamqth_session.inner(),
                 )? {
+                    note_lookup_name(&state, &call, &dto);
                     return Ok(dto);
                 }
                 // HamQTH was queried and answered — a genuine miss for THIS candidate. Only the
@@ -17054,6 +17168,93 @@ fn qrz_book_mismatch_warning(mycall: &str, owner: &str) -> String {
     }
 }
 
+/// #291: eQSL's side of the portable-callsign warning. eQSL files an upload under the
+/// account's callsign, and the account is its username — so compare that to the call the
+/// contact goes up under, the way [`qrz_book_mismatch_warning`] compares QRZ's book owner.
+/// Empty when they match, when either is blank, or when the username is a login name rather
+/// than a callsign (it then says nothing about which call the account holds).
+///
+/// Worded "may": whether eQSL refuses a suffixed call outright or files it unmatched was not
+/// measured against eQSL here, and a warning must not claim more than is known.
+fn eqsl_account_mismatch_warning(station_call: &str, username: &str) -> String {
+    let my = station_call.trim().to_ascii_uppercase();
+    let acct = username.trim().to_ascii_uppercase();
+    if my.is_empty() || acct.is_empty() || my == acct || !tempo_core::message::is_callsign(&acct) {
+        return String::new();
+    }
+    let same_base = tempo_core::message::base_call(&my) == tempo_core::message::base_call(&acct);
+    if same_base {
+        format!(
+            " ⚠ Your eQSL account is {acct}, but you are uploading as {my}. eQSL files contacts \
+             under the account's own callsign, so {my} contacts may be refused or never match — \
+             if they are, {my} needs its own eQSL account."
+        )
+    } else {
+        format!(
+            " ⚠ Your eQSL account is {acct}, but your station callsign is {my}. eQSL may refuse \
+             these uploads — check the eQSL username in Settings."
+        )
+    }
+}
+
+/// #291: the upload-time account warnings already said this session, keyed by service,
+/// station call and account, so an operator is told once per mismatch rather than once per
+/// contact.
+static UPLOAD_ACCOUNT_WARNED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// #291: the QRZ logbook's owner call, learned from a STATUS round trip — by Test Connection,
+/// or once per session at upload time (see [`qrz_upload_account_warning_from`]). Cleared when
+/// the Logbook API key is saved or cleared, since a new key can unlock a different book.
+static QRZ_BOOK_OWNER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// Whether this session already asked QRZ for the owner at upload time, so a STATUS that fails
+/// (QRZ down) is not repeated for every contact. Cleared with [`QRZ_BOOK_OWNER`].
+static QRZ_BOOK_OWNER_ASKED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// #291: QRZ's upload-time account warning — the Test button's owner check, run when a
+/// contact actually goes up. Returns `(warning, owner_to_cache)`: the warning is `Some` the
+/// first time this session a mismatch is seen; `owner_to_cache` is `Some` only when
+/// `fetch_owner` ran and answered, for the caller to store in [`QRZ_BOOK_OWNER`].
+///
+/// `fetch_owner` is a STATUS round trip, so it runs only when the owner is not known yet, the
+/// station call is stroked (the portable case the warning exists for — an ordinary call pays
+/// no extra network call), and this session has not already asked.
+fn qrz_upload_account_warning_from(
+    station_call: &str,
+    cached_owner: Option<String>,
+    already_asked: bool,
+    fetch_owner: impl FnOnce() -> Option<String>,
+    seen: &mut std::collections::BTreeSet<String>,
+) -> (Option<String>, Option<String>) {
+    let (owner, fetched) = match cached_owner {
+        Some(owner) => (owner, None),
+        None if !already_asked && station_call.contains('/') => match fetch_owner() {
+            Some(owner) => (owner.clone(), Some(owner)),
+            None => return (None, None),
+        },
+        None => return (None, None),
+    };
+    let warning = qrz_book_mismatch_warning(station_call, &owner);
+    let say = !warning.is_empty()
+        && first_upload_account_warning(seen, "QRZ Logbook", station_call, &owner);
+    (say.then_some(warning), fetched)
+}
+
+/// True the first time this (service, station call, account) mismatch is seen in `seen`.
+fn first_upload_account_warning(
+    seen: &mut std::collections::BTreeSet<String>,
+    service: &str,
+    station_call: &str,
+    account: &str,
+) -> bool {
+    seen.insert(format!(
+        "{service}\u{1f}{}\u{1f}{}",
+        station_call.trim().to_ascii_uppercase(),
+        account.trim().to_ascii_uppercase()
+    ))
+}
+
 async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     let key = qrz_logbook_keychain()?
         .get_password()
@@ -17066,6 +17267,11 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     let st = tempo_core::qrz::parse_status_response(&resp);
     if st.ok {
         let owner_raw = st.owner.clone().unwrap_or_default();
+        // #291: the upload path reuses this owner instead of spending its own STATUS call.
+        if !owner_raw.trim().is_empty() {
+            *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(owner_raw.trim().to_string());
+        }
         let owner = st.owner.unwrap_or_else(|| "your account".into());
         let book = st.book.map(|b| format!(" ({b})")).unwrap_or_default();
         let warn = qrz_book_mismatch_warning(mycall, &owner_raw);
@@ -17087,6 +17293,69 @@ fn qrz_push_qso_impl(
     let key = qrz_logbook_keychain()?
         .get_password()
         .map_err(|_| "No QRZ Logbook API key stored — set it in Settings.".to_string())?;
+    // #291: the Test button's owner check, run where a portable call is actually rejected —
+    // on the upload. The call the contact goes up under is its STATION_CALLSIGN, else today's.
+    let station_call = record
+        .station_callsign
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| engine_lock(engine).settings().mycall.trim().to_string());
+    {
+        let cached = QRZ_BOOK_OWNER
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let asked = QRZ_BOOK_OWNER_ASKED.load(std::sync::atomic::Ordering::Relaxed);
+        // A snapshot, so the warned-set lock is never held across the STATUS round trip; the
+        // real set is consulted again below before anything is said.
+        let mut snapshot = UPLOAD_ACCOUNT_WARNED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (warning, fetched) = qrz_upload_account_warning_from(
+            &station_call,
+            cached,
+            asked,
+            || {
+                QRZ_BOOK_OWNER_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
+                // The same STATUS request Test Connection sends. Only the owner is kept; the
+                // response is never logged (it is QRZ's, and the request carried the key).
+                let body = tempo_core::qrz::build_status_body(&key);
+                let resp =
+                    propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
+                        .ok()?;
+                let st = tempo_core::qrz::parse_status_response(&resp);
+                st.owner
+                    .filter(|_| st.ok)
+                    .map(|o| o.trim().to_string())
+                    .filter(|o| !o.is_empty())
+            },
+            &mut snapshot,
+        );
+        if let Some(owner) = fetched {
+            *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) = Some(owner);
+        }
+        if let Some(warning) = warning {
+            let owner = QRZ_BOOK_OWNER
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .unwrap_or_default();
+            let first = first_upload_account_warning(
+                &mut UPLOAD_ACCOUNT_WARNED
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
+                "QRZ Logbook",
+                &station_call,
+                &owner,
+            );
+            if first {
+                conn_log("QRZ Logbook", "error", warning.trim().to_string());
+            }
+        }
+    }
     let rec: tempo_core::logbook::QsoRecord = record.into();
     let adif = tempo_core::logbook::adif_record(&rec);
     let body = tempo_core::qrz::build_insert_body(&key, &adif, false);
@@ -17639,6 +17908,30 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
     let password = eqsl_keychain()?
         .get_password()
         .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
+    // #291: eQSL had no portable-callsign warning at all. The account is the username; the
+    // call the contact goes up under is its STATION_CALLSIGN, else today's. Said once a session.
+    {
+        let station_call = record
+            .station_callsign
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| engine_lock(engine).settings().mycall.trim().to_string());
+        let warning = eqsl_account_mismatch_warning(&station_call, &user);
+        if !warning.is_empty()
+            && first_upload_account_warning(
+                &mut UPLOAD_ACCOUNT_WARNED
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
+                "eQSL",
+                &station_call,
+                &user,
+            )
+        {
+            conn_log("eQSL", "error", warning.trim().to_string());
+        }
+    }
     let rec: tempo_core::logbook::QsoRecord = record.into();
     let adif = tempo_core::logbook::adif_record(&rec);
 
@@ -17806,6 +18099,73 @@ fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String
 /// persists (through [`cloudlog_stamp`]); the words are for the toast and the connection log.
 /// The two Settings-side refusals below classify themselves the same way rather than
 /// returning a bare string, so no caller has to guess which failure it is looking at.
+/// One station location the picker offers (#226) — the serialisable mirror of
+/// `propagation::live::cloudlog::CloudlogStation`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudlogStationDto {
+    station_id: String,
+    profile_name: String,
+    callsign: String,
+    gridsquare: String,
+    active: bool,
+}
+
+/// #226: the operator's own station locations, read from their Cloudlog/Wavelog so Settings can
+/// offer them instead of asking for a number they have no way to know.
+///
+/// ⛔ CREDENTIAL. The request carries the API key IN THE URL PATH. Therefore: it runs only here,
+/// from an explicit button press (never on load, never on a timer); the URL is built and spent
+/// inside `fetch_station_info` and is never returned, logged or persisted; and what reaches the
+/// operator is Nexus's own sentence or a `neterr::redact` category — both proven key-free by
+/// `the_api_key_never_reaches_a_station_info_error_or_url_error`, which carries its own positive
+/// control. The connection-log line below names a COUNT and nothing else.
+#[tauri::command(async)]
+async fn cloudlog_station_info(
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<CloudlogStationDto>, String> {
+    let url = {
+        let eng = engine_lock(&state);
+        eng.settings().cloudlog_url.trim().to_string()
+    };
+    if url.is_empty() {
+        return Err("Set your Cloudlog/Wavelog URL in Settings first.".to_string());
+    }
+    let key = cloudlog_keychain()?
+        .get_password()
+        .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())?;
+    // Blocking HTTP off the async executor (the push impls' rule). The key moves in and dies
+    // with the closure.
+    let found = tauri::async_runtime::spawn_blocking(move || {
+        propagation::live::cloudlog::fetch_station_info(&url, &key)
+    })
+    .await
+    .map_err(|e| format!("station lookup task failed: {e}"))?;
+    match found {
+        Ok(list) => {
+            conn_log(
+                "Cloudlog",
+                "ok",
+                format!("station locations offered: {}", list.len()),
+            );
+            Ok(list
+                .into_iter()
+                .map(|s| CloudlogStationDto {
+                    station_id: s.station_id,
+                    profile_name: s.profile_name,
+                    callsign: s.callsign,
+                    gridsquare: s.gridsquare,
+                    active: s.active,
+                })
+                .collect())
+        }
+        Err(e) => {
+            conn_log("Cloudlog", "error", e.message.clone());
+            Err(e.message)
+        }
+    }
+}
+
 fn cloudlog_push_qso_impl(
     dto: &LoggedQso,
     engine: &SharedEngine,
@@ -17843,6 +18203,33 @@ fn cloudlog_push_qso_impl(
     let rec: tempo_core::logbook::QsoRecord = dto.clone().into();
     let adif = tempo_core::logbook::adif_record(&rec);
     propagation::live::cloudlog::upload(&url, &key, &station_id, &adif)
+}
+
+/// #226: the connection-log line for a Cloudlog/Wavelog failure that retrying cannot fix, or
+/// `None` for one that can clear on its own (the instance unreachable, or in trouble with a
+/// 5xx) and is retried as before.
+///
+/// Written as an exhaustive match on purpose: a failure class added later does not compile
+/// until someone decides which side of that line it falls on. Nothing re-sends a single
+/// contact to Cloudlog/Wavelog from the app, so the way back is the ADIF export.
+fn cloudlog_refusal_line(
+    class: propagation::live::cloudlog::CloudlogFailure,
+    call: &str,
+) -> Option<String> {
+    use propagation::live::cloudlog::CloudlogFailure as F;
+    let why = match class {
+        F::Unreachable | F::ServerError => return None,
+        F::Credentials => "the instance refused the API key or the station profile id",
+        F::NotConfigured => "the Cloudlog/Wavelog settings cannot be used as they are",
+        F::NotAnApi => "the base URL does not answer as the Cloudlog/Wavelog API",
+        F::RecordRefused => "the instance refused to file the record",
+        F::Refused => "the instance refused the upload",
+    };
+    Some(format!(
+        "not retrying the QSO with {call}: {why}. Fix it in Settings ▸ Logging & Connectors ▸ \
+         Cloudlog / Wavelog. This contact is not sent again on its own — to add it afterwards, \
+         use Logbook ▸ Export ADIF and import the file into Wavelog or Cloudlog"
+    ))
 }
 
 /// Which connectors are enabled, for [`auto_push_one`] — bundled into one struct
@@ -18117,13 +18504,19 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     "error",
                     format!("auto-forward {call} — {}", e.message),
                 );
-                // Cloudlog's error covers both a down instance and a reject; retry
-                // (bounded by MAX_UPLOAD_RETRIES) rather than silently drop.
+                // #226: only a failure that can clear on its own is retried. A refusal (a
+                // callsign where the location number goes, a bad key, a URL that is not the
+                // API) was retried up to the budget and failed the same way every time; it is
+                // said once, with the way back, and dropped.
+                let refusal = cloudlog_refusal_line(e.class, &call);
+                if let Some(line) = &refusal {
+                    conn_log("Cloudlog", "error", line.clone());
+                }
                 (
                     format!("Cloudlog ✗ {}", e.message),
                     false,
                     cloudlog_stamp(e.class),
-                    true,
+                    refusal.is_none(),
                 )
             }
         };
@@ -21781,6 +22174,17 @@ pub fn run() {
                 // re-pushing the legs that already succeeded (no double-upload).
                 if failed != 0 {
                     let attempts = p.attempts.saturating_add(1);
+                    // #290: at the budget the re-queue below drops the record without a
+                    // word — say so here, while the contact is still in hand.
+                    let given_up = GivenUpQso {
+                        call: &rec.call,
+                        band: &rec.band,
+                        mode: &rec.mode,
+                        when_unix: rec.when_unix,
+                    };
+                    for (service, line) in upload_give_up_lines(failed, attempts, &given_up) {
+                        conn_log(service, "error", line);
+                    }
                     let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
                     let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
                     // `p.origin` CARRIED, not re-derived: a catch-up record that blips on
@@ -22626,6 +23030,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_license_class,
             get_licensed_band_plan,
             dxcc_entity_names,
+            dxcc_entity_continents,
+            cloudlog_station_info,
             dxcc_entity_locations,
             set_frequency,
             sstv_tune,
@@ -23560,6 +23966,110 @@ mod tests {
             super::HRDLOG_APP_NAME,
             format!("Nexus/{}", env!("CARGO_PKG_VERSION"))
         );
+    }
+
+    /// #290 (F4MQS): a QRZ or eQSL upload that ran out of retries used to fall off the queue
+    /// with no word to the operator. The give-up must name the contact and the way back,
+    /// exactly as the HRDLog leg's line does.
+    #[test]
+    fn qrz_and_eqsl_give_ups_name_the_qso_and_how_to_push_it_again() {
+        use tempo_app::engine::{upload_legs as legs, MAX_UPLOAD_RETRIES};
+        let qso = super::GivenUpQso {
+            call: "F4MQS/P",
+            band: "20m",
+            mode: "FT8",
+            // 2026-09-14 12:34:56 UTC
+            when_unix: 1_789_389_296,
+        };
+        let failed = legs::QRZ | legs::EQSL | legs::CLUBLOG;
+
+        // Budget not yet spent: the record goes back on the queue, nothing to announce.
+        assert!(super::upload_give_up_lines(failed, MAX_UPLOAD_RETRIES - 1, &qso).is_empty());
+
+        let lines = super::upload_give_up_lines(failed, MAX_UPLOAD_RETRIES, &qso);
+        let services: Vec<&str> = lines.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            services,
+            ["QRZ Logbook", "eQSL"],
+            "one line per given-up QRZ/eQSL leg, and ClubLog keeps its own catch-up path"
+        );
+        for (service, line) in &lines {
+            assert!(
+                line.contains("F4MQS/P")
+                    && line.contains("20m FT8")
+                    && line.contains("2026-09-14 12:34Z"),
+                "{service}: the line must name the QSO — {line}"
+            );
+            assert!(
+                line.contains(&MAX_UPLOAD_RETRIES.to_string()),
+                "{service}: {line}"
+            );
+        }
+        assert!(
+            lines[0].1.contains("Logbook"),
+            "QRZ's way back: {}",
+            lines[0].1
+        );
+        assert!(
+            lines[1].1.contains("Awards"),
+            "eQSL's way back: {}",
+            lines[1].1
+        );
+
+        // A failure that owes neither leg says nothing, even at the limit.
+        assert!(super::upload_give_up_lines(legs::CLUBLOG, MAX_UPLOAD_RETRIES, &qso).is_empty());
+    }
+
+    /// #174: a spot's voices become de-duplicated continents and countries, spotter first, and
+    /// a voice that cannot be placed adds nothing rather than a blank.
+    #[test]
+    fn a_spots_voices_resolve_to_deduplicated_continents_and_countries() {
+        let corroborators = ["F5ABC", "DK1ABC-#", "???", "W3LPL-#"].map(str::to_string);
+        let (conts, entities) = super::spot_voice_origins("DL8LAS", &corroborators);
+        assert_eq!(conts, ["EU", "NA"]);
+        assert_eq!(
+            entities,
+            ["Fed. Rep. of Germany", "France", "United States"]
+        );
+        let (conts, entities) = super::spot_voice_origins("???", &[]);
+        assert!(conts.is_empty() && entities.is_empty());
+    }
+
+    /// #226 (DG3ET): Wavelog refused every contact with HTTP 401 because the station profile id
+    /// was a callsign, and the sink marked every Cloudlog error transient, so each contact was
+    /// retried to the budget and failed the same way each time. Only a failure that can clear on
+    /// its own is retried; a refusal is logged once, naming the contact and the way back.
+    #[test]
+    fn a_cloudlog_refusal_is_not_retried_and_says_how_to_send_it_again() {
+        use propagation::live::cloudlog::CloudlogFailure as F;
+        for transient in [F::Unreachable, F::ServerError] {
+            assert_eq!(
+                super::cloudlog_refusal_line(transient, "DL1ABC"),
+                None,
+                "{transient:?} can clear on its own, so it is retried"
+            );
+        }
+        let refused = [
+            F::Credentials,
+            F::NotConfigured,
+            F::NotAnApi,
+            F::RecordRefused,
+            F::Refused,
+        ];
+        for class in refused {
+            let line = super::cloudlog_refusal_line(class, "DL1ABC")
+                .unwrap_or_else(|| panic!("{class:?} is retried, and it fails the same way"));
+            assert!(
+                line.contains("DL1ABC"),
+                "{class:?}: name the contact — {line}"
+            );
+            assert!(
+                line.contains("Export ADIF"),
+                "{class:?}: say how to send it again — {line}"
+            );
+        }
+        // Every class is decided one way or the other: a class added later must land here.
+        assert_eq!(F::ALL.len(), 2 + refused.len());
     }
 
     /// ⭐ **The country file the CONTEST SCORER actually gets** — the one assertion that
@@ -25272,6 +25782,132 @@ mod tests {
         );
     }
 
+    /// #291 (F4MQS): the portable warning ran only on QRZ's Test button, and eQSL had none.
+    /// eQSL's account is its username; the check must speak only when that username is a
+    /// callsign that differs from the one the contact is being uploaded under, and each
+    /// mismatch is said once per session, not once per contact.
+    #[test]
+    fn eqsl_account_mismatch_warns_a_portable_operator_and_says_it_once() {
+        use super::{eqsl_account_mismatch_warning as warn, first_upload_account_warning as first};
+        let p = warn("F4MQS/P", "F4MQS");
+        assert!(
+            p.contains("F4MQS/P") && p.contains("F4MQS") && p.contains("eQSL"),
+            "{p}"
+        );
+        assert_eq!(warn("F4MQS", "f4mqs"), "", "the same call, any case");
+        assert_eq!(warn("F4MQS/P", ""), "", "no username");
+        assert_eq!(warn("", "F4MQS"), "", "no station call");
+        // A login that is not a callsign says nothing about which call the account holds.
+        assert_eq!(warn("F4MQS/P", "yannick"), "");
+        let other = warn("K1ABC", "W9XYZ");
+        assert!(
+            other.contains("K1ABC") && other.contains("W9XYZ"),
+            "{other}"
+        );
+
+        let mut seen = std::collections::BTreeSet::new();
+        assert!(first(&mut seen, "eQSL", "F4MQS/P", "F4MQS"));
+        assert!(
+            !first(&mut seen, "eQSL", "F4MQS/P", "F4MQS"),
+            "said once per session"
+        );
+        assert!(
+            first(&mut seen, "QRZ Logbook", "F4MQS/P", "F4MQS"),
+            "per service"
+        );
+        assert!(
+            first(&mut seen, "eQSL", "F4MQS/M", "F4MQS"),
+            "a different station call is a different mismatch"
+        );
+    }
+
+    /// #291: QRZ's book owner is only known from a STATUS round trip. At upload time that
+    /// costs a network call, so it is spent only for a stroked (portable) call, at most once a
+    /// session, and never when the owner is already known.
+    #[test]
+    fn qrz_upload_warning_asks_qrz_only_for_a_portable_call_and_only_once() {
+        use super::qrz_upload_account_warning_from as warn;
+        let mut seen = std::collections::BTreeSet::new();
+
+        // An ordinary call with no known owner: nothing to compare, and no STATUS call.
+        let r = warn(
+            "F4MQS",
+            None,
+            false,
+            || panic!("no STATUS round trip for an unstroked call"),
+            &mut seen,
+        );
+        assert_eq!(r, (None, None));
+
+        // Portable, owner not known: ask once, hand the owner back to cache, and warn.
+        let (w, owner) = warn("F4MQS/P", None, false, || Some("F4MQS".into()), &mut seen);
+        assert!(
+            w.as_deref()
+                .is_some_and(|w| w.contains("F4MQS/P") && w.contains("REJECTED")),
+            "{w:?}"
+        );
+        assert_eq!(owner.as_deref(), Some("F4MQS"));
+
+        // Asked already this session and it came back empty (QRZ down): never ask again.
+        let r = warn(
+            "F4MQS/P",
+            None,
+            true,
+            || panic!("asked QRZ twice in one session"),
+            &mut seen,
+        );
+        assert_eq!(r, (None, None));
+
+        // Owner known: compare without asking, and a mismatch already said stays quiet.
+        let r = warn(
+            "F4MQS/P",
+            Some("F4MQS".into()),
+            true,
+            || panic!("the owner was already known"),
+            &mut seen,
+        );
+        assert_eq!(r, (None, None), "said once per session");
+        let (w, _) = warn("F4MQS/M", Some("F4MQS".into()), true, || None, &mut seen);
+        assert!(w.is_some(), "a new station call is a new mismatch");
+        // A book that matches the station call: silent.
+        let (w, _) = warn("F4MQS/P", Some("F4MQS/P".into()), true, || None, &mut seen);
+        assert_eq!(w, None);
+    }
+
+    /// #293: the name a lookup hands the log is the one the log strip fills — the QRZ nickname
+    /// when the station set one (what they answer to on the air), else the full name, and
+    /// nothing at all rather than a blank.
+    #[test]
+    fn the_logged_name_is_the_one_the_log_strip_would_fill() {
+        let dto = |name: Option<&str>, nickname: Option<&str>| tempo_app::dto::QrzLookupDto {
+            call: "W9XYZ".into(),
+            name: name.map(str::to_string),
+            nickname: nickname.map(str::to_string),
+            qth: None,
+            grid: None,
+            state: None,
+            country: None,
+            dxcc: None,
+            cq_zone: None,
+            itu_zone: None,
+            image: None,
+            lat: None,
+            lon: None,
+        };
+        let d = dto(Some("David Smith"), Some("Dave"));
+        assert_eq!(super::callbook_log_name(&d), Some("Dave"));
+        let d = dto(Some("David Smith"), None);
+        assert_eq!(super::callbook_log_name(&d), Some("David Smith"));
+        let d = dto(Some("David Smith"), Some("  "));
+        assert_eq!(
+            super::callbook_log_name(&d),
+            Some("David Smith"),
+            "a blank nickname"
+        );
+        let d = dto(Some(" "), None);
+        assert_eq!(super::callbook_log_name(&d), None);
+    }
+
     #[test]
     fn plain_qrz_reason_explains_the_internal_error() {
         use super::plain_qrz_reason;
@@ -26327,6 +26963,8 @@ mod tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,

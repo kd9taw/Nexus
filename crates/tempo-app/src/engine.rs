@@ -1669,6 +1669,10 @@ pub fn upload_backoff_secs(attempts: u8) -> i64 {
 /// worker tick / 2 s), so a permanently-down service eventually stops retrying.
 pub const MAX_UPLOAD_RETRIES: u8 = 20;
 
+/// How many callbook names a session remembers for the log (#293) — a busy FT8 hour
+/// looks up a few dozen stations; the oldest answer is dropped first.
+const CALLBOOK_NAMES_CAP: usize = 64;
+
 /// Seconds between two CATCH-UP uploads (see [`UploadOrigin::CatchUp`]). Live contacts
 /// are never subject to this.
 ///
@@ -2527,6 +2531,12 @@ pub struct Engine {
     cw_peer_call: String,
     cw_peer_name: String,
     cw_peer_state: String,
+    /// #293: names from callbook lookups already answered this session, `(CALL, name)`, newest
+    /// last, bounded by [`CALLBOOK_NAMES_CAP`]. Filled by the shell when a lookup resolves (the
+    /// engine has no callbook of its own), read by [`Self::qso_record`] so a sequencer-logged
+    /// contact carries the NAME the operator already saw on the callsign card — never a new
+    /// network call from the logging path.
+    callbook_names: VecDeque<(String, String)>,
     /// One-shot: the operator hit Abort — the radio loop calls `rig.stop_morse` and
     /// clears the queue, then resets this.
     cw_abort: bool,
@@ -4423,6 +4433,7 @@ impl Engine {
             cw_peer_call: String::new(),
             cw_peer_name: String::new(),
             cw_peer_state: String::new(),
+            callbook_names: VecDeque::new(),
             cw_abort: false,
             manual_ptt: false,
             rf_power: None,
@@ -7468,6 +7479,34 @@ impl Engine {
         self.cw_peer_state = state.trim().to_string();
     }
 
+    /// #293: remember the name a callbook lookup returned for `call`, replacing any earlier
+    /// answer for the same call. A blank call or name is ignored — an empty answer must not
+    /// wipe a name already known. Bounded: the oldest answer goes first.
+    pub fn note_callbook_name(&mut self, call: &str, name: &str) {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        let name = name.trim();
+        if call.is_empty() || name.is_empty() {
+            return;
+        }
+        self.callbook_names.retain(|(c, _)| *c != call);
+        if self.callbook_names.len() >= CALLBOOK_NAMES_CAP {
+            self.callbook_names.pop_front();
+        }
+        self.callbook_names.push_back((call, name.to_string()));
+    }
+
+    /// #293: the name a lookup answered for exactly this call this session, if any. Exact call,
+    /// not base call: `W1AW/P`'s callbook answer belongs to that call's record, and a name
+    /// guessed across calls would be written into a permanent log.
+    fn callbook_name_for(&self, call: &str) -> Option<String> {
+        let call = tempo_core::message::unhash_call(call.trim()).to_ascii_uppercase();
+        self.callbook_names
+            .iter()
+            .rev()
+            .find(|(c, _)| *c == call)
+            .map(|(_, name)| name.clone())
+    }
+
     /// Expand a CW macro WITHOUT queuing it — the cockpit's reply preview.
     pub fn preview_cw(&self, text: &str) -> String {
         self.expand_cw(text)
@@ -9373,6 +9412,11 @@ impl Engine {
     /// and claims nothing otherwise. "ISS (ZARYA)" deliberately resolves to
     /// `None`: LoTW's ISS designation is not derivable from the catalog name,
     /// and a QSO record is permanent — a guessed value is worse than none.
+    ///
+    /// ⚠️ A SHAPE, NOT A VERDICT (#296): plenty of names match it that LoTW has never listed
+    /// (CUBY-1, TOM-1, UWE-4). What may reach a record is decided by
+    /// [`Self::lotw_sat_name`] and its table — which also supplies LoTW's own name for the
+    /// ISS, as a measured fact rather than the guess this function still refuses to make.
     fn sat_designator(label: &str) -> Option<String> {
         let name = label.split('|').next().unwrap_or("").trim();
         let is_designator = |t: &str| {
@@ -9400,6 +9444,67 @@ impl Engine {
         }
         // …else the whole name IS the designator ("AO-7", "RS-44").
         is_designator(name).then(|| name.to_string())
+    }
+
+    /// The satellite names LoTW accepts, keyed by what OUR OWN catalog calls the bird (#296).
+    ///
+    /// ⚠️ MEASURED 2026-09-14, and it needs review as new birds appear. Against LoTW's
+    /// accepted-satellite list (as TQSL 11.34 carries it) and the bundled SatNOGS catalog: of the
+    /// 38 designators the catalog can produce, **11 are on that list**. The other 27 are not —
+    /// real designators LoTW has never listed (GO-32, AO-95, IO-26, CO-55, LO-74, OO-38…) and
+    /// names that merely match the designator SHAPE without being one (CUBY-1…5, TOM-1…3, UWE-3/4,
+    /// CANX-4/5, JACK-002). The last rows are the birds LoTW does list under a different spelling
+    /// than the catalog's.
+    ///
+    /// This table is OURS, hand-kept, deliberately not a copy of anyone's file, and the reason it
+    /// may be short: a bird missing here is stamped with NOTHING, which costs a satellite credit
+    /// the operator can still add by hand, while a WRONG name is refused by TQSL and — through the
+    /// `-a compliant` funnel — can take a whole signed batch with it. Unknown fails closed.
+    ///
+    /// Left out on purpose, as UNCONFIRMED: the catalog's `AISAT`, `UKUBE 1` and `BY70-4` resemble
+    /// LoTW's `AISAT1`, `UKUBE1` and `BY70-1`, but they were not verified to be the same bird, and
+    /// a guess here is exactly what this table exists to stop.
+    const LOTW_SAT_NAMES: &[(&str, &str)] = &[
+        // On LoTW's list under the designator the catalog already yields.
+        ("AO-10", "AO-10"),
+        ("AO-16", "AO-16"),
+        ("AO-27", "AO-27"),
+        ("AO-40", "AO-40"),
+        ("AO-91", "AO-91"),
+        ("AO-123", "AO-123"),
+        ("JO-97", "JO-97"),
+        ("LO-19", "LO-19"),
+        ("NO-44", "NO-44"),
+        ("SO-50", "SO-50"),
+        ("VO-52", "VO-52"),
+        // On LoTW's list, spelled differently there than in our catalog.
+        ("ISS (ZARYA)", "ARISS"),
+        ("TAURUS-1", "TAURUS"),
+        ("SONATE-2", "SONATE"),
+        ("TEVEL2-1", "TEV2-1"),
+        ("TEVEL2-2", "TEV2-2"),
+        ("TEVEL2-3", "TEV2-3"),
+        ("TEVEL2-4", "TEV2-4"),
+        ("TEVEL2-5", "TEV2-5"),
+        ("TEVEL2-6", "TEV2-6"),
+        ("TEVEL2-7", "TEV2-7"),
+        ("TEVEL2-8", "TEV2-8"),
+        ("TEVEL2-9", "TEV2-9"),
+    ];
+
+    /// #296: the name LoTW ACCEPTS for the bird this catalog label names, or `None` when we
+    /// cannot say. The whole catalog name is matched first (that is how a bird LoTW spells
+    /// differently is corrected), then the designator [`Self::sat_designator`] derives from it.
+    /// Whole names only — never a substring, or `SWISSCUBE` would answer for the ISS.
+    fn lotw_sat_name(label: &str) -> Option<&'static str> {
+        let name = label.split('|').next().unwrap_or("").trim();
+        let find = |key: &str| {
+            Self::LOTW_SAT_NAMES
+                .iter()
+                .find(|(ours, _)| ours.eq_ignore_ascii_case(key))
+                .map(|(_, lotw)| *lotw)
+        };
+        find(name).or_else(|| Self::sat_designator(label).as_deref().and_then(find))
     }
 
     /// The station callsign to stamp on a contact: the operator's current `mycall`, ADIF-cased
@@ -9579,7 +9684,7 @@ impl Engine {
         // ADIF by hand; the Sat VUCC card's caveat line is gone with them.
         if rec.prop_mode.is_none() && rec.sat_name.is_none() {
             if let Some(st) = &self.sat_tune {
-                if let Some(des) = Self::sat_designator(&st.label) {
+                if let Some(name) = Self::lotw_sat_name(&st.label) {
                     let f_hz = if rec.freq_mhz > 0.0 {
                         (rec.freq_mhz * 1e6) as i64
                     } else {
@@ -9589,7 +9694,7 @@ impl Engine {
                     let guard = st.transponder.half_width_hz as i64 + 20_000;
                     if centre > 0 && (f_hz - centre).abs() <= guard {
                         rec.prop_mode = Some("SAT".into());
-                        rec.sat_name = Some(des);
+                        rec.sat_name = Some(name.to_string());
                     }
                 }
             }
@@ -9669,6 +9774,17 @@ impl Engine {
         // operator repaired by hand — is left alone. Same rule as `operator` above.
         if rec.station_callsign.is_none() {
             rec.station_callsign = self.station_callsign_now();
+        }
+        // #239: WHICH RIG MADE IT — the active radio's model, stamped at this funnel on the same
+        // terms as STATION_CALLSIGN: a record arriving with its own rig keeps it, and a station
+        // with no rig configured stamps nothing rather than the words. "No rig" is spelled
+        // "None / VOX" by `Settings::default` (and "None" elsewhere), so the test is the prefix.
+        // The operator's OWN GRID is deliberately not stamped here — see `QsoRecord::my_grid`.
+        if rec.my_rig.is_none() {
+            let rig = self.settings.rig_model_name.trim();
+            if !rig.is_empty() && !rig.to_ascii_lowercase().starts_with("none") {
+                rec.my_rig = Some(rig.to_string());
+            }
         }
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs.
@@ -9806,7 +9922,13 @@ impl Engine {
             } else {
                 tag("STATION_CALLSIGN", &self.settings.mycall)
             },
-            tag("MY_GRIDSQUARE", &self.settings.mygrid),
+            // #239: a record carrying its own grid has it in `adif` already; a second, live copy
+            // would hand HRD two conflicting MY_GRIDSQUARE fields for one contact.
+            if rec.my_grid.is_some() {
+                String::new()
+            } else {
+                tag("MY_GRIDSQUARE", &self.settings.mygrid)
+            },
         );
         if let Some(pos) = adif.find("<EOR>") {
             adif.insert_str(pos, &station);
@@ -15627,6 +15749,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // Stamped at CONTACT time, not left for the funnel: with `prompt_to_log` on, this
             // record waits in `pending_log` (and on disk) until the operator confirms, so a
             // later read would be the call in force at the click, not at the contact.
+            my_grid: None,
+            my_rig: None,
             station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
             contest: None,
@@ -19614,6 +19738,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         } else {
             None
         };
+        // #293: the name a callbook lookup already returned for this call this session, if any —
+        // the callsign card's own lookup. Never a lookup from here. Taken before the literal
+        // moves `dxcall` into the record.
+        let callbook_name = self.callbook_name_for(&dxcall);
         QsoRecord {
             call: dxcall,
             grid,
@@ -19633,7 +19761,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // type 5 datagram loggers log from (the blank RST_SENT/RST_RCVD in Log4OM).
             rst_sent: self.qso_report_sent.map(tempo_core::message::fmt_report),
             rst_rcvd: rx_report.map(tempo_core::message::fmt_report),
-            name: None,
+            name: callbook_name,
             qth: None,
             // WSJT-X's "dB reports to comments" (opt-in): the COMMENT carries
             // "<mode>  Sent: <rpt>  Rcvd: <rpt>" in WSJT-X's own byte format, built
@@ -19662,6 +19790,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             operator: None,
             // Same reason as the RTTY builder: `prompt_to_log` can park this record for as long
             // as the operator takes to confirm, so the call is captured now.
+            my_grid: None,
+            my_rig: None,
             station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
             contest: None,
@@ -28812,6 +28942,82 @@ mod tests {
         );
     }
 
+    /// #239: a logged contact carries the rig that made it — the active radio, stamped at the log
+    /// funnel like STATION_CALLSIGN — and never an own-grid invented from the setting: that one is
+    /// left for the operator (the LoTW batch hands each record's own fields to TQSL).
+    #[test]
+    fn a_logged_contact_carries_the_rig_but_not_an_invented_grid() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.rig_model_name = "Icom IC-705".into();
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        let log = e.get_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].my_rig.as_deref(), Some("Icom IC-705"));
+        assert_eq!(
+            log[0].my_grid, None,
+            "own grid is never stamped from the setting"
+        );
+
+        // A record that arrives with its own rig keeps it.
+        let mut own = e.qso_record("K9AAA".into(), None, None);
+        own.my_rig = Some("FT-991A".into());
+        e.log_qso(own);
+        // No rig configured stamps nothing rather than the words. The real default is
+        // "None / VOX" (Settings::default), not a bare "None".
+        e.settings.rig_model_name = "None / VOX".into();
+        let bare = e.qso_record("N0CALL".into(), None, None);
+        e.log_qso(bare);
+        let log = e.get_log();
+        let rig = |call: &str| {
+            log.iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.my_rig.clone())
+        };
+        assert_eq!(rig("K9AAA").as_deref(), Some("FT-991A"));
+        assert_eq!(rig("N0CALL"), None);
+    }
+
+    /// #239: a record that carries its own grid hands HRD that one, once — not the record's plus
+    /// a second, conflicting copy from the live setting (the STATION_CALLSIGN guard's twin).
+    #[test]
+    fn the_hrd_datagram_uses_the_records_own_grid_not_a_second_one() {
+        let e = Engine::new("K2DEF", "FN31", 0);
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        rec.my_grid = Some("EN52XA".into());
+        let d = e.hrd_datagram(&rec);
+        assert_eq!(d.matches("MY_GRIDSQUARE").count(), 1, "{d}");
+        assert!(d.contains("<MY_GRIDSQUARE:6>EN52XA"), "{d}");
+        // Control: a record without its own still gets the live setting, as before.
+        let plain = e.qso_record("W9XYZ".into(), None, None);
+        let d = e.hrd_datagram(&plain);
+        assert!(d.contains("<MY_GRIDSQUARE:4>FN31"), "{d}");
+    }
+
+    /// #293 (mi0ayr): the log strip fills NAME from its own callbook lookup, but the FT
+    /// sequencer's record builder hard-coded `name: None`, so every auto-logged FT8/FT4 contact
+    /// reached the Logbook, ADIF and the uploads nameless even when the callsign card had
+    /// just shown the name. The name must come from a lookup already answered this session.
+    #[test]
+    fn an_auto_logged_qso_carries_the_name_from_this_sessions_callbook_lookup() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tier(Tier::TempoFast);
+        // The card looked the station up while it was calling; a lookup of someone else is
+        // there to prove the name is matched to the call, not simply the latest one.
+        e.note_callbook_name("w9xyz", " Dave ");
+        e.note_callbook_name("K9AAA", "Someone Else");
+
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "completed QSO auto-logs exactly one record");
+        assert_eq!(log[0].name.as_deref(), Some("Dave"));
+        // No lookup for this call: no name — never a borrowed one.
+        assert_eq!(e.qso_record("N0CALL".into(), None, None).name, None);
+    }
+
     /// Sibling of the NewState defect, same class: a QSO that logs with a BLANK grid can never
     /// teach `worked_grids` anything, so NewGrid keeps firing for a grid already worked. The
     /// session roster covers a station heard this session; this covers one worked on a previous
@@ -30140,6 +30346,8 @@ mod tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,
@@ -31113,6 +31321,8 @@ mod tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,
@@ -32703,6 +32913,8 @@ mod tests {
             prop_mode: None,
             sat_name: None,
             operator: None,
+            my_grid: None,
+            my_rig: None,
             station_callsign: None,
             extra: Vec::new(),
             contest: None,
@@ -38518,6 +38730,81 @@ mod tests {
         );
     }
 
+    /// #296: a satellite contact may carry only a name LoTW ACCEPTS. The designator SHAPE
+    /// matches plenty of birds LoTW has never heard of — CUBY-1, TOM-1 and UWE-4 are cubesat
+    /// names, not OSCAR designators — and a record carrying one is a record TQSL refuses, which
+    /// through the `-a compliant` funnel can take a whole signed batch with it. Unknown ⇒ no name.
+    #[test]
+    fn only_a_satellite_name_lotw_accepts_reaches_a_record() {
+        // Controls: the birds LoTW does list still stamp, by designator and after a spelling fix.
+        assert_eq!(
+            Engine::lotw_sat_name("SAUDISAT 1C (SO-50)|FM"),
+            Some("SO-50")
+        );
+        assert_eq!(Engine::lotw_sat_name("AO-91|FM"), Some("AO-91"));
+        assert_eq!(
+            Engine::lotw_sat_name("JY1SAT (JO-97)|linear"),
+            Some("JO-97")
+        );
+
+        // Real designators LoTW does not list.
+        for label in [
+            "TECHSAT 1B (GO-32)|FM",
+            "FOX-1CLIFF (AO-95)|FM",
+            "ITAMSAT (IO-26)|FM",
+            "CUTE-1 (CO-55)|beacon",
+        ] {
+            assert_eq!(Engine::lotw_sat_name(label), None, "{label}");
+        }
+        // Shape-only matches: names that merely look like a designator.
+        for label in ["CUBY-1|linear", "TOM-1|FM", "UWE-4|beacon", "CANX-5|beacon"] {
+            assert_eq!(Engine::lotw_sat_name(label), None, "{label}");
+        }
+        // The spellings LoTW wants for birds it DOES list.
+        assert_eq!(Engine::lotw_sat_name("ISS (ZARYA)|FM"), Some("ARISS"));
+        assert_eq!(Engine::lotw_sat_name("TEVEL2-4|FM"), Some("TEV2-4"));
+        assert_eq!(Engine::lotw_sat_name("TEVEL2-9|FM"), Some("TEV2-9"));
+        assert_eq!(Engine::lotw_sat_name("TAURUS-1|FM"), Some("TAURUS"));
+        assert_eq!(Engine::lotw_sat_name("SONATE-2|FM"), Some("SONATE"));
+        // A catalog name that merely CONTAINS one we know is not that bird.
+        assert_eq!(Engine::lotw_sat_name("SWISSCUBE|beacon"), None);
+    }
+
+    /// #296 end to end: a contact on an unlisted bird's downlink carries NOTHING — not a wrong
+    /// SAT_NAME, and not a lone PROP_MODE either (TQSL hard-errors on half the pair).
+    #[test]
+    fn a_contact_on_an_unlisted_bird_carries_no_satellite_fields() {
+        use tempo_core::doppler::Transponder;
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some((
+            "CUBY-1|linear".into(),
+            0,
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut on_bird = qrec("W1AW", "70cm");
+        on_bird.freq_mhz = 436.795;
+        e.log_qso(on_bird);
+        let r = &e.get_log()[0];
+        assert_eq!(
+            r.sat_name, None,
+            "a name LoTW refuses must not reach the record"
+        );
+        assert_eq!(r.prop_mode, None, "and never a lone PROP_MODE");
+
+        // Control: the same contact on a bird LoTW lists still carries both.
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut ok = qrec("K1ABC", "70cm");
+        ok.freq_mhz = 436.795;
+        e.log_qso(ok);
+        let r = &e.get_log()[1];
+        assert_eq!(r.sat_name.as_deref(), Some("SO-50"));
+        assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
+    }
+
     #[test]
     fn the_satellite_stamp_fires_on_the_downlink_and_nowhere_else() {
         // THE REBUILT STAMP (2026-08-10), pinned across its whole gate matrix. The
@@ -38552,19 +38839,42 @@ mod tests {
         );
         assert_eq!(hf.sat_name, None);
 
-        // 3. No safe designator → no stamp AT ALL (never a lone PROP_MODE, which TQSL
-        //    hard-rejects and which would wedge its whole upload batch).
+        // 3. A bird we cannot name for LoTW → no stamp AT ALL (never a lone PROP_MODE, which
+        //    TQSL hard-rejects and which would wedge its whole upload batch).
+        //
+        //    ⚠️ #296 changed this row's EXAMPLE, not its rule. The ISS stood here because
+        //    "ZARYA" is not a designator and LoTW's name for it could not be derived; the
+        //    table now carries that name as a measured fact, so the ISS stamps it (3b below)
+        //    and the unnameable case is a shape-only match instead — which is the larger half
+        //    of what #296 found.
         let mut e3 = Engine::new("KD9TAW", "EN52", 0);
         e3.set_sat_transponder(Some((
+            "CUBY-1|linear".into(),
+            0,
+            Transponder::channel(145_990_000, 437_800_000),
+        )));
+        let mut unknown = qrec("N0CALL", "70cm");
+        unknown.freq_mhz = 437.800;
+        e3.log_qso(unknown);
+        assert_eq!(
+            e3.get_log()[0].prop_mode,
+            None,
+            "CUBY-1 matches the designator shape; LoTW does not list it"
+        );
+        assert_eq!(e3.get_log()[0].sat_name, None, "both-or-neither: neither");
+
+        // 3b. …and the ISS, which LoTW lists as ARISS, now stamps that (#296).
+        let mut e4 = Engine::new("KD9TAW", "EN52", 0);
+        e4.set_sat_transponder(Some((
             "ISS (ZARYA)|FM Voice Repeater".into(),
             0,
             Transponder::channel(145_990_000, 437_800_000),
         )));
         let mut iss = qrec("NA1SS", "70cm");
         iss.freq_mhz = 437.800;
-        e3.log_qso(iss);
-        assert_eq!(e3.get_log()[0].prop_mode, None, "ZARYA is not a designator");
-        assert_eq!(e3.get_log()[0].sat_name, None, "both-or-neither: neither");
+        e4.log_qso(iss);
+        assert_eq!(e4.get_log()[0].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(e4.get_log()[0].sat_name.as_deref(), Some("ARISS"));
 
         // 4. Records ARRIVING with satellite fields are carried verbatim — the stamp is
         //    a writer for blank fields only, never an editor.

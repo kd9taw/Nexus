@@ -1004,6 +1004,28 @@ export const EN = {
   'logbook.column.time': 'Time (UTC)',
   'logbook.column.park': 'Park',
   'logbook.column.actions': 'Edit / delete',
+  // #239 More columns + the edit form's own-side and QSL fields. `(W)` is the unit symbol and
+  // MY_GRIDSQUARE / MY_RIG are ADIF field names — tokens inside the sentence.
+  'logbook.columns.more.label': 'More columns',
+  'logbook.columns.more.title':
+    'Show your grid, rig, name, QTH, state, power and operator in a wider table you can scroll sideways',
+  'logbook.column.myGrid': 'My grid',
+  'logbook.column.myRig': 'Rig',
+  'logbook.column.name': 'Name',
+  'logbook.column.qth': 'QTH',
+  'logbook.column.state': 'State',
+  'logbook.column.power': 'Power (W)',
+  'logbook.column.operator': 'Operator',
+  'logbook.field.myGrid.label': 'My grid',
+  'logbook.field.myGrid.title':
+    'Your own grid square for this contact (ADIF MY_GRIDSQUARE) — where you were, if not at home',
+  'logbook.field.myRig.label': 'Rig',
+  'logbook.field.myRig.title':
+    'The radio used for this contact (ADIF MY_RIG). Filled from the active radio when a contact is logged.',
+  'logbook.field.qslSent.label': 'QSL sent',
+  'logbook.field.qslSent.none': 'Not sent',
+  'logbook.field.qslSent.sent': 'Sent',
+  'logbook.field.qslCard.label': 'Card received',
   'logbook.empty': 'No logged contacts yet.',
   'logbook.emptySearch': 'No contacts match “{{query}}”.',
 
@@ -2348,6 +2370,12 @@ export const EN = {
   'spots.filters.aria': 'Filter spots',
   'spots.filters.modes.aria': 'Modes shown',
   'spots.filters.states.aria': 'US states shown',
+  // #174. `{{continent}}` is a continent CODE (EU, NA…) and `{{country}}` a DXCC entity name —
+  // both tokens inside the sentence.
+  'spots.filters.spotterConts.aria': 'Spotted from',
+  'spots.filters.spotterEntities.aria': 'Spotter countries',
+  'spots.filter.spotterCont.title': 'Show only spots someone in {{continent}} reported',
+  'spots.filter.spotterEntity.title': 'Show only spots someone in {{country}} reported',
   'spots.filter.toggle.title': 'Filter spots by band, mode, state, or privileges',
   'spots.filter.toggle.active': 'Filtered',
   'spots.filter.toggle.idle': 'Filter',
@@ -2512,6 +2540,18 @@ export const EN = {
   'hideCountries.head': 'Hide these countries',
   'hideCountries.pause': 'Pause (keep my ticks, show everything)',
   'hideCountries.other.head': 'Other country…',
+  // #229. The continent CODE follows each name in the picker as a token: "Europe (EU)".
+  'hideCountries.continents.head': 'Hide whole continents',
+  'hideCountries.continent.na': 'North America',
+  'hideCountries.continent.sa': 'South America',
+  'hideCountries.continent.eu': 'Europe',
+  'hideCountries.continent.af': 'Africa',
+  'hideCountries.continent.as': 'Asia',
+  'hideCountries.continent.oc': 'Oceania',
+  'hideCountries.hiddenContinents': {
+    one: '{{count}} continent hidden',
+    other: '{{count}} continents hidden',
+  },
   'hideCountries.search.placeholder': 'search all entities…',
   'hideCountries.note':
     'A view filter only — decoding, logging and alerts are untouched. Stations calling you, the one you are working, and new entities or band slots still show.',
@@ -4212,6 +4252,8 @@ export const EN = {
     'your {{grid}} square (set a 6-character grid in Settings to sharpen it)',
   'recall.geo.approx.theirs': 'their {{grid}} square',
   'recall.geo.approx.both': '{{mine}} and {{theirs}}',
+  'recall.calling.label': 'Calling {{call}}',
+  'recall.calling.title': "Show {{call}}'s card — the station this one is calling",
   'recall.dupe.label': 'Dupe {{band}}',
   'recall.dupe.title':
     'Already worked on {{band}} — logging now would be a dupe. Counts any mode on the band unless Settings’ “match mode too” is on.',
@@ -6330,8 +6372,19 @@ export const EN = {
   'settings.confirmations.cloudlog.url.hint':
     'Your Cloudlog/Wavelog site root. Leave blank to disable.',
   'settings.confirmations.cloudlog.stationId.label': 'Station profile id',
+  // #226. `…/station/edit/3` is a URL fragment, and Wavelog/Cloudlog/Station Locations are the
+  // product's own names — tokens inside the sentence.
   'settings.confirmations.cloudlog.stationId.hint':
-    'The station-location profile to log against (Cloudlog ▸ Station Locations).',
+    "Your station location number — in Wavelog or Cloudlog ▸ Station Locations, it is the number at the end of that location's Edit link (…/station/edit/3 means 3). Not your callsign.",
+  'settings.confirmations.cloudlog.stationId.notNumber':
+    'That looks like a callsign — Wavelog and Cloudlog want the station location number.',
+  // #226 station-location picker. The request carries the API key, so the tooltip says so.
+  'settings.confirmations.cloudlog.stations.find': 'Find my station locations',
+  'settings.confirmations.cloudlog.stations.busy': 'Asking…',
+  'settings.confirmations.cloudlog.stations.title':
+    'Ask your own Cloudlog/Wavelog which station locations it has, and fill the number in. This sends your API key to your instance, and only when you press it.',
+  'settings.confirmations.cloudlog.stations.none':
+    'That instance reports no station locations — add one in Cloudlog/Wavelog first.',
   'settings.confirmations.cloudlog.apiKey.label': 'API key',
   'settings.confirmations.cloudlog.apiKey.placeholder': 'your instance API key',
   'settings.confirmations.cloudlog.apiKey.forget.title':
@@ -7074,6 +7127,7 @@ export const EN = {
   'operate.panel.txmsgs': 'Tx Messages',
   'operate.panel.stations': 'Stations',
   'operate.panel.txmeters': 'TX Meters',
+  'operate.panel.recall': 'Callsign card',
 
   // The rotor's two answers. `{{call}}` is a callsign, `{{deg}}` a bearing and `{{error}}`
   // the backend's own refusal — all three pass through verbatim.

@@ -9,10 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **You can hide the Logbook globe (D#278).** Settings ▸ Appearance ▸ Workspace has a new Logbook
-  globe switch. Turn it off and the Logbook table starts at the top of the screen. It is on by
-  default.
-
 ### Fixed
 
 - **A satellite you just opened no longer claims it has no transmitters.** Open a bird the
@@ -61,6 +57,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   radio hands back — but on these screens a held picture looked like a waterfall that had died. A
   "TRANSMITTING — display held" badge now sits on the waterfall while you key and clears when you
   stop. Nothing about transmitting changes, and your own signal is still not drawn.
+
+- **A QRZ or eQSL upload that runs out of retries now says so.** After 20 failed tries Nexus used
+  to drop the contact from its upload queue without a word, so a QSO that never reached QRZ or
+  eQSL only showed up missing months later. The Connections log now names the contact (call, band,
+  mode, date and time) and says how to send it again: the QRZ button on its Logbook row, or Push to
+  eQSL under Awards ▸ Confirmations. (#290)
+
+- **Log4OM set to read WSJT-X's ADIF message now gets Nexus contacts.** Nexus sent the "QSO
+  logged" message over WSJT-X UDP but never the separate ADIF message WSJT-X sends right after
+  it, so a logger listening only for the ADIF one showed the callsign during the QSO and never
+  received the contact. Nexus now sends both, in WSJT-X's order; the "QSO logged" message itself
+  is unchanged, so JTAlert, GridTracker and loggers already working carry on as before. Field Day
+  contacts still send only the "QSO logged" message. (#267)
+
+- **The Logbook's push-to-QRZ button says QRZ.** Each row's QRZ upload button was a bare ↥ arrow,
+  easy to take for something else, so it looked as if uploading a single contact to QRZ had gone.
+  It now reads QRZ, like the CL, HL and WRL buttons beside it; hovering still says what it does,
+  and screen readers still hear "Push <call> to QRZ". (#270)
+
+- **The portable-callsign warning now appears when you upload, and eQSL has one too.** Nexus
+  warned that a QRZ logbook belongs to one exact callsign only when you pressed Test Connection,
+  so an operator set up at home who went portable months later was never told why his /P uploads
+  failed. Now the first QRZ upload under a callsign that doesn't match the logbook writes the
+  warning to the Connections log. For a portable call Nexus asks QRZ once per session which
+  callsign the logbook belongs to; an ordinary call costs no extra request. eQSL uploads check the
+  callsign against your eQSL username the same way. Each warning appears once per session, not
+  once per contact. (#291)
+
+- **Wavelog and Cloudlog: the station profile id is explained, and a callsign there is caught.**
+  Wavelog wants the station location's number, the one at the end of that location's Edit link
+  under Station Locations; one operator typed his callsign and Wavelog refused every contact
+  with "station id does not belong to the API key owner". The hint now says what the number is
+  and where to find it, a value that isn't a number gets a note right under the field, and Nexus
+  no longer sends an upload with one. (#226)
+
+- **A Wavelog or Cloudlog upload that is refused is no longer retried over and over.** Every
+  Cloudlog/Wavelog error used to count as temporary, so a contact the server refused (a wrong
+  key, a callsign in the station profile id, a URL that isn't the API) was sent again and again
+  and failed the same way each time. Now only "couldn't reach it" and server errors are retried.
+  A refusal is logged once in the Connections log, naming the contact, what to fix in Settings,
+  and how to add that contact afterwards with Logbook ▸ Export ADIF. (#226)
+
+- **Units is on the Station tab, where you'd look for it.** The km/miles and °C/°F choice applies
+  to the whole app but was filed under Settings ▸ Digital ▸ Station Housekeeping, beside FT8
+  options. It now sits under Settings ▸ Station ▸ Operator & Radio, and typing units, miles, km,
+  imperial, metric or temperature into the settings search goes straight to it. Your existing
+  choice carries over. (#248)
 
 ### Security
 

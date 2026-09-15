@@ -127,6 +127,12 @@ impl WsjtxServer {
         self.send(&wsjtx::encode_qso_logged(&self.id, qso))
     }
 
+    /// Send a LoggedADIF (type 12) for one contact — WSJT-X sends it right after QSOLogged.
+    /// `adif_record` is one ADIF record; see [`wsjtx::encode_logged_adif`].
+    pub fn send_logged_adif(&self, adif_record: &str) -> io::Result<()> {
+        self.send(&wsjtx::encode_logged_adif(&self.id, adif_record))
+    }
+
     /// Send a Close (Tempo is shutting down).
     /// **Clear (type 3)** — tell consumers (JTAlert/GridTracker) we erased a
     /// decode window so they clear theirs: 0 = Band Activity, 1 = Rx Frequency,
@@ -355,6 +361,32 @@ mod tests {
                 assert_eq!(qso.report_sent, "-12");
             }
             other => panic!("expected a QsoLogged datagram, got: {other:?}"),
+        }
+    }
+
+    /// #267: the ADIF form of a logged contact reaches the logger as one LoggedADIF datagram.
+    #[test]
+    fn logged_adif_roundtrips_over_loopback() {
+        let listener = UdpSocket::bind(loopback(0)).unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let target = listener.local_addr().unwrap();
+
+        let server = WsjtxServer::new(loopback(0), target).unwrap();
+        server
+            .send_logged_adif("<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<EOR>\n")
+            .unwrap();
+
+        let mut buf = [0u8; 4096];
+        let (n, _) = listener.recv_from(&mut buf).unwrap();
+        match wsjtx::parse_inbound(&buf[..n]).unwrap() {
+            Inbound::LoggedAdif { id, adif } => {
+                assert_eq!(id, APP_ID);
+                assert!(adif.contains("<EOH>\n<CALL:4>W1AW"), "{adif:?}");
+                assert!(adif.ends_with("FT8 <EOR>"), "{adif:?}");
+            }
+            other => panic!("expected a LoggedAdif datagram, got: {other:?}"),
         }
     }
 

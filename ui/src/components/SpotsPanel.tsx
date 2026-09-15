@@ -22,6 +22,9 @@ type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 // Common HF + 6m bands always offered in the filter bar; augmented with any band present
 // in the current spots.
 const COMMON_BANDS = ['160m', '80m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m']
+/** cty.dat's continent codes, in the order the spotted-from chips show them (#174). Tokens,
+ * not prose: the same two letters in every language. */
+const CONTINENT_ORDER = ['NA', 'SA', 'EU', 'AF', 'AS', 'OC']
 
 /** Compact age string from seconds-since-received (−1 = unknown). A number and its unit
  * letter, with no prose in it at all — a measurement, so it is not a catalog string. */
@@ -102,6 +105,12 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
   const [localOnly, setLocalOnly] = useSessionState('nexus.spots.localOnly', true)
   // US-state (WAS) filter, from the roster-resolved state on each spot. Empty = all.
   const [states, setStates] = useSessionState<string[]>('nexus.spots.states', [])
+  // #174 — where a spot was REPORTED from: the continents and DXCC countries of every voice for
+  // it (spotter + corroborators), resolved in Rust because the UI has no cty.dat. Empty = all.
+  // A spot stays when ANY voice matches — the same "one voice is enough" rule as the continent
+  // chip, which asks the narrower question "heard on MY continent".
+  const [spotterConts, setSpotterConts] = useSessionState<string[]>('nexus.spots.spotterConts', [])
+  const [spotterEntities, setSpotterEntities] = useSessionState<string[]>('nexus.spots.spotterEntities', [])
 
   const knownBands = useMemo(() => new Set(bandPlan.map((b) => b.band)), [bandPlan])
 
@@ -136,9 +145,32 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
     setBands((prev) => (prev.includes(b) ? prev.filter((x) => x !== b) : [...prev, b]))
   const toggleState = (st: string) =>
     setStates((prev) => (prev.includes(st) ? prev.filter((x) => x !== st) : [...prev, st]))
+  // #174: only the continents and countries some voice in the current feed actually has, like
+  // the state chips — a chip that can never match is a trap. Continents in cty.dat's fixed
+  // order; countries alphabetical.
+  const availableSpotterConts = useMemo(() => {
+    const set = new Set<string>()
+    for (const s of spots) for (const c of s.spotterConts ?? []) set.add(c)
+    return CONTINENT_ORDER.filter((c) => set.has(c)).concat([...set].filter((c) => !CONTINENT_ORDER.includes(c)).sort())
+  }, [spots])
+  const availableSpotterEntities = useMemo(() => {
+    const set = new Set<string>()
+    for (const s of spots) for (const e of s.spotterEntities ?? []) set.add(e)
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [spots])
+  const toggleSpotterCont = (c: string) =>
+    setSpotterConts((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
+  const toggleSpotterEntity = (e: string) =>
+    setSpotterEntities((prev) => (prev.includes(e) ? prev.filter((x) => x !== e) : [...prev, e]))
 
   const hasActiveFilters =
-    bands.length > 0 || hiddenModes.length > 0 || licensedOnly || localOnly || states.length > 0
+    bands.length > 0 ||
+    hiddenModes.length > 0 ||
+    licensedOnly ||
+    localOnly ||
+    states.length > 0 ||
+    spotterConts.length > 0 ||
+    spotterEntities.length > 0
 
   const rows = useMemo(() => {
     // Terms still narrow (AND), which is right here: a spot row is call + entity + spotter
@@ -154,6 +186,10 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
       if (bands.length > 0 && !bands.includes(s.band)) return false
       // A state filter hides spots whose state is unknown (cluster spots of unheard stations).
       if (states.length > 0 && (!s.state || !states.includes(s.state))) return false
+      // Spotted-from (#174): ANY voice on a chosen continent / in a chosen country keeps the
+      // spot. A spot whose voices could not be placed matches nothing, like an unknown state.
+      if (spotterConts.length > 0 && !(s.spotterConts ?? []).some((c) => spotterConts.includes(c))) return false
+      if (spotterEntities.length > 0 && !(s.spotterEntities ?? []).some((e) => spotterEntities.includes(e))) return false
       if (terms.length > 0) {
         const hay = `${s.call} ${s.entity} ${s.spotter} ${s.mode} ${s.submode ?? ''} ${s.band} ${s.freqMhz.toFixed(4)}`.toUpperCase()
         for (const t of terms) if (!t(hay)) return false
@@ -191,7 +227,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
       return c * dir
     })
     return filtered
-  }, [spots, hiddenModes, bands, states, sort, query, licensedOnly, localOnly])
+  }, [spots, hiddenModes, bands, states, spotterConts, spotterEntities, sort, query, licensedOnly, localOnly])
 
   // How many rows the locality filter is holding back RIGHT NOW — the honest half of a filter
   // that is on by default. Counted against everything else the operator has chosen, so it says
@@ -319,6 +355,45 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
               </div>
             </>
           )}
+          {/* Spotted from (#174) — continents, then countries, of the voices in this feed. */}
+          {availableSpotterConts.length > 0 && (
+            <>
+              <div className="np-filter-sep" aria-hidden="true" />
+              <div className="np-filter-group" role="group" aria-label={t('spots.filters.spotterConts.aria')}>
+                {availableSpotterConts.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`np-chip${spotterConts.includes(c) ? ' active' : ''}`}
+                    aria-pressed={spotterConts.includes(c)}
+                    onClick={() => toggleSpotterCont(c)}
+                    title={t('spots.filter.spotterCont.title', { continent: c })}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {availableSpotterEntities.length > 0 && (
+            <>
+              <div className="np-filter-sep" aria-hidden="true" />
+              <div className="np-filter-group" role="group" aria-label={t('spots.filters.spotterEntities.aria')}>
+                {availableSpotterEntities.map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    className={`np-chip${spotterEntities.includes(e) ? ' active' : ''}`}
+                    aria-pressed={spotterEntities.includes(e)}
+                    onClick={() => toggleSpotterEntity(e)}
+                    title={t('spots.filter.spotterEntity.title', { country: e })}
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           <div className="np-filter-sep" aria-hidden="true" />
           <button
             type="button"
@@ -350,6 +425,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                 setBands([])
                 setHiddenModes([])
                 setStates([])
+                setSpotterConts([])
+                setSpotterEntities([])
                 setLicensedOnly(false)
                 setLocalOnly(false)
               }}

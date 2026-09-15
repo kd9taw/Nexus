@@ -150,6 +150,7 @@ import { elementBandParts } from '../features/elementBands'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, revealDiagLog, revealRecordings } from '../api'
+import { getCloudlogStations, type CloudlogStation } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { AssistanceEvent, ConnEvent, CredStatus, FieldDayStatus } from '../types'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
@@ -1306,6 +1307,26 @@ export function SettingsPanel({
   const [wrlKey, setWrlKeyField] = useState('')
   const [rbToken, setRbTokenField] = useState('')
   const [cloudlogKey, setCloudlogKeyField] = useState('')
+  // #226: the Cloudlog/Wavelog station-location picker. The request carries the API KEY, so it
+  // runs ONLY from the button's onClick below — never on mount, never on a timer. `null` means
+  // "not asked"; an empty array means the instance answered with no locations.
+  const [cloudlogStations, setCloudlogStations] = useState<CloudlogStation[] | null>(null)
+  const [cloudlogStationsBusy, setCloudlogStationsBusy] = useState(false)
+  const [cloudlogStationsError, setCloudlogStationsError] = useState<string | null>(null)
+  const findCloudlogStations = async () => {
+    setCloudlogStationsBusy(true)
+    setCloudlogStationsError(null)
+    try {
+      setCloudlogStations(await getCloudlogStations())
+    } catch (e) {
+      // The backend's sentence is Nexus's own or a redacted category — never the URL, which
+      // carries the key (see cloudlog_station_info).
+      setCloudlogStations(null)
+      setCloudlogStationsError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCloudlogStationsBusy(false)
+    }
+  }
   // Where a deep link asked us to land. Resolved once per `target` change so a caller can pass
   // prose ("Settings ▸ Radio ▸ Audio") or a bare section id and get the same result; an
   // unresolvable target leaves the default landing rather than doing nothing.
@@ -6640,23 +6661,7 @@ export function SettingsPanel({
                   />
                   <span className="settings-hint">{t('settings.digital.stationPower.hint')}</span>
                 </div>
-
-                <div className="settings-field">
-                  <label className="settings-label" htmlFor="units">
-                    {t('settings.digital.units.label')}
-                  </label>
-                  <select disabled={remote}
-                    id="units"
-                    className="settings-input"
-                    value={form.units ?? 'auto'}
-                    onChange={(e) => update('units', e.target.value)}
-                  >
-                    <option value="auto">{t('settings.digital.units.auto')}</option>
-                    <option value="metric">{t('settings.digital.units.metric')}</option>
-                    <option value="imperial">{t('settings.digital.units.imperial')}</option>
-                  </select>
-                  <span className="settings-hint">{t('settings.digital.units.hint')}</span>
-                </div>
+                {/* Units moved to Station ▸ Operator & Radio (#248) — it is app-wide. */}
               </div>
             </div>
           </fieldset>
@@ -10265,6 +10270,55 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     {t('settings.confirmations.cloudlog.stationId.hint')}
                   </span>
+                  {/* #226: Wavelog wants the location NUMBER. A callsign here is answered with
+                      HTTP 401 on every contact, and the upload refuses to send it. */}
+                  {(form.cloudlogStationId ?? '').trim() !== '' &&
+                    !/^\d+$/.test((form.cloudlogStationId ?? '').trim()) && (
+                      <span className="settings-note" role="note">
+                        {t('settings.confirmations.cloudlog.stationId.notNumber')}
+                      </span>
+                    )}
+                  {/* #226: ask the instance rather than making the operator go and look. The
+                      request carries the API key, so it fires on this press and nowhere else. */}
+                  <div className="settings-input-row">
+                    <button disabled={remote || cloudlogStationsBusy}
+                      type="button"
+                      className="settings-refresh"
+                      onClick={() => void findCloudlogStations()}
+                      title={t('settings.confirmations.cloudlog.stations.title')}
+                    >
+                      {cloudlogStationsBusy
+                        ? t('settings.confirmations.cloudlog.stations.busy')
+                        : t('settings.confirmations.cloudlog.stations.find')}
+                    </button>
+                  </div>
+                  {cloudlogStationsError && (
+                    <span className="settings-error" role="alert">{cloudlogStationsError}</span>
+                  )}
+                  {cloudlogStations !== null && cloudlogStations.length === 0 && (
+                    <span className="settings-note">
+                      {t('settings.confirmations.cloudlog.stations.none')}
+                    </span>
+                  )}
+                  {cloudlogStations !== null && cloudlogStations.length > 0 && (
+                    <div className="settings-note cloudlog-stations">
+                      {cloudlogStations.map((st) => (
+                        <button
+                          key={st.stationId}
+                          type="button"
+                          className="log-filter-chip"
+                          onClick={() => {
+                            update('cloudlogStationId', st.stationId)
+                            setCloudlogStations(null)
+                          }}
+                        >
+                          {`${st.stationId} · ${st.profileName} · ${st.callsign}${
+                            st.gridsquare ? ` (${st.gridsquare})` : ''
+                          }${st.active ? ' ✓' : ''}`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </label>
 
                 <label className="settings-field">

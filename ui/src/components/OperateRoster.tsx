@@ -411,7 +411,8 @@ export function OperateRoster({
         {/* Beside the row count, so a thinned roster always says why. The picker itself
             lives in the Band Activity chip bar — one control for one shared list. */}
         <CountryHiddenChip
-          count={countries.keys.size}
+          count={countries.keys.size + countries.entities.size}
+          continents={countries.continents.size}
           onClear={countries.clear}
           testId="or-hidden"
         />

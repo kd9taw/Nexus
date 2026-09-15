@@ -10,12 +10,34 @@
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Its own prose comes
 // from the catalog; the country NAMES it lists do not — those are DXCC entity names, data that
-// arrives from `features/countryExclude.ts` and the backend's entity table.
+// arrives from `features/countryExclude.ts` and the backend's entity table. Continent CODES
+// (EU, NA…) are cty.dat tokens; only the continent NAMES beside them are prose.
 import * as RM from '@radix-ui/react-dropdown-menu'
 import { useState } from 'react'
-import { EXCLUDABLE_COUNTRIES, countryLabel } from '../features/countryExclude'
+import { CONTINENT_CODES, EXCLUDABLE_COUNTRIES, countryLabel } from '../features/countryExclude'
 import { getDxccEntityNames } from '../api'
 import { t } from '../i18n'
+
+/** A continent code's catalog name (#229). One literal `t()` per key, so the catalog guard can
+ *  see every entry used; an unknown code shows as itself. */
+function continentName(code: string): string {
+  switch (code) {
+    case 'NA':
+      return t('hideCountries.continent.na')
+    case 'SA':
+      return t('hideCountries.continent.sa')
+    case 'EU':
+      return t('hideCountries.continent.eu')
+    case 'AF':
+      return t('hideCountries.continent.af')
+    case 'AS':
+      return t('hideCountries.continent.as')
+    case 'OC':
+      return t('hideCountries.continent.oc')
+    default:
+      return code
+  }
+}
 
 interface PickerProps {
   /** The ticked catalog keys. */
@@ -30,10 +52,14 @@ interface PickerProps {
   entities?: ReadonlySet<string>
   /** Add/remove one entity by NAME. */
   onToggleEntity?: (entity: string) => void
+  /** Whole continents ticked (#229). */
+  continents?: ReadonlySet<string>
+  /** Tick or untick one whole continent. */
+  onToggleContinent?: (code: string) => void
 }
 
-/** The Band Activity chip-bar control: 18 quick-pick checkboxes + an "Other country…"
- *  search over the full DXCC table, multi-tick, stays open. */
+/** The Band Activity chip-bar control: 18 quick-pick checkboxes, a whole-continent submenu, and
+ *  an "Other country…" search over the full DXCC table, multi-tick, stays open. */
 export function CountryExcludePicker({
   keys,
   onToggle,
@@ -41,8 +67,10 @@ export function CountryExcludePicker({
   onPauseChange,
   entities,
   onToggleEntity,
+  continents,
+  onToggleContinent,
 }: PickerProps) {
-  const n = keys.size + (entities?.size ?? 0)
+  const n = keys.size + (entities?.size ?? 0) + (continents?.size ?? 0)
   const active = n > 0 && !paused
   const [allEntities, setAllEntities] = useState<string[]>([])
   const [q, setQ] = useState('')
@@ -107,6 +135,35 @@ export function CountryExcludePicker({
                 {countryLabel(c)}
               </RM.CheckboxItem>
             ))}
+            {/* #229 (pa0kgb): a whole continent at once — hide-by-country does not scale to
+                "show only Europe". A SUBMENU, not six more rows: the operator's rule for this
+                list is "under 20". Same set, same protections — a continent tick expands into
+                the entity names a row is matched on. It portals like the menu, for the same
+                clipping reason, and re-applies the zoom the same way. */}
+            {onToggleContinent && (
+              <RM.Sub>
+                <RM.SubTrigger className="ui-menu-item country-item">
+                  {`${t('hideCountries.continents.head')} ▸`}
+                </RM.SubTrigger>
+                <RM.Portal>
+                  <RM.SubContent className="ui-menu country-menu" sideOffset={2} collisionPadding={8}>
+                    <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
+                      {CONTINENT_CODES.map((code) => (
+                        <RM.CheckboxItem
+                          key={`cont-${code}`}
+                          className="ui-menu-item country-item"
+                          checked={continents?.has(code) ?? false}
+                          onSelect={(e) => e.preventDefault()}
+                          onCheckedChange={() => onToggleContinent(code)}
+                        >
+                          {`${continentName(code)} (${code})`}
+                        </RM.CheckboxItem>
+                      ))}
+                    </div>
+                  </RM.SubContent>
+                </RM.Portal>
+              </RM.Sub>
+            )}
             {onToggleEntity && (
               <>
                 {/* Any-entity picks already made, so they can be un-ticked without searching. */}
@@ -158,9 +215,12 @@ export function CountryExcludePicker({
 }
 
 interface ChipProps {
-  /** How many COUNTRIES are ticked (not how many rows vanished — the operator chose
-   *  countries, and a row count would change every slot). */
+  /** How many COUNTRIES are ticked — curated and picked by name — not how many rows vanished
+   *  (the operator chose countries, and a row count would change every slot). */
   count: number
+  /** How many whole CONTINENTS are ticked (#229). Counted apart: "1 country hidden" for all of
+   *  Europe would be a lie, and without it a continent-only tick showed no chip at all. */
+  continents?: number
   onClear: () => void
   /** Per-pane, so a test can tell the Band Activity chip from the roster's. */
   testId: string
@@ -171,11 +231,17 @@ interface ChipProps {
  * something, so a pane that looks emptier than the band always says why: a quiet filter is
  * the why-is-the-band-empty trap this feature must not become.
  */
-export function CountryHiddenChip({ count, onClear, testId }: ChipProps) {
-  if (count === 0) return null
+export function CountryHiddenChip({ count, continents = 0, onClear, testId }: ChipProps) {
+  if (count === 0 && continents === 0) return null
+  const said = [
+    count > 0 ? t('hideCountries.hidden', { count }) : null,
+    continents > 0 ? t('hideCountries.hiddenContinents', { count: continents }) : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
   return (
     <span className="country-hidden-chip" data-testid={testId}>
-      {t('hideCountries.hidden', { count })}
+      {said}
       <button
         type="button"
         className="country-hidden-clear"
