@@ -4,7 +4,7 @@ import type { RadioStatus } from '../types'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import type { SettingsConfiguration } from './configuration'
-import { useRemoteStation } from './amplifier-observation'
+import { useRemoteRig } from './amplifier-observation'
 
 type Draft = { radioId: number; revision: string; expected: number; gain: number; canceled: boolean }
 const idleSubscribe = () => () => {}
@@ -18,7 +18,7 @@ export function useReceiverGain(doc: SettingsConfiguration | null, radioId: numb
   radio: RadioStatus | undefined, refresh: () => void) {
   const client = useContext(RemoteOperationsContext), allowed = useStationCapability('receiverGain')
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
-  const observation = useRemoteStation(radioId)
+  const observation = useRemoteRig(radioId)
   const documentRadio = typeof doc?.settings.activeRadio === 'number' ? doc.settings.activeRadio : undefined
   const expected = typeof doc?.settings.rxGain === 'number' && Number.isFinite(doc.settings.rxGain) ? doc.settings.rxGain : null
   const [draft, setDraft] = useState<Draft | null>(null), edit = useRef<Draft | null>(null)
