@@ -463,6 +463,13 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   their network, so it is validated against signals that actually arrived at an antenna and not only
   against another implementation of the same theory. Thanks to stations 1696, 4803, 5049 and 5062
   and their operators (see **[NOTICE](NOTICE)** for what is redistributed where).
+- **[Opus](https://opus-codec.org/)** (BSD-3-Clause) — the **Xiph.Org Foundation** and
+  contributors. Nexus Remote compresses station receive audio with **libopus**, linked
+  statically through the [`opus`](https://github.com/SpaceManiac/opus-rs) (MIT/Apache-2.0) and
+  [`opusic-sys`](https://github.com/DoumanAsh/opusic-sys) (BSD-3-Clause) crates and used
+  unmodified. Opus is an IETF standard (RFC 6716) available under royalty-free patent
+  licences; libopus's neural extensions are not enabled (see **[NOTICE](NOTICE)** for the full
+  attribution and why).
 - **[Hamlib](https://hamlib.github.io/)** — `rigctld` for CAT control, bundled on every platform
   (tools GPL-2.0-or-later, library LGPL-2.1-or-later; launched as a separate process, not linked).
 - **[OpenSSL](https://www.openssl.org/)** (Apache-2.0) — the secure connection for HRDLog.net

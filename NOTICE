@@ -497,6 +497,100 @@ dependencies*). On Linux that stack is OpenSSL: the Nexus binary links
 - **Windows and macOS:** no OpenSSL. The same connection uses SChannel (Windows)
   or Security.framework (macOS), operating-system components Nexus does not ship.
 
+### Opus audio codec (libopus) — Xiph.Org Foundation and contributors
+License: **BSD-3-Clause**. <https://opus-codec.org/> · <https://github.com/xiph/opus>
+
+Nexus links the Opus interactive audio codec reference implementation, **libopus 1.6.1**,
+statically. The C source ships inside the `opusic-sys` Rust crate and is compiled as part of
+the Nexus build — there is no `pkg-config`, no system libopus, no submodule and no build-time
+download. Rust bindings: **`opus` 0.4.0** (MIT OR Apache-2.0, © Tad Hardesty,
+<https://github.com/SpaceManiac/opus-rs>) over **`opusic-sys` 0.7.5** (BSD-3-Clause, ©
+Douman, <https://github.com/DoumanAsh/opusic-sys>), whose own LICENSE file is a byte-identical
+copy of libopus's `COPYING` reproduced below; the `cmake` build-script crate (MIT OR
+Apache-2.0) arrives with it. Nexus Remote compresses station receive audio for the browser
+with libopus, used as a library and unmodified.
+
+The **neural extensions are not enabled**: `opusic-sys`'s `dred` and `osce` features are
+non-default and Nexus does not turn them on, so nothing under libopus's `dnn/` is compiled
+(verified on the built archive: 0 of 152 objects) and no model-weight artefact is fetched or
+shipped. That is deliberate and not only a size choice — the upstream neural model weights
+carry **no license statement of any kind**, in the generated `dnn/*_data.c` files or in the
+separate weights tarball a git build would download, so enabling them would mean this file
+asserting terms nobody wrote down.
+
+A per-file header walk of the exact tree that ships (`opusic-sys` 0.7.5 → `opus/` → libopus
+1.6.1, 402 `.c`/`.h`/`.S` files) found **no GPL, LGPL, Apache, MIT, public-domain or
+Creative Commons notice, and no BSD advertising clause**, with a positive control (planted
+GPL, LGPL and advertising-clause files) confirming the sweep trips. 36 files carry no header
+at all: four generated CELT mode tables (`celt/static_modes_*.h`) and one generated Keras
+table (`src/mlp_data.c`), which reach the binary; three CMake compile probes, 27 files under
+`dnn/` and one test program, which do not. Each generated file names its own generator, and
+every generator is present in the tree under the full BSD-3-Clause header, so those five are
+**assessed as BSD-3-Clause by inheritance from the repository `COPYING`** — an inference, not
+a header read, and the same shape as the LZHUF finding recorded above. The autotools
+scaffolding in the crate's copy (`configure`, `config.guess`, `ltmain.sh` and six others)
+carries GPL-2-or-later/GPL-3-or-later text with the usual Autoconf and libtool exceptions;
+none of it is GPL-2-**only**, and none of it is used, because `opusic-sys` builds with CMake.
+
+BSD-3-Clause imposes only notice retention and non-endorsement — both of which GPLv3 §7
+permits — so it combines one-way-inbound into Nexus's GPL-3.0-only whole, on the identical
+reasoning already recorded for ARSFI's LZHUF above. Neither the Xiph.Org, IETF or Internet
+Society names nor the names of contributors are used to endorse Nexus; "Nexus uses the Opus
+codec" is factual description.
+
+⚠️ **BSD-3-Clause grants no patent rights of its own.** The patent position rests entirely on
+the royalty-free IETF IPR declarations that `COPYING` itself cites, which is why it is
+reproduced here verbatim rather than paraphrased. Its holder list is also known to be shorter
+than the per-file headers (Cisco, Google, Parrot, Vidyo and Arm Limited appear in file headers
+but not in `COPYING`), which is a second reason not to hand-write a summary of it.
+
+`COPYING`, verbatim from the pinned tree:
+
+> Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
+>                     Jean-Marc Valin, Timothy B. Terriberry,
+>                     CSIRO, Gregory Maxwell, Mark Borgerding,
+>                     Erik de Castro Lopo, Mozilla, Amazon
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions
+> are met:
+>
+> - Redistributions of source code must retain the above copyright
+> notice, this list of conditions and the following disclaimer.
+>
+> - Redistributions in binary form must reproduce the above copyright
+> notice, this list of conditions and the following disclaimer in the
+> documentation and/or other materials provided with the distribution.
+>
+> - Neither the name of Internet Society, IETF or IETF Trust, nor the
+> names of specific contributors, may be used to endorse or promote
+> products derived from this software without specific prior written
+> permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+> ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+> LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+> A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+> OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+> EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+> PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+> PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+> LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+> NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+> SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+>
+> Opus is subject to the royalty-free patent licenses which are
+> specified at:
+>
+> Xiph.Org Foundation:
+> https://datatracker.ietf.org/ipr/1524/
+>
+> Microsoft Corporation:
+> https://datatracker.ietf.org/ipr/1914/
+>
+> Broadcom Corporation:
+> https://datatracker.ietf.org/ipr/1526/
+
 ---
 
 ## Rig-control protocol interoperability (no vendor code bundled)
@@ -618,6 +712,11 @@ principal third-party components, not a substitute for that gate:
   It arrives with **auto-launch** — MIT, **dirs** and **dirs-sys** (Linux and macOS) — MIT OR
   Apache-2.0, **redox_users** — MIT, and **winreg** (Windows) — MIT.
 - **cpal** (sound-card audio transport) — MIT OR Apache-2.0.
+- **opus** / **opusic-sys** (the Opus codec for Nexus Remote's station audio; `opusic-sys`
+  carries and statically links the libopus C source) — MIT OR Apache-2.0, and BSD-3-Clause.
+  The **cmake** build-script crate (MIT OR Apache-2.0) arrives with them. libopus itself is
+  covered in full under *Linked native libraries* above, including why the neural extensions
+  stay off.
 - **alsa** (Linux only: reading ALSA's PCM device hints, so the audio picker can show the
   card description the operator's own system shows — cpal keeps only the raw PCM name) —
   Apache-2.0 OR MIT. Already present as cpal's own dependency at the same version.
