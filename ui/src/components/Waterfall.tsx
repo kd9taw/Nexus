@@ -38,6 +38,7 @@ import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { PalettePicker } from './PalettePicker'
 import { MOD_LABEL } from '../platform'
 import { t } from '../i18n'
+import { PaneCloseButton } from './panes/PaneCloseButton'
 
 /** The legend's unit — relative dB, the scale WSJT-X uses. A unit, not a word. */
 const DBR = 'dBr'
@@ -108,6 +109,16 @@ interface Props {
   /** Pop the waterfall into its own window. When set, a ⧉ button renders as the last
    * item of the header row (kept in-flow so it never overlaps the Gain/Zero knobs). */
   onPopOut?: () => void
+  /** Hide the whole strip — the pane's own ✕, the SAME act as unticking this strip's ⊞
+   * entry (panelHost.closeProps). Omitted ⇒ no button, which is how a surface with no panel
+   * record (the torn-off waterfall window) renders none. */
+  onRemove?: () => void
+  /** What this hide ENDS, if anything. No spectrum strip in the app ends anything on its way
+   * out — display plus click-to-tune, no stop control (THE STOP LINE) — so it is unset
+   * everywhere today; the prop exists so the ✕ speaks the same way wherever it renders. */
+  hideNote?: string
+  /** This strip's ⊞ label ("Scope" / "Waterfall"), for the ✕'s accessible name. */
+  paneTitle?: string
   /** Named vertical cursors (Hz + color + short label) drawn IN PLACE OF the RX/TX
    * markers — e.g. RTTY mark/space. When set, the RX/TX marker block is skipped; the
    * FT8 path is byte-identical when this is undefined. */
@@ -198,6 +209,9 @@ export function Waterfall({
   onTune,
   active = true,
   onPopOut,
+  onRemove,
+  hideNote,
+  paneTitle,
   cursors,
   hint,
   rowMs = 120,
@@ -1122,6 +1136,9 @@ export function Waterfall({
             ⧉
           </button>
         )}
+        {/* Last in the header row, after ⧉, exactly as a pane frame orders its two head
+            buttons — the ✕ is in the same place on every removable pane in the app. */}
+        <PaneCloseButton title={paneTitle ?? ''} onRemove={onRemove} hideNote={hideNote} />
       </div>
       <div className="wf-stage">
         <canvas

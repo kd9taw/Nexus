@@ -26,6 +26,7 @@ import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import type { Memory } from '../features/memories'
@@ -659,6 +660,8 @@ export function CwCockpit({
       })
     : null
   const shown = (id: CwPanelId) => (host ? host.shown(id) : true)
+  // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
+  const closeProps = (id: CwPanelId) => (host ? host.closeProps(id) : {})
   // A CW-keyer failure surfaced by the radio loop (e.g. the rig rejected CAT send_morse).
   const [keyerError, setKeyerError] = useState<string | null>(null)
   // --- CW copilot: decoded-call chips only (Expert). The Guided/Expert selector + its bar were
@@ -1086,7 +1089,7 @@ export function CwCockpit({
   )
 
   const decodePane = hasDecodePane ? (
-    <CockpitPaneFrame title={t('cw.pane.decode.title')} paneId="decode" weight={3} actions={decodeActions}>
+    <CockpitPaneFrame title={t('cw.pane.decode.title')} paneId="decode" weight={3} actions={decodeActions} {...closeProps('decode')}>
       <div className="cw-decode panel" title={t('cw.decode.title', { window: AI_WINDOW_HZ })}>
         {/* The visible transcript animates character-by-character (typewriter) —
             aria-hidden so a screen reader doesn't announce every keystroke; the
@@ -1109,7 +1112,7 @@ export function CwCockpit({
   ) : null
 
   const sentPane = hasSentPane ? (
-    <CockpitPaneFrame title={t('cw.pane.sent.title')} paneId="sent" fit="content">
+    <CockpitPaneFrame title={t('cw.pane.sent.title')} paneId="sent" fit="content" {...closeProps('sent')}>
       {/* No head row: it held ONE span reading "SENT ▲" under a frame head reading "Sent", and
           what makes the echo readable as YOUR transmissions at a glance is the accent stripe
           (`.pane-body > .cw-sent-panel`), which stays. Deleting it also lets the framed floor
@@ -1311,7 +1314,7 @@ export function CwCockpit({
 
       {/* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */}
       {hasBandPane && onWorkSpot && (
-        <CockpitPaneFrame title={t('cw.pane.bandActivity.title')} paneId="bandActivity" fit="content">
+        <CockpitPaneFrame title={t('cw.pane.bandActivity.title')} paneId="bandActivity" fit="content" {...closeProps('bandActivity')}>
           {control || spotsRead?.phase === 'ready' ? <BandStrip
             band={snap.radio.band}
             dialMhz={snap.radio.dialMhz}
@@ -1337,7 +1340,7 @@ export function CwCockpit({
           new hams (Guided: plain-English prompts + the next key highlighted) vs experienced
           ops (Expert: just the chips). Nothing here transmits — the operator always keys. */}
       {hasCopilotPane && (
-        <CockpitPaneFrame title={t('cw.pane.copilot.title')} paneId="copilot" fit="content">
+        <CockpitPaneFrame title={t('cw.pane.copilot.title')} paneId="copilot" fit="content" {...closeProps('copilot')}>
           <div className="cw-copilot panel expert">
             <div className="cw-copilot-chips">
               {guide.workedCall ? (
@@ -1682,6 +1685,10 @@ export function CwCockpit({
           <ZeroBeat active={active && details} targetHz={pitch} filterHz={filterHz} />
           <span className="ph-scope-head-label">{t('cw.scope.colors.label')}</span>
           <PalettePicker />
+          {/* THE STRIP'S OWN ✕ (⊞ `scope`), last in the head — the title carries
+              `margin-right: auto`, so this row's tail is its right edge. The strip hosts no
+              stop control (THE STOP LINE), so its hide ends nothing and it warns of nothing. */}
+          <PaneCloseButton title={cwPanelLabels().scope} {...closeProps('scope')} />
         </div>
         {yaesuScope ? (
           // The FT-710 sweeps its own span and owns where the sweep sits, so these command the RADIO

@@ -10,9 +10,11 @@ import { RECALL_COMMAND } from './application-query-protocol'
 import { parseRecall } from './recall'
 import type { Recall } from './recall'
 
-export type RecallProps = { snap: AppSnapshot; call: string; mode: string; bounded?: boolean; onOpenLog?: (call: string) => void; context?: { band: string; freqMhz: number; mode: string } }
+/** `onRemove`/`hideNote`/`paneTitle`: the card's own ✕, handed down to RecallPanel. Only the
+ *  Operate cockpit passes them — there the card is a ⊞ entry of its own (`recall`). */
+export type RecallProps = { snap: AppSnapshot; call: string; mode: string; bounded?: boolean; onOpenLog?: (call: string) => void; context?: { band: string; freqMhz: number; mode: string }; onRemove?: () => void; hideNote?: string; paneTitle?: string }
 export type RemoteRecallEntryProps = Omit<RecallProps, 'call' | 'bounded'> & { selectedCall?: string; pendingWork?: { call: string; ts: number } | null; onConsumeWork?: () => void }
-export function RemoteRecall({ snap, call, mode, bounded, onOpenLog, context }: RecallProps) {
+export function RemoteRecall({ snap, call, mode, bounded, onOpenLog, context, onRemove, hideNote, paneTitle }: RecallProps) {
   const source = useContext(RemoteCollectionsContext)
   const available = useStationData()
   const cu = call.trim().toUpperCase()
@@ -51,6 +53,7 @@ export function RemoteRecall({ snap, call, mode, bounded, onOpenLog, context }: 
     newEntity={Boolean(value.entity?.trim()) && !value.slots.workedEver}
     newBandSlot={newBandSlot} newModeSlot={value.slots.workedEver && !newBandSlot && !value.slots.modesWorked.includes(modeKey(logMode))}
     latestNote={value.latestNote} hasLookup={false} bounded={bounded} onOpenLog={onOpenLog}
+    onRemove={onRemove} hideNote={hideNote} paneTitle={paneTitle}
     historyNotice={<div className="dim" role="status"><p>{t('remote.recallSnapshot')}</p>
       {value.rows.length < value.history.count && <p>{t('remote.collectionCapped', { count: value.rows.length, total: value.history.count })}</p>}{retry}</div>} />
 }

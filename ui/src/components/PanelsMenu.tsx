@@ -1,9 +1,19 @@
-// The ⊞ Panels control — the ONLY way to remove or restore a cockpit panel. A
-// persistent ✕ on every panel header was considered and rejected: it would sit inches
-// from a decode list the operator clicks all night, with no confirm, and hover-reveal
-// would break the always-on accessibility posture. Removal is menu-only, keyboard
-// reachable, and never more than one click from Undo / Reset — both ship here, before
-// the operator can make a mess.
+// The ⊞ Panels control — the ONLY way to RESTORE a cockpit panel, and one of two ways to
+// remove one.
+//
+// ⚠️ THE "MENU-ONLY" RULING WAS OVERTURNED 2026-09-15 and the reasoning is kept because it
+// is still half right. What stood here: "a persistent ✕ on every panel header was
+// considered and rejected: it would sit inches from a decode list the operator clicks all
+// night, with no confirm, and hover-reveal would break the always-on accessibility
+// posture." What happened: the operator went looking for a way to close a panel on the FT8
+// screen and could not find one. A capability nobody can find is not a capability, and
+// that outranks the misclick it was protecting against. Every removable pane now carries a
+// ✕ in its own header (components/panes/PaneCloseButton) — ALWAYS VISIBLE, never
+// hover-revealed, so the accessibility half of the old objection is honoured rather than
+// traded away; and the misclick half is answered by this menu, which is still one click
+// from Undo and from Reset, and is still where a panel comes BACK from. The ✕ makes the
+// same `setPanelState(id, 'removed')` call the tick makes — one mechanism, two doors, one
+// undo history.
 //
 // Only the panels the CURRENT layout renders are listed. Every cockpit keeps at least one
 // control that STOPS a transmission outside every pane this menu can reach — Stop TX and PTT

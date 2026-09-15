@@ -144,6 +144,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels() })
     : null
   const shown = (id: PskPanelId) => (host ? host.shown(id) : true)
+  // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes (panelHost.closeProps).
+  const closeProps = (id: PskPanelId) => (host ? host.closeProps(id) : {})
 
   // Live decoder state — polled at 2 Hz while this is the visible view. The
   // backend ring keeps decoding while we're hidden; the first tick on
@@ -523,6 +525,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           rig. Hiding it hands its height to the stream frame, the shell's only grower. */}
       {psk && shown('scope') && (
         <Waterfall
+          {...closeProps('scope')}
+          paneTitle={pskPanelLabels().scope}
           theme={theme}
           active={active}
           rowMs={50} // live band instrument — rig-scope cadence (the RTTY value)
@@ -550,7 +554,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           NO `weight`, deliberately: since #159 there is a second fill frame below it (the log
           strip), and the share that matters is declared THERE, measured. See that frame. */}
       {shown('stream') && (
-        <CockpitPaneFrame title={t('psk.pane.stream.title')} paneId="stream">
+        <CockpitPaneFrame title={t('psk.pane.stream.title')} paneId="stream" {...closeProps('stream')}>
           <div className="cw-decode psk-stream" title={t('psk.stream.title')}>
             <div className="cw-decode-head">
               <span className="cw-decode-label">{RX_PLATE}</span>

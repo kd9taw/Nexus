@@ -15615,6 +15615,17 @@ button.cq-skiptx1.on {
   margin: 0;
   font-size: 0.95rem;
 }
+/* Title + the pane's own ✕ on one line. `.od-head` is a flex COLUMN (title over the filter
+   row) and the compact head is a flex ROW, so a bare close button appended to either lands
+   somewhere different; this row makes the corner the same in both. The button supplies its
+   own `margin-left: auto` (.cockpit-popout), so it parks at the right edge. */
+.od-titlerow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .od-controls {
   display: flex;
   align-items: center;

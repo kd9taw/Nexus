@@ -27,6 +27,7 @@
 // arrives from the cockpit and is interpolated as data; the two head buttons' words are here.
 import type { ReactNode } from 'react'
 import { t } from '../../i18n'
+import { PaneCloseButton } from './PaneCloseButton'
 
 export function CockpitPaneFrame({
   title,
@@ -36,6 +37,7 @@ export function CockpitPaneFrame({
   weight,
   onPopOut,
   onRemove,
+  hideNote,
   actions,
 }: {
   /** Head label. Also the accessible name of the frame (a landmark per pane). */
@@ -66,8 +68,13 @@ export function CockpitPaneFrame({
   /** Tear this pane off into its own window (open_panel_window). Omitted ⇒ no button. */
   onPopOut?: () => void
   /** Hide this pane (panelState 'removed'). Omitted ⇒ the pane cannot be removed — which
-   *  is how a pane with no id in the view's vocabulary stays put. */
+   *  is how a pane with no id in the view's vocabulary stays put. Comes from
+   *  `panelHost.closeProps(id)`, so it is the SAME act as the ⊞ Panels tick. */
   onRemove?: () => void
+  /** What this hide ENDS, in the cockpit's own words (panelHost `endsOnHide`) — THE
+   *  PRACTICE half of THE STOP LINE, put before the act. Omitted for a hide that ends
+   *  nothing, which is every pane but Phone's voice keyer. */
+  hideNote?: string
   /** Pane-supplied head controls (filters, a mode chip). Rendered before pop-out/remove. */
   actions?: ReactNode
 }) {
@@ -100,17 +107,10 @@ export function CockpitPaneFrame({
               ⧉
             </button>
           )}
-          {onRemove && (
-            <button
-              type="button"
-              className="cockpit-popout"
-              onClick={onRemove}
-              aria-label={t('pane.hide.aria', { title })}
-              title={t('pane.hide.title')}
-            >
-              ✕
-            </button>
-          )}
+          {/* The pane's own ✕ — one shared component so every removable pane in the app
+              closes the same way, with the same accessible name and the same consequence
+              copy. It renders nothing when `onRemove` is absent. */}
+          <PaneCloseButton title={title} onRemove={onRemove} hideNote={hideNote} />
         </div>
       </header>
       <div className="pane-body">{children}</div>

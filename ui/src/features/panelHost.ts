@@ -59,6 +59,20 @@ export interface PanelHostSpec<P extends string> {
    *  wire which hides stopped anything. A pane that merely TRANSMITS needs no note — hiding
    *  Operate's Tx messages ends nothing, and a warning there would be noise. */
   readonly notes?: Partial<Record<P, string | undefined>>
+  /** What unticking this pane ENDS — the CONSEQUENCE half of `notes`, in its own field so
+   *  the pane's own ✕ can carry it and an availability reason cannot.
+   *
+   *  Both kinds used to live in `notes`, which is fine for a menu (the operator's question
+   *  there is the same either way) and wrong for a ✕: "your radio is not reporting DSP
+   *  functions over CAT" is not a warning about pressing Hide. Split, not duplicated —
+   *  `menuItems` merges this back over `notes`, so the ⊞ entry reads exactly as it did and
+   *  there is still ONE wording per pane. THE PRACTICE half of THE STOP LINE
+   *  (features/panelState.ts) is courtesy, not safety, and it says the consequence goes
+   *  BEFORE the act: the menu prints it under the checkbox, the ✕ carries it as its tooltip
+   *  and its accessible description. Exactly one pane in the app populates this today
+   *  (Phone's voiceKeyer). RTTY's `stream` hosts a stop control but its hide ends nothing —
+   *  unmounting it calls no wire — so it correctly carries neither. */
+  readonly endsOnHide?: Partial<Record<P, string | undefined>>
 }
 
 export interface PanelHost<P extends string> {
@@ -80,14 +94,28 @@ export interface PanelHost<P extends string> {
     state: PanelState
     note?: string
   }>
+  /** THE PANE'S OWN ✕ — the props that make a pane header's close button do EXACTLY what
+   *  unticking the same entry in ⊞ Panels does: the same `setPanelState(id, 'removed')`,
+   *  the same record, the same persistence. There is one mechanism and this is a second
+   *  DOOR onto it, which is the whole of the fix (operator, 2026-09-15: he went looking for
+   *  a way to close a panel and could not find one — the capability shipped, the
+   *  affordance did not).
+   *
+   *  `{}` for an id this layout does not list, because a pane with no entry is not
+   *  removable and must get no ✕ — the same reason CockpitPaneFrame draws no button when
+   *  `onRemove` is omitted. Spread it: `<CockpitPaneFrame {...host.closeProps('dsp')} …>`.
+   *  Restoring stays the menu's job; nothing here brings a pane back. */
+  closeProps: (id: P) => { onRemove?: () => void; hideNote?: string }
 }
 
 /**
- * Derive one cockpit layout's panel-render glue from its API + spec. Takes only the READ
- * side of the panel API (`stateOf`) so it's trivially testable and can't mutate anything.
+ * Derive one cockpit layout's panel-render glue from its API + spec. Everything but
+ * `closeProps` reads only `stateOf`, so the derivations stay trivially testable and cannot
+ * mutate anything; `closeProps` needs the one writer (`setPanelState`) because a pane's ✕
+ * must reach the SAME act as the menu tick rather than a second copy of it.
  */
 export function panelHost<P extends string>(
-  api: Pick<PanelLayoutApi<P>, 'stateOf'>,
+  api: Pick<PanelLayoutApi<P>, 'stateOf' | 'setPanelState'>,
   spec: PanelHostSpec<P>,
 ): PanelHost<P> {
   const shown = (id: P) => api.stateOf(id) !== 'removed'
@@ -108,7 +136,13 @@ export function panelHost<P extends string>(
       id,
       label: spec.labels[id],
       state: api.stateOf(id),
-      note: spec.notes?.[id],
+      // A consequence outranks an availability reason: a pane that is empty right now AND
+      // ends something on its way out must say the second — the operator can act on it.
+      note: spec.endsOnHide?.[id] ?? spec.notes?.[id],
     })),
+    closeProps: (id) =>
+      (spec.menu as readonly string[]).includes(id)
+        ? { onRemove: () => api.setPanelState(id, 'removed'), hideNote: spec.endsOnHide?.[id] }
+        : {},
   }
 }

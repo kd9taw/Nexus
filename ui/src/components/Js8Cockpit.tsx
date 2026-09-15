@@ -165,6 +165,10 @@ export function Js8Cockpit({
       })
     : null
   const shown = (id: Js8PanelId) => (host ? host.shown(id) : true)
+  // The pane's own ✕ — now routed through panelHost like every other cockpit's, so the five
+  // hand-rolled `setPanelState(..., 'removed')` calls this cockpit shipped with cannot drift
+  // from the ⊞ tick. Same act, same record; `{}` with no panel host.
+  const closeProps = (id: Js8PanelId) => (host ? host.closeProps(id) : {})
 
   // Live state — polled at 2 Hz while this is the visible view (the PSK pattern; no Tauri
   // events). The backend keeps decoding while we're hidden; the first tick on re-activation
@@ -544,7 +548,7 @@ export function Js8Cockpit({
       title={t('js8.panel.activity')}
       paneId="activity"
       weight={2}
-      onRemove={panels ? () => panels.setPanelState('activity', 'removed') : undefined}
+      {...closeProps('activity')}
     >
       <div
         className="js8-activity"
@@ -589,7 +593,7 @@ export function Js8Cockpit({
       title={t('js8.panel.offsets')}
       paneId="offsets"
       weight={1}
-      onRemove={panels ? () => panels.setPanelState('offsets', 'removed') : undefined}
+      {...closeProps('offsets')}
     >
       <div className="js8-offsets" title={t('js8.panel.offsets.title')}>
         {offsetRows.length === 0 ? (
@@ -625,7 +629,7 @@ export function Js8Cockpit({
     <CockpitPaneFrame
       title={t('js8.panel.stations')}
       paneId="stations"
-      onRemove={panels ? () => panels.setPanelState('stations', 'removed') : undefined}
+      {...closeProps('stations')}
     >
       <div className="js8-stations">
         {remote && <div className="js8-history-status" role="status">
@@ -740,7 +744,7 @@ export function Js8Cockpit({
     <CockpitPaneFrame
       title={t('js8.panel.inbox')}
       paneId="inbox"
-      onRemove={panels ? () => panels.setPanelState('inbox', 'removed') : undefined}
+      {...closeProps('inbox')}
     >
       <div className="js8-inbox">
         {!js8 || js8.inbox.length === 0 ? (
@@ -789,7 +793,7 @@ export function Js8Cockpit({
       title={t('js8.panel.log')}
       paneId="log"
       weight={1.5}
-      onRemove={panels ? () => panels.setPanelState('log', 'removed') : undefined}
+      {...closeProps('log')}
     >
       {!canControl ? <RemoteRecallEntry snap={snap} mode={JS8} selectedCall={selectedCall} onOpenLog={onOpenLogbook}/> : <LogEntry
         onOpenLogbook={onOpenLogbook}
@@ -918,6 +922,8 @@ export function Js8Cockpit({
           It hosts no stop control and no sender. */}
       {shown('scope') && (
         <Waterfall
+          {...closeProps('scope')}
+          paneTitle={js8PanelLabels().scope}
           theme={theme}
           active={active}
           transmitting={snap?.radio.transmitting ?? false}

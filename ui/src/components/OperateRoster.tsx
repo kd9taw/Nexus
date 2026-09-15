@@ -35,9 +35,18 @@ import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../ope
 import { hasOverridingNeed, isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { CountryHiddenChip } from './CountryExclude'
 import { RarityChip } from './RarityChip'
+import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useStationControl, useStationCapability } from '../stationAccess'
 
 interface Props {
+  /** THE PANE'S OWN ✕ (panelHost.closeProps) — the SAME setPanelState the ⊞ Panels tick
+   *  makes. One component, two ⊞ ids (Classic's `stations`, Roster's `callRoster`), so the
+   *  button is a prop: omitted ⇒ no ✕, which is what an unremovable host gets. */
+  onRemove?: () => void
+  /** What this hide ENDS. A roster is a list; hiding it ends nothing, so it is unset today. */
+  hideNote?: string
+  /** This pane's ⊞ label, for the ✕'s accessible name. */
+  paneTitle?: string
   stations: Station[]
   myGrid: string
   currentSlot: number
@@ -133,6 +142,9 @@ function ageLabel(slots: number): string {
 }
 
 export function OperateRoster({
+  onRemove,
+  hideNote,
+  paneTitle,
   stations,
   myGrid,
   currentSlot,
@@ -382,6 +394,10 @@ export function OperateRoster({
       <div className="or-filters">
         <strong>{t('operate.roster.title')}</strong>
         <span className="or-count">{rows.length}</span>
+        {/* THE PANE'S OWN ✕. It rides the filter row because that row IS this pane's head —
+            there is no other. `.cockpit-popout` carries `margin-left: auto`, so it parks at
+            the right edge and, when the chips wrap, wraps with them rather than clipping. */}
+        <PaneCloseButton title={paneTitle ?? t('operate.roster.title')} onRemove={onRemove} hideNote={hideNote} />
         <label className="or-filter">
           <input
             type="checkbox"

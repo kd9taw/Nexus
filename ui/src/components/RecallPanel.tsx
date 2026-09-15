@@ -12,6 +12,7 @@ import { gridToLatLon, stationLatLon, distanceLabelAt, bearingLabelAt } from '..
 import { t } from '../i18n'
 import { useUnits } from '../units'
 import { useRovingList } from '../useRovingList'
+import { PaneCloseButton } from './panes/PaneCloseButton'
 import type { ReactNode } from 'react'
 
 interface Props {
@@ -62,6 +63,15 @@ interface Props {
   calling?: string | null
   /** #204: open that station's card. Both this and `calling` are needed for the button. */
   onShowCall?: (call: string) => void
+  /** THE CARD'S OWN ✕ (panelHost.closeProps) — the SAME setPanelState the ⊞ Panels tick
+   *  makes. Only the Operate cockpit passes it: there the card is a ⊞ entry of its own
+   *  (`recall`, #204). In the CW/Phone log strips the card is part of the strip and has no
+   *  entry, so it gets no button — a pane with no vocabulary id is not removable. */
+  onRemove?: () => void
+  /** What this hide ENDS. The card shows who a station is; hiding it ends nothing. */
+  hideNote?: string
+  /** The card's ⊞ label, for the ✕'s accessible name. */
+  paneTitle?: string
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -106,7 +116,7 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall }: Props) {
+export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -270,6 +280,10 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
             </span>
           )}
         </div>
+        {/* Last in the identity row, after the badges — the card's head IS its pane head,
+            and `.cockpit-popout`'s margin-left:auto parks the ✕ at the top-right corner
+            where every other pane in the app keeps it. */}
+        <PaneCloseButton title={paneTitle ?? cu} onRemove={onRemove} hideNote={hideNote} />
       </div>
 
       {historyNotice}
