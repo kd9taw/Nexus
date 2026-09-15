@@ -28,7 +28,13 @@ import { useEntityCentroids } from '../features/entityCentroids'
 import { useUnits } from '../units'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
-import { alertsForSurface, chaseRank, isActivityTag, strongestNeed } from '../features/needs'
+import {
+  alertsForSurface,
+  chaseRank,
+  isActivating,
+  isActivityTag,
+  strongestNeed,
+} from '../features/needs'
 import { isIgnored } from '../txMessages'
 import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
@@ -223,6 +229,10 @@ export function OperateRoster({
         s,
         need,
         needAll,
+        // On the air from a park or summit RIGHT NOW. Not a need (it is not in `needAll`,
+        // and it colours nothing) — it is what keeps such a row through Hide worked, so the
+        // roster and the Needed board stop giving opposite answers about one station.
+        activating: isActivating(alerts),
         needRank: chaseRank(alerts, need),
         distKm: me && ll ? haversineKm(me, ll) : Infinity,
         // Sorts on the SAME number the Brg cell prints, centroid fallback included.
@@ -252,7 +262,14 @@ export function OperateRoster({
         ),
     )
     if (neededOnly) f = f.filter((x) => x.need != null)
-    if (hideWorked) f = f.filter((x) => !x.s.worked || x.need != null)
+    // Hide worked keeps a worked station on TWO grounds: it still fills a need here, or it is
+    // on the air from a park/summit right now. `worked` is "this callsign is anywhere in the
+    // logbook" — ever, not per band and emphatically not per park (dto.rs) — so without the
+    // second ground a call worked once, years ago, vanished from the roster while it was
+    // activating a park the operator has never worked. The Needed board showed that station
+    // (activation_alert always yields a row); this pane hid it. Same operator, same moment,
+    // two answers. A DXpedition is NOT a ground: see `isActivationTag`.
+    if (hideWorked) f = f.filter((x) => !x.s.worked || x.need != null || x.activating)
     // Hide blocked (opt-in; default they render dimmed). The station being WORKED or
     // selected always stays — hiding your live QSO partner mid-exchange is the same
     // self-own the country exclusion guards against.

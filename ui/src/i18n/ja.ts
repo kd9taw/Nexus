@@ -4571,7 +4571,7 @@ export const JA: PartialCatalog = {
   "operate.roster.title": "コールロスター",
   "operate.roster.filter.neededOnly": "必要のみ",
   "operate.roster.filter.hideWorked": "交信済みを隠す",
-  "operate.roster.filter.hideWorked.title": "交信済みの局を隠します — ただし、まだニーズを満たす局はリストに残ります。B4 チップがこのフィルターを通過するのはそのためです: そのコールとは別のバンドやモードで交信済みでも、ここでは新しいスロットになります。それだけを見るには「必要のみ」をオンにしてください。",
+  "operate.roster.filter.hideWorked.title": "交信済みの局を隠します — ただし 2 種類はリストに残ります: まだニーズを満たす局と、いま公園や山頂からオンエアしている局です。B4 チップがこのフィルターを通過するのはそのためです: 別のバンドやモードで交信済みでもここでは新しいスロットになる場合か、そのコールがアクティベーション中でニーズボードにも出ている場合です。ニーズだけを見るには「必要のみ」をオンにしてください。",
   "operate.roster.filter.hideBlocked": "ブロックを隠す",
   "operate.roster.filter.hideBlocked.title": "ブロック中のコールサインをロスターから完全に外します（オフのときは薄く表示）。行を Alt+ダブルクリックでブロック/解除。自動応答はいずれにせよブロックした局には応答しません。",
   "operate.roster.spot.label": "スポット",

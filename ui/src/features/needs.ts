@@ -116,6 +116,36 @@ export function isActivityTag(tag: NeedTag | null | undefined): boolean {
 }
 
 /**
+ * The subset of the activity tags that means SOMEONE IS ON THE AIR FROM A PLACE right now —
+ * a park or a summit. Deliberately NOT Dxped.
+ *
+ * The two are not the same kind of thing on the backend, which is why they are not the same
+ * kind of thing here. `activation_alert` (needalert.rs) mints a Needed-board ROW for every
+ * live POTA/SOTA activator, award or no award — the activation is itself the opportunity.
+ * The DXpedition tag is only ever APPENDED to a row some award already earned (lib.rs), so a
+ * DXpedition the operator has already worked on the band produces no board row at all.
+ *
+ * That asymmetry is exactly the defect the operator hit on 2026-09-15: the Needed board
+ * showed a station activating a new park while the roster's Hide-worked stripped it, because
+ * the roster asked "does this row fill a need" and the program tag honestly answers no. The
+ * 2026-08-23 ruling stands untouched — DXped/POTA/SOTA are still never *needs*, still never
+ * colour a row, still never appear in the chip cluster. This predicate answers a different
+ * question: is this station on the air from somewhere, which is a reason to keep it VISIBLE.
+ */
+const ACTIVATION_TAGS: ReadonlySet<string> = new Set(['Pota', 'Sota'])
+
+/** True for a tag that says the station is activating a park or summit right now. */
+export function isActivationTag(tag: NeedTag | null | undefined): boolean {
+  return tag != null && ACTIVATION_TAGS.has(tag)
+}
+
+/** True when any of a call's alerts says it is on the air from a park or summit. Pass the
+ * SURFACE-GATED alerts — the program tags are band-agnostic, so nothing is lost by it. */
+export function isActivating(alerts: NeedAlert[] | null | undefined): boolean {
+  return (alerts ?? []).some((a) => a.tags.some(isActivationTag))
+}
+
+/**
  * Top need tag per UPPERCASE callsign, taken from each call's STRONGEST alert — the map the
  * roster, band strip and map colour their rows from.
  *

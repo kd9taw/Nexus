@@ -5690,7 +5690,7 @@ export const DE: PartialCatalog = {
   "needed.column.freq": "Frequenz",
   "needed.row.freq.none": "Keine genaue Frequenz — dieser Bedarf gilt nur für das Band",
   "needed.row.freq.title": "Gespottet auf {{freq}} MHz",
-  "operate.roster.filter.hideWorked.title": "Blendet bereits gearbeitete Stationen aus — AUSSER denen, die noch einen Bedarf decken; die bleiben sichtbar, weil sie weiterhin einen Grund zum Arbeiten haben.",
+  "operate.roster.filter.hideWorked.title": "Blendet bereits gearbeitete Stationen aus — AUSSER zwei Sorten, die in der Liste bleiben: die, die noch einen Bedarf decken, und die, die gerade von einem Park oder Gipfel aus auf Sendung sind. Darum kann ein B4-Chip diesen Filter überleben — Sie haben das Rufzeichen auf einem anderen Band oder in einem anderen Modus gearbeitet und hier ist es noch ein neuer Slot, oder das Rufzeichen aktiviert gerade und steht auch auf der Bedarfsliste. Für nur den Bedarf schalten Sie Nur Benötigte ein.",
   "settings.backup.reset.confirm.action": "Zurücksetzen",
   "settings.backup.reset.confirm.body": "Ihre Funkgeräte, Audiogeräte, Ihr Rufzeichen und Ihre Einstellungen werden gelöscht. Ihr Logbuch bleibt unberührt. Das lässt sich nicht rückgängig machen.",
   "settings.backup.reset.confirm.title": "Alle Einstellungen auf Werkseinstellungen zurücksetzen?",

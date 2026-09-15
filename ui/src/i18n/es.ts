@@ -2606,7 +2606,7 @@ export const ES: PartialCatalog = {
   "operate.roster.filter.hideBlocked": "Ocultar bloqueadas",
   "operate.roster.filter.hideBlocked.title": "Quita del todo los indicativos bloqueados de la lista (sin marcar: salen atenuados). Alt+doble clic en una fila para bloquear o desbloquear; el respondedor automático nunca contesta a un indicativo bloqueado en ningún caso.",
   "operate.roster.filter.hideWorked": "Ocultar trabajadas",
-  "operate.roster.filter.hideWorked.title": "Oculta las estaciones que ya has trabajado — EXCEPTO las que todavía cubren una necesidad, que se quedan en la lista. Por eso un chip B4 puede sobrevivir a este filtro: trabajaste ese indicativo en otra banda o modo y aquí sigue siendo un slot nuevo. Activa Solo necesarios para ver únicamente esas.",
+  "operate.roster.filter.hideWorked.title": "Oculta las estaciones que ya has trabajado — EXCEPTO dos clases, que se quedan en la lista: las que todavía cubren una necesidad y las que están en el aire desde un parque o una cima ahora mismo. Por eso un chip B4 puede sobrevivir a este filtro: trabajaste ese indicativo en otra banda o modo y aquí sigue siendo un slot nuevo, o ese indicativo está activando y el tablero de necesidades también lo lista. Activa Solo necesarios para ver únicamente las necesidades.",
   "operate.roster.filter.neededOnly": "Solo necesarios",
   "operate.roster.grid.aria": "Estaciones — flechas para moverte, Enter para seleccionar, Mayús+Enter para trabajar",
   "operate.roster.lotw.title": "Sube a LoTW — este contacto debería confirmarse",

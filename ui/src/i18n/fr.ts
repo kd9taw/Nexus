@@ -2606,7 +2606,7 @@ export const FR: PartialCatalog = {
   "operate.roster.filter.hideBlocked": "Masquer bloqués",
   "operate.roster.filter.hideBlocked.title": "Retirer complètement les indicatifs bloqués de la liste (décoché : ils s'affichent en grisé). Alt+double-clic sur une ligne pour bloquer ou débloquer ; de toute façon le répondeur automatique ne répond jamais aux indicatifs bloqués.",
   "operate.roster.filter.hideWorked": "Masquer contactés",
-  "operate.roster.filter.hideWorked.title": "Masquer les stations déjà contactées — SAUF celles qui comblent encore un manque, qui restent dans la liste. C'est pourquoi un chip B4 peut survivre à ce filtre : vous avez contacté cet indicatif sur une autre bande ou un autre mode, et c'est encore un nouveau créneau ici. Activez Manquants seulement pour ne voir que ceux-là.",
+  "operate.roster.filter.hideWorked.title": "Masquer les stations déjà contactées — SAUF deux sortes, qui restent dans la liste : celles qui comblent encore un manque, et celles qui émettent depuis un parc ou un sommet en ce moment. C'est pourquoi un chip B4 peut survivre à ce filtre : vous avez contacté cet indicatif sur une autre bande ou un autre mode et c'est encore un nouveau créneau ici, ou bien cet indicatif est en activation et le tableau des manques le liste aussi. Activez Manquants seulement pour ne voir que les manques.",
   "operate.roster.filter.neededOnly": "Manquants seulement",
   "operate.roster.grid.aria": "Liste des stations — flèches pour se déplacer, Entrée pour sélectionner, Maj+Entrée pour contacter",
   "operate.roster.lotw.title": "Envoie vers LoTW — ce contact devrait se confirmer",

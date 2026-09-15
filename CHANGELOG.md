@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"Hide worked" stops hiding park and summit activators.** If you had ever worked a callsign —
+  once, years ago, on any band — the Call Roster's Hide worked dropped that station even while it
+  was on the air right then from a park or a summit. The Needed board listed the activation and
+  the roster threw it away, so the two panes disagreed about the same station at the same moment.
+  Hide worked now keeps a station that is activating, whatever the log says about the call. It
+  still hides a worked station with nothing to offer, and a DXpedition you have already worked on
+  the band still does not count as a reason to keep the row — that is a label, not something you
+  can need.
+
 - **A satellite you just opened no longer claims it has no transmitters.** Open a bird the
   Satellites section had not looked up yet (CO-57, say) and its transponder list read "no
   transmitters listed for this bird" for up to half an hour, because the SatNOGS lookup for it
