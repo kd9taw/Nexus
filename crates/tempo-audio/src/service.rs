@@ -5863,8 +5863,11 @@ impl RadioLoop {
                         // button work would trade one surprise for a bigger one.
                         let note = match d.set_scope_span(hz) {
                             Ok(()) => None,
+                            // ⚠️ THE VALUE IS A HALF-WIDTH — `take_scope_span_request` says so,
+                            // and the buttons are labelled `±25k`. Print the ± or the sentence
+                            // cannot be matched to the button that produced it.
                             Err(crate::civ::engine::CivError::Nak) => Some(format!(
-                                "the radio refused a {:.1} kHz scope span. An Icom takes a span \
+                                "the radio refused a ±{:.1} kHz scope span. An Icom takes a span \
                                  only while its scope is in Center mode — switch the scope to \
                                  Center on the radio, then pick the span again.",
                                 f64::from(hz) / 1000.0
@@ -9198,9 +9201,12 @@ impl RadioLoop {
             // only when tune power is switched on at all: a station without the setting pays
             // nothing and sees today's behaviour to the byte.
             //
-            // A rig that will not answer leaves `rf_power` as it was — `None` on a station that
-            // has never touched the slider — and the tune then declines to lower anything,
-            // which is the safe half: nothing to put back means nothing may be taken away.
+            // A rig that will not answer — or that answers ZERO, which `read_level` returns as a
+            // perfectly valid 0.0 — leaves `rf_power` as it was, `None` on a station that has
+            // never touched the slider, and the tune then declines to lower anything. That is
+            // the safe half twice over: nothing to put back means nothing may be taken away, and
+            // a radio reporting 0% must never have that adopted as the operator's level (see
+            // `Engine::adopt_rig_power`, which refuses it).
             //
             // ⚠️ NEEDS-BENCH, and this is a POWER COMMAND AROUND KEYING. What is proven here is
             // the ORDER on the wire (read, then set, then PTT) and that the level that comes
@@ -9210,6 +9216,9 @@ impl RadioLoop {
             if keying && tune_pct.is_some() && self.level_supported[LVL_RFPOWER] != Some(false) {
                 if let Ok(frac) = rig.read_level("RFPOWER") {
                     let mut e = engine_lock(engine);
+                    // Observed either way — a zero reading is exactly what the "keys and puts
+                    // nothing on the air" warning is built from. ADOPTED only if it is a level
+                    // worth putting back.
                     e.observe_rig_power(frac);
                     e.adopt_rig_power(frac);
                 }
@@ -21905,6 +21914,70 @@ mod tests {
                 .any(|l| l.starts_with("L RFPOWER ")),
             "nothing is known to put back, so nothing may be taken away: {:?}",
             log.lock().unwrap()
+        );
+    }
+
+    /// ⚠️ A RADIO REPORTING **ZERO** MUST NOT HAVE THAT ADOPTED AS THE OPERATOR'S LEVEL.
+    /// `Rig::read_level` accepts the whole 0.0–1.0 range, so 0% is `Ok(0.0)` and not an error —
+    /// and adopting it would key the tune at `min(want, 0)`, command 0% on the restore, and
+    /// leave the station there for the rest of the session and every over after it. A rig
+    /// genuinely at zero is the "keys and puts nothing on the air" case Nexus WARNS about; the
+    /// answer is never to adopt it as intent.
+    #[test]
+    fn a_tune_does_not_adopt_a_radio_reporting_zero_power() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.tune_power_pct = Some(10);
+            e.apply_settings(s);
+            // The operator has never touched the Pwr slider, which is most stations.
+        }
+        let (addr, log, _knob) = mock_rigctld_with_power(14_074_000, 0.0);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, 0.0);
+        engine.lock().unwrap().set_tune(true);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 20.0);
+        assert!(state.tuning_keyed, "control: the tune keyed");
+        let lines = log.lock().unwrap()[mark..].to_vec();
+        assert!(
+            lines.iter().any(|l| l == "l RFPOWER"),
+            "control: the level really was asked for — otherwise this proves nothing: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("L RFPOWER ")),
+            "a 0% reading is not a level to put back, so nothing may be taken away: {lines:?}"
+        );
+        assert_eq!(
+            engine.lock().unwrap().rf_power(),
+            None,
+            "and 0% must never become the operator's commanded level"
+        );
+
+        // …and the radio still gets TOLD, which is the part that helps the operator.
+        assert!(
+            engine.lock().unwrap().snapshot().radio.tx_power_zero
+                || !engine.lock().unwrap().tx_enabled(),
+            "the zero is observed either way — it feeds the no-RF warning"
         );
     }
 

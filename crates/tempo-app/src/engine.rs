@@ -5363,6 +5363,24 @@ impl Engine {
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
+        // ⚠️ AND THE CLARIFIER BELIEFS, for the split's reason. RIT/XIT is a write-only
+        // optimistic path: `xit_hz` is what Nexus COMMANDED the OUTGOING radio, and nothing else
+        // ever writes it. Since XIT is part of the key-time licence gate
+        // ([`Self::tx_emission_mhz`]), carrying that belief across a handoff means judging the
+        // NEW rig's emission at an offset it was never given — and that fails OPEN: an offset
+        // believed to move the transmitter INTO privileges would unlock a radio about to key on
+        // the bare dial.
+        //
+        // CLEARED, AND DELIBERATELY NOT MARKED DIRTY — unlike the split above, which does
+        // command the new radio. `rit_dirty`/`xit_dirty` are part of Remote's station-busy
+        // predicate (`remote_radio_context_idle`): a pending local clarifier gesture is a reason
+        // to refuse a remote selection, so arming one here would make every routed handoff look
+        // like the operator had just reached for the clarifier. Clearing alone is enough for the
+        // gate — it puts the belief back to "no offset", which judges the bare dial. That is the
+        // same bound this path always had (`xit_offset_mhz`: an offset dialled on the rig's own
+        // knob is invisible to Nexus), and it is the conservative half of it.
+        self.rit_hz = 0;
+        self.xit_hz = 0;
         self.clear_decode_context();
         self.app.clear_stations();
         // The a7 cross-cycle AP table holds the OLD radio's decodes — replaying
@@ -7805,9 +7823,23 @@ impl Engine {
     /// The CALLER owns the freshness question. The one caller reads the level from the rig on
     /// the tick it adopts it; adopting the 750 ms poll's `rig_rf_power` instead would let a
     /// reading up to a heavy cycle old overwrite a slider drag made inside that window.
-    pub fn adopt_rig_power(&mut self, frac: f32) {
+    ///
+    /// ⚠️ A ZERO IS NOT ADOPTED, and that is not tidiness — it is the difference between this
+    /// helping and this being a new way to silence a station. `Rig::read_level` accepts the
+    /// whole `0.0..=1.0` range, so a rig reporting 0% answers `Ok(0.0)`, not an error. Adopting
+    /// it would make 0% the operator's commanded level: the tune would key at `min(want, 0)`,
+    /// the restore afterwards would command 0%, and it would STAY there for the session and
+    /// every over after it. A radio genuinely sitting at zero is the "keys and puts nothing on
+    /// the air" case this app already has a warning lane for ([`Self::tx_power_is_zero`]) — the
+    /// answer to it is to TELL the operator, never to adopt it as their intent. Returns whether
+    /// the level was taken, so the caller can decline to lower a rig it learned nothing about.
+    pub fn adopt_rig_power(&mut self, frac: f32) -> bool {
+        if !frac.is_finite() || frac <= ZERO_RF_POWER {
+            return false;
+        }
         let ceiling = self.active_power_ceiling();
         self.rf_power = Some(frac.clamp(0.0, ceiling));
+        true
     }
 
     /// The operator's power level as it ACTUALLY stands: what we commanded, or failing that
@@ -23576,6 +23608,49 @@ mod tests {
         // Clearing XIT puts the permission back — the guard has to release, not latch.
         e.request_xit(0);
         assert!(e.tx_allowed(), "XIT off returns the gate to the dial");
+    }
+
+    /// ⚠️ A CLARIFIER BELIEF MUST NOT SURVIVE A RADIO HANDOFF. `xit_hz` is what Nexus
+    /// COMMANDED — nothing else ever writes it — and it is now part of the key-time licence
+    /// gate. Carried across a switch it judges the NEW radio's emission at an offset that radio
+    /// was never given, and that fails OPEN: an offset believed to move the transmitter INTO
+    /// privileges would unlock a rig about to key on the bare dial.
+    #[test]
+    fn a_radio_handoff_drops_the_clarifier_belief_it_cannot_carry() {
+        let (mut e, ic9700, _ft991a) = three_radio_engine();
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB"); // Extra-only
+        e.request_xit(15_000); // …which XIT "moves" to 14.030
+        assert!(
+            e.tx_allowed(),
+            "precondition: on THIS radio the offset is real and the gate opens"
+        );
+        // Drain the one-shots the way the loop does, so nothing is left pending by accident.
+        assert_eq!(e.take_xit_apply(), Some(15_000));
+
+        e.set_active_radio(ic9700);
+        assert_eq!(e.xit_hz, 0, "the belief belongs to the radio that had it");
+        assert_eq!(e.rit_hz, 0, "…and so does RIT's");
+        // THE FAIL-OPEN, shown on the new radio's own dial: 14.015 CW is Extra-only, and with
+        // the old rig's +15 kHz still believed the gate would judge 14.030 and unlock a radio
+        // about to key on the bare dial. (The handoff adopts the incoming rig's tune, so the
+        // dial has to be set again here — that is what makes this the new radio's question.)
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "an offset only the OUTGOING radio ever had must not open the gate here"
+        );
+        // …and NOTHING is queued for the incoming rig. `rit_dirty`/`xit_dirty` are part of
+        // Remote's station-busy predicate, so arming one here would make every routed handoff
+        // look like a local clarifier gesture in flight.
+        assert_eq!(
+            e.take_xit_apply(),
+            None,
+            "no clarifier write is queued by a handoff"
+        );
+        assert_eq!(e.take_rit_apply(), None);
     }
 
     /// THE OTHER DIRECTION. XIT that moves the transmitter INTO privileges is legal, because

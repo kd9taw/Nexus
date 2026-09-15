@@ -324,6 +324,20 @@ impl OmniRigClient for OmniRigCom {
         })
     }
 
+    /// ⚠️ **THE WRITE STILL TARGETS `Freq` ALONE, AND THE READ ABOVE NO LONGER DOES.** Named
+    /// here because the asymmetry is the next thing a bench will find, and a silent one would be
+    /// worse than the bug it sits beside: on exactly the rig files [`Self::freq_hz`] was widened
+    /// for — the ones that define only `pmFreqA`/`pmFreqB` — the dial now READS correctly while
+    /// every QSY, band change and spot click writes a property OmniRig may not back, so the
+    /// radio would look alive and ignore every set.
+    ///
+    /// NOT guessed at, deliberately. Writing `FreqA` needs to know which VFO the radio is on,
+    /// which needs OmniRig's `Vfo` property, whose parameter constants are not confirmed against
+    /// the type library on this machine — and writing the wrong VFO moves a frequency the
+    /// operator did not ask to move, which is worse than a set that does nothing. There is no
+    /// OmniRig here to ask. **Bench step:** on such a rig file, confirm whether a dial set from
+    /// Nexus reaches the radio; if it does not, this is the next fix and it needs `Vfo` read off
+    /// a real installation first.
     fn set_freq_hz(&self, hz: u64) -> Result<(), OmniError> {
         // OmniRig's `Freq` is a 32-bit signed integer of Hz, so ~2.147 GHz is its ceiling —
         // above every amateur allocation it can drive. Refuse rather than wrap.
