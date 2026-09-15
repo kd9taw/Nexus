@@ -1715,11 +1715,39 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         // (Keystrokes into a menu that has been idle for 10 s depend on focus still being inside it;
         // the keyboard path itself is pinned in the unit tests.)
         const row=band=>`[...document.querySelectorAll('[role="menuitemradio"]')].find(e=>e.textContent.trim().startsWith(${JSON.stringify(band)}))`
+        // WHERE IN THE COMMAND WINDOW THE GESTURE BEGINS, and it is not a detail (CI 35022016615).
+        // The window opens when the heartbeat is SENT and runs 1.2 s (`stateUntil`, operation-client),
+        // so a reply that lands 150-300 ms late has already spent a quarter of it before the browser
+        // can act at all, and the browser's own admission - the Web Locks turn plus waiting out an
+        // in-flight heartbeat - has to fit in what remains. Clicking at an UNDEFINED phase therefore
+        // rolls a die weighted by how fast the machine is: on a 4-core runner the remainder ran out
+        // mid-admission and the command was refused `windowExpired`, unsent, with every steady-view
+        // probe above clean. That refusal is the product working as decided (nothing reached the
+        // station, the operator is told, the menu and trigger stay live) and it is pinned
+        // DETERMINISTICALLY in ui/src/remote-web/control.test.ts - so nothing is lost by taking the
+        // die out of THIS test, whose subject is the delivery. Wait for the window to OPEN, which is
+        // also where an operator's own eye puts the gesture, and assert the wait really saw one open:
+        // a silent timeout here would put the coin flip straight back. This is `freshLoggingWindow`'s
+        // rule (every gesture below waits for a just-arrived controlling reply) applied to the one
+        // gesture in this file that was not waiting for it; it watches the client's own `fresh` rise
+        // rather than polling a 150 ms wire window, which a starved runner can poll straight past.
+        const windowOpened=`(()=>{let f=document.querySelector('.app');f=f?.[Object.keys(f).find(k=>k.startsWith('__reactFiber$'))];let ops;while(f){ops=f.memoizedProps?.connection?.operations;if(ops)break;f=f.return}
+          if(!ops)return Promise.resolve(false)
+          return new Promise(resolve=>{let was=!!ops.getSnapshot().fresh
+            const stop=ops.subscribe(()=>{const now=!!ops.getSnapshot().fresh;if(!was&&now){clearTimeout(timer);stop();resolve(true)}was=now})
+            const timer=setTimeout(()=>{stop();resolve(false)},8000)})})()`
+        assert.equal(await evaluate(windowOpened),true,'the pick must begin on a command window that has just opened')
         await click(row('20m'))
         for(let i=0;i<60&&stationRequests.length===before;i++)await sleep(100)
         await sleep(2000)
         const picked=stationRequests.slice(before).map(r=>r.action)
         console.log('STEADY_PROBE phone-pick',JSON.stringify(picked))
+        // What the browser itself thinks of that pick, logged before the assertion: an empty
+        // `phone-pick` with a `controlError` here names the refusal that dropped it, and an empty one
+        // with none says the gesture never reached the picker at all. Reading the log was the whole
+        // cost of the CI run above.
+        console.log('STEADY_PROBE pick-client',JSON.stringify(await evaluate(`(()=>{let f=document.querySelector('.app');f=f?.[Object.keys(f).find(k=>k.startsWith('__reactFiber$'))];let ops;while(f){ops=f.memoizedProps?.connection?.operations;if(ops)break;f=f.return}
+          const v=ops?.getSnapshot();return {controlError:v?.controlError??null,fresh:!!v?.fresh,connected:!!v?.connected,phase:v?.state?.phase??null,unresolved:!!v?.unresolved,controlPending:!!v?.controlPending}})()`)))
         // Positive controls, on the same trigger: a forced disable and a forced (then reversed)
         // replacement must be counted, and Escape must close a dropdown held open.
         // The pick closed the menu; wait for it to leave before clicking the trigger it covers.
