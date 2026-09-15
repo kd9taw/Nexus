@@ -1672,6 +1672,26 @@ export interface SstvState {
   txTotalSecs: number
 }
 
+/** Where the station's data + log folder is, and where it came from (#289). */
+export interface DataFolderInfo {
+  /** The folder in use for THIS run. A change applies at the next launch. */
+  current: string
+  /** Where the default would be. */
+  default: string
+  /** 'env' (NEXUS_DATA_DIR), 'chosen' (Settings) or 'default'. */
+  source: 'env' | 'chosen' | 'default'
+  /** The folder Settings has chosen, when one is set — may differ from `current` until restart. */
+  chosen: string | null
+  /** Is there a log.adi in the folder in use? */
+  logPresent: boolean
+}
+
+/** What a verified data-folder copy carried. */
+export interface DataCopyReport {
+  files: number
+  bytes: number
+}
+
 /** Result of "Auto-test ports": the working (port, baud, Hamlib model) the prober
  * auto-selected, or found=false with a detail message. */
 export interface CatProbeResult {

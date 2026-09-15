@@ -1951,6 +1951,34 @@ previously under *Radio → Transmit limits & sharing*, where they were effectiv
 undiscoverable: backing up a whole station has nothing to do with transmit
 limits.
 
+### Data & log folder
+
+Your logbook (`log.adi`), the data tables Nexus refreshes (country file, FCC
+state data, Field Day rules, satellite elements) and the Winlink mailbox all
+live in one folder. By default that is `%APPDATA%\tempo` on Windows and
+`~/.config/tempo` elsewhere.
+
+- **Folder in use** — where this run is reading and writing, and where that came
+  from: the default, your choice here, or the `NEXUS_DATA_DIR` environment
+  variable (which wins for this launch).
+- **Use this folder** — point Nexus at a folder that *already* holds a log. This
+  is the second computer in a shack picking up the log the first one keeps on a
+  NAS. Nexus refuses a folder with no `log.adi` when your current folder has one,
+  rather than opening an empty logbook.
+- **Copy my log and data there** — copy the logbook, the data tables and the
+  Winlink mailbox across, check every copied file against the original, and use
+  the new folder from then on. **Nothing is moved or deleted**: your old folder is
+  left exactly as it was, so a bad copy costs you nothing.
+- **Use the default folder** — forget the choice and go back to the default.
+
+A change takes effect the next time Nexus starts, and never half-way through a
+session — the logbook is opened once at launch.
+
+⚠️ **One Nexus at a time.** Putting the folder on Dropbox, OneDrive or Google
+Drive lets another computer reach your log, but two copies of Nexus writing the
+same `log.adi` produce a *conflicted copy*, not a merged log. Run one, or keep
+one machine's Nexus closed.
+
 ### Backup & reset
 
 ![The Backup & reset group: an explanation, "Back up" and "Restore…" links, a note that the file holds no passwords or API keys, and a red "Reset all settings…" link under a Start over heading.](../img/manual/settings-backup-reset.webp)

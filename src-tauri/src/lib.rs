@@ -43,7 +43,7 @@ mod sstv_scope_test;
 mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::Manager;
 use tauri::State;
@@ -1601,9 +1601,458 @@ fn use_single_radio() -> Result<(), String> {
 /// existing `log.adi` stays put and simply becomes the shared one, no migration). Override
 /// with `NEXUS_DATA_DIR` to place the shared log on a NAS/Drive-synced folder (a multi-PC shack).
 fn shared_data_dir() -> PathBuf {
-    match std::env::var_os("NEXUS_DATA_DIR").filter(|s| !s.is_empty()) {
-        Some(d) => PathBuf::from(d),
-        None => config_base().join("tempo"),
+    // ⚠️ RESOLVED ONCE PER PROCESS (#289). The operator can choose this folder in Settings, and a
+    // change must reach the app at the NEXT launch only: the logbook handle is opened from this
+    // path at startup while Winlink asks again per call, so a mid-session change would split the
+    // station's data across two folders. `NEXUS_DATA_DIR` still wins, for the multi-PC shack.
+    static RESOLVED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    RESOLVED
+        .get_or_init(
+            || match std::env::var_os("NEXUS_DATA_DIR").filter(|s| !s.is_empty()) {
+                Some(d) => PathBuf::from(d),
+                None => read_data_dir_pointer_in(&config_dir_for(None))
+                    .unwrap_or_else(|| config_base().join("tempo")),
+            },
+        )
+        .clone()
+}
+
+// ───────────────────────────────────────────────────────────────────────────────────────────
+// #289 — THE DATA / LOG FOLDER, chosen from Settings.
+//
+// The shared data dir holds the one thing that cannot be rebuilt (`log.adi`), the refreshed data
+// tables and the Winlink mailbox. Three properties make moving it safe, and each is a rule here
+// rather than a habit:
+//
+//  1. THE POINTER LIVES IN THE BASE CONFIG, not in settings.json. settings.json is per-profile
+//     (`tempo-<profile>`), and every profile shares ONE data dir — a per-profile copy would let
+//     two windows disagree about where the log is. It also cannot live INSIDE the data dir: the
+//     first move would carry the pointer out of reach.
+//  2. NOTHING IS EVER MOVED OR DELETED. Pointing somewhere else leaves the old folder untouched;
+//     the operator can copy the data across, and the copy is VERIFIED byte for byte before the
+//     pointer is written. A failed or partial copy leaves the pointer exactly as it was, so the
+//     app still opens the log it opened yesterday.
+//  3. IT APPLIES AT THE NEXT LAUNCH, never half-way through this one. `shared_data_dir` resolves
+//     ONCE per process (the OnceLock below), so a change cannot strand a live logbook handle
+//     against one folder while a Winlink write goes to another.
+//
+// Refusal: pointing at a folder with no `log.adi` while the current one HAS a log is refused
+// unless the operator asked for the copy — otherwise Nexus opens an empty log and it reads as
+// "my contacts are gone".
+
+/// File name of the data-dir pointer, in the BASE config dir (`<base>/tempo/`).
+const DATA_DIR_POINTER: &str = "data-dir.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DataDirPointer {
+    path: String,
+}
+
+/// The data dir named by the pointer in `base`, if any. A blank or unreadable pointer is "none",
+/// never an error: an unparseable file must not lock the operator out of their own logbook.
+fn read_data_dir_pointer_in(base: &Path) -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(base.join(DATA_DIR_POINTER)).ok()?;
+    let p: DataDirPointer = serde_json::from_str(&raw).ok()?;
+    let trimmed = p.path.trim();
+    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+/// Write the pointer. Called ONLY after a requested copy has been verified.
+fn write_data_dir_pointer_in(base: &Path, target: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(base)
+        .map_err(|e| format!("Could not create {}: {e}", base.display()))?;
+    let body = serde_json::to_string_pretty(&DataDirPointer {
+        path: target.to_string_lossy().into_owned(),
+    })
+    .map_err(|e| e.to_string())?;
+    std::fs::write(base.join(DATA_DIR_POINTER), body)
+        .map_err(|e| format!("Could not write the data-folder pointer: {e}"))
+}
+
+/// Remove the pointer (back to the default folder).
+fn clear_data_dir_pointer_in(base: &Path) -> Result<(), String> {
+    match std::fs::remove_file(base.join(DATA_DIR_POINTER)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Could not clear the data-folder pointer: {e}")),
+    }
+}
+
+/// Is `target` a folder Nexus may keep the operator's log in? Absolute, creatable, writable, and
+/// not inside the installed application (an upgrade replaces that tree — a log there is a log
+/// waiting to be deleted by the installer).
+fn validate_data_dir_target(target: &Path, install_dir: Option<&Path>) -> Result<PathBuf, String> {
+    if target.as_os_str().is_empty() {
+        return Err("Choose a folder first.".to_string());
+    }
+    if !target.is_absolute() {
+        return Err("Give the full path to the folder, starting from the drive or /.".to_string());
+    }
+    if target.exists() && !target.is_dir() {
+        return Err(format!("{} is a file, not a folder.", target.display()));
+    }
+    std::fs::create_dir_all(target)
+        .map_err(|e| format!("Could not create {}: {e}", target.display()))?;
+    // Resolve symlinks/.. before the containment check, or `<install>/../install/data` slips past.
+    let resolved = target
+        .canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
+    if let Some(install) = install_dir {
+        let install = install
+            .canonicalize()
+            .unwrap_or_else(|_| install.to_path_buf());
+        if resolved.starts_with(&install) {
+            return Err(
+                "That folder is inside the Nexus program folder, which an update replaces. Pick a \
+                 folder in your documents, or on a drive that stays put."
+                    .to_string(),
+            );
+        }
+    }
+    let probe = resolved.join(".nexus-write-probe");
+    std::fs::write(&probe, b"nexus")
+        .map_err(|e| format!("Nexus cannot write in {}: {e}", resolved.display()))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(resolved)
+}
+
+/// The data files a copy carries: the logbook, the refreshed tables beside it, and the Winlink
+/// mailbox tree. Relative to `from`, and only what exists.
+fn data_dir_entries(from: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for name in [
+        "log.adi",
+        "cty.dat",
+        "cty.meta.json",
+        "fcc-states.bin",
+        "fcc-states.meta.json",
+        "fd-rules.json",
+        "fd-rules.meta.json",
+        "tles.json",
+    ] {
+        if from.join(name).is_file() {
+            out.push(PathBuf::from(name));
+        }
+    }
+    fn walk(root: &Path, rel: PathBuf, out: &mut Vec<PathBuf>) {
+        let Ok(dir) = std::fs::read_dir(root.join(&rel)) else {
+            return;
+        };
+        for entry in dir.flatten() {
+            let child = rel.join(entry.file_name());
+            if root.join(&child).is_dir() {
+                walk(root, child, out);
+            } else {
+                out.push(child);
+            }
+        }
+    }
+    if from.join("winlink").is_dir() {
+        walk(from, PathBuf::from("winlink"), &mut out);
+    }
+    out
+}
+
+/// What a verified copy carried.
+#[derive(serde::Serialize, Clone, Copy, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+struct DataCopyReport {
+    files: usize,
+    bytes: u64,
+}
+
+/// Copy the data files from `from` to `to` and VERIFY each one byte for byte. Never deletes or
+/// modifies anything under `from`. Any failure — copy or verify — returns Err, and the caller
+/// must then leave the pointer alone: a half-copied folder must not become the live one.
+fn copy_data_dir_verified(from: &Path, to: &Path) -> Result<DataCopyReport, String> {
+    let mut report = DataCopyReport::default();
+    for rel in data_dir_entries(from) {
+        let src = from.join(&rel);
+        let dst = to.join(&rel);
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
+        }
+        std::fs::copy(&src, &dst).map_err(|e| format!("Could not copy {}: {e}", rel.display()))?;
+        let a =
+            std::fs::read(&src).map_err(|e| format!("Could not read {}: {e}", rel.display()))?;
+        let b = std::fs::read(&dst)
+            .map_err(|e| format!("Could not read the copy of {}: {e}", rel.display()))?;
+        if a != b {
+            return Err(format!(
+                "The copy of {} does not match the original — nothing was changed.",
+                rel.display()
+            ));
+        }
+        report.files += 1;
+        report.bytes += a.len() as u64;
+    }
+    Ok(report)
+}
+
+/// The policy behind `set_data_folder`, with every path handed in so a test can drive it.
+/// Returns the verified copy report (if one was asked for). The pointer is written LAST.
+fn apply_data_folder(
+    base: &Path,
+    current: &Path,
+    target: &Path,
+    copy: bool,
+    install_dir: Option<&Path>,
+) -> Result<DataCopyReport, String> {
+    let resolved = validate_data_dir_target(target, install_dir)?;
+    let same = resolved
+        == current
+            .canonicalize()
+            .unwrap_or_else(|_| current.to_path_buf());
+    if !same && !copy && !resolved.join("log.adi").is_file() && current.join("log.adi").is_file() {
+        return Err(
+            "That folder has no log.adi, and this station has one. Nexus would open an empty \
+             logbook. Choose \"Copy my log and data there\" instead, or pick the folder that \
+             already holds your log."
+                .to_string(),
+        );
+    }
+    let report = if copy && !same {
+        copy_data_dir_verified(current, &resolved)?
+    } else {
+        DataCopyReport::default()
+    };
+    write_data_dir_pointer_in(base, &resolved)?;
+    Ok(report)
+}
+
+/// Where the data folder came from, for the Settings readout.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataFolderInfo {
+    /// The folder in use for THIS run (the OnceLock value — a change applies at the next launch).
+    current: String,
+    /// Where the default would be.
+    default: String,
+    /// "env" (NEXUS_DATA_DIR), "chosen" (the pointer) or "default".
+    source: String,
+    /// The folder the pointer names, when one is set — which may differ from `current` until the
+    /// operator restarts. Null when no pointer is set.
+    chosen: Option<String>,
+    /// Is there a log.adi in the folder in use?
+    log_present: bool,
+}
+
+/// Read the data folder for Settings.
+#[tauri::command(async)]
+fn get_data_folder() -> DataFolderInfo {
+    let base = config_dir_for(None);
+    let chosen = read_data_dir_pointer_in(&base);
+    let env_set = std::env::var_os("NEXUS_DATA_DIR")
+        .filter(|s| !s.is_empty())
+        .is_some();
+    let current = shared_data_dir();
+    DataFolderInfo {
+        source: if env_set {
+            "env"
+        } else if chosen.is_some() {
+            "chosen"
+        } else {
+            "default"
+        }
+        .to_string(),
+        log_present: current.join("log.adi").is_file(),
+        current: current.to_string_lossy().into_owned(),
+        default: config_base().join("tempo").to_string_lossy().into_owned(),
+        chosen: chosen.map(|p| p.to_string_lossy().into_owned()),
+    }
+}
+
+/// Choose the data folder (#289). `copy` carries the log and data across, verified, first.
+/// Takes effect at the next launch — see `shared_data_dir`.
+#[tauri::command(async)]
+fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
+    if std::env::var_os("NEXUS_DATA_DIR")
+        .filter(|s| !s.is_empty())
+        .is_some()
+    {
+        return Err(
+            "NEXUS_DATA_DIR is set for this launch, and it wins over this setting. Clear it to \
+             choose the folder here."
+                .to_string(),
+        );
+    }
+    let base = config_dir_for(None);
+    let install = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    apply_data_folder(
+        &base,
+        &shared_data_dir(),
+        Path::new(path.trim()),
+        copy,
+        install.as_deref(),
+    )
+}
+
+/// Go back to the default folder (clears the pointer). Applies at the next launch.
+#[tauri::command(async)]
+fn clear_data_folder() -> Result<(), String> {
+    clear_data_dir_pointer_in(&config_dir_for(None))
+}
+
+#[cfg(test)]
+mod data_folder_tests {
+    use super::*;
+
+    /// A unique scratch directory. No tempfile dependency in this crate; the name carries the
+    /// test's own label so a leftover is attributable.
+    fn scratch(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-data-folder-{label}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn write(path: &Path, body: &[u8]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("parent");
+        }
+        std::fs::write(path, body).expect("write");
+    }
+
+    /// A station with a log, a data table and a Winlink mailbox tree.
+    fn station(root: &Path) {
+        write(&root.join("log.adi"), b"<CALL:5>W1AW <EOR>\n");
+        write(&root.join("cty.dat"), b"United States: ...");
+        write(&root.join("winlink/mailbox/0001.mime"), b"From: W1AW");
+    }
+
+    #[test]
+    fn the_pointer_lives_in_the_base_config_and_round_trips() {
+        let root = scratch("pointer");
+        let (base, target) = (root.join("base"), root.join("elsewhere/nexus-data"));
+        assert_eq!(
+            read_data_dir_pointer_in(&base),
+            None,
+            "no pointer, no choice"
+        );
+        write_data_dir_pointer_in(&base, &target).expect("write pointer");
+        // In the BASE config — never inside the data folder it names, which a move would carry away.
+        assert!(base.join(DATA_DIR_POINTER).is_file());
+        assert!(!target.join(DATA_DIR_POINTER).exists());
+        assert_eq!(
+            read_data_dir_pointer_in(&base).as_deref(),
+            Some(target.as_path())
+        );
+        clear_data_dir_pointer_in(&base).expect("clear");
+        assert_eq!(
+            read_data_dir_pointer_in(&base),
+            None,
+            "cleared = back to default"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_chosen_copy_is_verified_and_the_original_is_untouched() {
+        let root = scratch("copy");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
+        station(&current);
+        let before: Vec<_> = data_dir_entries(&current)
+            .into_iter()
+            .map(|rel| (rel.clone(), std::fs::read(current.join(rel)).expect("read")))
+            .collect();
+
+        let report = apply_data_folder(&base, &current, &target, true, None).expect("copy");
+        assert_eq!(report.files, 3, "log, table and the mailbox file");
+        assert!(report.bytes > 0);
+        for (rel, body) in &before {
+            assert_eq!(
+                &std::fs::read(target.join(rel)).expect("copied"),
+                body,
+                "{rel:?} copied"
+            );
+            assert_eq!(
+                &std::fs::read(current.join(rel)).expect("original"),
+                body,
+                "{rel:?} untouched"
+            );
+        }
+        assert_eq!(
+            read_data_dir_pointer_in(&base).map(|p| p.canonicalize().unwrap_or(p)),
+            Some(target.canonicalize().unwrap_or(target.clone())),
+            "the pointer names the new folder"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_copy_leaves_the_pointer_and_the_original_alone() {
+        let root = scratch("failed");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
+        station(&current);
+        let kept = root.join("kept-data");
+        write_data_dir_pointer_in(&base, &kept).expect("prior choice");
+        // `log.adi` is a DIRECTORY in the target: the copy of the one irreplaceable file fails.
+        std::fs::create_dir_all(target.join("log.adi")).expect("blocker");
+
+        let err = apply_data_folder(&base, &current, &target, true, None).expect_err("must refuse");
+        assert!(err.contains("log.adi"), "the failure names the file: {err}");
+        assert_eq!(
+            read_data_dir_pointer_in(&base).as_deref(),
+            Some(kept.as_path()),
+            "a half-finished copy must not become the live folder"
+        );
+        assert!(
+            current.join("log.adi").is_file(),
+            "the original log is untouched"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_empty_folder_is_refused_unless_the_operator_chose_the_copy() {
+        let root = scratch("empty");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
+        station(&current);
+
+        let err = apply_data_folder(&base, &current, &target, false, None).expect_err("refused");
+        assert!(
+            err.contains("empty logbook"),
+            "says what would happen: {err}"
+        );
+        assert_eq!(read_data_dir_pointer_in(&base), None, "nothing was chosen");
+        // The same folder WITH the copy is accepted…
+        apply_data_folder(&base, &current, &target, true, None).expect("copy accepted");
+        // …and a folder that already holds a log needs no copy (the second machine on a synced log).
+        let synced = root.join("synced");
+        write(&synced.join("log.adi"), b"<CALL:5>K1ABC <EOR>\n");
+        apply_data_folder(&base, &current, &synced, false, None).expect("adopting a log is fine");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_program_folder_is_refused_however_it_is_spelled() {
+        let root = scratch("install");
+        let (base, current) = (root.join("base"), root.join("old"));
+        station(&current);
+        let install = root.join("Program Files/Nexus");
+        std::fs::create_dir_all(&install).expect("install dir");
+        for target in [install.join("data"), install.join("../Nexus/data")] {
+            let err = apply_data_folder(&base, &current, &target, true, Some(&install))
+                .expect_err("inside the program folder");
+            assert!(err.contains("program folder"), "{err}");
+        }
+        assert_eq!(read_data_dir_pointer_in(&base), None);
+        // Positive control: the same shape OUTSIDE the program folder is accepted.
+        apply_data_folder(
+            &base,
+            &current,
+            &root.join("documents/nexus"),
+            true,
+            Some(&install),
+        )
+        .expect("outside is fine");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 
@@ -22439,6 +22888,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             sstv_delete_image,
             reveal_recordings,
             reveal_sstv_gallery,
+            get_data_folder,
+            set_data_folder,
+            clear_data_folder,
             reveal_all_txt,
             open_qrz_page,
             open_dxped_page,

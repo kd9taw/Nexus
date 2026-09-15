@@ -11,7 +11,10 @@ import { confirmDialog } from '../confirm'
 import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
+  clearDataFolder,
   exportSettingsBundle,
+  getDataFolder,
+  setDataFolder,
   fdDiscoverEvents,
   fdScoreboardStatus,
   connectWebStatus,
@@ -33,6 +36,7 @@ import type {
   RouteMode,
   RoutingRule,
   Settings,
+  DataFolderInfo,
 } from '../types'
 import {
   clearCloudlogKey,
@@ -997,6 +1001,32 @@ export function SettingsPanel({
     }
   }
   const [form, setForm] = useState<Settings | null>(null)
+  // #289 — the data + log folder. Read once when Settings opens; a change applies at the next
+  // launch, so the readout keeps saying what THIS run is using until then.
+  const [dataFolder, setDataFolderInfo] = useState<DataFolderInfo | null>(null)
+  const [dataFolderPath, setDataFolderPath] = useState('')
+  const [dataFolderNote, setDataFolderNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (remote) return
+    let live = true
+    getDataFolder()
+      .then((info) => { if (live) setDataFolderInfo(info) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [remote])
+  const chooseDataFolder = async (copy: boolean) => {
+    const target = dataFolderPath.trim()
+    if (!target) return
+    await withErrorToast(async () => {
+      const report = await setDataFolder(target, copy)
+      setDataFolderNote(
+        copy
+          ? t('settings.dataFolder.copied', { files: report.files, bytes: report.bytes })
+          : t('settings.dataFolder.chosen'),
+      )
+      setDataFolderInfo(await getDataFolder())
+    }, t('settings.dataFolder.failed'))
+  }
   useEffect(()=>{
     if(!remote)return
     const next=configuration.value?settingsForm(configuration.value):null
@@ -3090,6 +3120,82 @@ export function SettingsPanel({
           {remote && <p className="settings-note" role="status">{remoteFollow.supported || remoteGain.supported ? t('remote.configurationControls') : t('remote.configurationObserver')}</p>}
           {remote && (tab==='logging'||tab==='configurations') && <p className="settings-note">{t('remote.configurationLocal')}</p>}
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
+          {tab === 'configurations' && !remote && (
+            <fieldset className="settings-section" id="settings-data-folder">
+              <legend>{t('settings.dataFolder.legend')}</legend>
+              {/* The warning first: a synced folder is the reason most operators come here, and it
+                  is also the one way to lose contacts — two machines writing one log.adi through
+                  Dropbox/OneDrive resolve as a conflicted copy, not a merge. */}
+              <p className="settings-note">{t('settings.dataFolder.note')}</p>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.dataFolder.current.label')}</span>
+                <span className="settings-input mono" role="status">{dataFolder?.current ?? '—'}</span>
+                <span className="settings-hint">
+                  {dataFolder?.source === 'env'
+                    ? t('settings.dataFolder.source.env')
+                    : dataFolder?.source === 'chosen'
+                      ? t('settings.dataFolder.source.chosen')
+                      : t('settings.dataFolder.source.default')}
+                </span>
+                {dataFolder?.chosen && dataFolder.chosen !== dataFolder.current && (
+                  <span className="settings-hint" role="status">
+                    {t('settings.dataFolder.pending', { path: dataFolder.chosen })}
+                  </span>
+                )}
+              </div>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.dataFolder.path.label')}</span>
+                <input
+                  className="settings-input"
+                  value={dataFolderPath}
+                  onChange={(e) => setDataFolderPath(e.target.value)}
+                  placeholder={dataFolder?.default ?? ''}
+                  aria-label={t('settings.dataFolder.path.label')}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <div className="rig-share-row">
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    disabled={!dataFolderPath.trim()}
+                    onClick={() => void chooseDataFolder(false)}
+                    title={t('settings.dataFolder.use.title')}
+                  >
+                    {t('settings.dataFolder.use')}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    disabled={!dataFolderPath.trim()}
+                    onClick={() => void chooseDataFolder(true)}
+                    title={t('settings.dataFolder.copy.title')}
+                  >
+                    {t('settings.dataFolder.copy')}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() =>
+                      void withErrorToast(async () => {
+                        await clearDataFolder()
+                        setDataFolderNote(t('settings.dataFolder.chosen'))
+                        setDataFolderInfo(await getDataFolder())
+                      }, t('settings.dataFolder.failed'))
+                    }
+                    title={t('settings.dataFolder.reset.title')}
+                  >
+                    {t('settings.dataFolder.reset')}
+                  </button>
+                </div>
+                <span className="settings-hint">{t('settings.dataFolder.restart')}</span>
+                {dataFolderNote && (
+                  <span className="settings-hint" role="status">{dataFolderNote}</span>
+                )}
+              </div>
+            </fieldset>
+          )}
+
           {tab === 'configurations' && !remote && (
             <fieldset className="settings-section" id="settings-configurations">
               <legend>{t('settings.configurations.legend')}</legend>

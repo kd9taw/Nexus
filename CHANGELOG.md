@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   picture completes, and the saved picture is the corrected one. The Gallery pane also has a Reveal
   button that opens the folder the pictures are saved in (Pictures/Nexus SSTV).
 
+- **You can choose where your log and data are kept** (#289). Settings ▸ Config ▸ "Data & log
+  folder" points Nexus at another folder — a NAS or a synced folder, so a second computer in the
+  shack can reach the same log. Either adopt a folder that already holds a log, or have Nexus copy
+  your logbook, data tables and Winlink mailbox across; a copy is checked file by file against the
+  original. **Nothing is ever moved or deleted** — your old folder is left exactly as it was — and
+  the new folder is used the next time Nexus starts, never half-way through a session. Nexus
+  refuses a folder that would open an empty logbook unless you asked for the copy. One warning
+  worth repeating: only one Nexus should use a synced folder at a time, or you get a conflicted
+  copy instead of a merged log.
+
 ### Changed (60 m)
 
 - **The 60 m FT8 band button follows your country** (#175). If your callsign is a US one, 60 m
