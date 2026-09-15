@@ -1192,6 +1192,24 @@ export const WATERFALL_ZOOMS: { value: number; label: string }[] = [
   { value: 600, label: '600 Hz' },
 ]
 
+/** WSPR's 200 Hz sub-band (#101): the window every WSPR decoder searches, and the engine's own
+ *  `tx_offset_bounds` for the tier, which clamps both markers to it. A waterfall on the WSPR
+ *  tier passes this as `fixedWindow`, docked or torn off. */
+export const WSPR_WATERFALL_WINDOW = { lo: 1400, hi: 1600 }
+
+/** Scale for the waterfall's canvas overlay text — axis digits, marker labels, the paused chip
+ *  (#215). The overlay draws in rect px mapped onto device pixels, and engines disagree about
+ *  what a rect px is under the app's CSS `zoom`: Chromium (WebView2) reports the ZOOMED box, so
+ *  the transform carries no zoom and fixed-px text ignored the UI scale; an engine reporting the
+ *  unzoomed box already scales text through its transform. rect ÷ layout width is the zoom in the
+ *  first case and 1 in the second, so one formula is right on both. Unmeasured (hidden,
+ *  mid-layout) reads as 1, and the result is clamped so a bad measurement can never draw giant or
+ *  vanishing digits (the UI scale itself runs 65–175 %). */
+export function overlayTextScale(rectW: number, layoutW: number): number {
+  if (!(rectW > 0) || !(layoutW > 0)) return 1
+  return Math.min(2, Math.max(0.5, rectW / layoutW))
+}
+
 /** Coerce a persisted zoom span to the picker's own vocabulary. The `<select>` above is
  * the only legitimate writer, so any other finite number (stale format, foreign surface,
  * hand-edited store) falls back to Std (0) rather than rendering a span no option

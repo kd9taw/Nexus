@@ -210,6 +210,10 @@
 }
 
 .ui-toast-viewport {
+  /* The column itself is a 340 px fixed box over the cockpit: it must not eat clicks meant for
+     what is underneath, or the toast body's click-through (below) buys nothing. Each toast's own
+     buttons turn pointer events back on. */
+  pointer-events: none;
   position: fixed;
   bottom: var(--space-4);
   right: var(--space-4);
@@ -234,7 +238,15 @@
 .app:has(.update-banner) .ui-toast-viewport {
   bottom: calc(var(--space-4) + 72px);
 }
+/* CLICK-THROUGH (D#19). An error toast stays 12 s, and for those 12 s it sits over whatever is
+   beneath it — on a 390 px screen that is a control the operator cannot reach (the Remote
+   browser hit-test caught a decoder control behind "Could not set offset"). The toast BODY
+   therefore takes no pointer events, so a click lands on the control and `elementFromPoint`
+   answers the control; everything interactive inside it turns them back on below. This is what
+   replaces swipe-to-dismiss (Radix swipes the body), so the × close button is now the only
+   pointer dismissal and must always render. */
 .ui-toast {
+  pointer-events: none;
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
@@ -260,6 +272,8 @@
   flex: 1;
 }
 .ui-toast-close {
+  /* The body is click-through (see .ui-toast); its controls are not. */
+  pointer-events: auto;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -273,6 +287,7 @@
 }
 /* One-click action on an alert toast (e.g. "Work →" / "Answer →" the station it's about). */
 .ui-toast-action {
+  pointer-events: auto;
   flex-shrink: 0;
   align-self: center;
   background: var(--accent);
@@ -11602,6 +11617,28 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   cursor: pointer;
   accent-color: var(--accent, #4ea1ff);
 }
+/* #230: "the waterfall goes out of focus and does not show the transmitted signal" (W9GTY).
+   While we key, the backend drops the rows captured from the rig's muted receiver and readers
+   repeat the last real picture — deliberate, and on RTTY/PSK/SSTV/JS8 (no dark band) it looks
+   exactly like a dead waterfall. This badge says the picture is held. Display only: the
+   waterfall is never fed our own transmit audio. Click-through, like the toasts. */
+.wf-tx-held {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: none;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--alert-critical);
+  color: var(--accent-ink);
+  font-size: var(--fs-micro);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  box-shadow: var(--elev-2);
+}
 .wf-stage {
   position: relative;
   flex: 1;
@@ -12446,13 +12483,44 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 1.4fr minmax(160px, 0.8fr);
 }
 .log-note {
+  /* Flex so the comment toggle (#162) can ellipsize beside the 📝 flag: a <button> is an atomic
+     inline box, which text-overflow on the cell cannot clip with an ellipsis. */
+  display: flex;
+  align-items: center;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-dim);
 }
 .log-note-flag {
+  flex: none;
   margin-right: var(--space-1);
+}
+.log-note-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* #162: an opened comment wraps to its full length inside its row. Only the row grows; the
+   column template is untouched. */
+.log-note.expanded {
+  align-items: flex-start;
+  white-space: normal;
+}
+.log-note.expanded .log-note-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .log-country {
   overflow: hidden;

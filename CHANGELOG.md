@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **You can hide the Logbook globe (D#278).** Settings ▸ Appearance ▸ Workspace has a new Logbook
+  globe switch. Turn it off and the Logbook table starts at the top of the screen. It is on by
+  default.
+
 ### Fixed
 
 - **A satellite you just opened no longer claims it has no transmitters.** Open a bird the
@@ -16,6 +22,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opened bird up straight away, and until the answer arrives it says the transmitters are not
   fetched yet. "No transmitters listed" now only shows for a bird SatNOGS really lists nothing for.
   The Doppler line also told you to pick a transponder "below" when the list is beside it. (#269)
+
+- **On a first launch the Needed window waits for the setup wizard (#240).** The Needed board used to
+  open in its own window as soon as Nexus had data, landing on top of the setup wizard. It now opens
+  once the wizard is finished or skipped. Later launches are unchanged.
+- **Error messages stay on screen long enough to read (D#19).** An error pop-up used to vanish
+  after four seconds, or less, often before you looked back from the rig. Errors now stay at least
+  twelve seconds, or until you close them. Ordinary notices are unchanged. Because they stay
+  longer, notices no longer swallow clicks: click straight through one to the control underneath,
+  and close it with its own × (swiping a notice away is gone — the × replaces it).
+- **The Rx Frequency pane lets go of −B4 without a restart (#268, #235).** The pane now has its own
+  −B4 chip, and turning −B4 on or off in either Band Activity or Rx Frequency changes both panes at
+  once. Before, the Rx Frequency pane picked up −B4 when it opened and kept hiding a worked
+  station's RR73 until Nexus was restarted.
+- **The callsign card updates when the contact is logged (#282).** On the FT8/FT4 screen the card kept
+  showing "New DXCC!" (or a new band or mode) for a station you had just worked, until you picked a
+  different station. It now re-reads your log the moment the QSO is logged and shows it as worked.
+- **Re-docking the waterfall closes its pop-out window (#263).** Clicking re-dock put the waterfall
+  back on the FT8/FT4 screen but left the torn-off window open, so you had two. The outside window
+  now closes when you re-dock.
+- **Journey's Personal bests follows your Units setting (#244).** The longest-distance record was
+  always shown in miles. It now reads in kilometres or miles, like every other distance in Nexus.
+  Best miles-per-watt keeps its name and unit, since that is the award's own measure.
+- **On WSPR the waterfall and the RX marker stay in the WSPR sub-band (#101).** WSPR signals only
+  live in the 200 Hz around 1500 Hz, but the waterfall still showed the whole passband and the green
+  RX marker could be dragged anywhere in it. While WSPR is selected the waterfall now shows just
+  1400–1600 Hz (the zoom picker steps aside, and your zoom comes back when you leave WSPR), and the
+  RX marker stays inside that window, as the transmit marker already did.
+- **Long logbook comments can be read in full (#162).** The Comment column still shows one line, but
+  clicking a comment now opens it to its full length in that row, and clicking again folds it back.
+  The columns stay where they are.
+- **Waterfall frequency numbers grow with the UI scale (#215).** On Windows the numbers along the
+  bottom of the waterfall, and the RX/TX labels, stayed tiny at any UI scale. They now grow with
+  Settings ▸ Appearance ▸ Workspace ▸ UI scale, so 110 % or 125 % makes them easier to read.
+
+- **The RTTY, PSK, SSTV and JS8 waterfalls say when the picture is held (#230).** While you
+  transmit, Nexus keeps showing the last real picture of the band instead of the muted receiver the
+  radio hands back — but on these screens a held picture looked like a waterfall that had died. A
+  "TRANSMITTING — display held" badge now sits on the waterfall while you key and clears when you
+  stop. Nothing about transmitting changes, and your own signal is still not drawn.
 
 ### Security
 

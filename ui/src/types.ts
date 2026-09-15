@@ -2034,6 +2034,9 @@ export interface JourneyPersonalBest {
   title: string
   value: string
   detail: string | null
+  /** Raw km for a best that is a distance (#244) — format through Units, not `value`. Optional
+   *  so an older backend (or a Remote station on one) degrades to the `value` string. */
+  distanceKm?: number | null
 }
 
 export interface JourneyStreak {

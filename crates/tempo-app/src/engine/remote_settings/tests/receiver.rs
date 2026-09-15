@@ -66,7 +66,13 @@ fn receiver_settings_match_native_across_digital_tiers_without_touching_tx_or_ot
                     serde_json::to_value(saved).unwrap(),
                     settings(&native.engine)
                 );
-                assert_eq!(remote.engine.rx_offset_hz(), hz);
+                // #101: WSPR holds the marker inside its 200 Hz sub-band, natively and remotely.
+                let want = if tier == Tier::Wspr {
+                    hz.clamp(1400.0, 1600.0)
+                } else {
+                    hz
+                };
+                assert_eq!(remote.engine.rx_offset_hz(), want);
                 assert_eq!(
                     remote.engine.tx_offset_hz(),
                     tx,

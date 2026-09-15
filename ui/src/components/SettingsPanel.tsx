@@ -171,6 +171,7 @@ import { APRS_FREQS, BEACON_SYMBOLS, NORTH_AMERICA, aprsChannelForGrid } from '.
 import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
+import { useLogbookGlobe } from '../features/logbookGlobe'
 import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
 import { PROFILE_LIST } from '../features/profiles'
@@ -986,6 +987,8 @@ export function SettingsPanel({
       pushToast(t('settings.backup.reset.done'), 'success')
     }
   }
+  // D#278: browser-local display preference, not a Settings field — no save round-trip.
+  const [logbookGlobe, setLogbookGlobe] = useLogbookGlobe()
   const [form, setForm] = useState<Settings | null>(null)
   useEffect(()=>{
     if(!remote)return
@@ -3321,6 +3324,19 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.workspace.density.hint')}</span>
               </div>
+
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.workspace.logbookGlobe.label')}</span>
+                <span className="settings-input-row">
+                  <input disabled={remote}
+                    type="checkbox"
+                    checked={logbookGlobe}
+                    onChange={(e) => setLogbookGlobe(e.target.checked)}
+                    aria-label={t('settings.workspace.logbookGlobe.aria')}
+                  />
+                  <span className="settings-hint">{t('settings.workspace.logbookGlobe.hint')}</span>
+                </span>
+              </label>
 
               <div className="settings-field">
                 <span className="settings-label">{t('settings.workspace.panes.label')}</span>

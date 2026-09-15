@@ -12944,6 +12944,26 @@ fn dock_bandmap_window(window: tauri::WebviewWindow, side: String) -> Result<(),
     Ok(())
 }
 
+/// Close the main-instance torn-off window of one panel, if it is open (#263). The waterfall's
+/// re-dock button put the strip back in the cockpit but left the pop-out standing beside it, so
+/// the operator saw two waterfalls. Same slug filter and [`chains::panel_label`] as
+/// [`open_panel_window`], so this can only ever address a window that command created. A window
+/// that is not open is a no-op, not an error — the operator may already have closed it.
+#[tauri::command]
+async fn close_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), String> {
+    let slug: String = panel
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if slug.is_empty() {
+        return Err("invalid panel".into());
+    }
+    if let Some(w) = app.get_webview_window(&panel_label(&slug, Instance::Main)) {
+        w.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Initiate a directed QSO with a specific station (the UI "work this station"
 /// action). Enters QSO mode answering `call`. `message`/`snr` are the exact
 /// decoded line the operator double-clicked (when available) so the auto-sequencer
@@ -22706,6 +22726,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_fd_operator,
             call_station,
             open_panel_window,
+            close_panel_window,
             dock_bandmap_window,
             set_area,
             qso_resend,

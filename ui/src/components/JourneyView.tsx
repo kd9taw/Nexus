@@ -16,6 +16,7 @@ import { getJourney, getSettings } from '../api'
 import { t } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { shareCard } from '../features/shareCard'
+import { fmtDistanceKm, useUnits } from '../units'
 
 /**
  * Journey — the in-app, beginner-first achievement layer (separate from the
@@ -30,6 +31,8 @@ export function JourneyView() {
   const [err, setErr] = useState<string | null>(null)
   // Operator call for the share cards (best-effort — cards still render without).
   const [myCall, setMyCall] = useState('')
+  // #244: a distance best is formatted here, through Units, like every other distance.
+  const units = useUnits()
 
   useEffect(() => {
     let alive = true
@@ -233,7 +236,9 @@ export function JourneyView() {
             {j.bests.map((b) => (
               <div className="jy-best" key={b.id}>
                 <span className="jy-best-k">{b.title}</span>
-                <span className="jy-best-v">{b.value}</span>
+                <span className="jy-best-v">
+                  {b.distanceKm != null ? fmtDistanceKm(b.distanceKm, units) : b.value}
+                </span>
                 {b.detail && <span className="jy-best-d">{b.detail}</span>}
               </div>
             ))}

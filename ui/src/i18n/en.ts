@@ -6380,6 +6380,10 @@ export const EN = {
   'settings.workspace.density.dense': 'Compact',
   'settings.workspace.density.hint':
     'How tightly rows and controls pack. Compact fits more on screen.',
+  'settings.workspace.logbookGlobe.label': 'Logbook globe',
+  'settings.workspace.logbookGlobe.aria': 'Show the 3-D globe above the Logbook',
+  'settings.workspace.logbookGlobe.hint':
+    'The 3-D globe above the Logbook table. Turn it off and the table starts at the top.',
   'settings.workspace.panes.label': 'Pane sizes',
   'settings.workspace.panes.reset': 'Reset pane sizes',
   'settings.workspace.panes.hint': 'Restore the default left/right pane widths.',
@@ -8630,6 +8634,7 @@ export const EN = {
   // Drawn on the canvas, but a STATE MESSAGE rather than a tick label. `{{age}}` is how far
   // back the scrollback stands, formatted by `ageLabel`.
   'waterfall.paused': '⏸ PAUSED',
+  'waterfall.tx.held': 'TRANSMITTING — display held',
   'waterfall.paused.back': '⏸ PAUSED · −{{age}}',
   'waterfall.paused.now': 'now',
 

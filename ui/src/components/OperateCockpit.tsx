@@ -41,7 +41,8 @@ import {
   stdMessageList,
   toggleIgnored,
 } from '../txMessages'
-import { atuTune, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
+import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
+import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import { FdAdvisories } from './FdAdvisories'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
@@ -606,7 +607,14 @@ export function OperateCockpit({
     setPanelState('waterfall', 'popped')
     void openPanelWindow('waterfall')
   }
-  const redockWaterfall = () => setPanelState('waterfall', 'docked')
+  // #263: re-dock also closes the torn-off window. It used to flip the state only, so the
+  // strip came back in the cockpit while the pop-out stayed up beside it — two waterfalls.
+  // The pop-out's own unmount then clears the detached flag; the storage listener above sees
+  // a waterfall that is already docked and does nothing.
+  const redockWaterfall = () => {
+    setPanelState('waterfall', 'docked')
+    void closePanelWindow('waterfall').catch(() => {})
+  }
 
   // RPT = the DX's current heard SNR (case-insensitive), −10 when unheard.
   const dxSnr = snrForCall(snap.stations, dxCall)
@@ -1258,6 +1266,7 @@ export function OperateCockpit({
               ) : (
                 <Waterfall
                   onPopOut={popOutWaterfall}
+                  fixedWindow={tier === 'WSPR' ? WSPR_WATERFALL_WINDOW : undefined}
                   transmitting={snap.radio.transmitting}
                   rxOffsetHz={snap.radio.rxOffsetHz}
                   txOffsetHz={snap.radio.txOffsetHz}
@@ -1639,6 +1648,9 @@ function OperateRecall({
   const [book, setBook] = useState<QrzLookup | null>(null)
   const [entity, setEntity] = useState<string | null>(null)
 
+  // Re-read on a call change AND on `loggedTick` (#282): the sequencer logs in the background
+  // with the SAME station still on the card, so a call-only trigger left "New DXCC!" standing
+  // over a contact that was already in the log until the operator clicked someone else.
   useEffect(() => {
     let stale = false
     void getLog()
@@ -1649,7 +1661,7 @@ function OperateRecall({
     return () => {
       stale = true
     }
-  }, [cu])
+  }, [cu, snap.loggedTick])
 
   // The award identity comes from cty.dat via the CALL — never the callbook's country
   // string, which spells entities differently enough ("Germany" vs "Fed. Rep. of Germany")

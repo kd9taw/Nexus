@@ -11,6 +11,7 @@ import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedActivation, LoggedQso } from '../types'
 import { gpuCapableForGlobe } from '../gpu'
+import { useLogbookGlobe } from '../features/logbookGlobe'
 import { SpotDialog } from './SpotDialog'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
@@ -765,7 +766,23 @@ export function Logbook({
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
   const [globeOk] = useState(gpuCapableForGlobe)
-  const globeShown = control && globeOk && log.length > 0
+  // D#278: the operator's own switch (Settings ▸ Appearance ▸ Workspace). Off = no band at all,
+  // and the table starts at the top.
+  const [globeWanted] = useLogbookGlobe()
+  const globeShown = control && globeOk && globeWanted && log.length > 0
+
+  // #162: rows whose Comment is opened to its full length, keyed like the row itself. The column
+  // clips to one line; clicking the comment wraps it in place (the virtualizer measures the
+  // taller row), and clicking again folds it.
+  const [openComments, setOpenComments] = useState<Set<string>>(() => new Set())
+  const toggleComment = useCallback((key: string) => {
+    setOpenComments((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
 
   // Virtualize the row list: at 10k QSOs the old render put ~150k DOM nodes on screen (heavy scroll
   // + a full reconcile every dial-poll re-render). Now only the visible window mounts.
@@ -1537,7 +1554,7 @@ export function Logbook({
                     multi-line and gets a 📝 marker with the text in the tooltip, the same
                     idiom the callsign-recall card already uses. */}
                 <span
-                  className="log-cell log-note"
+                  className={`log-cell log-note${openComments.has(`${q.call}-${q.whenUnix}-${i}`) ? ' expanded' : ''}`}
                   title={[
                     (q.comment ?? '').trim() && `${t('logbook.row.notes.title')}: ${(q.comment ?? '').trim()}`,
                     (q.notes ?? '').trim() && `${t('logbook.row.notes.private')}: ${(q.notes ?? '').trim()}`,
@@ -1550,7 +1567,22 @@ export function Logbook({
                       📝
                     </span>
                   )}
-                  {(q.comment ?? '').trim() || ((q.notes ?? '').trim() ? '' : '—')}
+                  {/* #162: the comment is its own toggle — its text is the accessible name, and
+                      aria-expanded says whether the row shows it whole. */}
+                  {(q.comment ?? '').trim() ? (
+                    <button
+                      type="button"
+                      className="log-note-text"
+                      aria-expanded={openComments.has(`${q.call}-${q.whenUnix}-${i}`)}
+                      onClick={() => toggleComment(`${q.call}-${q.whenUnix}-${i}`)}
+                    >
+                      {(q.comment ?? '').trim()}
+                    </button>
+                  ) : (q.notes ?? '').trim() ? (
+                    ''
+                  ) : (
+                    '—'
+                  )}
                 </span>
                 <span className="log-cell log-rowactions">{control && <>
                   <button
