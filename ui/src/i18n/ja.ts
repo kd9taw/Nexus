@@ -4476,6 +4476,8 @@ export const JA: PartialCatalog = {
   "operate.tx.tx6.hint": "指定 CQ にするには編集 — CQ DX / CQ NA / CQ POTA / CQ TEST",
   "operate.tx.callCq.title": "CQ 呼出し（Alt+6）",
   "operate.tx.send.title": "これを次の送信として送る（Alt+{{n}}）",
+  "operate.tx.cq.malformed.try": "送信していません — Nexus が呼べる CQ ではありません。次をお試しください: {{fix}}",
+  "operate.tx.cq.malformed": "送信していません — Nexus が呼べる CQ ではありません。形式は CQ、任意の方向語、その後に {{mycall}} とグリッドロケーターです。",
   "rtty.panel.waterfall": "ウォーターフォール",
   "rtty.panel.stream": "デコードテキスト",
   "rtty.header.mode.title": "RTTY — 設定したボーレートとシフトの Baudot/ITA2（HF の標準は 45.45 / 170 Hz。設定 → RTTY で変更）",

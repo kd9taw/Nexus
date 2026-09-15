@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A directed CQ typed the wrong way round is refused, not quietly turned into a plain CQ.**
+  Typing something like `CQ KD9WES POTA` into the Tx6 box used to put a bare `CQ KD9WES EN61` on
+  the air while the box went on showing what you typed. Nexus now transmits nothing and tells you
+  why, and where it can work out what you meant from your own words it names the form that would
+  work — `CQ POTA KD9WES`. It does not rewrite the box for you and it does not change what a CQ
+  may look like: the message that goes on the air is always the one on the screen.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection

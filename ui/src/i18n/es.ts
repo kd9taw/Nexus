@@ -2585,6 +2585,8 @@ export const ES: PartialCatalog = {
   "operate.tx.next.title": "En cola como próxima transmisión",
   "operate.tx.rows.aria": "Filas de mensajes Tx",
   "operate.tx.send.title": "Enviar esto en la próxima transmisión (Alt+{{n}})",
+  "operate.tx.cq.malformed.try": "No se envió nada: eso no es un CQ que Nexus pueda llamar. Prueba: {{fix}}",
+  "operate.tx.cq.malformed": "No se envió nada: eso no es un CQ que Nexus pueda llamar. La forma es CQ, una palabra de dirección opcional, luego {{mycall}} y tu localizador.",
   "operate.tx.tx5.aria": "Texto libre Tx5",
   "operate.tx.tx5.placeholder": "Texto libre",
   "operate.tx.tx6.aria": "Tx6 Llamar CQ (edítalo para un CQ dirigido)",

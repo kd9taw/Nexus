@@ -4147,6 +4147,8 @@ export const DE: PartialCatalog = {
   "operate.tx.tx6.hint": "Für ein gerichtetes CQ bearbeiten — CQ DX / CQ NA / CQ POTA / CQ TEST",
   "operate.tx.callCq.title": "CQ rufen (Alt+6)",
   "operate.tx.send.title": "Dies als nächste Aussendung senden (Alt+{{n}})",
+  "operate.tx.cq.malformed.try": "Nichts gesendet — das ist kein CQ, das Nexus rufen kann. Versuchen Sie: {{fix}}",
+  "operate.tx.cq.malformed": "Nichts gesendet — das ist kein CQ, das Nexus rufen kann. Die Form ist CQ, ein optionales Richtungswort, dann {{mycall}} und Ihr Locator.",
   "topbar.tier.aria": "Verbindungsstufe",
   "topbar.tier.tempoFast.title": "Schnelle Gesprächsstufe",
   "topbar.tier.tempoDeep.title": "Robuste nichtkohärente Stufe — fadingfest (15 s)",
