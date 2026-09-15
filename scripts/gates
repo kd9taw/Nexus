@@ -300,7 +300,22 @@ function parseYaml(text) {
 // step unrunnable — a half-expanded command is worse than an honest refusal.
 // ---------------------------------------------------------------------------
 
-const RUNNER_TEMP = path.join(os.tmpdir(), 'nexus-gates-runner-temp');
+// ⚠️ PER-RUN, never a fixed name — and this is a correctness rule, not tidiness.
+// Several agents run this script at once in different worktrees. With a fixed
+// `nexus-gates-runner-temp`, every run wrote its step scripts to the SAME
+// `step-<n>.sh` paths. bash reads a script INCREMENTALLY, so a sibling rewriting
+// that file mid-step makes the running shell resume at its saved byte offset
+// inside somebody else's command. On 2026-09-15 the `npm --prefix remote test`
+// gate — which had just passed 62 of 63 subtests — was reported FAIL exit 127,
+// because the file underneath it had become the `ui` job's
+// `npm --prefix ui audit --omit=dev --audit-level=moderate`, and bash resumed
+// mid-string at `--audit-level=moderate: command not found`.
+// The false RED is only the visible half. A SHORT sibling command overwriting a
+// heavy gate's script makes that gate report PASS having run something else
+// entirely — a faked green, which is the one outcome this tool exists to prevent
+// and the same shape as the shared-CARGO_TARGET_DIR trap that runs a sibling's
+// binary. One process, one directory.
+const RUNNER_TEMP = path.join(os.tmpdir(), `nexus-gates-runner-${process.pid}`);
 
 function gitRepoSlug() {
   const r = spawnSync('git', ['-C', ROOT, 'remote', 'get-url', 'origin'], { encoding: 'utf8' });

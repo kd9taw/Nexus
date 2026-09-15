@@ -639,3 +639,46 @@ test('the real workflow reports the src-tauri feature requirement with the traps
   assert.ok(/EXCLUDES src-tauri\/Cargo\.toml/.test(out));
   assert.ok(/--features radio/.test(out), 'the radio feature requirement was not surfaced');
 });
+
+// ---------------------------------------------------------------------------
+// One process, one step-script directory. This is a CORRECTNESS property, not
+// tidiness: several agents run this script at once in different worktrees, bash
+// reads a script file incrementally, and a fixed path let a sibling rewrite the
+// file under a running step. The visible half is a false RED (2026-09-15: the
+// `npm --prefix remote test` gate reported FAIL exit 127 moments after passing
+// 62 of its 63 subtests, because the file beneath it had become another job's
+// `npm audit` line). The dangerous half is the false GREEN a short sibling
+// command produces when it overwrites a heavy gate's script.
+// ---------------------------------------------------------------------------
+
+test('two runs never share a step-script path', () => {
+  // `$0` inside the step IS the script path — bash is handed the file by name.
+  const probe = MINIMAL.replace('        run: echo alpha-ran\n', '        run: echo "SCRIPT=$0"\n');
+  const file = scratch('script-path-probe.yml', probe);
+  // Anchor on a leading `/`: the tool ECHOES the command before running it, so an
+  // unanchored match finds the literal `SCRIPT=$0"` from that banner, not the
+  // expanded path. (It did, the first time this test was written.)
+  const pathOf = (out) => {
+    const m = out.match(/SCRIPT=(\/\S+)/);
+    return m ? m[1] : null;
+  };
+
+  const a = pathOf(gates(['--workflow', file, '--allow-partial']).out);
+  const b = pathOf(gates(['--workflow', file, '--allow-partial']).out);
+
+  // Control: the probe must actually observe a path, or "they differ" is vacuous.
+  assert.ok(a, 'the probe never saw a step-script path — the check cannot trip');
+  assert.ok(b, 'the probe never saw a step-script path on the second run');
+
+  assert.notEqual(
+    a,
+    b,
+    `two runs wrote their step scripts to the same path (${a}) — a concurrent run ` +
+      'can rewrite the file under a running step, which reports the wrong verdict for the wrong gate'
+  );
+  // And the directory itself must not be the old fixed name, whatever else changes.
+  assert.ok(
+    !a.includes('nexus-gates-runner-temp/'),
+    'the step-script directory is back to a fixed shared name'
+  );
+});
