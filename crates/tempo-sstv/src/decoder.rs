@@ -73,6 +73,20 @@ pub enum SstvEvent {
         /// Row pixels in `[r, g, b]` order, length = mode's `line_pixels`.
         pixels: Vec<[u8; 3]>,
     },
+    /// A PROVISIONAL row, while the picture is still arriving (#130). Demodulated at the mode's
+    /// NOMINAL timing — no slant fit, which needs the whole image — into a separate preview
+    /// buffer with its own demod and SNR state, so it cannot change the corrected decode. Rows
+    /// arrive top to bottom as their audio lands. Draw them, then let the `LineDecoded` rows
+    /// that follow overwrite them; save only what `ImageComplete` carries. A sender whose clock
+    /// is off paints a slightly slanted preview that straightens when the picture completes.
+    LinePreview {
+        /// Mode currently being decoded.
+        mode: SstvMode,
+        /// 0-based image row.
+        line_index: u32,
+        /// Row pixels in `[r, g, b]` order, length = mode's `line_pixels`.
+        pixels: Vec<[u8; 3]>,
+    },
     /// Image complete (`LineDecoded` for the final line was just emitted).
     /// `partial` is reserved for future mid-image VIS handling — V1 always
     /// emits `partial: false`. `reset()` discards in-flight images silently
@@ -172,7 +186,22 @@ struct DecodingState {
     /// need cross-radio-line chroma state will need to extend the
     /// constructor's match in `process` to opt in.
     chroma_planes: Option<[Vec<u8>; 2]>,
+    /// #130 — the PROVISIONAL picture painted while audio is still arriving. Its own image,
+    /// demod, SNR estimator and chroma planes, so the preview pass shares no state with the
+    /// corrected decode above and cannot change a single saved pixel (`tests/preview.rs`).
+    preview: SstvImage,
+    preview_demod: crate::demod::ChannelDemod,
+    preview_snr: crate::snr::SnrEstimator,
+    preview_chroma: Option<[Vec<u8>; 2]>,
+    /// Next radio frame (a PD pair, or one Robot/Scottie line) to preview.
+    preview_next_frame: u32,
 }
+
+/// How far past a frame's nominal end the preview waits before demodulating it: the per-pixel
+/// FFT window reaches past the last pixel's centre, and a frame decoded short would paint its
+/// right-hand edge from silence. 0.1 s is more than the longest window and costs a tenth of a
+/// second of lag on a picture that takes 36 s to 5 min to arrive.
+const PREVIEW_LOOKAHEAD_SECONDS: f64 = 0.1;
 
 /// Headroom factor on the buffered audio length before [`find_sync`]
 /// runs. 1.00 = exactly the nominal image length. The Hough transform
@@ -356,6 +385,22 @@ impl SstvDecoder {
                                     // need to opt in here.
                                     _ => None,
                                 },
+                                preview: SstvImage::new(
+                                    spec.mode,
+                                    spec.line_pixels,
+                                    spec.image_lines,
+                                ),
+                                preview_demod: crate::demod::ChannelDemod::new(),
+                                preview_snr: crate::snr::SnrEstimator::new(),
+                                preview_chroma: match spec.mode {
+                                    SstvMode::Robot24 | SstvMode::Robot36 => {
+                                        let n = (spec.image_lines as usize)
+                                            * (spec.line_pixels as usize);
+                                        Some([vec![0_u8; n], vec![0_u8; n]])
+                                    }
+                                    _ => None,
+                                },
+                                preview_next_frame: 0,
                             }));
                             continue; // re-enter loop to process leftover audio
                         }
@@ -422,6 +467,10 @@ impl SstvDecoder {
                     // audio that follows it, so it decodes as a whole image
                     // with a demodulated-noise tail rather than not at all.
                     // `tests/dropout.rs` pins both halves.
+                    // #130: paint every frame whose audio has arrived, before the full-buffer
+                    // wait below. Provisional rows only — the corrected decode is untouched.
+                    Self::emit_previews(d, &mut out);
+
                     if d.audio.len() < d.target_audio_samples {
                         break;
                     }
@@ -525,6 +574,85 @@ impl SstvDecoder {
         clippy::cast_sign_loss,
         clippy::cast_possible_wrap
     )]
+    /// #130 — demodulate every radio frame whose audio has fully arrived into the PREVIEW image,
+    /// at the mode's nominal timing (skip 0, the nominal working rate — the slant fit needs the
+    /// whole image), and emit its rows as [`SstvEvent::LinePreview`]. Uses the same per-mode line
+    /// decoders as [`Self::run_findsync_and_decode`] with the preview's own state, so nothing here
+    /// can reach the corrected picture. Each frame is decoded once.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    fn emit_previews(d: &mut DecodingState, out: &mut Vec<SstvEvent>) {
+        let work_rate = f64::from(crate::resample::WORKING_SAMPLE_RATE_HZ);
+        let line_pixels = d.spec.line_pixels as usize;
+        let (frames, rows_per_frame) = match d.spec.channel_layout {
+            crate::modespec::ChannelLayout::PdYcbcr => (d.spec.image_lines / 2, 2),
+            crate::modespec::ChannelLayout::RobotYuv
+            | crate::modespec::ChannelLayout::RgbSequential => (d.spec.image_lines, 1),
+        };
+        while d.preview_next_frame < frames {
+            let frame = d.preview_next_frame;
+            let needed = (f64::from(frame + 1) * d.spec.line_seconds + PREVIEW_LOOKAHEAD_SECONDS)
+                * work_rate;
+            if needed as usize > d.audio.len() {
+                break;
+            }
+            let offset = f64::from(frame) * d.spec.line_seconds;
+            match d.spec.channel_layout {
+                crate::modespec::ChannelLayout::PdYcbcr => crate::mode_pd::decode_pd_line_pair(
+                    d.spec,
+                    frame,
+                    &d.audio,
+                    0,
+                    offset,
+                    work_rate,
+                    &mut d.preview,
+                    &mut d.preview_demod,
+                    &mut d.preview_snr,
+                    d.hedr_shift_hz,
+                ),
+                crate::modespec::ChannelLayout::RobotYuv => crate::mode_robot::decode_line(
+                    d.spec,
+                    d.mode,
+                    frame,
+                    &d.audio,
+                    0,
+                    offset,
+                    work_rate,
+                    &mut d.preview,
+                    d.preview_chroma.as_mut(),
+                    &mut d.preview_demod,
+                    &mut d.preview_snr,
+                    d.hedr_shift_hz,
+                ),
+                crate::modespec::ChannelLayout::RgbSequential => crate::mode_scottie::decode_line(
+                    d.spec,
+                    frame,
+                    &d.audio,
+                    0,
+                    offset,
+                    work_rate,
+                    &mut d.preview,
+                    &mut d.preview_demod,
+                    &mut d.preview_snr,
+                    d.hedr_shift_hz,
+                ),
+            }
+            let first_row = frame * rows_per_frame;
+            for row in first_row..first_row + rows_per_frame {
+                let start = (row as usize) * line_pixels;
+                out.push(SstvEvent::LinePreview {
+                    mode: d.mode,
+                    line_index: row,
+                    pixels: d.preview.pixels[start..start + line_pixels].to_vec(),
+                });
+            }
+            d.preview_next_frame += 1;
+        }
+    }
+
     fn run_findsync_and_decode(
         d: &mut DecodingState,
         channel_demod: &mut crate::demod::ChannelDemod,

@@ -240,6 +240,8 @@ const MIGRATED = [
   'components/BandPicker.tsx',
   'components/BandStrip.tsx',
   'components/FrequencyControl.tsx',
+  'components/BandMenu.tsx',
+  'bandConditions.ts',
   'components/RadioPicker.tsx',
   'components/RadioSwitcher.tsx',
   'rigFormChecks.ts',

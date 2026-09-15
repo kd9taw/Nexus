@@ -24,7 +24,7 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
-import { DECODE_HIDE_B4_EVENT, loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, loadDecodeHideConfirmed, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked, saveDecodeHideConfirmed } from '../operateFilters'
+import { DECODE_HIDE_B4_EVENT, loadDecodeFilter, loadDecodeHideB4, loadDecodeHideBlocked, loadDecodeHideConfirmed, loadDecodeNewestTop, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideBlocked, saveDecodeHideConfirmed, saveDecodeNewestTop } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
@@ -269,6 +269,12 @@ export function OperateDecodes({
     setFilterState(f)
   }
   const [sort, setSort] = useState<DecodeSort>('time')
+  // #276 "Newest on top" — an option, OFF by default so the pane keeps the WSJT-X order. It is
+  // a TIME-order statement, so another sort ignores it (reversing an SNR ranking would read as a
+  // broken sort), and like the chips it applies only on the pane that renders the chip bar:
+  // compact and locked panes (the Tempo rail, Rx Frequency) keep the stock order.
+  const [newestTopState, setNewestTopState] = useState<boolean>(loadDecodeNewestTop)
+  const newestTop = newestTopState && !compact && lockedFilter == null && sort === 'time'
   // The "hide B4" MODIFIER (field ask: "CQ only, but exclude B4") — ANDed with whichever
   // chip is lit, persisted like the chip itself. Inert while the B4 chip is active: that
   // chip's whole job is showing worked stations, and a modifier that blanked it would
@@ -330,7 +336,17 @@ export function OperateDecodes({
   // Bottom-pinned auto-scroll (WSJT-X flow) — the shared discipline, extracted
   // to usePinnedScroll (which keeps the every-render re-pin this pane's
   // keep-alive host depends on). `pinned` drives the "▲ reviewing" hint.
-  const { ref: scrollRef, pinned, onScroll, repin } = usePinnedScroll<HTMLDivElement>()
+  // Newest on top (#276) pins the TOP instead, holding the row being read while new periods
+  // arrive above it (each row carries `data-pin-key` for that).
+  const { ref: scrollRef, pinned, onScroll, repin } = usePinnedScroll<HTMLDivElement>(
+    newestTop ? 'top' : 'bottom',
+  )
+  const pickNewestTop = (on: boolean) => {
+    saveDecodeNewestTop(on)
+    setNewestTopState(on)
+    // Follow the newest rows at their new edge rather than stranding the view mid-list.
+    repin()
+  }
 
   // Band/tier change wipes the pane BEFORE this poll's decodes are ingested
   // (effect order = declaration order).
@@ -450,6 +466,9 @@ export function OperateDecodes({
   // Everything below counts `shown`, not `list`: the "N heard" readout means what is on screen,
   // and the roving-keyboard index must address the rows that exist.
   const shown = renderWindow(list)
+  // The order rows are DRAWN in. Everything that addresses a row by position (the roving index,
+  // the period separators) reads `drawn`; counts read `shown`, which is the same set.
+  const drawn = newestTop ? [...shown].reverse() : shown
 
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
   // Also calls onErase so the cockpit can mirror the gesture to loggers.
@@ -481,8 +500,8 @@ export function OperateDecodes({
 
   // Keyboard: arrow through rows, Enter selects, Shift+Enter works the station,
   // Alt+Enter toggles ignore — the pointerless equivalent of click/double-click.
-  const roving = useRovingList(shown.length, (i, mods) => {
-    const d = shown[i]
+  const roving = useRovingList(drawn.length, (i, mods) => {
+    const d = drawn[i]
     if (!d?.from) return
     if (mods.alt) { if (control) onToggleIgnore?.(d.from) }
     else if (mods.shift) { if (callControl) onCall(d.from, undefined, d.message, d.snr, d.freqHz) }
@@ -554,6 +573,20 @@ export function OperateDecodes({
               {t('operate.decodes.hideConfirmed.label')}
             </button>
             {hideB4Chip}
+            <button
+              type="button"
+              className={`od-chip od-newest${newestTop ? ' active' : ''}`}
+              aria-pressed={newestTopState}
+              disabled={sort !== 'time'}
+              onClick={() => pickNewestTop(!newestTopState)}
+              title={
+                sort !== 'time'
+                  ? t('operate.decodes.newestTop.title.idle')
+                  : t('operate.decodes.newestTop.title')
+              }
+            >
+              {t('operate.decodes.newestTop.label')}
+            </button>
             <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} paused={countries.paused} onPauseChange={countries.setPaused} entities={countries.entities} onToggleEntity={countries.toggleEntity} continents={countries.continents} onToggleContinent={countries.toggleContinent} />
             <HideCallsPicker />
             <label className="od-sort">
@@ -630,7 +663,7 @@ export function OperateDecodes({
               })}
             />
           ))}
-        {shown.map((d, i) => {
+        {drawn.map((d, i) => {
           const ignoredRow = isIgnored(ignores, d.from)
           const selectedRow = !!d.from && !!selectedUp && d.from.toUpperCase() === selectedUp
           // JTAlert highlight lookup: match the from-call case-insensitively.
@@ -658,14 +691,16 @@ export function OperateDecodes({
                   A decode ingested at boundary slot s carries AUDIO from slot s-1 —
                   the separator stamps the RX period the signals were ON AIR in
                   (WSJT-X labels the audio period, not the decode moment). */}
-              {/* ⚠️ `shown[i - 1]`, NEVER `list[i - 1]` — `i` indexes `shown`, and `shown` is
-                  the newest MAX_ROWS of `list`, so once history passes 300 rows the two
+              {/* ⚠️ `drawn[i - 1]`, NEVER `list[i - 1]` — `i` indexes `drawn` (`shown` in drawing
+                  order; reversed under Newest on top, where each separator heads the older period
+                  below it), and `shown` is the newest MAX_ROWS of `list`, so once history passes
+                  300 rows the two
                   indices point at completely different decodes. Comparing against `list`
                   matched each row's slot to one from the START of the buffer, minutes older,
                   which differs nearly every time: a separator between EVERY decode instead of
                   one per period. Reported twice (2026-08-21/22), both saying it begins "after
                   some time" — that is the buffer reaching MAX_ROWS, not elapsed time. */}
-              {sort === 'time' && i > 0 && d.slot !== shown[i - 1].slot && (
+              {sort === 'time' && i > 0 && d.slot !== drawn[i - 1].slot && (
                 <div
                   className="od-period-sep"
                   role="separator"
@@ -680,6 +715,7 @@ export function OperateDecodes({
               <div
                 className={`decode-row ${rowClass(d, needs.rowNeed)}${selectedRow ? ' selected' : ''}${ignoredRow ? ' ignored' : ''}`}
                 role="option"
+                data-pin-key={d.id}
                 aria-selected={selectedRow}
                 aria-label={
                   d.from

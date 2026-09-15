@@ -516,7 +516,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Workspace',
     tab: 'appearance',
     keywords: ['theme', 'dark', 'light', 'ui scale', 'text size', 'font size', 'zoom',
-      'density', 'compact', 'pane', 'layout', 'globe', 'logbook globe'],
+      'density', 'compact', 'pane', 'layout', 'globe', 'logbook globe', 'clock', 'local time', 'time zone', 'utc'],
   },
   {
     // The read-only LAN page. Filed under Appearance because it is a way of LOOKING at
@@ -562,6 +562,17 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   // Backup and Restore previously sat under Radio -> "Transmit limits & sharing", which is why
   // no one found them: backing up a whole station has nothing to do with transmit limits. The
   // keywords are deliberately wide because this is what an operator searches for in a panic.
+  {
+    // #289. Filed beside Backup & reset for the same reason those moved here: this is about the
+    // station's FILES, not about any one mode or radio. The keywords are what an operator types
+    // when they cannot find their log, or want it on a NAS the whole shack can reach.
+    id: 'data-folder',
+    label: 'Data & log folder',
+    tab: 'configurations',
+    keywords: ['data folder', 'log folder', 'logbook location', 'log.adi', 'where is my log',
+      'move my log', 'nas', 'network drive', 'dropbox', 'onedrive', 'google drive', 'synced folder',
+      'shared log', 'two computers', 'storage', 'path', 'folder'],
+  },
   {
     id: 'configurations',
     label: 'Backup & reset',

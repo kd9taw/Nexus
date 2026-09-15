@@ -86,16 +86,23 @@ it('a band dropdown stays enabled and keeps its options through every control la
   const ui = render(<StationControlContext.Provider value={false}><StationDataContext.Provider value>
     <RemoteOperationsContext.Provider value={h.client}><BandPicker snap={snap} mode="phone"/></RemoteOperationsContext.Provider>
   </StationDataContext.Provider></StationControlContext.Provider>)
-  const select = () => ui.container.querySelector('select')!
-  await until(() => h.client.getSnapshot().fresh && !select().disabled && select().options.length === 2)
+  // The band dropdown is a Nexus menu (BandMenu.tsx). OPEN it first: the lapse this pins used to
+  // disable the control, and a disabled control closes its open list under the operator.
+  const trigger = () => ui.container.querySelector<HTMLButtonElement>('.band-menu-trigger')!
+  const menu = () => document.querySelector<HTMLElement>('[role="menu"]')
+  const items = () => menu()?.querySelectorAll('[role="menuitemradio"]').length ?? 0
+  await until(() => h.client.getSnapshot().fresh && !trigger().disabled)
+  act(() => { trigger().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+  await until(() => items() === 2)
   let toggles = 0, removed = 0
   const observer = new MutationObserver(records => { for (const r of records) r.type === 'attributes' ? toggles++ : removed += r.removedNodes.length })
-  observer.observe(select(), { attributes: true, attributeFilter: ['disabled'], childList: true })
+  observer.observe(trigger(), { attributes: true, attributeFilter: ['disabled'] })
+  observer.observe(menu()!.querySelector('[role="group"]')!, { childList: true })
   const lapses = h.lapses()
   for (let elapsed = 0; elapsed < 2600; elapsed += 10) {
     await step(10)
-    expect(select().disabled).toBe(false)
-    expect(select().options.length).toBe(2)
+    expect(trigger().disabled).toBe(false)
+    expect(items()).toBe(2)
   }
   // Positive control: control really lapsed while the dropdown stayed put.
   expect(h.lapses()).toBeGreaterThan(lapses)

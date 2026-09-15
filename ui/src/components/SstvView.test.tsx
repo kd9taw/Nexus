@@ -3,12 +3,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { SstvView } from './SstvView'
 import * as api from '../api'
+import { EN } from '../i18n'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
 
 // The idle band view mounts the real Waterfall, which needs `window.matchMedia`
 // and a working canvas 2D context — jsdom provides neither. These tests are about
 // the SSTV panel, so the waterfall is stubbed rather than propped up.
 vi.mock('./Waterfall', () => ({ Waterfall: () => null }))
+// Radix Popper (the header's band menu) observes its elements with a ResizeObserver jsdom lacks.
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 
 vi.mock('../api', () => ({
   getSstvState: vi.fn(),
@@ -22,6 +25,8 @@ vi.mock('../api', () => ({
   // component imports but the factory omits is not a silent no-op — Vitest throws
   // 'No "setRfPower" export is defined on the "../api" mock' the first time it is touched.
   setRfPower: vi.fn(async () => {}),
+  // #130: the gallery's Reveal-in-folder.
+  revealSstvGallery: vi.fn(async () => {}),
 }))
 // withErrorToast passes through to its action so the Send path exercises the real
 // setOperatingMode → sstvSend sequence (returns null on reject, like the real one).
@@ -233,9 +238,10 @@ describe('SstvView RX wiring', () => {
     const onSetFrequency = vi.fn()
     render(<SstvView snap={snap} onSetFrequency={onSetFrequency} />)
     expect(getLicensedBandPlan).toHaveBeenCalledWith('sstv')
-    const select = (await screen.findByLabelText('Band channel preset')) as HTMLSelectElement
-    await waitFor(() => expect(select.querySelectorAll('option').length).toBeGreaterThan(1))
-    fireEvent.change(select, { target: { value: '2m' } })
+    // The band dropdown is a Nexus menu (BandMenu.tsx): open it from the keyboard, pick the item.
+    const trigger = await screen.findByRole('button', { name: /^Band channel preset/ })
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /^2 m · ISS downlink/ }))
     expect(onSetFrequency).toHaveBeenCalledWith(145.8, '2m', 'FM')
   })
 
@@ -390,7 +396,7 @@ describe('SstvView TX panel', () => {
     // button on 20 m would latch (the toggle reads back `radio.sideband`, which the pick
     // writes) while the radio stayed in USB — a control that looks like it worked and did not.
     render(<SstvView snap={snap} onSetFrequency={vi.fn()} />)
-    await waitFor(() => expect(screen.getByLabelText('Band channel preset')).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Band channel preset/ })).toBeTruthy())
     expect(screen.queryByRole('group', { name: 'Phone mode' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'FM' })).toBeNull()
   })
@@ -610,3 +616,21 @@ describe('SstvView TX panel', () => {
     expect(screen.getByText('TX — Scottie 1 · 1:52 remaining')).toBeTruthy()
   })
 })
+
+// #130 — the gallery pane reveals the folder the received pictures are saved in. There were Reveal
+// buttons for the diagnostic log, ALL.TXT and the recordings, and none for the one folder an SSTV
+// operator most needs to find.
+describe('#130 SSTV gallery Reveal in folder', () => {
+  it('the gallery pane head offers Reveal, and it opens the gallery folder', async () => {
+    const reveal = api.revealSstvGallery as unknown as ReturnType<typeof vi.fn>
+    render(<SstvView snap={snap} />)
+    const gallery = await screen.findByRole('region', { name: 'Gallery' })
+    const btn = gallery.querySelector('.pane-head button[title]') as HTMLButtonElement | null
+    const byName = screen.getByRole('button', { name: EN['sstv.gallery.reveal.label'] })
+    expect(byName.closest('.pane-head')).not.toBeNull()
+    expect(btn).not.toBeNull()
+    fireEvent.click(byName)
+    await waitFor(() => expect(reveal).toHaveBeenCalledTimes(1))
+  })
+})
+

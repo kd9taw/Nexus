@@ -13,6 +13,8 @@ import type { ControlCapability } from './station-operation'
 import { readBandChoices } from './band-choices'
 
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
+// Radix Popper observes its elements with a ResizeObserver jsdom lacks.
+globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>): Promise<unknown> => null)
 
 const cleanupClients: (() => void)[] = []
@@ -48,14 +50,32 @@ function fixture(mode: 'cw' | 'phone' = 'phone', capabilities: ControlCapability
   </StationDataContext.Provider></StationControlContext.Provider>
   const rendered = render(view())
   return { ...rendered, view, snap, later, sent, state, client, reply, read, onSnap, setSettings: (s: unknown) => { settings = s }, setAge: (v: number) => { age = v },
-    select: () => rendered.container.querySelector<HTMLSelectElement>('select')!, writes: () => sent.filter(f => f.request.type === 'stationControl') }
+    trigger, openMenu, options, choose, writes: () => sent.filter(f => f.request.type === 'stationControl') }
+}
+// The band dropdown is a Nexus menu (BandMenu.tsx), not a <select>: it opens from the keyboard,
+// lists radio items, and a DISABLED trigger does not open at all — the same refusal a disabled
+// select gave.
+const trigger = () => document.querySelector<HTMLButtonElement>('.band-menu-trigger')!
+const openMenu = () => { fireEvent.keyDown(trigger(), { key: 'Enter' }); return document.querySelector<HTMLElement>('[role="menu"]') }
+const labels = (menu: HTMLElement) => [...menu.querySelectorAll('.band-menu-label')].map(e => e.textContent)
+function options() {
+  const menu = openMenu()
+  if (!menu) return []
+  const out = labels(menu)
+  fireEvent.keyDown(menu, { key: 'Escape' })
+  return out
+}
+function choose(band: string) {
+  const menu = openMenu()
+  const item = menu && [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(e => e.querySelector('.band-menu-label')?.textContent === band)
+  if (item) fireEvent.click(item)
 }
 
 it.each(['cw', 'phone'] as const)('uses the actual %s picker and waits for station-selected memory/readback', async mode => {
   const h = fixture(mode); await tick()
-  expect(h.select().disabled).toBe(false)
+  expect(h.trigger().disabled).toBe(false)
   expect(h.read).toHaveBeenCalledWith('get_settings')
-  fireEvent.change(h.select(), { target: { value: '40m' } }); await tick()
+  h.choose('40m'); await tick()
   const request = h.writes()[0].request
   expect(request.action).toEqual({ action: 'radio.band', band: '40m', mode })
   expect(request.context).toEqual(h.state.controls.context)
@@ -70,28 +90,37 @@ it.each(['cw', 'phone'] as const)('uses the actual %s picker and waits for stati
 
 it.each([[[], 3], [['bandSelection'], 2]] as const)('keeps older or ungranted pickers unavailable', async (capabilities, version) => {
   const h = fixture('phone', [...capabilities], version); await tick()
-  expect(h.select().disabled).toBe(true); expect(h.read).not.toHaveBeenCalled()
-  fireEvent.change(h.select(), { target: { value: '40m' } }); await tick()
+  expect(h.trigger().disabled).toBe(true); expect(h.read).not.toHaveBeenCalled()
+  // A disabled menu does not open, so there is nothing to pick.
+  expect(h.openMenu()).toBeNull()
+  h.choose('40m'); await tick()
   expect(h.writes()).toHaveLength(0); expect(invoke).not.toHaveBeenCalled()
 })
 
 it('expires remote choices on loss and refreshes actual station license choices', async () => {
   const h = fixture(); await tick()
   h.setSettings({ bandChoices: { cw: [], phone: [channel('10m', 28.4)] } }); await tick(1000)
-  expect([...h.select().options].map(o => o.value)).toEqual(['20m', '10m'])
+  expect(h.options()).toEqual(['20m', '10m'])
   let resolve!: (v: unknown) => void
   h.read.mockImplementationOnce(() => new Promise(r => { resolve = r }))
   await tick(1000); h.rerender(h.view(false)); await tick()
   await act(async () => { resolve({ bandChoices: { cw: [], phone: [channel()] } }) }); await tick()
-  expect(h.select().disabled).toBe(true); expect([...h.select().options].map(o => o.value)).toEqual(['20m'])
+  expect(h.trigger().disabled).toBe(true); expect(h.openMenu()).toBeNull()
   expect(h.writes()).toHaveLength(0)
+  // Hold the first refresh after control returns. The remote picker is disabled while its choices
+  // are empty, so staying disabled here proves the late 40m answer above was DROPPED on loss —
+  // had it landed, the plan would be [40m] and the trigger enabled before any refresh answered.
+  let returned!: (v: unknown) => void
+  h.read.mockImplementationOnce(() => new Promise(r => { returned = r }))
   h.rerender(h.view()); await tick()
-  expect(h.select().disabled).toBe(false); expect([...h.select().options].map(o => o.value)).toEqual(['20m', '10m'])
+  expect(h.trigger().disabled).toBe(true)
+  await act(async () => { returned({ bandChoices: { cw: [], phone: [channel('10m', 28.4)] } }) }); await tick()
+  expect(h.trigger().disabled).toBe(false); expect(h.options()).toEqual(['20m', '10m'])
 })
 
 it('preserves the local band-pick API and snapshot behavior', async () => {
   const h = fixture('phone', [], 3, true); await tick()
-  fireEvent.change(h.select(), { target: { value: '40m' } }); await tick()
+  h.choose('40m'); await tick()
   expect(invoke).toHaveBeenCalledWith('get_licensed_band_plan', { mode: 'phone' })
   expect(invoke).toHaveBeenCalledWith('pick_band', { band: '40m', mode: 'phone' })
   expect(h.onSnap).toHaveBeenCalledWith(h.later); expect(h.writes()).toHaveLength(0)

@@ -324,6 +324,12 @@ export const DEFAULT_FD_MACROS: CwMacro[] = [
 const WPM_MIN = 5
 const WPM_MAX = 50
 
+/** #286: a typed His Call reduced to callsign characters. The call is keyed verbatim wherever a
+ *  macro says `!`, so a stray space, `?` or prosign character must not ride along. */
+function callsignChars(raw: string): string {
+  return raw.toUpperCase().replace(/[^A-Z0-9/]/g, '').slice(0, 15)
+}
+
 /**
  * CW operating cockpit — casual/ragchew. Keyboard + F-key macros key the rig via the
  * CAT keyer (the engine's send_cw path); the waterfall is the CW spectrum; a compact
@@ -801,6 +807,27 @@ export function CwCockpit({
   const catCwUnprovenHere =
     keyer === 'cat' && !!cwSettings && catCwUnproven.includes(cwSettings.rigModel)
   const [text, setText] = useState('')
+  // #286 — HIS CALL, editable. `!` in a macro is expanded by the ENGINE from its active peer
+  // (`Engine::expand_cw`), and `selectPeer` is the one setter (a decoded chip and a spot handoff
+  // use it too). The field shows that call — a decode fills it — and an overtype commits through
+  // the same `selectPeer` on Enter, on blur, or just before a macro sends, so "type the call, press
+  // F2" keys the TYPED call and never the stale one. Nothing here keys the rig on its own.
+  const [hisCallDraft, setHisCallDraft] = useState('')
+  const hisCallEditing = useRef(false)
+  const hisCallRef = useRef({ draft: '', worked: null as string | null })
+  hisCallRef.current = { draft: hisCallDraft, worked: guide.workedCall }
+  useEffect(() => {
+    if (!hisCallEditing.current) setHisCallDraft(guide.workedCall ?? '')
+  }, [guide.workedCall])
+  const commitHisCall = async (raw?: string) => {
+    if (!control) return
+    hisCallEditing.current = false
+    const call = callsignChars(raw ?? hisCallRef.current.draft)
+    setHisCallDraft(call)
+    if (call === (hisCallRef.current.worked ?? '')) return
+    const s = await selectPeer(call || null).catch(() => null)
+    if (s) onSnap?.(s)
+  }
   // Sidetone pitch — local for instant marker response; persisted via set_cw_keyer.
   const [pitch, setPitch] = useState(pitchHz)
   useEffect(() => setPitch(pitchHz), [pitchHz])
@@ -843,7 +870,12 @@ export function CwCockpit({
       pushToast(t('cw.send.txLocked'), 'info', 3500)
       return
     }
-    void withErrorToast(() => sendCw(line), t('cw.send.failed'))
+    // #286: an edited His Call lands BEFORE the send that may expand `!` to it.
+    const committing = hisCallEditing.current ? commitHisCall() : null
+    void withErrorToast(async () => {
+      if (committing) await committing
+      return sendCw(line)
+    }, t('cw.send.failed'))
   }
   const sendTyped = () => {
     if (!control) return
@@ -1813,6 +1845,31 @@ export function CwCockpit({
         </div>
 
         <div className="cw-send">
+          {/* #286: His Call, on the send row so the dock does not grow a row. */}
+          <label className="cw-hiscall" title={t('cw.hisCall.title')}>
+            <span className="cw-hiscall-label">{t('cw.hisCall.label')}</span>
+            <input disabled={!control}
+              className="settings-input cw-hiscall-input"
+              aria-label={t('cw.hisCall.label')}
+              value={hisCallDraft}
+              maxLength={15}
+              onChange={(e) => {
+                hisCallEditing.current = true
+                setHisCallDraft(e.target.value)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void commitHisCall(e.currentTarget.value)
+                }
+              }}
+              onBlur={(e) => {
+                if (hisCallEditing.current) void commitHisCall(e.currentTarget.value)
+              }}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
           <input disabled={!control}
             className="settings-input cw-type"
             value={text}

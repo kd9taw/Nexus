@@ -11,6 +11,7 @@ import { setFrequency, setRit, setXit, setVfo } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
+import { stepFrom } from '../wheelTuningPolicy'
 import { t } from '../i18n'
 
 /** The rig's own vocabulary on these buttons: the two clarifiers and the two VFOs. Named so
@@ -81,8 +82,9 @@ export function TuningStrip({
     const s = await setFrequency(mhz, bandLabelForMhz(mhz), sidebandForQsy(mhz, snap.radio.dialMhz, snap.radio.sideband)).catch(() => null)
     if (s) onSnap?.(s)
   }
-  // Round to the nearest Hz to avoid float drift accumulating on repeated nudges.
-  const nudge = (deltaHz: number) => void tuneTo(Math.round((dial + deltaHz / 1e6) * 1e6) / 1e6)
+  // #273: `steps` whole steps, the first rounding to the step (18.110.250 → 18.111.000 at 1 kHz),
+  // in integer Hz so float drift never accumulates on repeated nudges.
+  const nudge = (steps: number) => void tuneTo(stepFrom(Math.round(dial * 1e6), steps, step) / 1e6)
 
   // Mouse-wheel tuning over the big frequency read-out itself (operator request) — same coalesced
   // CAT path + selected step (Shift = ×10) as the scope wheel-tune, for hunting CW/phone signals
@@ -104,7 +106,7 @@ export function TuningStrip({
         type="button"
         className="tuning-nudge"
         disabled={!frequencyAllowed || !catOk}
-        onClick={() => nudge(-step * 10)}
+        onClick={() => nudge(-10)}
         title={t('cockpit.tuning.down.title', { hz: step * 10 })}
         aria-label={t('cockpit.tuning.down.aria', { hz: step * 10 })}
       >
@@ -114,7 +116,7 @@ export function TuningStrip({
         type="button"
         className="tuning-nudge"
         disabled={!frequencyAllowed || !catOk}
-        onClick={() => nudge(-step)}
+        onClick={() => nudge(-1)}
         title={t('cockpit.tuning.down.title', { hz: step })}
         aria-label={t('cockpit.tuning.down.aria', { hz: step })}
       >
@@ -144,7 +146,7 @@ export function TuningStrip({
         type="button"
         className="tuning-nudge"
         disabled={!frequencyAllowed || !catOk}
-        onClick={() => nudge(step)}
+        onClick={() => nudge(1)}
         title={t('cockpit.tuning.up.title', { hz: step })}
         aria-label={t('cockpit.tuning.up.aria', { hz: step })}
       >
@@ -154,7 +156,7 @@ export function TuningStrip({
         type="button"
         className="tuning-nudge"
         disabled={!frequencyAllowed || !catOk}
-        onClick={() => nudge(step * 10)}
+        onClick={() => nudge(10)}
         title={t('cockpit.tuning.up.title', { hz: step * 10 })}
         aria-label={t('cockpit.tuning.up.aria', { hz: step * 10 })}
       >

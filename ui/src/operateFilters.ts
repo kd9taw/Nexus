@@ -39,6 +39,18 @@ export const DECODE_FILTER_KEY = 'nexus.decodes.filter'
 export const DECODE_HIDE_B4_KEY = 'nexus.decodes.hideB4'
 export const DECODE_HIDE_BLOCKED_KEY = 'nexus.decodes.hideBlocked'
 export const DECODE_HIDE_CONFIRMED_KEY = 'nexus.decodes.hideConfirmed'
+export const DECODE_NEWEST_TOP_KEY = 'nexus.decodes.newestTop'
+
+/** #276 — Band Activity "newest on top". Off (default) is the WSJT-X order: oldest at the top,
+ *  each period appended at the bottom. On draws the newest first and pins the pane to the top.
+ *  Per surface like the chips above: a popped-out Operate window can read the other way round. */
+export function loadDecodeNewestTop(): boolean {
+  return surfaceGet(DECODE_NEWEST_TOP_KEY) === '1'
+}
+
+export function saveDecodeNewestTop(on: boolean): void {
+  surfaceSet(DECODE_NEWEST_TOP_KEY, on ? '1' : '0')
+}
 
 /** The Band Activity "hide B4" MODIFIER — ANDed with whatever chip is active (the field
  *  ask: "CQ only, but exclude B4"). A modifier rather than another one-of-N chip, the same

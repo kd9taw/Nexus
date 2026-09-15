@@ -6172,6 +6172,30 @@ impl Engine {
             _ => "",
         };
         let mut plan = crate::bandplan::band_plan_for(tier);
+        // #175 — the 60 m FT8 button follows the station's licence country. The stock row is
+        // the US channel (5.3715, 100 W ERP); a station whose callsign is not a US one gets the
+        // WRC-15 dial the rest of the world shares.
+        //
+        // ⚠️ DO NOT "SIMPLIFY" THIS TO ONE DIAL, IN EITHER DIRECTION. The two answers differ by
+        // POWER as well as by region: 5.3715 is a 100 W ERP US channel, while the WRC-15 segment
+        // is 9.15 W ERP (15 W EIRP) for a US station. Sending a US operator to 5.357 would drop
+        // their legal ceiling by roughly 10 dB with nothing on screen saying so, and Nexus cannot
+        // enforce the lower limit (it does not know their antenna gain). An unparseable or empty
+        // callsign therefore keeps the US channel — the conservative side for the licence Nexus
+        // can actually check. Operator-confirmed 2026-09-14. See `bandplan::is_us_callsign`.
+        //
+        // Applied BEFORE the operator's overrides, so
+        // Settings ▸ Frequencies still wins, and a band pick lands on exactly this row (the
+        // Digital arm of `band_pick_default` reads `band_plan`).
+        if tier == Tier::Ft8 && !crate::bandplan::is_us_callsign(&self.settings.mycall) {
+            if let Some(c) = plan.iter_mut().find(|c| c.band == "60m") {
+                c.dial_mhz = crate::bandplan::SIXTY_M_FT8_WORLDWIDE_MHZ;
+                c.note = "Worldwide 60 m segment 5351.5-5366.5 kHz (WRC-15), chosen because your \
+                          callsign is not a US one. 60 m differs country to country - check your own \
+                          band plan and power limit"
+                    .to_string();
+            }
+        }
         if !mode_name.is_empty() {
             for wf in &self.settings.working_frequencies {
                 if !wf.mode.eq_ignore_ascii_case(mode_name) || wf.mhz <= 0.0 {
@@ -28145,6 +28169,61 @@ mod tests {
         e.set_tier(Tier::Ft4);
         let c = e.band_plan().into_iter().find(|c| c.band == "20m").unwrap();
         assert!((c.dial_mhz - 14.080).abs() < 1e-9, "FT4 stock kept");
+    }
+
+    /// #175 — the 60 m FT8 band button follows the LICENCE COUNTRY of the station callsign.
+    /// A US call (ITU K, N, W, AA–AL — the FCC's blocks, territories included) keeps the US
+    /// channel 5.3715 at 100 W ERP; every other country gets 5.357 in the WRC-15 segment the
+    /// rest of the world shares. The operating prefix decides a portable call (`DL/W1AW` is
+    /// operating in Germany, `W1AW/VE3` in Canada; `/P` is not a country). No callsign at all
+    /// keeps today's 5.3715, and an operator's own working-frequency override still wins.
+    #[test]
+    fn sixty_metre_ft8_button_follows_the_licence_country() {
+        let sixty = |call: &str| {
+            let mut e = Engine::new(call, "EN37", 0);
+            e.set_tier(Tier::Ft8);
+            e.band_plan()
+                .into_iter()
+                .find(|c| c.band == "60m")
+                .unwrap()
+                .dial_mhz
+        };
+        for us in [
+            "W9XYZ", "K1ABC", "N0CALL", "AA7XY", "AL7AB", "KH6ABC", "KP4XX", "W1AW/P", "W1AW/4", "",
+        ] {
+            assert!(
+                (sixty(us) - 5.3715).abs() < 1e-9,
+                "{us:?} must keep the US channel"
+            );
+        }
+        for elsewhere in [
+            "DL1ABC", "VE3WEJ", "G4ABC", "ON4XYZ", "AM1ABC", "JA1XYZ", "DL/W1AW", "W1AW/VE3",
+        ] {
+            assert!(
+                (sixty(elsewhere) - 5.357).abs() < 1e-9,
+                "{elsewhere:?} must get the WRC-15 dial"
+            );
+        }
+        // The operator's own override still wins over the country default.
+        let mut e = Engine::new("DL1ABC", "JO31", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.working_frequencies = vec![crate::settings::WorkingFreq {
+            band: "60m".into(),
+            mode: "FT8".into(),
+            mhz: 5.3585,
+        }];
+        let c = e.band_plan().into_iter().find(|c| c.band == "60m").unwrap();
+        assert!((c.dial_mhz - 5.3585).abs() < 1e-9, "override applied");
+        // A band PICK lands on the same dial the list shows (the Digital default reads band_plan).
+        let mut e = Engine::new("VE3WEJ", "FN03", 0);
+        e.set_tier(Tier::Ft8);
+        let (dial, _) = e
+            .band_pick_default("60m", crate::settings::OperatingMode::Digital)
+            .expect("a 60 m digital default");
+        assert!(
+            (dial - 5.357).abs() < 1e-9,
+            "the pick tunes what the list shows"
+        );
     }
 
     #[test]

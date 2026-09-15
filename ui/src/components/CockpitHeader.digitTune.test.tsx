@@ -167,9 +167,13 @@ describe('per-digit wheel tuning on the shared main dial', () => {
 
   it('the selected step still drives the readout wheel when it changes — the selector is untouched', () => {
     const { container } = mount({ digitTune: true, wheelTune: true, wheelStepHz: 5000 })
+    // #273: the first notch at the selected step rounds to it (14.074 → 14.075 at 5 kHz), and the
+    // next is one whole 5 kHz step. Only a 5 kHz step lands on 14.080 — a 100 Hz step would give
+    // 14.0742 — so the selector still drives this wheel.
+    wheelUp(container.querySelector('.readout-unit')!)
     wheelUp(container.querySelector('.readout-unit')!)
     vi.advanceTimersByTime(120)
-    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.079, 6)
+    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.08, 6)
   })
 
   it('WITHOUT uniform wheel-tune (Operate/RTTY/SSTV) only the digits claim the wheel', () => {

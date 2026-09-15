@@ -9,6 +9,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 import type { AppSnapshot, BandChannel } from '../types'
 import { getLicensedBandPlan, pickBand } from '../api'
 import { bandColor } from '../bandColors'
+import { BandMenu } from './BandMenu'
 import { t } from '../i18n'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { pushToast } from '../toast'
@@ -81,21 +82,21 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
   return (
     <div className="band-picker">
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
-      <select
+      {/* A Nexus menu, not the system select: each band carries its condition (BandMenu.tsx). */}
+      <BandMenu
         disabled={!control || (!local && plan.length === 0)}
-        className="band-picker-select"
+        triggerClassName="band-picker-trigger"
         value={snap.radio.band}
-        onChange={(e) => onPick(e.target.value)}
+        onPick={onPick}
         title={t('bandPicker.select.title')}
-        style={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
-      >
-        {!known && <option value={snap.radio.band}>{snap.radio.band}</option>}
-        {plan.map((c) => (
-          <option key={c.band} value={c.band}>
-            {c.band}
-          </option>
-        ))}
-      </select>
+        ariaLabel={t('bandPicker.menu.aria', { band: snap.radio.band || '—' })}
+        triggerLabel={snap.radio.band || '—'}
+        triggerStyle={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
+        items={[
+          ...(!known && snap.radio.band ? [snap.radio.band] : []),
+          ...plan.map((c) => c.band),
+        ].map((band) => ({ value: band, label: band, conditionBand: band }))}
+      />
       {!snap.radio.txAllowed && (
         <span
           className="tx-lock"

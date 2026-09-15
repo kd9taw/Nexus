@@ -11,7 +11,10 @@ import { confirmDialog } from '../confirm'
 import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
+  clearDataFolder,
   exportSettingsBundle,
+  getDataFolder,
+  setDataFolder,
   fdDiscoverEvents,
   fdScoreboardStatus,
   connectWebStatus,
@@ -33,6 +36,7 @@ import type {
   RouteMode,
   RoutingRule,
   Settings,
+  DataFolderInfo,
 } from '../types'
 import {
   clearCloudlogKey,
@@ -219,6 +223,10 @@ interface Props {
   onScaleCapChange: (c: Scale) => void
   density: Density
   onDensityChange: (d: Density) => void
+  /** #253: the optional local-time clock beside UTC (UI-only, per machine — `useLocalClock`).
+   *  Optional so hosts/tests that do not wire it render Workspace unchanged, without the field. */
+  localClock?: boolean
+  onLocalClockChange?: (on: boolean) => void
   onResetLayout: () => void
   /** Modular-features API (toggles + profiles). */
   features: FeaturesApi
@@ -543,6 +551,10 @@ const ROT_POST_PASS: { value: string; labelKey: MessageKey }[] = [
 
 /** One operator override of the working-frequency table. */
 type WorkingFrequency = NonNullable<Settings['workingFrequencies']>[number]
+
+/** The worldwide 60 m FT8 dial (#175) — `bandplan::SIXTY_M_FT8_WORLDWIDE_MHZ` on the Rust side, which
+ *  the band button tunes for a non-US callsign. Shown beside the US row below. */
+const SIXTY_M_FT8_WORLDWIDE_MHZ = 5.357
 
 /** The stock WSJT-X working-frequency table, shown read-only for reference.
  * An override replaces the matching band+mode row; no overrides = stock. */
@@ -908,6 +920,8 @@ export function SettingsPanel({
   onScaleCapChange,
   density,
   onDensityChange,
+  localClock = false,
+  onLocalClockChange,
   onResetLayout,
   features,
   onRerunWizard,
@@ -991,6 +1005,32 @@ export function SettingsPanel({
   // D#278: browser-local display preference, not a Settings field — no save round-trip.
   const [logbookGlobe, setLogbookGlobe] = useLogbookGlobe()
   const [form, setForm] = useState<Settings | null>(null)
+  // #289 — the data + log folder. Read once when Settings opens; a change applies at the next
+  // launch, so the readout keeps saying what THIS run is using until then.
+  const [dataFolder, setDataFolderInfo] = useState<DataFolderInfo | null>(null)
+  const [dataFolderPath, setDataFolderPath] = useState('')
+  const [dataFolderNote, setDataFolderNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (remote) return
+    let live = true
+    getDataFolder()
+      .then((info) => { if (live) setDataFolderInfo(info) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [remote])
+  const chooseDataFolder = async (copy: boolean) => {
+    const target = dataFolderPath.trim()
+    if (!target) return
+    await withErrorToast(async () => {
+      const report = await setDataFolder(target, copy)
+      setDataFolderNote(
+        copy
+          ? t('settings.dataFolder.copied', { files: report.files, bytes: report.bytes })
+          : t('settings.dataFolder.chosen'),
+      )
+      setDataFolderInfo(await getDataFolder())
+    }, t('settings.dataFolder.failed'))
+  }
   useEffect(()=>{
     if(!remote)return
     const next=configuration.value?settingsForm(configuration.value):null
@@ -3105,6 +3145,82 @@ export function SettingsPanel({
           {remote && (tab==='logging'||tab==='configurations') && <p className="settings-note">{t('remote.configurationLocal')}</p>}
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'configurations' && !remote && (
+            <fieldset className="settings-section" id="settings-data-folder">
+              <legend>{t('settings.dataFolder.legend')}</legend>
+              {/* The warning first: a synced folder is the reason most operators come here, and it
+                  is also the one way to lose contacts — two machines writing one log.adi through
+                  Dropbox/OneDrive resolve as a conflicted copy, not a merge. */}
+              <p className="settings-note">{t('settings.dataFolder.note')}</p>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.dataFolder.current.label')}</span>
+                <span className="settings-input mono" role="status">{dataFolder?.current ?? '—'}</span>
+                <span className="settings-hint">
+                  {dataFolder?.source === 'env'
+                    ? t('settings.dataFolder.source.env')
+                    : dataFolder?.source === 'chosen'
+                      ? t('settings.dataFolder.source.chosen')
+                      : t('settings.dataFolder.source.default')}
+                </span>
+                {dataFolder?.chosen && dataFolder.chosen !== dataFolder.current && (
+                  <span className="settings-hint" role="status">
+                    {t('settings.dataFolder.pending', { path: dataFolder.chosen })}
+                  </span>
+                )}
+              </div>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.dataFolder.path.label')}</span>
+                <input
+                  className="settings-input"
+                  value={dataFolderPath}
+                  onChange={(e) => setDataFolderPath(e.target.value)}
+                  placeholder={dataFolder?.default ?? ''}
+                  aria-label={t('settings.dataFolder.path.label')}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <div className="rig-share-row">
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    disabled={!dataFolderPath.trim()}
+                    onClick={() => void chooseDataFolder(false)}
+                    title={t('settings.dataFolder.use.title')}
+                  >
+                    {t('settings.dataFolder.use')}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    disabled={!dataFolderPath.trim()}
+                    onClick={() => void chooseDataFolder(true)}
+                    title={t('settings.dataFolder.copy.title')}
+                  >
+                    {t('settings.dataFolder.copy')}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() =>
+                      void withErrorToast(async () => {
+                        await clearDataFolder()
+                        setDataFolderNote(t('settings.dataFolder.chosen'))
+                        setDataFolderInfo(await getDataFolder())
+                      }, t('settings.dataFolder.failed'))
+                    }
+                    title={t('settings.dataFolder.reset.title')}
+                  >
+                    {t('settings.dataFolder.reset')}
+                  </button>
+                </div>
+                <span className="settings-hint">{t('settings.dataFolder.restart')}</span>
+                {dataFolderNote && (
+                  <span className="settings-hint" role="status">{dataFolderNote}</span>
+                )}
+              </div>
+            </fieldset>
+          )}
+
+          {tab === 'configurations' && !remote && (
             <fieldset className="settings-section" id="settings-configurations">
               <legend>{t('settings.configurations.legend')}</legend>
               <p className="settings-note">
@@ -3358,6 +3474,36 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.workspace.logbookGlobe.hint')}</span>
                 </span>
               </label>
+              {/* #253: an optional second clock in the top bar showing this computer's local
+                  time. Per machine and off by default; UTC stays the station clock. */}
+              {onLocalClockChange && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.localClock.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.workspace.localClock.label')}
+                  >
+                    <button disabled={remote}
+                      type="button"
+                      className={`theme-chip${!localClock ? ' active' : ''}`}
+                      aria-pressed={!localClock}
+                      onClick={() => onLocalClockChange(false)}
+                    >
+                      {t('settings.workspace.localClock.off')}
+                    </button>
+                    <button disabled={remote}
+                      type="button"
+                      className={`theme-chip${localClock ? ' active' : ''}`}
+                      aria-pressed={localClock}
+                      onClick={() => onLocalClockChange(true)}
+                    >
+                      {t('settings.workspace.localClock.on')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">{t('settings.workspace.localClock.hint')}</span>
+                </div>
+              )}
 
               <div className="settings-field">
                 <span className="settings-label">{t('settings.workspace.panes.label')}</span>
@@ -8041,6 +8187,16 @@ export function SettingsPanel({
                           <span className="freq-override-tag">
                             {t('settings.workingFrequencies.stock.overrideTag')}
                           </span>
+                        </span>
+                      ) : r.band === '60m' && r.mode === 'FT8' ? (
+                        // #175: the 60 m button follows the licence country — the US channel for a
+                        // US callsign, the worldwide WRC-15 dial for everyone else. Say both, rather
+                        // than copy the engine's callsign rule into the UI where it could drift.
+                        <span className="freq-cell mono">
+                          {t('settings.workingFrequencies.stock.sixtyMetres', {
+                            us: r.mhz.toFixed(6),
+                            world: SIXTY_M_FT8_WORLDWIDE_MHZ.toFixed(6),
+                          })}
                         </span>
                       ) : (
                         <span className="freq-cell mono">{r.mhz.toFixed(6)}</span>

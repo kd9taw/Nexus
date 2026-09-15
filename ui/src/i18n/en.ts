@@ -4277,6 +4277,10 @@ export const EN = {
   'bandPicker.select.title':
     'Band — your last frequency on this band in this mode this session, else the start of your licensed segment',
   'bandPicker.txLock.label': '🔒 TX locked',
+  'bandPicker.menu.aria': 'Band: {{band}}',
+  'freq.channel.menu.aria': 'Band channel preset: {{channel}}',
+  'bandMenu.condition.unknown': 'No data',
+  'bandMenu.condition.unknown.title': 'No current band-condition data for this band',
   'bandPicker.txLock.splitTitle':
     'TX locked — your split transmit frequency, {{tx}} MHz, is outside your license privileges. Receiving on {{rx}} MHz is fine.',
   'bandPicker.txLock.title':
@@ -5923,6 +5927,7 @@ export const EN = {
   'settings.workingFrequencies.stock.dial': 'Dial (MHz)',
   'settings.workingFrequencies.stock.overrideTitle': 'Your override — stock is {{mhz}} MHz',
   'settings.workingFrequencies.stock.overrideTag': 'override',
+  'settings.workingFrequencies.stock.sixtyMetres': '{{us}} (US) · {{world}} (outside the US, chosen from your callsign)',
   'settings.workingFrequencies.stock.hint':
     'WSJT-X stock dial frequencies. A row with an active override shows your value (highlighted) instead of the stock one.',
   'settings.workingFrequencies.overrides.label': 'Your overrides',
@@ -6437,6 +6442,28 @@ export const EN = {
   'settings.workspace.logbookGlobe.aria': 'Show the 3-D globe above the Logbook',
   'settings.workspace.logbookGlobe.hint':
     'The 3-D globe above the Logbook table. Turn it off and the table starts at the top.',
+  'settings.workspace.localClock.label': 'Local time beside UTC',
+  'settings.workspace.localClock.on': 'On',
+  'settings.workspace.localClock.off': 'Off',
+  'settings.workspace.localClock.hint': 'Show this computer\'s local time next to the UTC clock in the top bar. Logs, spots and FT slots always use UTC.',
+  'settings.dataFolder.legend': 'Data & log folder',
+  'settings.dataFolder.note': 'Your logbook (log.adi), the data tables Nexus downloads and the Winlink mailbox live in one folder. You can put it on a network drive or a synced folder so another computer can reach it — but only ONE Nexus should use it at a time. Two computers writing the same log through Dropbox or OneDrive make a conflicted copy, not a merged log.',
+  'settings.dataFolder.current.label': 'Folder in use',
+  'settings.dataFolder.source.env': 'Set by NEXUS_DATA_DIR for this launch, which wins over this setting.',
+  'settings.dataFolder.source.chosen': 'Chosen here.',
+  'settings.dataFolder.source.default': 'The default folder.',
+  'settings.dataFolder.pending': 'Chosen: {{path}} — Nexus uses it the next time it starts.',
+  'settings.dataFolder.path.label': 'New folder',
+  'settings.dataFolder.use': 'Use this folder',
+  'settings.dataFolder.use.title': 'Use this folder from the next start. Nothing is copied, so the folder should already hold your log.',
+  'settings.dataFolder.copy': 'Copy my log and data there',
+  'settings.dataFolder.copy.title': 'Copy the logbook, the data tables and the Winlink mailbox to the new folder, check every copied file against the original, and use it from the next start. Your old folder is left exactly as it is.',
+  'settings.dataFolder.reset': 'Use the default folder',
+  'settings.dataFolder.reset.title': 'Forget the chosen folder and go back to the default one at the next start. Nothing is deleted.',
+  'settings.dataFolder.restart': 'A new folder is used the next time Nexus starts. Nothing is ever moved or deleted — your old folder stays as it is.',
+  'settings.dataFolder.copied': 'Copied {{files}} files ({{bytes}} bytes) and checked every one against the original. Nexus uses the new folder the next time it starts.',
+  'settings.dataFolder.chosen': 'Saved. Nexus uses the new folder the next time it starts.',
+  'settings.dataFolder.failed': 'Could not change the data folder',
   'settings.workspace.panes.label': 'Pane sizes',
   'settings.workspace.panes.reset': 'Reset pane sizes',
   'settings.workspace.panes.hint': 'Restore the default left/right pane widths.',
@@ -7238,6 +7265,9 @@ export const EN = {
     'Hide stations you have already worked (B4) from whichever filter is active — CQ-only minus B4, and friends',
   'operate.decodes.hideB4.title.idle':
     'The B4 chip shows worked stations — the hide switch is idle there',
+  'operate.decodes.newestTop.label': 'Newest on top',
+  'operate.decodes.newestTop.title': 'Draw the newest decodes at the top and follow them there. Off is the WSJT-X order, with the newest at the bottom.',
+  'operate.decodes.newestTop.title.idle': 'Newest on top works in Time order',
 
   // The sort picker. Its `value`s are stored tokens; `SNR` and `DT` are column tokens and
   // stay in the code, so only these two labels are words.
@@ -7868,6 +7898,9 @@ export const EN = {
   // `{{mode}}` is an SSTV mode name and `{{when}}` a UTC stamp; both arrive formatted.
   'sstv.gallery.empty':
     'Received images collect here — auto-saved with callsign (FSK ID), mode, frequency, and time.',
+  'sstv.gallery.reveal.label': 'Reveal',
+  'sstv.gallery.reveal.title': 'Open the folder the received pictures are saved in (Pictures/Nexus SSTV)',
+  'sstv.gallery.reveal.failed': 'Could not open the SSTV gallery folder',
   'sstv.gallery.thumb.alt': '{{mode}} image received {{when}}',
   'sstv.gallery.delete.aria': 'Delete the {{mode}} image received {{when}}',
   'sstv.gallery.delete.title': 'Delete this image',
@@ -8070,6 +8103,8 @@ export const EN = {
   'cw.macro.myCall.label': 'My Call',
   'cw.macro.hisCall.label': 'His Call',
   'cw.compose.placeholder': 'Type CW to send… (Enter)',
+  'cw.hisCall.label': 'His call',
+  'cw.hisCall.title': 'The station you are working. The ! in a macro sends this call. A decoded call fills it in; type over it to answer someone else, then press Enter or a macro key.',
   'cw.compose.send.label': 'Send',
   'cw.send.txLocked': 'TX locked — this frequency is outside your license privileges',
   'cw.send.failed': 'CW send failed',
@@ -8999,6 +9034,8 @@ export const EN = {
   'topbar.slotClock.title': 'Time to next slot',
   'topbar.slotClock.label': 'next slot',
   'topbar.utc.title': 'UTC time',
+  'topbar.localClock.label': 'Local',
+  'topbar.localClock.title': 'Local time on this computer',
   // The clock chip. `{{offset}}` is the signed clock error and `{{age}}` the
   // measurement age (`N min`), both formatted invariantly by the bar;
   // `{{servers}}` is a plain count. The ✓ and ✗ are glyphs, not words.

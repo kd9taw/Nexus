@@ -52,6 +52,9 @@ export const PER_SURFACE = [
   'nexus.decodes.hideB4',
   'nexus.decodes.hideBlocked',
   'nexus.decodes.hideConfirmed',
+  // Band Activity's newest-on-top order (#276) — the same class as the chips above it: a
+  // statement about what THIS pane shows, so a torn-off Operate window may read the other way.
+  'nexus.decodes.newestTop',
   'nexus.logbook.globespin',
   'nexus.operate.layout',
   'nexus.operateLayout',
@@ -104,6 +107,9 @@ const SHARED = [
   // Field mode: being outdoors is a fact about the STATION, not a window — a pop-out beside
   // the main window in the same sunlight must follow it (DetachedPanel mirrors the hook).
   'nexus-field-mode',
+  // The optional local-time clock beside UTC (#253). Per MACHINE, like density and field mode:
+  // local time is a fact about this computer's time zone, and every window of it agrees.
+  'nexus-local-clock',
   'nexus-motion',
   'nexus-ui-scale-cap',
   'nexus.connect.chaseDefault.v1',

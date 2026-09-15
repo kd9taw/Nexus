@@ -85,6 +85,30 @@ pub fn canonical_band(token: &str) -> String {
     t.split('-').next().unwrap_or(t).to_string()
 }
 
+/// The worldwide 60 m FT8 dial (#175): inside the WRC-15 segment 5351.5–5366.5 kHz, the
+/// allocation most of the world shares. What the 60 m band button tunes for a station whose
+/// callsign is not a US one — see [`is_us_callsign`] and `Engine::band_plan_for_tier`.
+pub const SIXTY_M_FT8_WORLDWIDE_MHZ: f64 = 5.357;
+
+/// Is this station callsign a US (FCC-issued) one, operating in the US? The ITU gave the
+/// United States the whole K, N and W blocks and AA–AL; FCC calls in the territories
+/// (KH6, KL7, KP4, …) are in them too. The OPERATING prefix decides a portable call, read
+/// through the CQ WPX rules the contest code already implements: `DL/W1AW` is operating in
+/// Germany and `W1AW/VE3` in Canada, while `/P`, `/M` and a bare call-area digit are not a
+/// country. An empty or unparseable call answers `true` — "no evidence of another country" —
+/// so a station that has not entered a callsign keeps today's US dial.
+pub fn is_us_callsign(call: &str) -> bool {
+    let Some(prefix) = tempo_core::contest::callsign::wpx_prefix(call) else {
+        return true;
+    };
+    let b = prefix.as_bytes();
+    match b.first() {
+        Some(b'K' | b'N' | b'W') => true,
+        Some(b'A') => matches!(b.get(1), Some(c) if (b'A'..=b'L').contains(c)),
+        _ => false,
+    }
+}
+
 /// The proposed Tempo band plan — verified US General-legal + CW-clear (judged on
 /// the emission ≈ dial + 1.5 kHz). Ordered low band → high.
 pub fn band_plan() -> Vec<BandChannel> {
@@ -147,8 +171,11 @@ pub fn ft8_band_plan() -> Vec<BandChannel> {
         //   5.357  — inside the WRC-15 segment, which is the allocation most of the world has,
         //            so it is where the DX is — but 9.15 W ERP for a US station.
         //
-        // IT STAYS 5.3715. A band button is a TRANSMIT decision, and moving it to 5.357 would
-        // drop a US operator's legal ceiling by roughly 10 dB with nothing on screen saying so —
+        // IT STAYS 5.3715 FOR A US STATION. A band button is a TRANSMIT decision, and moving it to
+        // 5.357 would drop a US operator's legal ceiling by roughly 10 dB with nothing on screen
+        // saying so — (#175, 2026-09-14: a station whose callsign is NOT a US one gets 5.357 from
+        // `Engine::band_plan_for_tier`, via `is_us_callsign`; this table row stays the US value.)
+        //
         // Nexus cannot know their antenna gain, so it cannot enforce the lower limit either. The
         // note below states the choice instead of hiding it, and 5.357 is one click away as a
         // Memories preset (`ui/src/features/packs.ts`, shipped 1.10.3 for this same report).

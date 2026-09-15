@@ -1299,6 +1299,27 @@ export async function revealRecordings(): Promise<void> {
   await invoke('reveal_recordings')
 }
 
+/** Where the station's data + log folder is (#289). */
+export async function getDataFolder(): Promise<import('./types').DataFolderInfo> {
+  return invoke<import('./types').DataFolderInfo>('get_data_folder')
+}
+
+/** Choose the data + log folder. `copy` carries the log and data across, verified, first; the
+ *  original is never moved or deleted, and the choice applies at the next launch. */
+export async function setDataFolder(path: string, copy: boolean): Promise<import('./types').DataCopyReport> {
+  return invoke<import('./types').DataCopyReport>('set_data_folder', { path, copy })
+}
+
+/** Go back to the default data folder (clears the choice). Applies at the next launch. */
+export async function clearDataFolder(): Promise<void> {
+  await invoke('clear_data_folder')
+}
+
+/** Open the SSTV gallery folder (Pictures/Nexus SSTV) in the OS file manager — #130. */
+export async function revealSstvGallery(): Promise<void> {
+  await invoke('reveal_sstv_gallery')
+}
+
 /** Delete one received SSTV image — the file AND its gallery entry, in one action so the two
  * cannot drift. Irreversible: the caller confirms first. */
 export async function sstvDeleteImage(path: string): Promise<void> {

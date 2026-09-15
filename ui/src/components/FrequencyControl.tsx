@@ -10,6 +10,7 @@ import { bandLabelForMhz } from '../band'
 import { bandColor } from '../bandColors'
 import { t } from '../i18n'
 import { FrequencyReadout } from './FrequencyReadout'
+import { BandMenu } from './BandMenu'
 
 interface Props {
   remoteFrequency?: boolean
@@ -36,6 +37,11 @@ const MATCH_EPS = 0.0005
 /** Stable key for a channel (band id is unique in the plan). */
 function chanKey(c: BandChannel): string {
   return c.band
+}
+
+/** A channel as the operator reads it: label · dial · mode (all invariant tokens). */
+function channelText(c: BandChannel): string {
+  return `${c.label} · ${c.dialMhz.toFixed(4)} · ${c.mode}`
 }
 
 function findActive(channels: BandChannel[], dialMhz: number, mode: string): BandChannel | null {
@@ -94,6 +100,33 @@ export function FrequencyControl({
   return (
     <div className={`freq-control ${variant}`} role="group" aria-label={t('freq.control.aria')}>
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
+      {variant === 'compact' ? (
+        // The cockpit headers and the TopBar: a Nexus menu, each channel carrying its band's
+        // condition (BandMenu.tsx). The Settings `full` variant keeps its select below.
+        <div className="freq-channel-wrap">
+          <BandMenu
+            disabled={!canTune}
+            triggerClassName="freq-channel"
+            value={active ? chanKey(active) : null}
+            onPick={selectChannel}
+            title={active ? active.note : t('freq.channel.title')}
+            ariaLabel={t('freq.channel.menu.aria', {
+              channel: active ? channelText(active) : t('freq.channel.custom', { band: band || '—' }),
+            })}
+            triggerLabel={active ? channelText(active) : t('freq.channel.custom', { band: band || '—' })}
+            triggerStyle={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
+            items={grouped.flatMap((g) =>
+              g.items.map((c) => ({
+                value: chanKey(c),
+                group: g.group,
+                label: c.tx === false ? `${channelText(c)} · ${t('freq.channel.rxOnly')}` : channelText(c),
+                conditionBand: bandLabelForMhz(c.dialMhz) || c.band,
+                title: c.tx === false ? t('freq.channel.rxOnly.title') : c.note,
+              })),
+            )}
+          />
+        </div>
+      ) : (
       <label className="freq-channel-wrap">
         {variant === 'full' && <span className="settings-label">{t('freq.channel.label')}</span>}
         <select disabled={!canTune}
@@ -128,6 +161,7 @@ export function FrequencyControl({
           ))}
         </select>
       </label>
+      )}
 
       {showReadout && (
         <div className="freq-manual-wrap">

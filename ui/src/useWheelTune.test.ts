@@ -121,6 +121,62 @@ describe('useWheelTune', () => {
   })
 })
 
+// ── #273 — THE FIRST NOTCH LANDS ON THE STEP GRID ─────────────────────────────────────────────
+// A dial left between steps (a spot click, a typed frequency, the rig's own knob) used to keep its
+// odd tail forever: 14.110.250 at a 1 kHz step went 14.111.250, 14.112.250… A rig's VFO rounds on
+// the first click. So the first notch goes UP to the next multiple of the step (or DOWN to the one
+// below), and every notch after it is a whole step.
+describe('useWheelTune — #273 the first notch rounds to the step', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    mockSetFreq.mockClear()
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('up from an off-grid dial lands on the next step (14.110.250 → 14.111.000 at 1 kHz)', () => {
+    const el = mountHook({ dialMhz: 14.11025, sideband: 'USB', enabled: true, stepHz: 1000 })
+    wheel(el, { deltaY: -100 })
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.111, 6)
+  })
+
+  it('down from an off-grid dial lands on the step below (14.110.250 → 14.110.000)', () => {
+    const el = mountHook({ dialMhz: 14.11025, sideband: 'USB', enabled: true, stepHz: 1000 })
+    wheel(el, { deltaY: 100 })
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.11, 6)
+  })
+
+  it('the notches after the first are whole steps (two notches → 14.112.000)', () => {
+    const el = mountHook({ dialMhz: 14.11025, sideband: 'USB', enabled: true, stepHz: 1000 })
+    wheel(el, { deltaY: -100 })
+    wheel(el, { deltaY: -100 })
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.112, 6)
+  })
+
+  it('Shift (×10) rounds first too: 14.110.250 → 14.120.000', () => {
+    const el = mountHook({ dialMhz: 14.11025, sideband: 'USB', enabled: true, stepHz: 1000 })
+    wheel(el, { deltaY: -100, shiftKey: true })
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.12, 6)
+  })
+
+  it('POSITIVE CONTROL — an on-grid dial moves exactly one step', () => {
+    const el = mountHook({ dialMhz: 14.111, sideband: 'USB', enabled: true, stepHz: 1000 })
+    wheel(el, { deltaY: -100 })
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.112, 6)
+  })
+
+  it('a DIGIT notch is not rounded: hovering the 10 kHz digit keeps the tail (per-digit carry)', () => {
+    const el = mountHook({ dialMhz: 14.11025, sideband: 'USB', enabled: true, stepHz: 1000, resolveStepHz: () => 10_000 })
+    wheel(el, { deltaY: -100 })
+    vi.advanceTimersByTime(120)
+    expect(mockSetFreq.mock.calls[0][0]).toBeCloseTo(14.12025, 6)
+  })
+})
+
 // ── PER-DIGIT TUNING RIDES THIS HOOK, IT DOES NOT SIT BESIDE IT ────────────────────────────────
 // The operator asked to hover any digit and scroll it. The readout that carries those digits is
 // already inside an element this hook listens on, so a SECOND listener (or a second hook) means

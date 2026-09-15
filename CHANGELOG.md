@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+- **Tune is always right next to the band picker** (#287). In Phone, CW, RTTY, PSK, SSTV and JS8,
+  the Tune button (and the ATU button, on radios that have one) now sits directly after the band
+  dropdown. It used to be at the far right of the header and moved depending on what else each
+  mode showed there. Stop TX and the CAT indicator stay where they were. Operate and Tempo are
+  deliberately unchanged: those two screens keep Tune where it has always been — in Operate's
+  QSO strip and in Tempo's top bar — rather than gaining a second one.
+- **Tuning steps land on round numbers** (#273). When the dial is between steps (after clicking a
+  spot, typing a frequency or turning the radio's own knob), the first mouse-wheel notch or ◄/►
+  click now rounds to the step, the way a radio's VFO does: 18.110.250 at a 1 kHz step goes to
+  18.111.000, not 18.111.250. After that each click is a whole step. Hovering a single digit of the
+  frequency still moves just that digit.
+
 ### Fixed
 
 - **A satellite you just opened no longer claims it has no transmitters.** Open a bird the
@@ -104,6 +118,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   options. It now sits under Settings ▸ Station ▸ Operator & Radio, and typing units, miles, km,
   imperial, metric or temperature into the settings search goes straight to it. Your existing
   choice carries over. (#248)
+
+### Changed (60 m)
+
+- **The 60 m FT8 band button follows your country** (#175). If your callsign is a US one, 60 m
+  still goes to 5.3715 MHz, the US channel. Any other callsign now goes to 5.357 MHz, in the
+  worldwide 60 m segment most countries share. A portable call counts where you are operating
+  (DL/W1AW is Germany, W1AW/VE3 is Canada). Your own Settings ▸ Frequencies override still wins,
+  and the standard table there now shows both dials. 60 m rules differ country to country, so
+  check your own band plan and power limit.
 
 ### Security
 
