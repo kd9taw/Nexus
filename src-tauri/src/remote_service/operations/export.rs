@@ -37,7 +37,7 @@ impl Selection {
                 .reference
                 .bytes()
                 .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/' || b == b'-')
-            && self.day_start_unix % 86_400 == 0
+            && self.day_start_unix.is_multiple_of(86_400)
             && self.day_start_unix <= 253_402_214_400
             && self.callsign.as_deref().is_none_or(|c| {
                 (3..=32).contains(&c.len())

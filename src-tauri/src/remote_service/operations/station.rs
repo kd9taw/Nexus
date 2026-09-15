@@ -1191,8 +1191,6 @@ pub fn execute(
     Ok(result)
 }
 
-/// The station accepted the change into its own state; a later sample shows it.
-#[cfg(feature = "radio")]
 /// The native panadapter this station's configuration runs: the same rig-model and opt-in test the
 /// radio loop starts its scope worker from. What a browser drew is never evidence of the family.
 #[cfg(feature = "radio")]
