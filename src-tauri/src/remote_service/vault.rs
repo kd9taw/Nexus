@@ -39,11 +39,17 @@ struct Record {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Grant {
     pub device_id: String,
-    /// The browser's approval expiry as the service listed it at grant time. The service writes a
-    /// new expiry on EVERY approval (and an expiry of "now" on every revocation), so this is the
-    /// approval generation: a revoked or re-approved browser no longer matches and gets nothing
-    /// back. No wire change was needed to bind to it.
+    /// The browser's approval expiry as the service last listed it for this approval. Without a
+    /// `generation` it identifies the approval: every approval and revocation rewrites it, and a
+    /// service that reports no generation never renews one.
     pub expires_at: u64,
+    /// The approval generation (browser approval lifetime, operator decision 2026-09-14). The service
+    /// renews an approval on use by moving its expiry and never this; approving again or revoking
+    /// moves it. So whenever the service reports one, a restart restores against it, and a renewed
+    /// browser keeps its grants. Omitted when unknown, which keeps a record in 1.12.0's shape; one
+    /// holding it reads as unreadable on 1.12.0, which leaves Remote off with nothing restored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
     pub logging: bool,
     pub control: bool,
     /// FT8/FT4 transmit. Only ever true alongside `control`. Omitted when false; see the module note.

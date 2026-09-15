@@ -3,7 +3,7 @@
 import { before, after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, writeFile, copyFile, cp, rm, stat, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, writeFile, copyFile, cp, rm, stat, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -117,6 +117,31 @@ test('verify-schema parses the real Wrangler output at the log level the deploy 
     assert.equal(behind.code, 0)
     assert.throws(() => compareSchema(behind.stdout, shipped, { stderr: behind.stderr, env }), new RegExp(`missing migrations: ${newest.replace('.', '\\.')}$`))
   } finally { await rm(state, { recursive: true, force: true }) }
+})
+
+// The deploy applies migrations BEFORE it uploads the Worker, so for a while the OLD Worker runs on
+// the NEW schema. Every migration therefore has to be additive: a dropped, renamed or rebuilt column
+// breaks the Worker that is still serving. The check reads each statement with its comments removed.
+const additive = sql => sql.split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n')
+  .split(';').map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean)
+  .filter(s => /\b(DROP|RENAME)\b/i.test(s) || !/^(PRAGMA \w+ ?= ?\w+|CREATE (TABLE|INDEX|UNIQUE INDEX) |ALTER TABLE \w+ ADD COLUMN |UPDATE \w+ SET )/i.test(s))
+test('every D1 migration is additive, including the approval-lifetime column', async () => {
+  // Positive control: the check really does refuse the shapes it exists for.
+  assert.equal(additive('ALTER TABLE devices DROP COLUMN approved_at;').length, 1)
+  assert.equal(additive('DROP TABLE devices;').length, 1)
+  assert.equal(additive('ALTER TABLE devices RENAME COLUMN expires_at TO ends_at;').length, 1)
+  assert.equal(additive('-- DROP TABLE devices; is only prose here\nALTER TABLE devices ADD COLUMN x INTEGER;').length, 0)
+  const directory = join(root, 'remote/migrations')
+  const names = (await readdir(directory)).filter(name => name.endsWith('.sql')).sort()
+  assert.ok(names.length >= 7)
+  for (const name of names) assert.deepEqual(additive(await readFile(join(directory, name), 'utf8')), [], name)
+  // The lifetime batch adds exactly one nullable column: an approval given before it has no approval
+  // time, and so is never renewed, which is what the Nexus that gave it expects.
+  const lifetime = additive(await readFile(join(directory, '0007_device_lifetime.sql'), 'utf8'))
+  assert.deepEqual(lifetime, [])
+  const statements = (await readFile(join(directory, '0007_device_lifetime.sql'), 'utf8')).split('\n')
+    .filter(line => !line.trimStart().startsWith('--')).join('\n').split(';').map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean)
+  assert.deepEqual(statements, ['ALTER TABLE devices ADD COLUMN approved_at INTEGER'])
 })
 
 test('staging configuration requires exact service/database scope and public Auth0 tenant values', () => {

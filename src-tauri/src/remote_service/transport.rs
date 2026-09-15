@@ -84,6 +84,10 @@ impl Client {
         let mut request = self
             .http
             .post(format!("{}/api/remote/{path}", self.origin))
+            // This Nexus binds remembered grants to the approval generation, so the service may list
+            // the generation to it and renew the browser approvals it gives. A service without the
+            // browser approval lifetime ignores the header and answers exactly as before.
+            .header("x-nexus-device-lifetime", "1")
             .json(&body);
         if let Some(token) = token {
             request = request.bearer_auth(token);

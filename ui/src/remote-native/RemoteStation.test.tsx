@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { RemoteStation } from './RemoteStation'
 import type { RemoteStationAction, RemoteStationStatus } from './types'
 
@@ -169,6 +169,51 @@ it('tells the operator approved browsers keep their access across a restart and 
   expect(screen.getByText(/FT8\/FT4 transmit also needs station controls/).textContent).toMatch(/stays allowed across restarts until you revoke it/)
   expect(screen.getByText(/Approving a browser gives it station controls/).textContent).toMatch(/To limit a browser, revoke them here/)
   expect(screen.queryByText(/turns off whenever Nexus restarts|not kept|grant it again after every restart|resets whenever/)).toBeNull()
+})
+
+// Browser approval lifetime (operator decision 2026-09-14): each approved browser shows when its
+// approval ends. In the last seven days before the end that use cannot move, the shack warns and
+// offers to approve it again, with the transmit tick off unless ticked.
+it('shows each browser approval expiry, and warns and offers approval again in its last seven days', async () => {
+  const day = 86400000, now = Date.now(), date = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+  const renewing = crypto.randomUUID(), capped = crypto.randomUUID(), older = crypto.randomUUID(), idle = crypto.randomUUID()
+  const status: RemoteStationStatus = { phase: 'connected', origin: 'https://remote-staging.hamradiotools.io',
+    stationId: crypto.randomUUID(), accountId: crypto.randomUUID(), pairingId: null, pairingCode: null, expiresAt: null, error: null,
+    devices: [
+      { id: renewing, name: 'Laptop', approved: 1, expiresAt: now + 30 * day, generation: 2, renewsUntil: now + 60 * day },
+      { id: capped, name: 'Phone', approved: 1, expiresAt: now + 5 * day, generation: 2, renewsUntil: now + 5 * day },
+      // Approved by an older Nexus: a fixed expiry, and the service never renews it.
+      { id: older, name: 'Tablet', approved: 1, expiresAt: now + 6 * day },
+      // Not used lately, but use would still carry it on: no warning.
+      { id: idle, name: 'Desk', approved: 1, expiresAt: now + 3 * day, generation: 4, renewsUntil: now + 80 * day },
+    ] }
+  const actions: RemoteStationAction[] = []
+  const invoke = async (command: string, input?: unknown) => {
+    if (command === 'get_remote_station_status') return status
+    if (command !== 'remote_station_action') throw new Error('unexpectedCommand')
+    actions.push((input as { action: RemoteStationAction }).action)
+    return status
+  }
+  window.__TAURI_INTERNALS__ = { invoke: invoke as NonNullable<Window['__TAURI_INTERNALS__']>['invoke'] }
+  render(<RemoteStation />)
+  const card = async (id: string) => (await screen.findByText(id.slice(-6))).closest('div')!
+  expect((await card(renewing)).textContent).toContain(`Approved until ${date(now + 30 * day)} UTC`)
+  expect((await card(renewing)).textContent).toContain(`up to ${date(now + 60 * day)} UTC`)
+  expect((await card(older)).textContent).toContain(`Approved until ${date(now + 6 * day)} UTC.`)
+  for (const id of [renewing, idle]) {
+    expect((await card(id)).textContent).not.toContain('approval ends')
+    expect(within(await card(id)).queryByRole('button', { name: 'Approve again' })).toBeNull()
+  }
+  for (const [id, end] of [[capped, now + 5 * day], [older, now + 6 * day]] as const) {
+    expect((await card(id)).textContent).toContain(`This approval ends ${date(end)} UTC`)
+    expect(within(await card(id)).getByRole('button', { name: 'Approve again' })).toBeTruthy()
+  }
+  const phone = await card(capped)
+  fireEvent.click(within(phone).getByRole('checkbox', { name: 'Also allow FT8/FT4 transmit' }))
+  fireEvent.click(within(phone).getByRole('button', { name: 'Approve again' }))
+  await waitFor(() => expect(actions).toContainEqual({ type: 'device', deviceId: capped, approve: true, transmit: true }))
+  // Ending it is still one click away, beside the warning.
+  expect(within(phone).getByRole('button', { name: 'Revoke browser approval' })).toBeTruthy()
 })
 
 function offerHarness(options: { failLaunchAtLogin?: boolean } = {}) {

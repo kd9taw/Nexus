@@ -638,6 +638,122 @@ test('approving a pairing approves the browser that confirmed it, once, and no o
   await app.client(browser.jwt).post(`${path}/ticket`, {}, 403)
 })
 
+// Browser approval lifetime (operator decision 2026-09-14): an approval renews on use, capped at ninety
+// days since the shack approved it. Only a Nexus that binds its remembered grants to the approval
+// generation says so (this header); an approval given by an older Nexus keeps its fixed thirty days,
+// because that Nexus binds its restored grants to the expiry and a renewal would silently drop them.
+const LIFETIME = { 'x-nexus-device-lifetime': '1' }
+const DAY = 86400000
+const deviceRow = id => app.db.prepare('SELECT generation,approved,approved_at,expires_at FROM devices WHERE id=?').bind(id).first()
+test('an approval renews on real use from that browser, never moves its generation, and stops at ninety days', async () => {
+  const pair = await app.paired(), path = `stations/${pair.stationId}`
+  const { value: request, response } = await pair.browser.post(`${path}/device`, { name: 'Travelling browser' })
+  pair.browser.setCookie(response.headers.get('set-cookie'))
+  await pair.native.post(`${path}/native/approve-device`, { deviceId: request.deviceId }, 200, LIFETIME)
+  const approved = await deviceRow(request.deviceId)
+  assert.ok(approved.approved_at > Date.now() - 60000, 'the approval time is recorded')
+  // The shack sees the expiry, the approval generation and the end that use cannot move.
+  const { value: listed } = await pair.native.post(`${path}/native/devices`, {}, 200, LIFETIME)
+  assert.deepEqual(listed.devices.find(d => d.id === request.deviceId), { id: request.deviceId, name: 'Travelling browser',
+    approved: 1, expiresAt: approved.expires_at, generation: approved.generation, renewsUntil: approved.approved_at + 90 * DAY })
+  // Without the header, exactly the shape a 1.12.0 desktop parses (it denies unknown fields).
+  const { value: legacy } = await pair.native.post(`${path}/native/devices`, {})
+  assert.deepEqual(Object.keys(legacy.devices.find(d => d.id === request.deviceId)).sort(), ['approved', 'expiresAt', 'id', 'name'])
+
+  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, request.deviceId).run()
+  // Loading the page is not use, and the page is told both dates.
+  const { value: session } = await pair.browser.post('session')
+  const shown = session.stations.find(s => s.id === pair.stationId).device
+  assert.equal(shown.renewsUntil, approved.approved_at + 90 * DAY)
+  assert.ok(shown.expires_at < Date.now() + 2 * DAY)
+  assert.ok((await deviceRow(request.deviceId)).expires_at < Date.now() + 2 * DAY, 'a page load renews nothing')
+  // The same account without this browser's credential is refused and renews nothing.
+  await app.client(pair.browser.jwt).post(`${path}/ticket`, {}, 403)
+  assert.ok((await deviceRow(request.deviceId)).expires_at < Date.now() + 2 * DAY, 'another browser renews nothing')
+
+  // Opening the station from this browser moves the expiry thirty days on. Nothing else changes.
+  const held = pair.browser.headers().cookie
+  const { response: opened } = await pair.browser.post(`${path}/ticket`)
+  const renewed = await deviceRow(request.deviceId)
+  assert.ok(renewed.expires_at > Date.now() + 29 * DAY, 'renewed on use')
+  assert.deepEqual({ ...renewed, expires_at: 0 }, { ...approved, expires_at: 0 }, 'generation, approval and approval time unchanged')
+  // The browser's credential lives as long as the approval now does. Same value, never a new one.
+  const refreshed = opened.headers.get('set-cookie')
+  assert.equal(refreshed.split(';')[0], held)
+  assert.ok(refreshed.includes('HttpOnly') && refreshed.includes('Secure') && refreshed.includes('SameSite=Strict'))
+  const maxAge = Number(/Max-Age=(\d+)/.exec(refreshed)[1])
+  assert.ok(maxAge > 29 * 86400 && maxAge <= 30 * 86400, `cookie lifetime follows the approval: ${maxAge}`)
+  // A live session's renewal is use too.
+  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, request.deviceId).run()
+  const station = await pair.native.open(pair.stationId)
+  await station.take(value => value.type === 'watch' && value.enabled === false)
+  const { value: sessionTicket } = await pair.browser.post(`${path}/ticket`)
+  const socket = await pair.browser.open(pair.stationId, sessionTicket.ticket)
+  const live = await socket.take(type('session'))
+  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, request.deviceId).run()
+  await pair.browser.post(`${path}/renew`, { sessionId: live.sessionId })
+  assert.ok((await deviceRow(request.deviceId)).expires_at > Date.now() + 29 * DAY, 'session renewal renews the approval')
+  socket.close(); station.close()
+
+  // THE CAP. Use can never carry an approval past ninety days from the shack approval.
+  const approvedAt = Date.now() - 89 * DAY
+  await app.db.prepare('UPDATE devices SET approved_at=?, expires_at=? WHERE id=?').bind(approvedAt, Date.now() + 3600000, request.deviceId).run()
+  await pair.browser.post(`${path}/ticket`)
+  assert.equal((await deviceRow(request.deviceId)).expires_at, approvedAt + 90 * DAY, 'renewed only up to the cap')
+  await pair.browser.post(`${path}/ticket`)
+  assert.equal((await deviceRow(request.deviceId)).expires_at, approvedAt + 90 * DAY, 'and never past it')
+  // An approval that has ended is refused, and use cannot revive it.
+  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() - 1, request.deviceId).run()
+  await pair.browser.post(`${path}/ticket`, {}, 403)
+  assert.ok((await deviceRow(request.deviceId)).expires_at < Date.now(), 'an expired approval stays expired')
+})
+
+test('renewal never touches an older Nexus approval or a waiting browser; re-approval moves the generation; revoke ends at once', async () => {
+  // A pairing approved by a Nexus that sends the header: its browser renews, and the shack learns the generation.
+  const browser = await app.owner(), desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Lifetime pairing' })
+  await browser.post('pair/claim', { code: enrollment.code })
+  const { response: confirmed } = await browser.post('pair/confirm', { id: enrollment.id })
+  browser.setCookie(confirmed.headers.get('set-cookie'))
+  const credential = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')
+  const { value: paired } = await desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential }, 200, LIFETIME)
+  const pairedRow = await deviceRow(paired.device.id)
+  assert.equal(paired.device.generation, pairedRow.generation)
+  assert.ok(pairedRow.approved_at > 0, 'the pairing browser renews too')
+
+  // An approval given WITHOUT the header (1.12.0 at the shack) keeps its fixed thirty days.
+  const pair = await app.paired(), path = `stations/${pair.stationId}`
+  const legacyId = await app.approved(pair)
+  const legacy = await deviceRow(legacyId)
+  assert.equal(legacy.approved_at, null)
+  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, legacyId).run()
+  await pair.browser.post(`${path}/ticket`)
+  assert.ok((await deviceRow(legacyId)).expires_at < Date.now() + 2 * DAY, 'an older Nexus approval is never renewed')
+
+  // A browser still waiting for approval cannot renew anything, or approve itself.
+  const waiting = app.client(pair.browser.jwt)
+  const { value: request, response } = await waiting.post(`${path}/device`, { name: 'Waiting browser' })
+  waiting.setCookie(response.headers.get('set-cookie'))
+  const before = await deviceRow(request.deviceId)
+  await waiting.post(`${path}/ticket`, {}, 403)
+  assert.deepEqual(await deviceRow(request.deviceId), before, 'a waiting browser gains nothing')
+
+  // Approving again at the shack is a NEW approval: a new generation and a new ninety days.
+  await pair.native.post(`${path}/native/approve-device`, { deviceId: legacyId }, 200, LIFETIME)
+  const again = await deviceRow(legacyId)
+  assert.equal(again.generation, legacy.generation + 1)
+  assert.ok(again.approved_at > 0)
+  // Revoke ends it at once, even straight after a renewal.
+  await app.db.prepare('UPDATE devices SET expires_at=? WHERE id=?').bind(Date.now() + DAY, legacyId).run()
+  await pair.browser.post(`${path}/ticket`)
+  assert.ok((await deviceRow(legacyId)).expires_at > Date.now() + 29 * DAY, 'positive control: it renewed')
+  await pair.native.post(`${path}/native/revoke-device`, { deviceId: legacyId }, 200, LIFETIME)
+  await pair.browser.post(`${path}/ticket`, {}, 403)
+  const revoked = await deviceRow(legacyId)
+  assert.equal(revoked.approved, 0)
+  assert.ok(revoked.expires_at <= Date.now() && revoked.generation === again.generation + 1)
+})
+
 test('one-use tickets, real observation sockets, ACK backpressure and hibernation restoration', async () => {
   const pair = await app.paired(), live = await admitted(pair)
   await pair.browser.open(pair.stationId, live.ticket.ticket, 401)

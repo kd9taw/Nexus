@@ -42,6 +42,48 @@ struct Device {
     name: String,
     approved: u8,
     expires_at: u64,
+    /// The approval generation. Listed only by a service with the browser approval lifetime, and only
+    /// to a Nexus that asks (`transport::Client::post` does).
+    #[serde(default)]
+    generation: Option<u64>,
+    /// The end that use cannot move, ninety days after the shack approved it. None for an approval that
+    /// never renews.
+    #[serde(default)]
+    renews_until: Option<u64>,
+}
+impl Device {
+    fn approval(&self) -> Approval {
+        Approval {
+            expires_at: self.expires_at,
+            generation: self.generation,
+        }
+    }
+}
+/// One browser approval as the service lists it.
+#[derive(Clone, Copy, PartialEq)]
+struct Approval {
+    expires_at: u64,
+    generation: Option<u64>,
+}
+impl Approval {
+    /// Was `grant` given against this approval? By generation when both sides know it: a renewal on
+    /// use moves the expiry and keeps the generation, while approving again or revoking moves it.
+    /// Otherwise by expiry, which every approval and revocation rewrites: a record 1.12.0 wrote, or a
+    /// service without the approval lifetime, which never renews.
+    fn holds(&self, grant: &vault::Grant) -> bool {
+        match (grant.generation, self.generation) {
+            (Some(held), Some(listed)) => held == listed,
+            _ => grant.expires_at == self.expires_at,
+        }
+    }
+    /// Rebind a grant this approval holds to the approval as listed now, so a record written before
+    /// the service reported a generation carries one from here on. Grants nothing.
+    fn bind(&self, grant: &mut vault::Grant) {
+        if self.generation.is_some() {
+            grant.generation = self.generation;
+            grant.expires_at = self.expires_at;
+        }
+    }
 }
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
@@ -116,19 +158,20 @@ enum Persist {
     Paused,
     /// A local decision cleared every browser permission (take over, revoke a browser).
     ClearGrants,
-    /// One browser's grants changed. `approval` is the approval expiry the change was made against:
-    /// a grant is only ever created against a known approval, and a grant against a newer approval
-    /// starts that browser afresh. A `None` field is left as it was.
+    /// One browser's grants changed. `approval` is the approval the change was made against: a grant
+    /// is only ever created against a known approval, and a grant against a different approval (not
+    /// merely a renewed one) starts that browser afresh. A `None` field is left as it was.
     Browser {
         device_id: String,
-        approval: Option<u64>,
+        approval: Option<Approval>,
         logging: Option<bool>,
         control: Option<bool>,
         transmit: Option<bool>,
     },
     /// The approvals the service lists right now. A grant remembered against any other approval
-    /// (a browser revoked, re-approved, expired or gone) is forgotten.
-    Approvals(Vec<(String, u64)>),
+    /// (a browser revoked, re-approved, expired or gone) is forgotten; the rest are rebound to the
+    /// approval as listed.
+    Approvals(Vec<(String, Approval)>),
     /// The pairing was removed.
     Removed,
 }
@@ -182,10 +225,14 @@ impl Remembered {
             } => {
                 let at = state.grants.iter().position(|g| g.device_id == device_id);
                 let mut grant = match (at.map(|i| state.grants[i].clone()), approval) {
-                    (Some(grant), Some(expires_at)) if grant.expires_at == expires_at => grant,
-                    (_, Some(expires_at)) => vault::Grant {
+                    (Some(mut grant), Some(approval)) if approval.holds(&grant) => {
+                        approval.bind(&mut grant);
+                        grant
+                    }
+                    (_, Some(approval)) => vault::Grant {
                         device_id,
-                        expires_at,
+                        expires_at: approval.expires_at,
+                        generation: approval.generation,
                         logging: false,
                         control: false,
                         transmit: false,
@@ -208,10 +255,14 @@ impl Remembered {
                     None => {}
                 }
             }
-            Persist::Approvals(approvals) => state.grants.retain(|g| {
-                approvals
+            Persist::Approvals(approvals) => state.grants.retain_mut(|g| {
+                let listed = approvals
                     .iter()
-                    .any(|(id, at)| *id == g.device_id && *at == g.expires_at)
+                    .find(|(id, approval)| *id == g.device_id && approval.holds(g));
+                if let Some((_, approval)) = listed {
+                    approval.bind(g);
+                }
+                listed.is_some()
             }),
             Persist::Bound(..) | Persist::Removed => return None,
         }
@@ -467,8 +518,9 @@ impl Service {
                 // as Disable/Take over. A prior status snapshot must not install
                 // a new grant after that local authority has been stopped.
                 let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
-                // The approval being granted against. Its expiry is what a restart checks before
-                // giving the grant back, so a revoked or re-approved browser gets nothing.
+                // The approval being granted against. A restart checks it (by generation where the
+                // service reports one) before giving the grant back, so a revoked or re-approved
+                // browser gets nothing, and a renewed one keeps what it had.
                 let mut approval = None;
                 if *allow {
                     let status = self.status.lock().map_err(|_| "serviceUnavailable")?;
@@ -480,7 +532,7 @@ impl Service {
                     else {
                         return Err("accessDenied");
                     };
-                    approval = Some(device.expires_at);
+                    approval = Some(device.approval());
                 }
                 // These are the restrict switches: each allows or revokes one permission for one
                 // browser, live first, and the record follows only what took effect. Revoking
@@ -712,19 +764,19 @@ impl Controller {
         }
     }
     /// Put back remembered grants for each browser the service still lists as approved at the SAME
-    /// approval (its expiry is the approval generation), under the epoch captured when Remote came
-    /// on. The grants are read from the record now, under the lock, so a revocation made while the
-    /// list was on its way is honoured. FT8/FT4 transmit comes back only where it was granted, only
-    /// with station control, and arms nothing.
+    /// approval (`Approval::holds`: the same generation, so a renewal on use still matches), under the
+    /// epoch captured when Remote came on. The grants are read from the record now, under the lock, so
+    /// a revocation made while the list was on its way is honoured. FT8/FT4 transmit comes back only
+    /// where it was granted, only with station control, and arms nothing.
     fn apply_restore(&mut self, devices: &[Device]) {
         let Some(restore) = self.restore.take() else {
             return;
         };
         let now = now_ms();
-        let approvals: Vec<(String, u64)> = devices
+        let approvals: Vec<(String, Approval)> = devices
             .iter()
             .filter(|d| d.approved == 1 && d.expires_at > now)
-            .map(|d| (d.id.clone(), d.expires_at))
+            .map(|d| (d.id.clone(), d.approval()))
             .collect();
         let Ok(mut control) = self.control.lock() else {
             return;
@@ -739,7 +791,7 @@ impl Controller {
             .filter(|g| {
                 approvals
                     .iter()
-                    .any(|(id, at)| *id == g.device_id && *at == g.expires_at)
+                    .any(|(id, approval)| *id == g.device_id && approval.holds(g))
             })
             .cloned()
             .collect();
@@ -828,10 +880,10 @@ impl Controller {
         transmit: bool,
         (generation, epoch): (u64, u64),
     ) -> Result<(), &'static str> {
-        let expires_at = devices
+        let approval = devices
             .iter()
             .find(|d| d.id == device_id && d.approved == 1 && d.expires_at > now_ms())
-            .map(|d| d.expires_at)
+            .map(Device::approval)
             .ok_or("invalidResponse")?;
         let mut control = self.control.lock().map_err(|_| "serviceUnavailable")?;
         if control.generation != generation || control.operations.epoch() != epoch {
@@ -846,7 +898,7 @@ impl Controller {
         }
         control.remember(Persist::Browser {
             device_id,
-            approval: Some(expires_at),
+            approval: Some(approval),
             logging: Some(true),
             control: Some(true),
             transmit: Some(transmit),
@@ -1066,17 +1118,20 @@ impl Controller {
                     .and_then(|d| {
                         Some((
                             d.get("id")?.as_str()?.to_string(),
-                            d.get("expiresAt")?.as_u64()?,
+                            Approval {
+                                expires_at: d.get("expiresAt")?.as_u64()?,
+                                generation: d.get("generation").and_then(|g| g.as_u64()),
+                            },
                         ))
                     })
-                    .filter(|(id, at)| identifier(id) && *at > now_ms());
+                    .filter(|(id, approval)| identifier(id) && approval.expires_at > now_ms());
                 if let Ok(mut control) = self.control.lock() {
                     // A new pairing starts with nothing remembered: off, and no grants.
                     control.remember(Persist::Bound(binding.clone(), None));
-                    if let Some((device_id, expires_at)) = paired {
+                    if let Some((device_id, approval)) = paired {
                         control.remember(Persist::Browser {
                             device_id,
-                            approval: Some(expires_at),
+                            approval: Some(approval),
                             logging: Some(true),
                             control: Some(true),
                             transmit: Some(transmit),
