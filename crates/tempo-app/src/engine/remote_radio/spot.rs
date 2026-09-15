@@ -1,7 +1,12 @@
-//! Receive-only CW/Phone spot entry through the existing radio transaction.
+//! Receive-only CW/Phone/RTTY spot entry through the existing radio transaction.
 //! Mode and exact spot frequency are one intent. Digital tier changes and split
 //! require their own complete contracts. Routed spots share the station-owned
 //! incoming-radio transaction and native atomic Work verb.
+//!
+//! RTTY rides this same path rather than a second one: the desktop's own Work for an RTTY spot
+//! is `work_spot("rtty", …)`, the identical verb it uses for CW and Phone, and the only thing
+//! that differs is the section the projection enters. A tier never changes here, so RTTY needs
+//! none of the decoder-swap machinery `queue_remote_digital_spot` carries.
 use super::*;
 
 impl Engine {
@@ -18,6 +23,7 @@ impl Engine {
         let operating_mode = match mode {
             "cw" => OperatingMode::Cw,
             "phone" => OperatingMode::Phone,
+            "rtty" => OperatingMode::Rtty,
             _ => return Err(Reason::InvalidAction),
         };
         if self.source_kind != crate::dto::SourceKind::Native {

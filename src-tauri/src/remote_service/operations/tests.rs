@@ -54,6 +54,9 @@ mod repeater;
 #[path = "rotator_tests.rs"]
 mod rotator;
 #[cfg(feature = "radio")]
+#[path = "rtty_spot_tests.rs"]
+mod rtty_spot;
+#[cfg(feature = "radio")]
 #[path = "rx_gain_tests.rs"]
 mod rx_gain;
 #[cfg(feature = "radio")]

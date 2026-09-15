@@ -365,6 +365,16 @@ pub enum Action {
         band: String,
         call: String,
     },
+    /// RTTY Work names itself in its own action for the same reason `workDigitalSpot` does: an
+    /// older desktop parses `workSpot`'s `mode` against `cw`/`phone` exactly and would refuse a
+    /// third word, so a browser that learned RTTY must not send it as a `workSpot` variant.
+    #[serde(rename = "radio.workRttySpot")]
+    WorkRttySpot {
+        #[serde(rename = "dialMhz")]
+        dial_mhz: f64,
+        band: String,
+        call: String,
+    },
     /// FT8/FT4 Work names its tier in its own action: an older desktop parses workSpot exactly.
     #[serde(rename = "radio.workDigitalSpot")]
     WorkDigitalSpot {
@@ -542,6 +552,12 @@ pub fn execute(
             band,
             call,
         } => {
+            // `workSpot` is exactly two words wide and stays that way. RTTY has its own action,
+            // so widening the engine verb to take it must not widen this one by the back door —
+            // the whole point of the separate action is that the grammars cannot drift apart.
+            if mode != "cw" && mode != "phone" {
+                return Err(Reason::InvalidAction);
+            }
             // Split needs a complete radio-worker transaction. Until then,
             // refuse a station-resolved pile-up rather than silently tuning
             // simplex. Failure to inspect the buffer is not evidence of none.
@@ -557,6 +573,35 @@ pub fn execute(
             drop(buffer);
             return engine.queue_remote_spot(
                 mode,
+                *dial_mhz,
+                band,
+                call,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        // RTTY Work: the same station-owned pile-up evidence as CW/Phone Work, and the same
+        // not-arming receive QSY — `queue_remote_spot` enters the RTTY section through
+        // `work_spot_split_with_arming(.., arm_manual: false)`, so the TX-enable latch is never
+        // touched and no transmit authority is taken.
+        #[cfg(feature = "radio")]
+        Action::WorkRttySpot {
+            dial_mhz,
+            band,
+            call,
+        } => {
+            let buffer = spots
+                .ok_or(Reason::ReadingUnavailable)?
+                .try_lock()
+                .map_err(|_| Reason::ReadingUnavailable)?;
+            if crate::work_spot_split_offset(&buffer, call, *dial_mhz, std::time::Instant::now())
+                .is_some()
+            {
+                return Err(Reason::UnsupportedAction);
+            }
+            drop(buffer);
+            return engine.queue_remote_spot(
+                "rtty",
                 *dial_mhz,
                 band,
                 call,
@@ -1248,6 +1293,7 @@ impl Action {
             | Self::PhoneMode { .. }
             | Self::Mode { .. }
             | Self::WorkSpot { .. }
+            | Self::WorkRttySpot { .. }
             | Self::WorkDigitalSpot { .. }
             | Self::Repeater { .. }
             | Self::AprsTune { .. }
@@ -1313,6 +1359,9 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "aprsTuning",
                 "rotator",
                 "rigScope",
+                // Remote parity leftovers: each hint ships with its action, so a station that
+                // predates one never names it and a page never sends that action to it.
+                "workRttySpot",
             ]
         }
     }

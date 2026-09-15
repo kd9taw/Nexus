@@ -691,6 +691,64 @@ it.each(['tier', 'section', 'frequency', 'evidence'])('refuses a digital Work ha
   h.client.disconnected()
 })
 
+it('sends one RTTY Work intent and waits for the spot frequency in the RTTY section', async () => {
+  const h = setup(storage(), ['workRttySpot'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { operatingMode: 'rtty', dialMhz: 14.0865, txEnabled: false } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('work_spot', { mode: 'rtty', freqMhz: 14.0865, band: '20m', call: 'JA2DEF/P', tier: null })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.workRttySpot', dialMhz: 14.0865, band: '20m', call: 'JA2DEF/P' })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['section', 'frequency', 'evidence'])('refuses an RTTY Work handoff after a mismatched %s without replaying it', async changed => {
+  const h = setup(storage(), ['workRttySpot'], 3)
+  const snapshot = { radio: { operatingMode: changed === 'section' ? 'digital' : 'rtty', dialMhz: changed === 'frequency' ? 14.074 : 14.0865 } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('work_spot', { mode: 'rtty', freqMhz: 14.0865, band: '20m', call: 'JA2DEF', tier: null }).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'stationState' : 'radioReadback' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses RTTY Work on older stations, without its own hint, or carrying a tier', async () => {
+  // An older desktop offers no workRttySpot, and workSpot alone must not stand in for it: a
+  // station that never learned RTTY Work is simply not offered the control.
+  for (const [capabilities, version, message] of [[['workRttySpot'], 2, 'stationUnsupported'], [['workSpot', 'workDigitalSpot'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    await expect(transport.invoke('work_spot', { mode: 'rtty', freqMhz: 14.0865, band: '20m', call: 'JA2DEF', tier: null })).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['workRttySpot'], 3)
+  const invoke = vi.fn(), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, {} as ApplicationClient, h.client)
+  const args = { mode: 'rtty', freqMhz: 14.0865, band: '20m', call: 'JA2DEF', tier: null }
+  for (const bad of [{ ...args, tier: 'FT8' }, { ...args, call: null }, { ...args, band: '21m' }, { ...args, freqMhz: 0 },
+    { ...args, splitUpKhz: 2 }, { ...args, txEnabled: true }]) {
+    await expect(transport.invoke('work_spot', bad)).rejects.toThrow()
+  }
+  expect(invoke).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})
+
 const RECALLS = [
   ['CW', { section: 'cw', dialMhz: 14.06, band: '20m', sideband: null, fm: null },
     { action: 'radio.memoryRecall', section: 'cw', dialMhz: 14.06, band: '20m', sideband: null }, 'cw'],

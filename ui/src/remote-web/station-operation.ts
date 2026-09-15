@@ -33,6 +33,9 @@ export type StationAction =
   | { action: 'ft.txEnabled'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; on: boolean }
   | { action: 'radio.level'; mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'; level: RadioLevel; expected: number; value: number }
   | { action: 'radio.workSpot'; mode: 'cw' | 'phone'; dialMhz: number; band: string; call: string }
+  // RTTY Work names itself, for the same reason: an older desktop parses workSpot's mode against
+  // cw/phone exactly, so a third word there would be refused rather than understood.
+  | { action: 'radio.workRttySpot'; dialMhz: number; band: string; call: string }
   // FT8/FT4 Work names its tier in its own action: an older desktop parses workSpot exactly.
   | { action: 'radio.workDigitalSpot'; tier: 'FT8' | 'FT4'; dialMhz: number; band: string; call: string }
   // An FM repeater: the output, the shift and offset the rig keys (0 = band convention) and the tone.
@@ -93,12 +96,15 @@ export type ControlContext = {
 export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver',
   // Remote parity batch 1. A station advertises each one only with its action, so an older
   // station never names them and this page never sends their actions to it.
-  'aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator'] as const
-/** The batch-1 hints. An older page does not know these names and drops them as hints. */
-export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator'] as const satisfies readonly ControlCapability[]
+  'aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator',
+  // The parity leftovers. Same rule: a station advertises each one only with its action.
+  'workRttySpot'] as const
+/** The hints added after operation v3 froze — batch 1 and the parity leftovers after it. An older
+ * page does not know these names and drops them as hints. */
+export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator', 'workRttySpot'] as const satisfies readonly ControlCapability[]
 /** Batch-1 controls that move the transmit frequency, start a retune or feed the FT sequencer.
  * They stay disabled while this browser's transmission is armed; the station refuses them too. */
-export const TX_IDLE_CAPABILITIES = ['redecode', 'workDigitalSpot', 'splitTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning'] as const satisfies readonly ControlCapability[]
+export const TX_IDLE_CAPABILITIES = ['redecode', 'workDigitalSpot', 'workRttySpot', 'splitTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning'] as const satisfies readonly ControlCapability[]
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
@@ -114,6 +120,7 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.filterWidth': 'receiverFilter',
   'radio.function': 'receiverDsp', 'radio.agc': 'receiverDsp',
   'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot', 'radio.workDigitalSpot': 'workDigitalSpot',
+  'radio.workRttySpot': 'workRttySpot',
   'radio.repeater': 'repeaterTuning',
   'radio.aprsTune': 'aprsTuning',
   'rotator.point': 'rotator', 'rotator.pointAtCall': 'rotator', 'rotator.stop': 'rotator',
@@ -244,6 +251,10 @@ export function stationAction(raw: unknown): StationAction {
     case 'radio.workSpot':
       object(a, ['action', 'mode', 'dialMhz', 'band', 'call'])
       if (!oneOf(a.mode, ['cw', 'phone']) || !finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) || typeof a.call !== 'string' || !/^[A-Za-z0-9/]{1,32}$/.test(a.call)) invalid()
+      break
+    case 'radio.workRttySpot':
+      object(a, ['action', 'dialMhz', 'band', 'call'])
+      if (!finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) || typeof a.call !== 'string' || !/^[A-Za-z0-9/]{1,32}$/.test(a.call)) invalid()
       break
     case 'radio.workDigitalSpot':
       object(a, ['action', 'tier', 'dialMhz', 'band', 'call'])

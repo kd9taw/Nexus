@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Click-to-work an RTTY spot from a browser.** Nexus Remote could already work a CW, Phone, FT8
+  or FT4 spot from the Needed board or the Spots board; an RTTY one was quietly refused. Clicking
+  it now retunes the station to the spot's exact frequency and puts it in the RTTY section, the
+  same single change the desktop makes. It is a receive change only: it never enables transmit,
+  and the station still refuses it while a transmission is armed. A station running an older
+  Nexus simply does not offer the control, so nothing is sent to one that could not do it.
+
 
 
 ### Changed
