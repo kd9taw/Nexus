@@ -11587,8 +11587,34 @@ fn width_reassert_after_default_rung(rig: &mut Rig, md: &str, sent_pb: i32) -> O
             want / 1000
         ));
     }
+    // ── THE ESCALATION RUNG'S OWN WIDTH, AND IT IS VERIFIED NOW (#82, operator 2026-09-14:
+    // "never escalate to a zero/maximum passband on failure — fail honestly and tell the
+    // operator"). `M <mode> 0` is `RIG_PASSBAND_NORMAL` — the RIG's own default width, which on
+    // a Flex is 6000 Hz — so this rung DELIBERATELY parks the radio on a filter FT8 never wants,
+    // and the line below is what is supposed to take it off again.
+    //
+    // It used to believe a bare `RPRT 0`. ve3wej's Flex answers `RPRT 0` and keeps its own
+    // filter — that is the whole of #114, already handled on the accepted-but-ignored path
+    // above — so the escalation could still leave FT8 on a 6 kHz SSB filter while the app
+    // reported the mode set. Read it back, exactly as that path does.
+    //
+    // The RUNG ITSELF STAYS. It is what gets the MODE accepted from a backend choking on the
+    // width→DATA-filter mapping rather than on the mode; without it the ladder falls through to
+    // plain USB, which on an Icom means TX audio from the mic jack and no RF at all. What
+    // changes is that the rig is never LEFT there in silence.
     if rig.set_mode(md, want).is_ok() {
-        return None;
+        return match rig.read_mode_passband().1 {
+            // A rig that will not report its width is ignorance, not evidence of a fault — the
+            // same rule the accepted-but-ignored path applies.
+            None => None,
+            Some(a) if width_is_close_enough(a as i32, want) => None,
+            Some(a) => Some(format!(
+                "set {md} at the rig's own default filter, and it is still on a {a} Hz filter, \
+                 not the {want} Hz asked for — set the rig's DATA filter to about {} kHz by hand \
+                 (FT8 needs the full audio passband)",
+                want / 1000
+            )),
+        };
     }
     Some(format!(
         "set {md} but the rig kept its own filter width — it refused {want} Hz; set the rig's \
@@ -13346,6 +13372,107 @@ mod tests {
         assert!(
             !width_is_close_enough(3751, 3000),
             "one Hz past the quarter is not"
+        );
+    }
+
+    /// A logging rigctld stub that ACCEPTS every `M` and then reports whatever width it feels
+    /// like — the Flex 6400 of #82/#114 as a socket. `width` is what `m` answers.
+    fn mock_rigctld_with_width(
+        mode: &'static str,
+        width: u32,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let m = format!("{mode}\n{width}\n");
+                    let reply = if l == "m" { m.as_str() } else { "RPRT 0\n" };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// ⭐ ISSUE #82: THE ESCALATION RUNG MUST NEVER LEAVE THE RIG ON A 6 kHz FILTER IN SILENCE.
+    ///
+    /// After [`MODE_SET_PASSBAND0_AFTER`] failures the ladder sends `M PKTUSB 0` —
+    /// `RIG_PASSBAND_NORMAL`, "use YOUR own default width" — which on a Flex is 6000 Hz. That
+    /// rung stays: it is what gets the MODE accepted from a backend choking on the width→DATA-
+    /// filter mapping rather than on the mode, and removing it drops the ladder to plain USB,
+    /// which on an Icom means TX audio from the mic jack and no RF at all.
+    ///
+    /// What was missing is the CHECK. The `sent_pb != 0` path reads the width back and says so
+    /// when the rig ignored it; this rung believed a bare `RPRT 0` — and ve3wej's Flex answers
+    /// `RPRT 0` and keeps its own filter, which is the whole of #114. So the escalation could
+    /// still land FT8 on a 6 kHz SSB filter with the app reporting success.
+    #[test]
+    fn the_escalation_rung_never_leaves_a_six_kilohertz_filter_unsaid() {
+        // THE DEFECT: the rig takes the mode, answers RPRT 0 to the width, and stays at 6 kHz.
+        let (addr, log) = mock_rigctld_with_width("PKTUSB", 6000);
+        let mut rig = Rig::rigctld(&addr);
+        let note = width_reassert_after_default_rung(&mut rig, "PKTUSB", 0);
+        let seen = log.lock().unwrap().clone();
+        assert!(
+            seen.iter().any(|l| l == "M PKTUSB 3000"),
+            "control: the rung re-asserts the width it wanted: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|l| l == "m"),
+            "…and READS BACK what the rig took — believing RPRT 0 is the bug: {seen:?}"
+        );
+        let note = note.expect("a rig left on 6 kHz must be reported, not silently accepted");
+        assert!(
+            note.contains("6000") && note.contains("3000"),
+            "the note has to name both widths or the operator cannot act on it: {note}"
+        );
+
+        // CONTROL: a rig that actually TAKES the width says nothing at all. Without this the
+        // assertion above would pass for a function that complains unconditionally.
+        let (addr, _log) = mock_rigctld_with_width("PKTUSB", 3000);
+        let mut rig = Rig::rigctld(&addr);
+        assert_eq!(
+            width_reassert_after_default_rung(&mut rig, "PKTUSB", 0),
+            None,
+            "a width that landed is not a complaint"
+        );
+
+        // CONTROL: the rig picking its nearest filter is the radio doing its job, not a fault.
+        let (addr, _log) = mock_rigctld_with_width("PKTUSB", 2700);
+        let mut rig = Rig::rigctld(&addr);
+        assert_eq!(
+            width_reassert_after_default_rung(&mut rig, "PKTUSB", 0),
+            None,
+            "2.7 kHz for a 3 kHz ask must stay silent"
+        );
+
+        // CONTROL: a rig that will not report its width is IGNORANCE, not evidence of a fault —
+        // the same rule the accepted-but-ignored path already applies.
+        let (addr, _log) = mock_rigctld_with_width("PKTUSB", 0);
+        let mut rig = Rig::rigctld(&addr);
+        assert_eq!(
+            width_reassert_after_default_rung(&mut rig, "PKTUSB", 0),
+            None,
+            "no width read back is not a 6 kHz filter"
         );
     }
 

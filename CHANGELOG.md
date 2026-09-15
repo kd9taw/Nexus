@@ -53,6 +53,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.000 MHz. On a radio parked on VFO B whose rig file reports both, VFO A is still what Nexus
   reads.
 
+- **A mode change that ends up on the radio's own wide filter now says so (#82).** When a radio
+  keeps refusing a mode with an explicit filter width, Nexus falls back to setting the mode at the
+  radio's *default* width to get the mode accepted at all — which on a Flex is 6 kHz, far wider
+  than FT8 wants — and then puts the width it asked for back. It was taking the radio's "OK" for
+  that second step at face value, and a Flex answers OK while keeping its own filter. Nexus now
+  reads the width back and, if the radio is still on the wide one, says which filter it is on and
+  which one to set by hand. A radio that will not report its width is left alone rather than
+  warned about.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
