@@ -301,6 +301,43 @@ export const STATION_LOCAL_SETTINGS_KEYS = [
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
  *  browser can refuse a document that carries one anyway. CI pins it to the Rust list. */
 export const WITHHELD_RADIO_KEYS: string[] = []
+/** Settings a Remote browser may CHANGE: Rust WRITABLE_CONTROL_KEYS (station control) and
+ *  WRITABLE_LOGGING_KEYS (the logging grant) in query/configuration.rs, where each key's reason is
+ *  written. The station is the authority and denies every other setting; these lists only decide
+ *  which fields this page enables. CI pins them to the Rust lists. */
+export const WRITABLE_CONTROL_SETTINGS_KEYS = [
+  'units',
+  'journeyStreakEnabled',
+  'propEngine',
+  'decodeDepth',
+  'decodeFLowHz',
+  'decodeFHighHz',
+  'apDecode',
+  'apCqOnly',
+  'singleDecode',
+  'rttyRxAutoArm',
+  'pskRxAutoArm',
+  'sstvRxAutoArm',
+  'alertConfirmTier',
+  'b4MatchMode',
+  'contestQthCounty',
+  'contestQthState',
+  'contestCheck',
+  'contestCqZone',
+  'contestItuZone',
+  'contestPower',
+  'contestCategoryOperator',
+  'contestCategoryPower',
+  'contestCategoryAssisted',
+  'contestCategoryStation',
+  'macros',
+] as const
+export const WRITABLE_LOGGING_SETTINGS_KEYS = [
+  'autoLog',
+  'promptToLog',
+  'clearDxAfterLog',
+  'logReportsToComments',
+] as const
 export const SETTINGS_SHAPES = {
   "mycall": "string",
   "mygrid": "string",

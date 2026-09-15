@@ -101,6 +101,17 @@ export const FR: PartialCatalog = {
   "remote.loggingSaving": "Enregistrement du QSO à la station…",
   "remote.loggingSaved": "QSO enregistré dans le fichier du carnet de la station. Les envois externes utilisent les files existantes de la station.",
   "remote.loggingUnknown": "Le QSO est peut-être déjà enregistré. Conservez cette saisie et vérifiez son résultat avant de réessayer.",
+  // remote adif+settings
+  "remote.activationExportDone": "{{name}} a été enregistré dans les téléchargements de ce navigateur.",
+  "remote.activationExportTooLarge": "Cette activation est trop volumineuse pour être téléchargée ici. Exportez-la avec Nexus à la station.",
+  "remote.activationExportMissing": "Cette activation n’est plus dans le journal de la station. Actualisez le journal et réessayez.",
+  "remote.activationExportFailed": "Le fichier d’activation n’est pas arrivé intact, rien n’a donc été enregistré. Réessayez.",
+  "remote.settingsEditable": "Les préférences d’exploitation modifiables d’ici sont activées. L’identité de la station, la licence, le poste, l’audio, le réseau, les comptes et les envois restent en lecture seule et ne se modifient qu’à la station.",
+  "remote.settingsChanged": "Ces réglages ont changé à la station après le chargement de cette page. Ils ont été rechargés ; refaites votre modification.",
+  "remote.settingsRefused": "La station n’a pas accepté cette modification. Rien n’a été enregistré.",
+  "remote.settingsUnconfirmed": "La station n’a pas confirmé l’enregistrement. Vérifiez les réglages à la station avant de les modifier à nouveau.",
+  "remote.settingsTooLarge": "Cette modification est trop volumineuse pour être envoyée depuis le navigateur. Modifiez moins de macros à la fois, ou faites la modification à la station.",
+  "remote.settingsCheckedStation": "J’ai vérifié les réglages à la station — terminer cette vérification",
   // remote parity batch 2
   "remote.logChangeUnknown": "La station a peut-être déjà effectué cette modification. Vérifiez son résultat avant de modifier à nouveau le carnet.",
   "remote.logChangeCheck": "Vérifier le résultat",

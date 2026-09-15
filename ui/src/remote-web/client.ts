@@ -1,7 +1,7 @@
 import { pendingLogStorage } from './operation-storage'
 import { pendingControlStorage } from './control-storage'
 import { OperationClient } from './operation-client'
-import { OPERATION_REQUEST_BYTES, OPERATION_RESPONSE_BYTES } from './operation-protocol'
+import { OPERATION_EXPORT_RESPONSE_BYTES, OPERATION_REQUEST_BYTES } from './operation-protocol'
 import { advertisedOperationVersion, parseOperationVersion } from './operation-version'
 import { Auth0Client } from '@auth0/auth0-spa-js'
 import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../remote-monitor/protocol'
@@ -216,7 +216,9 @@ export class HostedConnection {
         try {
           if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > (this.applicationMode ? APPLICATION_MAX_BYTES : MAX_FRAME_BYTES + 256)) throw new RemoteError(403)
           const message = JSON.parse(event.data) as Record<string, unknown>
-          if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';if(new TextEncoder().encode(event.data).length>OPERATION_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message);return}
+          // Only a chunk of the activation file this page asked for may pass the ordinary operation
+          // bound; the operation client refuses any other reply over it.
+          if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';const bytes=new TextEncoder().encode(event.data).length;if(bytes>OPERATION_EXPORT_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message,bytes);return}
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
             reason = 'invalidApplication'; this.application.receive(message); return
           }

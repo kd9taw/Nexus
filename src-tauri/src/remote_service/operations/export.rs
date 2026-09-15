@@ -1,0 +1,111 @@
+//! One POTA/SOTA activation file for a Remote browser. The file is exactly what the desktop's
+//! per-activation export writes (`Engine::export_logbook_for_activation`), and a browser can name
+//! one activation the log lists and nothing else: no date range, no search, never the whole log.
+//! It is a READ under the logging grant and that browser's own current lease. It spends no command
+//! sequence, writes nothing and never touches the radio.
+//!
+//! An operation reply is small, so the file travels in bounded chunks, each carrying the file's
+//! length and SHA-256. The station keeps nothing between chunks and rebuilds the file for each one,
+//! so a log that changed mid-download arrives as a different file description, and the browser
+//! refuses it rather than stitching two logs together.
+use ring::digest::{digest, SHA256};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tempo_app::dto::LoggedActivationDto;
+use tempo_app::engine::Engine;
+
+/// Mirrors ACTIVATION_EXPORT_* in ui/src/remote-web/operation-protocol.ts.
+const MAX_BYTES: usize = 1024 * 1024;
+const CHUNK_BYTES: usize = 32 * 1024;
+const LISTED: usize = 128;
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Selection {
+    reference: String,
+    day_start_unix: u64,
+    /// Null for records that carry no callsign, never omitted: serde fills a MISSING `Option` with
+    /// None, which would read an omitted key as "no callsign".
+    #[serde(deserialize_with = "Option::deserialize")]
+    callsign: Option<String>,
+}
+
+impl Selection {
+    fn valid(&self) -> bool {
+        (1..=32).contains(&self.reference.len())
+            && self
+                .reference
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/' || b == b'-')
+            && self.day_start_unix % 86_400 == 0
+            && self.day_start_unix <= 253_402_214_400
+            && self.callsign.as_deref().is_none_or(|c| {
+                (3..=32).contains(&c.len())
+                    && c.bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'/')
+            })
+    }
+    fn names(&self, a: &LoggedActivationDto) -> bool {
+        a.reference == self.reference
+            && a.day_start_unix == self.day_start_unix
+            && a.callsign == self.callsign
+    }
+}
+
+/// The reply to one read: the list (no selection, chunk 0 only), one chunk of one listed
+/// activation's file, or a refusal that names why nothing was sent.
+pub(super) fn respond(
+    engine: &Engine,
+    selection: Option<&Selection>,
+    index: u32,
+) -> Result<Value, &'static str> {
+    if selection.is_some_and(|s| !s.valid()) || (selection.is_none() && index != 0) {
+        return Err("invalidRequest");
+    }
+    // Only activations a browser can name back. A reference imported with other bytes is left out
+    // rather than offered and then refused.
+    let listed: Vec<LoggedActivationDto> = engine
+        .log_activations()
+        .into_iter()
+        .map(LoggedActivationDto::from)
+        .filter(|a| {
+            Selection {
+                reference: a.reference.clone(),
+                day_start_unix: a.day_start_unix,
+                callsign: a.callsign.clone(),
+            }
+            .valid()
+        })
+        .collect();
+    let Some(selection) = selection else {
+        return Ok(
+            json!({"operation":"activationExport","activations":&listed[..listed.len().min(LISTED)]}),
+        );
+    };
+    if !listed.iter().any(|a| selection.names(a)) {
+        return Ok(json!({"operation":"activationExport","refused":"notFound"}));
+    }
+    let text = engine.export_logbook_for_activation(
+        &selection.reference,
+        selection.day_start_unix,
+        selection.callsign.as_deref(),
+    );
+    let bytes = text.as_bytes();
+    if bytes.len() > MAX_BYTES {
+        return Ok(json!({"operation":"activationExport","refused":"tooLarge"}));
+    }
+    let chunks = bytes.len().div_ceil(CHUNK_BYTES);
+    let index = index as usize;
+    if index >= chunks {
+        return Err("invalidRequest");
+    }
+    let sha256: String = digest(&SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let chunk = &bytes[index * CHUNK_BYTES..bytes.len().min((index + 1) * CHUNK_BYTES)];
+    Ok(json!({"operation":"activationExport",
+        "file":{"byteLength":bytes.len(),"sha256":sha256,"chunks":chunks},
+        "index":index,"base64":crate::b64_encode(chunk)}))
+}

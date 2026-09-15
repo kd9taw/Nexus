@@ -1,3 +1,5 @@
+#[path = "export_tests.rs"]
+mod export;
 #[cfg(feature = "radio")]
 #[path = "level_tests.rs"]
 mod level;
@@ -15,6 +17,8 @@ mod receiver_filter;
 #[cfg(feature = "radio")]
 #[path = "selection_tests.rs"]
 mod selection;
+#[path = "settings_tests.rs"]
+mod settings;
 #[cfg(feature = "radio")]
 #[path = "split_tests.rs"]
 mod split;

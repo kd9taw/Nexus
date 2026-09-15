@@ -4,12 +4,17 @@ import { actionCapability, controlContext, stationAction, type StationAction, ty
 import { controlVersion, type OperationVersion } from './operation-version'
 import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
 import {
+  OPERATION_EXPORT_RESPONSE_BYTES,
+  OPERATION_RESPONSE_BYTES,
+  activationSelection,
   logChange,
-  logChangeCapability,
+  logChangeCapabilities,
   manualRecord,
   operationId,
   operationRequest,
   operationResponse,
+  type ActivationExportValue,
+  type ActivationSelection,
   type LogChange,
   type LogChangeOutcome,
   type ManualRecord,
@@ -348,11 +353,14 @@ export class OperationClient {
       }
     })
   }
-  receive(raw: unknown) {
+  /** `bytes` is the reply's size on the wire. Only a chunk of the activation file this browser asked
+   * for may exceed OPERATION_RESPONSE_BYTES. */
+  receive(raw: unknown, bytes = 0) {
+    if (bytes > OPERATION_EXPORT_RESPONSE_BYTES) throw Error('invalidOperation')
     const r = operationResponse(raw)
     const stop = this.pendingStop
     if (stop?.request.requestId === r.requestId) {
-      if ('value' in r && !('stop' in r.value)) throw Error('invalidOperation')
+      if (bytes > OPERATION_RESPONSE_BYTES || ('value' in r && !('stop' in r.value))) throw Error('invalidOperation')
       clearTimeout(stop.timer)
       this.pendingStop = null
       if ('error' in r) {
@@ -368,8 +376,11 @@ export class OperationClient {
     }
     const p = this.pending
     if (!p || p.request.requestId !== r.requestId) return
+    const exported = 'value' in r && 'operation' in r.value && r.value.operation === 'activationExport'
+    if (bytes > OPERATION_RESPONSE_BYTES && !exported) throw Error('invalidOperation')
     if ('value' in r) {
       if ('stop' in r.value) throw Error('invalidOperation')
+      if (exported !== (p.request.type === 'activationExport')) throw Error('invalidOperation')
       const expectsOutcome = p.request.type === 'logManual' || p.request.type === 'stationControl' || p.request.type === 'logChange' || p.request.type === 'result'
       if (expectsOutcome !== 'outcome' in r.value) throw new Error('invalidOperation')
       if (
@@ -389,6 +400,14 @@ export class OperationClient {
     clearTimeout(p.timer)
     this.pending = null
     this.finishBudget(p.request.requestId)
+    if (p.request.type === 'activationExport') {
+      // A read changed nothing at the station, so a refusal (busy, not the controller) costs neither
+      // this browser's lease token nor its station state; the next heartbeat still decides those.
+      this.update({ busy: false })
+      if ('error' in r) p.reject(new Error(r.error))
+      else p.resolve(r.value)
+      return
+    }
     if ('error' in r) {
       this.heartbeatLeaseId = null
       this.leaseUntil = 0
@@ -439,7 +458,8 @@ export class OperationClient {
       })
       this.polledAt = -Infinity
     } else if ('operation' in r.value) {
-      const result = r.value
+      // An export reply returned above, so what reaches here is a station control outcome.
+      const result = r.value as ControlOutcome
       if (p.request.type === 'logManual') throw Error('invalidOperation')
       const terminal = result.outcome === 'applied' || result.outcome === 'rejected'
       let cleared = false
@@ -589,10 +609,32 @@ export class OperationClient {
     try {
       const intent = structuredClone(logChange(change))
       if (this.operationVersion < 4) throw Error('stationUnsupported')
-      const r = await this.submitWrite(s => !!s.controls?.capabilities.includes(logChangeCapability(intent)),
+      const r = await this.submitWrite(s => logChangeCapabilities(intent).every(c => !!s.controls?.capabilities.includes(c)),
         (base, requestId) => ({ type: 'logChange', requestId, ...base, change: intent }), undefined, attempt)
       if (!('operation' in r) || r.operation !== 'logChange') throw Error('invalidRequest')
       return r
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'stationUnavailable'
+      throw new OperationFailure(code, attempt.sent, stationWasBusy(code, attempt.sent))
+    }
+  }
+  /** Read the station's activations (no selection) or one chunk of one activation file, under this
+   * browser's logging lease. A read: it spends no command sequence and changes nothing at the station.
+   * Sent only to a station that offers it, because an older desktop cannot parse the request at all.
+   * The offer is read from the last station state, kept through a command's re-read; the station
+   * decides each read against its live grant and lease. */
+  async activationExport(selection: ActivationSelection | null, index = 0): Promise<ActivationExportValue> {
+    const attempt = { sent: false }
+    try {
+      if (this.operationVersion < 4) throw Error('stationUnsupported')
+      const shown = this.view.state ?? this.view.retainedState
+      if (!this.view.connected || !this.heartbeatLeaseId || shown?.phase !== 'controlling' ||
+        !shown.controls?.capabilities.includes('activationExport')) throw Error('notController')
+      const value = await this.request({ type: 'activationExport', requestId: crypto.randomUUID(), stationBootId: shown.stationBootId,
+        leaseId: this.heartbeatLeaseId, selection: selection && structuredClone(activationSelection(selection)), index },
+      () => { attempt.sent = true })
+      if (!('operation' in value) || value.operation !== 'activationExport') throw Error('invalidOperation')
+      return value
     } catch (error) {
       const code = error instanceof Error ? error.message : 'stationUnavailable'
       throw new OperationFailure(code, attempt.sent, stationWasBusy(code, attempt.sent))

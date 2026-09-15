@@ -387,6 +387,319 @@ pub(super) const RADIO_KEYS: &[&str] = &[
 /// somewhere to go that is not `RadioView`. Declared on the wire beside `withheld`, so the browser
 /// can refuse a document that carries one anyway.
 pub(super) const RADIO_WITHHELD_KEYS: &[&str] = &[];
+
+/// Settings a Remote browser may CHANGE with station control: operating preferences only. Each was
+/// checked not to key the radio, move the dial, band or mode, touch the TX-enable latch, make a sound
+/// at the shack (a sound through the computer's default output can key a VOX rig), start network
+/// traffic, or name a device, port, path, account or credential. Every key is read where it is used
+/// (the decoder on its next slot, the logger on its next contact, the UI on its next render), so
+/// publishing the saved field is the whole of applying it.
+///
+/// Anything not on this list or `WRITABLE_LOGGING_KEYS` is DENIED, and `WRITE_DENIED_KEYS` must
+/// name every other exposed setting, so a setting added later fails the coverage test until someone
+/// classifies it. Mirrored by WRITABLE_*_SETTINGS_KEYS in ui/src/remote-web/configuration-schema.ts.
+pub(crate) const WRITABLE_CONTROL_KEYS: &[&str] = &[
+    // Display: distance units, the Journey streak, and which LOCAL model draws predictions.
+    "units",
+    "journeyStreakEnabled",
+    "propEngine",
+    // Decoding: receive only.
+    "decodeDepth",
+    "decodeFLowHz",
+    "decodeFHighHz",
+    "apDecode",
+    "apCqOnly",
+    "singleDecode",
+    "rttyRxAutoArm",
+    "pskRxAutoArm",
+    "sstvRxAutoArm",
+    // Spots and alerts that make no sound: what counts as confirmed, and how worked-before matches.
+    "alertConfirmTier",
+    "b4MatchMode",
+    // Contest exchange and Cabrillo category: what the exchange fields hold. Editing one sends nothing.
+    "contestQthCounty",
+    "contestQthState",
+    "contestCheck",
+    "contestCqZone",
+    "contestItuZone",
+    "contestPower",
+    "contestCategoryOperator",
+    "contestCategoryPower",
+    "contestCategoryAssisted",
+    "contestCategoryStation",
+    // Macro text. A macro is sent only when the operator presses it; editing one sends nothing.
+    "macros",
+];
+/// Logging preferences, under the logging grant rather than station control: they decide how the
+/// station logs a contact, which is that grant's business, and a browser that may not log has no use
+/// for them.
+pub(crate) const WRITABLE_LOGGING_KEYS: &[&str] = &[
+    "autoLog",
+    "promptToLog",
+    "clearDxAfterLog",
+    "logReportsToComments",
+];
+/// Every other exposed setting, and why a browser may not change it. Withheld settings never reach a
+/// browser and are denied by construction.
+#[cfg(test)]
+pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
+    // Station identity: validated at the keying boundary and sent over the air.
+    "mycall",
+    "mygrid",
+    "opName",
+    "opState",
+    // Licence class and privileges.
+    "licenseClass",
+    // Frequency, band, mode, repeater and split: these move the radio or its transmit VFO.
+    "band",
+    "dialMhz",
+    "sideband",
+    "phoneMode",
+    "operatingMode",
+    "rptrShift",
+    "ctcssToneHz",
+    "rptrOffsetOverrideHz",
+    "splitMode",
+    "workingFrequencies",
+    "qsyEnabled",
+    "qsySet",
+    "qsyCadence",
+    "wheelTuneSensitivity",
+    "issSstvAutoArm",
+    "satDopplerOff",
+    "satVfoMap",
+    "satUplinkRadios",
+    "satMinShiftHz",
+    "satUpdateMs",
+    // Transmit timing, sequencing, power and the TX gates: these key, decide when to key, or bound it.
+    "txEven",
+    "rxOffsetHz",
+    "txOffsetHz",
+    "holdTxFreq",
+    "clockCheck",
+    "preferRrr",
+    "cqMaxCalls",
+    "cqPauseSecs",
+    "directedMaxCalls",
+    "chatMaxCycles",
+    "chatImplicitAck",
+    "cqStallOvers",
+    "disableTxAfter73",
+    "cwIdAfter73",
+    "doubleClickSetsTx",
+    "tuneTimeoutSecs",
+    "tunePowerPct",
+    "txWatchdogMin",
+    "txLevel",
+    "specialOp",
+    "q65PeriodS",
+    "fst4PeriodS",
+    "msk144PeriodS",
+    "jt65Submode",
+    "q65Submode",
+    "js8Speed",
+    "js8HbIntervalMin",
+    "js8CqIntervalMin",
+    "js8HbAck",
+    "js8Autoreply",
+    "js8Relay",
+    "js8IdleWatchdogMin",
+    "js8Info",
+    "js8Status",
+    "js8Groups",
+    "beacon",
+    "beaconTxPercent",
+    "beaconPowerDbm",
+    "beaconRrSlot",
+    "beaconRrSlots",
+    "harqEnabled",
+    "bestCaller",
+    "bestCallerMinSnr",
+    "pounceThreshold",
+    "wantedCalls",
+    "blockedCalls",
+    "stationPowerW",
+    "maxPowerPhone",
+    "maxPowerCw",
+    "maxPowerDigital",
+    "maxPowerAm",
+    "sstvDefaultTxMode",
+    "sstvTxPowerPct",
+    "cwWpm",
+    "cwPitchHz",
+    "rttyBaud",
+    "rttyShiftHz",
+    "rttyReverse",
+    "aprsComment",
+    "aprsPath",
+    "aprsSsid",
+    "aprsSymbolCode",
+    "aprsSymbolTable",
+    "aprsChannelMhz",
+    // Radio, CAT, keying lines and ports, and the radio roster.
+    "pttMethod",
+    "rigModel",
+    "rigModelName",
+    "serialPort",
+    "pttSerialPort",
+    "catRtsState",
+    "catDtrState",
+    "catRtsKeysPtt",
+    "catSerialHandshake",
+    "catPttLineState",
+    "baud",
+    "rigConn",
+    "rigAddr",
+    "omnirigSlot",
+    "icomNativeCat",
+    "splitDetectEnabled",
+    "yaesuRfScope",
+    "icomDataMode",
+    "dataModesPlainSsb",
+    "sstvHoldDataSubmode",
+    "setRigMode",
+    "cwKeyer",
+    "winkeyerPort",
+    "cwKeyPort",
+    "cwKeyLine",
+    "cwReverse",
+    "rttyBackend",
+    "rttyFskLine",
+    "rttyFskPort",
+    "rigctldPort",
+    "catBroker",
+    "catBrokerPort",
+    "catBrokerPtt",
+    "flexRadioIp",
+    "flexNativePan",
+    "flexNativeAudio",
+    "radios",
+    "activeRadio",
+    "radioPegged",
+    "simultaneousRadios",
+    "routingRules",
+    "defaultRadio",
+    // Rotator and amplifier hardware.
+    "rotatorModel",
+    "rotatorPort",
+    "rotatorBaud",
+    "rotatorHost",
+    "rotParkAz",
+    "rotParkEl",
+    "rotReadyAz",
+    "rotReadyEl",
+    "rotPostPass",
+    "rotTolAzDeg",
+    "rotTolElDeg",
+    "rotCalAzDeg",
+    "rotCalElDeg",
+    "rotAllowFlip",
+    "ampModel",
+    "ampPort",
+    // Their own narrow station actions already exist (with hardware checks), or a decoder must be
+    // rebuilt, which saving the field does not do.
+    "ampFollowBand",
+    "rxGain",
+    "aiCwEnabled",
+    "js8RxSpeeds",
+    // Audio devices and levels.
+    "audioIn",
+    "audioOut",
+    "voiceMicDevice",
+    "monitorEnabled",
+    "monitorDevice",
+    "monitorLevel",
+    "source",
+    // Sounds at the shack: a sound through the computer's default output can key a VOX rig.
+    "soundTxState",
+    "soundDecodeTick",
+    "bandEdgeTones",
+    "announceVerbosity",
+    "alertMyCall",
+    "alertCq",
+    "alertNew",
+    "alertDxccBands",
+    "alertGridBands",
+    "alertRareGridBands",
+    "potaNewActivationAlert",
+    "satPassAlertSoundOff",
+    // Network, feeds and integrations, including a contest declaration that stops the spot feeds.
+    "connectWeb",
+    "connectWebPort",
+    "wsjtxUdp",
+    "wsjtxUdpAddr",
+    "hrdLogging",
+    "hrdUdpAddr",
+    "companionAddr",
+    "pskreporter",
+    "clusterEnabled",
+    "clusterHost",
+    "clusterHosts",
+    "aprsIsEnabled",
+    "aprsIsHost",
+    "aprsIsPort",
+    "aprsIsRadiusKm",
+    "aprsIsWatchCalls",
+    "aprsIsWeather",
+    "aprsIsObjects",
+    "aprsIsMessages",
+    "aprsIsUplink",
+    "aprsStationTtlMin",
+    "n3fjpHost",
+    "n3fjpPort",
+    "n3fjpUseEnter",
+    "n3fjpReportBand",
+    "dxkeeperHost",
+    "dxkeeperBasePort",
+    "n1mmAddr",
+    "openingRegional",
+    "unassistedMode",
+    // Uploads and service accounts: they use the station's credentials.
+    "lotwUseAdifLocation",
+    "lotwAutoUpload",
+    "lotwAutoUploadHours",
+    "lotwLastAutoUploadUnix",
+    "lotwMaxAgeDays",
+    "qrzLogbookUpload",
+    "qrzAutoSync",
+    "qrzSyncHours",
+    "qrzLastSyncUnix",
+    "clublogUpload",
+    "eqslUpload",
+    "hrdlogUpload",
+    "wrlUpload",
+    "n3fjpUpload",
+    "cloudlogUpload",
+    "dxkeeperUploads",
+    "n1mmUpload",
+    // Field Day: its own programme. It changes how the station logs and hosts a network scoreboard.
+    "fdActive",
+    "fdClass",
+    "fdEvent",
+    "fdPowerMult",
+    "fdBonuses",
+    "fdBonusesPlanned",
+    "fdSection",
+    "fdOperator",
+    "fdHostEnable",
+    "fdHostPort",
+    "fdEventName",
+    "fdJoinAddr",
+    "fdPositionName",
+    "fdPositionId",
+    "fdScoreboard",
+    "fdScoreboardPort",
+    // Files and paths.
+    "saveWav",
+    "saveQsoWav",
+    "writeAllTxt",
+    "diagDebugLog",
+    // Update channel.
+    "betaUpdates",
+    // Station equipment used by predictions, not an operating preference.
+    "antTxGainDbi",
+    "antRxGainDbi",
+];
 impl Serialize for SettingsView<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut out = serializer.serialize_struct("SettingsView", 269)?;
@@ -894,6 +1207,47 @@ mod tests {
         let before = result["revision"].clone();
         s.cw_wpm = 31;
         assert_ne!(settings(&s).unwrap()["revision"], before);
+    }
+    /// Every exposed setting is classified as writable from a browser or denied, and none is on two
+    /// lists. A setting added later fails here until someone decides which it is.
+    #[test]
+    fn every_exposed_setting_is_classified_writable_or_denied_and_no_list_overlaps() {
+        let unclassified = |exposed: &[&str]| -> Vec<String> {
+            exposed
+                .iter()
+                .filter(|k| {
+                    !WRITABLE_CONTROL_KEYS.contains(k)
+                        && !WRITABLE_LOGGING_KEYS.contains(k)
+                        && !WRITE_DENIED_KEYS.contains(k)
+                })
+                .map(|k| k.to_string())
+                .collect()
+        };
+        assert_eq!(
+            unclassified(SETTINGS_KEYS),
+            Vec::<String>::new(),
+            "classify each new setting as writable from a browser or denied"
+        );
+        // Positive control: a setting shaped like a rig port that nobody classified is caught.
+        let mut with_new = SETTINGS_KEYS.to_vec();
+        with_new.push("rigPort");
+        assert_eq!(unclassified(&with_new), vec!["rigPort".to_string()]);
+        let all: Vec<&str> = WRITABLE_CONTROL_KEYS
+            .iter()
+            .chain(WRITABLE_LOGGING_KEYS)
+            .chain(WRITE_DENIED_KEYS)
+            .copied()
+            .collect();
+        let unique: std::collections::BTreeSet<&str> = all.iter().copied().collect();
+        assert_eq!(unique.len(), all.len(), "a setting is on exactly one list");
+        for key in &all {
+            assert!(
+                SETTINGS_KEYS.contains(key),
+                "{key} is not an exposed setting"
+            );
+            assert!(!WITHHELD_KEYS.contains(key), "{key} is withheld");
+        }
+        assert_eq!(all.len(), SETTINGS_KEYS.len());
     }
     #[test]
     fn complete_saved_programming_list_roundtrips_without_writing_and_distinguishes_failure_from_empty(

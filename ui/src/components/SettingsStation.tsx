@@ -106,9 +106,12 @@ interface Props {
   bandPlan: BandChannel[]
   onUpdate: (key: FieldKey, raw: string) => void
   onSetFreq: (dialMhz: number, band: string, mode: string) => void
+  /** Units is on the Remote allow-list even though the rest of this section is not, so a
+   *  browser may still change it (#248 moved it here from Digital). Undefined off Remote. */
+  unitsLocked?: boolean
 }
 
-export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq }: Props) {
+export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdate, onSetFreq, unitsLocked }: Props) {
   return (
     <fieldset disabled={readOnly} className="settings-section" id="settings-operator-radio">
       <legend>{t('settings.station.legend')}</legend>
@@ -158,6 +161,7 @@ export function SettingsStation({ readOnly=false, form, error, bandPlan, onUpdat
           </label>
           <select
             id="units"
+            disabled={unitsLocked ?? readOnly}
             className="settings-input"
             value={form.units ?? 'auto'}
             onChange={(e) => onUpdate('units', e.target.value)}

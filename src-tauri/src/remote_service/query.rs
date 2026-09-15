@@ -19,9 +19,11 @@ mod parks;
 mod pounce;
 mod recall;
 
+/// The settings a Remote browser may change, and under which grant (see `configuration`).
+pub(super) use configuration::{WRITABLE_CONTROL_KEYS, WRITABLE_LOGGING_KEYS};
+
 /// The same bounded public projection used by the Settings document. Neither
 /// private settings fields nor client-supplied filesystem paths enter its digest.
-#[cfg(feature = "radio")]
 pub(super) fn settings_revision(
     settings: &tempo_app::settings::Settings,
 ) -> Result<String, &'static str> {

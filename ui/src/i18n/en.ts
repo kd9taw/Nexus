@@ -173,6 +173,17 @@ export const EN = {
   "remote.loggingSaving": "Saving QSO at the station…",
   "remote.loggingSaved": "QSO saved to the station log file. External uploads use the station’s existing queues.",
   "remote.loggingUnknown": "The QSO may already be logged. Keep this entry and check its result before trying again.",
+  // remote adif+settings
+  "remote.activationExportDone": "Saved {{name}} to this browser’s downloads.",
+  "remote.activationExportTooLarge": "This activation is too large to download here. Export it with Nexus at the station.",
+  "remote.activationExportMissing": "This activation is no longer in the station’s log. Refresh the log and try again.",
+  "remote.activationExportFailed": "The activation file did not arrive intact, so nothing was saved. Try again.",
+  "remote.settingsEditable": "Operating preferences you can change from here are enabled. Station identity, licence, radio, audio, network, account and upload settings stay read-only and change only at the station.",
+  "remote.settingsChanged": "These settings changed at the station after this page loaded them. They have been reloaded; make your change again.",
+  "remote.settingsRefused": "The station did not accept this change. Nothing was saved.",
+  "remote.settingsUnconfirmed": "The station has not confirmed this save. Check the settings at the station before changing them again.",
+  "remote.settingsTooLarge": "This change is too large to send from the browser. Change fewer macros at a time, or make the change at the station.",
+  "remote.settingsCheckedStation": "I checked the settings at the station — finish this check",
   // remote parity batch 2
   "remote.logChangeUnknown": "The station may already have made this change. Check its result before changing the log again.",
   "remote.logChangeCheck": "Check the result",

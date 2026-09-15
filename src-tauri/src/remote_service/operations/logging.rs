@@ -170,7 +170,16 @@ impl Work {
 
 /// Station hints for log changes. Offered with the logging grant at operation v4, inside
 /// `controls.capabilities`, which older hosted pages filter; `actions` never changes.
-pub(super) const CAPABILITIES: [&str; 4] = ["logEdit", "qslMarks", "otaHunt", "otaActivation"];
+/// `activationExport` is the one-activation ADIF read (see `export.rs`), under the same grant, and
+/// `settingsLogging` the logging preferences (see `settings.rs`).
+pub(super) const CAPABILITIES: [&str; 6] = [
+    "logEdit",
+    "qslMarks",
+    "otaHunt",
+    "otaActivation",
+    "activationExport",
+    "settingsLogging",
+];
 
 /// ⛔ Self-spot posts a PUBLIC DX cluster spot from the station's own call and cluster login. On
 /// since the operator signed it off (2026-09-14), behind a confirm on every click. Setting this to
@@ -231,6 +240,12 @@ pub enum Change {
         #[serde(rename = "dialHz")]
         dial_hz: u64,
     },
+    /// Operating preferences from the station's allow-list (see `settings.rs`), against the Settings
+    /// document revision the browser showed.
+    Settings {
+        revision: String,
+        values: serde_json::Map<String, Value>,
+    },
 }
 
 impl Change {
@@ -244,7 +259,8 @@ impl Change {
             | Self::ClearHunt {}
             | Self::Activation { .. }
             | Self::ClearActivation {}
-            | Self::SelfSpot { .. } => None,
+            | Self::SelfSpot { .. }
+            | Self::Settings { .. } => None,
         }
     }
     /// An edit states when the contact happened; "station time" only means something for a new entry.
@@ -290,10 +306,26 @@ impl Change {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
             }
+            Self::Settings { revision, values } => {
+                key(revision, 64)
+                    && (1..=32).contains(&values.len())
+                    && super::settings::grants(values).is_some()
+            }
             Self::Delete { .. }
             | Self::QslCard { .. }
             | Self::ClearHunt {}
             | Self::ClearActivation {} => true,
+        }
+    }
+    /// The local grants this change needs, as (logging grant, station control). A log change needs
+    /// the logging grant; a preference change needs what its keys need, and the strictest answer for
+    /// a key off the allow-list, which `valid` refuses anyway.
+    pub(super) fn grants(&self) -> (bool, bool) {
+        match self {
+            Self::Settings { values, .. } => {
+                super::settings::grants(values).unwrap_or((true, true))
+            }
+            _ => (true, false),
         }
     }
 }
@@ -305,6 +337,8 @@ pub(super) enum ChangeEvidence {
     StationState,
     /// Queued for the station's connected DX cluster node(s), which send it.
     SpotQueued,
+    /// Operating preferences saved to the station's settings file, then published.
+    SettingsSaved,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -405,6 +439,11 @@ pub(super) enum ChangeWork {
         call: String,
         comment: String,
     },
+    /// Operating preferences saved atomically under the Engine lock, and published.
+    SettingsSaved,
+    /// A preference save that did not complete: nothing was published, and what the file holds is
+    /// unknown.
+    SettingsUnconfirmed,
 }
 
 /// Apply under the Engine lock. Only the fields a remote edit carries change; everything else
@@ -452,6 +491,9 @@ pub(super) fn prepare_change(
                 comment: format!("{program} {active}"),
             });
         }
+        Change::Settings { revision, values } => {
+            return super::settings::prepare(engine, revision, values)
+        }
         _ => {}
     }
     // Fold in another instance's appends first, so the index found below cannot shift under it.
@@ -490,7 +532,8 @@ pub(super) fn prepare_change(
             | Change::ClearHunt {}
             | Change::Activation { .. }
             | Change::ClearActivation {}
-            | Change::SelfSpot { .. } => false,
+            | Change::SelfSpot { .. }
+            | Change::Settings { .. } => false,
         };
         if !applied {
             return Err(ChangeReason::ContextChanged);
@@ -552,6 +595,16 @@ impl ChangeWork {
             Self::State => {
                 return ChangeOutcome::Applied {
                     evidence: ChangeEvidence::StationState,
+                }
+            }
+            Self::SettingsSaved => {
+                return ChangeOutcome::Applied {
+                    evidence: ChangeEvidence::SettingsSaved,
+                }
+            }
+            Self::SettingsUnconfirmed => {
+                return ChangeOutcome::Unknown {
+                    reason: ChangeReason::PersistenceUnconfirmed,
                 }
             }
             Self::Spot {

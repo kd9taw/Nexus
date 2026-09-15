@@ -60,6 +60,8 @@ fn pending_confirm_requires_logging_not_radio_or_transmit_permission() {
             "otaHunt",
             "otaActivation",
             "selfSpot"
+            "activationExport",
+            "settingsLogging"
         ])
     );
     assert!(state["transmitEpoch"].is_null());
