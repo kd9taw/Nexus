@@ -105,3 +105,15 @@ it.each([null, false])('identifies an observation-only session without offering 
   fireEvent.click(toggle())
   expect(screen.getByText('Monitoring only. Operating controls are not available to this browser.')).toBeTruthy()
 })
+
+it('offers sign-out beside disconnect only when the page passes one', () => {
+  const h = fixture()
+  fireEvent.click(toggle())
+  expect(screen.getByRole('button', { name: 'Disconnect and return to stations' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull()
+  const signOut = vi.fn()
+  h.rerender(<SessionStatus client={h.client} stale={false} disconnect={h.disconnect} signOut={signOut} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+  expect(signOut).toHaveBeenCalledTimes(1)
+  expect(h.disconnect).not.toHaveBeenCalled()
+})

@@ -21,10 +21,14 @@ Read this part before changing anything here.
 - **Pairing finishes at the radio.** A code is generated at the shack and approved
   by a press at the shack. There is no path that pairs a station you are not
   standing at, and that is deliberate rather than unfinished.
-- **Every grant is separate and re-armed.** Approving one browser approves only
-  that browser. Control and transmit are distinct permissions, and they do not
-  survive a Nexus restart.
-- **A local operator always wins.** Anyone at the shack takes the radio back.
+- **Every browser is approved at the shack.** Approving one browser approves only
+  that browser, for that station. Station control and FT8/FT4 transmit are distinct
+  permissions. What an approved browser was allowed is kept across a Nexus restart
+  for as long as it stays approved, but nothing transmits after a restart until the
+  browser is allowed to and presses TX On.
+- **The shack can end remote control.** One button in Nexus at the shack ends remote
+  control and clears the remote permissions. Nothing hands the radio back on its own
+  just because someone sits down at the shack.
 - **The native path cannot be forged from a page.** `native()` in `authority.ts`
   refuses any request carrying an `Origin` header, so a browser cannot reach the
   station endpoints whatever credential it holds.

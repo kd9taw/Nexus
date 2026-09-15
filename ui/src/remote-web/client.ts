@@ -150,6 +150,10 @@ export class HostedConnection {
   private lastClockRenewal = -Infinity
   private clockFailures = 0
   private anchor: { server: number; start: number } | null = null
+  /** Called once when the service refuses a new ticket (401/403): the trial ended, the station or
+   *  browser was revoked, or the sign-in expired. The connection has already stopped retrying, and
+   *  without this the page kept showing a workspace that could never come back. */
+  onRefused: ((error: RemoteError) => void) | null = null
 
   constructor(private client: BrowserClient, private stationId: string, private readonly applicationMode = false) {
     this.application = new ApplicationClient(message => {
@@ -271,7 +275,11 @@ export class HostedConnection {
       socket.onclose = () => { if (this.socket === socket) { this.socket = null; this.retry() } }
       socket.onerror = () => { this.latest = null; this.application.disconnected(); this.operations.disconnected() }
     } catch (error) {
-      if (error instanceof RemoteError && [401, 403].includes(error.status)) { this.latest = null; return }
+      if (error instanceof RemoteError && [401, 403].includes(error.status)) {
+        this.latest = null
+        if (!this.disposed) this.onRefused?.(error)
+        return
+      }
       this.retry()
     }
   }

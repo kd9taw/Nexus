@@ -316,3 +316,23 @@ it.each([
   expect(remote.operations.getSnapshot().connected).toBe(false)
   remote.stop()
 })
+
+it('tells the page once when a ticket is refused, and not for a failure it will retry', async () => {
+  const { remote, post, socket } = await connection()
+  const refused = vi.fn()
+  remote.onRefused = refused
+  post.mockRejectedValueOnce(new RemoteError(503))
+  socket.end()
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(post).toHaveBeenCalledTimes(2)
+  // Control: an unavailable service is retried, not reported as the end of access.
+  expect(refused).not.toHaveBeenCalled()
+  post.mockRejectedValue(new RemoteError(403, 'trialRequired'))
+  await vi.advanceTimersByTimeAsync(2000)
+  expect(post).toHaveBeenCalledTimes(3)
+  expect(refused).toHaveBeenCalledTimes(1)
+  expect(refused.mock.calls[0]![0].code).toBe('trialRequired')
+  await vi.advanceTimersByTimeAsync(120000)
+  expect(refused).toHaveBeenCalledTimes(1)
+  remote.stop()
+})

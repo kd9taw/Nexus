@@ -8,9 +8,9 @@ import type { AlertToggle, StationAlertControl } from './browser-alerts'
 
 // Presentation belongs to this browser. Expanding help cannot acquire, release
 // or replace station authority, and never remounts the underlying Nexus app.
-export function SessionStatus({ client, stale, disconnect, display, alerts, rareAlerts, potaAlerts }: {
-  client?: OperationClient | null; stale: boolean; disconnect: () => void; display?: PresentationState; alerts?: AlertToggle
-  rareAlerts?: StationAlertControl; potaAlerts?: StationAlertControl
+export function SessionStatus({ client, stale, disconnect, signOut, display, alerts, rareAlerts, potaAlerts }: {
+  client?: OperationClient | null; stale: boolean; disconnect: () => void; signOut?: () => void; display?: PresentationState
+  alerts?: AlertToggle; rareAlerts?: StationAlertControl; potaAlerts?: StationAlertControl
 }) {
   const [expanded, setExpanded] = useState(false)
   const id = useId()
@@ -35,6 +35,8 @@ export function SessionStatus({ client, stale, disconnect, display, alerts, rare
       <p>{(client?.operationVersion ?? 0) >= 4 ? t('remote.ftControlPreview') : (client?.operationVersion ?? 0) >= 2 ? t('remote.controlPreview')
         : client?.enabled ? t('remote.applicationLoggingPreview') : t('remote.applicationObserver')}</p>
       <button type="button" className="remote-button" onClick={disconnect}>{t('remote.disconnect')}</button>
+      {/* Signing out used to mean disconnecting first and finding the button on the stations page. */}
+      {signOut && <button type="button" className="remote-button" onClick={signOut}>{t('remote.signOut')}</button>}
       {display && <button type="button" className="remote-button" onClick={() => {
         display.change(display.presentation === 'quick' ? 'full' : 'quick')
         setExpanded(false)

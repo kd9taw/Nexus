@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { BrowserClient, RemoteError } from './client'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { BrowserClient, HostedConnection, RemoteError } from './client'
 import type { AccountSession } from './client'
 import { RemoteApp } from './RemoteApp'
 
@@ -408,4 +408,97 @@ it('renames a station in place, and keeps the two cards independent', async () =
   service.post.mockClear()
   fireEvent.submit(second.closest('form')!)
   expect(service.post).not.toHaveBeenCalled()
+})
+
+// At two stations the pairing card used to disappear with no word about why.
+it('says why pairing is gone once the account holds two stations, and that browsers are approved per station', async () => {
+  const one = account()
+  one.stations.push({ id: crypto.randomUUID(), name: 'Home', device: null })
+  client(one)
+  render(<RemoteApp />)
+  // Control: below the limit the pairing form is there and neither line is.
+  expect(await screen.findByLabelText('Pairing code')).toBeTruthy()
+  expect(screen.queryByText(/already has two stations/i)).toBeNull()
+  expect(screen.queryByText(/approves its browsers separately/i)).toBeNull()
+  cleanup()
+
+  const two = account()
+  two.stations.push({ id: crypto.randomUUID(), name: 'Home', device: null }, { id: crypto.randomUUID(), name: 'Cabin', device: null })
+  client(two)
+  render(<RemoteApp />)
+  expect((await screen.findByText(/already has two stations/i)).getAttribute('role')).toBe('status')
+  expect(screen.queryByLabelText('Pairing code')).toBeNull()
+  expect(screen.getAllByText(/approves its browsers separately/i)).toHaveLength(2)
+})
+
+it('tells an approved browser that signing out does not remove its approval', async () => {
+  const pending = account()
+  pending.stations.push({ id: crypto.randomUUID(), name: 'Home', device: null })
+  client(pending)
+  render(<RemoteApp />)
+  await screen.findByLabelText('Name this browser')
+  // Control: nothing approved, nothing to remove.
+  expect(screen.queryByText(/signing out keeps this browser approved/i)).toBeNull()
+  cleanup()
+
+  const approved = account()
+  approved.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1 } })
+  client(approved)
+  render(<RemoteApp />)
+  expect(await screen.findByText(/signing out keeps this browser approved/i)).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Remove this browser’s approval' })).toBeTruthy()
+})
+
+function openableStation() {
+  const session = account()
+  session.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1 } })
+  const service = client(session)
+  let refuse: ((error: RemoteError) => void) | undefined
+  vi.spyOn(HostedConnection.prototype, 'start').mockImplementation(function (this: HostedConnection) {
+    refuse = error => this.onRefused?.(error)
+  })
+  const stop = vi.spyOn(HostedConnection.prototype, 'stop').mockImplementation(() => {})
+  return { session, service, stop, refuse: (error: RemoteError) => refuse!(error) }
+}
+
+// The relay closes a session the moment the trial ends, and the next ticket is refused. The page
+// used to keep the dead session up saying "check that Nexus is running", which blamed the shack.
+it('goes back to the stations page and names the end when an open session is refused', async () => {
+  const h = openableStation()
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  expect(await screen.findByRole('button', { name: 'Disconnect and return to stations' })).toBeTruthy()
+  // Control: nothing refused yet, so the session is still up.
+  expect(screen.queryByRole('heading', { name: 'Your stations' })).toBeNull()
+
+  h.session.entitlement = { ...h.session.entitlement, enabled: false, state: 'ended' }
+  act(() => h.refuse(new RemoteError(403, 'trialRequired')))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/Remote access to this station ended/)
+  expect(screen.getByRole('heading', { name: 'Your stations' })).toBeTruthy()
+  expect(await screen.findByText(/Your trial ended/)).toBeTruthy()
+  expect(screen.queryByText(/check the connection|check that Nexus is running/i)).toBeNull()
+  expect(h.stop).toHaveBeenCalled()
+})
+
+it('names an expired sign-in, not an ended session, when that is why the ticket was refused', async () => {
+  const h = openableStation()
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  await screen.findByRole('button', { name: 'Disconnect and return to stations' })
+  act(() => h.refuse(new RemoteError(401, 'signInRequired')))
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toMatch(/sign-in has expired/i)
+  expect(alert.textContent).not.toMatch(/access to this station ended/i)
+})
+
+it('signs out from inside an open session, not only from the stations page', async () => {
+  const h = openableStation()
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  const signOut = await screen.findByRole('button', { name: 'Sign out' })
+  // Control: opening a session signs nobody out.
+  expect(h.service.signOut).not.toHaveBeenCalled()
+  fireEvent.click(signOut)
+  await waitFor(() => expect(h.service.signOut).toHaveBeenCalledTimes(1))
+  expect(h.stop).toHaveBeenCalled()
 })

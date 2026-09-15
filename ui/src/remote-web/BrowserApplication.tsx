@@ -29,7 +29,7 @@ import '../cockpit-panes.css'
 import './application.css'
 
 type Bootstrap = { snapshot: AppSnapshot; settings: Settings; bandPlan: BandChannel[]; cwPhone: boolean; keyboard: boolean; collections: boolean; insights: boolean; dxpeditions: boolean; memories: boolean; ota: boolean; fieldDay: boolean; js8: boolean; stationModes: boolean; navigation: boolean; configuration: boolean }
-export function BrowserApplication({ connection, disconnect }: { connection: HostedConnection; disconnect: () => void }) {
+export function BrowserApplication({ connection, disconnect, signOut }: { connection: HostedConnection; disconnect: () => void; signOut?: () => void }) {
   const [presentation, setPresentation] = useState<RemotePresentation>('full')
   const [radioDetails, setRadioDetails] = useState(false)
   const display = useMemo(() => ({ presentation, change: setPresentation, radioDetails, setRadioDetails }), [presentation, radioDetails])
@@ -113,8 +113,8 @@ export function BrowserApplication({ connection, disconnect }: { connection: Hos
   const potaAlerts = usePotaAlerts(collections, !stale, stale || client.supports(OTA_COMMAND))
   // Stable props: the 500 ms tick re-renders this component to re-read the sample age, and a fresh
   // `remote` object every tick re-rendered the whole workspace with it.
-  const status = useMemo(() => <SessionStatus client={connection.operations} stale={staleShown} disconnect={disconnect} display={display} alerts={alerts} rareAlerts={rareAlerts} potaAlerts={potaAlerts} />,
-    [connection.operations, staleShown, disconnect, display, alerts, rareAlerts, potaAlerts])
+  const status = useMemo(() => <SessionStatus client={connection.operations} stale={staleShown} disconnect={disconnect} signOut={signOut} display={display} alerts={alerts} rareAlerts={rareAlerts} potaAlerts={potaAlerts} />,
+    [connection.operations, staleShown, disconnect, signOut, display, alerts, rareAlerts, potaAlerts])
   const remote = useMemo(() => boot && { ...boot, status, stale, staleShown }, [boot, status, stale, staleShown])
   if (!boot) return <div className="app remote-monitor-app remote-service-app">
     {status}

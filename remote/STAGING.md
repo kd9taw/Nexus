@@ -256,7 +256,8 @@ the rig and amplifier; never count test fixtures as a hardware result.
 
 Exercise local disable, device/station revocation, trial expiry, lost network,
 desktop restart, locked/unavailable OS credential storage and stale measurements.
-Remote must start disabled after a desktop restart. Repeat on mobile web with
+After a desktop restart Remote must come back on by itself if it was on when Nexus
+closed, and nothing may transmit until the browser presses TX On. Repeat on mobile web with
 cellular, backgrounding and screen locking. Record the actual platform, revision,
 measured interruption/reconnect behavior and Cloudflare usage before widening the pilot.
 
