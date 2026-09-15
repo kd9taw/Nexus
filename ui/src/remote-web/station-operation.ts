@@ -10,6 +10,12 @@ export const AGC_SPEEDS = ['auto', 'fast', 'mid', 'slow', 'off'] as const
 export type AgcSpeed = (typeof AGC_SPEEDS)[number]
 export const PHONE_MODES = ['auto', 'USB', 'LSB', 'FM', 'AM'] as const
 export type PhoneMode = (typeof PHONE_MODES)[number]
+/** Which VFO carries the uplink during a pass — `Settings.satVfoMap`, kebab for kebab the Rust
+ * enum (`tempo_app::settings::SatVfoMap`). Literal here, like the APRS channels below: this
+ * grammar is compiled into the relay, which must not pull in the app's type module. */
+export const SAT_VFO_MAPS = ['off', 'downlink-only', 'uplink-only', 'a-down-b-up', 'a-up-b-down',
+  'main-down-sub-up', 'main-up-sub-down'] as const
+export type SatVfoMap = (typeof SAT_VFO_MAPS)[number]
 export const RADIO_LEVELS = ['power', 'micGain', 'nr', 'compression', 'notch'] as const
 export type RadioLevel = (typeof RADIO_LEVELS)[number]
 export type FtCallSelection = { call: string; grid: string | null; message: string | null; snr: number | null; freq: number | null }
@@ -42,6 +48,27 @@ export type StationAction =
   | { action: 'radio.repeater'; outputMhz: number; shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number }
   // The APRS channel pick: one of the regional 2 m APRS channels, FM simplex at the station.
   | { action: 'radio.aprsTune'; dialMhz: number }
+  // ⭐ The satellite section, by operator gesture only. Arming a track is the one gesture in the
+  // app that leaves the station steering the dial, the split and the mast by itself for minutes,
+  // so it is a click and never a timer, an alarm or a spot — exactly as on the desktop — and the
+  // track the station arms for it ends when this browser does (station side: `SatTrack`).
+  | { action: 'satellite.track'; name: string; aosUnix: number }
+  | { action: 'satellite.stopTrack' }
+  // The transponder handed to the Doppler engine, by its raw row in the list the `satellite`
+  // detail page returned; null hands the dial back. `auto` marks a pick the "Work this pass"
+  // chain made rather than a click on a card, which the station judges differently mid-pass.
+  | { action: 'satellite.transponder'; name: string; index: number | null; auto: boolean }
+  // The readiness rail's two fixes: the Doppler switch, and the uplink VFO mapping together with
+  // the consent that it is the mapping for the radio Doppler would drive. A null `map` confirms
+  // the mapping already in force — the page's copy of it is poll-time state, so the station
+  // resolves it at write time; `radioId` names the rig the page's rail SHOWED, so a radio switch
+  // between the poll and the click can never consent for a rig the operator never saw named.
+  | { action: 'satellite.doppler'; on: boolean }
+  | { action: 'satellite.uplinkMap'; map: SatVfoMap | null; radioId: number | null }
+  // Peg-lock from the satellite radio-binding line: the app-wide "don't auto-switch radios".
+  | { action: 'satellite.peg'; on: boolean }
+  // "Update elements": one manual TLE refresh attempt. The station keeps every policy gate.
+  | { action: 'satellite.elements' }
   // The rotator, by operator gesture only: an azimuth, a callsign's entity, or stop.
   | { action: 'rotator.point'; azimuthDeg: number }
   | { action: 'rotator.pointAtCall'; call: string }
@@ -102,6 +129,11 @@ export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'f
   'aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator',
   // The parity leftovers. Same rule: a station advertises each one only with its action.
   'workRttySpot', 'sstvGallery',
+  // The satellite section: one hint for the whole of it, because its verbs are one operator act.
+  // Deliberately NOT in TX_IDLE_CAPABILITIES: an operator works an FM bird by transmitting DURING
+  // the pass the same controls armed, and the rail's Stop — which ends that pass — must stay live
+  // exactly when a transmission is armed rather than going dead at the moment it is wanted most.
+  'satellite',
   // Listening to the station's receive audio. The one hint here that names no ACTION: it
   // is answered on the audio lane, not by a station control, so it appears in no action
   // map. It rides this list because it is given under the same station-control grant, and
@@ -109,7 +141,7 @@ export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'f
   'audioListen'] as const
 /** The hints added after operation v3 froze — batch 1 and the parity leftovers after it. An older
  * page does not know these names and drops them as hints. */
-export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator', 'workRttySpot', 'sstvGallery'] as const satisfies readonly ControlCapability[]
+export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator', 'workRttySpot', 'sstvGallery', 'satellite'] as const satisfies readonly ControlCapability[]
 /** Batch-1 controls that move the transmit frequency, start a retune or feed the FT sequencer.
  * They stay disabled while this browser's transmission is armed; the station refuses them too. */
 export const TX_IDLE_CAPABILITIES = ['redecode', 'workDigitalSpot', 'workRttySpot', 'splitTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning'] as const satisfies readonly ControlCapability[]
@@ -132,6 +164,9 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.repeater': 'repeaterTuning',
   'radio.aprsTune': 'aprsTuning',
   'rotator.point': 'rotator', 'rotator.pointAtCall': 'rotator', 'rotator.stop': 'rotator',
+  'satellite.track': 'satellite', 'satellite.stopTrack': 'satellite', 'satellite.transponder': 'satellite',
+  'satellite.doppler': 'satellite', 'satellite.uplinkMap': 'satellite', 'satellite.peg': 'satellite',
+  'satellite.elements': 'satellite',
   'sstv.deleteImage': 'sstvGallery',
   'radio.scope': 'rigScope',
   'radio.memoryRecall': 'memoryRecall',
@@ -159,6 +194,10 @@ function object(raw: unknown, keys: string[]): Record<string, unknown> {
   try { return displayObject(raw, keys) } catch { return invalid() }
 }
 const oneOf = (v: unknown, choices: readonly string[]) => typeof v === 'string' && choices.includes(v)
+/** A bird name as the wire admits it: the page's own schedule row, bounded and printable. Naming
+ * the bird is the station's job — it resolves the string against its element set and its alias
+ * table, so a name this admits is still refused there if no such bird exists. */
+const satelliteName = (v: unknown) => typeof v === 'string' && v.length >= 1 && v.length <= 64 && !/[^ -~]/.test(v)
 /** An FM machine: a closed shift, a whole offset (0 = band convention) and a tone that is 0 (none)
  * or in the CTCSS range to a tenth of a hertz. */
 const repeaterMachine = (shift: unknown, offsetHz: unknown, toneHz: unknown) =>
@@ -392,6 +431,36 @@ export function stationAction(raw: unknown): StationAction {
       break
     case 'rotator.stop':
       object(a, ['action'])
+      break
+    case 'satellite.track':
+      object(a, ['action', 'name', 'aosUnix'])
+      // The station resolves the bird against its own element set (aliases included) and refuses
+      // anything it cannot name; this only keeps the wire value bounded and printable. `aosUnix`
+      // is the schedule row's own AOS — the station matches a pass to it within ±3 min.
+      if (!satelliteName(a.name) || !integer(a.aosUnix) || a.aosUnix < 1 || a.aosUnix > 253402300799) invalid()
+      break
+    case 'satellite.stopTrack': case 'satellite.elements':
+      object(a, ['action'])
+      break
+    case 'satellite.transponder':
+      object(a, ['action', 'name', 'index', 'auto'])
+      // `index` indexes the list the detail page returned, dead rows included — the station
+      // indexes that same list and refuses a dead pick by name rather than shifting past it.
+      // null hands the dial back. The cap is the wire's, not the bird's: the station knows how
+      // many rows it has.
+      if (!satelliteName(a.name) || typeof a.auto !== 'boolean' ||
+        (a.index !== null && (!integer(a.index) || a.index > 4095))) invalid()
+      break
+    case 'satellite.doppler': case 'satellite.peg':
+      object(a, ['action', 'on'])
+      if (typeof a.on !== 'boolean') invalid()
+      break
+    case 'satellite.uplinkMap':
+      object(a, ['action', 'map', 'radioId'])
+      // null map = confirm the mapping already in force, which the station resolves at write time.
+      // null radioId = the radio active at the station then; a number is the rig the rail NAMED.
+      if ((a.map !== null && !oneOf(a.map, SAT_VFO_MAPS)) ||
+        (a.radioId !== null && (!integer(a.radioId) || a.radioId > 0xffffffff))) invalid()
       break
     case 'sstv.deleteImage':
       object(a, ['action', 'finishedUtc', 'mode'])

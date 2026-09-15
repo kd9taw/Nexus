@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Work a satellite pass from the browser.** Nexus Remote could already show you the passes, the
+  schedule, a bird's transmitters and a live track — but every control in the Satellites section
+  was greyed out, so you could watch a pass and do nothing about it. From a browser you can now
+  arm and stop a track, pick a transponder or hand the dial back, lock back onto the bird, turn
+  Doppler on, choose and confirm which VFO carries the uplink, pin the radio, and fetch fresh
+  orbital elements — the same controls, doing the same things, as at the shack.
+- **Remote Stop also ends a satellite track.** A browser has one Stop, and a track keeps steering
+  the dial and the mast on its own; Stop now disarms it, hands the dial back and halts the rotator
+  as well as ending any transmission. A track armed from a browser also ends by itself if that
+  browser goes away — the session closes, the lease runs out, or you take the station back at the
+  shack — so the radio is never left following a bird for nobody.
 
 
 

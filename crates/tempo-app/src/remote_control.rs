@@ -43,6 +43,42 @@ impl Revocation {
     }
 }
 
+/// Does the browser that STARTED a piece of standing station work still hold authority?
+///
+/// A [`Permit`] cannot answer that: it carries an execution deadline of a few seconds, because it
+/// admits one bounded hardware write. Some station work is started by a browser gesture and then
+/// runs at the station for minutes on its own — the satellite track loop, which steers the dial
+/// and the mast until LOS. That work has to end when the browser that asked for it goes away, and
+/// "goes away" is exactly what this generation counts: the lease expiring or being released, the
+/// socket closing, the operator taking the station back or revoking the browser all move it.
+///
+/// It is NOT a permission. It admits nothing and grants nothing; it only answers `held()`. What
+/// the work is allowed to do was decided when the gesture was admitted.
+#[derive(Clone)]
+pub struct Standing {
+    owner: Arc<AtomicU64>,
+    generation: u64,
+}
+
+impl Revocation {
+    /// A standing check against this authority's CURRENT generation.
+    pub fn standing(&self) -> Standing {
+        Standing {
+            owner: self.0.clone(),
+            generation: self.0.load(Ordering::SeqCst),
+        }
+    }
+}
+
+impl Standing {
+    /// True while the authority that issued this is still the live one. Exhaustion
+    /// (`u64::MAX`, which permanently refuses new permits) reads as not held.
+    pub fn held(&self) -> bool {
+        let now = self.owner.load(Ordering::SeqCst);
+        now != u64::MAX && now == self.generation
+    }
+}
+
 #[derive(Clone)]
 pub struct Permit {
     owner: Arc<AtomicU64>,
@@ -103,6 +139,16 @@ impl WritePermission {
 impl Permit {
     pub fn valid(&self, now: Instant) -> bool {
         now < self.deadline && self.owner.load(Ordering::SeqCst) == self.generation
+    }
+
+    /// The deadline-free half of this permit, for work the gesture STARTS and the station then
+    /// runs on its own. See [`Standing`] — it carries no permission, only the authority generation
+    /// this gesture was admitted under.
+    pub fn standing(&self) -> Standing {
+        Standing {
+            owner: self.owner.clone(),
+            generation: self.generation,
+        }
     }
 
     pub fn deadline(&self) -> Instant {

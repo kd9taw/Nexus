@@ -1159,7 +1159,14 @@ impl Authority {
                     let executed = if let Some(transmit_permit) = transmit_permit {
                         station::execute_transmit(&mut engine, context, action, transmit_permit)
                     } else {
-                        station::execute(&mut engine, context, action, permit, self.spots.as_ref())
+                        station::execute(
+                            &mut engine,
+                            shared_engine,
+                            context,
+                            action,
+                            permit,
+                            self.spots.as_ref(),
+                        )
                     };
                     let completion = match executed {
                         Ok(result) => result,

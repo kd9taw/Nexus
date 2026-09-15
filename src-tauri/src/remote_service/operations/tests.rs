@@ -62,6 +62,9 @@ mod rtty_spot;
 #[path = "rx_gain_tests.rs"]
 mod rx_gain;
 #[cfg(feature = "radio")]
+#[path = "satellite_tests.rs"]
+mod satellite;
+#[cfg(feature = "radio")]
 #[path = "scope_tests.rs"]
 mod scope;
 #[cfg(feature = "radio")]
@@ -430,7 +433,8 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "rotator",
             "rigScope",
             "workRttySpot",
-            "sstvGallery"
+            "sstvGallery",
+            "satellite"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

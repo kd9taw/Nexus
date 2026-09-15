@@ -26,7 +26,7 @@
 // binding prints (MODE_FM/MODE_SSB below), and the sky dome's own plate text —
 // those plates are SIZED from the string by the viewBox arithmetic this file
 // documents at length, so they are instrument tick labels, not prose.
-import { useStationControl } from '../stationAccess'
+import { SatelliteControlContext, useSatelliteAllowed, useSatelliteControl, useSatelliteDetail } from '../remote-web/satellite'
 import { NavigationMapContext, useNavigation, useSatelliteLive, useSatelliteSchedule } from '../remote-web/useNavigation'
 import type { SatelliteData, SatelliteDetailData } from '../remote-web/navigation'
 import { displayNow } from '../remote-web/display-validation'
@@ -1494,7 +1494,7 @@ function TrackRail({
   onRefreshElements: () => void
   scrollRef: React.RefObject<HTMLDivElement>
 }) {
-  const stationControl=useStationControl()
+  const stationControl=useSatelliteAllowed()
   // The rotor half of the track is fixed at arm time (DTO `mode`) except for a
   // rotator that stops answering, which demotes it mid-pass (`rotorLost` — the
   // track keeps the dial and runs to LOS); the Doppler row below reports the
@@ -1804,7 +1804,7 @@ function SatRadioBinding({
   pegged: boolean
   onTogglePeg: (on: boolean) => void
 }) {
-  const stationControl=useStationControl()
+  const stationControl=useSatelliteAllowed()
   const leg = (confirmed: number | null, pending: number | null, arrow: string) =>
     confirmed != null
       ? `${confirmed.toFixed(3)} ${arrow}`
@@ -1911,7 +1911,7 @@ function SatRadioBinding({
  * Layout: content-height row in the arm bar, sharing the rail/binding box
  * treatment (ui-layout §2). */
 function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
-  const stationControl=useStationControl()
+  const stationControl=useSatelliteAllowed()
   return (
     <div className="sat-lockon" data-testid="sat-lockon">
       <div className="sat-rail-row">
@@ -1934,7 +1934,13 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
 }
 
 export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Props) {
-  const stationControl=useStationControl()
+  // Every gesture in this section — arm, stop, pick, Doppler, mapping, peg, elements — asks this
+  // one question, on the desktop and from a browser alike. `allowed` draws the control; `send`
+  // carries the gesture to the station, and only a browser ever uses it (`local` short-circuits
+  // every write below to the desktop's own command, unchanged).
+  const sat=useSatelliteControl()
+  const satDetail=useSatelliteDetail()
+  const stationControl=sat.allowed
   const remoteView=useNavigation<SatelliteData>('satellites')
   const remote=remoteView.remote
   const remoteLive=useSatelliteLive()
@@ -2607,6 +2613,22 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
 
   const armTrack = (name: string, aosUnix: number) => {
     if(!stationControl)return
+    if(!sat.local){
+      // The station arms it and the live sample brings the track back on the 1 s poll the rail
+      // already runs. NO success toast, deliberately: the desktop's composes what the pass will
+      // drive from the arm's own DTO, which a browser does not get — and the rail that lands a
+      // moment later says it exactly, state by state. A toast guessing at it would be the app
+      // claiming something it was not told. Nothing is mirrored optimistically either: a refused
+      // arm must never leave this page describing a pass the station is not flying.
+      sat.send({action:'satellite.track',name,aosUnix})
+        // `invalidAction` is the station declining the arm — no grid, a bird it cannot name, no
+        // matching pass in the next 48 h, or elements past the acting ceiling. That is the
+        // desktop's own "nothing to track"; anything else is the command not getting through.
+        .catch((e)=>{const r=e instanceof Error?e.message:`${e}`
+          pushToast(r==='invalidAction'?t('sat.toast.track.nothing'):t('sat.toast.track.failed',{error:r}),
+            r==='invalidAction'?'info':'error',6000)})
+      return
+    }
     startSatTrack(name, aosUnix)
       .then((armed) => {
         setTrack(armed)
@@ -2632,6 +2654,14 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
   }
   const disarmTrack = () => {
     if(!stationControl)return
+    if(!sat.local){
+      // The station disarms, hands the dial back and halts the mast — the one verb, the rail
+      // Stop's own. The live sample clears the track and the hold within a second; mirroring it
+      // here would claim a stop the station may have refused.
+      sat.send({action:'satellite.stopTrack'})
+        .catch((e)=>pushToast(t('sat.toast.track.failed',{error:e instanceof Error?e.message:`${e}`}),'error'))
+      return
+    }
     stopSatTrack()
       .then(() => {
         setTrack(null)
@@ -2654,6 +2684,17 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
    * resolves — a caller chaining on it never needs its own catch. */
   const refreshTles = () => {
     if(!stationControl)return Promise.resolve()
+    if(!sat.local){
+      // The station runs the one attempt with every policy gate it always had. What LANDED is
+      // read from the elements themselves — the schedule document carries the age the rail's
+      // Elements gate shows, and it refreshes on its own — so there is no status to compose here
+      // and no claim made about one.
+      setTleRefreshing(true)
+      return sat.send({action:'satellite.elements'})
+        .then(()=>{remoteView.refresh();remoteDetail.refresh()})
+        .catch((e)=>pushToast(`${e instanceof Error?e.message:e}`,'error'))
+        .finally(()=>setTleRefreshing(false))
+    }
     setTleRefreshing(true)
     return fetchTlesNow()
       .then((s) => {
@@ -2680,6 +2721,25 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
    * this pass", disclosed in the toast and on the card. */
   const pickTransponder = (name: string, index: number | null, label = '', auto = false) => {
     if(!stationControl)return Promise.resolve()
+    if(!sat.local){
+      // The same pick, indexing the same list: the detail document the section reads IS the list
+      // `get_sat_detail` returns, which is the list the station indexes.
+      //
+      // ⚠️ The toast says the PICK landed, never that the radio moved — the command returns Ok on
+      // every engine-side refusal, its honesty living in the binding. The desktop re-reads the
+      // binding here to raise that refusal as a toast; a browser does not, because the binding is
+      // on the live sample the rail polls anyway and the radio-binding line prints its note a
+      // second later. What must never happen is this toast growing into a claim about the dial.
+      return sat.send({action:'satellite.transponder',name,index,auto})
+        .then(()=>{
+          setDialOptOut((prev)=>{const next=new Set(prev);if(index==null)next.add(name);else next.delete(name);return next})
+          if(index==null)pushToast(t('sat.toast.transponder.cleared'),'success',4000)
+          else pushToast(t('sat.toast.transponder.working',{name,label,
+            auto:auto?t('sat.toast.transponder.working.auto'):''}),'success',4000)
+        })
+        .catch((e)=>pushToast(t('sat.toast.transponder.failed',
+          {error:e instanceof Error?e.message:`${e}`}),'error'))
+    }
     pickBusy.current = true
     // `auto` travels to the backend as well as into the local mirror: it is the
     // one thing the engine cannot work out for itself, and while a pass is
@@ -2753,6 +2813,14 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
   // never show a switch position the store refused.
   const writeDopplerOn = () => {
     if(!stationControl)return
+    if(!sat.local){
+      // The station makes the one-field change and saves it. The switch's live value comes back on
+      // the sample's settings, so nothing is mirrored here — the rail must never show a switch
+      // position the store refused, remote or not.
+      sat.send({action:'satellite.doppler',on:true})
+        .catch((e)=>pushToast(t('sat.toast.doppler.failed',{error:e instanceof Error?e.message:`${e}`}),'error'))
+      return
+    }
     settingsWriteBusy.current = true
     getSettings()
       .then((s: Settings) => setSettings({ ...s, satDopplerOff: false }))
@@ -2778,6 +2846,11 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
    * to 🔓. That is the "goes pinned, then goes unpinned" field report. */
   const writePegged = (on: boolean) => {
     if(!stationControl)return
+    if(!sat.local){
+      sat.send({action:'satellite.peg',on})
+        .catch((e)=>pushToast(t('sat.toast.peg.failed',{error:e instanceof Error?e.message:`${e}`}),'error'))
+      return
+    }
     settingsWriteBusy.current = true
     setPegLock(on)
       .then(() => setPegged(on))
@@ -2803,6 +2876,15 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
    * radio the operator never saw named. */
   const writeVfoMap = (v: SatVfoMap | undefined, radio?: number) => {
     if(!stationControl)return
+    if(!sat.local){
+      // `undefined` = confirming the mapping already in force, which the station resolves at write
+      // time; it travels as an explicit null rather than an absent field, because this wire names
+      // every value it carries. `radio` is the rig the rail SHOWED — consenting for the radio that
+      // happens to be active when the click lands would authorize one the operator never saw.
+      sat.send({action:'satellite.uplinkMap',map:v??null,radioId:radio??null})
+        .catch((e)=>pushToast(t('sat.toast.vfoMap.failed',{error:e instanceof Error?e.message:`${e}`}),'error'))
+      return
+    }
     settingsWriteBusy.current = true
     confirmSatUplink(v, radio)
       // `v` undefined = confirming the mapping already in force (round 4):
@@ -2830,16 +2912,20 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
     setSelected(p.name)
     wantRailScroll.current = true
     Promise.all([
-      getSatDetail(p.name),
+      // The bird's own transmitter list, which is what the auto-pick indexes. A browser fetches
+      // the same document the section reads, once, for this gesture — the watched copy is still
+      // arriving for a bird the operator has only just clicked.
+      sat.local ? getSatDetail(p.name) : satDetail(p.name),
       // The ENGINE's hold, not this session's last click: the hold is
       // released backend-side at LOS and on a live-track stop, so on a
       // bird's NEXT pass (LEO repeats every ~100 min) a stale local mirror
       // here skipped the re-pick — arming a pass whose Doppler had nothing
-      // to tune while the rail showed every gate green.
-      getSatTransponder().catch(() => null),
+      // to tune while the rail showed every gate green. Over Remote the live
+      // sample carries that same engine-side hold, once a second.
+      sat.local ? getSatTransponder().catch(() => null) : Promise.resolve(remoteLive?.held ?? null),
     ])
       .then(([d, held]) => {
-        setDetail(d) // seed the pane now; the selected-effect keeps it fresh
+        if (sat.local) setDetail(d) // seed the pane now; the selected-effect keeps it fresh
         // The chain's tail (auto-pick → arm), deferrable: past the 14 d STALE
         // line it waits on the operator's confirm instead of running.
         const proceed = () =>
@@ -2889,6 +2975,10 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
 
   return (
     <NavigationMapContext.Provider value={remote?{connect:null,satellites:view,track,ageMs:remoteView.ageMs}:null}>
+    {/* The one answer every control in this section follows — published rather than threaded,
+        because the readiness rail, the radio binding and the lock-on pill each ask it and none of
+        them can work it out from what they are given. */}
+    <SatelliteControlContext.Provider value={stationControl}>
     <div className="sats-view">
       <header className="sats-head">
           {remote&&<span role="status" className="dim">{view?t('remote.collectionObserver'):remoteView.loading?t('remote.collectionLoading'):t('remote.collectionUnavailable')}</span>}
@@ -4135,6 +4225,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
         </div>
       </Dialog>
     </div>
+    </SatelliteControlContext.Provider>
     </NavigationMapContext.Provider>
   )
 }
