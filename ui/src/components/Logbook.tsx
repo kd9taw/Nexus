@@ -42,6 +42,8 @@ import {
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
+import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
+import type { QrzCorrectResult } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -177,6 +179,8 @@ function activationFilename(a: LoggedActivation): string {
 
 /** Q-codes and service names printed as labels. Proper nouns and shorthand, not words. */
 const QRZ_LABEL = 'QRZ'
+/** The row's "correct at QRZ" mark — the service name plus a pencil, not prose. */
+const QRZ_CORRECT_LABEL = 'QRZ✎'
 const EQSL_LABEL = 'eQSL'
 const CLUBLOG_LABEL = 'CL'
 const HRDLOG_LABEL = 'HL'
@@ -400,6 +404,14 @@ export function Logbook({
   // "Mark all as already on LoTW" confirmation — for an imported legacy log that was
   // uploaded through another tool, so the unsent count reflects reality.
   const [showMarkLotw, setShowMarkLotw] = useState(false)
+  // "Correct at QRZ" — one contact, never a selection, never automatic. `phase` is the whole
+  // state machine: read QRZ's copy → show exactly what changes → send → report what QRZ said.
+  const [qrzFix, setQrzFix] = useState<{
+    q: LoggedQso
+    phase: 'reading' | 'confirm' | 'sending' | 'done' | 'recovering'
+    text: string
+    result: QrzCorrectResult | null
+  } | null>(null)
   // Index (in the loaded `log` array) being edited; null = the form logs a NEW QSO.
   const [editIndex, setEditIndex] = useState<number | null>(null)
   // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
@@ -625,6 +637,52 @@ export function Logbook({
       }
     } catch (e) {
       pushToast(t('logbook.push.qrz.failed', { detail: String(e) }), 'error', 6000)
+    }
+  }
+
+  // Correct ONE contact already in the QRZ logbook. A normal push cannot do this: QRZ answers
+  // "Duplicate" and keeps its copy. This reads QRZ's own record back first and sends it whole
+  // with only the corrected fields changed — every refusal, and the reading of QRZ's answer,
+  // lives in the backend.
+  const onCorrectQrz = async (q: LoggedQso) => {
+    setQrzFix({ q, phase: 'reading', text: '', result: null })
+    try {
+      const p = await qrzCorrectPreview(q, 1)
+      setQrzFix({ q, phase: 'confirm', text: p.confirmation, result: null })
+    } catch (e) {
+      // A refusal is not an error the operator caused; it is the reason this will not happen,
+      // and it is written to be read.
+      setQrzFix(null)
+      pushToast(String(e), 'error', 9000)
+    }
+  }
+
+  // The operator has read what will change and said yes.
+  const onCorrectQrzConfirm = async () => {
+    if (!qrzFix) return
+    const q = qrzFix.q
+    setQrzFix({ ...qrzFix, phase: 'sending' })
+    try {
+      const r = await qrzCorrectApply(q, 1)
+      // ⚠️ `r.ok` is QRZ's RESULT=REPLACE and nothing else. A RESULT=OK means QRZ added a
+      // SECOND copy instead of overwriting, and the dialog stays open saying so.
+      setQrzFix({ q, phase: 'done', text: r.message, result: r })
+    } catch (e) {
+      setQrzFix({ q, phase: 'done', text: String(e), result: null })
+    }
+  }
+
+  // Remove the duplicate a missed replace created — permanent, and only ever the record QRZ
+  // itself reported adding.
+  const onCorrectQrzRecover = async () => {
+    if (!qrzFix) return
+    setQrzFix({ ...qrzFix, phase: 'recovering' })
+    try {
+      const said = await qrzCorrectUndoMiss()
+      setQrzFix({ ...qrzFix, phase: 'done', text: said, result: null })
+      pushToast(said, 'success', 7000)
+    } catch (e) {
+      setQrzFix({ ...qrzFix, phase: 'done', text: String(e) })
     }
   }
 
@@ -1898,6 +1956,15 @@ export function Logbook({
                   <button
                     type="button"
                     className="log-rowbtn"
+                    onClick={() => void onCorrectQrz(q)}
+                    title={t('logbook.row.qrzCorrect.title', { call: q.call })}
+                    aria-label={t('logbook.row.qrzCorrect.aria', { call: q.call })}
+                  >
+                    {QRZ_CORRECT_LABEL}
+                  </button>
+                  <button
+                    type="button"
+                    className="log-rowbtn"
                     onClick={() => void onPushClublog(q)}
                     title={t('logbook.row.pushClublog.title', { call: q.call })}
                     aria-label={t('logbook.row.pushClublog.aria', { call: q.call })}
@@ -2107,6 +2174,73 @@ export function Logbook({
               <button type="button" className="logconfirm-log" onClick={onMarkLotwUploaded}>
                 {t('logbook.markLotw.confirm', { formatted: unsentLotw.toLocaleString() })}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {qrzFix && (
+        <div
+          className="logconfirm-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('logbook.qrzCorrect.aria')}
+        >
+          <div className="logconfirm">
+            <div className="logconfirm-head">
+              <h2>{t('logbook.qrzCorrect.heading', { call: qrzFix.q.call })}</h2>
+            </div>
+            {/* The body is composed in Rust: it names the callsign, the date and every field
+                that will change, or reports exactly what QRZ answered. Shown verbatim so the
+                one place that knows what a correction does is the place that says so. */}
+            <p className="purge-warn" style={{ whiteSpace: 'pre-wrap' }}>
+              {qrzFix.phase === 'reading'
+                ? t('logbook.qrzCorrect.reading', { call: qrzFix.q.call })
+                : qrzFix.text}
+            </p>
+            <div className="logconfirm-actions">
+              {qrzFix.phase === 'done' ? (
+                <>
+                  <button
+                    type="button"
+                    className="logconfirm-discard"
+                    onClick={() => setQrzFix(null)}
+                  >
+                    {t('logbook.qrzCorrect.close')}
+                  </button>
+                  {/* Offered, never automatic: QRZ's delete is permanent. */}
+                  {qrzFix.result?.canRecover && (
+                    <button
+                      type="button"
+                      className="logconfirm-log"
+                      onClick={() => void onCorrectQrzRecover()}
+                    >
+                      {t('logbook.qrzCorrect.recover')}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="logconfirm-discard"
+                    onClick={() => setQrzFix(null)}
+                  >
+                    {t('logbook.qrzCorrect.cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    className="logconfirm-log"
+                    disabled={qrzFix.phase !== 'confirm'}
+                    onClick={() => void onCorrectQrzConfirm()}
+                  >
+                    {qrzFix.phase === 'sending'
+                      ? t('logbook.qrzCorrect.busy')
+                      : qrzFix.phase === 'recovering'
+                        ? t('logbook.qrzCorrect.recovering')
+                        : t('logbook.qrzCorrect.confirm')}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

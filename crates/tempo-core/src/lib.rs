@@ -36,6 +36,7 @@ pub mod pota;
 pub mod process;
 pub mod psk;
 pub mod qrz;
+pub mod qrz_correct;
 pub mod qso;
 pub mod qsy;
 pub mod reconcile;

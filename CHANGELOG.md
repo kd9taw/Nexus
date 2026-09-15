@@ -9,7 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Correct one contact at QRZ.** Phone contacts already in your QRZ logbook carry no sideband,
+  because Nexus never recorded one until now — and an ordinary push cannot repair them: QRZ sees
+  the contact is already there, answers "duplicate", and keeps its copy. Each row in the logbook
+  now has a **QRZ✎** button that overwrites QRZ's copy of that one contact.
 
+  It is deliberately narrow. **One contact at a time** — there is no "fix them all", no bulk
+  selection, and nothing runs on a timer or in the background. Nexus first reads QRZ's own record
+  back, shows you the callsign, the date and exactly which fields will change, and waits for you
+  to say yes. What goes back to QRZ is QRZ's own record with only those fields changed, so
+  anything QRZ holds that Nexus does not track is returned to it untouched.
+
+  It refuses rather than guess. Nexus will not send a correction that would change the callsign,
+  band, mode or time — QRZ finds the record to overwrite by exactly those four details, so
+  changing one would add a second contact instead of correcting the first. It also refuses a
+  contact with no time of day recorded, one with no station callsign, one dated outside the date
+  range of the logbook your API key opens, and any selection that is not exactly one contact.
+  Each refusal says which it was.
+
+  If QRZ's matcher disagrees with ours it adds a second copy rather than overwriting, and QRZ's
+  answer says so. Nexus reports that as a **failure**, names the record QRZ just added, and offers
+  to delete exactly that record and nothing else — it never deletes on its own. QRZ's delete is
+  permanent and there is no undo, at QRZ or here, so take a QRZ ADIF export before your first run.
+  Your QRZ confirmations are not at risk from the correction itself: QRZ works those out
+  continuously from both operators' records and nothing you upload can set or clear one.
 
 
 ### Changed
