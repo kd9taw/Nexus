@@ -712,7 +712,15 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
 })
 
 
-for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} produce one durable QSO, preserve receipts and refuse local takeover`, {timeout:60000},async()=>{
+// v4 gets a bigger clock than the rest, and it is a BUDGET, not a slackened assertion. v1-v3 run
+// 4-6 s; v4 runs the stop-anything section (three local keyings, each behind the relay's 1.1 s Stop
+// window), the preference save, and the whole FT8+FT4 settings/CQ/runtime sweep. MEASURED on an
+// idle box (load 2.55): 61.9 s against the old 60 s — it was failing by 3%. That clock was set when
+// the v4 block was a fraction of its current size, and everything since was added while this file
+// could not run at all (a stray quote made it a SyntaxError from 2dfadeb3 until it was fixed), so
+// nothing ever re-timed it. 180 s is ~3x the idle measurement, which leaves room for a loaded
+// machine while still catching a real hang. If v4 grows again, split it rather than raising this.
+for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} produce one durable QSO, preserve receipts and refuse local takeover`, {timeout:operationVersion>=4?180000:60000},async()=>{
  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
  const app=await runtime(),probe=await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY,app.origin)
  let socket
@@ -886,7 +894,12 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
      const afterStation=await probe.send({type:'settingsEvidence'})
      assert.equal(afterStation.contestCheck,'73');assert.equal(afterStation.savedContestCheck,'73')
      assert.equal(afterStation.txEnabled,false);assert.equal(afterStation.dialHz,shownStation.dialHz)
-     assert.equal(controls.transmitEpoch, null)
+     // Stop anything (operator decision 2026-09-14): from v4 the stop token goes to any browser
+     // holding station control, before and without any transmit permission; versions 1-3 carry no
+     // token at all. This line used to assert null unconditionally, which contradicted the same
+     // object's assertion above. A preference save must not clear the token either.
+     if (operationVersion >= 4) assert.match(controls.transmitEpoch, /^[0-9a-f]{16}$/)
+     else assert.equal(controls.transmitEpoch, null)
      const grant = await probe.send({type:'transmitPermission',deviceId:device.deviceId,allow:true})
      assert.equal(grant.ok,true,grant.error)
      assert.deepEqual(grant.status.transmitPermissions,[device.deviceId])
