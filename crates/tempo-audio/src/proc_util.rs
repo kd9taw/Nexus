@@ -80,7 +80,7 @@ pub fn runs_ok(bin: &std::ffi::OsStr) -> bool {
 #[cfg(unix)]
 pub(crate) fn runs_ok_within(bin: &std::ffi::OsStr, budget: std::time::Duration) -> bool {
     use std::os::unix::process::ExitStatusExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     // ⚠️ "COULD NOT EXEC RIGHT NOW" IS NOT "THIS BINARY IS UNUSABLE", and collapsing the two is
     // the same mistake EINTR was on the CAT read path. This function's verdict decides whether
     // Nexus ABANDONS an operator's deliberately chosen rigctld and substitutes its own guess, so
@@ -103,7 +103,7 @@ pub(crate) fn runs_ok_within(bin: &std::ffi::OsStr, budget: std::time::Duration)
     //
     // ENOENT / EACCES / bad arch are real answers about the binary and still return immediately.
     let spawn = |_: ()| {
-        Command::new(bin)
+        tempo_core::process::command(bin)
             .arg("--version")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -516,7 +516,7 @@ pub(crate) mod orphan_ledger {
     /// the launchd/systemd default PATH); a zombie still lists, which for the PARENT check
     /// is the conservative direction (its records wait for the next launch).
     fn proc_comm(pid: u32) -> Option<String> {
-        let out = std::process::Command::new("ps")
+        let out = tempo_core::process::command("ps")
             .args(["-p", &pid.to_string(), "-o", "comm="])
             .output()
             .ok()?;
@@ -529,7 +529,7 @@ pub(crate) mod orphan_ledger {
 
     /// Send `sig` (a `kill(1)` signal argument, e.g. `"-TERM"`) to `pid`. Best-effort.
     fn send_signal(pid: u32, sig: &str) {
-        let _ = std::process::Command::new("kill")
+        let _ = tempo_core::process::command("kill")
             .args([sig, &pid.to_string()])
             .status();
     }

@@ -33,6 +33,7 @@ pub mod lotw;
 pub mod lotw_upload;
 pub mod message;
 pub mod pota;
+pub mod process;
 pub mod psk;
 pub mod qrz;
 pub mod qso;

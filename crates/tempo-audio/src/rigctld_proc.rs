@@ -1051,7 +1051,7 @@ pub fn spawn_rotctld(
             rot_bin.to_string_lossy()
         ),
     );
-    let mut cmd = Command::new(rot_bin);
+    let mut cmd = tempo_core::process::command(rot_bin);
     cmd.args(&args);
     // ⭐ CAPTURE THE ROTATOR DAEMON'S STDERR, which used to be thrown away. rotctld EXITS when
     // it cannot open the port (measured on the bundled 4.7.1: `-r COM99` → "serial_open: serial
@@ -1060,12 +1060,6 @@ pub fn spawn_rotctld(
     // was left with a rotator that never answered and nothing anywhere naming a cause. Hamlib
     // knew: wrong model, bad port, port busy, refused baud — all of it goes here.
     cmd.stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     let mut child = cmd.spawn()?;
     let said = drain_stderr(&mut child, "rotctld");
     #[cfg(windows)]
@@ -1202,16 +1196,10 @@ fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> S
 /// exit, or output we cannot read; every caller turns that into "claim nothing".
 pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
     tempo_core::applog::info("proc", &format!("run rigctld {}", args.join(" ")));
-    let mut cmd = Command::new(resolve_rigctld());
+    // No console window, same as the daemon itself (Nexus is a GUI app).
+    let mut cmd = tempo_core::process::command(resolve_rigctld());
     cmd.args(args);
     cmd.stdin(Stdio::null());
-    // Same no-console-window treatment as the daemon itself (Nexus is a GUI app).
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     match cmd.output() {
         Ok(out) if out.status.success() => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
         _ => None,
@@ -1375,7 +1363,7 @@ impl ServedRig {
 /// `output()` drains the pipes while it waits; the bound lives on the receive, so a wedged child
 /// still cannot hold up a rig open (the thread is left to finish on its own).
 fn capture_bounded(cmd: &mut Command, timeout: std::time::Duration) -> Option<String> {
-    let mut owned = Command::new(cmd.get_program());
+    let mut owned = tempo_core::process::command(cmd.get_program());
     owned.args(cmd.get_args());
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1410,7 +1398,7 @@ pub fn daemon_serving_port(tcp_port: u16) -> Option<ServedRig> {
     // `ps` rather than a crate: this reads the process list once per CAT open, and it is the one
     // thing every Unix exposes the same way.
     let out = capture_bounded(
-        Command::new("ps").args(["-axo", "pid=,command="]),
+        tempo_core::process::command("ps").args(["-axo", "pid=,command="]),
         std::time::Duration::from_millis(1_500),
     )?;
     parse_ps_for_port(&out, tcp_port)
@@ -1476,25 +1464,22 @@ pub fn spawn_rigctld(
     let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line, lines);
     let bin = resolve_rigctld();
     // EVERY CHILD PROCESS SAYS SO. Operator report 2026-08-19: "moving to cw, I saw an ultra
-    // quick flash of what looked like a terminal screen". Every spawn Nexus makes on Windows
-    // already carries CREATE_NO_WINDOW — verified site by site — so reading the code cannot
-    // name the flash, and it does not reproduce on the build machine. A line per spawn turns
-    // the next flash into a timestamp with a binary beside it; a flash with NO line beside it
-    // is just as useful, because it rules the child processes out and points at the webview.
+    // quick flash of what looked like a terminal screen". A line per spawn turns the next flash
+    // into a timestamp with a binary beside it; a flash with NO line beside it is just as useful,
+    // because it rules the child processes out and points at the webview.
+    //
+    // ⚠️ This comment used to say every spawn already carried CREATE_NO_WINDOW, "verified site by
+    // site". The 1.12.0 clock diagnosis added a site without it (see `clockdiag::capture`), and
+    // the claim stayed in place while the flashes came back. The flag now comes from
+    // `tempo_core::process::command`, and a test fails the build for any spawn that bypasses it.
     tempo_core::applog::info("proc", &format!("spawn rigctld: {}", bin.to_string_lossy()));
-    let mut cmd = Command::new(bin);
+    // No console window for the daemon (Nexus is a GUI app).
+    let mut cmd = tempo_core::process::command(bin);
     cmd.args(&args);
     // Capture the daemon's own stderr so Hamlib's connection errors (port open failed, read
     // timeout, wrong model) land IN the CI-V diagnostic — for a Hamlib/Icom rig the byte-level
     // tap can't see the serial link, so without this a "rig never answered" fault is invisible.
     cmd.stderr(Stdio::piped());
-    // On Windows, don't pop a console window for the daemon (Tempo is a GUI app).
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     let mut child = cmd.spawn()?;
     // Record the exact launch (model / port / baud) so a diagnostic capture names the rig config
     // even when logging is armed AFTER the daemon started. A no-op line when logging is off.

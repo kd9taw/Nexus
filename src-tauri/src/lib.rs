@@ -1495,7 +1495,7 @@ fn radio_launch_info(state: State<'_, SharedEngine>) -> Result<RadioLaunchInfo, 
 #[tauri::command]
 fn choose_radio(app: tauri::AppHandle, radio_id: u32) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    std::process::Command::new(exe)
+    tempo_core::process::command(exe)
         .arg("--profile")
         .arg(radio_profile_key(radio_id))
         .spawn()
@@ -16086,13 +16086,8 @@ fn lotw_upload_batch(
     // Resolve + run TQSL one-shot, capturing its result.
     let tqsl = resolve_tqsl(&tqsl_path);
     let args = tempo_core::lotw_upload::tqsl_args(location.as_deref(), &path_str);
-    let mut cmd = std::process::Command::new(&tqsl);
+    let mut cmd = tempo_core::process::command(&tqsl); // no console window on Windows
     cmd.args(&args);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW (TQSL is GUI-linked)
-    }
     let output = cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             "TQSL isn't installed (or its path is wrong). LoTW uploads are signed locally by TQSL — install it from lotw.arrl.org, or set the TQSL path in Settings.".to_string()
@@ -20137,7 +20132,7 @@ const LAUNCHER_PROBE: std::time::Duration = std::time::Duration::from_millis(400
 #[cfg(target_os = "linux")]
 fn spawn_launcher(program: &str, args: &[&str], url: &str) -> Result<(), String> {
     use std::process::Stdio;
-    let mut child = std::process::Command::new(program)
+    let mut child = tempo_core::process::command(program)
         .args(args)
         .arg(url)
         .stdin(Stdio::null())

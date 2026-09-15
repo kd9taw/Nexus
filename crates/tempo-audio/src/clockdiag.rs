@@ -36,7 +36,7 @@
 //! about what a machine with only W32Time does. Every diagnosis reports what it
 //! FOUND rather than asserting what it means.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// Third-party Windows time clients. If one of these is running it owns the
@@ -571,8 +571,15 @@ pub fn parse_third_party(tasklist_out: &str) -> Option<String> {
 ///
 /// Absolute paths on Windows: a GUI-launched process gets a minimal `PATH`, a
 /// trap this tree already documents in `rigctld_proc.rs`.
+///
+/// ⚠️ **No console window, and 1.12.0 shipped without that.** Every one of these
+/// is a console program, and [`detect`] runs five of them back to back a few
+/// seconds after launch and every ten minutes. Spawned with a bare
+/// `Command::new`, each one flashed a command-prompt window on Windows, and
+/// testers saw three or four at a time. [`tempo_core::process::command`] is what
+/// prevents that.
 fn capture(program: &str, args: &[&str]) -> Option<String> {
-    let mut child = Command::new(program)
+    let mut child = tempo_core::process::command(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -797,7 +804,7 @@ pub fn run_repair_elevated(repair: Repair) -> bool {
     );
     // Absolute path: a GUI-launched process gets a minimal `PATH`, the trap this
     // tree documents in `rigctld_proc.rs`.
-    Command::new(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+    tempo_core::process::command(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .status()
         .map(|st| st.success())
