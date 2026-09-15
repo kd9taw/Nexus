@@ -9412,6 +9412,11 @@ impl Engine {
     /// and claims nothing otherwise. "ISS (ZARYA)" deliberately resolves to
     /// `None`: LoTW's ISS designation is not derivable from the catalog name,
     /// and a QSO record is permanent — a guessed value is worse than none.
+    ///
+    /// ⚠️ A SHAPE, NOT A VERDICT (#296): plenty of names match it that LoTW has never listed
+    /// (CUBY-1, TOM-1, UWE-4). What may reach a record is decided by
+    /// [`Self::lotw_sat_name`] and its table — which also supplies LoTW's own name for the
+    /// ISS, as a measured fact rather than the guess this function still refuses to make.
     fn sat_designator(label: &str) -> Option<String> {
         let name = label.split('|').next().unwrap_or("").trim();
         let is_designator = |t: &str| {
@@ -9439,6 +9444,67 @@ impl Engine {
         }
         // …else the whole name IS the designator ("AO-7", "RS-44").
         is_designator(name).then(|| name.to_string())
+    }
+
+    /// The satellite names LoTW accepts, keyed by what OUR OWN catalog calls the bird (#296).
+    ///
+    /// ⚠️ MEASURED 2026-09-14, and it needs review as new birds appear. Against LoTW's
+    /// accepted-satellite list (as TQSL 11.34 carries it) and the bundled SatNOGS catalog: of the
+    /// 38 designators the catalog can produce, **11 are on that list**. The other 27 are not —
+    /// real designators LoTW has never listed (GO-32, AO-95, IO-26, CO-55, LO-74, OO-38…) and
+    /// names that merely match the designator SHAPE without being one (CUBY-1…5, TOM-1…3, UWE-3/4,
+    /// CANX-4/5, JACK-002). The last rows are the birds LoTW does list under a different spelling
+    /// than the catalog's.
+    ///
+    /// This table is OURS, hand-kept, deliberately not a copy of anyone's file, and the reason it
+    /// may be short: a bird missing here is stamped with NOTHING, which costs a satellite credit
+    /// the operator can still add by hand, while a WRONG name is refused by TQSL and — through the
+    /// `-a compliant` funnel — can take a whole signed batch with it. Unknown fails closed.
+    ///
+    /// Left out on purpose, as UNCONFIRMED: the catalog's `AISAT`, `UKUBE 1` and `BY70-4` resemble
+    /// LoTW's `AISAT1`, `UKUBE1` and `BY70-1`, but they were not verified to be the same bird, and
+    /// a guess here is exactly what this table exists to stop.
+    const LOTW_SAT_NAMES: &[(&str, &str)] = &[
+        // On LoTW's list under the designator the catalog already yields.
+        ("AO-10", "AO-10"),
+        ("AO-16", "AO-16"),
+        ("AO-27", "AO-27"),
+        ("AO-40", "AO-40"),
+        ("AO-91", "AO-91"),
+        ("AO-123", "AO-123"),
+        ("JO-97", "JO-97"),
+        ("LO-19", "LO-19"),
+        ("NO-44", "NO-44"),
+        ("SO-50", "SO-50"),
+        ("VO-52", "VO-52"),
+        // On LoTW's list, spelled differently there than in our catalog.
+        ("ISS (ZARYA)", "ARISS"),
+        ("TAURUS-1", "TAURUS"),
+        ("SONATE-2", "SONATE"),
+        ("TEVEL2-1", "TEV2-1"),
+        ("TEVEL2-2", "TEV2-2"),
+        ("TEVEL2-3", "TEV2-3"),
+        ("TEVEL2-4", "TEV2-4"),
+        ("TEVEL2-5", "TEV2-5"),
+        ("TEVEL2-6", "TEV2-6"),
+        ("TEVEL2-7", "TEV2-7"),
+        ("TEVEL2-8", "TEV2-8"),
+        ("TEVEL2-9", "TEV2-9"),
+    ];
+
+    /// #296: the name LoTW ACCEPTS for the bird this catalog label names, or `None` when we
+    /// cannot say. The whole catalog name is matched first (that is how a bird LoTW spells
+    /// differently is corrected), then the designator [`Self::sat_designator`] derives from it.
+    /// Whole names only — never a substring, or `SWISSCUBE` would answer for the ISS.
+    fn lotw_sat_name(label: &str) -> Option<&'static str> {
+        let name = label.split('|').next().unwrap_or("").trim();
+        let find = |key: &str| {
+            Self::LOTW_SAT_NAMES
+                .iter()
+                .find(|(ours, _)| ours.eq_ignore_ascii_case(key))
+                .map(|(_, lotw)| *lotw)
+        };
+        find(name).or_else(|| Self::sat_designator(label).as_deref().and_then(find))
     }
 
     /// The station callsign to stamp on a contact: the operator's current `mycall`, ADIF-cased
@@ -9618,7 +9684,7 @@ impl Engine {
         // ADIF by hand; the Sat VUCC card's caveat line is gone with them.
         if rec.prop_mode.is_none() && rec.sat_name.is_none() {
             if let Some(st) = &self.sat_tune {
-                if let Some(des) = Self::sat_designator(&st.label) {
+                if let Some(name) = Self::lotw_sat_name(&st.label) {
                     let f_hz = if rec.freq_mhz > 0.0 {
                         (rec.freq_mhz * 1e6) as i64
                     } else {
@@ -9628,7 +9694,7 @@ impl Engine {
                     let guard = st.transponder.half_width_hz as i64 + 20_000;
                     if centre > 0 && (f_hz - centre).abs() <= guard {
                         rec.prop_mode = Some("SAT".into());
-                        rec.sat_name = Some(des);
+                        rec.sat_name = Some(name.to_string());
                     }
                 }
             }
@@ -38619,6 +38685,81 @@ mod tests {
         );
     }
 
+    /// #296: a satellite contact may carry only a name LoTW ACCEPTS. The designator SHAPE
+    /// matches plenty of birds LoTW has never heard of — CUBY-1, TOM-1 and UWE-4 are cubesat
+    /// names, not OSCAR designators — and a record carrying one is a record TQSL refuses, which
+    /// through the `-a compliant` funnel can take a whole signed batch with it. Unknown ⇒ no name.
+    #[test]
+    fn only_a_satellite_name_lotw_accepts_reaches_a_record() {
+        // Controls: the birds LoTW does list still stamp, by designator and after a spelling fix.
+        assert_eq!(
+            Engine::lotw_sat_name("SAUDISAT 1C (SO-50)|FM"),
+            Some("SO-50")
+        );
+        assert_eq!(Engine::lotw_sat_name("AO-91|FM"), Some("AO-91"));
+        assert_eq!(
+            Engine::lotw_sat_name("JY1SAT (JO-97)|linear"),
+            Some("JO-97")
+        );
+
+        // Real designators LoTW does not list.
+        for label in [
+            "TECHSAT 1B (GO-32)|FM",
+            "FOX-1CLIFF (AO-95)|FM",
+            "ITAMSAT (IO-26)|FM",
+            "CUTE-1 (CO-55)|beacon",
+        ] {
+            assert_eq!(Engine::lotw_sat_name(label), None, "{label}");
+        }
+        // Shape-only matches: names that merely look like a designator.
+        for label in ["CUBY-1|linear", "TOM-1|FM", "UWE-4|beacon", "CANX-5|beacon"] {
+            assert_eq!(Engine::lotw_sat_name(label), None, "{label}");
+        }
+        // The spellings LoTW wants for birds it DOES list.
+        assert_eq!(Engine::lotw_sat_name("ISS (ZARYA)|FM"), Some("ARISS"));
+        assert_eq!(Engine::lotw_sat_name("TEVEL2-4|FM"), Some("TEV2-4"));
+        assert_eq!(Engine::lotw_sat_name("TEVEL2-9|FM"), Some("TEV2-9"));
+        assert_eq!(Engine::lotw_sat_name("TAURUS-1|FM"), Some("TAURUS"));
+        assert_eq!(Engine::lotw_sat_name("SONATE-2|FM"), Some("SONATE"));
+        // A catalog name that merely CONTAINS one we know is not that bird.
+        assert_eq!(Engine::lotw_sat_name("SWISSCUBE|beacon"), None);
+    }
+
+    /// #296 end to end: a contact on an unlisted bird's downlink carries NOTHING — not a wrong
+    /// SAT_NAME, and not a lone PROP_MODE either (TQSL hard-errors on half the pair).
+    #[test]
+    fn a_contact_on_an_unlisted_bird_carries_no_satellite_fields() {
+        use tempo_core::doppler::Transponder;
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some((
+            "CUBY-1|linear".into(),
+            0,
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut on_bird = qrec("W1AW", "70cm");
+        on_bird.freq_mhz = 436.795;
+        e.log_qso(on_bird);
+        let r = &e.get_log()[0];
+        assert_eq!(
+            r.sat_name, None,
+            "a name LoTW refuses must not reach the record"
+        );
+        assert_eq!(r.prop_mode, None, "and never a lone PROP_MODE");
+
+        // Control: the same contact on a bird LoTW lists still carries both.
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut ok = qrec("K1ABC", "70cm");
+        ok.freq_mhz = 436.795;
+        e.log_qso(ok);
+        let r = &e.get_log()[1];
+        assert_eq!(r.sat_name.as_deref(), Some("SO-50"));
+        assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
+    }
+
     #[test]
     fn the_satellite_stamp_fires_on_the_downlink_and_nowhere_else() {
         // THE REBUILT STAMP (2026-08-10), pinned across its whole gate matrix. The
@@ -38653,19 +38794,42 @@ mod tests {
         );
         assert_eq!(hf.sat_name, None);
 
-        // 3. No safe designator → no stamp AT ALL (never a lone PROP_MODE, which TQSL
-        //    hard-rejects and which would wedge its whole upload batch).
+        // 3. A bird we cannot name for LoTW → no stamp AT ALL (never a lone PROP_MODE, which
+        //    TQSL hard-rejects and which would wedge its whole upload batch).
+        //
+        //    ⚠️ #296 changed this row's EXAMPLE, not its rule. The ISS stood here because
+        //    "ZARYA" is not a designator and LoTW's name for it could not be derived; the
+        //    table now carries that name as a measured fact, so the ISS stamps it (3b below)
+        //    and the unnameable case is a shape-only match instead — which is the larger half
+        //    of what #296 found.
         let mut e3 = Engine::new("KD9TAW", "EN52", 0);
         e3.set_sat_transponder(Some((
+            "CUBY-1|linear".into(),
+            0,
+            Transponder::channel(145_990_000, 437_800_000),
+        )));
+        let mut unknown = qrec("N0CALL", "70cm");
+        unknown.freq_mhz = 437.800;
+        e3.log_qso(unknown);
+        assert_eq!(
+            e3.get_log()[0].prop_mode,
+            None,
+            "CUBY-1 matches the designator shape; LoTW does not list it"
+        );
+        assert_eq!(e3.get_log()[0].sat_name, None, "both-or-neither: neither");
+
+        // 3b. …and the ISS, which LoTW lists as ARISS, now stamps that (#296).
+        let mut e4 = Engine::new("KD9TAW", "EN52", 0);
+        e4.set_sat_transponder(Some((
             "ISS (ZARYA)|FM Voice Repeater".into(),
             0,
             Transponder::channel(145_990_000, 437_800_000),
         )));
         let mut iss = qrec("NA1SS", "70cm");
         iss.freq_mhz = 437.800;
-        e3.log_qso(iss);
-        assert_eq!(e3.get_log()[0].prop_mode, None, "ZARYA is not a designator");
-        assert_eq!(e3.get_log()[0].sat_name, None, "both-or-neither: neither");
+        e4.log_qso(iss);
+        assert_eq!(e4.get_log()[0].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(e4.get_log()[0].sat_name.as_deref(), Some("ARISS"));
 
         // 4. Records ARRIVING with satellite fields are carried verbatim — the stamp is
         //    a writer for blank fields only, never an editor.

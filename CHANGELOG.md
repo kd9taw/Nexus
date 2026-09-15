@@ -51,6 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never on its own — and it goes to your instance over https only. An older Cloudlog without that
   endpoint says so and asks you to enter the number by hand. (#226)
 
+- **Satellite contacts no longer carry a satellite name LoTW won't accept.** Nexus worked the
+  name out from the bird's catalog name, which produced plenty LoTW has never heard of — GO-32,
+  AO-95, IO-26, and cubesats like CUBY-1 whose names only look like an OSCAR number. LoTW refuses
+  a contact like that, and it can take the rest of the upload with it. Nexus now stamps a name
+  only when it is one LoTW takes, and leaves the field empty otherwise, which you can still fill
+  in by hand. Contacts through the ISS now carry ARISS, the name LoTW wants, and the TEVEL-2,
+  TAURUS and SONATE birds carry theirs. (#296)
+
 ### Fixed
 
 - **A QRZ or eQSL upload that runs out of retries now says so.** After 20 failed tries Nexus used
