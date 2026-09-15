@@ -5,6 +5,18 @@ use crate::{
 };
 use std::time::Duration;
 
+/// Browser authority for cases whose subject is not the command window. The host
+/// mints a permit ending 5 s after it accepts a request and commits it inside the
+/// same call, so the window bounds the *commit*, not the operator; a whole-process
+/// stall between mint and commit (swap or CPU starvation under workspace load)
+/// lapses it inside the product's own check, which then correctly refuses with
+/// `AuthorityExpired`. That answer is right, so these tests must not ask the
+/// question. Expiry stays asserted where it is the subject, by the
+/// `authority.revoke()` and already-lapsed-permit cases below.
+fn unexpired_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(24 * 60 * 60)
+}
+
 struct Station {
     engine: Engine,
     radio: Connection,
@@ -81,9 +93,7 @@ impl Station {
             o.radio.readings.cat.unwrap().connection_generation,
             a.connection_generation,
             a.read_sequence,
-            self.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            self.authority.permit(unexpired_deadline()).unwrap(),
         )
     }
 }

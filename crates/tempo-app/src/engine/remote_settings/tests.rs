@@ -10,6 +10,18 @@ mod gain;
 mod receiver;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+/// Browser authority for cases whose subject is not the command window. The host
+/// mints a permit ending 5 s after it accepts a request and commits it inside the
+/// same call, so the window bounds the *commit*, not the operator; a whole-process
+/// stall between mint and commit (swap or CPU starvation under workspace load)
+/// lapses it inside the product's own check, which then correctly refuses with
+/// `AuthorityExpired`. That answer is right, so these tests must not ask the
+/// question. Expiry stays asserted where it is the subject, by the
+/// `authority.revoke()` and already-lapsed-permit cases below.
+fn unexpired_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(24 * 60 * 60)
+}
+
 struct Station {
     engine: Engine,
     connection: Connection,
@@ -76,10 +88,7 @@ impl Station {
         self.engine.save_remote_decoder_setting(
             setting,
             connection,
-            &self
-                .authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            &self.authority.permit(unexpired_deadline()).unwrap(),
         )
     }
     fn connection_generation(&self) -> u64 {
@@ -314,10 +323,7 @@ fn decoder_setting_requires_exact_values_context_and_live_permission() {
         };
         assert_eq!(s.apply(conflict), Err(Reason::ContextChanged));
         let connection = s.connection_generation();
-        let permit = s
-            .authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap();
+        let permit = s.authority.permit(unexpired_deadline()).unwrap();
         assert_eq!(
             s.engine
                 .save_remote_decoder_setting(setting, connection + 1, &permit),
@@ -348,10 +354,7 @@ fn remote_ai_cw_matches_the_native_toggle_and_publishes_only_after_saving() {
     let mut remote = Station::new(Tier::Ft8);
     let mut native = Station::new(Tier::Ft8);
     let current = remote.engine.settings.ai_cw_enabled;
-    let permit = remote
-        .authority
-        .permit(Instant::now() + Duration::from_secs(5))
-        .unwrap();
+    let permit = remote.authority.permit(unexpired_deadline()).unwrap();
     assert_eq!(
         remote.engine.save_remote_ai_cw(current, current, &permit),
         Err(Reason::InvalidAction)
@@ -391,10 +394,7 @@ fn remote_ai_cw_save_failure_changes_nothing() {
         .configure_remote_settings_store(blocker.join("settings.json"));
     let original = settings(&s.engine);
     let current = s.engine.settings.ai_cw_enabled;
-    let permit = s
-        .authority
-        .permit(Instant::now() + Duration::from_secs(5))
-        .unwrap();
+    let permit = s.authority.permit(unexpired_deadline()).unwrap();
     assert_eq!(
         s.engine.save_remote_ai_cw(current, !current, &permit),
         Err(Reason::PersistenceFailed)
@@ -443,9 +443,7 @@ fn local_decoder_choices_retire_pending_remote_hardware_work_without_rewriting_t
                 "40m",
                 "USB",
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
+                s.authority.permit(unexpired_deadline()).unwrap(),
             )
             .unwrap();
         let work = s.engine.take_remote_radio().unwrap();

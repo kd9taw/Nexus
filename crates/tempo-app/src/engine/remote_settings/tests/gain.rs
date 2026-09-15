@@ -7,9 +7,7 @@ fn apply(s: &mut Station, expected: f32, gain: f32) -> Result<(), Reason> {
         expected,
         gain,
         connection,
-        &s.authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
+        &s.authority.permit(unexpired_deadline()).unwrap(),
     )
 }
 
@@ -115,10 +113,7 @@ fn rx_gain_rejects_invalid_values_wrong_radio_or_connection_and_expired_authorit
     assert_eq!(apply(&mut s, 1.5, 2.0), Err(Reason::ContextChanged));
     let connection = s.connection_generation();
     let radio = s.engine.settings.active_radio;
-    let permit = s
-        .authority
-        .permit(Instant::now() + Duration::from_secs(5))
-        .unwrap();
+    let permit = s.authority.permit(unexpired_deadline()).unwrap();
     assert_eq!(
         s.engine
             .save_remote_rx_gain(9, 1.0, 2.0, connection, &permit),
@@ -197,9 +192,7 @@ fn native_rx_gain_takeover_cancels_pending_remote_hardware_work_without_changing
             "40m",
             "USB",
             connection,
-            s.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            s.authority.permit(unexpired_deadline()).unwrap(),
         )
         .unwrap();
     let work = s.engine.take_remote_radio().unwrap();
