@@ -1825,6 +1825,8 @@ export function LogEntry({
         band={snap.radio.band}
         name={logName}
         qth={logQth}
+        // Already filled from the callbook lookup / cty.dat resolve above (#237).
+        state={logState}
         grid={logGrid}
         lat={logCoords?.lat ?? null}
         lon={logCoords?.lon ?? null}

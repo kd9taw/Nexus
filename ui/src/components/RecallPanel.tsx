@@ -20,6 +20,12 @@ interface Props {
   band?: string
   name?: string | null
   qth?: string | null
+  /** Primary administrative subdivision (ADIF STATE) — a US state or Canadian province.
+   *  The SAME hint the Needed board and WAS use, resolved from the callsign's FCC index or
+   *  the heard grid (dto.rs `Station::state`), never a callbook lookup, so the card and the
+   *  award maths can never disagree about where a station is. Absent outside those two
+   *  countries, and absent rather than guessed when no resolver is wired. */
+  state?: string | null
   grid?: string | null
   /** The station's exact callbook coordinates, when the lookup vouched for a real
    *  position. Preferred over `grid` for the distance/bearing line — a locator is a
@@ -106,7 +112,7 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall }: Props) {
+export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -123,7 +129,10 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
   const roving = useRovingList(prior.length, () => openLog?.(cu))
   if (c.length < 3) return null
   const nm = name?.trim()
-  const place = [qth?.trim(), grid?.trim() ? `(${grid.trim()})` : ''].filter(Boolean).join(' ')
+  // "KEKAHA, HI (BL01dx)" — the state rides with the town, the way an operator says it.
+  const st = state?.trim()
+  const town = [qth?.trim(), st].filter(Boolean).join(', ')
+  const place = [town, grid?.trim() ? `(${grid.trim()})` : ''].filter(Boolean).join(' ')
   const ctry = country?.trim()
   const where = [place, ctry].filter(Boolean).join(' · ')
   // Distance + true bearing from the operator's QTH, computed from the BEST position each

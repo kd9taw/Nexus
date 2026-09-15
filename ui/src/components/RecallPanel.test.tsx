@@ -54,6 +54,24 @@ describe('RecallPanel — the full card', () => {
   // showing previous contacts for a CS entered and resolved." A bare "worked 3×" count answers
   // "have I worked them?" but NOT the question actually being asked mid-contact: when, on what
   // band, and what did we exchange. The full card must keep the real list.
+  // #237: the operator's own report with a screenshot — the card showed "KEKAHA (BL01dx) ·
+  // United States" for a Hawaii station and never named the state, while the Needed board and
+  // WAS already knew it. Both directions: a station outside the US/Canada must gain nothing.
+  it('names the state beside the town, and adds nothing when there is none', () => {
+    const us = render(
+      <RecallPanel call="WH6S" band="20m" qth="KEKAHA" state="HI" grid="BL01dx" country="United States" hist={hist()} />,
+    )
+    expect(us.container.textContent).toContain('KEKAHA, HI (BL01dx)')
+    us.unmount()
+
+    // The control: without a state the line is exactly what it was before this change.
+    const dx = render(
+      <RecallPanel call="DL1ABC" band="20m" qth="Munich" grid="JN58td" country="Germany" hist={hist()} />,
+    )
+    expect(dx.container.textContent).toContain('Munich (JN58td)')
+    expect(dx.container.textContent).not.toContain(',')
+  })
+
   it('lists previous contacts with date / band+mode / report readable', () => {
     render(
       <RecallPanel

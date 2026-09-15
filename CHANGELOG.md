@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The callsign card names the state (#237).** A US or Canadian station's card showed the town,
+  the grid and the country but never the state, so a Hawaii station read "KEKAHA (BL01dx) · United
+  States" while the Needed board and Worked All States already knew it was HI. The card now reads
+  "KEKAHA, HI (BL01dx)", from the same resolved hint the award maths uses — so the two can never
+  disagree — and stations elsewhere are unchanged.
+
 - **Phone contacts now record which sideband you worked them on.** Every phone QSO was logged
   as plain `SSB`, so nothing Nexus wrote down — your own Logbook, the ADIF export, or the
   uploads to QRZ, LoTW, ClubLog, eQSL and the rest — said whether the contact was upper or

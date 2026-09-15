@@ -1789,6 +1789,10 @@ function OperateRecall({
       // prefers it: it is what they answer to on the air.
       name={book?.nickname || book?.name}
       qth={book?.qth}
+      // The station's own resolved subdivision, not the callbook's: it is the SAME hint the
+      // Needed board and WAS score against (dto.rs `Station::state`), so the card cannot say
+      // one state while the award maths counts another. #237.
+      state={station?.state}
       grid={book?.grid || station?.grid}
       lat={book?.lat ?? null}
       lon={book?.lon ?? null}
