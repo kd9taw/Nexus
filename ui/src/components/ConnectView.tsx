@@ -46,6 +46,7 @@ import { MapPicker, ALL_MAP_CHOICES } from './MapPicker'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { t } from '../i18n'
 import { NavigationMapContext, useNavigation, useSatelliteLive } from '../remote-web/useNavigation'
+import { useStationCapability } from '../stationAccess'
 import type { ConnectData, PathData, SatelliteData } from '../remote-web/navigation'
 
 /** The two intents NAMED for a programme and a band. POTA and SOTA are the programmes' own
@@ -156,6 +157,8 @@ export function ConnectView({
   const remoteSats=useNavigation<SatelliteData>('satellites')
   const remoteTrack=useSatelliteLive()
   const remote=remoteConnect.remote
+  // A browser may point the rotator only while the station advertises it.
+  const remoteRotator=useStationCapability('rotator')
   const [remoteSelection,setRemoteSelection]=useState<string|null>(null)
   const selectedCall=remote?remoteSelection:nativeSelectedCall
   const onSelectCall=remote?setRemoteSelection:nativeOnSelectCall
@@ -427,8 +430,8 @@ export function ConnectView({
     alerts,
     muf,
     onSelectCall,
-    onWorkSpot: remote?undefined:onWorkSpot,
-    onPoint: remote?undefined:onPoint,
+    onWorkSpot,
+    onPoint: remote&&!remoteRotator?undefined:onPoint,
     toggleFocusBand,
   }
   const chromeHidden = mapFull && !map3d
@@ -613,7 +616,7 @@ export function ConnectView({
               needByCall={needByCall}
               intent={intent}
               projection={shownPick === '3d' ? 'globe' : shownPick}
-              onWorkSpot={remote?undefined:onWorkSpot}
+              onWorkSpot={onWorkSpot}
               onSelectSat={onSelectSat}
               focusBand={focusBand}
               onFocusBand={toggleFocusBand}

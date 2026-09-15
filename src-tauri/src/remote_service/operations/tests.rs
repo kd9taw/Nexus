@@ -16,6 +16,9 @@ mod receiver_filter;
 #[path = "selection_tests.rs"]
 mod selection;
 #[cfg(feature = "radio")]
+#[path = "split_tests.rs"]
+mod split;
+#[cfg(feature = "radio")]
 #[path = "spot_tests.rs"]
 mod spot;
 #[path = "transmit_tests.rs"]
@@ -23,14 +26,35 @@ mod transmit;
 use super::*;
 use std::sync::Arc;
 #[cfg(feature = "radio")]
+#[path = "ai_cw_tests.rs"]
+mod ai_cw;
+#[cfg(feature = "radio")]
 #[path = "amp_follow_tests.rs"]
 mod amp_follow;
+#[cfg(feature = "radio")]
+#[path = "aprs_tune_tests.rs"]
+mod aprs_tune;
 #[cfg(feature = "radio")]
 #[path = "decoder_settings_tests.rs"]
 mod decoder_settings;
 #[cfg(feature = "radio")]
+#[path = "digital_spot_tests.rs"]
+mod digital_spot;
+#[cfg(feature = "radio")]
+#[path = "memory_tests.rs"]
+mod memory;
+#[cfg(feature = "radio")]
+#[path = "repeater_tests.rs"]
+mod repeater;
+#[cfg(feature = "radio")]
+#[path = "rotator_tests.rs"]
+mod rotator;
+#[cfg(feature = "radio")]
 #[path = "rx_gain_tests.rs"]
 mod rx_gain;
+#[cfg(feature = "radio")]
+#[path = "scope_tests.rs"]
+mod scope;
 #[cfg(feature = "radio")]
 #[path = "workspace_tests.rs"]
 mod workspace;
@@ -382,7 +406,17 @@ fn tier_admission_requires_v3_and_keeps_one_native_receipt_through_readback() {
             "radioLevels",
             "radioSelection",
             "fmTuning",
-            "fmReceiver"
+            "fmReceiver",
+            "aiCw",
+            "redecode",
+            "splitTuning",
+            "ritTuning",
+            "workDigitalSpot",
+            "repeaterTuning",
+            "memoryRecall",
+            "aprsTuning",
+            "rotator",
+            "rigScope"
         ])
     );
     let command = control_request(&state, json!({"action":"radio.tier","tier":"FT4"}));

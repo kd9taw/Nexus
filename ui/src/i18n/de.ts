@@ -31,6 +31,11 @@ export const DE: PartialCatalog = {
   "remote.controlNotSent": "Nicht gesendet. Nichts hat die Station erreicht, dort hat sich also nichts geändert. Versuchen Sie es erneut.",
   "remote.controlBusy": "Die Station war beschäftigt, es hat sich nichts geändert. Versuchen Sie es erneut.",
   "remote.controlLocalHint": "Wenn du einen Browser freigibst, erhält er die Stationssteuerung: unterstützte Empfänger-, Funkgeräte- und Verstärkerfunktionen sowie Stop TX, das jede Aussendung der Station beendet. Um einen Browser einzuschränken, entziehe sie ihm hier. Eine Aussendung zu starten erfordert eine eigene Berechtigung.",
+  // remote parity batch 1
+  "remote.b1.outsidePrivileges": "Nicht geändert. Diese Sendefrequenz liegt außerhalb Ihrer Lizenzberechtigung.",
+  "remote.b1.workUnavailable": "Dieser Spot lässt sich nicht aus dem Browser arbeiten. An der Station hat sich nichts geändert.",
+  "remote.b1.rotatorNoHeading": "Die Richtung wird im Browser noch nicht angezeigt.",
+  "remote.b1.rotatorPointing": "Der Rotor wird auf {{call}} gedreht.",
   "remote.transmitAllow": "FT8/FT4-Senden erlauben",
   "remote.transmitRevoke": "Sendeberechtigung entziehen",
   "remote.transmitLocalHint": "FT8/FT4-Senden braucht zusätzlich die Stationssteuerung. Einmal erlaubt, bleibt es auch über Neustarts erlaubt, bis du es hier entziehst; ein Entzug stoppt die Aussendung dieses Browsers sofort. Gesendet wird erst, wenn der Browser TX On drückt.",

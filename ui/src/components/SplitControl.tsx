@@ -1,4 +1,4 @@
-import { useStationControl } from '../stationAccess'
+import { useStationCapability, useStationControl } from '../stationAccess'
 // The manual split control — SPLIT toggle, ±1 kHz steps, and the live offset readout.
 //
 // ⭐ ONE COPY, USED BY THREE COCKPITS. It shipped in Phone only, so a CW operator working a
@@ -25,6 +25,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
 import { setSplit } from '../api'
 import { t } from '../i18n'
+import { controlFailureMessage } from '../remote-web/control-failure'
 
 /** kHz per ± press. One is the pile-up convention; the operator holds for more. */
 const SPLIT_STEP_KHZ = 1
@@ -41,6 +42,11 @@ interface Props {
 
 export function SplitControl({ snap, onSnap, onError }: Props) {
   const control = useStationControl()
+  // A browser needs the station's splitTuning hint; it is off while that browser's TX is armed.
+  const allowed = useStationCapability('splitTuning') || control
+  // Local keeps its own wording; a browser is told what the station answered (busy, not sent,
+  // outside the licence).
+  const failed = (local: string) => (error: unknown) => onError?.(control ? local : controlFailureMessage(error))
   // The desired TX dial lives in the snapshot; a plain retune clears it (backend).
   // Offset is kHz off the RX dial; default +5, the common pileup.
   const [splitOffsetKhz, setSplitOffsetKhz] = useState(5)
@@ -60,13 +66,13 @@ export function SplitControl({ snap, onSnap, onError }: Props) {
   const applySplitTx = (offsetKhz: number) =>
     setSplit(snap.radio.dialMhz + offsetKhz / 1000)
       .then((s) => onSnap?.(s))
-      .catch(() => onError?.(t('phone.split.setFailed')))
+      .catch(failed(t('phone.split.setFailed')))
 
   const toggleSplit = () =>
     splitOn
       ? setSplit(null)
           .then((s) => onSnap?.(s))
-          .catch(() => onError?.(t('phone.split.clearFailed')))
+          .catch(failed(t('phone.split.clearFailed')))
       : applySplitTx(splitOffsetKhz)
 
   // Accumulate on local state (functional updater) so rapid bumps that fire before the
@@ -80,7 +86,7 @@ export function SplitControl({ snap, onSnap, onError }: Props) {
 
   return (
     <div className={`ph-split ${splitOn ? 'on' : ''}`}>
-      <button disabled={!control}
+      <button disabled={!allowed}
         className="ph-split-toggle"
         onClick={toggleSplit}
         title={
@@ -91,7 +97,7 @@ export function SplitControl({ snap, onSnap, onError }: Props) {
       >
         SPLIT
       </button>
-      <button disabled={!control}
+      <button disabled={!allowed}
         className="ph-split-step"
         onClick={() => bumpSplit(-SPLIT_STEP_KHZ)}
         title={t('phone.split.lower.title', { step: SPLIT_STEP_KHZ })}
@@ -101,7 +107,7 @@ export function SplitControl({ snap, onSnap, onError }: Props) {
       <span className="ph-split-amt mono" title={t('phone.split.offset.title')}>
         {splitOffsetKhz >= 0 ? `+${splitOffsetKhz}` : `${splitOffsetKhz}`}
       </span>
-      <button disabled={!control}
+      <button disabled={!allowed}
         className="ph-split-step"
         onClick={() => bumpSplit(SPLIT_STEP_KHZ)}
         title={t('phone.split.higher.title', { step: SPLIT_STEP_KHZ })}

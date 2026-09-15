@@ -344,6 +344,94 @@ fn decoder_setting_requires_exact_values_context_and_live_permission() {
 }
 
 #[test]
+fn remote_ai_cw_matches_the_native_toggle_and_publishes_only_after_saving() {
+    let mut remote = Station::new(Tier::Ft8);
+    let mut native = Station::new(Tier::Ft8);
+    let current = remote.engine.settings.ai_cw_enabled;
+    let permit = remote
+        .authority
+        .permit(Instant::now() + Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        remote.engine.save_remote_ai_cw(current, current, &permit),
+        Err(Reason::InvalidAction)
+    );
+    assert_eq!(
+        remote.engine.save_remote_ai_cw(!current, current, &permit),
+        Err(Reason::ContextChanged)
+    );
+    assert!(!remote.path.exists());
+    remote
+        .engine
+        .save_remote_ai_cw(current, !current, &permit)
+        .unwrap();
+    native.engine.set_ai_cw_enabled(!current);
+    assert_eq!(settings(&remote.engine), settings(&native.engine));
+    let saved: Settings = serde_json::from_slice(&std::fs::read(&remote.path).unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_value(saved).unwrap(),
+        settings(&native.engine)
+    );
+    assert!(!remote.engine.tx_enabled());
+    remote.authority.revoke();
+    assert_eq!(
+        remote.engine.save_remote_ai_cw(!current, current, &permit),
+        Err(Reason::AuthorityExpired)
+    );
+    assert_eq!(remote.engine.settings.ai_cw_enabled, !current);
+}
+
+#[test]
+fn remote_ai_cw_save_failure_changes_nothing() {
+    let mut s = Station::new(Tier::Ft8);
+    std::fs::create_dir_all(s.path.parent().unwrap()).unwrap();
+    let blocker = s.path.parent().unwrap().join("not-a-directory");
+    std::fs::write(&blocker, b"retain this file").unwrap();
+    s.engine
+        .configure_remote_settings_store(blocker.join("settings.json"));
+    let original = settings(&s.engine);
+    let current = s.engine.settings.ai_cw_enabled;
+    let permit = s
+        .authority
+        .permit(Instant::now() + Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        s.engine.save_remote_ai_cw(current, !current, &permit),
+        Err(Reason::PersistenceFailed)
+    );
+    assert_eq!(settings(&s.engine), original);
+    assert_eq!(std::fs::read(blocker).unwrap(), b"retain this file");
+}
+
+#[test]
+fn remote_redecode_is_refused_while_armed_or_off_the_expected_ft_tier() {
+    let mut s = Station::new(Tier::Ft8);
+    // Positive control: the idle FT8 station accepts it.
+    assert_eq!(s.engine.remote_redecode(Tier::Ft8), Ok(()));
+    assert_eq!(
+        s.engine.remote_redecode(Tier::Ft4),
+        Err(Reason::ContextChanged)
+    );
+    assert_eq!(
+        s.engine.remote_redecode(Tier::Msk144),
+        Err(Reason::InvalidAction)
+    );
+    s.engine.set_tx_enabled(true);
+    assert_eq!(
+        s.engine.remote_redecode(Tier::Ft8),
+        Err(Reason::StationBusy)
+    );
+    assert!(s.engine.tx_enabled(), "the TX latch is left as it was");
+    s.engine.set_tx_enabled(false);
+    s.engine.settings.operating_mode = OperatingMode::Cw;
+    assert_eq!(
+        s.engine.remote_redecode(Tier::Ft8),
+        Err(Reason::UnsupportedAction)
+    );
+    assert!(!s.engine.tx_enabled());
+}
+
+#[test]
 fn local_decoder_choices_retire_pending_remote_hardware_work_without_rewriting_tx_policy() {
     for tier in [Tier::Js8, Tier::Msk144] {
         let mut s = Station::new(tier);

@@ -115,6 +115,11 @@ export const EN = {
   "remote.controlNotSent": "Not sent. Nothing reached the station, so nothing changed there. Try again.",
   "remote.controlBusy": "The station was busy and nothing changed. Try again.",
   "remote.controlLocalHint": "Approving a browser gives it station controls: supported receiver, radio and amplifier controls, and Stop TX, which stops any transmission at the station. To limit a browser, revoke them here. Starting a transmission needs its own permission.",
+  // remote parity batch 1
+  "remote.b1.outsidePrivileges": "Not changed. That transmit frequency is outside your license privileges.",
+  "remote.b1.workUnavailable": "This spot can’t be worked from a browser. Nothing changed at the station.",
+  "remote.b1.rotatorNoHeading": "Heading isn’t shown remotely yet.",
+  "remote.b1.rotatorPointing": "Pointing the rotator at {{call}}.",
   "remote.transmitAllow": "Allow FT8/FT4 transmission",
   "remote.transmitRevoke": "Revoke transmission permission",
   "remote.transmitLocalHint": "FT8/FT4 transmit also needs station controls. Once allowed, it stays allowed across restarts until you revoke it here, and revoking it stops that browser’s transmission at once. Nothing transmits until the browser presses TX On.",

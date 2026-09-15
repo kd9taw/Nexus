@@ -36,6 +36,11 @@ export const JA: PartialCatalog = {
   "remote.controlNotSent": "送信されていません。局には何も届いていないため、局側では何も変わっていません。もう一度お試しください。",
   "remote.controlBusy": "局が処理中だったため、何も変わっていません。もう一度お試しください。",
   "remote.controlLocalHint": "ブラウザーを承認すると、局の操作（対応する受信機、無線機、アンプの操作）と、局のあらゆる送信を止める Stop TX が許可されます。制限する場合は、ここで取り消してください。送信を始めるには別の許可が必要です。",
+  // remote parity batch 1
+  "remote.b1.outsidePrivileges": "変更していません。その送信周波数は免許の運用範囲外です。",
+  "remote.b1.workUnavailable": "このスポットはブラウザーからは交信に移れません。局側では何も変わっていません。",
+  "remote.b1.rotatorNoHeading": "方位はリモートではまだ表示されません。",
+  "remote.b1.rotatorPointing": "ローテーターを{{call}}に向けています。",
   "remote.transmitAllow": "FT8/FT4 の送信を許可",
   "remote.transmitRevoke": "送信許可を取り消す",
   "remote.transmitLocalHint": "FT8/FT4 の送信には局の操作権限も必要です。一度許可すると、ここで取り消すまで Nexus を再起動しても保持されます。取り消すと、そのブラウザーの送信はすぐに停止します。ブラウザーで TX On を押すまで送信は行われません。",

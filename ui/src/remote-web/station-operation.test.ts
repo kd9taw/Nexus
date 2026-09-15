@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { actionCapability, controlContext, controlOutcome, stationAction } from './station-operation'
+import { APRS_FREQS } from '../aprsBeacon'
 
 describe('closed station operating requests', () => {
   it('accepts bounded native levels with exact prior readings and their own capability', () => {
@@ -181,5 +182,190 @@ describe('closed station operating requests', () => {
     ]) expect(controlOutcome(result)).toEqual(result)
     expect(() => controlOutcome({ ...base, outcome: 'applied', evidence: 'queueAccepted' })).toThrow()
     expect(() => controlOutcome({ ...base, outcome: 'applied', evidence: 'rfOff' })).toThrow()
+  })
+  it('admits a changed AI-CW choice and an FT redecode, each under its own capability', () => {
+    for (const expectedOn of [false, true]) {
+      const action = { action: 'decoder.aiCw', expectedOn, on: !expectedOn }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('aiCw')
+      expect(() => stationAction({ ...action, on: expectedOn })).toThrow('invalidOperation')
+      for (const value of [0, 1, 'true', null, undefined]) for (const field of ['expectedOn', 'on']) expect(() => stationAction({ ...action, [field]: value })).toThrow()
+      for (const extra of ['settings', 'command', 'txEnabled', 'radioId', 'model']) expect(() => stationAction({ ...action, [extra]: true })).toThrow()
+    }
+    for (const expectedTier of ['FT8', 'FT4']) {
+      const action = { action: 'decoder.redecode', expectedTier }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('redecode')
+      for (const extra of ['depth', 'command', 'txEnabled', 'slot']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+    }
+    for (const expectedTier of ['MSK144', 'JS8', 'ft8', '', null, undefined]) expect(() => stationAction({ action: 'decoder.redecode', expectedTier })).toThrow()
+    expect(() => stationAction({ action: 'decoder.redecode' })).toThrow()
+  })
+})
+
+// Remote parity batch 1: split, XIT and VFO move the transmit frequency and share one hint; RIT
+// is receive-only and has its own. Each carries the value the page displayed.
+describe('split and clarifier requests', () => {
+  it('admits bounded, changed split, XIT, VFO and RIT choices under their own hints', () => {
+    const accepted: [Record<string, unknown>, string][] = [
+      [{ action: 'radio.split', expectedTxMhz: null, txMhz: 14.032 }, 'splitTuning'],
+      [{ action: 'radio.split', expectedTxMhz: 14.032, txMhz: null }, 'splitTuning'],
+      [{ action: 'radio.split', expectedTxMhz: 14.032, txMhz: 14.033 }, 'splitTuning'],
+      [{ action: 'radio.xit', expectedHz: 0, hz: -4000 }, 'splitTuning'],
+      [{ action: 'radio.vfo', expectedVfo: 'A', vfo: 'B' }, 'splitTuning'],
+      [{ action: 'radio.rit', expectedHz: 10, hz: 0 }, 'ritTuning']
+    ]
+    for (const [action, capability] of accepted) {
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe(capability)
+      for (const extra of ['settings', 'command', 'txEnabled', 'radioId', 'dialMhz']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+      for (const key of Object.keys(action).filter(k => k !== 'action')) {
+        const missing = { ...action }
+        delete missing[key]
+        expect(() => stationAction(missing)).toThrow()
+      }
+    }
+    for (const txMhz of [NaN, Infinity, 0, -14.032, 250001, '14.032', undefined]) expect(() => stationAction({ action: 'radio.split', expectedTxMhz: null, txMhz })).toThrow()
+    expect(() => stationAction({ action: 'radio.split', expectedTxMhz: null, txMhz: null })).toThrow()
+    expect(() => stationAction({ action: 'radio.split', expectedTxMhz: 14.032, txMhz: 14.032 })).toThrow()
+    for (const name of ['radio.xit', 'radio.rit']) {
+      for (const hz of [10000, -10000, 10.5, NaN, '10', null]) expect(() => stationAction({ action: name, expectedHz: 0, hz })).toThrow()
+      expect(() => stationAction({ action: name, expectedHz: 20, hz: 20 })).toThrow()
+      expect(() => stationAction({ action: name, expectedHz: 10000, hz: 0 })).toThrow()
+    }
+    for (const vfo of ['C', 'a', 'VFOB', '', null]) expect(() => stationAction({ action: 'radio.vfo', expectedVfo: 'A', vfo })).toThrow()
+    expect(() => stationAction({ action: 'radio.vfo', expectedVfo: 'B', vfo: 'B' })).toThrow()
+    expect(() => stationAction({ action: 'radio.swapVfo' })).toThrow()
+  })
+  it('admits a memory recall as a section, exact dial and the memory’s own sideband or FM machine', () => {
+    const cw = { action: 'radio.memoryRecall', section: 'cw', dialMhz: 14.06, band: '20m', sideband: null }
+    const ssb = { action: 'radio.memoryRecall', section: 'phone', dialMhz: 7.2, band: '40m', sideband: 'LSB' }
+    const fm = { action: 'radio.memoryRecall', section: 'phone', dialMhz: 146.94, band: '2m', sideband: null, fm: { shift: 'minus', offsetHz: 600000, toneHz: 103.5 } }
+    for (const action of [cw, ssb, fm, { ...cw, section: 'digital', dialMhz: 14.074 }, { ...ssb, sideband: null }]) {
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('memoryRecall')
+    }
+    for (const section of ['rtty', 'operate', 'CW', '', null]) expect(() => stationAction({ ...cw, section })).toThrow()
+    expect(() => stationAction({ ...cw, sideband: 'USB' })).toThrow()
+    expect(() => stationAction({ ...cw, section: 'digital', sideband: 'LSB' })).toThrow()
+    for (const sideband of ['usb', 'FM', 'AM', '']) expect(() => stationAction({ ...ssb, sideband })).toThrow()
+    expect(() => stationAction({ ...fm, sideband: 'USB' })).toThrow()
+    expect(() => stationAction({ ...fm, section: 'cw' })).toThrow()
+    expect(() => stationAction({ ...fm, dialMhz: 28.5, band: '10m' })).toThrow()
+    for (const bad of [{ shift: 'up', offsetHz: 600000, toneHz: 0 }, { shift: 'minus', offsetHz: -1, toneHz: 0 }, { shift: 'minus', offsetHz: 600000, toneHz: 88.55 },
+      { shift: 'minus', offsetHz: 600000, toneHz: 0, txEnabled: true }, { shift: 'minus', offsetHz: 600000 }, null]) expect(() => stationAction({ ...fm, fm: bad })).toThrow()
+    for (const dialMhz of [NaN, 0, 250001, '7.2']) expect(() => stationAction({ ...cw, dialMhz })).toThrow()
+    for (const band of ['21m', '', null]) expect(() => stationAction({ ...cw, band })).toThrow()
+    for (const extra of ['call', 'tier', 'txEnabled', 'settings', 'radioId']) expect(() => stationAction({ ...cw, [extra]: 1 })).toThrow()
+    const missing: Record<string, unknown> = { ...cw }
+    delete missing.sideband
+    expect(() => stationAction(missing)).toThrow()
+  })
+  it('admits a repeater tune only as the machine: output, shift, offset and tone', () => {
+    const action = { action: 'radio.repeater', outputMhz: 146.94, shift: 'minus', offsetHz: 600000, toneHz: 100 }
+    expect(stationAction(action)).toEqual(action)
+    expect(actionCapability(stationAction(action))).toBe('repeaterTuning')
+    for (const shift of ['simplex', 'plus', 'minus']) expect(stationAction({ ...action, shift })).toEqual({ ...action, shift })
+    for (const toneHz of [0, 67, 88.5, 254.1]) expect(stationAction({ ...action, toneHz })).toEqual({ ...action, toneHz })
+    for (const offsetHz of [0, 20000000]) expect(stationAction({ ...action, offsetHz })).toEqual({ ...action, offsetHz })
+    for (const shift of ['up', 'split', 'PLUS', '', null]) expect(() => stationAction({ ...action, shift })).toThrow()
+    for (const offsetHz of [-1, 1.5, 20000001, NaN, '600000', null]) expect(() => stationAction({ ...action, offsetHz })).toThrow()
+    for (const toneHz of [59.9, 260.1, 88.55, NaN, -1, '100', null]) expect(() => stationAction({ ...action, toneHz })).toThrow()
+    for (const outputMhz of [NaN, Infinity, 0, 28.99, 250001, '146.94', null]) expect(() => stationAction({ ...action, outputMhz })).toThrow()
+    for (const extra of ['txEnabled', 'settings', 'command', 'band', 'radioId']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+    for (const key of ['outputMhz', 'shift', 'offsetHz', 'toneHz']) {
+      const missing: Record<string, unknown> = { ...action }
+      delete missing[key]
+      expect(() => stationAction(missing)).toThrow()
+    }
+  })
+  it('admits an APRS tune only to one of the regional APRS channels, and nothing beside it', () => {
+    for (const dialMhz of [144.39, 144.8, 145.175, 144.575, 144.66, 144.93, 145.57]) {
+      const action = { action: 'radio.aprsTune', dialMhz }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('aprsTuning')
+    }
+    // The grammar's list is the cockpit's picker list, channel for channel.
+    for (const [dialMhz] of APRS_FREQS) expect(stationAction({ action: 'radio.aprsTune', dialMhz })).toEqual({ action: 'radio.aprsTune', dialMhz })
+    const action = { action: 'radio.aprsTune', dialMhz: 144.39 }
+    for (const dialMhz of [144.391, 146.52, 14.105, 0, NaN, Infinity, '144.39', null]) expect(() => stationAction({ ...action, dialMhz })).toThrow()
+    for (const extra of ['band', 'mode', 'shift', 'txEnabled', 'settings', 'radioId']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+    expect(() => stationAction({ action: 'radio.aprsTune' })).toThrow()
+  })
+  it('points the rotator only by azimuth or callsign, stops it bare, and nothing else, under its own hint', () => {
+    for (const azimuthDeg of [0, 90, 123.4, 359.9]) {
+      const action = { action: 'rotator.point', azimuthDeg }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('rotator')
+    }
+    for (const azimuthDeg of [360, 400, -1, 12.34, NaN, Infinity, -Infinity, '90', null, undefined]) expect(() => stationAction({ action: 'rotator.point', azimuthDeg })).toThrow()
+    for (const extra of ['elevationDeg', 'host', 'port', 'command', 'txEnabled', 'radioId']) expect(() => stationAction({ action: 'rotator.point', azimuthDeg: 90, [extra]: 1 })).toThrow()
+    for (const call of ['JA1ABC', '3Y0J/MM', 'K1A']) {
+      const action = { action: 'rotator.pointAtCall', call }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('rotator')
+    }
+    for (const call of ['ja1abc', 'W1', 'A'.repeat(33), 'W1AW\nS', 'W1AW S', '', null, 7]) expect(() => stationAction({ action: 'rotator.pointAtCall', call })).toThrow()
+    expect(() => stationAction({ action: 'rotator.pointAtCall', call: 'JA1ABC', azimuthDeg: 90 })).toThrow()
+    expect(stationAction({ action: 'rotator.stop' })).toEqual({ action: 'rotator.stop' })
+    expect(actionCapability(stationAction({ action: 'rotator.stop' }))).toBe('rotator')
+    for (const extra of ['reason', 'command', 'azimuthDeg', 'satTrack']) expect(() => stationAction({ action: 'rotator.stop', [extra]: 1 })).toThrow()
+  })
+  it('admits an FT8/FT4 Work intent only as its own action with an explicit tier', () => {
+    for (const tier of ['FT8', 'FT4']) {
+      const action = { action: 'radio.workDigitalSpot', tier, dialMhz: 14.074, band: '20m', call: 'JA2DEF/P' }
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('workDigitalSpot')
+      for (const bad of ['FT2', 'JS8', 'ft8', '', null, undefined]) expect(() => stationAction({ ...action, tier: bad })).toThrow()
+      for (const dialMhz of [NaN, Infinity, 0, -14.074, 250001, '14.074']) expect(() => stationAction({ ...action, dialMhz })).toThrow()
+      for (const band of ['21m', '', 'JA\nT 1', null]) expect(() => stationAction({ ...action, band })).toThrow()
+      for (const call of ['', 'JA 2DEF', 'A'.repeat(33), 'JA2DEF\nT 1', null]) expect(() => stationAction({ ...action, call })).toThrow()
+      for (const extra of ['mode', 'splitUpKhz', 'txEnabled', 'settings', 'command', 'radioId']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
+      for (const key of ['tier', 'dialMhz', 'band', 'call']) {
+        const missing: Record<string, unknown> = { ...action }
+        delete missing[key]
+        expect(() => stationAction(missing)).toThrow()
+      }
+    }
+    // The CW/Phone Work intent is unchanged: an older desktop parses it exactly, so it never names a tier.
+    expect(() => stationAction({ action: 'radio.workSpot', mode: 'digital', dialMhz: 14.074, band: '20m', call: 'JA2DEF' })).toThrow()
+    expect(() => stationAction({ action: 'radio.workSpot', mode: 'cw', dialMhz: 14.025, band: '20m', call: 'JA2DEF', tier: 'FT8' })).toThrow()
+    expect(actionCapability(stationAction({ action: 'radio.workSpot', mode: 'cw', dialMhz: 14.025, band: '20m', call: 'JA2DEF' }))).toBe('workSpot')
+  })
+  it('accepts the privilege refusal only as a rejection reason', () => {
+    const id = crypto.randomUUID()
+    expect(controlOutcome({ operation: 'stationControl', operationId: id, outcome: 'rejected', reason: 'outsidePrivileges' }).outcome).toBe('rejected')
+    expect(() => controlOutcome({ operation: 'stationControl', operationId: id, outcome: 'applied', evidence: 'outsidePrivileges' })).toThrow()
+  })
+  it('adjusts the rig scope only by a closed setting carrying its own field, under its own hint', () => {
+    const accepted = [
+      // Every Icom CI-V chip (± half-width) and every FT-710 rung (its half-width), nothing between.
+      ...[500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000].map(hz => ({ action: 'radio.scope', setting: 'span', hz })),
+      ...[-200, -35, 0, 200].map(tenthsDb => ({ action: 'radio.scope', setting: 'ref', tenthsDb })),
+      ...['center', 'cursor', 'fix'].map(position => ({ action: 'radio.scope', setting: 'position', position })),
+      ...[5_000, 50_000, 2_000_000, 14_000_000].map(hz => ({ action: 'radio.scope', setting: 'panSpan', hz })),
+      ...[-160, -80, 20, null].map(refDbm => ({ action: 'radio.scope', setting: 'panRef', refDbm })),
+    ]
+    for (const action of accepted) {
+      expect(stationAction(action)).toEqual(action)
+      expect(actionCapability(stationAction(action))).toBe('rigScope')
+    }
+    for (const hz of [0, 1, 750, 2_400, 1_000_000, 2_500.5, -2_500, NaN, Infinity, '2500', null, undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'span', hz })).toThrow()
+    for (const tenthsDb of [-201, 201, 0.5, NaN, '0', null, undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'ref', tenthsDb })).toThrow()
+    for (const position of ['CENTER', 'middle', 'fixed', '', null, 1, undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'position', position })).toThrow()
+    for (const hz of [4_999, 14_000_001, 50_000.5, NaN, '50000', null, undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'panSpan', hz })).toThrow()
+    for (const refDbm of [-161, 21, -80.5, NaN, '-80', undefined]) expect(() => stationAction({ action: 'radio.scope', setting: 'panRef', refDbm })).toThrow()
+    // Each setting carries exactly its own field: no neighbour's, no Icom center/fixed, no command.
+    for (const bad of [
+      { action: 'radio.scope', setting: 'span', hz: 2_500, tenthsDb: 0 },
+      { action: 'radio.scope', setting: 'ref', tenthsDb: 0, hz: 2_500 },
+      { action: 'radio.scope', setting: 'position', position: 'fix', code: 65 },
+      { action: 'radio.scope', setting: 'panSpan', hz: 50_000, refDbm: null },
+      { action: 'radio.scope', setting: 'panRef' },
+      { action: 'radio.scope', setting: 'span' },
+      { action: 'radio.scope', setting: 'fixed', fixed: true },
+      { action: 'radio.scope', hz: 2_500 },
+      ...['command', 'txEnabled', 'radioId', 'family'].map(extra => ({ action: 'radio.scope', setting: 'span', hz: 2_500, [extra]: 1 })),
+    ]) expect(() => stationAction(bad)).toThrow()
   })
 })

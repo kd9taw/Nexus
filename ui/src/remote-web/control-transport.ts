@@ -6,6 +6,27 @@ import { APPLICATION_TIMEOUT_MS } from './application-protocol'
 import type { ApplicationCommand } from './application-protocol'
 import { readBandChoices } from './band-choices'
 
+type TuningAction = Extract<StationAction, { action: 'radio.split' | 'radio.xit' | 'radio.vfo' | 'radio.rit' }>
+const isTuning = (action: StationAction): action is TuningAction => ['radio.split', 'radio.xit', 'radio.vfo', 'radio.rit'].includes(action.action)
+/** The station applies these as one-shots its radio loop writes; a later sample must show the value. */
+function tuningShown(action: TuningAction, radio: import('../types').RadioStatus | undefined): boolean {
+  if (!radio) return false
+  switch (action.action) {
+    case 'radio.split': return action.txMhz === null ? radio.splitTxMhz == null
+      : radio.splitTxMhz != null && Math.abs(Math.round(radio.splitTxMhz * 1e6) - Math.round(action.txMhz * 1e6)) <= 1
+    case 'radio.vfo': return (radio.activeVfo === 'B' ? 'B' : 'A') === action.vfo
+    case 'radio.rit': return radio.ritHz === action.hz
+    case 'radio.xit': return radio.xitHz === action.hz
+  }
+}
+
+/** Which FT-710 position a scope MODE code names: CENTER, CURSOR or FIX in any display family. */
+function scopePosition(code: number | null | undefined): 'center' | 'cursor' | 'fix' | null {
+  const c = typeof code === 'number' ? String.fromCharCode(code) : ''
+  if (c.length !== 1) return null
+  return '034'.includes(c) ? 'center' : '167'.includes(c) ? 'cursor' : '29A'.includes(c) ? 'fix' : null
+}
+
 /** Adapt only the reviewed local gestures. The station receives typed intents,
  * never an invoke name; every other command remains behind the read allowlist. */
 export function controlTransport(reads: ApplicationTransport, client: ApplicationClient, operations: OperationClient): ApplicationTransport {
@@ -126,9 +147,58 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             action = stationAction({ action: 'radio.select', radioId: args.id })
             read = 'get_snapshot'
             break
+          case 'remote_recall_memory':
+            // A station memory as the closed recall intent: never a Settings form, a call or a tier.
+            if (!args || Object.keys(args).length !== 5 || Object.keys(args).some(k => !['section', 'dialMhz', 'band', 'sideband', 'fm'].includes(k))) throw Error('invalidOperation')
+            action = stationAction({ action: 'radio.memoryRecall', section: args.section, dialMhz: args.dialMhz, band: args.band, sideband: args.sideband,
+              ...(args.fm === null ? {} : { fm: args.fm }) })
+            read = 'get_snapshot'
+            break
+          case 'repeater_tune':
+            // The Program Tune: exactly the machine, no settings or radio arguments beside it.
+            if (!args || Object.keys(args).length !== 4 || Object.keys(args).some(k => !['outputMhz', 'shift', 'offsetHz', 'toneHz'].includes(k))) throw Error('invalidOperation')
+            action = stationAction({ action: 'radio.repeater', outputMhz: args.outputMhz, shift: args.shift, offsetHz: args.offsetHz, toneHz: args.toneHz })
+            read = 'get_snapshot'
+            break
+          case 'aprs_tune':
+            // The APRS channel pick: exactly the channel, nothing beside it.
+            if (!args || Object.keys(args).length !== 1 || !('dialMhz' in args)) throw Error('invalidOperation')
+            action = stationAction({ action: 'radio.aprsTune', dialMhz: args.dialMhz })
+            read = 'get_snapshot'
+            break
+          case 'point_rotator': {
+            // An operator gesture only: exactly the azimuth, to the tenth of a degree the station takes.
+            if (!args || Object.keys(args).length !== 1 || !('azDeg' in args)) throw Error('invalidOperation')
+            const az = typeof args.azDeg === 'number' && Number.isFinite(args.azDeg) ? (Math.round(args.azDeg * 10) / 10) % 360 : args.azDeg
+            // No rotator reading reaches the page, so nothing is read back: the station's outcome is the answer.
+            action = stationAction({ action: 'rotator.point', azimuthDeg: az })
+            break
+          }
+          case 'point_rotator_at_call':
+            // The bearing is resolved at the station; the page gets no bearing back.
+            if (!args || Object.keys(args).length !== 1 || !('call' in args)) throw Error('invalidOperation')
+            action = stationAction({ action: 'rotator.pointAtCall', call: args.call })
+            break
+          case 'stop_rotator':
+            if (args && Object.keys(args).length) throw Error('invalidOperation')
+            action = stationAction({ action: 'rotator.stop' })
+            break
+          case 'set_scope_span': case 'set_scope_ref': case 'set_yaesu_scope_mode': case 'set_flex_pan_span': case 'set_flex_pan_ref': {
+            const key = command === 'set_scope_ref' ? 'tenthsDb' : command === 'set_yaesu_scope_mode' ? 'position' : command === 'set_flex_pan_ref' ? 'refDbm' : 'hz'
+            if (!args || Object.keys(args).length !== 1 || !(key in args)) throw Error('invalidOperation')
+            const setting = command === 'set_scope_span' ? 'span' : command === 'set_scope_ref' ? 'ref'
+              : command === 'set_yaesu_scope_mode' ? 'position' : command === 'set_flex_pan_span' ? 'panSpan' : 'panRef'
+            // The page names only the operator's setting; the station decides which scope family is live.
+            action = stationAction({ action: 'radio.scope', setting, [key]: args[key] })
+            read = 'get_snapshot'
+            break
+          }
           case 'work_spot':
-            if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k)) || (args.tier !== null && args.tier !== undefined)) throw Error('applicationUnsupported')
-            action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
+            if (!args || Object.keys(args).some(k => !['mode', 'freqMhz', 'band', 'call', 'tier'].includes(k))) throw Error('applicationUnsupported')
+            if (args.tier === null || args.tier === undefined) action = stationAction({ action: 'radio.workSpot', mode: args.mode, dialMhz: args.freqMhz, band: args.band, call: args.call })
+            // FT8/FT4 carries its tier in its own action, never as a workSpot field an older desktop cannot parse.
+            else if (args.mode === 'digital') action = stationAction({ action: 'radio.workDigitalSpot', tier: args.tier, dialMhz: args.freqMhz, band: args.band, call: args.call })
+            else throw Error('applicationUnsupported')
             read = 'get_snapshot'
             break
           case 'get_licensed_band_plan': {
@@ -178,6 +248,38 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             action = stationAction({ action: 'decoder.pskMode', ...args, mode: typeof args?.mode === 'string' ? args.mode.toUpperCase() : args?.mode })
             read = 'get_psk_state'
             break
+          case 'set_ai_cw': {
+            if (!args || Object.keys(args).length !== 1 || typeof args.on !== 'boolean') throw Error('invalidOperation')
+            // Bind the choice to the switch position the station last reported.
+            const snapshot = await reads.invoke<import('../types').AppSnapshot>('get_snapshot')
+            if (typeof snapshot?.aiCw?.enabled !== 'boolean') throw Error('readingUnavailable')
+            action = stationAction({ action: 'decoder.aiCw', expectedOn: snapshot.aiCw.enabled, on: args.on })
+            read = 'get_snapshot'
+            break
+          }
+          case 'redecode': {
+            if (args && Object.keys(args).length) throw Error('invalidOperation')
+            const snapshot = await reads.invoke<import('../types').AppSnapshot>('get_snapshot')
+            action = stationAction({ action: 'decoder.redecode', expectedTier: snapshot?.link?.tier })
+            read = 'get_snapshot'
+            break
+          }
+          case 'set_split': case 'set_rit': case 'set_xit': case 'set_vfo': {
+            const key = command === 'set_split' ? 'txMhz' : command === 'set_vfo' ? 'vfo' : 'hz'
+            if (!args || Object.keys(args).length !== 1 || !(key in args)) throw Error('invalidOperation')
+            // Bind the change to the value the station last reported, in whole Hz for a split.
+            const radio = (await reads.invoke<import('../types').AppSnapshot>('get_snapshot'))?.radio
+            if (!radio) throw Error('readingUnavailable')
+            const whole = (mhz: unknown) => typeof mhz === 'number' ? Math.round(mhz * 1e6) / 1e6 : mhz
+            action = stationAction(command === 'set_split' ? { action: 'radio.split', expectedTxMhz: radio.splitTxMhz == null ? null : whole(radio.splitTxMhz), txMhz: args.txMhz === null ? null : whole(args.txMhz) }
+              : command === 'set_vfo' ? { action: 'radio.vfo', expectedVfo: radio.activeVfo === 'B' ? 'B' : 'A', vfo: args.vfo }
+              : { action: command === 'set_rit' ? 'radio.rit' : 'radio.xit', expectedHz: (command === 'set_rit' ? radio.ritHz : radio.xitHz) ?? 0, hz: args.hz })
+            read = 'get_snapshot'
+            break
+          }
+          // The desktop has no swap button; a browser may not reach one either.
+          case 'swap_vfo':
+            throw Error('applicationUnsupported')
         }
         if (action?.action === 'radio.select') {
           const context = operations.getSnapshot().state?.controls?.context
@@ -207,6 +309,15 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
         if ((action.action === 'qso.confirm' || action.action === 'qso.discard') &&
           (result.outcome !== 'applied' || result.evidence !== (action.action === 'qso.confirm' ? 'fileSynced' : 'pendingDiscarded'))) throw Error('operationUnknown')
         if (action?.action === 'radio.workSpot' && result.outcome === 'applied' && result.evidence !== 'radioReadback') throw Error('operationUnknown')
+        if (action.action === 'radio.workDigitalSpot' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
+        if (action.action === 'radio.repeater' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
+        if (action.action === 'radio.aprsTune' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
+        if (action.action.startsWith('rotator.') && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
+        if (action.action === 'radio.scope' && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
+        if (action.action === 'radio.memoryRecall' && (result.outcome !== 'applied' || result.evidence !== 'radioReadback')) throw Error('operationUnknown')
+        if (action.action === 'decoder.aiCw' && (result.outcome !== 'applied' || result.evidence !== 'settingsSaved')) throw Error('operationUnknown')
+        if (action.action === 'decoder.redecode' && (result.outcome !== 'applied' || result.evidence !== 'receiverState')) throw Error('operationUnknown')
+        if (isTuning(action) && (result.outcome !== 'applied' || result.evidence !== 'stationState')) throw Error('operationUnknown')
         if (action?.action === 'radio.select' && result.outcome === 'applied' && result.evidence !== 'radioReadback' && !(displayed?.radioId === action.radioId && result.evidence === 'stationState')) throw Error('operationUnknown')
       }
       if (!read) return undefined as T
@@ -223,6 +334,22 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             const radio = (value as import('../types').AppSnapshot)?.radio
             if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.mode) throw Error('readingUnavailable')
           }
+          if (action?.action === 'radio.workDigitalSpot') {
+            const snapshot = value as import('../types').AppSnapshot
+            if (!snapshot?.radio || Math.round(snapshot.radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || snapshot.radio.operatingMode?.toLowerCase() !== 'digital' || snapshot.link?.tier !== action.tier) throw Error('readingUnavailable')
+          }
+          if (action?.action === 'radio.memoryRecall') {
+            const radio = (value as import('../types').AppSnapshot)?.radio
+            if (!radio || Math.round(radio.dialMhz * 1e6) !== Math.round(action.dialMhz * 1e6) || radio.operatingMode?.toLowerCase() !== action.section) throw Error('readingUnavailable')
+          }
+          if (action?.action === 'radio.repeater' &&Math.round(((value as import('../types').AppSnapshot)?.radio?.dialMhz ?? NaN) * 1e6) !== Math.round(action.outputMhz * 1e6)) throw Error('readingUnavailable')
+          if (action?.action === 'radio.aprsTune' && Math.round(((value as import('../types').AppSnapshot)?.radio?.dialMhz ?? NaN) * 1e6) !== Math.round(action.dialMhz * 1e6)) throw Error('readingUnavailable')
+          // Only the FT-710 position has a station reading. A span or reference level has none, so
+          // the later sample is returned as it stands rather than checked against a field that does not exist.
+          if (action?.action === 'radio.scope' && action.setting === 'position' &&
+            scopePosition((value as import('../types').AppSnapshot)?.radio?.scopeModeCode) !== action.position) throw Error('readingUnavailable')
+          if (action?.action === 'decoder.aiCw' &&(value as import('../types').AppSnapshot)?.aiCw?.enabled !== action.on) throw Error('readingUnavailable')
+          if (action && isTuning(action) && !tuningShown(action, (value as import('../types').AppSnapshot)?.radio)) throw Error('readingUnavailable')
           if (action?.action === 'radio.select') {
             const snapshot = value as import('../types').AppSnapshot
             const settings = await reads.invoke<import('../types').Settings>('get_settings')

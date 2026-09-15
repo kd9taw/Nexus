@@ -46,6 +46,11 @@ export const ES: PartialCatalog = {
   "remote.controlNotSent": "No enviado. Nada llegó a la estación, así que allí no cambió nada. Inténtalo de nuevo.",
   "remote.controlBusy": "La estación estaba ocupada y no cambió nada. Inténtalo de nuevo.",
   "remote.controlLocalHint": "Al autorizar un navegador, recibe el control de la estación: las funciones compatibles del receptor, la radio y el amplificador, y Stop TX, que detiene cualquier transmisión de la estación. Para limitar un navegador, revócalo aquí. Iniciar una transmisión requiere un permiso independiente.",
+  // remote parity batch 1
+  "remote.b1.outsidePrivileges": "No se cambió. Esa frecuencia de transmisión está fuera de los privilegios de tu licencia.",
+  "remote.b1.workUnavailable": "Este spot no se puede trabajar desde el navegador. No cambió nada en la estación.",
+  "remote.b1.rotatorNoHeading": "El rumbo todavía no se muestra en remoto.",
+  "remote.b1.rotatorPointing": "Orientando el rotor hacia {{call}}.",
   "remote.transmitAllow": "Permitir transmisión FT8/FT4",
   "remote.transmitRevoke": "Revocar permiso de transmisión",
   "remote.transmitLocalHint": "La transmisión FT8/FT4 también requiere el control de la estación. Una vez permitida, se mantiene tras los reinicios hasta que la revoques aquí, y revocarla detiene al instante la transmisión de ese navegador. Nada se transmite hasta que el navegador pulsa TX On.",

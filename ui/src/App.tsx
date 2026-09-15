@@ -122,6 +122,7 @@ import {
   setSidebandOverride,
   testCat,
   setOperatingMode,
+  remoteRecallMemory,
   workSpot,
   setHuntTarget,
   setLicenseClass,
@@ -249,12 +250,18 @@ export type BrowserWorkspace = { snapshot: AppSnapshot; settings: Settings; band
 import { CollectionStatus, useRemoteCollection } from './remote-web/collections'
 import { RemoteInsights } from './remote-web/RemoteInsights'
 import { RemoteDxpeditions } from './remote-web/RemoteDxpeditions'
+import { remoteWorkable, spotNeed } from './remote-web/remote-work'
+import { remoteRecallArgs } from './remote-web/remote-recall'
+import { controlFailureMessage } from './remote-web/control-failure'
 import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
 import { RemoteOta } from './remote-web/RemoteOta'
 import { RemoteMemories } from './remote-web/RemoteMemories'
 
 export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const remoteWorkAllowed = useStationCapability('workSpot')
+  const remoteDigitalWorkAllowed = useStationCapability('workDigitalSpot')
+  const remoteRotatorAllowed = useStationCapability('rotator')
+  const remoteRecallAllowed = useStationCapability('memoryRecall')
   const display = useRemotePresentation()
   const quick = !!remote && display?.presentation === 'quick'
   const needsRead = useRemoteCollection('needs')
@@ -1533,10 +1540,15 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // must be put in FM explicitly — otherwise it keeps the prior section's DATA/USB mode and the
   // 2 m packet never demodulates. Clearing the mode override is handled backend-side on the next QSY.
   const handleAprsTune = useCallback((dialMhz: number) => {
+    // A browser's refusal carries data, not operator text: name it plainly.
+    if (remote) {
+      void aprsTune(dialMhz).then((s) => { if (s) setSnap(s) }).catch((e) => pushToast(controlFailureMessage(e), 'error', 4000))
+      return
+    }
     void withErrorToast(() => aprsTune(dialMhz), t('shell.aprs.tune.failed')).then((s) => {
       if (s) setSnap(s)
     })
-  }, [])
+  }, [!!remote])
 
   const handleSetTxEnabled = useCallback((enabled: boolean) => {
     void withErrorToast(
@@ -1695,7 +1707,29 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // retunes (same behavior as the Needed board's work-click).
   const recallMemory = useCallback(
     (m: Memory) => {
-      if (remote) return
+      if (remote) {
+        // A browser recall: the station applies the memory (section, exact dial, phone mode, FM
+        // machine, sideband) as one transaction. No Settings write and no browser bank write here,
+        // and the station never arms transmit for it.
+        const request = remoteRecallAllowed ? remoteRecallArgs(m) : null
+        if (!request) return
+        const target = request.view
+        if ((target === 'cw' && !cwEnabled) || (target === 'phone' && !phoneEnabled)) {
+          pushToast(t('shell.recall.sectionOff', { section: target === 'cw' ? 'CW' : 'Phone' }), 'info', 4000)
+          return
+        }
+        void remoteRecallMemory(request.args)
+          .then((s) => {
+            if (s) setSnap(s)
+            const opMode = request.args.section
+            lastOpModeRef.current = opMode
+            lastHomedModeRef.current = opMode // recalled to an EXACT dial — do not re-home
+            setView(target)
+            pushToast(t('shell.recall.done', { name: m.name, freq: request.args.dialMhz.toFixed(3), mode: m.mode }), 'success', 2500)
+          })
+          .catch((e) => pushToast(controlFailureMessage(e), 'error', 4000))
+        return
+      }
       const plan = planRecall(m)
       const target = plan.view
       const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
@@ -1775,7 +1809,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         }
       })()
     },
-    [cwEnabled, phoneEnabled, !!remote],
+    [cwEnabled, phoneEnabled, !!remote, remoteRecallAllowed],
   )
 
   // Global quick-recall hotkeys: Ctrl+1..9 (or ⌘+1..9 — the native chord on macOS, where
@@ -1841,23 +1875,27 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Point the antenna rotator at a needed call (great-circle bearing from your grid).
   const handlePointAntenna = useCallback(async (call: string) => {
     try {
-      const bearing = await pointRotatorAtCall(call)
-      pushToast(t('shell.rotator.pointed', { bearing: Math.round(bearing), call }), 'success', 3000)
+      // A browser gets no bearing back: the station resolves it.
+      const bearing: number | null | undefined = await pointRotatorAtCall(call)
+      pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('shell.rotator.pointed', { bearing: Math.round(bearing), call }), 'success', 3000)
     } catch (e) {
-      pushToast(typeof e === 'string' ? e : t('shell.rotator.failed', { call }), 'error', 4000)
+      pushToast(remote ? controlFailureMessage(e) : typeof e === 'string' ? e : t('shell.rotator.failed', { call }), 'error', 4000)
     }
-  }, [])
+  }, [!!remote])
 
-  const canRemoteWork = useCallback((alert: NeedAlert) => {
-    const target = workTarget(alert, bandPlan)
-    return remoteWorkAllowed && !!target &&
-      ((target.view === 'cw' && cwEnabled) || (target.view === 'phone' && phoneEnabled))
-  }, [remoteWorkAllowed, bandPlan, cwEnabled, phoneEnabled])
+  const canRemoteWork = useCallback((alert: NeedAlert) => remoteWorkable(alert, bandPlan,
+    { workSpot: remoteWorkAllowed, workDigitalSpot: remoteDigitalWorkAllowed, cwEnabled, phoneEnabled }),
+  [remoteWorkAllowed, remoteDigitalWorkAllowed, bandPlan, cwEnabled, phoneEnabled])
+  const canRemoteWorkSpot = useCallback((s: SpotRow) => canRemoteWork(spotNeed(s)), [canRemoteWork])
 
   // resolvable frequency at all falls back to a plain band QSY.
   const handleWorkNeeded = useCallback(
     (alert: NeedAlert) => {
-      if (remote && !canRemoteWork(alert)) return
+      if (remote && !canRemoteWork(alert)) {
+        // The map and DXpedition Work buttons reach here for every spot; say why nothing moved.
+        pushToast(t('remote.b1.workUnavailable'), 'info', 4000)
+        return
+      }
       // `target`, not `t` — `t` is the translator in this file.
       const target = workTarget(alert, bandPlan)
       if (!target) {
@@ -1894,7 +1932,8 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         let tier: 'FT8' | 'FT4' | undefined
         if (opMode === 'digital') {
           const m = alert.mode?.toUpperCase()
-          if ((m === 'FT4' || m === 'FT8') && tierRef.current !== m) tier = m
+          // A browser always names the tier: its Work intent carries no implicit current tier.
+          if ((m === 'FT4' || m === 'FT8') && (remote || tierRef.current !== m)) tier = m
         }
         const s = await withErrorToast(
           () => workSpot(opMode, target.freqMhz, target.band, target.call, tier),
@@ -2027,20 +2066,9 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
 
   const handleWorkSpot = useCallback(
     (s: SpotRow) => {
-      handleWorkNeeded({
-        call: s.call,
-        entity: s.entity,
-        band: s.band,
-        zone: s.zone,
-        tags: [],
-        priority: 0,
-        headline: '',
-        // Forward the SPECIFIC digital submode (FT4/FT8) so handleWorkNeeded's tier-switch
-        // guard fires — else clicking an FT4 spot QSYs but leaves the decoder on FT8. The
-        // frequency-class `s.mode` ('Digital') never matched that guard, so it was dead.
-        mode: s.submode === 'FT4' || s.submode === 'FT8' ? s.submode : s.mode,
-        freqMhz: s.freqMhz,
-      })
+      // `spotNeed` forwards the SPECIFIC digital submode (FT4/FT8) so handleWorkNeeded's
+      // tier-switch guard fires — else clicking an FT4 spot QSYs but leaves the decoder on FT8.
+      handleWorkNeeded(spotNeed(s))
     },
     [handleWorkNeeded],
   )
@@ -2687,7 +2715,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           onWork={handleWorkNeeded}
           canWork={remote ? canRemoteWork : undefined}
           onPoint={
-              !remote && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
+              (!remote || remoteRotatorAllowed) && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
                 ? handlePointAntenna
                 : undefined
             }
@@ -2714,6 +2742,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           myGrid={snap.mygrid}
           onSelect={handleSelect}
           onWork={handleWorkSpot}
+          canWork={remote ? canRemoteWorkSpot : undefined}
         />
       )
       break
@@ -2814,7 +2843,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           selectedCall={activePeer}
           onSelectCall={handleMapSelect}
           needByCall={needByCall}
-          onWorkSpot={handleWorkMapSpot}
+          onWorkSpot={remote && !remoteWorkAllowed && !remoteDigitalWorkAllowed ? undefined : handleWorkMapSpot}
           needAlerts={visibleAlerts}
           // The amplifier rides the snapshot App already polls at 300 ms — no fourth poller,
           // no new command. Absent when none is configured, and the pane then renders nothing.
@@ -2823,7 +2852,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           // bundled rotctld) OR by the advanced external host — host-only was
           // the pre-rotctld gate and silently disabled point-at for model users.
           onPoint={
-            (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim()
+            (!remote || remoteRotatorAllowed) && ((settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim())
               ? handlePointAntenna
               : undefined
           }
@@ -2840,7 +2869,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       )
       break
     case 'dxped':
-      workspace = remote ? <RemoteDxpeditions /> : (
+      workspace = remote ? <RemoteDxpeditions onWorkSpot={remoteWorkAllowed || remoteDigitalWorkAllowed ? handleWorkMapSpot : undefined} /> : (
         <main className="layout single">
           <DxpeditionsView
             snap={prop}
@@ -2870,7 +2899,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     case 'memories':
       // A manager view — never touches the rig on entry; only an explicit
       // Tune (recallMemory) retunes + switches cockpit.
-      workspace = remote ? <RemoteMemories myGrid={settings?.mygrid ?? ''} /> : (
+      workspace = remote ? <RemoteMemories myGrid={settings?.mygrid ?? ''} onRecall={recallMemory} /> : (
         <main className="layout single">
           <MemoriesView
             onPopOut={() => void openPanelWindow('memories')}

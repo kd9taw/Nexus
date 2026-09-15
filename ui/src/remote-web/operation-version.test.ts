@@ -27,6 +27,8 @@ it('preserves the original advertisement while explicitly negotiating expanded o
   expect(controlVersion({ action: 'radio.band', band: '40m', mode: 'phone' })).toBe(3)
   expect(controlVersion({ action: 'radio.tier', tier: 'FT4' })).toBe(3)
   expect(controlVersion({ action: 'radio.workspace', workspace: 'js8' })).toBe(3)
+  expect(controlVersion({ action: 'decoder.aiCw', expectedOn: false, on: true })).toBe(3)
+  expect(controlVersion({ action: 'decoder.redecode', expectedTier: 'FT8' })).toBe(3)
   expect(controlVersion({ action: 'decoder.clear', receiver: 'cw' })).toBe(2)
 })
 
@@ -133,4 +135,26 @@ it('keeps FT CQ and Call authority out of older browser state projections', () =
     if (version === 1) expect(projected.controls).toBeUndefined()
     else expect(projected.controls.capabilities).toEqual(version === 4 ? ['decoder', 'ftOperate', 'ftCall', 'qsoLogging'] : ['decoder'])
   }
+})
+
+it('sends split, XIT, VFO and RIT at v3, without a version bump', () => {
+  expect(controlVersion({ action: 'radio.split', expectedTxMhz: null, txMhz: 14.032 })).toBe(3)
+  expect(controlVersion({ action: 'radio.workDigitalSpot', tier: 'FT4', dialMhz: 14.080, band: '20m', call: 'JA2DEF' })).toBe(3)
+  expect(controlVersion({ action: 'radio.repeater', outputMhz: 146.94, shift: 'minus', offsetHz: 600000, toneHz: 0 })).toBe(3)
+  expect(controlVersion({ action: 'radio.memoryRecall', section: 'cw', dialMhz: 14.06, band: '20m', sideband: null })).toBe(3)
+  expect(controlVersion({ action: 'radio.aprsTune', dialMhz: 144.39 })).toBe(3)
+  expect(controlVersion({ action: 'rotator.point', azimuthDeg: 90 })).toBe(3)
+  expect(controlVersion({ action: 'rotator.pointAtCall', call: 'JA1ABC' })).toBe(3)
+  expect(controlVersion({ action: 'rotator.stop' })).toBe(3)
+  expect(controlVersion({ action: 'radio.xit', expectedHz: 0, hz: 10 })).toBe(3)
+  expect(controlVersion({ action: 'radio.vfo', expectedVfo: 'A', vfo: 'B' })).toBe(3)
+  expect(controlVersion({ action: 'radio.rit', expectedHz: 0, hz: 10 })).toBe(3)
+})
+
+it('sends rig scope settings at v3, without a version bump', () => {
+  expect(controlVersion({ action: 'radio.scope', setting: 'span', hz: 25_000 })).toBe(3)
+  expect(controlVersion({ action: 'radio.scope', setting: 'ref', tenthsDb: -35 })).toBe(3)
+  expect(controlVersion({ action: 'radio.scope', setting: 'position', position: 'fix' })).toBe(3)
+  expect(controlVersion({ action: 'radio.scope', setting: 'panSpan', hz: 200_000 })).toBe(3)
+  expect(controlVersion({ action: 'radio.scope', setting: 'panRef', refDbm: null })).toBe(3)
 })

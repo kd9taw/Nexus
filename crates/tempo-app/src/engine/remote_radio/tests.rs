@@ -18,12 +18,18 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 fn unexpired_deadline() -> Instant {
     Instant::now() + Duration::from_secs(24 * 60 * 60)
 }
+mod aprs;
 mod band_selection;
+mod digital_spot;
 mod dsp;
 mod filter;
 mod level;
+mod memory;
 mod phone_mode;
 mod receive_tuning;
+mod repeater;
+mod scope;
+mod split;
 mod spot;
 struct Station {
     engine: Engine,

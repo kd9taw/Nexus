@@ -53,6 +53,8 @@ import {
   setTxEnabled,
 } from '../api'
 import { pushToast } from '../toast'
+import { controlFailureMessage } from '../remote-web/control-failure'
+import { latestOnly } from '../remote-web/latest-only'
 import { RotorStrip } from './RotorStrip'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
@@ -406,11 +408,19 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const quick = display?.presentation === 'quick'
   const details = !quick || display.radioDetails
   const frequencyControl = useStationCapability('frequency')
+  const rotatorControl = useStationCapability('rotator')
   const scopeClick = useRemoteScopeClick(snap)
   const levels = useRadioLevels(snap)
   const dspControl = useReceiverDsp(snap, 'phone')
   const phoneModeControl = usePhoneMode(snap, phoneMode)
   const control = useStationControl()
+  // A browser moves the rig scope with the station's rigScope hint; the station judges the family.
+  const rigScope = useStationCapability('rigScope')
+  const scopeControl = control || rigScope
+  const scopeFailed = (error: unknown): void => { pushToast(controlFailureMessage(error), 'error') }
+  // One remote reference change at a time: a drag sends its newest value, never every step.
+  const [sendScopeRef] = useState(() => latestOnly((tenths: number) => setScopeRef(tenths), scopeFailed))
+  const [sendFlexRef] = useState(() => latestOnly((dbm: number) => setFlexPanRef(dbm), scopeFailed))
   const spotsRead = useRemoteCollection('spots')
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
@@ -511,9 +521,10 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // Native Icom scope reference level, in tenths of a dB (−200..+200 = −20.0..+20.0 dB).
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
   const changeScopeRef = (tenths: number) => {
-    if (!control) return
+    if (!scopeControl) return
     setScopeRefTenths(tenths)
-    void setScopeRef(tenths)
+    if (control) void setScopeRef(tenths)
+    else sendScopeRef(tenths)
   }
   const [keyed, setKeyed] = useState(false)
   /** Mirrors `keyed` for the window key handlers, which capture their closure once per
@@ -582,8 +593,9 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const flexScope = scopeFeed?.source === 'flex'
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
-    if (!control) return
+    if (!scopeControl) return
     setFlexRefDbm(dbm)
+    if (!control) return sendFlexRef(dbm)
     void setFlexPanRef(dbm)
       .then((s) => onSnap?.(s))
       .catch(() => {})
@@ -1046,12 +1058,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             </span>
             <div className="ph-span">
               {RIG_SPANS.map((sp) => (
-                <button disabled={!control}
+                <button disabled={!scopeControl}
                   key={sp.label}
                   type="button"
                   className="theme-chip"
                   title={t('phone.rigScope.span.title', { span: sp.label })}
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(control ? () => {} : scopeFailed)}
                 >
                   {sp.label}
                 </button>
@@ -1059,17 +1071,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             </div>
             <label className="ph-rigscope-ref" title={t('phone.rigScope.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
-              <input disabled={!control}
+              <input disabled={!scopeControl}
                 type="range"
                 min={-200}
                 max={200}
                 step={5}
                 value={scopeRefTenths}
-                style={{ visibility: control ? undefined : 'hidden' }}
+                style={{ visibility: scopeControl ? undefined : 'hidden' }}
                 onChange={(e) => changeScopeRef(Number(e.target.value))}
                 aria-label={t('phone.rigScope.ref.aria')}
               />
-              <span className="ph-power-val">{control ? (scopeRefTenths / 10).toFixed(1) : '—'} {DB}</span>
+              <span className="ph-power-val">{scopeControl ? (scopeRefTenths / 10).toFixed(1) : '—'} {DB}</span>
             </label>
           </div>
         </CockpitPaneFrame>
@@ -1084,12 +1096,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             </span>
             <div className="ph-span">
               {FLEX_SPANS.map((sp) => (
-                <button disabled={!control}
+                <button disabled={!scopeControl}
                   key={sp.label}
                   type="button"
                   className="theme-chip"
                   title={t('phone.flexPan.span.title', { span: sp.label })}
-                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
+                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(control ? () => {} : scopeFailed)}
                 >
                   {sp.label}
                 </button>
@@ -1097,17 +1109,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             </div>
             <label className="ph-rigscope-ref" title={t('phone.flexPan.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
-              <input disabled={!control}
+              <input disabled={!scopeControl}
                 type="range"
                 min={-140}
                 max={-20}
                 step={5}
                 value={flexRefDbm}
-                style={{ visibility: control ? undefined : 'hidden' }}
+                style={{ visibility: scopeControl ? undefined : 'hidden' }}
                 onChange={(e) => changeFlexRef(Number(e.target.value))}
                 aria-label={t('phone.flexPan.ref.aria')}
               />
-              <span className="ph-power-val">{control ? flexRefDbm : '—'} {DBM}</span>
+              <span className="ph-power-val">{scopeControl ? flexRefDbm : '—'} {DBM}</span>
             </label>
           </div>
         </CockpitPaneFrame>
@@ -1451,7 +1463,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             onManage={onOpenMemories}
           /> : <MemoryStripUnavailable />
         )}
-        {control ? <RotorStrip onOpenSettings={onOpenSettings} /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+        {control || rotatorControl ? <RotorStrip onOpenSettings={onOpenSettings} /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
         {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
             '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
             the glyph and the tooltip already say. The accessible name is explicit here rather
@@ -1529,14 +1541,14 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             // rig has ten span rungs and three positions, and a chip row that long crowds the scope it
             // is supposed to serve.
             <div className="ph-span" role="group" aria-label={t('phone.scope.yaesu.aria')}>
-              <select disabled={!control}
+              <select disabled={!scopeControl}
                 className="theme-chip"
                 aria-label={t('phone.scope.yaesu.span.aria')}
                 title={t('phone.scope.yaesu.span.title')}
                 value={yaesuSpanLabel}
                 onChange={(e) => {
                   const sp = YAESU_SPANS.find((x) => x.label === e.target.value)
-                  if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+                  if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => (control ? pushToast(String(e), 'error') : scopeFailed(e)))
                 }}
               >
                 {YAESU_SPANS.map((sp) => (
@@ -1545,14 +1557,14 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   </option>
                 ))}
               </select>
-              <select disabled={!control}
+              <select disabled={!scopeControl}
                 className="theme-chip"
                 aria-label={t('phone.scope.yaesu.pos.aria')}
                 title={t('phone.scope.yaesu.pos.title')}
                 value={yaesuPosition}
                 onChange={(e) => {
                   const pos = e.target.value as 'center' | 'cursor' | 'fix'
-                  void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+                  void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => (control ? pushToast(String(e), 'error') : scopeFailed(e)))
                 }}
               >
                 <option value="center">{t('phone.scope.yaesu.pos.center')}</option>

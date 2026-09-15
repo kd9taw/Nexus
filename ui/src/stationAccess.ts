@@ -3,7 +3,7 @@
 // The installed desktop keeps its existing authority and transmit guards.
 import { createContext, useContext, useSyncExternalStore } from 'react'
 import type { OperationClient } from './remote-web/operation-client'
-import type { ControlCapability } from './remote-web/station-operation'
+import { TUNE_CAPABILITIES, TX_IDLE_CAPABILITIES, type ControlCapability } from './remote-web/station-operation'
 import type { RadioStatus } from './types'
 
 export const StationControlContext = createContext(true)
@@ -26,9 +26,9 @@ export function useStationCapability(capability: ControlCapability, lapse = true
   const local = useStationControl(), available = useStationData()
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
-  const expanded = ['frequency', 'mode', 'tier', 'workspace', 'ampFollowBand', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability)
+  const expanded = ['frequency', 'mode', 'tier', 'workspace', 'ampFollowBand', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver', ...TUNE_CAPABILITIES].includes(capability)
   return local || !!(available && (!['ftRuntime', 'ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages'].includes(capability) || (client?.operationVersion ?? 0) >= 4) && (!expanded || (client?.operationVersion ?? 0) >= 3) && (lapse || view?.fresh) && view?.connected && view.requestReady !== false && !view.unresolved && !view.controlPending &&
-    view.state?.phase === 'controlling' && (!['frequency', 'mode', 'tier', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
+    view.state?.phase === 'controlling' && (!['frequency', 'mode', 'tier', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver', ...TX_IDLE_CAPABILITIES].includes(capability) || !view.state.txArmed) && view.state.controls?.capabilities.includes(capability))
 }
 
 /** Local tier changes retain their native conditions. Remote selection needs

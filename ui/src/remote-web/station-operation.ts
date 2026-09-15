@@ -33,6 +33,26 @@ export type StationAction =
   | { action: 'ft.txEnabled'; expectedTier: 'FT8' | 'FT4'; transmitEpoch: string; on: boolean }
   | { action: 'radio.level'; mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'; level: RadioLevel; expected: number; value: number }
   | { action: 'radio.workSpot'; mode: 'cw' | 'phone'; dialMhz: number; band: string; call: string }
+  // FT8/FT4 Work names its tier in its own action: an older desktop parses workSpot exactly.
+  | { action: 'radio.workDigitalSpot'; tier: 'FT8' | 'FT4'; dialMhz: number; band: string; call: string }
+  // An FM repeater: the output, the shift and offset the rig keys (0 = band convention) and the tone.
+  | { action: 'radio.repeater'; outputMhz: number; shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number }
+  // The APRS channel pick: one of the regional 2 m APRS channels, FM simplex at the station.
+  | { action: 'radio.aprsTune'; dialMhz: number }
+  // The rotator, by operator gesture only: an azimuth, a callsign's entity, or stop.
+  | { action: 'rotator.point'; azimuthDeg: number }
+  | { action: 'rotator.pointAtCall'; call: string }
+  | { action: 'rotator.stop' }
+  // The native panadapter: one closed setting and exactly its own field. The station judges which
+  // scope family is live, never this page.
+  | { action: 'radio.scope'; setting: 'span'; hz: number }
+  | { action: 'radio.scope'; setting: 'ref'; tenthsDb: number }
+  | { action: 'radio.scope'; setting: 'position'; position: 'center' | 'cursor' | 'fix' }
+  | { action: 'radio.scope'; setting: 'panSpan'; hz: number }
+  | { action: 'radio.scope'; setting: 'panRef'; refDbm: number | null }
+  // A station memory: its section and exact dial, plus its own sideband (Phone) or its FM machine.
+  | { action: 'radio.memoryRecall'; section: 'cw' | 'phone' | 'digital'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | null
+      fm?: { shift: 'simplex' | 'plus' | 'minus'; offsetHz: number; toneHz: number } }
   | { action: 'radio.frequency'; dialMhz: number; band: string; sideband: 'USB' | 'LSB' | 'FM' | 'AM' }
   | { action: 'radio.band'; band: string; mode: 'cw' | 'phone' }
   | { action: 'radio.filterWidth'; mode: 'cw' | 'phone'; expectedHz: number; hz: number }
@@ -49,6 +69,12 @@ export type StationAction =
   | { action: 'decoder.afcReset'; receiver: 'rtty' | 'psk' }
   | { action: 'decoder.net'; receiver: 'rtty' | 'psk'; hz: number }
   | { action: 'decoder.pskMode'; mode: 'PSK31' | 'QPSK31'; reverse: boolean }
+  | { action: 'decoder.aiCw'; expectedOn: boolean; on: boolean }
+  | { action: 'decoder.redecode'; expectedTier: 'FT8' | 'FT4' }
+  | { action: 'radio.split'; expectedTxMhz: number | null; txMhz: number | null }
+  | { action: 'radio.xit'; expectedHz: number; hz: number }
+  | { action: 'radio.vfo'; expectedVfo: 'A' | 'B'; vfo: 'A' | 'B' }
+  | { action: 'radio.rit'; expectedHz: number; hz: number }
   | { action: 'decoder.js8Speed'; expectedSpeed: number; speed: number }
   | { action: 'decoder.msk144Period'; expectedPeriodSecs: number; periodSecs: number }
   | { action: 'decoder.depth'; expectedTier: string; expectedDepth: number; depth: number }
@@ -64,7 +90,15 @@ export type ControlContext = {
   ampConnection: number | null
   ampReadSequence: number | null
 }
-export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver'] as const
+export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'ftOperate', 'ftCall', 'ftExchange', 'ftMessages', 'decoder', 'radio', 'amplifier', 'frequency', 'mode', 'tier', 'ampFollowBand', 'workspace', 'decoderSettings', 'receiverSettings', 'receiverGain', 'bandSelection', 'receiverFilter', 'receiverDsp', 'phoneMode', 'workSpot', 'radioLevels', 'radioSelection', 'fmTuning', 'fmReceiver',
+  // Remote parity batch 1. A station advertises each one only with its action, so an older
+  // station never names them and this page never sends their actions to it.
+  'aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator'] as const
+/** The batch-1 hints. An older page does not know these names and drops them as hints. */
+export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator'] as const satisfies readonly ControlCapability[]
+/** Batch-1 controls that move the transmit frequency, start a retune or feed the FT sequencer.
+ * They stay disabled while this browser's transmission is armed; the station refuses them too. */
+export const TX_IDLE_CAPABILITIES = ['redecode', 'workDigitalSpot', 'splitTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning'] as const satisfies readonly ControlCapability[]
 export type ControlCapability = (typeof CONTROL_CAPABILITIES)[number]
 // A new action cannot silently inherit a broader capability by its prefix.
 const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
@@ -79,9 +113,17 @@ const ACTION_CAPABILITY: Record<StationAction['action'], ControlCapability> = {
   'radio.band': 'bandSelection', 'radio.mode': 'mode', 'radio.tier': 'tier', 'radio.workspace': 'workspace',
   'radio.filterWidth': 'receiverFilter',
   'radio.function': 'receiverDsp', 'radio.agc': 'receiverDsp',
-  'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot',
+  'radio.phoneMode': 'phoneMode', 'radio.workSpot': 'workSpot', 'radio.workDigitalSpot': 'workDigitalSpot',
+  'radio.repeater': 'repeaterTuning',
+  'radio.aprsTune': 'aprsTuning',
+  'rotator.point': 'rotator', 'rotator.pointAtCall': 'rotator', 'rotator.stop': 'rotator',
+  'radio.scope': 'rigScope',
+  'radio.memoryRecall': 'memoryRecall',
   'decoder.arm': 'decoder', 'decoder.clear': 'decoder', 'decoder.afcReset': 'decoder',
   'decoder.net': 'decoder', 'decoder.pskMode': 'decoder',
+  'decoder.aiCw': 'aiCw', 'decoder.redecode': 'redecode',
+  // Split, XIT and VFO decide where the transmitter goes; RIT only moves the receiver.
+  'radio.split': 'splitTuning', 'radio.xit': 'splitTuning', 'radio.vfo': 'splitTuning', 'radio.rit': 'ritTuning',
   'decoder.js8Speed': 'decoderSettings', 'decoder.msk144Period': 'decoderSettings',
   'decoder.depth': 'receiverSettings', 'receiver.rxOffset': 'receiverSettings',
   'receiver.rxGain': 'receiverGain',
@@ -93,11 +135,19 @@ export const CONTROL_TIERS = [
   'TempoFast', 'TempoDeep'
 ] as const
 const BANDS = ['2190m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm', '13cm', '9cm', '6cm', '3cm', '1.25cm', '6mm', '4mm', '2.5mm', '2mm', '1mm']
+// The regional 2 m APRS channels in Hz, channel for channel the cockpit picker's list (aprsBeacon.ts).
+// Literal here: this grammar is compiled into the relay, which must not pull in the grid code.
+const APRS_CHANNELS_HZ = [144390000, 144800000, 145175000, 144575000, 144660000, 144930000, 145570000]
 const invalid = (): never => { throw Error('invalidOperation') }
 function object(raw: unknown, keys: string[]): Record<string, unknown> {
   try { return displayObject(raw, keys) } catch { return invalid() }
 }
 const oneOf = (v: unknown, choices: readonly string[]) => typeof v === 'string' && choices.includes(v)
+/** An FM machine: a closed shift, a whole offset (0 = band convention) and a tone that is 0 (none)
+ * or in the CTCSS range to a tenth of a hertz. */
+const repeaterMachine = (shift: unknown, offsetHz: unknown, toneHz: unknown) =>
+  oneOf(shift, ['simplex', 'plus', 'minus']) && Number.isSafeInteger(offsetHz) && (offsetHz as number) >= 0 && (offsetHz as number) <= 20000000 &&
+  finite(toneHz) && (toneHz === 0 || (toneHz >= 60 && toneHz <= 260 && Math.abs(Math.round(toneHz * 10) - toneHz * 10) <= 1e-6))
 
 export function controlContext(raw: unknown): ControlContext {
   const c = object(raw, ['radioId', 'radioConnection', 'ampConnection', 'ampReadSequence'])
@@ -117,6 +167,10 @@ function exchangeContext(raw: unknown): void {
         (q.txNow !== null && (typeof q.txNow !== 'string' || q.txNow.length > 128 || /[^ -~]/.test(q.txNow)))) invalid()
 }
 
+/** Every rig-scope span the cockpits offer: the Icom CI-V chips (± half-width) and the FT-710
+ * rungs (half of the full span), nothing between. The station checks the live family's own ladder. */
+const SCOPE_SPANS_HZ = [500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000]
+const SCOPE_FIELD: Record<string, string> = { span: 'hz', ref: 'tenthsDb', position: 'position', panSpan: 'hz', panRef: 'refDbm' }
 export function stationAction(raw: unknown): StationAction {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const a = raw as Record<string, unknown>
@@ -191,6 +245,10 @@ export function stationAction(raw: unknown): StationAction {
       object(a, ['action', 'mode', 'dialMhz', 'band', 'call'])
       if (!oneOf(a.mode, ['cw', 'phone']) || !finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) || typeof a.call !== 'string' || !/^[A-Za-z0-9/]{1,32}$/.test(a.call)) invalid()
       break
+    case 'radio.workDigitalSpot':
+      object(a, ['action', 'tier', 'dialMhz', 'band', 'call'])
+      if (!oneOf(a.tier, ['FT8', 'FT4']) || !finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) || typeof a.call !== 'string' || !/^[A-Za-z0-9/]{1,32}$/.test(a.call)) invalid()
+      break
     case 'radio.frequency':
       object(a, ['action', 'dialMhz', 'band', 'sideband'])
       if (!finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || (a.band !== '' && !oneOf(a.band, BANDS)) || !oneOf(a.sideband, ['USB', 'LSB', 'FM', 'AM'])) invalid()
@@ -261,6 +319,75 @@ export function stationAction(raw: unknown): StationAction {
       object(a, ['action', 'mode', 'reverse'])
       if (!oneOf(a.mode, ['PSK31', 'QPSK31']) || typeof a.reverse !== 'boolean') invalid()
       break
+    case 'decoder.aiCw':
+      object(a, ['action', 'expectedOn', 'on'])
+      if (typeof a.expectedOn !== 'boolean' || typeof a.on !== 'boolean' || a.expectedOn === a.on) invalid()
+      break
+    case 'decoder.redecode':
+      object(a, ['action', 'expectedTier'])
+      if (!oneOf(a.expectedTier, ['FT8', 'FT4'])) invalid()
+      break
+    case 'radio.memoryRecall': {
+      object(a, ['action', 'section', 'dialMhz', 'band', 'sideband', ...('fm' in a ? ['fm'] : [])])
+      // Only a Phone memory names a sideband; an FM machine is Phone voice at or above 29 MHz.
+      if (!oneOf(a.section, ['cw', 'phone', 'digital']) || !finite(a.dialMhz) || a.dialMhz <= 0 || a.dialMhz > 250000 || !oneOf(a.band, BANDS) ||
+        (a.sideband !== null && (a.section !== 'phone' || !oneOf(a.sideband, ['USB', 'LSB'])))) invalid()
+      if ('fm' in a) {
+        const machine = object(a.fm, ['shift', 'offsetHz', 'toneHz'])
+        if (a.section !== 'phone' || a.sideband !== null || (a.dialMhz as number) < 29 || !repeaterMachine(machine.shift, machine.offsetHz, machine.toneHz)) invalid()
+      }
+      break
+    }
+    case 'radio.repeater': {
+      object(a, ['action', 'outputMhz', 'shift', 'offsetHz', 'toneHz'])
+      // FM voice starts at 29 MHz.
+      if (!finite(a.outputMhz) || a.outputMhz < 29 || a.outputMhz > 250000 || !repeaterMachine(a.shift, a.offsetHz, a.toneHz)) invalid()
+      break
+    }
+    case 'radio.aprsTune':
+      object(a, ['action', 'dialMhz'])
+      // Only a regional APRS channel: this is the APRS pick, never a general 2 m tune.
+      if (!finite(a.dialMhz) || !APRS_CHANNELS_HZ.includes(Math.round((a.dialMhz as number) * 1e6))) invalid()
+      break
+    case 'radio.scope': {
+      const field = typeof a.setting === 'string' && Object.prototype.hasOwnProperty.call(SCOPE_FIELD, a.setting) ? SCOPE_FIELD[a.setting] : null
+      if (!field) invalid()
+      object(a, ['action', 'setting', field as string])
+      const whole = (v: unknown, lo: number, hi: number) => Number.isSafeInteger(v) && (v as number) >= lo && (v as number) <= hi
+      if (a.setting === 'span' ? !Number.isSafeInteger(a.hz) || !SCOPE_SPANS_HZ.includes(a.hz as number)
+        : a.setting === 'ref' ? !whole(a.tenthsDb, -200, 200)
+        : a.setting === 'position' ? !oneOf(a.position, ['center', 'cursor', 'fix'])
+        : a.setting === 'panSpan' ? !whole(a.hz, 5_000, 14_000_000)
+        : a.refDbm !== null && !whole(a.refDbm, -160, 20)) invalid()
+      break
+    }
+    case 'rotator.point':
+      object(a, ['action', 'azimuthDeg'])
+      // An azimuth the rotctld line carries exactly: 0 ≤ az < 360, to a tenth of a degree.
+      if (!finite(a.azimuthDeg) || a.azimuthDeg < 0 || a.azimuthDeg >= 360 || Math.abs(a.azimuthDeg * 10 - Math.round(a.azimuthDeg * 10)) > 1e-6) invalid()
+      break
+    case 'rotator.pointAtCall':
+      object(a, ['action', 'call'])
+      if (typeof a.call !== 'string' || !/^[A-Z0-9/]{3,32}$/.test(a.call)) invalid()
+      break
+    case 'rotator.stop':
+      object(a, ['action'])
+      break
+    case 'radio.split':
+      // null is simplex. Both values are always named: a missing one is not simplex by omission.
+      object(a, ['action', 'expectedTxMhz', 'txMhz'])
+      for (const v of [a.expectedTxMhz, a.txMhz]) if (v !== null && (!finite(v) || v <= 0 || v > 250000)) invalid()
+      if (a.expectedTxMhz === a.txMhz) invalid()
+      break
+    case 'radio.xit': case 'radio.rit':
+      object(a, ['action', 'expectedHz', 'hz'])
+      // Offsets are signed: the shared `integer` helper is non-negative by design.
+      if (!Number.isSafeInteger(a.expectedHz) || !Number.isSafeInteger(a.hz) || (a.expectedHz as number) < -9999 || (a.expectedHz as number) > 9999 || (a.hz as number) < -9999 || (a.hz as number) > 9999 || a.expectedHz === a.hz) invalid()
+      break
+    case 'radio.vfo':
+      object(a, ['action', 'expectedVfo', 'vfo'])
+      if (!oneOf(a.expectedVfo, ['A', 'B']) || !oneOf(a.vfo, ['A', 'B']) || a.expectedVfo === a.vfo) invalid()
+      break
     case 'decoder.js8Speed':
       object(a, ['action', 'expectedSpeed', 'speed'])
       if (!integer(a.expectedSpeed) || !integer(a.speed) || a.expectedSpeed < 0 || a.expectedSpeed > 3 || a.speed < 0 || a.speed > 3 || a.expectedSpeed === a.speed) invalid()
@@ -308,7 +435,9 @@ export type ControlOutcome = { operation: 'stationControl'; operationId: string 
   | { outcome: 'applied'; evidence: 'receiverState' | 'radioReadback' | 'amplifierReadback' | 'stationState' | 'settingsSaved' | 'fileSynced' | 'pendingConfirmationSynced' | 'pendingDiscarded' }
   | { outcome: 'rejected' | 'unknown'; reason: string }
 )
-const REASONS = ['authorityExpired', 'contextChanged', 'readingUnavailable', 'stationBusy', 'hardwareUnavailable', 'hardwareUnconfirmed', 'unsupportedAction', 'invalidAction', 'persistenceFailed', 'noEligibleContact', 'alreadyPresent', 'pendingConfirmationRequired']
+const REASONS = ['authorityExpired', 'contextChanged', 'readingUnavailable', 'stationBusy', 'hardwareUnavailable', 'hardwareUnconfirmed', 'unsupportedAction', 'invalidAction', 'persistenceFailed', 'noEligibleContact', 'alreadyPresent', 'pendingConfirmationRequired',
+  // Only batch-1 transmit-frequency actions emit this, so a page that predates it never receives it.
+  'outsidePrivileges']
 export function controlOutcome(raw: unknown): ControlOutcome {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const v = raw as Record<string, unknown>

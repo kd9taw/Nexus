@@ -55,11 +55,82 @@ pub enum TextReceiver {
     Psk,
 }
 
+/// The section a recalled memory lands in.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecallSection {
+    Cw,
+    Phone,
+    Digital,
+}
+
+/// A Phone memory's own sideband.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum RecallSideband {
+    Usb,
+    Lsb,
+}
+
+/// An FM memory's machine: shift, offset (0 = band convention) and tone.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecallFm {
+    shift: RepeaterShift,
+    offset_hz: u32,
+    tone_hz: f32,
+}
+
+/// A repeater's shift: a closed set, so an unknown word never degrades to simplex.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RepeaterShift {
+    Simplex,
+    Plus,
+    Minus,
+}
+
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyboardReceiver {
     Rtty,
     Psk,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum Vfo {
+    A,
+    B,
+}
+
+/// A split request always names both values; an absent one is invalid, never simplex by omission.
+fn present<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<f64>, D::Error> {
+    Option::<f64>::deserialize(value)
+}
+
+/// Which native panadapter setting a `radio.scope` request carries.
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ScopeSetting {
+    Span,
+    Ref,
+    Position,
+    PanSpan,
+    PanRef,
+}
+
+/// The FT-710 scope position, by name; the station resolves the rig's display family.
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ScopePlace {
+    Center,
+    Cursor,
+    Fix,
+}
+
+/// A named `refDbm: null` (auto) stays distinct from an absent field.
+fn named<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<Option<i32>>, D::Error> {
+    Option::<i32>::deserialize(value).map(Some)
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -166,6 +237,42 @@ pub enum Action {
     ReceiverNet { receiver: KeyboardReceiver, hz: f32 },
     #[serde(rename = "decoder.pskMode")]
     PskMode { mode: String, reverse: bool },
+    #[serde(rename = "decoder.aiCw")]
+    AiCw {
+        #[serde(rename = "expectedOn")]
+        expected_on: bool,
+        on: bool,
+    },
+    #[serde(rename = "decoder.redecode")]
+    Redecode {
+        #[serde(rename = "expectedTier")]
+        expected_tier: tempo_app::dto::Tier,
+    },
+    #[serde(rename = "radio.split")]
+    Split {
+        #[serde(rename = "expectedTxMhz", deserialize_with = "present")]
+        expected_tx_mhz: Option<f64>,
+        #[serde(rename = "txMhz", deserialize_with = "present")]
+        tx_mhz: Option<f64>,
+    },
+    #[serde(rename = "radio.rit")]
+    Rit {
+        #[serde(rename = "expectedHz")]
+        expected_hz: i32,
+        hz: i32,
+    },
+    #[serde(rename = "radio.xit")]
+    Xit {
+        #[serde(rename = "expectedHz")]
+        expected_hz: i32,
+        hz: i32,
+    },
+    #[serde(rename = "radio.vfo")]
+    Vfo {
+        #[serde(rename = "expectedVfo")]
+        expected_vfo: Vfo,
+        vfo: Vfo,
+    },
     #[serde(rename = "decoder.js8Speed")]
     Js8Speed {
         #[serde(rename = "expectedSpeed")]
@@ -258,6 +365,70 @@ pub enum Action {
         band: String,
         call: String,
     },
+    /// FT8/FT4 Work names its tier in its own action: an older desktop parses workSpot exactly.
+    #[serde(rename = "radio.workDigitalSpot")]
+    WorkDigitalSpot {
+        tier: tempo_app::dto::Tier,
+        #[serde(rename = "dialMhz")]
+        dial_mhz: f64,
+        band: String,
+        call: String,
+    },
+    /// An FM repeater (the Program Tune): the machine only. The offset is the magnitude the rig
+    /// keys, 0 = the band convention; the station judges the input it keys against the licence.
+    #[serde(rename = "radio.repeater")]
+    Repeater {
+        #[serde(rename = "outputMhz")]
+        output_mhz: f64,
+        shift: RepeaterShift,
+        #[serde(rename = "offsetHz")]
+        offset_hz: u32,
+        #[serde(rename = "toneHz")]
+        tone_hz: f32,
+    },
+    /// An APRS tune (the APRS cockpit's channel pick): one of the regional 2 m APRS channels only.
+    #[serde(rename = "radio.aprsTune")]
+    AprsTune {
+        #[serde(rename = "dialMhz")]
+        dial_mhz: f64,
+    },
+    /// Point the rotator at an absolute azimuth: an operator gesture only.
+    #[serde(rename = "rotator.point")]
+    RotatorPoint {
+        #[serde(rename = "azimuthDeg")]
+        azimuth_deg: f64,
+    },
+    /// Point the rotator at a callsign's entity, bearing resolved at the station.
+    #[serde(rename = "rotator.pointAtCall")]
+    RotatorPointAtCall { call: String },
+    /// Stop the rotator.
+    #[serde(rename = "rotator.stop")]
+    RotatorStop {},
+    /// The native panadapter's span, reference or position: one setting and exactly its own field.
+    /// The station decides which scope family is live; a browser's view of the feed is never used.
+    #[serde(rename = "radio.scope")]
+    Scope {
+        setting: ScopeSetting,
+        #[serde(default)]
+        hz: Option<u32>,
+        #[serde(default, rename = "tenthsDb")]
+        tenths_db: Option<i32>,
+        #[serde(default)]
+        position: Option<ScopePlace>,
+        #[serde(default, rename = "refDbm", deserialize_with = "named")]
+        ref_dbm: Option<Option<i32>>,
+    },
+    /// A memory recall: the section, the memory's exact dial, its own sideband (Phone only) or
+    /// its FM machine. Never a Settings form, a call or a tier.
+    #[serde(rename = "radio.memoryRecall")]
+    MemoryRecall {
+        section: RecallSection,
+        #[serde(rename = "dialMhz")]
+        dial_mhz: f64,
+        band: String,
+        sideband: Option<RecallSideband>,
+        fm: Option<RecallFm>,
+    },
     #[serde(rename = "radio.tier")]
     Tier { tier: tempo_app::dto::Tier },
     #[serde(rename = "radio.workspace")]
@@ -291,6 +462,17 @@ pub enum Action {
         expected_follow: bool,
         follow: bool,
     },
+}
+
+#[cfg(feature = "radio")]
+#[path = "rotator.rs"]
+pub(super) mod rotator;
+
+/// Whether the desktop's satellite loop is steering the mast right now. An unreadable marker
+/// answers yes, so a remote point never fights a track it could not see.
+#[cfg(feature = "radio")]
+fn satellite_track_live() -> bool {
+    crate::SAT_TRACK.lock().map(|g| g.is_some()).unwrap_or(true)
 }
 
 pub fn execute(
@@ -381,6 +563,129 @@ pub fn execute(
                 context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
                 permit,
             );
+        }
+        // FT8/FT4 Work: the same station-owned pile-up evidence as CW/Phone Work, then the tiered
+        // receive QSY. Refused while TX is armed; it never enables TX or calls the station.
+        #[cfg(feature = "radio")]
+        Action::WorkDigitalSpot {
+            tier,
+            dial_mhz,
+            band,
+            call,
+        } => {
+            let buffer = spots
+                .ok_or(Reason::ReadingUnavailable)?
+                .try_lock()
+                .map_err(|_| Reason::ReadingUnavailable)?;
+            if crate::work_spot_split_offset(&buffer, call, *dial_mhz, std::time::Instant::now())
+                .is_some()
+            {
+                return Err(Reason::UnsupportedAction);
+            }
+            drop(buffer);
+            return engine.queue_remote_digital_spot(
+                *tier,
+                *dial_mhz,
+                band,
+                call,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        // A memory recall through the readback transaction. Refused while TX is armed, when an FM
+        // machine's input is outside the licence, and when another radio owns the band.
+        #[cfg(feature = "radio")]
+        Action::MemoryRecall {
+            section,
+            dial_mhz,
+            band,
+            sideband,
+            fm,
+        } => {
+            let shift = |shift: RepeaterShift| match shift {
+                RepeaterShift::Simplex => "simplex",
+                RepeaterShift::Plus => "plus",
+                RepeaterShift::Minus => "minus",
+            };
+            return engine.queue_remote_memory_recall(
+                match section {
+                    RecallSection::Cw => "cw",
+                    RecallSection::Phone => "phone",
+                    RecallSection::Digital => "digital",
+                },
+                *dial_mhz,
+                band,
+                sideband.map(|s| match s {
+                    RecallSideband::Usb => "USB",
+                    RecallSideband::Lsb => "LSB",
+                }),
+                fm.map(|f| (shift(f.shift), i64::from(f.offset_hz), f.tone_hz)),
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        // The Program Tune through the readback transaction. Refused while TX is armed and when
+        // the input the offset keys is outside the licence; it never arms or keys.
+        #[cfg(feature = "radio")]
+        Action::Repeater {
+            output_mhz,
+            shift,
+            offset_hz,
+            tone_hz,
+        } => {
+            return engine.queue_remote_repeater(
+                *output_mhz,
+                match shift {
+                    RepeaterShift::Simplex => "simplex",
+                    RepeaterShift::Plus => "plus",
+                    RepeaterShift::Minus => "minus",
+                },
+                i64::from(*offset_hz),
+                *tone_hz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        // The APRS channel pick through the readback transaction: a regional APRS channel only,
+        // refused while TX is armed; it never arms, keys or queues an APRS transmission.
+        #[cfg(feature = "radio")]
+        Action::AprsTune { dial_mhz } => {
+            return engine.queue_remote_aprs_tune(
+                *dial_mhz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                permit,
+            );
+        }
+        // The rotator: resolved from station Settings here, written by its own worker thread so
+        // this lock is never held across rotctld. It never arms or keys anything.
+        #[cfg(feature = "radio")]
+        Action::RotatorPoint { azimuth_deg } => {
+            if !rotator::valid_azimuth(*azimuth_deg) {
+                return Err(Reason::InvalidAction);
+            }
+            return rotator::queue(
+                engine.settings(),
+                rotator::Command::Point(*azimuth_deg),
+                permit,
+                satellite_track_live(),
+            );
+        }
+        #[cfg(feature = "radio")]
+        Action::RotatorPointAtCall { call } => {
+            if !rotator::valid_call(call) {
+                return Err(Reason::InvalidAction);
+            }
+            let bearing = rotator::bearing_to_call(engine.settings(), call)?;
+            return rotator::queue(
+                engine.settings(),
+                rotator::Command::Point(bearing),
+                permit,
+                satellite_track_live(),
+            );
+        }
+        #[cfg(feature = "radio")]
+        Action::RotatorStop {} => {
+            return rotator::queue(engine.settings(), rotator::Command::Stop, permit, false);
         }
         #[cfg(feature = "radio")]
         Action::RxGain {
@@ -487,6 +792,114 @@ pub fn execute(
                 evidence: Evidence::SettingsSaved,
             });
             return Ok(result);
+        }
+        #[cfg(feature = "radio")]
+        Action::AiCw { expected_on, on } => {
+            engine.save_remote_ai_cw(*expected_on, *on, &permit)?;
+            // The AI decoder is an assistance source: journal it exactly as the local switch does.
+            // Unit tests never write the operator's real config directory.
+            #[cfg(not(test))]
+            crate::journal_assistance(engine.settings(), "AI CW decoder toggled", false);
+            let result = Completion::default();
+            result.finish(Outcome::Applied {
+                evidence: Evidence::SettingsSaved,
+            });
+            return Ok(result);
+        }
+        // Receive-only: re-runs the decoder over retained audio, refused while TX is enabled.
+        #[cfg(feature = "radio")]
+        Action::Redecode { expected_tier } => engine.remote_redecode(*expected_tier)?,
+        // Split, RIT, XIT and VFO use the local one-shot verbs the radio loop writes next pass.
+        // The engine refuses a transmit-frequency change while TX is armed or outside the licence.
+        #[cfg(feature = "radio")]
+        Action::Split {
+            expected_tx_mhz,
+            tx_mhz,
+        } => {
+            engine.queue_remote_split(
+                *expected_tx_mhz,
+                *tx_mhz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
+        }
+        #[cfg(feature = "radio")]
+        Action::Rit { expected_hz, hz } => {
+            engine.queue_remote_rit(
+                *expected_hz,
+                *hz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
+        }
+        #[cfg(feature = "radio")]
+        Action::Xit { expected_hz, hz } => {
+            engine.queue_remote_xit(
+                *expected_hz,
+                *hz,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
+        }
+        #[cfg(feature = "radio")]
+        Action::Vfo { expected_vfo, vfo } => {
+            engine.queue_remote_vfo(
+                *expected_vfo == Vfo::B,
+                *vfo == Vfo::B,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
+        }
+        // Receive-display one-shots with the local scope verbs, only for the family this station
+        // runs and never while the transmitter is owned or a tune carrier is up.
+        #[cfg(feature = "radio")]
+        Action::Scope {
+            setting,
+            hz,
+            tenths_db,
+            position,
+            ref_dbm,
+        } => {
+            use tempo_app::engine::remote_radio::RemoteScope;
+            let scope = match (setting, hz, tenths_db, position, ref_dbm) {
+                (ScopeSetting::Span, Some(hz), None, None, None) => RemoteScope::Span(*hz),
+                (ScopeSetting::Ref, None, Some(tenths), None, None) => RemoteScope::Ref(*tenths),
+                (ScopeSetting::Position, None, None, Some(place), None) => {
+                    use tempo_audio::yaesu_wf::{mode_code_for, ScopePosition};
+                    // The desktop command's own resolution: keep the display family the rig
+                    // reports, falling back to W/F NORMAL before anything has been read.
+                    let current = engine
+                        .snapshot()
+                        .radio
+                        .scope_mode_code
+                        .unwrap_or(u32::from(b'4')) as u8;
+                    RemoteScope::Position(mode_code_for(
+                        match place {
+                            ScopePlace::Center => ScopePosition::Center,
+                            ScopePlace::Cursor => ScopePosition::Cursor,
+                            ScopePlace::Fix => ScopePosition::Fix,
+                        },
+                        current,
+                    ))
+                }
+                (ScopeSetting::PanSpan, Some(hz), None, None, None) => RemoteScope::PanSpan(*hz),
+                (ScopeSetting::PanRef, None, None, None, Some(reference)) => {
+                    RemoteScope::PanRef(*reference)
+                }
+                _ => return Err(Reason::InvalidAction),
+            };
+            let family = scope_family(engine.settings());
+            engine.queue_remote_scope(
+                scope,
+                family,
+                context.radio_connection.ok_or(Reason::ReadingUnavailable)?,
+                &permit,
+            )?;
+            return Ok(station_state());
         }
         Action::ReceiverArm { receiver, on } => match receiver {
             Receiver::Rtty => engine.set_rtty_armed(*on),
@@ -778,6 +1191,36 @@ pub fn execute(
     Ok(result)
 }
 
+/// The station accepted the change into its own state; a later sample shows it.
+#[cfg(feature = "radio")]
+/// The native panadapter this station's configuration runs: the same rig-model and opt-in test the
+/// radio loop starts its scope worker from. What a browser drew is never evidence of the family.
+#[cfg(feature = "radio")]
+fn scope_family(
+    settings: &tempo_app::settings::Settings,
+) -> tempo_app::engine::remote_radio::ScopeFamily {
+    use tempo_app::engine::remote_radio::ScopeFamily;
+    use tempo_audio::rigmodels::{native_spectrum_kind, SpectrumKind};
+    let conn = if tempo_app::settings::rig_conn_is_network(&settings.rig_conn, &settings.rig_addr) {
+        "network"
+    } else {
+        "serial"
+    };
+    match native_spectrum_kind(settings.rig_model, conn) {
+        Some(SpectrumKind::IcomCiv { .. }) => ScopeFamily::IcomCiv,
+        Some(SpectrumKind::FlexVita) if settings.flex_native_pan => ScopeFamily::Flex,
+        _ => ScopeFamily::None,
+    }
+}
+
+fn station_state() -> Completion {
+    let result = Completion::default();
+    result.finish(Outcome::Applied {
+        evidence: Evidence::StationState,
+    });
+    result
+}
+
 impl Action {
     pub fn is_logging(&self) -> bool {
         matches!(
@@ -807,6 +1250,13 @@ impl Action {
             | Self::PhoneMode { .. }
             | Self::Mode { .. }
             | Self::WorkSpot { .. }
+            | Self::WorkDigitalSpot { .. }
+            | Self::Repeater { .. }
+            | Self::AprsTune { .. }
+            | Self::RotatorPoint { .. }
+            | Self::RotatorPointAtCall { .. }
+            | Self::RotatorStop { .. }
+            | Self::MemoryRecall { .. }
             | Self::Tier { .. }
             | Self::Workspace { .. }
             | Self::Js8Speed { .. }
@@ -815,7 +1265,14 @@ impl Action {
             | Self::RxOffset { .. }
             | Self::RxGain { .. }
             | Self::Radio { .. }
-            | Self::AmpFollowBand { .. } => 3,
+            | Self::AmpFollowBand { .. }
+            | Self::AiCw { .. }
+            | Self::Redecode { .. }
+            | Self::Split { .. }
+            | Self::Rit { .. }
+            | Self::Xit { .. }
+            | Self::Vfo { .. }
+            | Self::Scope { .. } => 3,
             _ => 2,
         }
     }
@@ -847,6 +1304,17 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 "radioSelection",
                 "fmTuning",
                 "fmReceiver",
+                // Remote parity batch 1: each hint ships with its action.
+                "aiCw",
+                "redecode",
+                "splitTuning",
+                "ritTuning",
+                "workDigitalSpot",
+                "repeaterTuning",
+                "memoryRecall",
+                "aprsTuning",
+                "rotator",
+                "rigScope",
             ]
         }
     }

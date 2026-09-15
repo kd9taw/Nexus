@@ -9,6 +9,8 @@ import type { OperationVersion } from './operation-version'
 import { controlTransport } from './control-transport'
 import type { ApplicationClient } from './application-client'
 import type { ApplicationTransport } from '../applicationTransport'
+import { controlFailureMessage } from './control-failure'
+import { t } from '../i18n'
 
 afterEach(() => vi.useRealTimers())
 const action = { action: 'amplifier.operate', expectedOperate: false, operate: true } as const
@@ -495,4 +497,547 @@ it('sends a typed FT offset only once control is current again, and refuses it a
     expect(commands(h)).toHaveLength(0)
     h.client.disconnected()
   }
+})
+
+// Remote parity batch 1: the AI-CW switch and the FT Decode button.
+function decoderGesture(capabilities: ControlCapability[], version: OperationVersion, snapshot: any) {
+  const h = setup(storage(), capabilities, version)
+  const sample = { age: Infinity, value: snapshot }
+  const invoke = vi.fn(async () => sample.value)
+  const transport = controlTransport({ kind: 'remote', invoke } as unknown as ApplicationTransport,
+    { age: () => sample.age } as unknown as ApplicationClient, h.client)
+  const commands = () => h.sent.filter(w => w.request.type === 'stationControl')
+  return { h, sample, invoke, transport, commands }
+}
+
+it('sends one AI-CW choice bound to the displayed state and returns only a later sample showing it', async () => {
+  const g = decoderGesture(['aiCw'], 3, { aiCw: { enabled: false, status: '', text: '' }, link: { tier: 'FT8' } })
+  const result = g.transport.invoke('set_ai_cw', { on: true })
+  await g.h.advance(0)
+  expect(g.commands()).toHaveLength(1)
+  const request = g.commands()[0].request
+  expect(request.action).toEqual({ action: 'decoder.aiCw', expectedOn: false, on: true })
+  g.h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'settingsSaved' })
+  await g.h.advance(100)
+  expect(g.invoke).toHaveBeenCalledTimes(1)
+  g.sample.value = { aiCw: { enabled: true, status: '', text: '' }, link: { tier: 'FT8' } }
+  g.sample.age = 0
+  await g.h.advance(50)
+  expect(await result).toEqual(g.sample.value)
+  expect(g.commands()).toHaveLength(1)
+  g.h.client.disconnected()
+})
+
+it.each(['readback', 'evidence'])('refuses an AI-CW choice after a mismatched %s without sending it again', async changed => {
+  const g = decoderGesture(['aiCw'], 3, { aiCw: { enabled: false, status: '', text: '' } })
+  g.sample.age = 0
+  const result = g.transport.invoke('set_ai_cw', { on: true }).catch(e => e)
+  await g.h.advance(0)
+  const request = g.commands()[0].request
+  g.h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'receiverState' : 'settingsSaved' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await g.h.advance(1500)
+  expect(g.commands()).toHaveLength(1)
+  g.h.client.disconnected()
+})
+
+it('refuses malformed, unchanged, unhinted and older-station AI-CW choices before anything is sent', async () => {
+  const shown = { aiCw: { enabled: false, status: '', text: '' } }
+  const g = decoderGesture(['aiCw'], 3, shown)
+  for (const bad of [{}, { on: 'yes' }, { on: true, extra: 1 }, { on: false }, undefined])
+    await expect(g.transport.invoke('set_ai_cw', bad as Record<string, unknown>)).rejects.toMatchObject({ sent: false })
+  expect(g.commands()).toHaveLength(0)
+  g.h.client.disconnected()
+  for (const [capabilities, version, message] of [[['decoder'], 3, 'notController'], [['aiCw'], 2, 'stationUnsupported']] as [ControlCapability[], OperationVersion, string][]) {
+    const old = decoderGesture(capabilities, version, shown)
+    await expect(old.transport.invoke('set_ai_cw', { on: true })).rejects.toMatchObject({ message })
+    expect(old.commands()).toHaveLength(0)
+    old.h.client.disconnected()
+  }
+})
+
+it('sends one FT redecode for the displayed tier and returns a later station sample', async () => {
+  const g = decoderGesture(['redecode'], 3, { link: { tier: 'FT4' } })
+  const result = g.transport.invoke('redecode', {})
+  await g.h.advance(0)
+  const request = g.commands()[0].request
+  expect(request.action).toEqual({ action: 'decoder.redecode', expectedTier: 'FT4' })
+  g.h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'receiverState' })
+  await g.h.advance(100)
+  expect(g.invoke).toHaveBeenCalledTimes(1)
+  g.sample.age = 0
+  await g.h.advance(50)
+  expect(await result).toEqual(g.sample.value)
+  g.h.client.disconnected()
+  const wrong = decoderGesture(['redecode'], 3, { link: { tier: 'FT8' } })
+  wrong.sample.age = 0
+  const refused = wrong.transport.invoke('redecode', {}).catch(e => e)
+  await wrong.h.advance(0)
+  const sent = wrong.commands()[0].request
+  wrong.h.reply({ operation: 'stationControl', operationId: sent.requestId, outcome: 'applied', evidence: 'settingsSaved' })
+  expect(await refused).toMatchObject({ message: 'operationUnknown' })
+  wrong.h.client.disconnected()
+})
+
+it('refuses a redecode with arguments, off FT8/FT4, without its hint or on an older station', async () => {
+  const g = decoderGesture(['redecode'], 3, { link: { tier: 'FT8' } })
+  await expect(g.transport.invoke('redecode', { depth: 3 })).rejects.toMatchObject({ sent: false })
+  g.h.client.disconnected()
+  const msk = decoderGesture(['redecode'], 3, { link: { tier: 'MSK144' } })
+  await expect(msk.transport.invoke('redecode', {})).rejects.toMatchObject({ message: 'invalidOperation', sent: false })
+  expect(msk.commands()).toHaveLength(0)
+  msk.h.client.disconnected()
+  for (const [capabilities, version, message] of [[['decoder', 'receiverSettings'], 3, 'notController'], [['redecode'], 2, 'stationUnsupported']] as [ControlCapability[], OperationVersion, string][]) {
+    const old = decoderGesture(capabilities, version, { link: { tier: 'FT8' } })
+    await expect(old.transport.invoke('redecode', {})).rejects.toMatchObject({ message })
+    expect(old.commands()).toHaveLength(0)
+    old.h.client.disconnected()
+  }
+})
+
+// Remote parity batch 1: split, XIT, VFO and RIT. Each is bound to the value the page displayed,
+// needs the station's stationState answer, and returns only a later sample showing the change.
+const splitSnapshot = (radio: Record<string, unknown> = {}) => ({ radio: { splitTxMhz: null, ritHz: 0, xitHz: 0, activeVfo: 'A', ...radio } })
+it.each([
+  ['set_split', { txMhz: 14.032 }, { action: 'radio.split', expectedTxMhz: null, txMhz: 14.032 }, 'splitTuning', { splitTxMhz: 14.032 }],
+  ['set_split', { txMhz: null }, { action: 'radio.split', expectedTxMhz: 14.032, txMhz: null }, 'splitTuning', { splitTxMhz: null }],
+  ['set_xit', { hz: -4000 }, { action: 'radio.xit', expectedHz: 0, hz: -4000 }, 'splitTuning', { xitHz: -4000 }],
+  ['set_vfo', { vfo: 'B' }, { action: 'radio.vfo', expectedVfo: 'A', vfo: 'B' }, 'splitTuning', { activeVfo: 'B' }],
+  ['set_rit', { hz: 10 }, { action: 'radio.rit', expectedHz: 0, hz: 10 }, 'ritTuning', { ritHz: 10 }]
+] as const)('%s %j sends one bound intent and returns a later sample showing it', async (command, args, action, capability, after) => {
+  const before = command === 'set_split' && args.txMhz === null ? splitSnapshot({ splitTxMhz: 14.032 }) : splitSnapshot()
+  const g = decoderGesture([capability], 3, before)
+  const result = g.transport.invoke(command, { ...args })
+  await g.h.advance(0)
+  expect(g.commands()).toHaveLength(1)
+  const request = g.commands()[0].request
+  expect(request.action).toEqual(action)
+  g.h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+  await g.h.advance(100)
+  expect(g.invoke).toHaveBeenCalledTimes(1)
+  g.sample.value = splitSnapshot(after)
+  g.sample.age = 0
+  await g.h.advance(50)
+  expect(await result).toEqual(g.sample.value)
+  expect(g.commands()).toHaveLength(1)
+  g.h.client.disconnected()
+})
+
+it.each(['readback', 'evidence', 'privileges'])('refuses a split after a mismatched %s without sending it again', async changed => {
+  const g = decoderGesture(['splitTuning'], 3, splitSnapshot())
+  g.sample.age = 0
+  const result = g.transport.invoke('set_split', { txMhz: 14.020 }).catch(e => e)
+  await g.h.advance(0)
+  const request = g.commands()[0].request
+  g.h.reply(changed === 'privileges'
+    ? { operation: 'stationControl', operationId: request.requestId, outcome: 'rejected', reason: 'outsidePrivileges' }
+    : { operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'radioReadback' : 'stationState' })
+  const error = await result
+  expect(error).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : changed === 'privileges' ? 'outsidePrivileges' : 'readingUnavailable' })
+  if (changed === 'privileges') expect(controlFailureMessage(error)).toBe(t('remote.b1.outsidePrivileges'))
+  await g.h.advance(1500)
+  expect(g.commands()).toHaveLength(1)
+  g.h.client.disconnected()
+})
+
+it('refuses malformed, unchanged, unhinted and older-station split and clarifier requests before sending', async () => {
+  const g = decoderGesture(['splitTuning', 'ritTuning'], 3, splitSnapshot())
+  for (const [command, bad] of [['set_split', {}], ['set_split', { txMhz: '14.032' }], ['set_split', { txMhz: 14.032, extra: 1 }], ['set_split', { txMhz: null }],
+    ['set_rit', { hz: 0 }], ['set_rit', { hz: 10.5 }], ['set_xit', { hz: 10000 }], ['set_vfo', { vfo: 'A' }], ['set_vfo', { vfo: 'C' }], ['swap_vfo', undefined]] as const)
+    await expect(g.transport.invoke(command, bad as Record<string, unknown> | undefined)).rejects.toMatchObject({ sent: false })
+  expect(g.commands()).toHaveLength(0)
+  g.h.client.disconnected()
+  for (const [capabilities, version, message] of [[['ritTuning'], 3, 'notController'], [['splitTuning'], 2, 'stationUnsupported']] as [ControlCapability[], OperationVersion, string][]) {
+    const old = decoderGesture(capabilities, version, splitSnapshot())
+    await expect(old.transport.invoke('set_split', { txMhz: 14.032 })).rejects.toMatchObject({ message })
+    expect(old.commands()).toHaveLength(0)
+    old.h.client.disconnected()
+  }
+})
+
+it.each(['FT8', 'FT4'] as const)('sends one %s digital Work intent and waits for the spot frequency, digital section and tier', async tier => {
+  const h = setup(storage(), ['workDigitalSpot'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { operatingMode: 'digital', dialMhz: 14.0765, txEnabled: false }, link: { tier } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('work_spot', { mode: 'digital', freqMhz: 14.0765, band: '20m', call: 'JA2DEF/P', tier })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.workDigitalSpot', tier, dialMhz: 14.0765, band: '20m', call: 'JA2DEF/P' })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['tier', 'section', 'frequency', 'evidence'])('refuses a digital Work handoff after a mismatched %s without replaying it', async changed => {
+  const h = setup(storage(), ['workDigitalSpot'], 3)
+  const snapshot = { radio: { operatingMode: changed === 'section' ? 'cw' : 'digital', dialMhz: changed === 'frequency' ? 14.074 : 14.080 }, link: { tier: changed === 'tier' ? 'FT8' : 'FT4' } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('work_spot', { mode: 'digital', freqMhz: 14.080, band: '20m', call: 'JA2DEF', tier: 'FT4' }).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'stationState' : 'radioReadback' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+const RECALLS = [
+  ['CW', { section: 'cw', dialMhz: 14.06, band: '20m', sideband: null, fm: null },
+    { action: 'radio.memoryRecall', section: 'cw', dialMhz: 14.06, band: '20m', sideband: null }, 'cw'],
+  ['FM repeater', { section: 'phone', dialMhz: 146.94, band: '2m', sideband: null, fm: { shift: 'minus', offsetHz: 600000, toneHz: 103.5 } },
+    { action: 'radio.memoryRecall', section: 'phone', dialMhz: 146.94, band: '2m', sideband: null, fm: { shift: 'minus', offsetHz: 600000, toneHz: 103.5 } }, 'phone'],
+] as [string, Record<string, unknown>, Record<string, unknown>, string][]
+
+it.each(RECALLS)('sends one %s memory recall and waits for a later sample on its dial and section', async (_name, args, expected, section) => {
+  const h = setup(storage(), ['memoryRecall'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { operatingMode: section, dialMhz: args.dialMhz, txEnabled: false } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('remote_recall_memory', args)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual(expected)
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['section', 'frequency', 'evidence'])('refuses a memory recall handoff after a mismatched %s without replaying it', async changed => {
+  const h = setup(storage(), ['memoryRecall'], 3)
+  const snapshot = { radio: { operatingMode: changed === 'section' ? 'digital' : 'cw', dialMhz: changed === 'frequency' ? 14.074 : 14.06 } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('remote_recall_memory', RECALLS[0][1]).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'stationState' : 'radioReadback' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses a memory recall on older stations, without its hint, or with unreviewed arguments', async () => {
+  const args = RECALLS[1][1]
+  for (const [capabilities, version, message] of [[['memoryRecall'], 2, 'stationUnsupported'], [['repeaterTuning', 'workSpot'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    await expect(transport.invoke('remote_recall_memory', args)).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['memoryRecall'], 3)
+  const invoke = vi.fn(), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  for (const bad of [{ ...args, section: 'rtty' }, { ...args, sideband: 'USB' }, { ...args, fm: { shift: 'up', offsetHz: 0, toneHz: 0 } },
+    { ...args, txEnabled: true }, { section: 'cw', dialMhz: 14.06, band: '20m', sideband: null }]) {
+    await expect(transport.invoke('remote_recall_memory', bad)).rejects.toThrow()
+  }
+  expect(invoke).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})
+
+it('sends one repeater tune naming the machine and waits for a later sample on its output', async () => {
+  const h = setup(storage(), ['repeaterTuning'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { operatingMode: 'phone', dialMhz: 146.94, txEnabled: false } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('repeater_tune', { outputMhz: 146.94, shift: 'minus', offsetHz: 600000, toneHz: 100 })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.repeater', outputMhz: 146.94, shift: 'minus', offsetHz: 600000, toneHz: 100 })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['frequency', 'evidence'])('refuses a repeater tune handoff after a mismatched %s without replaying it', async changed => {
+  const h = setup(storage(), ['repeaterTuning'], 3)
+  const snapshot = { radio: { operatingMode: 'phone', dialMhz: changed === 'frequency' ? 146.52 : 146.94 } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('repeater_tune', { outputMhz: 146.94, shift: 'minus', offsetHz: 0, toneHz: 0 }).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'stationState' : 'radioReadback' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses a repeater tune on older stations, without its hint, with unreviewed arguments, and names a licence refusal', async () => {
+  const args = { outputMhz: 146.94, shift: 'minus', offsetHz: 600000, toneHz: 100 }
+  for (const [capabilities, version, message] of [[['repeaterTuning'], 2, 'stationUnsupported'], [['frequency', 'workSpot'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    await expect(transport.invoke('repeater_tune', args)).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['repeaterTuning'], 3)
+  const invoke = vi.fn(), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  for (const bad of [{ ...args, shift: 'up' }, { ...args, offsetHz: -1 }, { ...args, toneHz: 88.55 }, { ...args, outputMhz: 28.5 },
+    { ...args, txEnabled: true }, { outputMhz: 146.94, shift: 'minus', offsetHz: 600000 }]) {
+    await expect(transport.invoke('repeater_tune', bad)).rejects.toThrow()
+  }
+  expect(invoke).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  const refused = transport.invoke('repeater_tune', args).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'rejected', reason: 'outsidePrivileges' })
+  expect(await refused).toMatchObject({ message: 'outsidePrivileges' })
+  expect(invoke).not.toHaveBeenCalled()
+  h.client.disconnected()
+})
+
+it('refuses digital Work on older stations, without its own hint, or with any other native argument', async () => {
+  for (const [capabilities, version, message] of [[['workDigitalSpot'], 2, 'stationUnsupported'], [['workSpot'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    await expect(transport.invoke('work_spot', { mode: 'digital', freqMhz: 14.074, band: '20m', call: 'JA2DEF', tier: 'FT8' })).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['workDigitalSpot', 'workSpot'], 3)
+  const invoke = vi.fn(), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, {} as ApplicationClient, h.client)
+  const args = { mode: 'digital', freqMhz: 14.074, band: '20m', call: 'JA2DEF', tier: 'FT8' }
+  for (const bad of [{ ...args, mode: 'cw' }, { ...args, mode: 'phone' }, { ...args, mode: 'rtty' }, { ...args, tier: 'FT2' }, { ...args, tier: 'ft8' },
+    { ...args, tier: null }, { ...args, call: null }, { ...args, band: '21m' }, { ...args, splitUpKhz: 2 }, { ...args, txEnabled: true }]) {
+    await expect(transport.invoke('work_spot', bad)).rejects.toThrow()
+  }
+  expect(invoke).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})
+
+it('sends one APRS tune to the regional channel and waits for a later sample on that dial', async () => {
+  const h = setup(storage(), ['aprsTuning'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { operatingMode: 'digital', dialMhz: 144.8, txEnabled: false } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('aprs_tune', { dialMhz: 144.8 })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.aprsTune', dialMhz: 144.8 })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['frequency', 'evidence'])('refuses an APRS tune handoff after a mismatched %s without replaying it', async changed => {
+  const h = setup(storage(), ['aprsTuning'], 3)
+  const snapshot = { radio: { operatingMode: 'digital', dialMhz: changed === 'frequency' ? 146.52 : 144.39 } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('aprs_tune', { dialMhz: 144.39 }).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'stationState' : 'radioReadback' })
+  expect(await result).toMatchObject({ message: changed === 'evidence' ? 'operationUnknown' : 'readingUnavailable' })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses an APRS tune on older stations, without its hint, or away from an APRS channel', async () => {
+  for (const [capabilities, version, message] of [[['aprsTuning'], 2, 'stationUnsupported'], [['frequency', 'repeaterTuning'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    await expect(transport.invoke('aprs_tune', { dialMhz: 144.39 })).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['aprsTuning'], 3)
+  const invoke = vi.fn(), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  for (const bad of [{ dialMhz: 146.52 }, { dialMhz: '144.39' }, { dialMhz: 144.39, band: '2m' }, {}, undefined]) {
+    await expect(transport.invoke('aprs_tune', bad)).rejects.toThrow()
+  }
+  expect(invoke).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})
+
+it('points the rotator by azimuth through a pending receipt and resolves on the station outcome, with no radio sample to wait for', async () => {
+  const h = setup(storage(), ['rotator'], 3)
+  const reads = vi.fn()
+  const transport = controlTransport({ kind: 'remote', invoke: reads } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('point_rotator', { azDeg: 123.44 })
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  // One decimal is what the station accepts; the page never sends more.
+  expect(request.action).toEqual({ action: 'rotator.point', azimuthDeg: 123.4 })
+  const receipt = { operation: 'stationControl', operationId: request.requestId }
+  h.reply({ ...receipt, outcome: 'pending' })
+  await Promise.resolve(); await Promise.resolve()
+  await h.advance(250)
+  h.reply({ ...h.state, revision: 2, nextSequence: 2 })
+  await h.advance(250)
+  expect(h.sent[h.sent.length - 1].request).toMatchObject({ type: 'result', operationId: request.requestId })
+  h.reply({ ...receipt, outcome: 'applied', evidence: 'stationState' })
+  expect(await result).toBeUndefined()
+  expect(reads).not.toHaveBeenCalled()
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each([
+  ['point_rotator_at_call', { call: 'JA1ABC' }, { action: 'rotator.pointAtCall', call: 'JA1ABC' }],
+  ['stop_rotator', undefined, { action: 'rotator.stop' }],
+  ['stop_rotator', {}, { action: 'rotator.stop' }],
+  ['point_rotator', { azDeg: 359.97 }, { action: 'rotator.point', azimuthDeg: 0 }],
+] as const)('maps %s to one rotator action and resolves with no bearing', async (command, args, action) => {
+  const h = setup(storage(), ['rotator'], 3)
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke(command, args as Record<string, unknown> | undefined)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual(action)
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+  expect(await result).toBeUndefined()
+  h.client.disconnected()
+})
+
+it.each([
+  [{ outcome: 'unknown', reason: 'hardwareUnconfirmed' }, 'operationUnknown'],
+  [{ outcome: 'rejected', reason: 'hardwareUnavailable' }, 'hardwareUnavailable'],
+  [{ outcome: 'applied', evidence: 'radioReadback' }, 'operationUnknown'],
+] as const)('refuses a rotator outcome %o as %s without replaying it', async (outcome, message) => {
+  const h = setup(storage(), ['rotator'], 3)
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('stop_rotator', undefined).catch(e => e)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, ...outcome })
+  expect(await result).toMatchObject({ message })
+  await h.advance(1500)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('sends no rotator command to an older station, without the hint, or with anything beside its fields, and leaves the heading read alone', async () => {
+  for (const [capabilities, version, message] of [[['rotator'], 2, 'stationUnsupported'], [['frequency', 'aprsTuning'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn() } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    await expect(transport.invoke('stop_rotator', undefined)).rejects.toThrow(message)
+    await expect(transport.invoke('point_rotator', { azDeg: 90 })).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['rotator'], 3)
+  const invoke = vi.fn(async () => null), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  for (const [command, bad] of [['point_rotator', { azDeg: 90, elDeg: 10 }], ['point_rotator', { azDeg: '90' }], ['point_rotator', {}], ['point_rotator', undefined],
+    ['point_rotator_at_call', { call: 'ja1abc' }], ['point_rotator_at_call', { call: 'JA1ABC', azDeg: 1 }], ['stop_rotator', { now: true }]] as [string, Record<string, unknown> | undefined][]) {
+    await expect(transport.invoke(command, bad)).rejects.toThrow()
+  }
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  // The heading has no remote path: the read passes through untouched (and the reads refuse it).
+  expect(invoke).not.toHaveBeenCalled()
+  await transport.invoke('read_rotator')
+  expect(invoke).toHaveBeenCalledWith('read_rotator', undefined)
+  h.client.disconnected()
+})
+
+const SCOPE_SETTINGS = [
+  ['set_scope_span', { hz: 25_000 }, { setting: 'span', hz: 25_000 }],
+  ['set_scope_ref', { tenthsDb: -35 }, { setting: 'ref', tenthsDb: -35 }],
+  ['set_flex_pan_span', { hz: 200_000 }, { setting: 'panSpan', hz: 200_000 }],
+  ['set_flex_pan_ref', { refDbm: -80 }, { setting: 'panRef', refDbm: -80 }],
+  ['set_flex_pan_ref', { refDbm: null }, { setting: 'panRef', refDbm: null }],
+  // 0x41 'A' = W/F FIX (NORMAL): the later sample must show a FIX position.
+  ['set_yaesu_scope_mode', { position: 'fix' }, { setting: 'position', position: 'fix' }],
+] as const
+
+it.each(SCOPE_SETTINGS)('maps %s to one rig scope setting and returns a later station sample', async (command, args, setting) => {
+  const h = setup(storage(), ['rigScope'], 3)
+  let sampleAge = Infinity
+  const snapshot = { radio: { dialMhz: 14.2, scopeModeCode: 0x41 } }
+  const getSnapshot = vi.fn(async () => snapshot)
+  const transport = controlTransport({ kind: 'remote', invoke: getSnapshot } as ApplicationTransport,
+    { age: () => sampleAge } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke(command, args)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.action).toEqual({ action: 'radio.scope', ...setting })
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+  await h.advance(100)
+  expect(getSnapshot).not.toHaveBeenCalled()
+  sampleAge = 0
+  await h.advance(50)
+  expect(await result).toEqual(snapshot)
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it.each(['position', 'evidence'])('refuses a rig scope change after a mismatched %s without sending it again', async changed => {
+  const h = setup(storage(), ['rigScope'], 3)
+  // 0x34 '4' = W/F CENTER (NORMAL): not the FIX the operator asked for.
+  const snapshot = { radio: { dialMhz: 14.2, scopeModeCode: changed === 'position' ? 0x34 : 0x41 } }
+  const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => snapshot) } as ApplicationTransport,
+    { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const result = transport.invoke('set_yaesu_scope_mode', { position: 'fix' })
+  const settled = result.catch(error => error)
+  await Promise.resolve()
+  const request = h.sent[h.sent.length - 1].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: changed === 'evidence' ? 'radioReadback' : 'stationState' })
+  await h.advance(100)
+  expect(((await settled) as Error).message).toBe(changed === 'position' ? 'readingUnavailable' : 'operationUnknown')
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  h.client.disconnected()
+})
+
+it('refuses a rig scope change on older stations, without its hint, or with unreviewed arguments, and leaves Icom center/fixed alone', async () => {
+  for (const [capabilities, version, message] of [[['rigScope'], 2, 'stationUnsupported'], [['frequency', 'receiverDsp'], 3, 'notController']] as [ControlCapability[], OperationVersion, string][]) {
+    const h = setup(storage(), capabilities, version)
+    const transport = controlTransport({ kind: 'remote', invoke: vi.fn(async () => ({ radio: {} })) } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+    for (const [command, args] of SCOPE_SETTINGS) await expect(transport.invoke(command, args)).rejects.toThrow(message)
+    expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+    h.client.disconnected()
+  }
+  const h = setup(storage(), ['rigScope'], 3)
+  const invoke = vi.fn(async () => null), transport = controlTransport({ kind: 'remote', invoke } as ApplicationTransport, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  for (const [command, bad] of [['set_scope_span', { hz: 2_400 }], ['set_scope_span', { hz: 25_000, band: '20m' }], ['set_scope_span', {}], ['set_scope_span', undefined],
+    ['set_scope_ref', { tenthsDb: '0' }], ['set_yaesu_scope_mode', { position: 'middle' }], ['set_flex_pan_span', { hz: 1 }],
+    ['set_flex_pan_ref', {}], ['set_flex_pan_ref', { refDbm: -80, auto: true }]] as [string, Record<string, unknown> | undefined][]) {
+    await expect(transport.invoke(command, bad)).rejects.toThrow()
+  }
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  // Icom center/fixed has no desktop control and no remote action: it passes to the read allowlist.
+  expect(invoke).not.toHaveBeenCalled()
+  await transport.invoke('set_scope_fixed', { fixed: true })
+  expect(invoke).toHaveBeenCalledWith('set_scope_fixed', { fixed: true })
+  h.client.disconnected()
 })

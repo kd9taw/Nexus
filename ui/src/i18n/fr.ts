@@ -46,6 +46,11 @@ export const FR: PartialCatalog = {
   "remote.controlNotSent": "Non envoyé. Rien n’a atteint la station, donc rien n’y a changé. Réessayez.",
   "remote.controlBusy": "La station était occupée et rien n’a changé. Réessayez.",
   "remote.controlLocalHint": "Autoriser un navigateur lui donne le contrôle de la station : les fonctions prises en charge du récepteur, de la radio et de l’amplificateur, ainsi que Stop TX, qui arrête toute émission de la station. Pour limiter un navigateur, révoquez-le ici. Lancer une émission nécessite une autorisation distincte.",
+  // remote parity batch 1
+  "remote.b1.outsidePrivileges": "Rien n’a changé. Cette fréquence d’émission est hors des privilèges de votre licence.",
+  "remote.b1.workUnavailable": "Ce spot ne peut pas être contacté depuis le navigateur. Rien n’a changé à la station.",
+  "remote.b1.rotatorNoHeading": "Le cap n’est pas encore affiché à distance.",
+  "remote.b1.rotatorPointing": "Orientation du rotor vers {{call}}.",
   "remote.transmitAllow": "Autoriser l’émission FT8/FT4",
   "remote.transmitRevoke": "Révoquer l’autorisation d’émission",
   "remote.transmitLocalHint": "L’émission FT8/FT4 nécessite aussi le contrôle de la station. Une fois autorisée, elle le reste après les redémarrages jusqu’à ce que vous la révoquiez ici, et sa révocation arrête aussitôt l’émission de ce navigateur. Rien n’est émis tant que le navigateur n’a pas appuyé sur TX On.",

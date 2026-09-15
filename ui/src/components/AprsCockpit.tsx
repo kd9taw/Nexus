@@ -604,6 +604,10 @@ export function AprsCockpit({
   onOpenSettings?: (target: string) => void
 }) {
   const canControl = useStationControl(), receiverControl = useStationCapability('decoder'), observation = useAprs(active), remote = observation.remote
+  // A browser may tune (never beacon or save) while the station advertises the APRS tune. Only an
+  // explicit pick or Re-tune uses it: the entry auto-tune below stays local-only.
+  const aprsTuning = useStationCapability('aprsTuning')
+  const tuneControl = canControl || aprsTuning
   const operations = useContext(RemoteOperationsContext)
   // NO local `armed` state. Arming lives on the ENGINE and is session state that outlives this
   // component, so a local copy drifts: a remount came back up saying "Monitor" while the decoder
@@ -881,7 +885,7 @@ export function AprsCockpit({
    * right now (an over in flight) must never look like a button that did nothing — the operator
    * pressed a control whose whole meaning is "move the radio". */
   const tuneToAprs = (mhz: number) => {
-    if (!canControl || !onTune) return
+    if (!tuneControl || !onTune) return
     onTune(mhz)
     setStatus(
       radio?.transmitting
@@ -1039,9 +1043,9 @@ export function AprsCockpit({
             <select
               className="np-chip aprs-freq"
               value={freq ?? ''}
-              disabled={!canControl || freq == null}
+              disabled={!tuneControl || freq == null}
               onChange={(e) => {
-                if (!canControl) return
+                if (!tuneControl) return
                 // Selecting a frequency retunes the rig immediately (band-picker behavior) — no
                 // separate Tune click needed. Switches to the 2 m radio + FM simplex via onTune.
                 // The SELECTION always sticks (it drives the health chip's "which channel do you
@@ -1070,7 +1074,7 @@ export function AprsCockpit({
               type="button"
               className="np-chip"
               // Also dead while the channel is still being read — there is nothing to re-tune TO.
-              disabled={!canControl || !canReachAprs || freq == null}
+              disabled={!tuneControl || !canReachAprs || freq == null}
               onClick={() => freq != null && tuneToAprs(freq)}
               title={
                 freq == null
@@ -1159,7 +1163,7 @@ export function AprsCockpit({
           <button
             type="button"
             className="np-chip aprs-health-fix"
-            disabled={!canControl}
+            disabled={!tuneControl}
             onClick={() => tuneToAprs(freq)}
             title={t('aprs.tuneFix.title', { freq: freq.toFixed(3) })}
           >

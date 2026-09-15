@@ -48,6 +48,7 @@ import { importPack, STARTER_PACKS, type Pack } from '../features/packs'
 import { saveTextToDownloads } from '../api'
 import { confirmDialog } from '../confirm'
 import { pushToast } from '../toast'
+import { useStationCapability } from '../stationAccess'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { modChord } from '../platform'
@@ -344,6 +345,10 @@ function MemoriesContent({
   observation,
 }: MemoriesViewProps & { bank: MemoriesBank }) {
   const units = useUnits()
+  // A browser recalls a station memory only while the station advertises the recall transaction;
+  // the bank itself stays read-only either way.
+  const recallCapability = useStationCapability('memoryRecall')
+  const remoteRecall = !!observation && !!onRecall && recallCapability
   const [sel, setSel] = useState<Selection>('all')
   const [q, setQ] = useState('')
   const [grid, setGrid] = useState(false)
@@ -1368,7 +1373,11 @@ function MemoriesContent({
                       {m.toneMode && m.toneMode !== 'none' ? m.toneMode.toUpperCase() : '—'}
                     </td>
                     <td className="mv-ro">{KIND_LABEL[m.kind]}</td>
-                    <td className="mv-row-actions">{!observation && <>
+                    <td className="mv-row-actions">{remoteRecall && (
+                      <button type="button" className="mv-row-tune" onClick={() => onRecall?.(m)} title={t('memories.grid.tune.title')}>
+                        {t('memories.grid.tune.label')}
+                      </button>
+                    )}{!observation && <>
                       <button
                         type="button"
                         onClick={() => { if (!observation) onRecall?.(m) }}
@@ -1449,8 +1458,8 @@ function MemoriesContent({
                   <button
                     type="button"
                     className="mv-row-main"
-                    disabled={!!observation}
-                    onClick={() => { if (!observation) onRecall?.(m) }}
+                    disabled={!!observation && !remoteRecall}
+                    onClick={() => { if (!observation || remoteRecall) onRecall?.(m) }}
                     title={observation ? undefined : t('memories.row.main.title', {
                       freq: m.rxMhz.toFixed(4),
                       mode: m.mode,
@@ -1501,6 +1510,16 @@ function MemoriesContent({
                         ▼
                       </button>
                     </span>
+                  )}
+                  {remoteRecall && (
+                    <button
+                      type="button"
+                      className="mv-row-tune"
+                      onClick={() => onRecall?.(m)}
+                      title={t('memories.row.tune.title')}
+                    >
+                      {t('memories.row.tune.label')}
+                    </button>
                   )}
                   {!observation && <>
                   <button

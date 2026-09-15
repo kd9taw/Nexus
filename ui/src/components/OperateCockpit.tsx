@@ -358,6 +358,7 @@ export function OperateCockpit({
   wheelSensitivity,
 }: Props) {
   const control = useStationControl()
+  const rotatorControl = useStationCapability('rotator')
   const messageControl = useStationCapability('ftMessages')
   const ftSettings = useStationCapability('ftSettings') && !!snap.remoteFtSettings && (tier === 'FT8' || tier === 'FT4')
   const ftRuntime = useStationCapability('ftRuntime') && !!snap.remoteFtRuntime && (tier === 'FT8' || tier === 'FT4')
@@ -365,6 +366,7 @@ export function OperateCockpit({
   const ftSettingsDraft = useStationCapability('ftSettings', true) && !!snap.remoteFtSettings && (tier === 'FT8' || tier === 'FT4')
   const ftRuntimeDraft = useStationCapability('ftRuntime', true) && !!snap.remoteFtRuntime && (tier === 'FT8' || tier === 'FT4')
   const cqControl = useStationCapability('ftOperate')
+  const redecodeControl = useStationCapability('redecode') && (tier === 'FT8' || tier === 'FT4')
   const tierControl = useStationTierControl(snap.radio)
   const decoderSettings = useDecoderSettings(snap, 'MSK144')
   const receiverSettings = useReceiverSettings(snap, tier)
@@ -789,7 +791,13 @@ export function OperateCockpit({
 
   /** Re-decode the last period (WSJT-X Decode / F6). */
   const handleRedecode = () => {
-    redecode().then((s) => onSnap?.(s)).catch(() => {})
+    if (control) {
+      redecode().then((s) => onSnap?.(s)).catch(() => {})
+      return
+    }
+    // Remote: the button and F6 share this one gate.
+    if (!redecodeControl) return
+    redecode().then((s) => onSnap?.(s)).catch((error) => pushToast(controlFailureMessage(error), 'error'))
   }
 
   /** Single-click SELECT from a decode: populate DX Call/Grid only — no RF
@@ -1161,7 +1169,7 @@ export function OperateCockpit({
             <DfField key={control ? 'tx' : `tx-${snap.remoteFtSettings?.key}`} label={DF_TX} hz={snap.radio.txOffsetHz} remoteReceive={ftSettingsDraft} onCommit={(hz) => onTune(hz, 'tx')} />
           </div>
           {/* Decode button — re-run the decoder over the last period's audio (F6). */}
-          <button disabled={!control}
+          <button disabled={!control && !redecodeControl}
             type="button"
             className="cockpit-decode-btn"
             onClick={handleRedecode}
@@ -1367,26 +1375,29 @@ export function OperateCockpit({
           nextSlotSec={nextSlotSec}
           specialOpBadge={specialOpBadge}
           rotor={
+            control || rotatorControl ? (
             <RotorStrip
               active={active}
               onOpenSettings={onOpenSettings}
               targetCall={selectedCall}
               onPointAt={(call) =>
                 pointRotatorAtCall(call)
-                  .then((bearing) =>
-                    pushToast(t('operate.rotor.pointed', { call, deg: Math.round(bearing) }), 'info'),
+                  .then((bearing: number | null | undefined) =>
+                    // A browser gets no bearing back: the station resolves it.
+                    pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('operate.rotor.pointed', { call, deg: Math.round(bearing) }), 'info'),
                   )
                   // `{{error}}` is the backend's own refusal, passed through as a value.
                   .catch((e) =>
                     pushToast(
-                      t('operate.rotor.failed', {
+                      control ? t('operate.rotor.failed', {
                         error: e instanceof Error ? e.message : String(e),
-                      }),
+                      }) : controlFailureMessage(e),
                       'error',
                     ),
                   )
               }
             />
+            ) : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>
           }
           // Transmit meters (SWR / ALC / Po / COMP): the old PERMANENT body row is
           // gone (the operator's "eating up a whole line" complaint) — the same

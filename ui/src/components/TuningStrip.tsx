@@ -13,6 +13,8 @@ import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
 import { stepFrom } from '../wheelTuningPolicy'
 import { t } from '../i18n'
+import { pushToast } from '../toast'
+import { controlFailureMessage } from '../remote-web/control-failure'
 
 /** The rig's own vocabulary on these buttons: the two clarifiers and the two VFOs. Named so
  *  the catalog guard reads them as the deliberate tokens they are. */
@@ -58,6 +60,9 @@ export function TuningStrip({
   const control = useStationControl(), frequency = useStationCapability('frequency')
   const frequencyAllowed = control || (frequency && snap.radio.source === 'native' && !snap.radio.txEnabled &&
     !snap.radio.txBusyReason && !snap.radio.transmitting && !snap.radio.rigKeyed && !snap.radio.tuning)
+  // A browser holds VFO + XIT under splitTuning (they move the transmitter) and RIT under ritTuning.
+  const splitTuning = useStationCapability('splitTuning'), ritTuning = useStationCapability('ritTuning')
+  const vfoXitAllowed = control || splitTuning, ritAllowed = control || ritTuning
   const dial = snap.radio.dialMhz
   const catOk = snap.radio.catOk === true
   const [stepInternal, setStepInternal] = useState(100)
@@ -66,7 +71,10 @@ export function TuningStrip({
   const rit = snap.radio.ritHz ?? 0
   const xit = snap.radio.xitHz ?? 0
   const vfo = snap.radio.activeVfo || 'A'
-  const apply = (p: Promise<AppSnapshot>) => void p.then((s) => s && onSnap?.(s)).catch(() => {})
+  const apply = (p: Promise<AppSnapshot>) => void p.then((s) => s && onSnap?.(s)).catch((error) => {
+    // A refused browser change is said, never swallowed: the value it shows stays the station's.
+    if (!control) pushToast(controlFailureMessage(error), 'error')
+  })
   const fmtOffset = (hz: number) => (hz > 0 ? `+${hz}` : `${hz}`)
 
   const tuneTo = async (mhz: number) => {
@@ -179,7 +187,7 @@ export function TuningStrip({
         <button
           type="button"
           className={vfo === VFO_A ? 'active' : ''}
-          disabled={!control || (!catOk)}
+          disabled={!vfoXitAllowed || !catOk}
           onClick={() => apply(setVfo(VFO_A))}
           title={t('cockpit.tuning.vfo.title', { vfo: VFO_A })}
         >
@@ -188,7 +196,7 @@ export function TuningStrip({
         <button
           type="button"
           className={vfo === VFO_B ? 'active' : ''}
-          disabled={!control || (!catOk)}
+          disabled={!vfoXitAllowed || !catOk}
           onClick={() => apply(setVfo(VFO_B))}
           title={t('cockpit.tuning.vfo.title', { vfo: VFO_B })}
         >
@@ -196,26 +204,26 @@ export function TuningStrip({
         </button>
       </span>
       <span className={`tuning-clar${rit !== 0 ? ' on' : ''}`}>
-        <button type="button" disabled={!control || (!catOk)} onClick={() => apply(setRit(0))} title={t('cockpit.tuning.rit.title')}>
+        <button type="button" disabled={!ritAllowed || !catOk} onClick={() => apply(setRit(0))} title={t('cockpit.tuning.rit.title')}>
           {RIT}
         </button>
-        <button type="button" disabled={!control || (!catOk)} onClick={() => apply(setRit(rit - 10))} aria-label={t('cockpit.tuning.rit.down.aria')}>
+        <button type="button" disabled={!ritAllowed || !catOk} onClick={() => apply(setRit(rit - 10))} aria-label={t('cockpit.tuning.rit.down.aria')}>
           −
         </button>
         <span className="tuning-clar-val mono">{fmtOffset(rit)}</span>
-        <button type="button" disabled={!control || (!catOk)} onClick={() => apply(setRit(rit + 10))} aria-label={t('cockpit.tuning.rit.up.aria')}>
+        <button type="button" disabled={!ritAllowed || !catOk} onClick={() => apply(setRit(rit + 10))} aria-label={t('cockpit.tuning.rit.up.aria')}>
           +
         </button>
       </span>
       <span className={`tuning-clar${xit !== 0 ? ' on' : ''}`}>
-        <button type="button" disabled={!control || (!catOk)} onClick={() => apply(setXit(0))} title={t('cockpit.tuning.xit.title')}>
+        <button type="button" disabled={!vfoXitAllowed || !catOk} onClick={() => apply(setXit(0))} title={t('cockpit.tuning.xit.title')}>
           {XIT}
         </button>
-        <button type="button" disabled={!control || (!catOk)} onClick={() => apply(setXit(xit - 10))} aria-label={t('cockpit.tuning.xit.down.aria')}>
+        <button type="button" disabled={!vfoXitAllowed || !catOk} onClick={() => apply(setXit(xit - 10))} aria-label={t('cockpit.tuning.xit.down.aria')}>
           −
         </button>
         <span className="tuning-clar-val mono">{fmtOffset(xit)}</span>
-        <button type="button" disabled={!control || (!catOk)} onClick={() => apply(setXit(xit + 10))} aria-label={t('cockpit.tuning.xit.up.aria')}>
+        <button type="button" disabled={!vfoXitAllowed || !catOk} onClick={() => apply(setXit(xit + 10))} aria-label={t('cockpit.tuning.xit.up.aria')}>
           +
         </button>
       </span>
