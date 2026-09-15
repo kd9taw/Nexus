@@ -1,0 +1,890 @@
+#!/usr/bin/env node
+// scripts/operator-review — the operator-review gate.
+//
+// WHY THIS EXISTS. Every other gate in this project proves the code does what
+// the code says. `cargo test` proves a function returns what its assertions
+// expect; `tsc -b` proves the types line up; `scripts/gates` proves the list of
+// checks is CI's list and not a remembered subset. Nothing in that stack knows
+// what a radio does, or what a log entry means to the operator who has to defend
+// it to an awards checker.
+//
+// Every expensive defect this project has shipped lives in that gap:
+//
+//   - a decode that outlived its slot replayed the transmit decision (wrong
+//     parity on the air, 2026-08-17);
+//   - rebuilding the CAT link mid-over stranded a keyed Yaesu in transmit
+//     (1.10.2);
+//   - a band change landed on the rig's per-band MODE memory, so the dial moved
+//     and the mode followed the rig's memory rather than the operator;
+//   - CW commanded CW-R on some bands — right note, inverted sideband;
+//   - AM logged as SSB;
+//   - a phone contact logged with no sideband at all, for three months;
+//   - an SWR meter reading 6:1 into a 1.5:1 load;
+//   - a rejected upload writing an API key into log.adi.
+//
+// NOT ONE OF THOSE FAILED A TEST. They are all the same defect in different
+// clothes: the code was self-consistent and the RADIO, or the LOG, disagreed.
+// The only instrument that catches that class is somebody who has operated, and
+// the only reason it keeps being missed is that nobody is made to look.
+//
+// So this tool does not judge a change. It decides WHETHER A REVIEW WAS OWED,
+// points the reviewer at the ground truth for it, and checks that the review's
+// findings were each CLOSED. Judgement stays with the reviewer (see
+// operator-review.d/brief.md). Bookkeeping is what a script is for.
+//
+// FOUR PARTS, three of them data on purpose:
+//
+//   operator-review.d/paths.map     which code paths make which lens REQUIRED
+//   operator-review.d/scenarios.txt what a radio/log actually does — the library
+//                                   the reviewer is pointed at
+//   operator-review.d/calibration.txt  real past defects + what the reviewer
+//                                   SHOULD have said, so the tool can be tested
+//                                   against history rather than against opinion
+//   operator-review.d/brief.md      the reviewer's own prompt
+//
+// The lists are NOT in this file. A hard-coded path list inside a script is a
+// transcription, and this repo has already paid for transcription twice (see the
+// header of scripts/gates). A human adding a subsystem edits one line of
+// paths.map and every command below follows.
+//
+// ADVISORY FIRST, BINDING LATER — operator's ruling, 2026-09-15. Today this
+// REPORTS and RECORDS and always exits 0 on a missing review. The binding path
+// is implemented and is one flag away (`--binding`, or NEXUS_OPREVIEW_BINDING=1,
+// or flipping BINDING_DEFAULT below). WHAT HAS TO BE TRUE BEFORE IT IS FLIPPED
+// is written at BINDING_DEFAULT, not left to memory.
+//
+// Usage:
+//   scripts/operator-review                      decide for @{u}..HEAD
+//   scripts/operator-review --range A..B         decide for a commit range
+//   scripts/operator-review --files-from PATH    decide for a file list ('-' = stdin)
+//   scripts/operator-review --lenses             print the path map, grouped by lens
+//   scripts/operator-review --scenarios          print the scenario library
+//   scripts/operator-review --brief              print the reviewer's brief for the
+//                                                required lenses, scenarios included
+//   scripts/operator-review --receipt            print a blank receipt for the range
+//   scripts/operator-review --calibrate          run the calibration corpus
+//   scripts/operator-review --binding            enforce (exit 1) instead of advise
+//   scripts/operator-review --check-data         validate the three data files alone
+//
+// Overrides, for the tests and for a positive control (point the tool at a
+// sandbox and it PRINTS the path it resolved — a control that acts on a copy the
+// code does not read proves nothing):
+//   --data-dir PATH  --path-map PATH  --receipts-dir PATH  --repo PATH
+//
+// NEVER pipe this into grep/tail/head: a pipe discards the exit status, which is
+// how a faked-green gate shipped in 1.10.3.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(HERE, '..');
+
+// ---------------------------------------------------------------------------
+// BINDING_DEFAULT — the one switch.
+//
+// `false` today: the gate prints its verdict and exits 0 even when a review was
+// owed and never happened. Flip to `true` to make a missing review refuse.
+//
+// WHAT MUST BE TRUE FIRST — all four, checked deliberately, not assumed:
+//
+//   1. The path map has run advisory across at least a few real batches with
+//      NO false "review required" on a change that plainly touched no radio or
+//      log behaviour. A gate that cries wolf is a gate people learn to bypass
+//      (the same reasoning is written into .githooks/pre-push check 5).
+//   2. `--calibrate` is GREEN on the whole corpus in operator-review.d, and the
+//      corpus contains at least the three defects it was built around: the
+//      stuck-transmit CAT rebuild, the stale-decode transmit, and the phone
+//      sideband. A reviewer that cannot catch those is not calibrated.
+//   3. RECEIPTS ARE LOCAL-ONLY AND THAT IS A KNOWN HOLE (see RECEIPTS below).
+//      Before binding, decide what a push from a machine with no tasks/
+//      directory should do. Fail-closed refuses every fresh clone; fail-open
+//      makes the gate decorative. Neither is acceptable by default, so this
+//      needs an operator ruling, not a code change chosen here.
+//   4. `scripts/operator-review --receipt` has actually been used to close a
+//      real review, so the receipt format is known to survive contact rather
+//      than being merely well-formed.
+//
+// Until all four hold, leave it false. A binding gate that is wrong is worse
+// than an advisory gate that is right, because the first thing a wrong binding
+// gate teaches is --no-verify.
+// ---------------------------------------------------------------------------
+const BINDING_DEFAULT = false;
+
+// Exit codes, distinct on purpose — `scripts/operator-review && git push` must
+// not lie, the same way scripts/gates must not.
+const EXIT_OK = 0; // nothing owed, or everything owed was closed
+const EXIT_OWED = 1; // a review was owed and is missing/incomplete (BINDING only)
+const EXIT_USAGE = 2; // usage, or a data file this tool could not read in full
+const EXIT_PARTIAL = 3; // ran, but coverage was incomplete (calibration mostly)
+
+class DataError extends Error {}
+
+// ---------------------------------------------------------------------------
+// The stanza format the three data files share.
+//
+// RFC822-ish: `key: value` lines, stanzas separated by blank lines, `#` at the
+// start of a line is a comment, and a line starting with whitespace CONTINUES
+// the previous key. Chosen over JSON because a human has to add a row to these
+// (JSON has no comments, and the WHY behind a glob is the load-bearing half),
+// and over a table because half these fields are sentences.
+//
+// LOUD, NEVER SILENT — the rule scripts/gates pays for and this file inherits.
+// A line the reader cannot place is a hard error naming the file and the line
+// number. Dropping a scenario silently would make the library shorter than it
+// looks, which is the failure this whole tool exists to stop, in miniature.
+// ---------------------------------------------------------------------------
+function parseStanzas(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  const stanzas = [];
+  let cur = null;
+  let lastKey = null;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const where = `${path.relative(ROOT, file)}:${i + 1}`;
+    if (/^#/.test(raw)) continue;
+    if (/^\s*$/.test(raw)) {
+      if (cur) stanzas.push(cur);
+      cur = null;
+      lastKey = null;
+      continue;
+    }
+    if (/^\s/.test(raw)) {
+      if (!cur || !lastKey) throw new DataError(`${where}: continuation line with no key above it`);
+      cur[lastKey] += ' ' + raw.trim();
+      continue;
+    }
+    const m = raw.match(/^([a-z][a-z0-9-]*):\s?(.*)$/);
+    if (!m) throw new DataError(`${where}: not a \`key: value\` line, a comment, or a continuation: ${raw.slice(0, 60)}`);
+    if (!cur) cur = { __line: i + 1 };
+    const [, key, val] = m;
+    if (key in cur) throw new DataError(`${where}: duplicate key \`${key}\` in one stanza`);
+    cur[key] = val.trim();
+    lastKey = key;
+  }
+  if (cur) stanzas.push(cur);
+  return stanzas;
+}
+
+const listField = (s) =>
+  (s || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+function requireKeys(stanzas, keys, file) {
+  for (const s of stanzas) {
+    for (const k of keys) {
+      if (!s[k] || !String(s[k]).trim()) {
+        throw new DataError(
+          `${path.relative(ROOT, file)}:${s.__line}: stanza is missing required key \`${k}\``
+        );
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The path map.
+//
+// `lens | glob | why` — one line per glob, `#` comments, blank lines ignored.
+// Not a stanza file: a glob is one line and wants to stay one line so a human
+// can add one without ceremony. `|` is the separator because a glob contains
+// `/` and `*` and never a pipe.
+// ---------------------------------------------------------------------------
+function loadPathMap(file) {
+  const rows = [];
+  const lensNote = new Map();
+  const text = fs.readFileSync(file, 'utf8');
+  text.split('\n').forEach((raw, idx) => {
+    const where = `${path.relative(ROOT, file)}:${idx + 1}`;
+    if (/^\s*(#.*)?$/.test(raw)) return;
+    const parts = raw.split('|').map((p) => p.trim());
+    // `lens :: description` declares a lens and what it is FOR; the reviewer's
+    // brief prints it. Declared before use so a typo in a lens name is a parse
+    // error rather than a silently-created third lens nobody reviews.
+    if (parts.length === 1 && raw.includes('::')) {
+      const [name, desc] = raw.split('::').map((p) => p.trim());
+      if (!name || !desc) throw new DataError(`${where}: expected \`lens :: description\``);
+      if (lensNote.has(name)) throw new DataError(`${where}: lens \`${name}\` declared twice`);
+      lensNote.set(name, desc);
+      return;
+    }
+    if (parts.length !== 3) {
+      throw new DataError(
+        `${where}: expected \`lens | glob | why\` (3 fields separated by |), got ${parts.length}: ${raw.slice(0, 70)}`
+      );
+    }
+    const [lens, glob, why] = parts;
+    if (!lensNote.has(lens)) {
+      throw new DataError(
+        `${where}: lens \`${lens}\` is used before it is declared. Add a \`${lens} :: what it is for\` line above.`
+      );
+    }
+    if (!glob || !why) throw new DataError(`${where}: empty glob or empty reason`);
+    rows.push({ lens, glob, why, line: idx + 1, re: globToRegExp(glob) });
+  });
+  if (!rows.length) throw new DataError(`${path.relative(ROOT, file)}: no glob rows — refusing to claim every change is safe`);
+  return { file, rows, lensNote };
+}
+
+// A deliberately small glob subset: `**` crosses directory boundaries, `*` does
+// not, everything else is literal. Anything richer would need a dependency, and
+// a path map nobody can read in their head is a path map nobody maintains.
+function globToRegExp(glob) {
+  let out = '^';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*' && glob[i + 1] === '*') {
+      // `a/**` matches a/ and everything under it; `**/x` matches x at any depth.
+      if (glob[i + 2] === '/') {
+        out += '(?:.*/)?';
+        i += 2;
+      } else {
+        out += '.*';
+        i += 1;
+      }
+    } else if (c === '*') out += '[^/]*';
+    else if (c === '?') out += '[^/]';
+    else out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(out + '$');
+}
+
+function lensesFor(map, files) {
+  const hits = new Map(); // lens -> [{file, glob, why}]
+  for (const f of files) {
+    for (const r of map.rows) {
+      if (!r.re.test(f)) continue;
+      if (!hits.has(r.lens)) hits.set(r.lens, []);
+      hits.get(r.lens).push({ file: f, glob: r.glob, why: r.why });
+    }
+  }
+  return hits;
+}
+
+// ---------------------------------------------------------------------------
+// Scenario library + calibration corpus.
+// ---------------------------------------------------------------------------
+const SCENARIO_KEYS = ['id', 'lens', 'title', 'truth', 'wrong', 'paths'];
+const CALIBRATION_KEYS = ['id', 'defect', 'expect-lens', 'expect-finding'];
+
+function loadScenarios(file, map) {
+  const st = parseStanzas(file);
+  requireKeys(st, SCENARIO_KEYS, file);
+  const seen = new Set();
+  for (const s of st) {
+    if (seen.has(s.id)) throw new DataError(`${path.relative(ROOT, file)}:${s.__line}: duplicate scenario id \`${s.id}\``);
+    seen.add(s.id);
+    for (const l of listField(s.lens)) {
+      if (!map.lensNote.has(l)) {
+        throw new DataError(
+          `${path.relative(ROOT, file)}:${s.__line}: scenario \`${s.id}\` names lens \`${l}\`, which the path map does not declare`
+        );
+      }
+    }
+  }
+  return st;
+}
+
+function loadCalibration(file, map, scenarios) {
+  const st = parseStanzas(file);
+  requireKeys(st, CALIBRATION_KEYS, file);
+  const ids = new Set(scenarios.map((s) => s.id));
+  const seen = new Set();
+  for (const c of st) {
+    if (seen.has(c.id)) throw new DataError(`${path.relative(ROOT, file)}:${c.__line}: duplicate case id \`${c.id}\``);
+    seen.add(c.id);
+    for (const l of listField(c['expect-lens'])) {
+      if (!map.lensNote.has(l)) {
+        throw new DataError(
+          `${path.relative(ROOT, file)}:${c.__line}: case \`${c.id}\` expects lens \`${l}\`, which the path map does not declare`
+        );
+      }
+    }
+    for (const s of listField(c.scenario || '')) {
+      if (!ids.has(s)) {
+        throw new DataError(
+          `${path.relative(ROOT, file)}:${c.__line}: case \`${c.id}\` cites scenario \`${s}\`, which is not in the scenario library`
+        );
+      }
+    }
+  }
+  return st;
+}
+
+// ---------------------------------------------------------------------------
+// RECEIPTS — one record per commit range, and the reason they are LOCAL-ONLY.
+//
+// THE SEAM, AND WHY IT IS WHERE IT IS. A receipt's value is its FINDINGS, and a
+// finding names the thing an operator saw: a rig model, an incident, a bench
+// step, a tasks/ path. This repository is PUBLIC, and CLAUDE.md forbids even a
+// POINTER to tasks/ in shipped material. A receipt stripped of everything that
+// cannot ship is a count and four closure words — and a count nobody can audit
+// is a box to tick, not evidence. It is also forgeable in the cheapest possible
+// direction: writing `findings: 0` costs less than doing the review.
+//
+// So: receipts live in tasks/operator-review/ (gitignored), and the CHECK lives
+// here and in .githooks/pre-push, at the last moment before anything becomes
+// public. That is the same seam the identity scrub and the licence guard already
+// sit on, for the same reason — it is the last point at which the decision is
+// still reversible.
+//
+// The second reason is more important than the privacy one. CI CANNOT DO THIS
+// CHECK AT ALL. An operator review is a judgement against ground truth CI has no
+// access to: the WSJT-X source, the vendor's CAT reference, the ADIF spec, the
+// POTA rules, and a rig on a bench. A green CI tick over a receipt would be a
+// proxy for the artifact — this project's most-repeated defect class, wearing a
+// new costume.
+//
+// THE HOLE, WRITTEN DOWN RATHER THAN PAPERED OVER: receipts are local, so a push
+// from another machine — or a fresh clone — has none, and a binding gate there
+// either refuses everything or waves everything through. That is condition 3 at
+// BINDING_DEFAULT, and it is an operator ruling, not a thing to decide here.
+// ---------------------------------------------------------------------------
+const CLOSURES = {
+  fixed: 'the finding was fixed in this range (name the commit or the change)',
+  test: 'a test was written that would have caught it (name the test)',
+  bench: 'a bench step was filed for the operator (name the step — bench time is scarce)',
+  accepted: 'the operator accepted it, with a reason (quote the reason)',
+};
+
+const rangeSlug = (range) => range.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+// A receipt is NOT a stanza file, and the difference is deliberate: it is read in
+// FILE ORDER, because a `closure:` closes the `finding:` above it, and both keys
+// repeat. Running it through parseStanzas rejected a perfectly good receipt for
+// "duplicate key `finding`" — caught the first time a filled-in one was fed back
+// in, which is why BINDING_DEFAULT's condition 4 asks for exactly that.
+//
+// Loud, never silent, here too: a `key: value` line whose key this reader does
+// not know is NAMED rather than skipped. A receipt whose findings were written
+// under a key with a typo would otherwise read as a receipt with no findings,
+// which is the one answer this file must never produce by accident.
+const RECEIPT_KEYS = new Set(['range', 'lens', 'reviewed', 'finding', 'closure', 'findings']);
+
+function loadReceipt(dir, range) {
+  const file = path.join(dir, `${rangeSlug(range)}.txt`);
+  if (!fs.existsSync(file)) return { file, exists: false };
+  const findings = [];
+  const lenses = new Set();
+  const problems = [];
+  let declaredNone = false;
+  let cur = null;
+  fs.readFileSync(file, 'utf8')
+    .split('\n')
+    .forEach((raw, idx) => {
+      const where = `${path.basename(file)}:${idx + 1}`;
+      if (/^\s*(#.*)?$/.test(raw)) return;
+      const m = raw.match(/^\s*([a-z][a-z0-9-]*):\s*(.*)$/);
+      if (!m) {
+        problems.push(`${where}: not a \`key: value\` line or a comment: ${raw.trim().slice(0, 60)}`);
+        return;
+      }
+      const [, key, val] = m;
+      if (!RECEIPT_KEYS.has(key)) {
+        problems.push(`${where}: unknown key \`${key}\` — known keys: ${[...RECEIPT_KEYS].join(', ')}`);
+        return;
+      }
+      if (key === 'lens') listField(val).forEach((l) => lenses.add(l));
+      // "No findings" is a legitimate review result, but it has to be WRITTEN
+      // DOWN. Without this line an untouched template — every finding still
+      // commented out — would read as a clean review, and "0 findings" is the
+      // cheapest possible forgery of one.
+      if (key === 'findings') {
+        if (val.trim().toLowerCase() !== 'none') {
+          problems.push(`${where}: the only legal value for \`findings\` is \`none\`; individual findings go on \`finding:\` lines`);
+          return;
+        }
+        declaredNone = true;
+      }
+      if (key === 'finding') {
+        if (cur && !cur.closure) problems.push(`${cur.where}: finding has NO closure — "${cur.text.slice(0, 70)}"`);
+        cur = { where, text: val, closure: null };
+        findings.push(cur);
+      }
+      if (key === 'closure') {
+        if (!cur) {
+          problems.push(`${where}: closure with no finding above it`);
+          return;
+        }
+        if (cur.closure) {
+          problems.push(`${where}: this finding already has a closure — exactly one per finding`);
+          return;
+        }
+        const kind = val.split('|')[0].trim().toLowerCase();
+        const detail = val.includes('|') ? val.slice(val.indexOf('|') + 1).trim() : '';
+        if (!(kind in CLOSURES)) {
+          problems.push(`${where}: closure kind \`${kind}\` is not one of: ${Object.keys(CLOSURES).join(', ')}`);
+          return;
+        }
+        if (!detail) {
+          problems.push(`${where}: closure \`${kind}\` carries no detail — ${CLOSURES[kind]}`);
+          return;
+        }
+        cur.closure = { kind, detail };
+      }
+    });
+  if (cur && !cur.closure) problems.push(`${cur.where}: finding has NO closure — "${cur.text.slice(0, 70)}"`);
+  if (!findings.length && !declaredNone) {
+    problems.push(
+      `${path.basename(file)}: the receipt records no findings and does not say \`findings: none\`. ` +
+        `An empty receipt is indistinguishable from a review nobody ran; say so explicitly.`
+    );
+  }
+  return { file, exists: true, findings, lenses, problems, declaredNone };
+}
+
+function receiptTemplate(range, lenses) {
+  const L = [...lenses.keys()];
+  return [
+    `# Operator review receipt. tasks/ is gitignored — this file is LOCAL and stays local.`,
+    `# Fill it in AFTER the review. Every finding needs exactly one closure line under it.`,
+    `# Closure kinds: ${Object.keys(CLOSURES).join(' | ')}`,
+    ...Object.entries(CLOSURES).map(([k, v]) => `#   ${k.padEnd(9)} ${v}`),
+    `#`,
+    `# A finding with no closure is the failure this whole thing exists to prevent.`,
+    `#`,
+    `# "No findings" is a legitimate result — write \`findings: none\` on its own line.`,
+    `# An untouched template does NOT count: an empty receipt is indistinguishable`,
+    `# from a review nobody ran, and "0 findings" is the cheapest forgery of one.`,
+    ``,
+    `range: ${range}`,
+    `lens: ${L.join(', ') || '(none required)'}`,
+    `reviewed: ${new Date().toISOString().slice(0, 10)}`,
+    ``,
+    `# findings: none`,
+    ``,
+    `# finding: R1 | provable | <what an operator would see go wrong, with its citation>`,
+    `# closure: test | <the test that now covers it>`,
+    ``,
+    `# finding: R2 | needs-bench | <what only a rig can settle>`,
+    `# closure: bench | <the bench step filed for the operator>`,
+    ``,
+  ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// git
+// ---------------------------------------------------------------------------
+function git(repo, args) {
+  const r = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
+}
+
+function filesInRange(repo, range) {
+  const r = git(repo, ['diff', '--name-only', range]);
+  if (r.code !== 0) throw new DataError(`git diff --name-only ${range} failed: ${r.err || 'no output'}`);
+  return r.out ? r.out.split('\n').filter(Boolean) : [];
+}
+
+function filesInCommit(repo, sha) {
+  const r = git(repo, ['show', '--name-only', '--format=', sha]);
+  if (r.code !== 0) return null;
+  return r.out ? r.out.split('\n').filter(Boolean) : [];
+}
+
+function defaultRange(repo) {
+  const up = git(repo, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (up.code === 0 && up.out) return `${up.out}..HEAD`;
+  return 'origin/main..HEAD';
+}
+
+// ---------------------------------------------------------------------------
+// Reporting.
+// ---------------------------------------------------------------------------
+const rule = (s) => `${s} ${'-'.repeat(Math.max(0, 74 - s.length))}`;
+
+function printLenses(map) {
+  console.log(`path map: ${map.file}\n`);
+  for (const [lens, desc] of map.lensNote) {
+    const rows = map.rows.filter((r) => r.lens === lens);
+    console.log(rule(`${lens}`));
+    console.log(`  ${desc}\n`);
+    for (const r of rows) console.log(`  ${r.glob}\n      ${r.why}`);
+    console.log('');
+  }
+  console.log(`${map.lensNote.size} lens(es), ${map.rows.length} glob(s).`);
+}
+
+function printScenarios(scenarios, only) {
+  const sel = only ? scenarios.filter((s) => listField(s.lens).some((l) => only.has(l))) : scenarios;
+  for (const s of sel) {
+    console.log(rule(`[${s.id}]  ${s.title}`));
+    console.log(`  lens:   ${s.lens}`);
+    console.log(`  TRUTH:  ${s.truth}`);
+    console.log(`  WRONG:  ${s.wrong}`);
+    console.log(`  paths:  ${s.paths}`);
+    if (s.seen) console.log(`  seen:   ${s.seen}`);
+    if (s.cite) console.log(`  cite:   ${s.cite}`);
+    console.log('');
+  }
+  console.log(`${sel.length} scenario(s)${only ? ` for lens ${[...only].join(', ')}` : ''}.`);
+}
+
+// ---------------------------------------------------------------------------
+// The decision.
+// ---------------------------------------------------------------------------
+function decide(opts) {
+  const map = loadPathMap(opts.pathMap);
+  const scenarios = loadScenarios(opts.scenarios, map);
+
+  let files;
+  let label;
+  if (opts.filesFrom) {
+    const raw = opts.filesFrom === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(opts.filesFrom, 'utf8');
+    files = raw.split('\n').map((s) => s.trim()).filter(Boolean);
+    label = `file list from ${opts.filesFrom === '-' ? 'stdin' : opts.filesFrom}`;
+  } else {
+    files = filesInRange(opts.repo, opts.range);
+    label = opts.range;
+  }
+
+  const hits = lensesFor(map, files);
+  console.log(rule('OPERATOR REVIEW'));
+  console.log(`  range/input : ${label}`);
+  console.log(`  files       : ${files.length}`);
+  console.log(`  path map    : ${opts.pathMap}`);
+  console.log(`  receipts    : ${opts.receiptsDir}`);
+  console.log(`  mode        : ${opts.binding ? 'BINDING (a missing review refuses)' : 'ADVISORY (reports only, always exit 0)'}`);
+  console.log('');
+
+  if (!hits.size) {
+    console.log('NO REVIEW REQUIRED — this change touches no path in the map.');
+    console.log('');
+    console.log('What that claim rests on, stated so it can be doubted: the map covers');
+    console.log(`${map.rows.length} glob(s) across ${map.lensNote.size} lens(es). A subsystem that is not in`);
+    console.log('the map cannot make a review required, however dangerous it is. If this');
+    console.log('change moves a radio or writes a log and the answer above is "no review",');
+    console.log('THE MAP IS WRONG — add the glob, do not skip the review.');
+    return EXIT_OK;
+  }
+
+  console.log(`REVIEW REQUIRED — ${hits.size} lens(es):\n`);
+  for (const [lens, why] of hits) {
+    console.log(rule(lens));
+    console.log(`  ${map.lensNote.get(lens)}`);
+    const byGlob = new Map();
+    for (const h of why) {
+      if (!byGlob.has(h.glob)) byGlob.set(h.glob, { why: h.why, files: [] });
+      byGlob.get(h.glob).files.push(h.file);
+    }
+    for (const [glob, g] of byGlob) {
+      console.log(`  ${glob}  — ${g.why}`);
+      for (const f of g.files.slice(0, 8)) console.log(`      ${f}`);
+      if (g.files.length > 8) console.log(`      … ${g.files.length - 8} more`);
+    }
+    const scn = scenarios.filter((s) => listField(s.lens).includes(lens));
+    console.log(`  scenarios to review against (${scn.length}): ${scn.map((s) => s.id).join(', ')}`);
+    console.log('');
+  }
+
+  const receipt = loadReceipt(opts.receiptsDir, label);
+  const missing = [];
+  if (!receipt.exists) {
+    missing.push(`no receipt at ${receipt.file}`);
+  } else {
+    for (const lens of hits.keys()) {
+      if (!receipt.lenses.has(lens)) missing.push(`receipt does not record the \`${lens}\` lens`);
+    }
+    for (const p of receipt.problems) missing.push(p);
+  }
+
+  if (!missing.length) {
+    console.log(rule('RECEIPT'));
+    console.log(`  ${receipt.file}`);
+    if (!receipt.findings.length) {
+      console.log('  findings: none — recorded deliberately, not by an empty file.');
+    } else {
+      console.log(`  ${receipt.findings.length} finding(s), all closed:`);
+      for (const f of receipt.findings) console.log(`    ${f.closure.kind.padEnd(9)} ${f.text.slice(0, 80)}`);
+    }
+    console.log('\nREVIEW COMPLETE.');
+    return EXIT_OK;
+  }
+
+  console.log(rule('REVIEW NOT ON FILE'));
+  for (const m of missing) console.log(`  - ${m}`);
+  console.log('');
+  console.log('Next step — run the review, then record it:');
+  console.log(`  scripts/operator-review --brief ${opts.filesFrom ? '' : `--range ${opts.range}`}   # the reviewer's prompt + the scenarios`);
+  console.log(`  scripts/operator-review --receipt ${opts.filesFrom ? '' : `--range ${opts.range}`} > ${receipt.file}`);
+  console.log('');
+
+  if (opts.binding) {
+    console.log('BINDING — refusing. A review was owed on this change and is not on file.');
+    return EXIT_OWED;
+  }
+  console.log('ADVISORY — exiting 0 anyway (operator ruling 2026-09-15: advisory first).');
+  console.log('IN BINDING MODE THIS WOULD HAVE EXITED 1. See BINDING_DEFAULT in this file');
+  console.log('for the four things that must be true before that switch is flipped.');
+  return EXIT_OK;
+}
+
+// ---------------------------------------------------------------------------
+// --brief — the reviewer's prompt, with the scenarios for the required lenses
+// pasted in. One command produces the whole thing an agent is handed, so the
+// reviewer never has to be told which file to open.
+// ---------------------------------------------------------------------------
+function printBrief(opts) {
+  const map = loadPathMap(opts.pathMap);
+  const scenarios = loadScenarios(opts.scenarios, map);
+  let only = null;
+  if (opts.lens) only = new Set(listField(opts.lens));
+  else if (!opts.allLenses) {
+    const files = opts.filesFrom
+      ? fs
+          .readFileSync(opts.filesFrom === '-' ? 0 : opts.filesFrom, 'utf8')
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : filesInRange(opts.repo, opts.range);
+    only = new Set(lensesFor(map, files).keys());
+  }
+  console.log(fs.readFileSync(opts.brief, 'utf8'));
+  console.log('');
+  console.log(rule('LENSES REQUIRED FOR THIS CHANGE'));
+  if (!only || !only.size) {
+    console.log('  (none — the change touches no path in the map)');
+    return EXIT_OK;
+  }
+  for (const l of only) console.log(`  ${l} — ${map.lensNote.get(l) || '(undeclared)'}`);
+  console.log('');
+  console.log(rule('SCENARIO LIBRARY FOR THOSE LENSES'));
+  console.log('');
+  printScenarios(scenarios, only);
+  return EXIT_OK;
+}
+
+// ---------------------------------------------------------------------------
+// --calibrate — the part that keeps this honest.
+//
+// The corpus is real past defects from this repository's own history. For each,
+// the commit that INTRODUCED it is reconstructed from the log, and the question
+// asked is the only one a script can answer: WOULD THE REVIEWER HAVE BEEN
+// CALLED? If the path map does not make that change require the lens the defect
+// lived in, no reviewer was ever asked, and nothing downstream matters.
+//
+// What this DOES NOT check, said plainly rather than implied: whether the
+// reviewer would have SAID the right thing. That is `expect-finding`, and it is
+// for a human — or the reviewing agent — to compare against. A script that
+// scored an agent's prose would be measuring its own opinion.
+//
+// A case whose introducing commit is unknown is reported UNCALIBRATABLE and
+// costs the run its green. Silently scoring 12/12 out of 9 real cases is the
+// exact shape of the defect this project keeps paying for.
+// ---------------------------------------------------------------------------
+function calibrate(opts) {
+  const map = loadPathMap(opts.pathMap);
+  const scenarios = loadScenarios(opts.scenarios, map);
+  const cases = loadCalibration(opts.calibration, map, scenarios);
+
+  console.log(rule('CALIBRATION'));
+  console.log(`  path map    : ${opts.pathMap}`);
+  console.log(`  corpus      : ${opts.calibration}`);
+  console.log(`  repo        : ${opts.repo}`);
+  console.log(`  ${cases.length} case(s)\n`);
+
+  const red = [];
+  const uncal = [];
+  let green = 0;
+
+  for (const c of cases) {
+    const want = listField(c['expect-lens']);
+    const sha = (c['introduced-by'] || '').trim();
+    if (!sha || sha === 'unknown') {
+      uncal.push({ c, why: 'no introducing commit on file — the corpus cannot route it' });
+      console.log(`  UNCAL  ${c.id}\n         ${c.defect.slice(0, 90)}\n         no \`introduced-by:\` — see the note in the corpus`);
+      continue;
+    }
+    const files = filesInCommit(opts.repo, sha);
+    if (files === null) {
+      uncal.push({ c, why: `commit ${sha} is not in this repository` });
+      console.log(`  UNCAL  ${c.id}\n         introduced-by ${sha} is not resolvable here`);
+      continue;
+    }
+    const got = new Set(lensesFor(map, files).keys());
+    const miss = want.filter((l) => !got.has(l));
+    if (miss.length) {
+      red.push({ c, miss, got: [...got], files });
+      console.log(`  RED    ${c.id}`);
+      console.log(`         ${c.defect.slice(0, 90)}`);
+      console.log(`         introduced by ${sha.slice(0, 12)} (${files.length} file(s))`);
+      console.log(`         expected lens: ${want.join(', ')}`);
+      console.log(`         path map gave: ${[...got].join(', ') || '(none — NO review would have been required)'}`);
+      console.log(`         MISSING      : ${miss.join(', ')}`);
+      continue;
+    }
+    green++;
+    console.log(`  green  ${c.id}  (${sha.slice(0, 12)} → ${[...got].join(', ')})`);
+  }
+
+  console.log('');
+  console.log(`green ${green}   RED ${red.length}   uncalibratable ${uncal.length}   of ${cases.length}`);
+
+  if (red.length) {
+    console.log('');
+    console.log('CALIBRATION RED. The path map would NOT have called a reviewer for the');
+    console.log('change that introduced these defects, so no review could have caught them:');
+    for (const r of red) console.log(`  - ${r.c.id}: missing ${r.miss.join(', ')}`);
+    console.log('');
+    console.log('Fix the MAP (add the glob), not the corpus. Editing a case to match the');
+    console.log('tool is how a calibration becomes a mirror.');
+    return EXIT_RED_CAL;
+  }
+  if (uncal.length) {
+    console.log('');
+    console.log(`PARTIAL — every routable case is green, but ${uncal.length} could not be routed:`);
+    for (const u of uncal) console.log(`  - ${u.c.id}: ${u.why}`);
+    console.log('');
+    console.log('That is not a pass. A corpus that scores itself only on the cases it can');
+    console.log('reach reports a number bigger than its own coverage.');
+    return EXIT_PARTIAL;
+  }
+  console.log('\nCALIBRATION GREEN — every case in the corpus would have called its reviewer.');
+  console.log('This proves ROUTING only. Whether the reviewer would have SAID the right');
+  console.log('thing is `expect-finding` in the corpus, and that is a human comparison.');
+  return EXIT_OK;
+}
+const EXIT_RED_CAL = 1;
+
+// ---------------------------------------------------------------------------
+function checkData(opts) {
+  const map = loadPathMap(opts.pathMap);
+  const scenarios = loadScenarios(opts.scenarios, map);
+  const cases = loadCalibration(opts.calibration, map, scenarios);
+  const problems = [];
+
+  // A lens nothing can be reviewed AGAINST is a lens that will be waved through.
+  for (const lens of map.lensNote.keys()) {
+    if (!scenarios.some((s) => listField(s.lens).includes(lens))) {
+      problems.push(`lens \`${lens}\` is declared in the path map but has NO scenario — a reviewer sent there has nothing to check against`);
+    }
+  }
+  // A glob that matches nothing in the tree is a glob that has rotted.
+  const tracked = git(opts.repo, ['ls-files']);
+  if (tracked.code === 0) {
+    const files = tracked.out.split('\n').filter(Boolean);
+    for (const r of map.rows) {
+      if (!files.some((f) => r.re.test(f))) {
+        problems.push(`${path.relative(ROOT, map.file)}:${r.line}: glob \`${r.glob}\` matches no tracked file — it has rotted, or it is a typo`);
+      }
+    }
+  } else {
+    problems.push('could not run `git ls-files` — glob rot was NOT checked, so this run is not full coverage');
+  }
+
+  console.log(`path map    ${map.rows.length} glob(s), ${map.lensNote.size} lens(es)`);
+  console.log(`scenarios   ${scenarios.length}`);
+  console.log(`calibration ${cases.length} case(s)`);
+  if (!problems.length) {
+    console.log('\nDATA OK.');
+    return EXIT_OK;
+  }
+  console.log('');
+  for (const p of problems) console.log(`  PROBLEM  ${p}`);
+  return EXIT_USAGE;
+}
+
+// ---------------------------------------------------------------------------
+function main(argv) {
+  const args = argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    const src = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1);
+    const header = [];
+    for (const l of src) {
+      if (!l.startsWith('//')) break;
+      header.push(l.replace(/^\/\/ ?/, ''));
+    }
+    console.log(header.join('\n'));
+    return EXIT_OK;
+  }
+
+  const opts = {
+    repo: ROOT,
+    dataDir: path.join(HERE, 'operator-review.d'),
+    pathMap: null,
+    receiptsDir: null,
+    range: null,
+    filesFrom: null,
+    lens: null,
+    allLenses: false,
+    binding: BINDING_DEFAULT || process.env.NEXUS_OPREVIEW_BINDING === '1',
+  };
+  let mode = 'decide';
+  const MODES = {
+    '--lenses': 'lenses',
+    '--scenarios': 'scenarios',
+    '--brief': 'brief',
+    '--receipt': 'receipt',
+    '--calibrate': 'calibrate',
+    '--check-data': 'check-data',
+  };
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a in MODES) mode = MODES[a];
+    else if (a === '--binding') opts.binding = true;
+    else if (a === '--advisory') opts.binding = false;
+    else if (a === '--all') opts.allLenses = true;
+    else if (a === '--range') opts.range = args[++k];
+    else if (a === '--files-from') opts.filesFrom = args[++k];
+    else if (a === '--lens') opts.lens = args[++k];
+    else if (a === '--repo') opts.repo = path.resolve(args[++k]);
+    else if (a === '--data-dir') opts.dataDir = path.resolve(args[++k]);
+    else if (a === '--path-map') opts.pathMap = path.resolve(args[++k]);
+    else if (a === '--receipts-dir') opts.receiptsDir = path.resolve(args[++k]);
+    else {
+      console.error(`scripts/operator-review: unknown argument ${a} (try --help)`);
+      return EXIT_USAGE;
+    }
+  }
+  opts.pathMap = opts.pathMap || path.join(opts.dataDir, 'paths.map');
+  opts.scenarios = path.join(opts.dataDir, 'scenarios.txt');
+  opts.calibration = path.join(opts.dataDir, 'calibration.txt');
+  opts.brief = path.join(opts.dataDir, 'brief.md');
+  opts.receiptsDir = opts.receiptsDir || path.join(opts.repo, 'tasks', 'operator-review');
+  opts.range = opts.range || defaultRange(opts.repo);
+
+  try {
+    switch (mode) {
+      case 'lenses':
+        printLenses(loadPathMap(opts.pathMap));
+        return EXIT_OK;
+      case 'scenarios': {
+        const map = loadPathMap(opts.pathMap);
+        printScenarios(loadScenarios(opts.scenarios, map), opts.lens ? new Set(listField(opts.lens)) : null);
+        return EXIT_OK;
+      }
+      case 'brief':
+        return printBrief(opts);
+      case 'receipt': {
+        const map = loadPathMap(opts.pathMap);
+        const files = opts.filesFrom
+          ? fs
+              .readFileSync(opts.filesFrom === '-' ? 0 : opts.filesFrom, 'utf8')
+              .split('\n')
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : filesInRange(opts.repo, opts.range);
+        console.log(receiptTemplate(opts.filesFrom || opts.range, lensesFor(map, files)));
+        return EXIT_OK;
+      }
+      case 'calibrate':
+        return calibrate(opts);
+      case 'check-data':
+        return checkData(opts);
+      default:
+        return decide(opts);
+    }
+  } catch (err) {
+    // A data file this tool cannot read in FULL is a usage failure, never a
+    // quiet pass over the part it managed to read. Rule 1 of scripts/gates.
+    console.error(err instanceof DataError ? `scripts/operator-review: ${err.message}` : `scripts/operator-review: ${err.stack || err}`);
+    return EXIT_USAGE;
+  }
+}
+
+process.exit(main(process.argv));
