@@ -163,6 +163,12 @@ export const ES: PartialCatalog = {
   "remote.audio.inUse": "Otro navegador está escuchando esta estación.",
   "remote.audio.notController": "El audio se detuvo porque se perdió el control de la estación.",
   "remote.audio.stopped": "Audio detenido.",
+  "remote.stop.sending": "Enviando parada…",
+  "remote.stop.sent": "Parada enviada",
+  "remote.stop.sent.title":
+    "La estación aceptó la parada. No deja de transmitir hasta que la estación informe que el transmisor está libre.",
+  "remote.stop.stopped": "Detenido",
+  "remote.stop.stopped.title": "La estación informa que el transmisor está libre.",
   "remote.audio.unavailable": "La estación no tiene audio que enviar ahora mismo.",
   "remote.b3.potaAlertsOlder": "Los avisos de activaciones POTA requieren un Nexus más reciente en la estación.",
   "remote.b3.awardsObserver": "Journey y las cargas aún no están disponibles en remoto. Los diagnósticos de confirmación vienen de la estación.",

@@ -62,6 +62,13 @@ export type OperationView = {
   stopSending?: boolean
   stopAvailable?: boolean
   stopError?: string | null
+  /** The station ACCEPTED a Stop — it is not a claim that RF stopped, and must never be shown as
+   * one. `stop_transmit` returns on acceptance, and when the station's Engine is held the halt runs
+   * afterwards on its own thread, so between this and the transmitter actually going free the rig
+   * is still on the air. The browser says "stop sent" here and "stopped" only once the station's
+   * own reading shows the transmitter free (`useStationStopProgress`). Cleared when a new Stop is
+   * sent, when one fails, and on disconnect. */
+  stopAccepted?: boolean
   requestReady?: boolean
   /** DISPLAY ONLY. The last state the station sent, kept while a command outcome's re-read is
    * pending so the banner and panels stay mounted (shown disabled) instead of unmounting until the
@@ -195,6 +202,7 @@ export class OperationClient {
     this.heartbeatLeaseId = null
     const stop = this.pendingStop
     this.pendingStop = null
+    this.update({ stopAccepted: false })
     if (stop) { clearTimeout(stop.timer); stop.reject(new Error('operationUnknown')) }
     const p = this.pending
     this.pending = null
@@ -345,16 +353,16 @@ export class OperationClient {
       const p: Pending = { request, started: this.now(), resolve, reject, timer: setTimeout(() => {
         if (this.pendingStop !== p) return
         this.pendingStop = null
-        this.update({ stopError: 'operationUnknown' })
+        this.update({ stopError: 'operationUnknown', stopAccepted: false })
         reject(new Error('operationUnknown'))
       }, 7500) }
       this.pendingStop = p
-      this.update({ stopError: null })
+      this.update({ stopError: null, stopAccepted: false })
       try { this.send(JSON.stringify({ type: 'operationRequest', operationVersion: 4, request })) }
       catch {
         clearTimeout(p.timer)
         this.pendingStop = null
-        this.update({ stopError: 'operationUnknown' })
+        this.update({ stopError: 'operationUnknown', stopAccepted: false })
         reject(new Error('operationUnknown'))
       }
     })
@@ -370,12 +378,13 @@ export class OperationClient {
       clearTimeout(stop.timer)
       this.pendingStop = null
       if ('error' in r) {
-        this.update({ stopError: r.error })
+        this.update({ stopError: r.error, stopAccepted: false })
         stop.reject(new Error(r.error))
       } else {
+        // ACCEPTANCE, never a claim that RF stopped — see `stopAccepted`.
         this.stopTarget = null
         this.polledAt = -Infinity
-        this.update({ stopError: null })
+        this.update({ stopError: null, stopAccepted: true })
         stop.resolve(r.value)
       }
       return

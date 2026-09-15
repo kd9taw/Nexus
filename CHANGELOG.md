@@ -46,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   revoked grant or a different device are refused exactly as before, and a Stop can still only
   stop — it can never start, arm or re-arm anything.
 
+- **Remote's Stop TX says "Stop sent" until the station confirms the transmitter is free.** The
+  station answers a Stop the moment it accepts it, and if it is busy (a decode pass, another
+  command) the actual unkey happens a moment later. The browser now shows "Stop sent" until the
+  station's own reading shows the transmitter free, and only then "Stopped" — it will not tell you
+  the rig is off the air while it is still transmitting.
+
 - **The callsign card names the state (#237).** A US or Canadian station's card showed the town,
   the grid and the country but never the state, so a Hawaii station read "KEKAHA (BL01dx) · United
   States" while the Needed board and Worked All States already knew it was HI. The card now reads

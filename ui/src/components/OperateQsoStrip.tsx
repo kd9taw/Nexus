@@ -268,7 +268,7 @@ export function OperateQsoStrip({
               ATU
             </button>
           )}
-          <FtStopControl onHaltTx={onHaltTx} />
+          <FtStopControl onHaltTx={onHaltTx} radio={radio} />
           <button disabled={!ftSettings}
             type="button"
             className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}

@@ -58,3 +58,20 @@ export function useStationStopControl(): boolean {
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
   return local || !!(view?.connected && view.stopAvailable && !view.stopSending)
 }
+
+/** How far a REMOTE Stop has actually got — 'idle' on the desktop, where the call is the act.
+ *
+ * The station returns Ok on ACCEPTANCE, not on RF: when its Engine is held (a radio-loop tick,
+ * another command) the halt runs afterwards on its own thread with no deadline. So an accepted Stop
+ * says `sent`, never `stopped`, and only the station's OWN reading of the transmitter turns it into
+ * `stopped`. Saying "stopped" while the rig is still keyed is the failure this exists to prevent;
+ * saying "stop sent" a moment longer than necessary costs nothing. With no reading to go on
+ * (`radio` absent) it stays `sent` — the safe direction, never an assertion nobody made. */
+export function useStationStopProgress(radio?: RadioStatus | null): 'idle' | 'sending' | 'sent' | 'stopped' {
+  const local = useStationControl(), client = useContext(RemoteOperationsContext)
+  const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
+  if (local || !view) return 'idle'
+  if (view.stopSending) return 'sending'
+  if (!view.stopAccepted) return 'idle'
+  return radio && !radio.transmitting && !radio.tuning && !radio.rigKeyed && !radio.txEnabled ? 'stopped' : 'sent'
+}

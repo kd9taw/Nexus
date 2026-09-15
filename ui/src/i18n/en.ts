@@ -327,6 +327,16 @@ export const EN = {
   "remote.audio.inUse": "Another browser is listening to this station.",
   "remote.audio.notController": "Audio stopped because station control was lost.",
   "remote.audio.stopped": "Audio stopped.",
+  // ⚠️ REMOTE STOP: ACCEPTANCE IS NOT RF. The station answers an accepted Stop at once, and when
+  // its Engine is held the halt runs afterwards on its own thread — so "stopped" here would tell the
+  // operator the rig is unkeyed while it is still on the air. It says SENT until the station's own
+  // reading shows the transmitter free, and only then STOPPED.
+  'remote.stop.sending': 'Sending stop…',
+  'remote.stop.sent': 'Stop sent',
+  'remote.stop.sent.title':
+    'The station has accepted the Stop. It is not off the air until the station reports the transmitter free.',
+  'remote.stop.stopped': 'Stopped',
+  'remote.stop.stopped.title': 'The station reports the transmitter free.',
   "remote.audio.unavailable": "The station has no audio to send right now.",
   "remote.b3.potaAlertsOlder": "POTA activation alerts need a newer Nexus at the station.",
   "remote.b3.awardsObserver": "Journey and uploads are not available remotely yet. Confirmation diagnostics come from the station.",

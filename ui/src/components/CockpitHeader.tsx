@@ -1,6 +1,6 @@
 import { QuickRadioDetails, useRemotePresentation } from '../remote-web/presentation'
 import { useRadioLevels } from '../remote-web/useRadioLevels'
-import { useStationControl, useStationStopControl } from '../stationAccess'
+import { useStationControl, useStationStopControl, useStationStopProgress } from '../stationAccess'
 import { haltTx } from '../api'
 import { withErrorToast } from '../toast'
 import { ModeEntry, type OperatingSection, type OperatingWorkspace } from '../remote-web/ModeEntry'
@@ -174,6 +174,8 @@ export function CockpitHeader({
   const control = useStationControl()
   // Stop's own authority, never ordinary control freshness — see the Stop TX button below.
   const remoteStop = useStationStopControl()
+  // How far a remote Stop has got. ACCEPTANCE IS NOT RF: see `useStationStopProgress`.
+  const stopProgress = useStationStopProgress(snap.radio)
   const levels = useRadioLevels(snap)
   const remotePower = power?.unit === '%' && levels.can('power')
   const powerInput = levels.input('power'), powerDraft = levels.draft('power')
@@ -469,6 +471,15 @@ export function CockpitHeader({
             title="Stop TX (Esc)">
             Stop TX
           </button>
+        )}
+        {/* ⚠️ NEVER "stopped" on acceptance. The station answers an accepted Stop before the halt
+            has run — when its Engine is held it runs afterwards on its own thread — so this reads
+            SENT until the station's own transmitter reading goes free, and STOPPED only then. */}
+        {onStopTx && stopProgress !== 'idle' && (
+          <span className={`cockpit-stopstate${stopProgress === 'stopped' ? ' done' : ''}`} role="status"
+            title={stopProgress === 'stopped' ? t('remote.stop.stopped.title') : stopProgress === 'sent' ? t('remote.stop.sent.title') : undefined}>
+            {stopProgress === 'stopped' ? t('remote.stop.stopped') : stopProgress === 'sent' ? t('remote.stop.sent') : t('remote.stop.sending')}
+          </span>
         )}
 
         {catStatus ?? (

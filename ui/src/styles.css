@@ -6847,6 +6847,18 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cockpit-stoptx:hover {
   background: color-mix(in srgb, var(--state-weak) 22%, transparent);
 }
+/* How far a REMOTE Stop has got, beside the button that sent it. `--state-weak` while it is only
+   SENT (the station accepted it; the rig may still be keyed), `--state-good` once the station's own
+   reading says the transmitter is free. Both variables exist in each theme. */
+.cockpit-stopstate {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--state-weak);
+}
+.cockpit-stopstate.done {
+  color: var(--state-good);
+}
 /* Tune (ATU/amp carrier) + Stop-TX utilities — shared look across the Phone & CW cockpits.
    Restored after the de-FT8 pass dropped them; reuse the Operate cockpit's set_tune/halt_tx. */
 .ph-tx-utils {

@@ -153,6 +153,12 @@ export const JA: PartialCatalog = {
   "remote.audio.inUse": "別のブラウザがこの局の受信音を聞いています。",
   "remote.audio.notController": "局の操作権を失ったため音声を止めました。",
   "remote.audio.stopped": "音声を止めました。",
+  "remote.stop.sending": "停止を送信中…",
+  "remote.stop.sent": "停止を送信しました",
+  "remote.stop.sent.title":
+    "局が停止を受け付けました。局が送信機の解放を報告するまでは、まだ電波が出ている可能性があります。",
+  "remote.stop.stopped": "停止しました",
+  "remote.stop.stopped.title": "局が送信機の解放を報告しています。",
   "remote.audio.unavailable": "局から送る音声が今ありません。",
   "remote.b3.potaAlertsOlder": "POTAアクティベーションの通知には、局のNexusの更新が必要です。",
   "remote.b3.awardsObserver": "Journeyとアップロードは、まだリモートでは利用できません。交信確認の診断は局から読み込みます。",
