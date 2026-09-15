@@ -6163,7 +6163,17 @@ impl Engine {
         let mut plan = crate::bandplan::band_plan_for(tier);
         // #175 — the 60 m FT8 button follows the station's licence country. The stock row is
         // the US channel (5.3715, 100 W ERP); a station whose callsign is not a US one gets the
-        // WRC-15 dial the rest of the world shares. Applied BEFORE the operator's overrides, so
+        // WRC-15 dial the rest of the world shares.
+        //
+        // ⚠️ DO NOT "SIMPLIFY" THIS TO ONE DIAL, IN EITHER DIRECTION. The two answers differ by
+        // POWER as well as by region: 5.3715 is a 100 W ERP US channel, while the WRC-15 segment
+        // is 9.15 W ERP (15 W EIRP) for a US station. Sending a US operator to 5.357 would drop
+        // their legal ceiling by roughly 10 dB with nothing on screen saying so, and Nexus cannot
+        // enforce the lower limit (it does not know their antenna gain). An unparseable or empty
+        // callsign therefore keeps the US channel — the conservative side for the licence Nexus
+        // can actually check. Operator-confirmed 2026-09-14. See `bandplan::is_us_callsign`.
+        //
+        // Applied BEFORE the operator's overrides, so
         // Settings ▸ Frequencies still wins, and a band pick lands on exactly this row (the
         // Digital arm of `band_pick_default` reads `band_plan`).
         if tier == Tier::Ft8 && !crate::bandplan::is_us_callsign(&self.settings.mycall) {

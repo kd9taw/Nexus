@@ -62,7 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tune is always right next to the band picker** (#287). In Phone, CW, RTTY, PSK, SSTV and JS8,
   the Tune button (and the ATU button, on radios that have one) now sits directly after the band
   dropdown. It used to be at the far right of the header and moved depending on what else each
-  mode showed there. Stop TX and the CAT indicator stay where they were.
+  mode showed there. Stop TX and the CAT indicator stay where they were. Operate and Tempo are
+  deliberately unchanged: those two screens keep Tune where it has always been — in Operate's
+  QSO strip and in Tempo's top bar — rather than gaining a second one.
 - **Tuning steps land on round numbers** (#273). When the dial is between steps (after clicking a
   spot, typing a frequency or turning the radio's own knob), the first mouse-wheel notch or ◄/►
   click now rounds to the step, the way a radio's VFO does: 18.110.250 at a 1 kHz step goes to
