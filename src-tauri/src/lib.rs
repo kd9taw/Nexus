@@ -17996,6 +17996,143 @@ fn qrz_push_qso_impl(
     Ok(push.into())
 }
 
+// ----- "Correct at QRZ" — one contact, operator-invoked ----------------------
+//
+// The read-and-repair path for contacts already at QRZ that Nexus can no longer fix with an
+// ordinary push (QRZ answers `Duplicate` and keeps its copy). The whole decision — every
+// refusal, what goes on the wire, and what `RESULT=OK` means — lives in
+// `tempo_core::qrz_correct`, which is pure and has no network of its own. This layer is the
+// keychain, the transport, the session state and the connection log, and nothing else.
+
+/// The duplicate a missed replace created, for as long as this session lasts.
+///
+/// ⚠️ **This is the only place a delete authority is ever held.** A `QrzMissRecovery` cannot be
+/// constructed from a log id (see its type), so the only way into this slot is a replace that
+/// QRZ answered `RESULT=OK` — and the only way out is the operator pressing the recovery button
+/// for that specific duplicate. It is deliberately not persisted: a delete authority that
+/// outlives the session it was earned in is a delete nobody is watching.
+static QRZ_CORRECT_MISS: std::sync::Mutex<Option<tempo_core::qrz::QrzMissRecovery>> =
+    std::sync::Mutex::new(None);
+
+/// The per-logbook API key, or the same sentence the push path uses when there is none.
+///
+/// ⛔ The return value is a secret. It goes to `tempo_core::qrz_correct` and to the transport,
+/// and to nothing else — never to `conn_log`, never into an error, never into a stamp.
+fn qrz_correct_key() -> Result<String, String> {
+    qrz_logbook_keychain()?.get_password().map_err(|_| {
+        "No QRZ Logbook API key stored — set it in Settings ▸ Logbook & QSL ▸ QRZ.".to_string()
+    })
+}
+
+/// Preview the correction of ONE contact: read QRZ's own copy, run every refusal, and give back
+/// the text the operator is asked to approve. Nothing is written at QRZ by this command.
+#[tauri::command]
+async fn qrz_correct_preview(
+    record: LoggedQso,
+    selected: usize,
+) -> Result<tempo_app::dto::QrzCorrectPreviewDto, String> {
+    // Blocking HTTP off the async executor (see qrz_push_qso).
+    tauri::async_runtime::spawn_blocking(move || {
+        let key = qrz_correct_key()?;
+        let rec: tempo_core::logbook::QsoRecord = record.into();
+        let plan = tempo_core::qrz_correct::preview(
+            &propagation::live::qrz::LogbookApi,
+            &key,
+            &rec,
+            selected,
+        )
+        .map_err(|r| r.sentence())?;
+        Ok(tempo_app::dto::QrzCorrectPreviewDto {
+            call: plan.call.clone(),
+            date: plan.date.clone(),
+            confirmation: plan.confirmation(),
+        })
+    })
+    .await
+    .map_err(|e| format!("QRZ correction task failed: {e}"))?
+}
+
+/// Send the correction for ONE contact. Re-reads QRZ's copy and re-runs every refusal first —
+/// the record a replace is built from must be one QRZ just handed back, not one planned before
+/// the operator read the dialog.
+#[tauri::command]
+async fn qrz_correct_apply(
+    record: LoggedQso,
+    selected: usize,
+) -> Result<tempo_app::dto::QrzCorrectResultDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let key = qrz_correct_key()?;
+        let rec: tempo_core::logbook::QsoRecord = record.into();
+        let outcome = tempo_core::qrz_correct::apply(
+            &propagation::live::qrz::LogbookApi,
+            &key,
+            &rec,
+            selected,
+        );
+        let message = outcome.sentence();
+        let mut can_recover = false;
+        if let tempo_core::qrz_correct::Outcome::MissedAndDuplicated { recovery, .. } = &outcome {
+            can_recover = recovery.is_some();
+            *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) = recovery.clone();
+        }
+        // The sentence has already been through `scrub_key`, so it is safe to keep.
+        conn_log(
+            "QRZ Logbook",
+            if outcome.is_success() { "info" } else { "error" },
+            message.clone(),
+        );
+        Ok(tempo_app::dto::QrzCorrectResultDto {
+            ok: outcome.is_success(),
+            message,
+            can_recover,
+        })
+    })
+    .await
+    .map_err(|e| format!("QRZ correction task failed: {e}"))?
+}
+
+/// Delete the duplicate a missed replace created — **the only delete this application can send
+/// to QRZ**, and it can only ever name the record QRZ itself reported adding in this session.
+///
+/// QRZ's delete is permanent and has no undo, so the authority is consumed: a second press finds
+/// the slot empty and refuses rather than aiming at whatever is there now.
+#[tauri::command]
+async fn qrz_correct_undo_miss() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let recovery = QRZ_CORRECT_MISS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .ok_or_else(|| {
+                "There is no duplicate for Nexus to remove. Nexus can only delete a record QRZ \
+                 reported adding during this session; anything else has to be removed in the QRZ \
+                 logbook."
+                    .to_string()
+            })?;
+        let key = qrz_correct_key()?;
+        let said = tempo_core::qrz_correct::recover_from_miss(
+            &propagation::live::qrz::LogbookApi,
+            &key,
+            &recovery,
+        );
+        match said {
+            Ok(msg) => {
+                conn_log("QRZ Logbook", "info", msg.clone());
+                Ok(msg)
+            }
+            Err(msg) => {
+                // The delete did not happen, so put the authority back — the duplicate is still
+                // there and the operator will want another go.
+                *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) = Some(recovery);
+                conn_log("QRZ Logbook", "error", msg.clone());
+                Err(msg)
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("QRZ correction task failed: {e}"))?
+}
+
 // ----- ClubLog realtime QSO push --------------------------------------------
 
 /// Store (or, if empty, clear) the ClubLog **Application Password** in the OS
@@ -23821,6 +23958,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_cloudlog_key,
             clear_cloudlog_key,
             qrz_push_qso,
+            qrz_correct_preview,
+            qrz_correct_apply,
+            qrz_correct_undo_miss,
             sync_qrz,
             set_clublog_password,
             clear_clublog_password,

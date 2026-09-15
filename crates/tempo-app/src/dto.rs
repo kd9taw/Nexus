@@ -2477,6 +2477,33 @@ impl From<tempo_core::qrz::QrzPush> for QrzPushResultDto {
     }
 }
 
+/// What the operator is being asked to approve before ONE contact is corrected at QRZ.
+///
+/// `confirmation` is composed in Rust and shown verbatim: it names the callsign, the date and
+/// every field that will change, and says that everything else goes back to QRZ exactly as QRZ
+/// holds it. Building it here keeps the one place that knows what a correction actually does the
+/// same place that says so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QrzCorrectPreviewDto {
+    pub call: String,
+    pub date: String,
+    pub confirmation: String,
+}
+
+/// What happened when a correction was sent.
+///
+/// ⚠️ `ok` is `true` **only** for QRZ's `RESULT=REPLACE`. A `RESULT=OK` means QRZ's matcher did
+/// not recognise the record and inserted a SECOND copy — a failure, reported as one, with
+/// `canRecover` saying whether Nexus can delete exactly the record QRZ just added.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QrzCorrectResultDto {
+    pub ok: bool,
+    pub message: String,
+    pub can_recover: bool,
+}
+
 /// Result of a ClubLog realtime push (one-QSO upload). `result` is a camelCase
 /// outcome tag the UI switches on; `duplicate` is the benign "already on ClubLog".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

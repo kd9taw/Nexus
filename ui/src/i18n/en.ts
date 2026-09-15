@@ -1119,6 +1119,18 @@ export const EN = {
   'logbook.row.pushQrz.title':
     'Push {{call}} to your QRZ logbook (re-push is safe — duplicates are detected)',
   'logbook.row.pushQrz.aria': 'Push {{call}} to QRZ',
+  'logbook.row.qrzCorrect.title':
+    'Correct {{call}} in your QRZ logbook — overwrites the copy QRZ already holds. One contact at a time; you confirm what changes first.',
+  'logbook.row.qrzCorrect.aria': 'Correct {{call}} at QRZ',
+  'logbook.qrzCorrect.aria': 'Correct a contact at QRZ',
+  'logbook.qrzCorrect.heading': 'Correct {{call}} at QRZ',
+  'logbook.qrzCorrect.reading': 'Reading QRZ’s copy of {{call}}…',
+  'logbook.qrzCorrect.cancel': 'Cancel',
+  'logbook.qrzCorrect.confirm': 'Correct it at QRZ',
+  'logbook.qrzCorrect.busy': 'Sending…',
+  'logbook.qrzCorrect.close': 'Close',
+  'logbook.qrzCorrect.recover': 'Delete the duplicate QRZ added',
+  'logbook.qrzCorrect.recovering': 'Deleting…',
   'logbook.row.pushClublog.title':
     'Push {{call}} to ClubLog (re-push is safe — duplicates are detected)',
   'logbook.row.pushClublog.aria': 'Push {{call}} to ClubLog',

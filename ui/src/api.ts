@@ -1061,6 +1061,39 @@ export async function qrzPushQso(record: LoggedQso): Promise<QrzPushResult> {
   return invoke<QrzPushResult>('qrz_push_qso', { record })
 }
 
+/** What the operator is asked to approve before ONE contact is corrected at QRZ. The
+ *  `confirmation` text is composed in Rust and shown verbatim — it names the callsign, the date
+ *  and every field that will change. */
+export type QrzCorrectPreview = { call: string; date: string; confirmation: string }
+
+/** What happened when a correction was sent. `ok` is true ONLY for QRZ's `RESULT=REPLACE`;
+ *  a `RESULT=OK` means QRZ inserted a second copy instead of overwriting, which is a failure,
+ *  and `canRecover` says whether Nexus can delete exactly the record QRZ just added. */
+export type QrzCorrectResult = { ok: boolean; message: string; canRecover: boolean }
+
+/** Read QRZ's own copy of ONE contact and plan its correction. Writes nothing; rejects with the
+ *  refusal sentence when the correction will not be attempted. */
+export async function qrzCorrectPreview(
+  record: LoggedQso,
+  selected: number,
+): Promise<QrzCorrectPreview> {
+  return invoke<QrzCorrectPreview>('qrz_correct_preview', { record, selected })
+}
+
+/** Send the correction for ONE contact (`OPTION=REPLACE`). Re-reads QRZ's copy first. */
+export async function qrzCorrectApply(
+  record: LoggedQso,
+  selected: number,
+): Promise<QrzCorrectResult> {
+  return invoke<QrzCorrectResult>('qrz_correct_apply', { record, selected })
+}
+
+/** Delete the duplicate a missed replace created — the only delete Nexus can send to QRZ, and
+ *  only for the record QRZ itself reported adding during this session. Permanent; no undo. */
+export async function qrzCorrectUndoMiss(): Promise<string> {
+  return invoke<string>('qrz_correct_undo_miss')
+}
+
 /** Store the ClubLog Application Password in the OS keychain (write-only; empty
  *  clears). */
 export async function setClublogPassword(password: string): Promise<void> {
