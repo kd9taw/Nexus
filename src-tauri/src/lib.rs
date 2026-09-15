@@ -13319,6 +13319,10 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         // read at the keyboard), so it opens wider and shorter than the generic default.
         "fdclub" => (860.0, 620.0),
         "waterfall" => (900.0, 300.0), // a wide, short monitoring strip
+        // The received-picture viewer. Opens big enough to show the widest raster Nexus
+        // decodes (PD-290 is 800×616) at 1:1 with its details strip beside the picture,
+        // because the whole point of the window is to LOOK at the picture.
+        "sstvviewer" => (900.0, 720.0),
         _ => (760.0, 660.0),
     }
 }
@@ -13333,6 +13337,9 @@ fn panel_min_inner(slug: &str) -> (f64, f64) {
         // zoom floor that window could only ever show a 646 px box, and the board's
         // natural is 820. 560 raises the ceiling above it.
         "fdclub" => (560.0, 400.0),
+        // The picture scales to fit, so the viewer drags smaller than most pop-outs —
+        // but not below what its details strip and its three buttons need in a row.
+        "sstvviewer" => (420.0, 320.0),
         _ => (420.0, 360.0),
     }
 }
@@ -13386,6 +13393,7 @@ async fn open_panel_window(
         "pota" => "Nexus — POTA / SOTA".to_string(),
         "operatemap" => "Nexus — Map".to_string(),
         "waterfall" => "Nexus — Waterfall".to_string(),
+        "sstvviewer" => "Nexus — SSTV picture".to_string(),
         "bandmapPhone" => "Nexus — Band map (Phone)".to_string(),
         "bandmapCw" => "Nexus — Band map (CW)".to_string(),
         other => format!("Nexus — {other}"),

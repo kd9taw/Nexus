@@ -5,6 +5,7 @@ import { SstvView } from './SstvView'
 import * as api from '../api'
 import { EN } from '../i18n'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
+import { SSTV_VIEWER_PANEL, SSTV_VIEWER_PATH_KEY } from './SstvViewer'
 
 // The idle band view mounts the real Waterfall, which needs `window.matchMedia`
 // and a working canvas 2D context — jsdom provides neither. These tests are about
@@ -29,6 +30,8 @@ vi.mock('../api', () => ({
   revealSstvGallery: vi.fn(async () => {}),
   // #202: the manual receive start.
   sstvManualRx: vi.fn(),
+  // The picture viewer's own window.
+  openPanelWindow: vi.fn(async () => {}),
 }))
 // withErrorToast passes through to its action so the Send path exercises the real
 // setOperatingMode → sstvSend sequence (returns null on reject, like the real one).
@@ -698,5 +701,45 @@ describe('#202 manual SSTV receive start', () => {
     expect(start.closest('.cockpit-header')).not.toBeNull()
     expect(start.closest('.cockpit-panes')).toBeNull()
     expect(start.closest('.sstv-tx-bar')).toBeNull()
+  })
+})
+
+// THE PICTURE VIEWER — clicking a gallery thumbnail used to do nothing at all, which is the
+// bug the operator and a user both reported: the gallery offered delete, edit-and-resend and
+// Reveal in folder, so looking at a picture that had just arrived meant leaving Nexus.
+describe('the gallery opens a received picture in its own window', () => {
+  const entry = {
+    path: '/g/img-004-martin1.png',
+    mode: 'Martin 1',
+    finishedUtc: '2026-09-15T13:00:00Z',
+    freqMhz: 14.23,
+    lines: 256,
+    fskId: 'W1AW',
+  }
+
+  it('clicking the picture points the viewer at THAT picture and opens the window', async () => {
+    const open = api.openPanelWindow as unknown as ReturnType<typeof vi.fn>
+    open.mockClear()
+    localStorage.removeItem(SSTV_VIEWER_PATH_KEY)
+    getSstvState.mockResolvedValue({ ...IDLE, gallery: [entry] })
+    render(<SstvView snap={snap} />)
+    const btn = await screen.findByRole('button', {
+      name: /Open the Martin 1 picture received 2026-09-15 13:00Z/i,
+    })
+    fireEvent.click(btn)
+    // BOTH halves matter: a window that opened on the wrong picture would still "work".
+    expect(localStorage.getItem(SSTV_VIEWER_PATH_KEY)).toBe(entry.path)
+    expect(open).toHaveBeenCalledWith(SSTV_VIEWER_PANEL)
+  })
+
+  it('the delete and edit buttons are still their own controls, not the picture', async () => {
+    getSstvState.mockResolvedValue({ ...IDLE, gallery: [entry] })
+    render(<SstvView snap={snap} />)
+    const open = await screen.findByRole('button', { name: /Open the Martin 1 picture/i })
+    const del = screen.getByRole('button', { name: /Delete the Martin 1 image/i })
+    // A <button> inside a <button> is invalid and would swallow the delete click; the two
+    // are siblings under the figure, which is why the open affordance wraps the IMAGE only.
+    expect(del.closest('button')).toBe(del)
+    expect(open.contains(del)).toBe(false)
   })
 })

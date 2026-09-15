@@ -598,6 +598,13 @@ const PARTIAL = [
   'components/PskCockpit.tsx',
   'components/Js8Cockpit.tsx',
   'components/SstvView.tsx',
+  // SstvViewer.tsx (2026-09-15) — the received-picture pop-out, extracted from SstvView's
+  // gallery when a thumbnail became clickable, so it arrives already fully catalogued.
+  // Without it here every `sstv.viewer.*` entry reads as an orphan, exactly as
+  // SplitControl's did: the strings are new, and the scanner only looks where it is told.
+  // It carries no control that stops a transmission — it is a receive-side window and
+  // renders nothing that keys a radio.
+  'components/SstvViewer.tsx',
   'components/PhoneCockpit.tsx',
   // SplitControl.tsx (2026-08-26) — extracted FROM PhoneCockpit when CW and Operate gained a
   // real split control, so it arrives already fully catalogued. Without it here every

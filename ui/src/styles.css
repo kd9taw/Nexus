@@ -19170,6 +19170,103 @@ button.sat-chip:disabled {
   min-height: 0;
 }
 
+/* --- The received-picture viewer pop-out (its own OS window) ---
+   Same zoom-corrected height contract as `.detached-waterfall` above: the branch carries
+   `.app`, where zoom lives, so a raw 100vh would overshoot the window by the zoom factor
+   and clip the details strip off the bottom. --vh-eff is innerHeight/zoom; the fallback
+   covers the first paint before useViewport runs. */
+.detached-sstvviewer {
+  display: flex;
+  flex-direction: column;
+  height: var(--vh-eff, 100vh);
+}
+.sstv-viewer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+/* THE GROWER, and it points at content that can actually stretch: the picture is sized by
+   `max-width/max-height: 100%` below, so it takes the surplus instead of leaving a black
+   box under a fixed-height image (the pane-grid contract's most-repeated bug). min-height:0
+   is what lets it shrink inside the flex column rather than pushing the strip off-screen. */
+.sstv-viewer-stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.sstv-viewer-stage img,
+.sstv-viewer-stage canvas {
+  max-width: 100%;
+  max-height: 100%;
+  /* The decode is a fixed raster; showing it bigger than 1:1 only shows the interpolation.
+     `image-rendering: pixelated` is deliberate for the same reason the gallery uses it. */
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+/* Content height — a strip cannot use surplus, and giving it any would take the room from
+   the picture. Wraps rather than overflowing when the window is dragged narrow. */
+.sstv-viewer-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+.sstv-viewer-facts,
+.sstv-viewer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.sstv-viewer-mode {
+  font-weight: 600;
+  color: var(--text);
+}
+.sstv-viewer-call {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: var(--fs-label);
+}
+.sstv-viewer-meta,
+.sstv-viewer-count {
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+}
+.sstv-viewer.empty {
+  align-items: center;
+  justify-content: center;
+}
+/* The gallery thumbnail is a button now (it opens the viewer). Strip the button chrome so
+   the grid looks exactly as it did, and keep a visible focus ring — it is reachable from
+   the keyboard, which the old bare <img> was not. */
+.sstv-thumb-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.sstv-thumb-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* --- CW F-key macro editor (Settings ▸ Macros) --- */
 .cw-macro-editor {
   grid-column: 1 / -1;

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Click a received SSTV picture to look at it, in its own window.** Clicking a gallery
+  thumbnail used to do nothing at all — the gallery offered delete, edit-and-resend and Reveal
+  in folder, so examining a picture that had just come in meant leaving Nexus for a file
+  manager. It now opens big, in a window of its own that you can park on a second monitor and
+  leave open while the next picture arrives. The window shows the mode, the time, the frequency
+  and the sender's callsign when their software sent one, and offers Save a copy and Reveal in
+  folder. Esc closes it; ← and → step through the gallery. Clicking another thumbnail re-points
+  the window that is already open rather than opening a second one. Desktop only for now — in a
+  browser the gallery still shows thumbnails.
+
 - **SSTV can send your callsign as an FSK ID after each picture — off by default.** Nexus has
   always *read* the callsign burst that trails a received picture and shown it under the
   thumbnail; it could not send one. Settings ▸ Digital ▸ SSTV ▸ "Send my callsign after each

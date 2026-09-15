@@ -7992,6 +7992,34 @@ export const EN = {
   // `{{mode}}` is an SSTV mode name and `{{when}}` a UTC stamp; both arrive formatted.
   'sstv.gallery.empty':
     'Received images collect here — auto-saved with callsign (FSK ID), mode, frequency, and time.',
+  'sstv.gallery.open.aria':
+    'Open the {{mode}} picture received {{when}} in its own window',
+  'sstv.gallery.open.title':
+    'Open this picture in its own window — it stays open beside the cockpit while the next one comes in. Esc closes it; ← and → step through the gallery.',
+  'sstv.viewer.empty':
+    'No pictures in the gallery yet.',
+  'sstv.viewer.meta':
+    '{{when}} · {{mhz}} MHz · {{lines}} lines',
+  'sstv.viewer.position':
+    '{{n}} of {{total}}',
+  'sstv.viewer.prev.label':
+    '← Previous',
+  'sstv.viewer.prev.title':
+    'The picture received before this one (← or ↑)',
+  'sstv.viewer.next.label':
+    'Next →',
+  'sstv.viewer.next.title':
+    'The picture received after this one (→ or ↓)',
+  'sstv.viewer.save.label':
+    'Save a copy',
+  'sstv.viewer.save.done':
+    'Saved to {{path}}',
+  'sstv.viewer.save.failed':
+    'Could not save a copy of this picture',
+  'sstv.viewer.close.label':
+    'Close',
+  'sstv.viewer.close.title':
+    'Close this window (Esc)',
   'sstv.gallery.reveal.label': 'Reveal',
   'sstv.gallery.reveal.title': 'Open the folder the received pictures are saved in (Pictures/Nexus SSTV)',
   'sstv.gallery.reveal.failed': 'Could not open the SSTV gallery folder',

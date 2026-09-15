@@ -51,6 +51,7 @@ import {
 } from '../sstvOverlay'
 import { normalizeOverlayText } from '../sstvOverlayFont'
 import { SSTV_PANEL_IDS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
+import { setViewerPicture, SSTV_VIEWER_PANEL } from './SstvViewer'
 import {
   atuTune,
   getLicensedBandPlan,
@@ -60,6 +61,7 @@ import {
   setRfPower,
   setTune,
   revealSstvGallery,
+  openPanelWindow,
   sstvArm,
   sstvManualRx,
   sstvAutoArm,
@@ -249,7 +251,7 @@ function overlayColorLabel(id: string): string {
  * asset-protocol URL the webview may load under the tauri.conf.json
  * assetProtocol scope (asset://localhost/… on Linux/macOS,
  * http://asset.localhost/… on Windows). Null outside the desktop shell. */
-function assetUrl(path: string): string | null {
+export function assetUrl(path: string): string | null {
   const w = window as unknown as {
     __TAURI_INTERNALS__?: { convertFileSrc?: (p: string, protocol?: string) => string }
     __TAURI__?: { core?: { convertFileSrc?: (p: string, protocol?: string) => string } }
@@ -476,7 +478,7 @@ export function sstvDecodeStatus(
 }
 
 /** "2026-07-17 15:30Z" from the gallery's ISO stamp (raw string if unexpected). */
-function fmtUtc(iso: string): string {
+export function fmtUtc(iso: string): string {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso)
     ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`
     : iso
@@ -491,7 +493,7 @@ function fmtUtc(iso: string): string {
  * deleted file) would silently draw nothing — a blank box that looks exactly like the bug it
  * would be hiding. Anything not .bmp keeps the broken-image indicator, which is at least
  * honest. Outside the shell (tests) → caption-only card. */
-function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc?: string | null }) {
+export function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc?: string | null }) {
   const src = remoteSrc === undefined ? assetUrl(entry.path) : remoteSrc
   const isBmp = /\.bmp$/i.test(entry.path)
   const [fallback, setFallback] = useState(false)
@@ -525,14 +527,30 @@ function GalleryThumb({ entry, remoteSrc }: { entry: SstvGalleryEntry; remoteSrc
 }
 
 // A browser download name from the picture's own caption, never the station's file path.
-const sstvDownloadName = (g: SstvGalleryEntry) =>
+export const sstvDownloadName = (g: SstvGalleryEntry) =>
   `nexus-sstv-${`${g.finishedUtc}-${g.mode}`.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')}${g.path.slice(-4).toLowerCase()}`
 
 function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) {
   const source=useContext(RemoteCollectionsContext), available=useStationData()
   const ref=useRef<HTMLDivElement>(null)
   const image=useSstvImage(source,entry.path,ref,active&&available)
-  if(!source)return <GalleryThumb entry={entry}/>
+  // ⭐ CLICK THE PICTURE TO LOOK AT IT. Clicking a thumbnail did nothing at all until
+  // now: the gallery offered delete, edit-and-resend and Reveal in folder, so examining
+  // a picture that had just arrived meant leaving Nexus for a file manager. It opens in
+  // ITS OWN WINDOW (the torn-off-panel pattern) rather than a modal, so it can sit on a
+  // second monitor while the next picture comes in — the operator's decision. A button
+  // and not a click handler on the <figure>, so it is reachable from the keyboard and
+  // announces itself; the delete and edit buttons keep sitting on top of it.
+  // DESKTOP ONLY this batch: a Remote browser fetches the full-size copy lazily and needs
+  // its own loading state, which is a separate piece of work.
+  if(!source)return (
+    <button type="button" className="sstv-thumb-open"
+      aria-label={t('sstv.gallery.open.aria',{mode:entry.mode,when:fmtUtc(entry.finishedUtc)})}
+      title={t('sstv.gallery.open.title')}
+      onClick={()=>{setViewerPicture(entry.path);void openPanelWindow(SSTV_VIEWER_PANEL).catch(()=>{})}}>
+      <GalleryThumb entry={entry}/>
+    </button>
+  )
   const mode=SSTV_TX_MODES.find(m=>m.name===entry.mode)
   return <>
     <div ref={ref} className="sstv-remote-image" style={{aspectRatio:mode?`${mode.width} / ${mode.height}`:'4 / 3'}}>
