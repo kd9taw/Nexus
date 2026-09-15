@@ -56,7 +56,7 @@ test('a retired service announces where Remote moved, then refuses new pairings,
 
 test('station lookups require all extensions, preserve v14 refusal and survive hibernation', async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
-  assert.equal(config.applicationVersion, 16)
+  assert.equal(config.applicationVersion, 17)
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1',
     'x-nexus-application-insights-version': '1', 'x-nexus-application-dxpeditions-version': '1', 'x-nexus-application-memories-version': '1', 'x-nexus-application-ota-version': '1', 'x-nexus-application-field-day-version': '1', 'x-nexus-application-js8-version': '1', 'x-nexus-application-station-modes-version':'1', 'x-nexus-application-navigation-version':'1', 'x-nexus-application-configuration-version':'1', 'x-nexus-application-lookups-version':'1' }
@@ -476,7 +476,7 @@ test('v2 subscriptions share native samples across approved browsers and recover
 
 test('keyboard observation needs the complete native advertisement and survives room hibernation', async () => {
   const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
-  assert.equal(config.applicationVersion, 16)
+  assert.equal(config.applicationVersion, 17)
   const headers = { 'x-nexus-application-stream-version': '2', 'x-nexus-application-query-version': '1',
     'x-nexus-application-recall-version': '1', 'x-nexus-application-keyboard-version': '1' }
   for (const [missing, expected] of [[null, 5], ['keyboard', 4], ['recall', 3], ['query', 2], ['stream', 1]]) {

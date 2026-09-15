@@ -10,7 +10,11 @@ use super::*;
 use std::path::PathBuf;
 
 /// One received picture on disk, plus the gallery entry that names it.
-fn picture(name: &str, mode: &str, finished_utc: &str) -> (PathBuf, tempo_app::dto::SstvGalleryEntry) {
+fn picture(
+    name: &str,
+    mode: &str,
+    finished_utc: &str,
+) -> (PathBuf, tempo_app::dto::SstvGalleryEntry) {
     let dir = crate::test_pictures_dir().join("Nexus SSTV");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
@@ -39,8 +43,16 @@ fn del(finished_utc: &str, mode: &str) -> Value {
 
 #[test]
 fn a_browser_deletes_the_row_it_was_shown_and_names_no_path_to_do_it() {
-    let (path, entry) = picture("20260915T120000_Scottie1.bmp", "Scottie 1", "2026-09-15T12:00:00Z");
-    let (kept, keep) = picture("20260915T121000_Martin1.bmp", "Martin 1", "2026-09-15T12:10:00Z");
+    let (path, entry) = picture(
+        "20260915T120000_Scottie1.bmp",
+        "Scottie 1",
+        "2026-09-15T12:00:00Z",
+    );
+    let (kept, keep) = picture(
+        "20260915T121000_Martin1.bmp",
+        "Martin 1",
+        "2026-09-15T12:10:00Z",
+    );
     let f = station(vec![entry, keep]);
     let state = acquire_controls_version(&f, Instant::now(), 3);
     assert!(state["controls"]["capabilities"]
@@ -73,7 +85,11 @@ fn a_browser_deletes_the_row_it_was_shown_and_names_no_path_to_do_it() {
 
 #[test]
 fn a_row_the_station_no_longer_has_is_refused_and_deletes_nothing() {
-    let (path, entry) = picture("20260915T130000_Scottie2.bmp", "Scottie 2", "2026-09-15T13:00:00Z");
+    let (path, entry) = picture(
+        "20260915T130000_Scottie2.bmp",
+        "Scottie 2",
+        "2026-09-15T13:00:00Z",
+    );
     let f = station(vec![entry]);
     acquire_controls_version(&f, Instant::now(), 3);
     for (when, mode) in [
@@ -108,7 +124,11 @@ fn the_gallery_delete_needs_station_control_and_admits_no_other_argument() {
     f.acquire(Instant::now());
     let state = control_state_version(&f, Instant::now(), 3);
     assert_eq!(
-        run(&f, 3, &control_request(&state, del("2026-09-15T14:00:00Z", "PD120"))),
+        run(
+            &f,
+            3,
+            &control_request(&state, del("2026-09-15T14:00:00Z", "PD120"))
+        ),
         Err("localPermissionRequired")
     );
     assert!(path.exists());

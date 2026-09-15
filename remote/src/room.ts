@@ -175,7 +175,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     this.syncApplication(Date.now())
     // Bounds apply before parsing. The larger envelope is available only to an
     // authenticated station that advertised this application protocol version.
-    const limit = attachment.role === 'station' && [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(this.applicationVersions.get(ws) ?? 0)
+    const limit = attachment.role === 'station' && [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(this.applicationVersions.get(ws) ?? 0)
       ? APPLICATION_MAX_BYTES : attachment.role === 'station' ? MAX_FRAME_BYTES + 256 : Math.max(APPLICATION_REQUEST_BYTES,OPERATION_REQUEST_BYTES)
     if (new TextEncoder().encode(message).length > limit) {
       ws.close(1008, 'invalidMessage'); await this.disconnected(ws); return

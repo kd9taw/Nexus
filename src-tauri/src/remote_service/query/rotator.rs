@@ -102,9 +102,10 @@ mod tests {
     }
 
     fn page(engine: &crate::SharedEngine) -> Value {
-        let request: Request = serde_json::from_value(json!({ "requestId": ID, "collection": "rotator",
+        let request: Request =
+            serde_json::from_value(json!({ "requestId": ID, "collection": "rotator",
             "cursor": null, "search": "", "unconfirmed": false, "after": null }))
-        .unwrap();
+            .unwrap();
         assert!(request.valid());
         serde_json::from_str(
             &Publisher::default()

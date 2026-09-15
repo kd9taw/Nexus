@@ -1156,7 +1156,10 @@ fn spotting_another_station_needs_station_control_and_never_the_logging_grant_al
     // A dropped reply is answered from the receipt: a public spot never posts twice.
     assert_eq!(run(&f, &request).unwrap(), result);
     let (pota, cluster) = posted.lock().unwrap().clone();
-    assert!(pota.is_empty(), "a spot of another station is not a self-spot");
+    assert!(
+        pota.is_empty(),
+        "a spot of another station is not a self-spot"
+    );
     assert_eq!(
         cluster,
         vec![(14.0765, "JA2DEF/P".to_string(), "FT8 up 2".to_string())]
@@ -1197,7 +1200,11 @@ fn a_refused_callsign_or_frequency_never_reaches_the_cluster_door() {
         json!({"kind":"spot","call":"JA2DEF","freqMhz":14.0765,"comment":"x".repeat(31)}),
         json!({"kind":"spot","call":"JA2DEF","freqMhz":14.0765,"comment":"up\n2"}),
     ] {
-        assert_eq!(run(&f, &change(&f, bad.clone())), Err("invalidRecord"), "{bad}");
+        assert_eq!(
+            run(&f, &change(&f, bad.clone())),
+            Err("invalidRecord"),
+            "{bad}"
+        );
     }
     // Refused by the wire grammar, before it is a change at all.
     for bad in [
@@ -1212,7 +1219,10 @@ fn a_refused_callsign_or_frequency_never_reaches_the_cluster_door() {
     }
     assert!(nothing_posted(&posted));
     // Positive control: the well-formed request from the same browser is accepted.
-    assert_eq!(run(&f, &dx_spot(&f, "JA2DEF")).unwrap()["outcome"], "applied");
+    assert_eq!(
+        run(&f, &dx_spot(&f, "JA2DEF")).unwrap()["outcome"],
+        "applied"
+    );
     assert_eq!(posted.lock().unwrap().1.len(), 1);
 }
 

@@ -195,9 +195,7 @@ fn the_cw_phone_work_intent_still_names_only_cw_and_phone() {
     let (mut f, _connection) = station();
     f.authority.spots = Some(Default::default());
     acquire_controls_version(&f, Instant::now(), 3);
-    let work = |mode: &str| {
-        json!({"action":"radio.workSpot","mode":mode,"dialMhz":14.0865,"band":"20m","call":"JA2DEF"})
-    };
+    let work = |mode: &str| json!({"action":"radio.workSpot","mode":mode,"dialMhz":14.0865,"band":"20m","call":"JA2DEF"});
     let send = |mode: &str| {
         let state = control_state_version(&f, Instant::now(), 3);
         run(&f, 3, &control_request(&state, work(mode))).unwrap()
