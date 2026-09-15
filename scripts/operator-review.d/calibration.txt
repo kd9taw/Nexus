@@ -1,0 +1,187 @@
+# calibration.txt — the operator-review calibration corpus.
+#
+# WHY A CORPUS AND NOT AN OPINION. A review tool is trivially easy to build and
+# impossible to trust: it will always produce something that reads like insight.
+# The only honest way to find out whether it is worth anything is to point it at
+# defects that ALREADY HAPPENED, where the right answer is on the record, and see
+# whether it gets there. Every case below is a real defect from this
+# repository's own history. The SHAs were read out of `git log`, not remembered.
+#
+# WHAT `--calibrate` ACTUALLY CHECKS, said plainly so nobody reads more into a
+# green run than is there: it takes the commit that INTRODUCED each defect, runs
+# it through paths.map, and asks WOULD THE REVIEWER HAVE BEEN CALLED, and for the
+# right lens. That is the half a script can settle. If the answer is no, nothing
+# downstream matters — an uninvoked reviewer catches nothing.
+#
+# It does NOT check whether the reviewer would have SAID the right thing. That is
+# `expect-finding:`, and it is a human comparison — or the reviewing agent's own,
+# read back afterwards. A script that scored prose would be measuring its own
+# opinion and calling it calibration.
+#
+# THE CORPUS OUTRANKS THE MAP. When a case goes RED, the fix is to add the glob
+# to paths.map. Editing a case so it matches what the tool already does turns a
+# calibration into a mirror. Two rows in paths.map exist only because this file
+# went red first: `crates/tempo-app/src/settings.rs` under cat-rig, and
+# `ui/src/components/*Cockpit.tsx` under logbook.
+#
+# FORMAT — stanzas, blank line between them, `#` comments, a whitespace-led line
+# continues the key above it:
+#
+#   id:             stable slug
+#   defect:         what actually went wrong, in the operator's words
+#   fix-commit:     the SHA that fixed it (for the reader; not routed)
+#   introduced-by:  the SHA that introduced it — THIS is what gets routed.
+#                   `unknown` is allowed and is reported UNCALIBRATABLE, which
+#                   costs the run its green. It must never be guessed: a wrong
+#                   SHA scores a case the corpus did not actually test.
+#   expect-lens:    the lens(es) paths.map must require for that commit
+#   expect-finding: what the reviewer should have said
+#   scenario:       the scenario library entries that cover it
+#   bench:          (optional) what only a rig could have settled
+
+# ===========================================================================
+# THE THREE THIS TOOL WAS BUILT AROUND. A reviewer that cannot catch these is
+# not calibrated, and BINDING_DEFAULT's condition 2 names them.
+# ===========================================================================
+
+id: stuck-tx-cat-teardown
+defect: A CAT hiccup while the radio was keyed left a Yaesu transmitting until it was
+  powered off. The automatic reconnect rebuilt the link but forgot the radio was keyed and,
+  on the external-Hamlib path, never sent the key-up through the reopened channel — so the
+  safety retry that recovers a stuck key was switched off exactly when it was needed.
+fix-commit: ed9e6130c810903613aafd8a592f72c2d0f30766
+introduced-by: 636ad7e3dbb281d64ab00e3c6bf1a78e0bb9ea1e
+expect-lens: transmit, cat-rig
+expect-finding: R1, on-air. "A radio switched off overnight reconnects on its own" adds a
+  path that DESTROYS AND REBUILDS the CAT link on a schedule the operator did not ask for.
+  PTT is a state held in the radio, not in the program: the rebuild must carry the belief
+  that the rig was keyed across the reconnect and must send an unkey through the NEW channel
+  before anything else. As written, a reconnect that happens during an over or a tune leaves
+  the transmitter up. Cite the vendor CAT reference for the rig's PTT state model.
+scenario: cat-teardown-while-keyed, dual-radio-handoff
+bench: on a real Yaesu Enhanced CAT port, key a tune, pull the USB for two seconds, plug it
+  back in, and watch whether the radio unkeys. Watch the RADIO, not the app.
+
+id: stale-decode-wrong-parity-tx
+defect: With Tx 1st/even set, the station's own CQ keyed real RF at :45+1s and :45+4s — odd
+  slots. A boundary decode overrunning the 15 s period drained after the NEXT boundary had
+  re-stamped the one-deep guard; the deferred path then re-ran the whole TX decision with the
+  job's dispatch-time slot index, and the parity gate trusts its caller's slot.
+fix-commit: db19fab796a5840164437309e6dcc31663491fcc
+introduced-by: 9c309f1755306a63ef9446845be61f3f458e9a64
+expect-lens: transmit
+expect-finding: R1, on-air. Keying at the slot boundary instead of gating on the prior slot's
+  decode means a decode job can now outlive the period it belongs to. A decode is evidence
+  about the slot it was decoded in, and slots alternate parity — so any deferred path that
+  re-runs a TX decision must re-read the LIVE slot index rather than the one it was
+  dispatched with. Otherwise a machine that falls a full period behind transmits in the wrong
+  half of the sequence, and nobody hears it. Cite the WSJT-X source for period and parity.
+scenario: stale-decode-replays-tx
+bench: not needed — this is provable in software, and the fix shipped with
+  `stale_boundary_straggler_after_next_boundary_never_keys`, proven RED with the gate
+  scratch-disabled.
+
+id: phone-sideband-missing
+defect: A phone contact was logged with no sideband at all. The entry looked complete and
+  never matched at the other end. It shipped that way for three months.
+fix-commit: 3e74d1caf1f1fbd82b5484036dec60fd6e54c99f
+introduced-by: fcd10e7845ecdf615ffe7a83504fe5d347dc3f1f
+expect-lens: logbook, transmit
+expect-finding: R2, silent data loss. The Phone cockpit logs a contact but records no
+  sideband. "SSB" is not a mode an awards program can match — the ADIF MODE enumeration wants
+  USB or LSB, and the cockpit already knows which it is, because it is band-aware enough to
+  COMMAND one. Whatever the cockpit commands the radio must also be what it writes down. Cite
+  the ADIF specification's MODE list.
+scenario: phone-contact-without-sideband, am-logged-as-ssb
+bench: not needed — the ADIF spec settles it.
+
+# ===========================================================================
+# THE REST OF THE CORPUS
+# ===========================================================================
+
+id: am-logged-as-ssb
+defect: Work someone on AM from the Phone screen and the QSO was written to the logbook as
+  SSB — including on 14.286, the 20 m AM calling frequency. The Phone screen had two answers
+  for what mode you were on, FM and SSB, and everything that was not FM came out SSB.
+fix-commit: 74f708108bb4f2610eeb767f1d0c63616384323e
+introduced-by: fcd10e7845ecdf615ffe7a83504fe5d347dc3f1f
+expect-lens: logbook, transmit
+expect-finding: R2, silent data loss. The mode written to the log is derived from what the
+  cockpit COMMANDED rather than from what the radio is actually on, and the cockpit's mode
+  vocabulary is smaller than the radio's. The log must follow the radio: if the rig is on AM
+  the contact is AM, whatever Nexus last asked for — and the converse, ask for AM, have the
+  rig refuse it, and the contact really was the SSB it logged as. A mode read-back is only
+  believable while CAT is up and the radio has actually answered. Everything downstream
+  carries the error: ADIF export, the N1MM and N3FJP feeds, and every upload.
+scenario: am-logged-as-ssb, phone-contact-without-sideband
+bench: not needed in software, but worth one line at the rig: set AM with the radio's own
+  mode knob on 14.286 and confirm the entry strip says AM before the contact is committed.
+
+id: cw-r-commanded-on-40m
+defect: Moving to 40, 80 or 160 m put the rig in reverse CW and moving back to 20 m put it in
+  normal CW, on every band change, undoing it if the operator set it back by hand. Reported
+  from an IC-7300 on 40 m under Linux.
+fix-commit: 06b871f444c778ba28b70a87ba4f9f3a75a454f9
+introduced-by: 28408da56f84132a3343950d2442b202de51f694
+expect-lens: cat-rig
+expect-finding: R3, and arguably R1 on the rigs it inverts. The commit applies the 40/80/160 m
+  LSB convention to CW. That convention is real for VOICE and does not exist for CW: CW and
+  CW-R transmit identically, so the worked station cannot tell the difference — the only thing
+  that changes is the pitch the operator hears. Worse, the two words mean opposite sides per
+  manufacturer. Yaesu names the side (CAT MD "3: CW-U … 7: CW-L"); Icom does not — its normal
+  side is the user menu item "CW Normal Side (Default: LSB)" — so CW-R on 40 m gives a Yaesu
+  the lower side and a default IC-7300 the UPPER one, the exact opposite of what the rule
+  intended. The commit's own comment equates "Hamlib CWR, Icom 0x07, Yaesu CW-L"; the first
+  two are not equal to the third. Cite the vendor CAT references, not Hamlib.
+scenario: cw-r-is-not-cw, per-band-mode-memory
+bench: on an IC-7300 and on a Yaesu, set CW on 20 m and QSY to 40 m, and read the mode OFF
+  THE RADIO'S OWN DISPLAY — the app collapsed CW-R to CW, which is why this was invisible
+  inside Nexus and had to be spotted on the front panel.
+
+id: api-key-written-into-log-adi
+defect: When a QRZ Logbook or ClubLog upload bounced, the service's reply was stored on the
+  contact itself, inside log.adi. Both services answer a rejected upload by quoting the
+  request back, and the request carries the API key — so the key rode out through every export
+  built on the log, including the TQSL batch signed with the operator's callsign certificate
+  and uploaded to LoTW. A secret leaving the machine under the operator's own signature, and
+  it cannot be recalled.
+fix-commit: 1af518de81b7ae82f09ddb99066f8ace72db1826
+introduced-by: 6b2243f604b7523dd9346a738bf2c85b2a02f612
+expect-lens: upload, logbook, adif
+expect-finding: R2, and a credential incident. The per-QSO upload state gains a free-text
+  `detail` field carrying the service's own words, and that field is persisted on the contact
+  — which means it is in the ADIF, which means it is in every export. The failure path is
+  where the secret is: these services echo the request back on rejection. What is stored must
+  be Nexus's OWN sentence naming the failure class; the service's exact words can be shown
+  live and must not be kept. Note the blast radius before the fix, not after: anything already
+  written into log.adi has to be cleaned on read, because the operator's file already has it.
+scenario: rejected-upload-stores-the-request, duplicate-push
+bench: not needed — this is entirely provable in software, and the fix shipped with
+  `no_service_reply_can_reach_the_adif_upload_stamp` and
+  `a_key_already_in_the_log_is_dropped_when_the_record_is_read`.
+
+# ===========================================================================
+# KNOWN-INCOMPLETE — kept in the corpus rather than dropped.
+#
+# A corpus that quietly holds only the cases it can route reports a score bigger
+# than its own coverage. These are reported UNCALIBRATABLE and cost the run its
+# green, which is the honest answer.
+# ===========================================================================
+
+id: xiegu-swr-meter-scale
+defect: Nexus reads CI-V transmit meters on an Icom scale, and a Xiegu's meter uses its own —
+  a G90 showing 1.2:1 on its own front panel could read 6:1 in Nexus. The operator either
+  stops transmitting into a perfectly good antenna, or trusts a reading that is wrong the
+  other way.
+fix-commit: unknown
+introduced-by: unknown
+expect-lens: cat-rig
+expect-finding: R3, the operator is misled. A CI-V meter reading is a raw value on THAT
+  RADIO'S scale, and applying Icom's curve to a Xiegu does not give a slightly wrong number,
+  it gives a confidently wrong one. Where the scale is not known from the vendor, the reading
+  must be labelled as unconverted rather than presented as an SWR. Cite the vendor's meter
+  scaling table.
+scenario: swr-meter-scale
+bench: a G90 into a known 1.5:1 load, reading the front panel and Nexus side by side. This one
+  cannot be closed without the bench — a real calibration needs bench measurements first, and
+  the CHANGELOG says so.

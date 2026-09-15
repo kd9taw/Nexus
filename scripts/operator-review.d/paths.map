@@ -1,0 +1,154 @@
+# paths.map — which code paths make which operator-review lens REQUIRED.
+#
+# Read by scripts/operator-review. Format, one line each:
+#
+#   lens :: what that lens is for          (declares a lens; must come before its globs)
+#   lens | glob | why this path is in it   (three fields, separated by `|`)
+#
+# `#` starts a comment line. Globs: `**` crosses directories, `*` does not.
+#
+# THE RULE THIS FILE ENCODES: touch none of these and no operator review is
+# required. Touch one and its lens is required, and the change is not done until
+# the review's findings are each closed.
+#
+# THE RULE THIS FILE CANNOT ENCODE: a subsystem that is not listed here cannot
+# make a review required, however dangerous it is. `scripts/operator-review`
+# says that out loud on every "no review required" verdict, because the honest
+# failure mode of a path map is a confident silence. If a change moves a radio
+# or writes a log and this file says nothing, THIS FILE IS WRONG — add the glob.
+#
+# ROT IS THE OTHER FAILURE MODE, and it is checked: `--check-data` refuses a
+# glob that matches no tracked file, and refuses a lens with no scenario behind
+# it. A lens a reviewer is sent to with nothing to check against gets waved
+# through, which is worse than not sending them.
+#
+# Every glob below was derived from the tree (`git ls-files` + the symbols that
+# actually key a rig, build a CAT frame, or write a QSO), not from memory.
+
+# ---------------------------------------------------------------------------
+transmit :: Does this key the rig, decide WHEN to key it, or decide what goes out? Ask what state the rig is in when it runs, and whether every exit path — including the error paths and the teardowns — ends unkeyed.
+
+transmit | crates/tempo-core/src/tx.rs | the transmit-decision core: the TX-enable latch, privilege gating and identity validation at the keying boundary
+transmit | crates/tempo-core/src/timing.rs | slot and period timing. A decode that outlives its slot replaying a TX decision is the 2026-08-17 wrong-parity incident
+transmit | crates/tempo-app/src/engine.rs | the radio loop. Every automatic decision to transmit, every abort latch and the wall-clock TX watchdog pass through here
+transmit | crates/tempo-app/src/engine/remote_transmit.rs | transmit commanded from Nexus Remote — the same keying, over a link that can vanish mid-over
+transmit | crates/tempo-app/src/engine/remote_transmit/** | as above
+transmit | crates/tempo-audio/src/slot.rs | slot boundaries: which period an over belongs to, and whether it is still the current one
+transmit | crates/tempo-audio/src/service.rs | the audio service that actually renders and plays TX audio and drops PTT when it ends. A buffer that swallowed the tail of an over left a rig keyed for 90 s (WSPR, 1.x)
+transmit | crates/tempo-audio/src/service/** | as above
+transmit | crates/tempo-audio/src/voice.rs | the voice keyer: a recorded message keys the rig with no operator hand on the mic
+transmit | crates/tempo-audio/src/control_line.rs | RTS/DTR hardware PTT. An RTS line asserted at open keyed a rig at launch (1.x)
+transmit | crates/tempo-audio/src/serial_keyer.rs | serial CW keying — a keyer that stops mid-character leaves the key down
+transmit | crates/tempo-audio/src/winkeyer.rs | WinKeyer CW keying, same hazard with a device in between
+transmit | crates/tempo-audio/src/rtty_afsk.rs | AFSK RTTY generation; RTTY's continuous-TX latch is the one transmission with no precomputed end
+transmit | crates/tempo-audio/src/rtty_fsk.rs | true-FSK RTTY keying, driven over the control line
+transmit | crates/tempo-core/src/cw.rs | CW element timing and what actually goes out as a note
+transmit | ui/src/components/*Cockpit.tsx | the stop line: every cockpit must keep a control that stops a transmission OUTSIDE every removable pane (CLAUDE.md)
+transmit | ui/src/components/CockpitHeader.tsx | the shared header that renders Stop TX and Tune for every cockpit — the stop line runs through this one file
+transmit | ui/src/features/panelState.ts | pane vocabularies — giving a stop control an id is how it gets hidden
+# THE WHOLE REMOTE STATION SURFACE, added after the advisory run over the week of 2026-09-08
+# found the map silent on "Stop any transmission at the station from a controlling Remote
+# browser" (5e9cc506) — a commit that added src-tauri/src/remote_service/operations/
+# transmit_stop.rs, a file whose entire job is unkeying the operator's radio from a browser,
+# and got NO REVIEW REQUIRED. src-tauri was missing from the map altogether. A transmission
+# commanded from a browser is a transmission: same rig, same licence, same finals, over a link
+# that can vanish mid-over.
+transmit | src-tauri/src/remote_service/operations/** | what a Remote browser can make the station do, including start and stop a transmission
+transmit | src-tauri/src/remote_service/operations.rs | the operation dispatch and its admission checks
+transmit | crates/tempo-app/src/remote_control.rs | the station side of Remote control: who holds the lease, and what a lease lets them key
+transmit | crates/tempo-app/src/remote_control/** | as above
+transmit | ui/src/remote-web/RemoteApp.tsx | the Remote browser's own cockpit — the stop line applies to it too
+
+# ---------------------------------------------------------------------------
+cat-rig :: Does this build, send, order or interpret a command to a radio, amplifier or rotator? Ask what the RIG remembers that the code does not, and what happens in the window between two commands.
+
+cat-rig | crates/tempo-audio/src/rig.rs | the Rig abstraction — mode, frequency, split, PTT, meters. Replacing a Rig while keyed strands the transmitter (1.10.2)
+cat-rig | crates/tempo-audio/src/rig/** | rig tuning and the remote rig path
+cat-rig | crates/tempo-audio/src/rigctld_proc.rs | the external Hamlib daemon's lifecycle — the teardown/rebuild that stranded a keyed Yaesu
+cat-rig | crates/tempo-audio/src/rigctld_server.rs | Nexus's own rigctld surface, spoken to by other software
+cat-rig | crates/tempo-audio/src/civ/** | Icom CI-V framing. Read the vendor's CI-V reference, never a wrapper's reading of it
+cat-rig | crates/tempo-audio/src/omnirig/** | the OmniRig backend — a third reading of the same protocols
+cat-rig | crates/tempo-audio/src/rigmodels.rs | per-model capabilities and quirks. Five curated models were dead at 9600 baud
+cat-rig | crates/tempo-audio/src/usbrig.rs | USB rig identity and enumeration — a rig that comes back under a new COM number
+cat-rig | crates/tempo-audio/src/ports.rs | serial port selection; the Enhanced vs Standard port distinction is a safety difference
+cat-rig | crates/tempo-audio/src/port_prober.rs | probing a port — a probe against a keyed rig is a command against a keyed rig
+cat-rig | crates/tempo-audio/src/baud_ladder.rs | baud negotiation; a slow line changes every command deadline below it
+cat-rig | crates/tempo-audio/src/amplifier.rs | amplifier control. A band step on a keyed amplifier can destroy it
+cat-rig | crates/tempo-audio/src/amppoll.rs | amplifier polling — re-read the setup before every serial write
+cat-rig | crates/tempo-audio/src/amppoll/** | as above
+cat-rig | crates/tempo-audio/src/rotator.rs | rotator control: per-model baud, flip and park geometry
+cat-rig | crates/tempo-core/src/rotator.rs | rotator geometry and headings
+cat-rig | crates/tempo-audio/src/flexdax.rs | FlexRadio's native path — the danger zone of the 2026-08 Flex audit
+cat-rig | crates/tempo-audio/src/usbtopo.rs | USB topology: which sound card belongs to which radio
+cat-rig | crates/tempo-app/src/engine/radio_selection.rs | which radio is the operating radio — a handoff mid-over is a teardown in disguise
+cat-rig | crates/tempo-app/src/engine/mode_entry.rs | what mode is commanded and believed. CW vs CW-R was collapsed here and hid an inverted sideband
+# BROAD, AND KEPT BROAD DELIBERATELY. settings.rs is a big file that changes often, so this
+# glob will ask for reviews a narrower one would not. It is here because
+# `Settings::rig_mode_on_sideband` lives in it — the function that decides WHICH MODE IS
+# COMMANDED TO THE RADIO per band — and commit 28408da5 changed nothing else at all while
+# putting every Yaesu into CW-L and every default IC-7300 into the opposite sideband on
+# 40/80/160 m. A narrower glob scores better on the calibration corpus and would have missed
+# the real change. If this one turns out to cry wolf in practice, split the function out of
+# settings.rs and narrow the glob to it — do not delete the row.
+cat-rig | crates/tempo-app/src/settings.rs | `rig_mode_on_sideband` and the per-radio mode rules: what mode Nexus asks the radio for on each band
+
+# ---------------------------------------------------------------------------
+logbook :: Does this create or change a QSO on its way to storage? Ask whether the entry would survive an awards checker, an LoTW match, and the operator's own memory a year from now.
+
+logbook | crates/tempo-core/src/logbook.rs | the log store and the ADIF record builder. An AM contact was written here as SSB; a phone contact carried no sideband at all
+logbook | crates/tempo-core/src/logbook/** | log record types
+logbook | crates/tempo-core/src/qso.rs | the QSO record itself — every field an awards program will read
+logbook | crates/tempo-core/src/store.rs | persistence: a log that half-writes is a log that lost a contact
+logbook | crates/tempo-core/src/reconcile.rs | matching contacts against a service's answer; a correction is not a new entry
+logbook | crates/tempo-core/src/pota.rs | park references, activations, the UTC-day boundary that splits one sitting into two
+logbook | crates/tempo-core/src/fieldday.rs | Field Day exchange and section — a section the rules do not list must refuse, not transmit
+logbook | crates/tempo-core/src/contest/** | contest exchanges and serial numbers; the exchange IS the contact
+logbook | crates/tempo-core/src/doppler.rs | satellite doppler — a satellite QSO has two frequencies and the log has to say which
+logbook | crates/tempo-app/src/engine/remote_logging.rs | contacts logged from Nexus Remote, where the clock is the SERVER's, not the operator's
+logbook | ui/src/components/LogEntry.tsx | the entry strip — what the operator sees committed, and the last place a wrong field is visible
+logbook | ui/src/components/Logbook.tsx | the log view, including the corrections an operator makes after an upload
+# The cockpits are in TWO lenses, and the second one was missed until the calibration corpus
+# said so. A cockpit is where the operator's contact is assembled, so it decides what MODE a
+# contact is logged as — and the AM-logged-as-SSB fix (74f70810) touched PhoneCockpit.tsx and
+# NOTHING ELSE. With this row absent the corpus routed that change to `transmit` alone and a
+# logging reviewer was never called for a logging defect.
+logbook | ui/src/components/*Cockpit.tsx | a cockpit assembles the contact — including what mode and sideband it is logged as
+
+# ---------------------------------------------------------------------------
+upload :: Does this send a contact to LoTW, QRZ, Clublog, eQSL, HRDLog, WRL or POTA? Ask what each service actually requires, and — first — what the FAILURE path writes down.
+
+upload | crates/tempo-core/src/lotw.rs | LoTW: TQSL signs with the operator's certificate, so anything in the batch leaves under their signature
+upload | crates/tempo-core/src/lotw_upload.rs | the LoTW upload funnel and its exit-code mapping (exit 9 was read as Pending, hiding rejections)
+upload | crates/tempo-core/src/qrz.rs | QRZ Logbook — one logbook belongs to one exact callsign, which is why /P uploads fail silently
+upload | crates/tempo-core/src/clublog.rs | Clublog upload; its rejection quotes the request back, API key included
+upload | crates/tempo-core/src/eqsl.rs | eQSL upload and its QTH nickname placement inside the record
+upload | crates/tempo-core/src/hrdlog.rs | HRDLog.net upload code handling
+upload | crates/tempo-core/src/hamqth.rs | HamQTH credentials and lookups
+upload | crates/tempo-core/src/wrl.rs | World Radio League upload
+upload | crates/propagation/src/live/** | the live connectors, including Cloudlog/Wavelog whose replies can echo the key
+
+# ---------------------------------------------------------------------------
+adif :: Does this read or write ADIF? Ask the specification, not the file you have in front of you. A field that is right in the log and absent from the export is a silent half-loss.
+
+adif | crates/tempo-core/src/contest/adif.rs | contest ADIF emission
+adif | crates/modes/src/mode.rs | the mode/submode mapping every export depends on. SSB is not a mode an awards program matches; USB and LSB are
+adif | crates/tempo-core/src/logbook.rs | `adif_record` and `adif_for_activation` live here — this file is in TWO lenses and both apply
+
+# ---------------------------------------------------------------------------
+bandplan :: Does this decide what band a frequency is, what may be transmitted there, or what mode belongs there? Ask the regulator's table and the IARU region, not a remembered edge.
+
+bandplan | crates/tempo-app/src/bandplan.rs | band edges and segments; the mode convention per band, which is real for voice and does not exist for CW
+bandplan | crates/tempo-app/src/bandplan/** | licensed-band handling
+bandplan | crates/tempo-app/src/privileges.rs | licence-class privilege gating — a transmit gate, not a display filter
+bandplan | crates/tempo-core/src/qsy.rs | QSY: moving the dial, and whether where it lands is legal to transmit on
+bandplan | crates/tempo-core/src/channel.rs | channelised segments such as the four US 60 m channels, where the dial is not free
+# THE UI HALF OF THE BAND PLAN, added after the advisory run over the week of 2026-09-08 found
+# it missing on main's own tip: "Keep the licensed bands already known when one settings
+# refresh fails" (c200a027) touched ui/src/components/BandPicker.tsx and nothing else, and the
+# map said no review was required for a change to which bands the operator is shown as
+# licensed. A picker offering a band the operator does not hold is where a QSY out of
+# privileges starts; the Rust gate stops the transmit, it does not stop the misleading.
+bandplan | ui/src/band.ts | the UI's own band arithmetic — frequency to band, and back
+bandplan | ui/src/components/Band*.tsx | the band pickers, menus, strips and maps: what the operator is offered
+bandplan | ui/src/components/FrequencyControl.tsx | where the operator types or spins a frequency
+bandplan | ui/src/remote-web/band-choices.ts | the same offer, made to a Remote browser

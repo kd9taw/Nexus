@@ -1,0 +1,484 @@
+# scenarios.txt — the operator-review scenario library.
+#
+# Real on-air and real logging situations. This is the part that makes the
+# reviewer USEFUL rather than PLAUSIBLE: an agent asked "would an operator be
+# unhappy with this?" will produce fluent, general worry. An agent handed a
+# named situation — the rig, the state, the action, and what wrong looks like —
+# produces a finding somebody can act on.
+#
+# Every scenario here is DERIVED FROM THIS REPOSITORY'S OWN HISTORY: the
+# CHANGELOG, the incident comments in the engine and the audio service, and the
+# TX-safety and stop-line sections of CLAUDE.md. None is invented. Where a
+# scenario records something this project actually shipped wrong, `seen:` names
+# it, because a defect that has happened once is not a hypothesis.
+#
+# FORMAT — stanzas, blank line between them, `#` comments, a line starting with
+# whitespace continues the key above it. Adding one is adding a stanza:
+#
+#   id:     a stable slug, cited by the calibration corpus
+#   lens:   which lens(es) it belongs to — must be declared in paths.map
+#   title:  one line, the situation as an operator would name it
+#   truth:  what the RADIO or the LOG actually does. Not what the code does.
+#   wrong:  what WRONG looks like to an operator — on the air, or in the log
+#   paths:  the code that touches it
+#   seen:   (optional) where this bit us before
+#   cite:   (optional) the ground truth to check it against
+#
+# Keep `truth` and `wrong` in the operator's voice. The moment a stanza starts
+# describing a function signature it has stopped being a scenario.
+
+# ===========================================================================
+# TRANSMIT — the rig is keyed, or about to be
+# ===========================================================================
+
+id: band-change-while-keyed
+lens: transmit, cat-rig, bandplan
+title: The band changes while the rig is keyed
+truth: A band change is several things the rig does in sequence — dial, mode, sometimes
+  antenna and ATU segment — and the rig does not refuse them because it happens to be
+  transmitting. A linear amplifier following the band step is worse: switching a keyed
+  amplifier's band relay is how finals and relays die.
+wrong: The operator hears their own over change pitch or go silent mid-word; a watching
+  station sees a signal move across the band under key; the amplifier makes a noise it
+  should never make. Nothing in the log or the UI says anything happened.
+paths: crates/tempo-app/src/engine.rs, crates/tempo-audio/src/rig.rs, crates/tempo-audio/src/amplifier.rs
+seen: CHANGELOG — amplifier band-following now re-reads the setup before every serial write
+  and sends nothing while the radio is keyed by hand; the KPA waits for a fresh idle reading.
+cite: the amplifier vendor's protocol reference (SPE Expert, Elecraft KPA) for what a band
+  command does mid-transmit; the rig vendor's CAT reference for mode-vs-frequency ordering.
+
+id: cat-teardown-while-keyed
+lens: transmit, cat-rig
+title: The CAT link is torn down and rebuilt while the rig is transmitting
+truth: PTT is a state held IN THE RADIO, not in the program. Dropping the serial link,
+  restarting the daemon or swapping the Rig object does not unkey anything — the radio
+  stays exactly as it was last commanded. The only thing that unkeys a radio is an unkey
+  sent through a channel that is actually open.
+wrong: The rig transmits until it is powered off. On a Yaesu Enhanced CAT port this is
+  reproducible with nothing more than a USB hiccup during an over or a tune.
+paths: crates/tempo-audio/src/rigctld_proc.rs, crates/tempo-audio/src/rig.rs, crates/tempo-app/src/engine/radio_selection.rs
+seen: 1.10.3 — "A rig could get stuck transmitting after a CAT dropout (Yaesu, Enhanced USB
+  port)". The 1.10.2 auto-reconnect rebuilt the link but forgot the radio was keyed and never
+  sent the key-up over the reopened channel, switching off the 1.10.1 safety retry exactly
+  when it was needed.
+cite: the vendor CAT reference for the rig's PTT state model; CLAUDE.md transmit-safety
+  invariants. Note the honest limit: if the USB device disappears entirely no software can
+  unkey it — only hardware PTT that fails safe can.
+
+id: over-outlives-its-audio
+lens: transmit
+title: A long over goes silent partway through and leaves the rig keyed
+truth: The transmitter is held up for as long as the code believes the over lasts, and the
+  sound card's buffer is finite. Hand the card more than it holds and the tail is discarded
+  before a sample plays — but the PTT timer does not know that.
+wrong: The power meter falls to zero and the red TX light stays on. On SSB-based digital
+  modes there is no RF at all, so the operator sees a dead meter on a transmitting radio; on
+  FM, AM or CW it is an unmodulated carrier sitting on the band for ninety seconds.
+paths: crates/tempo-audio/src/service.rs, crates/tempo-app/src/engine.rs
+seen: CHANGELOG — WSPR transmitted about twenty seconds of a 112 s over, every over, on an
+  FTdx10 under Ubuntu. It was never only WSPR: JT65, Q65 and FST4/FST4W at 30 s and longer,
+  and FST4W-1800 held the transmitter up for twenty-nine minutes.
+cite: the mode's own period length in the WSJT-X source; the audio backend's buffer size.
+
+id: stale-decode-replays-tx
+lens: transmit
+title: A decode from the previous period drives this period's transmit decision
+truth: An FT8/FT4 decode belongs to the slot it was decoded in, and slots alternate parity.
+  A decode that arrives late — or is retained across a boundary — is evidence about a period
+  that has already ended. Acting on it transmits in the wrong half of the sequence.
+wrong: The operator's signal appears in the same period as the station they are answering,
+  so the other station never hears them. To everyone else on the waterfall it is a station
+  calling on the wrong parity, endlessly.
+paths: crates/tempo-core/src/timing.rs, crates/tempo-audio/src/slot.rs, crates/tempo-app/src/engine.rs
+seen: 2026-08-17 wrong-parity TX — a decode outliving its period replayed the TX decision.
+  The fix is the slot-liveness invariant.
+cite: the WSJT-X source at ~/work/ft1/research/phase2/wsjtx-source for period and parity
+  handling — the code, not a description of it.
+
+id: ptt-asserted-at-open
+lens: transmit, cat-rig
+title: Opening the serial port keys the radio
+truth: RTS and DTR are asserted by the operating system when a serial port is opened unless
+  the port is opened with them suppressed. A radio wired for RTS PTT reads that as "key".
+wrong: The radio keys the instant Nexus launches and nothing in the app releases it, because
+  nothing in the app ever asked it to transmit. It stops when the app closes.
+paths: crates/tempo-audio/src/control_line.rs, crates/tempo-audio/src/ports.rs
+seen: CHANGELOG — "A rig keyed the moment Nexus started, when PTT was set to RTS". RTS cannot
+  be flow control and PTT at the same time.
+cite: the platform serial API's documented default for RTS/DTR on open.
+
+id: clock-jump-mid-over
+lens: transmit
+title: The system clock jumps while the radio is transmitting
+truth: The transmit watchdog measures elapsed wall-clock time. A clock that moves BACKWARDS
+  makes elapsed time look negative or tiny, so a watchdog reading the wall clock cannot see
+  that the over has run long.
+wrong: A keyed radio stays keyed, because the one thing that was going to stop it is
+  measuring against a clock that moved under it.
+paths: crates/tempo-app/src/clocksync.rs, crates/tempo-app/src/engine.rs
+seen: CHANGELOG — a time-service correction landing mid-transmission now ENDS the over
+  rather than holding it, for exactly this reason.
+cite: a monotonic clock is the only defensible source for a TX watchdog; the ADIF/log side
+  still needs UTC wall-clock, and the two must not be confused.
+
+id: stop-control-inside-a-pane
+lens: transmit
+title: The only control that stops a transmission is inside a pane the operator can hide
+truth: Every Nexus cockpit lets the operator remove panes. If a stop control lives in a
+  removable pane, there is a screen layout — a legal, one-click layout — in which nothing on
+  screen stops a transmission.
+wrong: The radio is transmitting and the operator has no button. This is a safety rule, not
+  an ergonomics one.
+paths: ui/src/components/*Cockpit.tsx, ui/src/features/panelState.ts
+seen: CLAUDE.md's stop line, fifth wording, 2026-08-03. Four earlier wordings were falsified
+  by shipped code; the guarantee is a property of THE SCREEN THAT REMAINS, not of a pane.
+cite: CLAUDE.md "UI layout contract — The stop line", and the sweeps in
+  components/stop-line.test.tsx. Note what the sweeps cannot see: a stop control that is
+  present, enabled and inert passed the whole suite.
+
+# ===========================================================================
+# CAT / RIG — what the radio remembers that the code does not
+# ===========================================================================
+
+id: per-band-mode-memory
+lens: cat-rig, bandplan
+title: A cross-band QSY lands on the rig's per-band mode register
+truth: Most rigs remember a mode per band. Command the dial to a new band and the rig applies
+  ITS remembered mode for that band — which may not be the mode the operator is working. The
+  order matters: mode-then-frequency and frequency-then-mode leave the radio in different
+  states, and there is a window between the two commands in which the radio is in neither.
+wrong: The operator QSYs from 20 m SSB to 40 m and finds themselves in the data mode they
+  last used there, transmitting the wrong thing, or transmitting a mode they are not
+  privileged for at that frequency.
+paths: crates/tempo-core/src/qsy.rs, crates/tempo-audio/src/rig.rs, crates/tempo-app/src/engine/mode_entry.rs
+cite: the vendor's CAT reference for that rig's band-memory behaviour — Hamlib is one reading
+  of the protocol and has been wrong about this project's radios four times.
+
+id: cw-r-is-not-cw
+lens: cat-rig, logbook
+title: CW and CW-R are the same note and opposite sidebands
+truth: The 40/80/160 m LSB convention is real for VOICE and does not exist for CW. CW and
+  CW-R transmit identically, so the worked station cannot tell — the only difference is the
+  pitch the operator hears tuning past a signal. And the two words do not mean the same thing
+  on every radio: on a Yaesu reverse CW is CW-L; on an Icom it follows that rig's own CW
+  Normal Side menu item, which ships set to LSB, so an IC-7300 asked for reverse CW goes to
+  the UPPER side — the exact opposite of what the rule intended.
+wrong: Every band change flips the operator's rig between CW and CW-R, undoing it if they set
+  it back by hand. Inside Nexus nothing shows, because the two modes were treated as one — it
+  has to be spotted on the radio's own display.
+paths: crates/tempo-app/src/engine/mode_entry.rs, crates/tempo-app/src/bandplan.rs
+seen: CHANGELOG — "Nexus no longer switches your radio to CW-R on 40 m". Reported by an
+  operator with an IC-7300 on 40 m under Linux.
+cite: the Icom CI-V reference and the rig's CW Normal Side menu; the Yaesu CAT reference for
+  CW-L. Note the exception: the soundcard keyer keys a tone through a DATA mode, so the
+  sideband there really does follow the band, exactly as it does for FT8.
+
+id: atu-tune-mid-qso
+lens: transmit, cat-rig
+title: The operator hits ATU tune in the middle of a QSO
+truth: A tune is a transmission — a carrier, at the power the tune step sets, into whatever
+  the antenna is doing right now — and an ATU cycle can take seconds and can retune the relay
+  bank. It is also a per-segment solution: the ATU remembers a match for where it was tuned,
+  not for where the dial is now.
+wrong: A carrier goes out on top of the QSO in progress. Worse with split: the tune carrier
+  goes out on the TX VFO, which is not where the operator has been listening. Afterwards the
+  power level may not be where it was.
+paths: crates/tempo-app/src/engine.rs, crates/tempo-audio/src/rig.rs, crates/tempo-audio/src/rig/tuning.rs
+seen: CHANGELOG — the TX meters stood still while Tune was keyed; the Tune/ATU buttons were
+  in the header in three cockpits and in the TX strip in a fourth.
+cite: the rig's CAT reference for its tune command, and whether it returns before or after
+  the ATU cycle completes.
+
+id: split-and-xit
+lens: cat-rig, transmit, logbook
+title: Working a DX station listening up, with split and XIT set
+truth: With split on, the radio RECEIVES on VFO A and TRANSMITS on VFO B. XIT shifts the
+  transmit frequency without moving either VFO. So the frequency the waterfall shows, the
+  frequency the operator hears, the frequency they transmit on, and the frequency that should
+  be logged are up to four different numbers.
+wrong: A tune or a spot goes out on the receive frequency instead of the transmit one; a
+  logged QSO records the wrong side of a split, which is what an awards checker reads; or the
+  dial coming back after a split offset reads as "nothing is on the air".
+paths: crates/tempo-audio/src/rig.rs, crates/tempo-core/src/logbook.rs, crates/tempo-app/src/engine.rs
+seen: CHANGELOG — the dial coming back after a Split Operation offset read as "nothing is on
+  the air"; power changes Nexus commands during an FT8 over with Split Operation on.
+cite: the vendor CAT reference for split/XIT read-back, and the ADIF spec for FREQ vs FREQ_RX.
+
+id: slow-serial-line
+lens: cat-rig, transmit
+title: The CAT line is slow, and a command is still in flight
+truth: A CAT exchange at 4800 baud is not instantaneous, and some radios do not answer at all
+  while transmitting. Every command has a deadline; code that assumes a reply has landed
+  before the next command goes out is assuming a fast line. A burst of tuning steps sent one
+  by one arrives as a queue the radio works through after the operator has stopped turning.
+wrong: The dial keeps moving after the operator lets go; a mode set is overtaken by a
+  frequency set and lands in the wrong order; a state read-back reports the state from before
+  the last command, and the code believes it.
+paths: crates/tempo-audio/src/baud_ladder.rs, crates/tempo-audio/src/rig.rs, crates/tempo-audio/src/rigctld_proc.rs
+seen: CHANGELOG — scroll-wheel, arrow-key and digit tuning no longer drop steps on a slow
+  connection: a burst is sent as one tune once the connection catches up, or refused whole.
+cite: the vendor CAT reference's stated command timing, and this project's slow-serial
+  deadline notes.
+
+id: dual-radio-handoff
+lens: cat-rig, transmit
+title: The operator switches operating radio while the first one is doing something
+truth: A handoff replaces the Rig — and replacing a Rig is a teardown plus a build. The
+  outgoing radio keeps whatever state it was last commanded into, including PTT, including a
+  tune in progress, including split.
+wrong: Radio A is left keyed, or left in split, or left with its amplifier still following a
+  band it is no longer on, while the operator's attention is entirely on radio B.
+paths: crates/tempo-app/src/engine/radio_selection.rs, crates/tempo-audio/src/rig.rs, crates/tempo-audio/src/rig/remote.rs
+cite: this project's multi-radio architecture notes; the same unkey-through-the-new-channel
+  rule as cat-teardown-while-keyed.
+
+id: swr-meter-scale
+lens: cat-rig
+title: The SWR meter reads a number the radio did not mean
+truth: A CI-V transmit meter reading is a raw value on THAT RADIO'S scale. Icom's scale is not
+  Xiegu's. Converting with the wrong curve does not produce a slightly wrong number, it
+  produces a confidently wrong one.
+wrong: A G90 showing 1.2:1 on its own front panel reads 6:1 in Nexus. The operator either
+  stops transmitting into a perfectly good antenna, or — with the error the other way —
+  keeps transmitting into a bad one.
+paths: crates/tempo-audio/src/civ/**, crates/tempo-audio/src/rigmodels.rs
+seen: CHANGELOG — "Xiegu radios: trust the radio's own SWR meter". A real calibration needs
+  bench measurements first.
+cite: the vendor's meter scaling table; anything else is a guess and must be labelled one.
+
+# ===========================================================================
+# LOGGING — what the entry has to survive
+# ===========================================================================
+
+id: phone-contact-without-sideband
+lens: logbook, adif
+title: A phone contact is logged with no sideband
+truth: "SSB" is not a sideband. An awards program matching a contact wants USB or LSB, and
+  which one it is is determined by band convention and by what the radio was actually doing —
+  not by what the software last commanded.
+wrong: The operator's phone contacts sit in the log looking complete and never match at the
+  other end. Nothing warns, because every field that IS there is right.
+paths: crates/tempo-core/src/logbook.rs, crates/modes/src/mode.rs, ui/src/components/LogEntry.tsx
+seen: shipped unnoticed for three months.
+cite: the ADIF specification's MODE enumeration and its treatment of SSB/USB/LSB.
+
+id: am-logged-as-ssb
+lens: logbook, adif
+title: An AM contact is logged as SSB
+truth: The log follows the RADIO, not what the software asked the radio for. If the rig is on
+  AM the contact is AM, whatever the Phone screen last commanded — and it cuts the other way
+  too: ask for AM, have the rig refuse it, and the contact really was the SSB it logged as. A
+  mode read-back is only believable while CAT is up and the radio has actually answered.
+wrong: Every AM contact — including on 14.286, the 20 m AM calling frequency — goes into the
+  log as SSB, and carries that error onward through ADIF export, the N1MM and N3FJP feeds,
+  and every upload. Already-logged entries can only be fixed by hand.
+paths: crates/tempo-core/src/logbook.rs, crates/tempo-app/src/engine/mode_entry.rs, ui/src/components/LogEntry.tsx
+seen: CHANGELOG — "An AM contact was logged as SSB". The Phone screen had two answers for
+  what mode you were on, FM and SSB, and everything not FM came out SSB. The AM button was
+  also hidden below 10 MHz and above 28 MHz, which is why the reporter used the rig's knob.
+cite: the ADIF specification's MODE list, which has AM in it.
+
+id: activation-crosses-utc-midnight
+lens: logbook
+title: A POTA activation runs through UTC midnight
+truth: POTA credit is per ZULU DAY. An activation that crosses UTC midnight is two
+  activations, and each needs ten contacts on its own. Six contacts either side of midnight is
+  twelve contacts and NO valid activation.
+wrong: The operator submits one combined file, POTA accepts it, and neither day reaches ten.
+  They find out weeks later that a good afternoon at the park counted for nothing.
+paths: crates/tempo-core/src/pota.rs, crates/tempo-core/src/logbook.rs
+seen: CHANGELOG — the Logbook now lists activations and exports exactly one, and an activation
+  crossing UTC midnight gives two files, with two rows saying "6 QSOs · under 10".
+cite: the POTA activator rules on Zulu-day credit and the required filename form
+  (CALL@REF-YYYYMMDD.adi).
+
+id: two-fer
+lens: logbook, adif
+title: One contact from a park that is two parks
+truth: Parks overlap. A single QSO made from a spot inside two park boundaries counts for
+  both, and the operator submits it under both references. One QSO, two park references — and
+  a park spanning two states needs a fourth part in the filename.
+wrong: The record holds one reference, so half the credit is silently dropped, and the
+  operator has no way to say what really happened without editing files by hand.
+paths: crates/tempo-core/src/pota.rs, crates/tempo-core/src/logbook.rs
+seen: CHANGELOG states this plainly as NOT HANDLED — "a two-fer is not modelled: one QSO
+  carries one park reference". A known gap is still a scenario; a change here must not make
+  it worse or quietly claim it is fixed.
+cite: the POTA rules on multi-reference activations, and the ADIF MY_SIG_INFO/POTA_REF field.
+
+id: busted-call-corrected-after-upload
+lens: logbook, upload
+title: A callsign is found to be wrong after the contact was already uploaded
+truth: A correction is a CORRECTION, not a new contact. The original went to LoTW, QRZ,
+  Clublog and eQSL, each of which handles a changed record differently, and some of which will
+  simply hold both. The other operator's log says the right call, so the match depends
+  entirely on the correction propagating.
+wrong: The log shows the right call, the services still hold the wrong one, the QSO never
+  confirms, and nothing in the app indicates a divergence. Or: the correction uploads as a
+  second contact and the operator now has a duplicate at every service.
+paths: crates/tempo-core/src/reconcile.rs, crates/tempo-core/src/logbook.rs, ui/src/components/Logbook.tsx
+cite: each service's documented behaviour for a modified record — LoTW, Clublog and QRZ do
+  not agree, so "the service handles it" must name WHICH service.
+
+id: clock-was-wrong-when-logged
+lens: logbook
+title: The contact was logged from a machine whose clock was wrong
+truth: A log entry's time comes from the operator's machine. A clock minutes out produces
+  entries that are internally perfect, indistinguishable from good ones, and unmatchable
+  forever — LoTW's window is not generous. Nexus knows its own clock offset; the log is the
+  place where that knowledge is worth something.
+wrong: A whole session's contacts fail to confirm and the operator has no idea why. The
+  distinctive symptom is that they fail at EVERY service at once.
+paths: crates/tempo-app/src/clocksync.rs, crates/tempo-core/src/logbook.rs
+seen: CHANGELOG — Nexus refuses to steer slot timing by an offset over a minute and says so;
+  "slot timing is not the only thing a clock that wrong affects".
+cite: the LoTW matching window; the ADIF QSO_DATE/TIME_ON definitions, which are UTC.
+
+id: portable-callsign
+lens: logbook, upload, adif
+title: The operator is running /P, /M, /MM or a prefix form
+truth: A portable call is a different callsign. A QRZ logbook belongs to ONE EXACT callsign.
+  /MM (maritime mobile) and /AM have no DXCC entity at all. A prefix form (DL/KD9TAW) changes
+  the DXCC entity, the CQ zone and the ITU zone, and a portable call counts where the operator
+  is actually operating, which is not where their licence address is.
+wrong: Every upload under the portable call is rejected, or worse accepted into the wrong
+  logbook. The operator set Nexus up at home months ago, went portable, and was never told
+  why nothing was landing.
+paths: crates/tempo-core/src/qrz.rs, crates/tempo-core/src/eqsl.rs, crates/tempo-core/src/logbook.rs
+seen: CHANGELOG — the portable-callsign warning used to appear only on Test Connection, so an
+  operator set up at home who went portable months later was never told why his /P uploads
+  failed. Now it fires on the first upload under a non-matching call.
+cite: the QRZ Logbook API's one-logbook-one-callsign rule; the ADIF spec on DXCC for /MM and
+  /AM; the DXCC rules on portable operation.
+
+id: satellite-qso
+lens: logbook, cat-rig, adif
+title: A satellite contact, with doppler running on both ends
+truth: A satellite QSO has an UPLINK and a DOWNLINK — two frequencies, often two bands, often
+  two modes — and both are moving under doppler for the whole pass. The log has to record the
+  satellite, the mode of the transponder, and enough frequency information to be matched.
+wrong: The record carries one frequency and one band, so it either looks like a contact that
+  cannot have happened or fails to match the other operator's entry, which recorded the other
+  end of it.
+paths: crates/tempo-core/src/doppler.rs, crates/tempo-core/src/logbook.rs
+cite: the ADIF spec's SAT_NAME, SAT_MODE, PROP_MODE=SAT and FREQ/FREQ_RX fields; the
+  satellite's published transponder plan.
+
+id: contest-exchange
+lens: logbook
+title: A contest QSO where the exchange is the contact
+truth: In a contest the exchange — serial number, section, zone, power class, name — IS the
+  contact. A serial number is per-contest and strictly sequential; losing or repeating one is
+  a scoring error at both ends. Some sponsors take multipliers from the CALLSIGN rather than
+  the exchange, and a section the rules do not list is not a section.
+wrong: The operator's log and the other station's disagree, the contact is removed from both
+  during checking, and a penalty is applied. Or an unrecognised section is transmitted all
+  weekend.
+paths: crates/tempo-core/src/contest/**, crates/tempo-core/src/fieldday.rs
+seen: CHANGELOG — "Field Day refuses a section its own rules do not list": entering an
+  unrecognised section used to start the mode anyway and let you transmit it.
+cite: that contest sponsor's own rules; the ARRL section list (85 sections, not 83 — MAR split
+  into NB/NS/PE, GTA became GH, NT became TER).
+
+id: channelised-band-segment
+lens: bandplan
+title: 60 m, where the dial is not free
+truth: US 60 m is four fixed 100 W ERP channels (5332.0 / 5348.0 / 5373.0 / 5405.0 kHz since
+  13 February 2026), not a band with edges. Much of the rest of the world has a shared
+  worldwide segment instead. Treating it as a range lets the operator land between channels.
+wrong: The operator transmits off-channel on 60 m, which is not a style choice, it is out of
+  their authorisation.
+paths: crates/tempo-core/src/channel.rs, crates/tempo-app/src/bandplan.rs
+seen: CHANGELOG — the FCC 60 m change of 13 February 2026 is carried in the band plan.
+cite: FCC Part 97 for the US channels; the IARU region plan for everywhere else.
+
+id: privilege-edge-not-band-edge
+lens: bandplan, transmit
+title: The frequency is in the band and not in the operator's privileges
+truth: A band edge and a privilege edge are different lines, and the privilege edge depends on
+  licence class. A mode's OCCUPIED BANDWIDTH also extends past its dial frequency, so a signal
+  whose dial reading is legal can still have energy outside the segment.
+wrong: The operator transmits outside their privileges. This is the one class of defect where
+  what is at risk is their licence.
+paths: crates/tempo-app/src/privileges.rs, crates/tempo-app/src/bandplan/licensed.rs
+cite: FCC Part 97 subpart D for US privileges by class; the mode's occupied bandwidth.
+
+# ===========================================================================
+# UPLOAD — and what the FAILURE path writes down
+# ===========================================================================
+
+id: rejected-upload-stores-the-request
+lens: upload, logbook, adif
+title: A rejected upload writes the service's reply somewhere it is kept
+truth: QRZ Logbook and Clublog answer a rejected upload by QUOTING THE REQUEST BACK, and the
+  request carries the API key. Cloudlog and Wavelog in debug mode, and proxies and firewall
+  pages in front of them, do the same. Anywhere that reply is stored is now a place a
+  credential lives.
+wrong: The key was written onto the contact itself, inside log.adi — and from there it rode
+  out through every export built on it: the TQSL batch signed with the operator's callsign
+  certificate and uploaded to LoTW, the per-contact eQSL upload, and every range export. A
+  secret leaving the machine under the operator's own signature, and it cannot be recalled.
+paths: crates/tempo-core/src/qrz.rs, crates/tempo-core/src/clublog.rs, crates/propagation/src/live/**
+seen: CHANGELOG, twice — once for the config-directory failure line and the world-readable
+  Linux console log, once for log.adi itself. Both are the same defect in two places.
+cite: CLAUDE.md credential-handling hard rule. The fix shape is fixed: store Nexus's OWN
+  sentence, never the service's words; show the service's words live and do not keep them.
+
+id: duplicate-push
+lens: upload, logbook
+title: The same contact is pushed twice
+truth: Every service treats a duplicate differently, and the difference matters: LoTW's TQSL
+  exit codes distinguish "some suppressed" from "none accepted", and reading the wrong one as
+  success hides real rejections. A retry after a timeout is indistinguishable, from the
+  client's side, from a first attempt — the first one may well have landed.
+wrong: The operator sees green and nothing reached the service; or the log records an upload
+  that did not happen and the catch-up pass never retries it because it looks done.
+paths: crates/tempo-core/src/lotw_upload.rs, crates/tempo-core/src/reconcile.rs, crates/tempo-core/src/clublog.rs
+seen: CHANGELOG — TQSL exit 9 (some suppressed) was mapped to Pending and exit 8 (none
+  accepted) to Duplicate, so contacts sat looking queued and never reached LoTW. Exit 9 is now
+  Rejected and exit 8 stays Duplicate only when it really is.
+cite: the TQSL documented exit codes; each service's documented duplicate behaviour.
+
+id: upload-succeeds-partially
+lens: upload
+title: A batch upload is accepted in part
+truth: A batch is not atomic at any of these services. TQSL can sign and send part of a batch;
+  a per-contact connector can fail on record 40 of 200. "The upload succeeded" is a statement
+  about a batch, and the operator needs it per contact.
+wrong: The log marks two hundred contacts uploaded and the service holds forty. The operator
+  finds out when confirmations do not arrive, by which time the batch is long gone.
+paths: crates/tempo-core/src/lotw_upload.rs, crates/tempo-core/src/lotw.rs
+cite: the TQSL exit-code table, and each service's documented batch semantics.
+
+# ===========================================================================
+# FT MODES — where WSJT-X is the contract
+# ===========================================================================
+
+id: ft8-73-without-rr73
+lens: transmit, logbook
+title: An FT8 QSO ends with 73 for a roger that was never sent
+truth: An FT8 QSO is a fixed sequence, and the 73 means the roger was received. A DXpedition
+  Fox transmits split, and the halves of its confirmation have to be stitched back together —
+  stitched to the RIGHT contact. Attach a bystander's RR73 to this QSO and the sequence
+  advances on evidence that belongs to somebody else.
+wrong: The operator sends 73 and logs a completed contact for a QSO the other station never
+  rogered; or the reverse, and they keep calling a station that has already worked them.
+paths: crates/tempo-app/src/engine.rs, crates/tempo-core/src/message.rs
+seen: CHANGELOG — "FT8 no longer sends 73 without receiving RR73", from the hound_split
+  reattach. Issue #236.
+cite: the WSJT-X source at ~/work/ft1/research/phase2/wsjtx-source for the Fox/Hound sequence.
+  WSJT-X is the compatibility contract: behaving differently needs sign-off even when it looks
+  like an improvement.
+
+id: hound-mode-toggled-mid-qso
+lens: transmit
+title: Hound mode is switched off in the middle of a QSO with a Fox
+truth: A Fox/Hound QSO is a mode of operation for the whole exchange. A setting read at each
+  transmit decision, rather than bound to the contact, changes the rules of a QSO that is
+  already half done.
+wrong: The contact strands: the operator's side is following one protocol and the Fox the
+  other, and neither completes.
+paths: crates/tempo-app/src/engine.rs
+seen: CHANGELOG — "Turning Hound off during a QSO with a Fox could strand the contact": the
+  behaviour was keyed to the Hound switch as it stood right then rather than to the contact.
+cite: the WSJT-X Fox/Hound documentation and source.
