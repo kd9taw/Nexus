@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tune no longer keeps a finished FT contact alive.** If you called a station, it stopped coming
+  back, and Nexus gave up on it, running the ATU used to restart the clock that was the only thing
+  ending that contact — and the station could "answer" minutes later out of a period the tune had
+  cut short, putting you back on the air with nothing clicked. Coming off Tune now switches TX off
+  in the digital section, which is what WSJT-X has always done, and drops the decoder's memory of
+  who you were working. Your microphone is untouched: Phone, CW, RTTY, PSK and SSTV keep the TX
+  switch they had, and the radio's own ATU button is unaffected.
+
 - **A directed CQ typed the wrong way round is refused, not quietly turned into a plain CQ.**
   Typing something like `CQ KD9WES POTA` into the Tx6 box used to put a bare `CQ KD9WES EN61` on
   the air while the box went on showing what you typed. Nexus now transmits nothing and tells you

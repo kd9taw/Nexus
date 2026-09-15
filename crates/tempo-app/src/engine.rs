@@ -13380,15 +13380,64 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     pub fn set_tune(&mut self, on: bool) {
+        self.set_tune_with_reset(on, modes::reset_ft8_a7);
+    }
+
+    fn set_tune_with_reset(&mut self, on: bool, reset: impl FnOnce()) {
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.remote_actuation.revoke();
+        let was_tuning = self.tuning;
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tx_allowed();
         if self.tuning {
+            // Holding Tune is an operator action and restarts the idle clock — WSJT-X does the
+            // same, though incidentally: any click or keystroke anywhere in its window zeroes
+            // `m_idleMinutes` (mainwindow.cpp:2823-2827), and the Tune button is a click.
             self.reset_tx_watchdog();
+            return;
         }
+        if !was_tuning {
+            return; // not a release — nothing was held
+        }
+        // ⭐ D#295 — RELEASING TUNE STOPS THE SEQUENCER, AND WSJT-X IS WHY.
+        //
+        // `end_tuning` (mainwindow.cpp:8760-8771) opens with `on_stopTxButton_clicked()`
+        // (8762), whose body is `auto_tx_mode(false)` + `m_btxok = false` + `m_bCallingCQ =
+        // false` + `m_bAutoReply = false` (8787-8797). So in stock, coming off Tune leaves
+        // the auto-sequencer DISARMED — a tune can never extend a QSO's life. Nexus's Tune
+        // did nothing here, and a directed QSO whose call cap had spent itself stays armed
+        // with its `dxcall` still loaded as the decoder's AP hypothesis, bounded only by a
+        // wall clock this very method restarts. The operator ran the ATU and Nexus answered
+        // a station it had given up on, with no click anywhere.
+        //
+        // ⚠️ THE DIGITAL SECTION AND NOTHING ELSE, because that is the whole of what stock is
+        // talking about: `auto_tx_mode` IS the FT auto-sequencer, and WSJT-X has no Phone, CW,
+        // RTTY, PSK or SSTV cockpit to have an opinion about. In the manual modes the same
+        // latch is the PTT enable (`set_ptt` masks on it), so widening this would confiscate
+        // the operator's mic for pressing Tune; and a `halt_tx` there also DROPS a queued SSTV
+        // image and the CW/RTTY/PSK queues, which would quietly make Tune a stop control the
+        // stop-line census does not list. Measured, not assumed:
+        // `poll_sstv_tx_holds_the_job_while_a_gate_is_down` went red on the unscoped version.
+        //
+        // NOT the rig's own ATU tune-up: `atu_tune` does not come through here, matching
+        // upstream's `m_tuneup` exemption at mainwindow.cpp:8790.
+        if self.settings.operating_mode == crate::settings::OperatingMode::Digital {
+            self.halt_tx_for_context_change("tune ended");
+        }
+        // …and drop the cross-cycle a7 table with it. The tune cleared the RX ring on every
+        // tick it ran (`service.rs`, "don't decode our own carrier") and re-anchored the slot
+        // grid on release, so the period that follows is decoded from a TRUNCATED buffer —
+        // while the a7 replay table still holds the call pairs from before the tune, ours and
+        // the given-up partner's among them. `ft8_a7.f90` does not CRC-check what it rebuilds
+        // (342-373: best soft-distance match of 206 synthesised candidates, accepted on a
+        // threshold and a 1.3x runner-up margin), so those pairs are exactly what can come
+        // back looking like a fresh answer. Stock fences the same hazard after a band change
+        // with `no_a7_decodes` (mainwindow.cpp:8644-8646) and needs nothing here only because
+        // its Tune does not clear its ring. Nexus already resets this table on a band change
+        // and a radio handoff for the identical reason; a tune joins them.
+        reset();
     }
 
     /// Whether the operator is holding a steady tune carrier (read by the loop to key PTT).
@@ -25060,6 +25109,10 @@ mod tests {
         e.set_tune(true); // live tune carrier owns the rig
         assert!(!e.broker_ptt(true), "no foreign key mid-tune");
         e.set_tune(false);
+        // Coming off Tune disarms the Digital sequencer (D#295 — WSJT-X's `end_tuning` runs
+        // Stop Tx), and a foreign broker key is gated on the same arm switch. Re-arm, because
+        // what this test is about is the mid-tune and mid-over refusals, not the arm state.
+        e.set_tx_enabled(true);
         e.app.set_transmitting(true); // FT8 over in flight
         assert!(!e.broker_ptt(true), "no foreign key mid-over");
         e.app.set_transmitting(false);
@@ -42476,6 +42529,178 @@ mod tests {
             "precondition: {cap} overs should have spent the directed call cap"
         );
         slot
+    }
+
+    /// An AP-ASSISTED decode — `nap != 0`, the `a1`..`a7` annotation WSJT-X prints. A7 in
+    /// particular is NOT CRC-checked upstream: `ft8_a7.f90:277-287, 342-373` synthesises 206
+    /// candidate messages from the PREVIOUS same-parity period's call pairs and accepts the
+    /// best soft-distance match on a threshold plus a 1.3x runner-up margin. That is the
+    /// mechanism by which a partner who has stopped transmitting can appear to answer.
+    fn dec_ap(msg: &str, snr: i32, nap: i32) -> Decode {
+        Decode {
+            nap,
+            ..dec_snr(msg, snr)
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════
+    // D#295 — AFTER TUNE/ATU, NEXUS ANSWERED A STATION IT HAD GIVEN UP CALLING.
+    //
+    // The operator called a station, the call cap spent itself, he ran the ATU, and Nexus
+    // transmitted to that station again with no click anywhere. Five links, each read in the
+    // code before anything here was written:
+    //
+    //  1. A capped directed QSO stays ARMED — `tx_capped()` withholds the MESSAGE only, so
+    //     `Mode::Qso`, `dxcall` and `tx_enabled` all survive (`plan_tx`'s `None` arm).
+    //  2. Its ONLY bound is the wall-clock watchdog, applied in that arm since
+    //     `a_call_capped_station_is_still_bounded_by_the_wall_clock_watchdog`.
+    //  3. `set_tune(true)` calls `reset_tx_watchdog()` — so every tune restarted that clock.
+    //  4. `Mode::Qso` feeds `station.dxcall` to the decoder as the AP `hiscall` every period
+    //     (`decode_job`), so the given-up partner stays the decoder's hypothesis.
+    //  5. The tune CLEARS THE RX RING every tick (`service.rs` — "don't decode our own
+    //     carrier") and re-anchors the slot grid on release, so the period after a tune is
+    //     decoded from a truncated buffer with that hypothesis still loaded.
+    //
+    // WHAT WSJT-X ACTUALLY DOES (read in the real tree, not the vendored DSP copy —
+    // wsjtx-source 2.7.0.0). The triage note "WSJT-X drops the QSO on band change" is FALSE,
+    // and the fix does not implement it:
+    //
+    //  * `band_changed` (mainwindow.cpp:8642-8688) never touches m_hisCall, m_hisGrid or
+    //    m_QSOProgress. It sets `no_a7_decodes` for 1.5 TR periods (8644-8646, read at
+    //    4401-4402) "because they can be leftovers from the previous band", and halts TX only
+    //    on an operator-edited blind QSY outside the waterfall (8659-8670).
+    //  * ENDING A TUNE DOES STOP THE SEQUENCER. `end_tuning` (8760-8771) opens with
+    //    `on_stopTxButton_clicked()` (8762), which is `auto_tx_mode(false)` + `m_bAutoReply =
+    //    false` + `m_btxok = false` (8787-8797). Stock's Tune therefore CANNOT extend an
+    //    armed QSO: releasing it disarms the sequencer. Nexus's did not — that is the gap.
+    //    (The rig's own ATU tune-up is exempt upstream, `m_tuneup` at 8790, and is exempt
+    //    here too: `atu_tune` does not go through `set_tune`.)
+    //  * The watchdog reset on Tune is PARITY and stays: any click or keystroke anywhere in
+    //    WSJT-X's window zeroes m_idleMinutes (mainwindow.cpp:2823-2827), the Tune button
+    //    included. Upstream's bound on an idle QSO is the tune-release auto-off above, not
+    //    the watchdog, so that is the one we restore.
+    //  * The sequencer is BLIND to AP assistance upstream: `DecodedText` strips the `a<N>`
+    //    annotation at construction (Decoder/decodedtext.cpp:57-58), and neither
+    //    `auto_sequence` nor `processMessage` reads it. So Nexus must not start refusing
+    //    AP-assisted decodes wholesale — that would be a divergence, not a repair. The
+    //    upstream defence against a STALE one is exactly the a7 table, and Nexus already
+    //    resets it on a band change and a radio handoff (`modes::reset_ft8_a7`). A tune gets
+    //    the same reset, for the reason stock does not need it: stock does not clear its RX
+    //    ring while tuning, so it never decodes the truncated period that follows.
+    #[test]
+    fn tune_does_not_extend_an_armed_qso() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2);
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+
+        let slot = cap_a_directed_call(&mut e, 2);
+        assert!(
+            e.tx_enabled(),
+            "precondition: the capped QSO is still armed — that is link 1"
+        );
+
+        // The operator gives up on the station and runs the ATU. Hold and release, exactly as
+        // the cockpit's Tune button and the loop's own auto-release both do.
+        e.set_tune(true);
+        e.set_tune(false);
+
+        assert!(
+            !e.tx_enabled(),
+            "releasing Tune must disarm the sequencer, as WSJT-X's end_tuning does"
+        );
+
+        // …and now the given-up partner "answers" out of the truncated period, AP-assisted.
+        e.ingest_decodes_for_test(&[dec_ap("K2DEF W9XYZ RRR", -5, 7)], slot + 1);
+        for s in slot + 2..slot + 8 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "Nexus keyed a station it had given up calling, after a tune"
+            );
+        }
+    }
+
+    #[test]
+    fn tune_cannot_be_used_to_keep_an_armed_qso_alive_indefinitely() {
+        // The watchdog reset in `set_tune` stays (it is WSJT-X parity — see the block above),
+        // so this asserts the property that matters rather than the mechanism: however many
+        // times the operator tunes, a QSO they have stopped calling does not stay armed.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2);
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+        let slot = cap_a_directed_call(&mut e, 2);
+
+        for _ in 0..5 {
+            e.set_tune(true);
+            e.set_tune(false);
+            assert!(!e.tx_enabled(), "a tune left the capped QSO armed");
+        }
+        for s in slot..slot + 6 {
+            assert!(e.poll_tx(s).is_empty(), "the capped QSO keyed after tuning");
+        }
+    }
+
+    #[test]
+    fn a_tune_release_takes_the_sequencer_but_never_the_operators_mic() {
+        // THE SCOPE GUARD. `halt_tx_for_context_change` is the primitive precisely because
+        // WSJT-X has no Phone cockpit to have an opinion about: the FT sequencer is disarmed
+        // (stock's `auto_tx_mode(false)`), and the manual modes keep the arm switch they had,
+        // which is the rule `halt_tx_for_context_change` was written for in the first place.
+        use crate::settings::OperatingMode;
+        for (mode, keeps_tx) in [
+            (OperatingMode::Digital, false),
+            (OperatingMode::Phone, true),
+            (OperatingMode::Cw, true),
+            (OperatingMode::Rtty, true),
+        ] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            // The field directly, as the other mode-scoped tests here do: a full
+            // `apply_settings` re-seeds the tier, and an rx-only tier would make
+            // `set_tx_enabled(true)` a no-op — the arm below has to be real for the
+            // assertion to mean anything.
+            e.settings.operating_mode = mode;
+            e.set_tx_enabled(true);
+            assert!(e.tx_enabled(), "{mode:?}: precondition — TX really armed");
+            e.set_tune(true);
+            assert!(e.tuning(), "{mode:?}: precondition — the tune carrier is held");
+            e.set_tune(false);
+            assert_eq!(
+                e.tx_enabled(),
+                keeps_tx,
+                "{mode:?}: wrong arm state after a tune release"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tune_release_drops_the_cross_cycle_ap_table() {
+        // The a7 replay table holds the call pairs of the period BEFORE the tune, and the
+        // period AFTER one is decoded from a ring the tune truncated. Stock fences the
+        // equivalent hazard with `no_a7_decodes` after a band change (mainwindow.cpp:8644-8646);
+        // Nexus already resets the table itself on a band change and a radio handoff, so a
+        // tune takes the same reset rather than a second mechanism.
+        //
+        // Both directions, because a reset that fires on every call proves nothing.
+        use std::cell::Cell;
+        let hits = Cell::new(0u32);
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tx_enabled(true);
+        e.set_tune_with_reset(true, || hits.set(hits.get() + 1));
+        assert_eq!(hits.get(), 0, "holding Tune resets nothing");
+        e.set_tune_with_reset(false, || hits.set(hits.get() + 1));
+        assert_eq!(hits.get(), 1, "releasing Tune must drop the a7 table");
+
+        // A release with no tune held is not a release.
+        e.set_tune_with_reset(false, || hits.set(hits.get() + 1));
+        assert_eq!(hits.get(), 1, "a no-op release must not reset anything");
     }
 
     #[test]
