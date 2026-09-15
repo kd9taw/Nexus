@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The callsign card no longer squeezes Band Activity off the screen.** Click a station with a
+  long history — eleven previous contacts was the case reported — and the card grew until it took
+  half the right-hand rail, leaving Band Activity a couple of rows and shortening Rx Frequency to
+  match. The card is now capped at about a third of the rail, and the list of previous contacts
+  scrolls inside it instead of pushing its neighbours around; nothing is lost, you just scroll for
+  the older contacts. Measured at 1024×768, 1366×768, 1600×900 and 1920×1080 and at 100 %, 110 %
+  and 125 % zoom: at 1920×1080 Band Activity goes from 197 px to 258 px and Rx Frequency from
+  128 px to 166 px with the card up.
+
 - **Tune is always right next to the band picker** (#287). In Phone, CW, RTTY, PSK, SSTV and JS8,
   the Tune button (and the ATU button, on radios that have one) now sits directly after the band
   dropdown. It used to be at the far right of the header and moved depending on what else each

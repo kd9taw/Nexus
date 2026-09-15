@@ -405,12 +405,31 @@
    roster they clicked in. A one-row test fixture hides this completely — it was measured
    with a full card on purpose.
 
-   `min(22em, 45%)`: a share so the bound scales with the rail rather than pinning a px
+   `min(14em, 33%)`: a share so the bound scales with the rail rather than pinning a px
    height into a zoom-sensitive column, and an em ceiling so it cannot eat a tall rail on a
    large display. Written as a CEILING, never a floor — a floor here would sit under the
    region's own clipping and be the crush mechanism reborn (see the min-height ruling
    above). Past the ceiling the card scrolls INSIDE itself, which is safe precisely because
    its prior-contact list already carries its own em ceiling and does not fight a parent.
+
+   TIGHTENED FROM `min(22em, 45%)` (operator screenshot, 2026-09-15: a station with ELEVEN
+   previous contacts, Roster layout at 100 %). That rail holds THREE panes — the card, Band
+   Activity and Rx Frequency — and the first cap was written when the measured case was the
+   TWO-pane Classic rail (card + Stations). Measured in headless Chrome, card present vs the
+   same rail with `recall` unticked, 11 contacts:
+     1920×1080  Band Activity 197 px vs 391 · Rx Frequency 128 px vs 249
+     1600×900   Band Activity 149 px vs 304 · Rx Frequency  98 px vs 195
+     1366×768   Band Activity 105 px vs 224 · Rx Frequency  71 px vs 145
+   i.e. the card was taking HALF the rail and both feeds were paying for it — which is what
+   "Band Activity is squeezed out and Rx Frequency is short" is, measured. The card's content
+   saturates around 320 px (its prior-contact list stops at 12em), so ELEVEN contacts is
+   already enough to sit on the ceiling: the ceiling is the whole of the behaviour and 45 %
+   was simply too much of a three-pane rail.
+   14em is identity + badges + ~5 prior contacts, with the rest a scroll inside the card —
+   the card answers "who is this", and a sixth row is one flick away. It is em-DOMINANT on
+   any rail over ~560 px, so a long history cannot claim more of a big screen than a short
+   one; the 40 % arm is only the yield-under-pressure guard on a short rail, and it still
+   yields exactly as the 45 % one did. The card is NOT a feed and must not scale like one.
 
    ⚠️ A SINGLE FLAT CLASS, APPLIED BY THE HOST — deliberately NOT `.cockpit-side
    > .recall-card`, which is the obvious spelling and is REFUSED here: this sheet's whole
@@ -422,7 +441,7 @@
    and the pane body is already its scroller. */
 .cockpit-recall {
   flex: 0 1 auto;
-  max-height: min(22em, 45%);
+  max-height: min(14em, 33%);
   overflow-y: auto;
 }
 

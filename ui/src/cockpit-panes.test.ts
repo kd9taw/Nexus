@@ -409,6 +409,59 @@ describe('the fill-pane floor exists exactly where a scroller stands behind it',
   }
 })
 
+describe('the rail-bound callsign card is a CEILING, and a small one', () => {
+  // #168 gave the Operate rail's callsign card a bound so a selected station could not take
+  // the rail apart. On 2026-09-15 the operator sent a screenshot of a station with ELEVEN
+  // previous contacts at 100 %: the card had squeezed Band Activity out and shortened Rx
+  // Frequency. The first bound was written against the TWO-pane Classic rail (card +
+  // Stations); Roster's rail holds THREE panes, and 45 % of it is half the rail once the two
+  // feeds have paid their gaps.
+  //
+  // What is computed here is the SHAPE and the BOUNDS, never the exact number — a guard that
+  // pins a literal goes red on a healthy re-tune, which is how two of them blocked a release
+  // in one day. Measurement is what says whether the number is RIGHT; headless Chrome does
+  // that (ui/layout-harness, and the numbers are in the cockpit-panes.css comment).
+  const recall = () => RULES.filter((r) => r.selector === '.cockpit-recall')
+
+  it('exists, exactly once', () => {
+    expect(recall(), 'the card lost its placement rule — it would take the whole rail').toHaveLength(1)
+  })
+
+  it('is a max-height and never a min-height', () => {
+    const body = recall()[0].body
+    expect(/max-height\s*:/.test(body)).toBe(true)
+    // A FLOOR here would sit under the region's own clipping and be the crush mechanism
+    // reborn — the whole reason the 2026-07 rebuild deleted the 18em floors it found.
+    expect(
+      /(^|[;{\s])min-height\s*:/.test(body),
+      '.cockpit-recall declares a min-height — a floor under a clipping ancestor is the bug ' +
+        'this sheet exists to retire',
+    ).toBe(false)
+  })
+
+  it('yields two ways: an em ceiling AND a share of the rail', () => {
+    const m = /max-height\s*:\s*min\(\s*([\d.]+)em\s*,\s*([\d.]+)%\s*\)/.exec(recall()[0].body)
+    expect(
+      m,
+      'the cap is no longer min(<em>, <share>). One arm alone is wrong in a known direction: ' +
+        'a bare em cannot yield on a short rail, and a bare % scales the card with the screen ' +
+        'when it is a reference card, not a feed.',
+    ).not.toBeNull()
+    const [, em, pct] = m!.map(Number) as unknown as [string, number, number]
+    // THE SHARE. Roster's rail holds three panes; the card is one of them and is the only one
+    // that is not a live feed, so it may never claim more than an equal share. At 45 % it was
+    // taking half the rail and both feeds paid for it.
+    expect(pct, 'the card may not claim more than a third of a rail it shares with two feeds').toBeLessThanOrEqual(34)
+    // THE CEILING. Identity + badges + a few prior contacts; past that the card scrolls
+    // inside itself (below). A long history must not buy a bigger card.
+    expect(em, 'the em ceiling is large enough for a long history to claim a big screen').toBeLessThanOrEqual(16)
+  })
+
+  it('scrolls inside itself past the ceiling, so the tail is reachable rather than clipped', () => {
+    expect(blockOverflowY(recall()[0].body)).toBe('auto')
+  })
+})
+
 describe('panes are sized by the grid, never by themselves', () => {
   it('cockpit-panes.css does not restyle the shared .pane-frame family', () => {
     // The frame CSS (styles.css ~1497) is Connect's, shipped and correct. Forking it here
