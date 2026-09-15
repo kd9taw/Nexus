@@ -62,6 +62,25 @@ tempo-net = { path = "../tempo-net", optional = true }
 tempo-sstv = { path = "../tempo-sstv", optional = true }
 # SSTV gallery persistence (gallery.json load/save in `sstv_store`). Pure.
 serde_json = "1"
+# Opus codec for Nexus Remote's station receive audio (`receive_encode`). Safe bindings
+# (MIT OR Apache-2.0) over `opusic-sys` (BSD-3-Clause), which carries the libopus 1.6.1 C
+# source INSIDE the crate and links it statically — no pkg-config, no system libopus, no
+# submodule, no network fetch at build time. NOTICE entry and README credit filed with the
+# dependency; libopus is uniformly BSD-3-Clause, which combines one-way-inbound into this
+# project's GPL-3.0-only whole exactly as the LZHUF entry at NOTICE:285 already does.
+#
+# ⚠️ DO NOT enable `opusic-sys`'s `dred` / `osce` features. They compile libopus's neural
+# extensions, whose MODEL WEIGHTS carry no licence statement of any kind upstream — turning
+# them on would mean this NOTICE asserting terms nobody wrote down. They are off by default
+# and they also cost 4.4 MB (568 KB of code+data becomes 5.0 MB, measured), for capability a
+# 24 kbit/s speech link does not want. Leave them off.
+#
+# NOT feature-gated, deliberately. Putting it behind a feature would keep the encoder out of
+# `cargo test --workspace` — the exact blind spot `reference-build-verify-limits` exists to
+# warn about — and it buys nothing: `opusic-sys` needs CMake, and CMake is ALREADY a build
+# dependency of every Nexus target (ci.yml test/msrv/windows-cross/macOS, Dockerfile.pi,
+# release.yml, build-windows.sh), because libtempo is a CMake project.
+opus = "0.4"
 
 # Linux-only: read ALSA's PCM hints ourselves, so the device picker can show the card
 # DESCRIPTION ("USB AUDIO CODEC") the operator's system, `aplay -l`, KDE, pavucontrol and

@@ -12,6 +12,12 @@ use tokio_tungstenite::tungstenite::{
 
 pub const REMOTE_ORIGIN: &str = "https://remote-staging.hamradiotools.io";
 const HTTP_LIMIT: usize = 16384;
+/// The RX DSP tick, which is also one Opus frame. A literal here so the socket loop is
+/// one piece of code in a build without tempo-audio; the assertion below pins it to the
+/// encoder's own definition, so the two cannot drift apart silently.
+const AUDIO_TICK_MS: u64 = 20;
+#[cfg(feature = "radio")]
+const _: () = assert!(AUDIO_TICK_MS == tempo_audio::receive_encode::FRAME_MS);
 
 pub fn identifier(value: &str) -> bool {
     value.len() == 36
@@ -183,6 +189,17 @@ enum ServerMessage {
         #[serde(rename = "requestId")]
         request_id: Option<String>,
     },
+    /// A browser asking to start or stop listening. The session and device are stamped
+    /// by the relay from its own admission record, never asserted by the browser.
+    AudioListen {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "deviceId")]
+        device_id: String,
+        listening: bool,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+    },
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -198,6 +215,14 @@ pub struct Feeds {
     pub spectrum: Option<tempo_app::engine::SpectrumFeed>,
     pub meters: tempo_app::engine::MeterFeed,
     pub sources: Option<super::query::Sources>,
+    /// The bounded copy of receive audio, for a listening browser. `None` on a build or
+    /// a launch with no capture path, and then the audio lane is never advertised at all
+    /// — so a browser is never offered a control the station cannot honour.
+    ///
+    /// Holding this grants nothing: it is a read of already-captured receive audio, and
+    /// while nobody is listening it copies nothing.
+    #[cfg(feature = "radio")]
+    pub audio: Option<std::sync::Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
 }
 pub async fn connected(
     client: &Client,
@@ -317,6 +342,17 @@ pub async fn connected(
         "x-nexus-operation-ft-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    // Receive audio, advertised only when this station actually has a capture copy to
+    // send. A service that does not see this header never routes an `audioListen` here,
+    // which matters: the message parser above rejects unknown fields, so being handed
+    // one would take the whole control socket down rather than declining a feature.
+    #[cfg(feature = "radio")]
+    if feeds.audio.is_some() {
+        request.headers_mut().insert(
+            "x-nexus-audio-version",
+            "1".parse().map_err(|_| "invalidResponse")?,
+        );
+    }
     let config = WebSocketConfig::default()
         .max_message_size(Some(8192))
         .max_frame_size(Some(8192))
@@ -371,6 +407,19 @@ pub async fn connected(
     let mut stream = super::application::Stream::default();
     let mut application_tick = tokio::time::interval(Duration::from_millis(100));
     application_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The receive-audio lane. It holds no encoder until a browser asks to listen, and
+    // its select branch below is guarded on that, so on a station nobody is listening to
+    // this timer is never even polled.
+    #[cfg(feature = "radio")]
+    let mut audio_lane = super::audio::AudioLane::default();
+    // A plain bool rather than `audio_lane.listening()`, because a `select!` branch
+    // condition cannot carry a `#[cfg]` and the lane type does not exist in a build
+    // without tempo-audio. INVARIANT: every block that can change the lane's state
+    // re-reads it into this on the way out. There are three, and each is marked.
+    #[cfg_attr(not(feature = "radio"), allow(unused_mut))]
+    let mut audio_listening = false;
+    let mut audio_tick = tokio::time::interval(Duration::from_millis(AUDIO_TICK_MS));
+    audio_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             biased;
@@ -384,7 +433,52 @@ pub async fn connected(
                 Some(Ok(Message::Text(text))) => {
                     let message: ServerMessage = serde_json::from_str(&text).map_err(|_| "invalidResponse")?;
                     match message {
-                        ServerMessage::OperationDisconnect{session_id}=>{if !identifier(&session_id){return Err("invalidResponse")}operation_connection.authority.disconnect_session(&session_id);},
+                        ServerMessage::OperationDisconnect{session_id}=>{
+                            if !identifier(&session_id){return Err("invalidResponse")}
+                            // A browser that has gone cannot still be listening. This is
+                            // also the tab-hide and lease-loss path in practice: the
+                            // browser stops its own audio first, and this is the backstop
+                            // for the times it cannot.
+                            #[cfg(feature = "radio")]
+                            { audio_lane.stop(Some(&session_id)); audio_listening = audio_lane.listening(); }
+                            operation_connection.authority.disconnect_session(&session_id);
+                        },
+                        ServerMessage::AudioListen{session_id,device_id,listening,lease_id}=>{
+                            if !identifier(&session_id)||!identifier(&device_id)||!identifier(&lease_id){return Err("invalidResponse")}
+                            // A build without the audio lane never advertises it, so the
+                            // service never routes one here. If one arrives anyway it is
+                            // ignored rather than treated as a protocol error: dropping a
+                            // working control socket over a message this build simply
+                            // cannot serve would be far worse than a listen control that
+                            // never lights up.
+                            #[cfg(feature = "radio")]
+                            {
+                                let now = Instant::now();
+                                let result = if listening {
+                                    match feeds.audio.as_ref() {
+                                        None => Err("audioUnavailable"),
+                                        Some(feed) => operation_connection.authority
+                                            .audio_admitted(&session_id, &device_id, &lease_id, now)
+                                            .and_then(|()| audio_lane.start(feed, &session_id, &device_id, &lease_id, now)),
+                                    }
+                                } else {
+                                    audio_lane.stop(Some(&session_id));
+                                    Ok(())
+                                };
+                                let data = match result {
+                                    Ok(()) => super::audio::audio_state(&session_id, listening, None),
+                                    Err(reason) => super::audio::audio_state(&session_id, false, Some(super::audio::shared_reason(reason))),
+                                };
+                                audio_listening = audio_lane.listening();
+                                tokio::select! {
+                                    biased;
+                                    _ = stop.changed() => return Ok(()),
+                                    result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
+                                        result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
+                                    }
+                                }
+                            }
+                        },
                         ServerMessage::OperationRequest{session_id,device_id,operation_version,request}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(request.id()){return Err("invalidResponse")}
                             if matches!(request.as_ref(), super::operations::Request::StopTransmit { .. }) {
@@ -497,8 +591,65 @@ pub async fn connected(
                 tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Ping(Vec::new().into())))
                     .await.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
             }
+            // LAST, deliberately. Every branch above shares one writer, so audio has to
+            // be the thing that yields: it sits after the stop signal, every operation
+            // response, the observation publication and the application batch, and it is
+            // guarded on somebody actually listening so an idle station never polls it.
+            //
+            // It also never queues. `writer_ready` asks whether the socket can take a
+            // message without waiting, and a "no" discards the bundle rather than holding
+            // it - the listener hears a 60 ms gap and the control channel is untouched.
+            // The alternative, waiting, would put band noise in front of Stop TX.
+            _ = audio_tick.tick(), if audio_listening => {
+                if *stop.borrow() { return Ok(()); }
+                #[cfg(feature = "radio")]
+                {
+                let now = Instant::now();
+                let session = audio_lane.session().unwrap_or_default().to_owned();
+                let authority = operation_connection.authority.clone();
+                // A lapsed lease or a withdrawn control grant stops the audio. On a slow
+                // cadence, so the authority lock stays out of the 20 ms path.
+                let lost = audio_lane.recheck(now, |s, d, l| authority.audio_admitted(s, d, l, now));
+                let data = if let Some(reason) = lost {
+                    Some(super::audio::audio_state(&session, false, Some(super::audio::shared_reason(reason))))
+                } else {
+                    let writable = writer_ready(&mut socket);
+                    let pump = audio_lane.poll(now, writable);
+                    match pump.ended {
+                        Some(reason) => Some(super::audio::audio_state(&session, false, Some(super::audio::shared_reason(reason)))),
+                        None => pump.message,
+                    }
+                };
+                audio_listening = audio_lane.listening();
+                if let Some(data) = data {
+                    tokio::select! {
+                        biased;
+                        _ = stop.changed() => return Ok(()),
+                        result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
+                            result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
+                        }
+                    }
+                }
+                }
+            }
         }
     }
+}
+
+/// Can the socket take a message right now without waiting?
+///
+/// One poll with a no-op waker, which is exactly right here: nothing needs to be woken,
+/// because the audio tick asks again in 20 ms. A "no" means the write path is backed up
+/// behind a browser that is not reading, and the caller's answer to that is to DROP the
+/// bundle. Awaiting instead would make receive audio able to delay an operation response
+/// on the same writer, which is the one thing this lane must never do.
+#[cfg(feature = "radio")]
+fn writer_ready<S: futures_util::Sink<Message> + Unpin>(sink: &mut S) -> bool {
+    let mut cx = std::task::Context::from_waker(futures_util::task::noop_waker_ref());
+    matches!(
+        std::pin::Pin::new(sink).poll_ready(&mut cx),
+        std::task::Poll::Ready(Ok(()))
+    )
 }
 
 pub async fn supervise(

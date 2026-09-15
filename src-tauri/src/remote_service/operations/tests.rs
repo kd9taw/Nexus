@@ -1,3 +1,5 @@
+#[path = "audio_tests.rs"]
+mod audio;
 #[path = "export_tests.rs"]
 mod export;
 #[cfg(feature = "radio")]

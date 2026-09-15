@@ -332,10 +332,14 @@ fn cloud_runtime_probe() {
         origin.clone(),
         Box::new(vault.clone()),
         engine.clone(),
-        crate::remote_monitor::Publisher::default(),
-        Some(scope_feed.clone()),
-        Default::default(),
-        Some(sources.clone()),
+        transport::Feeds {
+            monitor: crate::remote_monitor::Publisher::default(),
+            spectrum: Some(scope_feed.clone()),
+            meters: Default::default(),
+            sources: Some(sources.clone()),
+            #[cfg(feature = "radio")]
+            audio: None,
+        },
     );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     println!("REMOTE_TEST:{{\"ready\":true}}");
@@ -851,10 +855,14 @@ fn cloud_runtime_probe() {
                     origin.clone(),
                     Box::new(vault.clone()),
                     engine.clone(),
-                    crate::remote_monitor::Publisher::default(),
-                    Some(scope_feed.clone()),
-                    Default::default(),
-                    Some(sources.clone()),
+                    transport::Feeds {
+                        monitor: crate::remote_monitor::Publisher::default(),
+                        spectrum: Some(scope_feed.clone()),
+                        meters: Default::default(),
+                        sources: Some(sources.clone()),
+                        #[cfg(feature = "radio")]
+                        audio: None,
+                    },
                 );
                 std::thread::sleep(Duration::from_millis(100));
                 service.status()
@@ -943,7 +951,7 @@ fn actual_native_socket_refuses_cloud_commands_after_a_valid_publication() {
             });
             let token = transport::random_secret().unwrap();
             let result = transport::connected(&client, "00000000-0000-4000-8000-000000000001", &token,
-                cancellation, &engine, &transport::Feeds { monitor: publisher.clone(), spectrum: None, meters: Default::default(), sources: None }, &status).await;
+                cancellation, &engine, &transport::Feeds { monitor: publisher.clone(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None }, &status).await;
             assert_eq!(result, Err("invalidResponse"));
             server.await.unwrap();
             assert_eq!(serde_json::to_value(engine.lock().unwrap().snapshot().radio).unwrap(), before);

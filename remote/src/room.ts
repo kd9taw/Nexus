@@ -13,13 +13,14 @@ import type { RemoteEnv } from './authority'
 import { ApplicationRelay } from '../../ui/src/remote-web/application-relay'
 import type { ApplicationCheckpoint } from '../../ui/src/remote-web/application-relay'
 import { APPLICATION_MAX_BYTES, APPLICATION_REQUEST_BYTES } from '../../ui/src/remote-web/application-protocol'
+import { AudioRelay } from '../../ui/src/remote-web/audio-relay'
 
 type Saved = { access: StationAccess; order: FrameOrderState }
 type Sample = { requestId: string; at: number }
-type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; applicationVersion?: number; operationVersion?: number }
+type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; applicationVersion?: number; operationVersion?: number; audioVersion?: number }
 type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; application?: ApplicationCheckpoint; operations?: OperationCheckpoint }
 type Attachment = StationAttachment | BrowserAttachment
-type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; applicationVersion?: number; operationVersion?: number }
+type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; applicationVersion?: number; operationVersion?: number; audioVersion?: number }
 
 export class StationRoom extends DurableObject<RemoteEnv> {
   private relay: ObservationRelay | null = null
@@ -29,6 +30,11 @@ export class StationRoom extends DurableObject<RemoteEnv> {
   private alarmAt: number | null = null
   private application = new ApplicationRelay()
   private operations = new OperationRelay()
+  // Receive audio. Runtime only: no checkpoint, no storage, no alarm. A bundle that
+  // does not survive a hibernation is a gap the player conceals, which is the right
+  // answer - keeping one would only deliver stale band noise late.
+  private audio = new AudioRelay()
+  private audioVersions = new Map<WebSocket, number>()
   private operationVersions = new Map<WebSocket,number>()
   private applicationVersions = new Map<WebSocket, number>()
   private applicationPeers = new Map<WebSocket, Peer>()
@@ -50,6 +56,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           const attachment = ws.deserializeAttachment() as Attachment
           if (attachment?.version !== 1) throw new Error('invalidCheckpoint')
           if(attachment.role==='station')this.operationVersions.set(ws,parseOperationVersion(attachment.operationVersion)??0)
+          if (attachment.role === 'station') this.audioVersions.set(ws, attachment.audioVersion === 1 ? 1 : 0)
           if (attachment.role === 'station' && attachment.sample) this.samples.set(ws, attachment.sample)
           const peer = this.peer(ws, attachment.role)
           if (attachment.role === 'station') {
@@ -75,6 +82,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         this.samples.clear(); this.applicationPeers.clear(); this.applicationVersions.clear()
         this.application = new ApplicationRelay()
         this.operations = new OperationRelay();this.operationVersions.clear()
+        this.audio = new AudioRelay(); this.audioVersions.clear()
         this.relay = new ObservationRelay(this.saved.access)
       }
     })
@@ -101,7 +109,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       }, close: (code, reason) => {
         if (!buffer?.pending) ws.close(code, reason)
         this.peers.delete(ws); this.samples.delete(ws)
-        this.applicationVersions.delete(ws); this.applicationPeers.delete(ws);this.operationVersions.delete(ws)
+        this.applicationVersions.delete(ws); this.applicationPeers.delete(ws);this.operationVersions.delete(ws);this.audioVersions.delete(ws)
       } }
       this.peers.set(ws, peer)
     }
@@ -148,6 +156,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       const buffered = { pending: true, messages: [] as string[] }
       const peer = this.peer(server, path === '/station' ? 'station' : 'browser', buffered)
       if(path==='/station')this.operationVersions.set(server,parseOperationVersion(input.operationVersion)??0)
+      if (path === '/station') this.audioVersions.set(server, input.audioVersion === 1 ? 1 : 0)
       if (path === '/station') this.applicationVersions.set(server, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
       try {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
@@ -183,6 +192,16 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     let parsed: Record<string, unknown>
     try { parsed = JSON.parse(message) as Record<string, unknown> }
     catch { ws.close(1008, 'invalidMessage'); await this.disconnected(ws); return }
+    // Audio first, and it returns WITHOUT a checkpoint. Everything else in this method
+    // ends in `checkpoint()`, which serializes an attachment per socket and may write
+    // storage; paying that every 60 ms for a throw-away bundle would turn the audio
+    // lane into the room's dominant cost and would make audio able to delay a control
+    // message through shared work. The lane holds no state worth checkpointing.
+    if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string' && parsed.type.startsWith('audio')) {
+      if (attachment.role === 'station') this.audio.receiveStation(parsed)
+      else this.audio.receiveBrowser(attachment.sessionId, parsed)
+      return
+    }
     if(parsed&&typeof parsed==='object'&&typeof parsed.type==='string'&&parsed.type.startsWith('operation')){
       if(attachment.role==='station')this.operations.receiveStation(parsed)
       else this.operations.receiveBrowser(attachment.sessionId,parsed,Date.now())
@@ -246,7 +265,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     const state = this.relay.checkpoint()
     for (const [ws, peer] of this.peers) {
       let attachment: Attachment | undefined
-      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, applicationVersion: this.applicationVersions.get(ws) ?? 0, operationVersion:this.operationVersions.get(ws)??0 }
+      if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, applicationVersion: this.applicationVersions.get(ws) ?? 0, operationVersion:this.operationVersions.get(ws)??0, audioVersion: this.audioVersions.get(ws) ?? 0 }
       else {
         const observer = state.observers.find(o => o.peer === peer)
         if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, application: this.application.checkpoint(observer.sessionId),operations:this.operations.checkpoint(observer.sessionId) } }
@@ -308,5 +327,6 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     })
     this.application.sync(station, observers, now)
     this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&parseOperationVersion(this.operationVersions.get(stationSocket))!==null,operationVersion:stationSocket?this.operationVersions.get(stationSocket):0}:null,observers,now)
+    this.audio.sync(station ? { peer: station.peer, supported: this.audioVersions.get(stationSocket!) === 1 } : null, observers)
   }
 }

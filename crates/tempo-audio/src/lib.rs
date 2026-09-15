@@ -73,6 +73,7 @@ pub mod proc_util;
 #[cfg(feature = "device")]
 pub mod pskrx;
 pub mod receive_audio;
+pub mod receive_encode;
 pub mod resample;
 pub mod rig;
 pub mod rigctld_proc;

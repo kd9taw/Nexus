@@ -101,7 +101,12 @@ export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'f
   // station never names them and this page never sends their actions to it.
   'aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator',
   // The parity leftovers. Same rule: a station advertises each one only with its action.
-  'workRttySpot', 'sstvGallery'] as const
+  'workRttySpot', 'sstvGallery',
+  // Listening to the station's receive audio. The one hint here that names no ACTION: it
+  // is answered on the audio lane, not by a station control, so it appears in no action
+  // map. It rides this list because it is given under the same station-control grant, and
+  // because a station that does not name it must never be offered the control.
+  'audioListen'] as const
 /** The hints added after operation v3 froze — batch 1 and the parity leftovers after it. An older
  * page does not know these names and drops them as hints. */
 export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator', 'workRttySpot', 'sstvGallery'] as const satisfies readonly ControlCapability[]

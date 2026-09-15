@@ -2,6 +2,10 @@
 //! bounded observation, reviewed application reads and separately approved manual logging.
 mod application;
 mod aprs;
+/// Receive audio for a listening browser. Gated with the radio feature because the
+/// encoder lives in tempo-audio, which a build without it does not have at all.
+#[cfg(feature = "radio")]
+mod audio;
 mod operations;
 pub(crate) mod query;
 pub(crate) mod sstv;
@@ -362,6 +366,9 @@ impl Service {
         spectrum: tempo_app::engine::SpectrumFeed,
         meters: tempo_app::engine::MeterFeed,
         sources: Option<query::Sources>,
+        // `audio`: the station's bounded receive-audio copy, for a listening browser.
+        // `None` leaves the audio lane unadvertised, so nothing is ever offered it.
+        #[cfg(feature = "radio")] audio: Option<Arc<tempo_audio::receive_audio::ReceiveAudioFeed>>,
     ) -> Self {
         tempo_app::engine::engine_lock(&engine)
             .configure_remote_settings_store(crate::settings_path());
@@ -369,10 +376,14 @@ impl Service {
             REMOTE_ORIGIN.to_string(),
             Box::new(SystemVault),
             engine,
-            publisher,
-            Some(spectrum),
-            meters,
-            sources,
+            transport::Feeds {
+                monitor: publisher,
+                spectrum: Some(spectrum),
+                meters,
+                sources,
+                #[cfg(feature = "radio")]
+                audio,
+            },
         )
     }
     #[cfg(test)]
@@ -386,20 +397,24 @@ impl Service {
             origin,
             vault,
             engine,
-            publisher,
-            None,
-            Default::default(),
-            None,
+            transport::Feeds {
+                monitor: publisher,
+                spectrum: None,
+                meters: Default::default(),
+                sources: None,
+                #[cfg(feature = "radio")]
+                audio: None,
+            },
         )
     }
+    /// `feeds` arrives whole rather than as four parameters. They were four until the audio
+    /// lane made it five, and a five-feed argument list is the shape that gets called with two
+    /// of them transposed — they already travel together into the controller.
     fn start(
         origin: String,
         vault: Box<dyn Vault>,
         engine: crate::SharedEngine,
-        publisher: crate::remote_monitor::Publisher,
-        spectrum: Option<tempo_app::engine::SpectrumFeed>,
-        meters: tempo_app::engine::MeterFeed,
-        sources: Option<query::Sources>,
+        feeds: transport::Feeds,
     ) -> Self {
         let vault: Arc<dyn Vault> = Arc::from(vault);
         let status = Arc::new(Mutex::new(Status {
@@ -419,9 +434,10 @@ impl Service {
             .map(|_| writer);
         let control = Arc::new(Mutex::new(Control {
             operations: Arc::new(operations::Authority::with_spots(
-                sources.as_ref().map(|s| s.spots.clone()),
+                feeds.sources.as_ref().map(|s| s.spots.clone()),
             )),
-            memories: sources
+            memories: feeds
+                .sources
                 .as_ref()
                 .map(|s| s.memories.clone())
                 .unwrap_or_default(),
@@ -448,12 +464,7 @@ impl Service {
                             status: task_status,
                             control: task_control,
                             engine,
-                            feeds: transport::Feeds {
-                                monitor: publisher,
-                                spectrum,
-                                meters,
-                                sources,
-                            },
+                            feeds,
                             restore: None,
                         }
                         .run(receiver),

@@ -21564,6 +21564,11 @@ struct BuildDeps {
     pounce_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<pouncer::SpotHint>>>>,
     /// The alerts the pounce detector raised, for the Remote browser's rare-DX alert read.
     pounces: pouncer::SharedRecent,
+    /// The bounded copy of received sound-card audio, for a Remote browser that is
+    /// listening. Absent in a build without the radio feature, which has no capture path
+    /// at all; present but silent until a browser with station control asks for it.
+    #[cfg(feature = "radio")]
+    receive_audio: std::sync::Arc<tempo_audio::receive_audio::ReceiveAudioFeed>,
 }
 
 /// Where Tauri puts the WebView2 user-data folder on Windows — and, when it is corrupt, the
@@ -21987,6 +21992,15 @@ pub fn run() {
     let meter_feed = tempo_app::engine::MeterFeed::default();
 
     // Build the radio config from settings before the engine takes ownership.
+    // The RX tap, built here rather than inline in the radio config so its bounded
+    // receive-audio copy can also reach Remote. Same object either way: the DSP thread
+    // tees into it, and the media feed hanging off it copies nothing at all while nobody
+    // is listening. Holding the feed is not a permission to use it - see receive_audio.rs.
+    #[cfg(feature = "radio")]
+    let rx_tap = std::sync::Arc::new(tempo_audio::rxtap::RxTap::new());
+    #[cfg(feature = "radio")]
+    let receive_audio = rx_tap.receive_audio();
+
     #[cfg(feature = "radio")]
     let mut radio_cfg = tempo_audio::service::RadioConfig {
         on_active_profile_change: None,
@@ -21994,7 +22008,7 @@ pub fn run() {
         // rx-dsp thread drains. The waterfall row is produced on that thread, not on the radio
         // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
         spectrum_feed: spectrum_feed.clone(),
-        rx_tap: std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+        rx_tap: rx_tap.clone(),
         capture_radio_id: Some(settings.active_radio),
         meter_feed: meter_feed.clone(),
         ptt_method: settings.ptt_method.clone(),
@@ -23393,6 +23407,8 @@ pub fn run() {
         // gets the receiver, and a retry whose predecessor already consumed it skips the
         // detector rather than failing the launch over an alerting nicety.
         pounce_rx: Arc::new(Mutex::new(Some(pounce_rx))),
+        #[cfg(feature = "radio")]
+        receive_audio,
         pounces: Default::default(),
     };
 
@@ -23465,6 +23481,10 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                 legacy_sstv_gallery_dir(),
             ]),
         }),
+        // Receive audio for a listening browser. Without this the lane is never
+        // advertised and no browser is ever offered the control.
+        #[cfg(feature = "radio")]
+        Some(d.receive_audio.clone()),
     );
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

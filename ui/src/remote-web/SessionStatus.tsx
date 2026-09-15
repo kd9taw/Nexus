@@ -1,4 +1,5 @@
 import { useId, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Info } from 'lucide-react'
 import { t } from '../i18n'
 import type { OperationClient } from './operation-client'
@@ -8,9 +9,13 @@ import type { AlertToggle, StationAlertControl } from './browser-alerts'
 
 // Presentation belongs to this browser. Expanding help cannot acquire, release
 // or replace station authority, and never remounts the underlying Nexus app.
-export function SessionStatus({ client, stale, disconnect, signOut, display, alerts, rareAlerts, potaAlerts }: {
+export function SessionStatus({ client, stale, disconnect, signOut, display, alerts, rareAlerts, potaAlerts, audio }: {
   client?: OperationClient | null; stale: boolean; disconnect: () => void; signOut?: () => void; display?: PresentationState
   alerts?: AlertToggle; rareAlerts?: StationAlertControl; potaAlerts?: StationAlertControl
+  /** The listen control. In the row itself, not behind the fold: an operator has to be
+   *  able to stop the sound in one movement, and a control they have to expand a panel to
+   *  reach is not that. It renders nothing at all on a station that cannot do audio. */
+  audio?: ReactNode
 }) {
   const [expanded, setExpanded] = useState(false)
   const id = useId()
@@ -23,6 +28,7 @@ export function SessionStatus({ client, stale, disconnect, signOut, display, ale
         <span role="alert" className="remote-session-unavailable">{stale ? t('remote.applicationUnavailable') + ' ' : null}</span>
         <span role="status">{t('monitor.observer')}</span>
       </span>}
+      {audio}
       <button type="button" className="remote-button remote-session-toggle"
         aria-label={t('remote.settingsLegend')} title={t('remote.settingsLegend')}
         aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(value => !value)}>
