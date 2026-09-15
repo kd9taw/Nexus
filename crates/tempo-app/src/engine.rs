@@ -14170,6 +14170,47 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 "This radio doesn't cover {output_mhz:.4} MHz, so it can't work that repeater."
             ));
         }
+        // ⭐ A REPEATER IS WORKED ON ITS **INPUT**, so that is where the licence question is
+        // (operator, 2026-09-14). Nothing here used to ask it at all, and the key-time gate that
+        // follows cannot stand in: it judges the DIAL — the machine's OUTPUT — through
+        // `emission_allowed`'s SSB-passband model, which only approximates an FM channel and in
+        // any case is looking at the wrong frequency. A minus-shift machine near a segment edge
+        // was tuned happily and the first over went out below the edge.
+        //
+        // Judged as PHONE explicitly, not `settings.operating_mode`: FM voice is a phone-class
+        // emission whatever section the operator tuned this machine out of, and the whole point
+        // of this verb is that it arrives from Program, Operate or CW.
+        //
+        // The CARRIER is what is judged, not an FM passband. Naming it: Nexus has no FM emission
+        // width model, and inventing one here would put a second, differently-shaped answer beside
+        // `emission_allowed`. A machine whose input sits within a few kHz of a segment edge is
+        // therefore not caught by this — the bench step says so.
+        let input_mhz = match shift {
+            "plus" | "minus" => {
+                let magnitude = if offset_hz > 0 {
+                    offset_hz
+                } else {
+                    crate::settings::rptr_offset_for_dial(output_mhz)
+                } as f64
+                    / 1e6;
+                if shift == "plus" {
+                    output_mhz + magnitude
+                } else {
+                    output_mhz - magnitude
+                }
+            }
+            _ => output_mhz, // simplex: the input IS the output
+        };
+        if !crate::privileges::tx_allowed(
+            self.settings.license_class,
+            input_mhz,
+            crate::settings::OperatingMode::Phone,
+        ) {
+            return Err(format!(
+                "That machine's input is {input_mhz:.4} MHz, which is outside your licence \
+                 privileges — you'd be transmitting there, not on {output_mhz:.4}."
+            ));
+        }
         // The FM plumbing lands BEFORE the QSY so the radio loop's first retune after it already
         // carries this machine's shift and tone (fm_repeater_config reads these three fields).
         self.settings.phone_mode = "fm".to_string();
@@ -35497,6 +35538,47 @@ mod tests {
         assert_eq!(
             e.settings.active_radio, 1,
             "the next 2 m digital QSY still routed on Digital"
+        );
+    }
+
+    /// ⭐ A REPEATER IS WORKED ON ITS **INPUT** (operator, 2026-09-14). `repeater_tune` parked
+    /// the rig on the machine's output and checked nothing about where keying it would land,
+    /// and the key-time gate that follows judges the DIAL — the output — through an SSB
+    /// passband model that only approximates FM. So a machine whose input sits in a segment the
+    /// operator may not key was tuned, and the first over went out there.
+    ///
+    /// The scene is a real one: 6 m repeaters run a 1 MHz shift, and 50.000–50.100 is CW-only
+    /// for every US class. A 51.000 output with a minus shift keys 50.000.
+    #[test]
+    fn repeater_tune_checks_privileges_at_the_input_frequency() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("technician");
+
+        // Control first: the same machine with a PLUS shift keys 52.000, which is fine — so
+        // this is not "6 m repeaters are refused", it is the input being judged.
+        assert!(
+            e.repeater_tune(51.000, "plus", 1_000_000, 0.0).is_ok(),
+            "control: a 52.000 input is inside a Technician's 6 m phone privileges"
+        );
+        let (dial, band) = (e.settings.dial_mhz, e.settings.band.clone());
+
+        let err = e
+            .repeater_tune(51.000, "minus", 1_000_000, 0.0)
+            .expect_err("a 50.000 input is CW-only — tuning this machine must be refused");
+        assert!(
+            err.contains("50.0"),
+            "the refusal has to NAME the input frequency, or it is unactionable: {err}"
+        );
+        assert!(
+            (e.settings.dial_mhz - dial).abs() < 1e-9 && e.settings.band == band,
+            "a refused repeater tune must leave the radio exactly where it was"
+        );
+
+        // And the BAND-CONVENTION offset (0 = "use the convention") is derived from the
+        // machine's own output, not from wherever the rig happens to be parked: 6 m is 1 MHz.
+        assert!(
+            e.repeater_tune(51.000, "minus", 0, 0.0).is_err(),
+            "offset 0 means the 6 m convention (1 MHz) — the same illegal 50.000 input"
         );
     }
 

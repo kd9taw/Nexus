@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whether a given radio adds XIT on top of its split VFO differs by radio. Nexus can only see an
   offset **it** set: one dialled on the radio's own clarifier knob is invisible to the check.
 
+- **Tuning an FM repeater checks your privileges at the machine's input.** A repeater is worked on
+  its input, and nothing was asking whether you may key there — the licence check that follows
+  looks at the dial, which is the machine's *output*. A machine whose input falls outside your
+  privileges is now refused, and the message names the input frequency. The check is on the input
+  carrier: a machine whose input sits within a few kHz of a segment edge is still your call.
+
 ### Security
 
 - **Encrypted connections refuse a malformed setup from the server.** Nexus's secure-connection
