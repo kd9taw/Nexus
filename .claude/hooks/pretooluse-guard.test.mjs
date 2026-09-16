@@ -157,7 +157,26 @@ blocks('npm run test:native | grep', 'npm run test:native | grep FAIL');
 blocks('scripts/gates | head', './scripts/gates | head -40');
 blocks('node --test | tail', 'node --test scripts/gates.test.mjs | tail -5');
 
+// `tee` — the entry the enumerated list was short, found in the wild on 2026-09-15 when a
+// cross-compile piped into it exited 77 and was reported as 0.
+blocks('the 1.10.3 shape in its 2026-09-15 form: a build into tee',
+  'cargo build --release --target x86_64-pc-windows-gnu | tee build.log');
+blocks('scripts/gates | tee', './scripts/gates | tee gates.log');
+blocks('npm run test:native | tee', 'npm run test:native | tee out.log');
+// The class, not the list: a tail that was never enumerated must be refused too. If this
+// passes while the tee cases block, the rule is still a list and still one entry short.
+blocks('a gate into a tail no list would have held', 'cargo test --workspace | md5sum');
+blocks('a gate into a tail no list would have held (2)', 'cargo clippy --all-targets | xxd');
+blocks('a gate into tee then grep', 'cargo test --workspace | tee run.log | grep FAIL');
+
+// The taught fix must actually be accepted, or the message sends people into a refusal.
+allows('set -o pipefail keeps the build AND the tee', 'set -o pipefail; cargo build --release | tee build.log');
+allows('set -euo pipefail is the same promise', 'set -euo pipefail; cargo test --workspace | tee run.log');
+allows('reading PIPESTATUS keeps the status', 'cargo test --workspace | tee run.log; echo "exit=${PIPESTATUS[0]}"');
+
 allows('grep on a log file is not a gate', 'grep -n "FAIL" guardhooks.log');
+allows('grep on a log file, piped onward to tee', 'grep -n "FAIL" build.log | tee found.txt');
+allows('cat into tee is not a gate', 'cat run.log | tee copy.log');
 allows('cat into grep is not a gate', 'cat guardhooks.log | grep FAIL');
 allows('cargo metadata is a query, not a gate', 'cargo metadata --format-version 1 | jq ".packages | length"');
 allows('git log into head is not a gate', 'git log --oneline | head -5');

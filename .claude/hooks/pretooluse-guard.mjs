@@ -49,13 +49,20 @@
 //     because that command line is not ambiguous about which tree it means.
 //                                              Override: NEXUS_ALLOW_GIT_CWD=1
 //
-//  4. A PIPED GATE — a test/lint/build piped into grep/tail/head/wc/...      BLOCK.
-//     Without `set -o pipefail`, a pipeline's status is the RIGHT-hand side's, so the
-//     gate's own exit code is discarded and a red run reads green. This one is not
-//     hypothetical: it SHIPPED a faked-green gate in release 1.10.3, and the rule had
-//     been written down four separate times before that happened. Block, because the
-//     whole failure mode is that the result LOOKS fine — there is no later moment at
-//     which anyone catches it.
+//  4. A PIPED GATE — a test/lint/build on the left of ANY pipe, with no          BLOCK.
+//     `pipefail` and no `PIPESTATUS` anywhere in the command.
+//     In `a | b` the shell reports b's status, so the gate's own exit code is discarded
+//     and a red run reads green. Not hypothetical twice over: it SHIPPED a faked-green
+//     gate in release 1.10.3 after the rule had been written down four separate times,
+//     and on 2026-09-15 — an hour after this hook went live — a Windows cross-compile
+//     ending in `| tee` exited 77 and was reported as 0.
+//     This rule does NOT enumerate tail commands. It used to, and that list was one entry
+//     short: `tee`. It always would be. The narrow half was never the tail — it is that
+//     the LEFT side must be a named gate, which is why `cat x.log | grep FAIL` and
+//     `cargo metadata | jq` stay allowed. Block, because the whole failure mode is that
+//     the result LOOKS fine; there is no later moment at which anyone catches it.
+//     The message teaches the fix rather than the prohibition: keep your pipe, add
+//     `set -o pipefail` — "use pipefail", never "don't tee".
 //                                              Override: NEXUS_ALLOW_PIPED_GATE=1
 //
 //  5. `scripts/gates --allow-partial`.                                        BLOCK.
@@ -121,7 +128,10 @@
 //     never be read as `--all`; exact token matching, not prefix matching.
 //   - `grep` on a log file, `cargo metadata | jq`, `git log | head` are not piped gates —
 //     rule 4 needs a GATE on the left of the pipe, by name, not any command at all.
-//   - A pipeline preceded by `set -o pipefail` keeps the gate's status and passes.
+//   - A pipeline that says `pipefail` or reads `${PIPESTATUS[0]}` keeps the gate's status
+//     and passes — including `set -o pipefail; cargo build ... | tee build.log`, which is
+//     the shape agents legitimately use to watch a long build. The fix taught is "add
+//     pipefail", never "stop using tee".
 //   - Heredoc bodies are skipped entirely, so writing documentation that CONTAINS
 //     `git add -A` does not trip rule 2. (This file is that document.)
 //
@@ -140,10 +150,19 @@
 //     server, a script the agent writes and then runs, `bash -c "$(...)"` — is invisible
 //     here. Rule 4's real siblings are the same: a gate run from inside a shell script is
 //     not seen. This guard covers the shape agents actually type, not every shape.
-//   - `cargo test | tee run.log` also discards the gate's status, and is NOT blocked. tee
-//     is left out of the discard list because it keeps the full output for review and
-//     blocking it would hit a common honest pattern. Redirect instead: `cargo test
-//     > run.log 2>&1` keeps the exit code.
+//   - REVERSED 2026-09-15, and the reversal is the lesson. This slot used to read "`cargo
+//     test | tee run.log` also discards the gate's status, and is NOT blocked — blocking
+//     it would hit a common honest pattern." That reasoning was wrong in the one way that
+//     matters: the pattern is honest, but the status loss is real, and an hour after this
+//     hook went live a cross-compile piped into `tee` exited 77 and was reported as 0. The
+//     honest pattern deserved a correct form, not an exemption — `set -o pipefail` gives
+//     it one. Generalising to "any pipe after a gate" closed the class the list could not.
+//   - The residual false positive is now the opposite shape: a gate-named command used as
+//     a QUERY on the left of a pipe — `cargo build --message-format=json | jq`, or
+//     `cargo test -- --list | wc -l`. Both are refused and neither loses anything real,
+//     since `set -o pipefail` is the right answer there too (if the cargo invocation
+//     fails, jq's exit code is not the one you want). Judged acceptable: a handful of
+//     query shapes paying one prefix, against a class of silent false greens.
 //   - Rule 3 accepts `cd /abs && git commit`. That is genuinely unambiguous for that one
 //     command line; it does not stop the NEXT call inheriting a cwd nobody meant.
 //   - The shared-checkout test costs one `git rev-parse` per matching command. It runs
@@ -405,7 +424,22 @@ function isSharedCheckout(dir) {
 const CARGO_GATES = new Set(['test', 'clippy', 'build', 'check', 'fmt', 'bench', 'nextest', 'miri', 'tarpaulin', 'deny', 'audit']);
 const BARE_GATES = new Set(['tsc', 'vitest', 'jest', 'eslint', 'pytest', 'mypy', 'ruff', 'cargo-nextest']);
 const SCRIPT_RE = /(test|lint|build|check|typecheck|fmt|format|gate|ci|clippy|audit)/i;
-const DISCARDS = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'tail', 'head', 'less', 'more', 'wc', 'sort', 'uniq', 'awk', 'sed', 'cut', 'jq', 'column', 'tr', 'tac', 'nl']);
+// The command did something to keep the left-hand status. `pipefail` makes the pipeline
+// report the rightmost non-zero; PIPESTATUS reads the gate's code directly. Either means
+// the author thought about it, which is the whole ask.
+//
+// THIS REPLACED A LIST OF TAIL COMMANDS, and the replacement is the point. The old check
+// enumerated grep/tail/head/wc/jq/... and asked whether the right-hand side was one of
+// them. That list was one entry short, as such a list always is: on 2026-09-15 a Windows
+// cross-compile ending in `| tee` exited 77 and was reported as 0, an hour after this hook
+// went live. `tee` is the worst possible omission, too — people reach for grep and tail to
+// REDUCE output, but for `tee` precisely when they want to KEEP it, so it appears in the
+// careful, long-running commands whose exit code matters most.
+//
+// The narrow half of this rule was never the tail; it is that the LEFT side must be a
+// named gate. `cat x.log | grep FAIL` and `cargo metadata | jq` stay allowed because
+// neither left-hand side is a gate — not because of anything the right-hand side is.
+const STATUS_PRESERVED = /\bpipefail\b|\bPIPESTATUS\b/;
 
 function isGateCommand(argv) {
   if (!argv.length) return null;
@@ -692,19 +726,19 @@ function decide(command, cwd) {
   for (const pipe of pipelines(tokens)) {
     const stageInfo = pipe.stages.map(argvOf);
 
-    // Rule 4: a gate on the left of a pipe, a status-discarding filter on the right.
-    if (stageInfo.length > 1 && !/\bset\s+-[A-Za-z]*o?\s*pipefail|\bset\s+-o\s+pipefail/.test(command)) {
+    // Rule 4: a gate on the LEFT of a pipe, with nothing in the command preserving its
+    // status. Deliberately NOT an enumeration of tail commands — see the note on
+    // STATUS_PRESERVED below for why that list had to go.
+    if (stageInfo.length > 1 && !STATUS_PRESERVED.test(command)) {
       const gate = isGateCommand(stageInfo[0].argv);
       if (gate) {
-        const sink = stageInfo.slice(1).map((s) => path.basename(s.argv[0] || '')).find((b) => DISCARDS.has(b));
-        if (sink) {
-          findings.push({
-            rule: 4, level: 'block', override: 'NEXUS_ALLOW_PIPED_GATE',
-            what: `${gate} piped into ${sink}`,
-            why: 'without `set -o pipefail` a pipeline reports the RIGHT-hand command\'s status, so the gate\'s own exit code is thrown away and a red run reads green — this exact shape shipped a faked-green gate in release 1.10.3',
-            instead: `${gate} > <unique-name>.log 2>&1 ; echo "exit=$?"   then read the file (or prefix the pipeline with set -o pipefail)`,
-          });
-        }
+        const tail = stageInfo.slice(1).map((s) => path.basename(s.argv[0] || '?')).join(' | ');
+        findings.push({
+          rule: 4, level: 'block', override: 'NEXUS_ALLOW_PIPED_GATE',
+          what: `${gate} piped into ${tail}`,
+          why: `in \`a | b\` the shell reports b's status, so the gate's own exit code is discarded and a red run reads green — \`tee\` returns 0 even when the build it is logging exits 77, which reported a failed cross-compile as success on 2026-09-15; the same shape shipped a faked-green gate in 1.10.3`,
+          instead: `keep the pipe and preserve the status: set -o pipefail; ${gate} ... | ${tail}   — or read \${PIPESTATUS[0]} after it, or redirect instead: ${gate} ... > <unique-name>.log 2>&1 ; echo "exit=$?"`,
+        });
       }
     }
 
