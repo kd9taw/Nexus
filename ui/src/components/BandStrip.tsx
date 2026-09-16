@@ -240,14 +240,20 @@ export function BandStrip({
           const beacon = s.beacon ? BEACON_BADGE[s.beacon] : null
           // Colour the tick by need tier (why it's worth working) — parity with the band map.
           const need = beacon ? undefined : needByCall?.get(cu)
-          const needCls = need ? ` is-need need-${NEED_CHIP[need].cls}` : ''
+          // `?.` is not defensive noise: Remote's station and browser are versioned apart
+          // and need rows cross the wire uncast, so a station newer than this bundle sends
+          // a tag NEED_CHIP has no key for. Unknown must cost the tick its colour, never
+          // take the render down — an unguarded index here crashed staging (2026-09-14),
+          // and a TypeError in render unmounts the whole cockpit subtree.
+          const chip = need ? NEED_CHIP[need] : undefined
+          const needCls = chip ? ` is-need need-${chip.cls}` : ''
           // Flag the activity type (POTA/SOTA/DXped) independent of the colour.
           const type = typeByCall?.get(cu)
           const badge = type ? TYPE_BADGE[type] : null
           const detail = [
             s.call,
             beacon?.word,
-            need && NEED_CHIP[need].label,
+            chip?.label,
             badge?.word,
             // State/province, when the FCC index or a heard grid resolved one — the same
             // value the roster's State pill shows (operator ask, 2026-08-16).
