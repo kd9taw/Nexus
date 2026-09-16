@@ -389,6 +389,12 @@ mod unix_tests { fn u() { let _ = Command::new("sleep"); } }
     /// operator's GUI process, and if it can, is it a console program on Windows? If both,
     /// it is a flash and it needs a mitigation, not an entry.
     const REVIEWED_DEPENDENCY_SPAWNS: &[&str] = &[
+        // `rfd` — the native file/folder dialog behind the data-folder Browse button (#289).
+        // Spawns `zenity` in its LINUX backend only; the Windows backend calls the Win32 dialog
+        // API directly and spawns nothing at all (checked: 0 `Command::new` under
+        // `src/backend/windows/`). A `zenity` child on Linux cannot open a Windows console, so
+        // this cannot be the flash. Admitted.
+        "rfd src/backend/linux/zenity.rs",
         // ⚠️ THE ONE THAT REACHES AN OPERATOR: `wmic cpu get L2CacheSize,L3CacheSize` with no
         // CREATE_NO_WINDOW, to size matmul cache blocking. Still there in 0.23.7, the latest
         // published version. It runs on the AI CW decode thread — `tract` enters this tree
