@@ -67,7 +67,7 @@ export class ApplicationQueryRelay {
       const b = [...this.browsers.values()].find(b => b.pending?.forwardId === message.requestId)
       if (!b?.pending || b.pending.delivered) return // revoked or timed out
       const pending = b.pending
-      if (now - pending.at >= APPLICATION_TIMEOUT_MS) { this.close(b, 'applicationTimeout'); return }
+      if (now - pending.at >= APPLICATION_TIMEOUT_MS) { this.timeout(b); return }
       if (message.type === 'applicationQueryError') {
         if (Object.keys(message).length !== 3 || !QUERY_ERRORS.includes(message.error as never)) throw new Error('invalidApplicationPage')
       } else {
@@ -79,7 +79,17 @@ export class ApplicationQueryRelay {
     } catch { try { this.station.close(1008, 'invalidApplicationPage') } catch { /* gone */ } }
   }
   expire(now: number): void {
-    for (const b of this.browsers.values()) if (b.pending && now - b.pending.at >= APPLICATION_TIMEOUT_MS) this.close(b, 'applicationTimeout')
+    for (const b of this.browsers.values()) if (b.pending && now - b.pending.at >= APPLICATION_TIMEOUT_MS) this.timeout(b)
+  }
+  /** A collection read the station did not answer in time fails THAT read and frees the slot. It
+   * must not close the observer: these are background board reads, and whether the station is still
+   * there is the instrument stream's question, which keeps its own deadline in the stream relay.
+   * Closing here disabled every station control over a slow log page. */
+  private timeout(b: Browser): void {
+    const pending = b.pending!
+    b.pending = null
+    try { b.peer.send(JSON.stringify({ type: 'applicationQueryError', requestId: pending.id, error: 'applicationUnavailable' })) }
+    catch { this.close(b, 'applicationUnavailable') }
   }
   nextDeadline(): number | null {
     const times = [...this.browsers.values()].flatMap(b => b.pending ? [b.pending.at + APPLICATION_TIMEOUT_MS] : [])

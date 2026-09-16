@@ -26,8 +26,9 @@ const TOPICS: StreamTopic[] = ['get_snapshot', 'get_settings', 'get_band_plan', 
  * that spends its credit on the topics whose interval has elapsed, and ONE query at a time
  * (`query_task.is_some()` answers `applicationBusy` without reading the board). `starveAfterMs`
  * is the positive control: past it the station stops publishing `get_snapshot` and nothing else. */
-function harness({ queryMs, starveAfterMs = Infinity }: { queryMs: number; starveAfterMs?: number }) {
+function harness({ queryMs: initialQueryMs, starveAfterMs = Infinity }: { queryMs: number; starveAfterMs?: number }) {
   const relay = new ApplicationRelay()
+  let queryMs = initialQueryMs
   let watch: { id: string; topics: StreamTopic[] } | null = null
   let credit: string | null = null
   let revision = 0
@@ -85,15 +86,15 @@ function harness({ queryMs, starveAfterMs = Infinity }: { queryMs: number; starv
 
   relay.sync({ peer: station, version: 17 }, [{ sessionId: 'one', peer: browser }], performance.now())
   client.open()
-  return { client, stop: () => clearInterval(tick), closed: () => closed }
+  return { client, relay, stop: () => clearInterval(tick), closed: () => closed, setQueryMs: (ms: number) => { queryMs = ms } }
 }
 
 const query = (client: ApplicationClient, command: string, collection: string): Promise<unknown> =>
   client.invoke(command, { collection, cursor: null, search: '', unconfirmed: false, after: null }).catch(() => {})
 
 /** BrowserApplication's own readers, at its own cadences, for five simulated minutes. */
-async function run(options: { queryMs: number; starveAfterMs?: number }) {
-  const { client, stop, closed } = harness(options)
+async function run(options: { queryMs: number; starveAfterMs?: number; minutes?: number }) {
+  const { client, relay, stop, closed } = harness(options)
   await vi.advanceTimersByTimeAsync(10)
   expect(client.getPhase()).toBe('ready')
   let worst = 0
@@ -106,11 +107,14 @@ async function run(options: { queryMs: number; starveAfterMs?: number }) {
     setInterval(() => { void query(client, POUNCE_COMMAND, 'pounce') }, 15_000),      // useRareDxAlerts
     setInterval(() => { void query(client, OTA_COMMAND, 'ota') }, 120_000),           // usePotaAlerts
     setInterval(() => { worst = Math.max(worst, client.age('get_snapshot')) }, 500),  // BrowserApplication's own tick
+    // The room's alarm (remote/src/room.ts:324) drives the relay's own expiry. Polling it is at
+    // least as prompt as scheduling on nextDeadline(), so the relay's timeout is not modelled away.
+    setInterval(() => relay.expire(performance.now()), 100),
   ]
-  await vi.advanceTimersByTimeAsync(300_000)
+  await vi.advanceTimersByTimeAsync((options.minutes ?? 5) * 60_000)
   for (const timer of timers) clearInterval(timer)
   stop()
-  return { worst, closed: closed() }
+  return { worst, closed: closed(), phase: client.getPhase() }
 }
 
 it('alert polls never age get_snapshot into `stale`, and the control proves that is measured', async () => {
@@ -128,13 +132,44 @@ it('alert polls never age get_snapshot into `stale`, and the control proves that
   expect(starved.worst).toBeGreaterThanOrEqual(APPLICATION_TIMEOUT_MS)
 })
 
-it('a station read slower than the timeout takes the whole application client down with it', async () => {
+// A board read that outruns APPLICATION_TIMEOUT_MS used to end the whole session: the query lane's
+// deadline was `fail`, which ApplicationClient wires to `disconnected()` + close, and the relay's
+// own query expiry closed the browser socket with 1008. Either one leaves `supports()` false and
+// phase off 'ready', which disables every station control and drops the audio lease - for a station
+// that is answering the instrument stream perfectly well. 1.13.0 tripled the reads exposed to it.
+it('a slow board read fails that read and leaves the session operating', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
-  // The query lane's deadline is `fail`, and ApplicationClient wires that to `disconnected()` +
-  // close (application-client.ts:39). So ONE board read that outruns APPLICATION_TIMEOUT_MS ends
-  // the session - phase leaves 'ready', which is the other half of `stale`. The alert polls do not
-  // contend for the snapshot lane, but they do share this fate, and 1.13.0 tripled the reads
-  // exposed to it.
   const slow = await run({ queryMs: APPLICATION_TIMEOUT_MS + 100 })
-  expect(slow.closed).toBe(true)
+  expect(slow.closed).toBe(false)
+  expect(slow.phase).toBe('ready')
+  // The snapshot kept arriving throughout, so no control was ever disabled.
+  expect(slow.worst).toBeLessThan(STREAM_INTERVAL.get_snapshot + 200)
+})
+
+it('the slow read itself fails, and the lane keeps serving after it', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
+  // POSITIVE CONTROL for the test above: surviving is only the right answer if the read in fact
+  // failed and the lane in fact recovered. A session that quietly stopped reading would pass the
+  // assertions above and fail these.
+  const { client, relay, stop, closed, setQueryMs } = harness({ queryMs: APPLICATION_TIMEOUT_MS + 100 })
+  const alarm = setInterval(() => relay.expire(performance.now()), 100)
+  const feed = setInterval(() => { for (const topic of TOPICS) void client.invoke(topic).catch(() => {}) }, 500)
+  await vi.advanceTimersByTimeAsync(1000)
+
+  let refused: unknown = 'never settled'
+  void client.invoke(POUNCE_COMMAND, { collection: 'pounce', cursor: null, search: '', unconfirmed: false, after: null })
+    .then(() => { refused = 'resolved' }, (error: Error) => { refused = error.message })
+  await vi.advanceTimersByTimeAsync(APPLICATION_TIMEOUT_MS + 2000)
+  expect(refused).toBe('applicationUnavailable')
+  expect(closed()).toBe(false)
+
+  // ...and the next read on the same lane still gets an answer.
+  setQueryMs(100)
+  let next: unknown = 'never settled'
+  void client.invoke(OTA_COMMAND, { collection: 'ota', cursor: null, search: '', unconfirmed: false, after: null })
+    .then(() => { next = 'resolved' }, (error: Error) => { next = error.message })
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(next).toBe('resolved')
+  expect(client.getPhase()).toBe('ready')
+  clearInterval(feed); clearInterval(alarm); stop()
 })
