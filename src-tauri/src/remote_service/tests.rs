@@ -385,7 +385,7 @@ fn cloud_runtime_probe() {
                         "station must decode the actual peer waveform"
                     );
                 } else {
-                    let tx_slot = if (slot % 2 == 0) == e.tx_even() {
+                    let tx_slot = if slot.is_multiple_of(2) == e.tx_even() {
                         slot
                     } else {
                         slot + 1

@@ -63,15 +63,17 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
     fn engine(event: &str) -> crate::SharedEngine {
-        let mut s = tempo_app::settings::Settings::default();
-        s.fd_active = true;
-        s.fd_event = event.into();
-        s.fd_class = "1D".into();
-        s.fd_section = "EMA".into();
-        s.fd_operator = "W1AW".into();
-        s.fd_power_mult = 2;
-        s.fd_bonuses = vec!["emergency-power".into()];
-        s.fd_bonuses_planned = vec!["natural-power".into()];
+        let s = tempo_app::settings::Settings {
+            fd_active: true,
+            fd_event: event.into(),
+            fd_class: "1D".into(),
+            fd_section: "EMA".into(),
+            fd_operator: "W1AW".into(),
+            fd_power_mult: 2,
+            fd_bonuses: vec!["emergency-power".into()],
+            fd_bonuses_planned: vec!["natural-power".into()],
+            ..Default::default()
+        };
         let mut e = tempo_app::engine::Engine::with_settings(s);
         e.restore_field_day_if_enabled();
         assert!(e.fd_log_manual("K1ABC", "2A", "WI", "CW").unwrap());
