@@ -184,8 +184,10 @@ export function analyse(sheet: string, selectClasses: Set<string>): Violation[] 
   for (const rule of rules) {
     if (rule === base) continue
     if (!matchesSelect(rule.selector, selectClasses)) continue
-    // The Logbook's 22×22 icon menu deliberately re-centres the arrow with its own
-    // important; it is the sanctioned exception and is asserted separately below.
+    // The Logbook's per-row QSL menu is the ONE sanctioned exception: its closed label is
+    // the token `QSL▸`, which carries its own arrowhead, so it draws none of its own. What
+    // it is allowed to override is pinned by its own test below — skipping it here without
+    // that would let the next edit switch off more of the base chrome unseen.
     if (rule.selector.trim() === 'select.log-rowbtn') continue
 
     const spec = specificity(rule.selector.split(',')[0])
@@ -251,6 +253,22 @@ describe('the closed <select> box is owned by one rule', () => {
     const found = analyse(broken, SELECT_CLASSES)
     expect(found.length, 'the broken sheet must be reported').toBeGreaterThan(0)
     expect(found.some((v) => v.prop === 'background-image')).toBe(true)
+  })
+
+  it('pins what the one exempt select is allowed to override', () => {
+    // `analyse` skips `select.log-rowbtn` wholesale, so without this the exception is an
+    // unbounded hole: any arrow property could be switched off there and no guard would see
+    // it. The exception is exactly two declarations — drop the arrow (the `QSL▸` label is its
+    // own), and drop the gutter that arrow needed. Anything else is a new decision.
+    const rule = parseRules(strip(STYLES)).find((r) => r.selector.trim() === 'select.log-rowbtn')
+    expect(rule, 'the sanctioned exception must exist, or this check is vacuous').toBeTruthy()
+    const overrides = declarations(rule!.body)
+      .filter((d) => OWNED.includes(d.prop) || (d.prop in RESET_BY && RESET_BY[d.prop].some((p) => OWNED.includes(p))))
+    expect(overrides.map((d) => d.prop).sort()).toEqual(['background-image', 'padding-right'])
+    // Both must be important or they lose to the base rule's important and the exception is
+    // decorative — the box would draw an arrowhead over "QSL▸" again.
+    expect(overrides.every((d) => d.important)).toBe(true)
+    expect(strip(STYLES)).toMatch(/select\.log-rowbtn\s*\{[^}]*background-image:\s*none\s*!important/)
   })
 
   it('keeps the subsumed settings rule from coming back', () => {

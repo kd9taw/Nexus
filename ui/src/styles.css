@@ -4559,12 +4559,25 @@ select {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-/* The Logbook's per-row QSL menu is a 22×22 icon button, not a field: the arrow IS its whole
-   content, so it centres instead of sitting after text there is no room for. Higher
-   specificity + important is what it takes to beat the important above. */
+/* The Logbook's per-row QSL menu. THE SANCTIONED EXCEPTION to the arrow above, and the one
+   place in the sheet where a select draws none: its closed label is the token `QSL▸`, which
+   ends in an arrowhead of its own. The base rule's purpose — a select must not read as a text
+   input — is met by the label itself, and drawing the engine arrow as well printed a second
+   arrowhead ON TOP of the text (the box is 22px tall and was 22px wide; `background-position:
+   center` put the 5px arrow exactly where "QSL▸" already was). That overlap is part of what
+   was reported on 2026-09-16, so the arrow goes and the gutter it needed goes with it.
+
+   ⚠️ AND THE WIDTH IS PINNED, DELIBERATELY. A <select> is as wide as its WIDEST OPTION, not
+   its closed label, and these options are translated prose — "Card NOT received", "Karte
+   NICHT erhalten". Left to size itself the control measures 98px in English and 110px in
+   German (harness, 2026-09-16), so the row's action cluster — and the grid floor that has to
+   hold it — would become a property of the catalog, changing width when an operator changes
+   language. The closed label needs 34px here (harness `qslLabelW`), so 44 carries about 29%
+   for a wider face; the label is an invariant token, so it cannot grow behind this number. */
 select.log-rowbtn {
-  background-position: center !important;
+  background-image: none !important;
   padding-right: 0 !important;
+  width: 44px;
 }
 /* Native <select> POPUPS render on the OS's (usually light) background, so the app's dim
    text is nearly unreadable there. Force a dark popup + readable text for EVERY dropdown
@@ -12629,11 +12642,26 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   margin-top: var(--space-3);
 }
 .logbook-row {
-  /* Last track (row actions) gets a fixed floor, not a bare 0.8fr: at ~1366px / >=110% zoom the
-     fractional share shrinks below the button cluster and .log-cell{overflow:hidden} + justify-end
-     clip the leading QRZ/ClubLog push buttons off the LEFT, unclickable. A deterministic px floor
-     (not max-content) keeps the empty header cell aligned with the button-filled data cells. */
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 1.4fr minmax(160px, 0.8fr);
+  /* Last track (row actions) gets a fixed floor, not a bare 0.8fr: the fractional share
+     shrinks below the button cluster and .log-cell{overflow:hidden} + justify-end clip the
+     leading QRZ/ClubLog push buttons off the LEFT, unclickable. A deterministic px floor (not
+     max-content) keeps the empty header cell aligned with the button-filled data cells.
+
+     336px, and the number is MEASURED, not reasoned. The 160px floor was written 2026-07-15
+     (8da8036c) against the cluster of the day: SIX controls, each a 22px square — ↥ CL HL,
+     the QSL menu, ✎ ✕ — which is 6×22 + 5×4 = 152px, and 160 fitted it with 8px to spare.
+     Since then three controls joined (📢, QRZ✎, WRL), ↥ became the word QRZ, and the floor
+     never moved. Nine content-sized controls is a different number entirely. 0.8fr only
+     exceeds 160px above roughly 2400px of window, so the floor was what nearly every
+     operator got: at 1366–1920 the harness measures 70px of the cluster sheared off the left
+     — 📢, QRZ and part of QRZ✎, gone and unclickable — with every surviving label also
+     overrunning its own 22px box (operator report, 2026-09-16: that is what "cramped"
+     describes). ui/layout-harness's measure-logbook-actions.sh lays the real cluster out in
+     real Chrome: the nine content-sized controls need 324.6px at --space-scale 1, on the
+     widest of the five sans faces installed on that box; the spread across those faces is
+     11.1px. 336 = that requirement plus one spread, so a wider face on Windows still fits.
+     styles-logbook-actions.test.tsx fails if the cluster outgrows it again. */
+  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 1.4fr minmax(336px, 0.8fr);
 }
 .log-note {
   /* Flex so the comment toggle (#162) can ellipsize beside the 📝 flag: a <button> is an atomic
@@ -12696,8 +12724,24 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--bg);
   color: var(--text-dim);
   border-radius: 4px;
-  width: 22px;
+  /* A 22px SQUARE is right for a glyph, and the square was written when most of these were
+     one (↥ ✎ ✕). They are TEXT now — QRZ, QRZ✎, CL, HL, WRL, QSL▸ — and a fixed 22px box
+     cannot hold three characters, so the labels overran their borders and printed across each
+     other (reported 2026-09-16). Size to the content and keep 22px as the FLOOR, so a
+     one-glyph button is still the square it was and a worded one is as wide as its word.
+     `flex: 0 0 auto` because a content-sized flex item's default `0 1 auto` would let a tight
+     column squeeze the labels back into overlap. (It never did while they were pinned to
+     22px — the harness measures every control at exactly 22px on the old sheet — so this
+     forecloses a failure mode content sizing would have opened, rather than fixing an
+     observed one.) It also makes the floor in `.logbook-row` LOAD-BEARING: nothing gives any
+     more, so a floor too small shears the leading buttons off the left instead of squeezing
+     them. Measured with ui/layout-harness/measure-logbook-actions.sh; guarded by
+     styles-logbook-actions.test.tsx. */
+  min-width: 22px;
   height: 22px;
+  flex: 0 0 auto;
+  padding: 0 var(--space-1);
+  white-space: nowrap;
   line-height: 1;
   font-size: 0.8rem;
   opacity: 0;
@@ -12757,11 +12801,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 
 /* Narrow (EFFECTIVE width — the old raw @media hid six columns at the 900-px
    Tauri minimum where all eleven fit, and never fired under pinned zoom where
-   they don't): keep Call, Country, Band, QSL, actions; hide
-   Freq/Mode/Sent/Rcvd/Time/Park. */
+   they don't): keep Call, Country, Band, QSL, Notes, actions; hide
+   Freq/Mode/Sent/Rcvd/Time/Park.
+
+   SIX TRACKS, AND THE COUNT IS THE POINT. This was five, written 2026-06-07 when five cells
+   survived the hide list. The Notes column landed 2026-08-23 and is not in that list, so the
+   row has had SIX visible cells and five tracks ever since — and grid-auto-flow being `row`,
+   the sixth cell (the action cluster) was auto-placed onto a second GRID ROW, under the
+   callsign, on every narrow window and at every pinned zoom that produces one. That is the
+   1024×768 supported floor and 1366 at 125%. It also left the cluster in an implicit `auto`
+   track where no floor from this sheet could reach it. The tail track carries the same
+   measured floor as the wide template above; styles-logbook-actions.test.tsx checks the track
+   count against the cells the component actually renders, so a seventh column cannot do this
+   again silently. */
 [data-viewport='sm'] .logbook-row,
 [data-viewport='xs'] .logbook-row {
-  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 0.7fr;
+  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 1fr minmax(336px, 0.8fr);
 }
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(4),
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(5),
@@ -12800,7 +12855,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-columns:
     1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr
     0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr
-    1.4fr minmax(160px, 0.8fr);
+    1.4fr minmax(336px, 0.8fr);
 }
 [data-viewport='sm'] .logbook-table.wide .logbook-row .log-cell,
 [data-viewport='xs'] .logbook-table.wide .logbook-row .log-cell {

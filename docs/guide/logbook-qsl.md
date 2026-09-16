@@ -123,9 +123,10 @@ answer, not an error.
 
 The buttons live at the right-hand end of the row and appear on hover, so an
 untouched table shows none of them. Left to right they are **📢** (spot this
-station), **↥** (push to QRZ), **CL**, **HL**, **WRL**, a **QSL▸** menu, **✏**
-to edit and **✕** to delete. On a narrow window the leading buttons can be
-clipped off the left of that cell; widen the window if 📢 and ↥ are missing.
+station), **QRZ** (push to QRZ), **QRZ✎** (correct a contact QRZ already holds),
+**CL**, **HL**, **WRL**, a **QSL▸** menu, **✎** to edit and **✕** to delete.
+They all stay on one line and stay clickable at every window size — that column
+is floored to the width the whole run needs.
 
 ### World Radio League
 

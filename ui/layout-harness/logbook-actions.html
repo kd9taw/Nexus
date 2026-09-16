@@ -1,0 +1,353 @@
+<!doctype html><html><head><meta charset="utf-8"><title>logbook row-actions harness</title>
+<style>body{margin:0;background:#0b0e14}.host{border:1px dashed #334}</style></head>
+<!--
+  THE LOGBOOK ROW-ACTION CLUSTER AGAINST ITS GRID TRACK.
+
+  ⚠️ WHY THIS FILE EXISTS. The last track of `.logbook-row` is `minmax(<floor>, 0.8fr)`, and
+  the floor is a NUMBER somebody has to justify. It was 160px, written 2026-07-15 against six
+  controls of 22px each (6×22 + 5×4 = 152). Three controls joined, the glyphs became words,
+  and the floor did not move — so the leading buttons were sheared off the left of an
+  `overflow:hidden` cell and the labels printed across each other inside their 22px boxes
+  (operator report, 2026-09-16: "buttons look cramped on the screen"). A floor nobody
+  re-measures is the defect; this page is how it gets re-measured.
+
+  jsdom lays nothing out — every getBoundingClientRect in the vitest suite is 0×0 — so the
+  floor cannot be checked from there. This page lays the real cluster out in a real engine
+  with the REAL sheet and prints what the cluster actually needs.
+
+  It carries the REAL classes and the REAL labels from `Logbook.tsx` — mirror any change to
+  those here. It needs no `cp` step: unlike its sibling pages it links ../src/styles.css
+  DIRECTLY rather than the hand-refreshed `styles.css` copy beside them, which was 879 lines
+  stale the day this was written.
+
+  RUN IT:  ./measure-logbook-actions.sh                 (headless Chrome, prints the JSON)
+           ./measure-logbook-actions.sh /abs/other.css  (measure a DIFFERENT sheet — how the
+                                                         before/after evidence is taken)
+  or:      python3 -m http.server 8799 → http://localhost:8799/logbook-actions.html
+           then `run()` in the console.
+
+  WHAT TO READ:
+   • `requiredInkW` — what the cluster needs to print every label WITHOUT overflowing its own
+                     border: Σ per-control ink + Σ gaps. THE FINDING, and the floor's source.
+   • `requiredW`   — the same sum over BORDER BOXES. Lower than the above whenever a control
+                     is pinned narrower than its label, which is the bug's other half.
+   • `floorPx`     — the floor the sheet actually grants (computed, not grepped).
+   • `grantedW`    — the track width at that container width / viewport class / zoom.
+   • `clippedLeft` — px of the cluster sheared off the LEFT edge of the cell. Any value
+                     above 0 is a button the operator cannot click.
+   • `overlaps`    — labels whose INK intersects a neighbour's, i.e. printing across.
+   • `tailOnOwnLine` — the cluster wrapped to a grid row of its own, under the row's text.
+   • `widths`/`inkW` — the per-control box and ink widths, so a change can be attributed.
+
+  A SELECT IS AS WIDE AS ITS WIDEST OPTION, not its closed label. `select.log-rowbtn`'s
+  options are translated prose ("Card NOT received" / "Karte NICHT erhalten"), so the QSL
+  control's intrinsic width is both large and locale-dependent. `qslIntrinsic` reports it;
+  `qslW` reports what the sheet pinned it to. If those two are equal the sheet has stopped
+  pinning it and the cluster's width has become a property of the catalog.
+-->
+<body>
+<div class="app" style="display:block">
+<div class="host" id="host" style="width:1024px">
+  <div class="log-table logbook-table" id="table">
+    <div class="log-scroll">
+      <div class="log-rows" style="position:relative;width:100%">
+        <div class="log-row logbook-row" id="row" role="row" style="width:100%"></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<!-- The unconstrained twin: the same cluster in a row so wide nothing can compress it.
+     What it measures is the cluster's intrinsic requirement, free of the track. -->
+<div class="app" style="display:block;position:absolute;left:-99999px;top:0">
+  <div style="width:6000px">
+    <div class="log-table logbook-table">
+      <div class="log-scroll">
+        <div class="log-rows" style="position:relative;width:100%">
+          <div class="log-row logbook-row" id="freerow" role="row" style="width:100%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<pre id="out"></pre>
+<script>
+// ── THE REAL LABELS (Logbook.tsx). Keep in step with the constants there. ───────────────
+const QRZ_LABEL = 'QRZ', QRZ_CORRECT_LABEL = 'QRZ✎', CLUBLOG_LABEL = 'CL';
+const HRDLOG_LABEL = 'HL', WRL_LABEL = 'WRL', QSL_MENU_LABEL = 'QSL▸';
+// The buttons in render order. `control` true, which is the widest case and the one the
+// operator runs: the six push buttons, then the QSL menu, then edit and delete.
+const BTNS = ['📢', QRZ_LABEL, QRZ_CORRECT_LABEL, CLUBLOG_LABEL, HRDLOG_LABEL, WRL_LABEL];
+const TAIL = ['✎', '✕'];
+// Every option the menu can carry at once, in the widest catalog we ship. The en strings
+// are what an operator sees by default; de is the widest of the four.
+const OPTS = {
+  en: [QSL_MENU_LABEL, 'Bureau', 'Direct', 'Electronic', 'QSL NOT sent', 'Card received', 'Card NOT received'],
+  de: [QSL_MENU_LABEL, 'Büro', 'Direkt', 'Elektronisch', 'QSL NICHT gesendet', 'Karte erhalten', 'Karte NICHT erhalten'],
+};
+
+// The eleven compact columns that precede the actions cell, with representative content —
+// the track sizing is `fr`-based, so what is IN the other cells does not move the actions
+// track, but the row has to be real for the grid to resolve at all.
+const CELLS = [
+  ['log-cell mono', 'KD9TAW'], ['log-cell log-country', 'United States'], ['log-cell', '20m'],
+  ['log-cell mono', '14.0740'], ['log-cell', 'FT8'], ['log-cell mono', '-12'],
+  ['log-cell mono', '-09'], ['log-cell mono', '2026-09-16 14:32Z'], ['log-cell mono', '—'],
+  ['log-cell', '—'],                       // QSL  — the cell the report says collides
+  ['log-cell log-note', '—'],              // Notes
+];
+
+function buildRow(row, lang) {
+  row.replaceChildren();
+  for (const [cls, text] of CELLS) {
+    const s = document.createElement('span');
+    s.className = cls;
+    if (cls.includes('log-note')) s.innerHTML = '<span class="log-note-text">' + text + '</span>';
+    else if (cls.includes('log-country') || text === '—') s.textContent = text;
+    else s.textContent = text;
+    row.appendChild(s);
+  }
+  // The QSL cell's own mark, so the reported collision can be measured rather than guessed.
+  row.children[9].innerHTML = '<span class="log-qsl none">—</span>';
+  const act = document.createElement('span');
+  act.className = 'log-cell log-rowactions';
+  for (const label of BTNS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'log-rowbtn'; b.textContent = label;
+    act.appendChild(b);
+  }
+  const sel = document.createElement('select');
+  sel.className = 'log-rowbtn'; sel.style.fontSize = '0.85em';
+  for (const o of OPTS[lang]) {
+    const op = document.createElement('option'); op.textContent = o; sel.appendChild(op);
+  }
+  act.appendChild(sel);
+  for (const label of TAIL) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'log-rowbtn' + (label === '✕' ? ' danger' : '');
+    b.textContent = label;
+    act.appendChild(b);
+  }
+  row.appendChild(act);
+  return act;
+}
+
+/** useViewport.ts's classifyViewport, on the EFFECTIVE (zoom-adjusted) width. Kept in step
+ *  with that file — the thresholds are what decides which template the row gets. */
+const classify = effW => effW < 768 ? 'xs' : effW < 1100 ? 'sm' : effW < 1600 ? 'md' : effW < 2400 ? 'lg' : 'xl';
+const r = e => e.getBoundingClientRect();
+const px = v => +(parseFloat(v) || 0);
+
+/** The floor the sheet actually grants the actions track. `grid-template-columns`'s computed
+ *  value is the RESOLVED track list in px — the granted width, not the floor — so the floor
+ *  is read by STARVING the grid: squeeze the container until the `fr` share is zero, and what
+ *  the track keeps is its minmax() minimum. That is a cascade computation, not a grep: a
+ *  later rule that replaces the template (the [data-viewport] ones do) is seen here. */
+function starvedTracks(host, row) {
+  const keep = host.style.width;
+  host.style.width = '240px';
+  const tracks = getComputedStyle(row).gridTemplateColumns.split(/\s+/).map(px);
+  host.style.width = keep;
+  return tracks;
+}
+
+function measure(opts) {
+  const { width, viewport, zoom, theme, lang, font } = opts;
+  // The labels are text, so the requirement is a FONT metric, and `--font-sans` resolves to
+  // Segoe UI on the operator's Windows box but to whatever fontconfig serves here. Sweeping
+  // the faces this box HAS turns the margin over the measurement from a guess into a range.
+  // Set `font-family`, NOT `--font-sans`: the sheet resolves that token once on `body` and
+  // everything below inherits the RESOLVED family, so re-pointing the variable lower down
+  // changes nothing. (That mistake made the first sweep report five identical faces.)
+  document.querySelectorAll('.app').forEach(a => { a.style.fontFamily = font || ''; });
+  document.documentElement.setAttribute('data-viewport', viewport);
+  document.documentElement.setAttribute('data-theme', theme);
+  document.documentElement.style.setProperty('--ui-zoom', String(zoom));
+  document.documentElement.style.setProperty('--vw-eff', (width / zoom) + 'px');
+  // `zoom` lives on `.app`; the container is inside it, so its width is in LAYOUT px —
+  // the effective content width, which is exactly what useViewport classifies on.
+  document.getElementById('host').style.width = (width / zoom) + 'px';
+
+  const act = buildRow(document.getElementById('row'), lang);
+  const free = buildRow(document.getElementById('freerow'), lang);
+
+  // getBoundingClientRect is in VISUAL px under `zoom`; divide back to layout px so every
+  // number below is comparable with the px floor written in the sheet.
+  const L = n => +(n / zoom).toFixed(1);
+
+  const kids = [...free.children];
+  const gap = px(getComputedStyle(free).columnGap || getComputedStyle(free).gap);
+  const widths = kids.map(k => +(r(k).width / zoom).toFixed(1));
+  const requiredW = +(widths.reduce((a, b) => a + b, 0) + gap * (kids.length - 1)).toFixed(1);
+  // BOX width is not INK width. A control pinned narrower than its label still reports its
+  // pinned box; the text spills past the border and prints over the neighbour, which is the
+  // reported symptom. scrollWidth is content+padding, so add the borders back.
+  const inkW = kids.map(k => {
+    const cs = getComputedStyle(k);
+    const b = px(cs.borderLeftWidth) + px(cs.borderRightWidth);
+    return +(Math.max(r(k).width / zoom, k.scrollWidth + b)).toFixed(1);
+  });
+
+  // What the select WANTS if nothing pins it (widest option), vs what it got.
+  const sel = free.querySelector('select.log-rowbtn');
+  const selClone = sel.cloneNode(true);
+  selClone.style.width = 'max-content'; selClone.style.minWidth = '0'; selClone.style.maxWidth = 'none';
+  selClone.style.position = 'absolute'; selClone.style.left = '-99999px';
+  free.parentElement.appendChild(selClone);
+  const qslIntrinsic = +(r(selClone).width / zoom).toFixed(1);
+  // …and what it needs to show only its CLOSED label, which is the invariant `QSL▸`. This
+  // is the number a pinned width has to cover; `qslIntrinsic` is what it would take if the
+  // catalog were allowed to size the control.
+  while (selClone.options.length > 1) selClone.remove(1);
+  free.parentElement.appendChild(selClone);
+  const qslLabelW = +(r(selClone).width / zoom).toFixed(1);
+  selClone.remove();
+  // A <select>'s scrollWidth is not its ink the way a button's is (the engine clips the
+  // closed box itself), so take the select's requirement from the label measurement above.
+  const selIdx = kids.indexOf(sel);
+  inkW[selIdx] = Math.max(inkW[selIdx], qslLabelW);
+  const requiredInkW = +(inkW.reduce((a, b) => a + b, 0) + gap * (kids.length - 1)).toFixed(1);
+
+  const rowEl = document.getElementById('row');
+  const live = [...act.children];
+  const cellR = r(act);
+  const clippedLeft = +Math.max(0, (cellR.left - r(live[0]).left) / zoom).toFixed(1);
+  const clippedRight = +Math.max(0, (r(live[live.length - 1]).right - cellR.right) / zoom).toFixed(1);
+  // Labels printing across one another: the reported symptom. The text of a button is
+  // CENTRED, so a label wider than its box spills symmetrically past both borders — the ink
+  // extent, not the border box, is what overlaps the neighbour.
+  const overflowing = live.filter(k => k.scrollWidth - k.clientWidth > 1).map(k => k.textContent);
+  const ink = live.map(k => {
+    const bb = r(k), mid = (bb.left + bb.right) / 2, half = Math.max(bb.width, k.scrollWidth) / 2;
+    return { label: k.textContent, left: mid - half, right: mid + half };
+  });
+  const overlaps = [];
+  for (let i = 1; i < ink.length; i++) {
+    if (ink[i].left < ink[i - 1].right - 0.5) overlaps.push(ink[i - 1].label + '|' + ink[i].label);
+  }
+  // The neighbouring collision the report names. `.log-cell { overflow: hidden }`, so ink
+  // that lands outside the cell is CLIPPED, not painted over the neighbour — `paintsInto*`
+  // says whether any of it survives the clip, `reaches*` only that the geometry got there.
+  const vis = [...rowEl.children].filter(c => getComputedStyle(c).display !== 'none');
+  const qslCell = r(vis[vis.length - 3]);
+  const notesCell = r(vis[vis.length - 2]);
+  const inkLeft = Math.min(...ink.map(k => k.left));
+  const visibleLeft = Math.max(inkLeft, cellR.left);
+  // Same LINE, not same top: `.log-row { align-items: center }` centres cells of different
+  // heights, so a 22px-tall actions cell never shares a `top` with the taller text cells.
+  // A cluster auto-placed onto the next grid row starts at or below the text cells' bottom.
+  const sameLine = cellR.top < notesCell.bottom - 1;
+  const tracks = starvedTracks(document.getElementById('host'), rowEl);
+
+  return {
+    case: `${width}@${Math.round(zoom * 100)}% ${viewport} ${theme} ${lang}${font ? ' ' + font : ''}`,
+    width, zoom, viewport, theme, lang, font: font || '(default)',
+    controls: live.length,
+    gap: +gap.toFixed(1),
+    requiredW, requiredInkW,
+    grantedW: L(cellR.width),
+    floorPx: +(tracks[tracks.length - 1] || 0).toFixed(1),
+    // `grid-auto-flow` is `row`, so a template with fewer tracks than the row has visible
+    // cells does not widen — it WRAPS, auto-placing the tail cell onto a second grid row in
+    // column 1, where no floor from this sheet reaches it. Read with `tailOnOwnLine`.
+    tracks: tracks.length, gridItems: vis.length,
+    moreCellsThanTracks: vis.length > tracks.length,
+    rowOverflow: +Math.max(0, (rowEl.scrollWidth - rowEl.clientWidth) / zoom).toFixed(1),
+    fits: requiredInkW <= L(cellR.width) + 0.5,
+    clippedLeft, clippedRight,
+    overflowingLabels: overflowing,
+    overlaps,
+    qslW: widths[selIdx], qslIntrinsic, qslLabelW,
+    widths, inkW,
+    // The cluster wrapped onto a grid row of its own — it is not beside the QSL/Notes cells,
+    // it is UNDERNEATH them. Compare tops: an x-only comparison calls that an overlap and is
+    // wrong in both directions.
+    tailOnOwnLine: !sameLine,
+    reachesNotes: sameLine && inkLeft < notesCell.right - 0.5,
+    reachesQsl: sameLine && inkLeft < qslCell.right - 0.5,
+    // …and `.log-cell { overflow: hidden }` clips whatever lands outside the cell, so
+    // `paintsInto*` is the only one of these that means ink an operator can actually see.
+    paintsIntoNotes: sameLine && visibleLeft < notesCell.right - 0.5,
+    paintsIntoQsl: sameLine && visibleLeft < qslCell.right - 0.5,
+    // The tail three cells' geometry, so the "the — sits under the buttons" report can be
+    // read off numbers instead of argued about.
+    tail: {
+      qsl: [L(qslCell.left), L(qslCell.right)],
+      notes: [L(notesCell.left), L(notesCell.right)],
+      actions: [L(cellR.left), L(cellR.right)],
+      inkLeft: L(inkLeft), visibleLeft: L(visibleLeft),
+    },
+  };
+}
+
+function run() {
+  // A sheet that did not load makes every number below meaningless and every assertion
+  // pass. Refuse loudly instead.
+  const row = document.getElementById('row');
+  buildRow(row, 'en');
+  if (getComputedStyle(row).display !== 'grid') {
+    document.getElementById('out').textContent =
+      JSON.stringify({ error: 'styles.css did not apply — .logbook-row is not a grid' });
+    return;
+  }
+  const rows = [];
+  // The supported floor (1024x768) and the sizes the operator actually runs, at the zooms he
+  // runs — plus two windows BELOW the floor (800 and 600), which must still not trap him:
+  // `flex: 0 0 auto` means nothing in the cluster gives, so `rowOverflow` there is the check. The size class is
+  // DERIVED, exactly as useViewport.ts derives it from innerWidth/zoom; hand-labelling it put
+  // 'xs' against two windows that are really 'sm' and measured the wrong rules.
+  for (const [w, z] of [
+    [1024, 1.0], [1024, 1.1], [1024, 1.25],
+    [1366, 1.0], [1366, 1.1], [1366, 1.25],
+    [1600, 1.0], [1920, 1.0], [1920, 1.25],
+    [2560, 1.0], [800, 1.0], [600, 1.0],
+  ]) {
+    const vp = classify(w / z);
+    rows.push(measure({ width: w, zoom: z, viewport: vp, theme: 'dark', lang: 'en' }));
+    rows.push(measure({ width: w, zoom: z, viewport: vp, theme: 'light', lang: 'en' }));
+  }
+  // The widest catalog, at the floor — the QSL menu's options are translated prose.
+  rows.push(measure({ width: 1024, zoom: 1.0, viewport: classify(1024), theme: 'dark', lang: 'de' }));
+  rows.push(measure({ width: 1920, zoom: 1.0, viewport: classify(1920), theme: 'dark', lang: 'de' }));
+  // THE FLOOR IS A FONT METRIC. Every sans face this box has, at the widest viewport scale
+  // (--space-scale 1, i.e. md and up), so the floor can be set from the widest of them
+  // rather than from whichever one fontconfig happened to serve.
+  for (const font of ['DejaVu Sans', 'Liberation Sans', 'Ubuntu', 'FreeSans', 'Bitstream Charter']) {
+    rows.push(measure({ width: 1920, zoom: 1.0, viewport: 'md', theme: 'dark', lang: 'en', font }));
+  }
+  // CONTROL: a label four characters longer than any we ship. If `requiredW` does not move,
+  // the measurement is not seeing the labels and nothing above is evidence.
+  BTNS[5] = 'WRLXXXX';
+  const control = measure({ width: 1920, zoom: 1.0, viewport: 'md', theme: 'dark', lang: 'en' });
+  // Name it, or the one deliberately-failing row reads as a real case that does not fit.
+  control.case = 'CONTROL (label +4 chars, must NOT fit): ' + control.case;
+  rows.push(control);
+  BTNS[5] = WRL_LABEL;
+  document.getElementById('out').textContent = JSON.stringify(rows, null, 1);
+  return rows;
+}
+
+// THE REAL SHEET, not the sibling pages' `styles.css` copy: that copy has to be refreshed by
+// hand and was 879 lines stale when this page was written, and a measurement of a sheet nobody
+// ships is worse than none. `?sheet=` overrides it, which is how the before/after evidence for
+// a fix is taken (point it at `git show origin/main:ui/src/styles.css`).
+const sheet = new URLSearchParams(location.search).get('sheet') || '../src/styles.css';
+const link = document.createElement('link');
+link.rel = 'stylesheet'; link.href = sheet;
+// A throw inside run() would leave the output element empty, and empty is indistinguishable
+// from "the page never ran" — report the stack instead of nothing. (Do not write the output
+// element's opening tag in this file's text: the extractor in measure-logbook-actions.sh
+// ranges on it, and a second occurrence restarts the range and swallows the script source.)
+link.onload = () => {
+  try { run(); } catch (e) {
+    document.getElementById('out').textContent =
+      JSON.stringify({ error: String(e && e.stack || e) }, null, 1);
+  }
+};
+link.onerror = () => {
+  document.getElementById('out').textContent =
+    JSON.stringify({ error: 'stylesheet failed to load: ' + sheet });
+};
+document.head.appendChild(link);
+</script>
+</body></html>
