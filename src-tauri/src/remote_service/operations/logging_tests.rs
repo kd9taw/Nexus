@@ -543,7 +543,38 @@ fn a_rewrite_that_did_not_reach_the_disk_is_unknown_never_applied() {
     let result = run(&f, &request);
     std::fs::set_permissions(&f.dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     if !probe {
-        return; // running as a user the directory mode cannot stop; nothing to prove here
+        // The write went through DESPITE 0o555, so this process is root (or holds
+        // CAP_DAC_OVERRIDE) and the failure this test exists to stage cannot be
+        // staged at all. That is a legitimate reason not to run — but not a
+        // reason to report a pass, which is what the bare `return` here did:
+        // `cargo test` captures `eprintln!`, so the four assertions below went
+        // silently unexecuted on every root container. Straight to the real
+        // stderr, which libtest does not capture. On GitHub Actions it is not a
+        // skip at all: hosted runners execute as the non-root `runner` user, so
+        // this arm is unreachable there today, and a workflow that started
+        // running privileged would lose this coverage permanently and silently.
+        // (`GITHUB_ACTIONS` rather than `CI`, for the reason spelled out in
+        // `crates/tempo-audio/tests/common/mod.rs`: `CI` is also set by
+        // `scripts/gates` on developer boxes, some of which are root containers.)
+        let promised = std::env::var_os("GITHUB_ACTIONS").is_some_and(|v| !v.is_empty());
+        assert!(
+            !promised,
+            "this test runs privileged, so a read-only directory does not stop a write and the \
+             unknown/persistenceUnconfirmed assertions below cannot be reached — on GitHub \
+             Actions that is a permanent, silent loss of the coverage, not a skip. Hosted \
+             runners run as the non-root `runner` user; run the job that way."
+        );
+        use std::io::Write;
+        let thread = std::thread::current();
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(
+            err,
+            "!! NOT RUN, and NOT A PASS: {} — running privileged, so a 0o555 directory does not \
+             fail the rewrite and there is no unconfirmed-persistence case to observe.",
+            thread.name().unwrap_or("<unnamed test>")
+        );
+        let _ = err.flush();
+        return;
     }
     let result = result.unwrap();
     assert_eq!(result["outcome"], "unknown");
