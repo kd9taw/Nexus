@@ -16,6 +16,8 @@ import {
   exportSettingsBundle,
   getDataFolder,
   setDataFolder,
+  pickDataFolder,
+  isTauri,
   fdDiscoverEvents,
   fdScoreboardStatus,
   connectWebStatus,
@@ -1035,6 +1037,16 @@ export function SettingsPanel({
       )
       setDataFolderInfo(await getDataFolder())
     }, t('settings.dataFolder.failed'))
+  }
+  // Browse fills the field in; it does not adopt anything. Typing or pasting a path stays the
+  // other way in and is not a fallback — a UNC or a network share an OS picker will not reach
+  // is exactly the case the field is there for.
+  const browseDataFolder = async () => {
+    await withErrorToast(async () => {
+      const picked = await pickDataFolder()
+      // Cancel is a null, not an error: leave whatever was typed exactly as it was.
+      if (picked) setDataFolderPath(picked)
+    }, t('settings.dataFolder.browse.failed'))
   }
   useEffect(()=>{
     if(!remote)return
@@ -3188,15 +3200,30 @@ export function SettingsPanel({
               </div>
               <div className="settings-field">
                 <span className="settings-label">{t('settings.dataFolder.path.label')}</span>
-                <input
-                  className="settings-input"
-                  value={dataFolderPath}
-                  onChange={(e) => setDataFolderPath(e.target.value)}
-                  placeholder={dataFolder?.default ?? ''}
-                  aria-label={t('settings.dataFolder.path.label')}
-                  spellCheck={false}
-                  autoComplete="off"
-                />
+                <div className="settings-input-row">
+                  <input
+                    className="settings-input"
+                    value={dataFolderPath}
+                    onChange={(e) => setDataFolderPath(e.target.value)}
+                    placeholder={dataFolder?.default ?? ''}
+                    aria-label={t('settings.dataFolder.path.label')}
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  {/* Desktop only: the picker is an OS dialog, so there is nothing to open in a
+                      browser. Hidden rather than disabled — a dead button reads as a fault, and
+                      the field beside it still takes a typed path. */}
+                  {isTauri() && (
+                    <button
+                      type="button"
+                      className="settings-linkbtn"
+                      onClick={() => void browseDataFolder()}
+                      title={t('settings.dataFolder.browse.title')}
+                    >
+                      {t('settings.dataFolder.browse')}
+                    </button>
+                  )}
+                </div>
                 <div className="rig-share-row">
                   <button
                     type="button"

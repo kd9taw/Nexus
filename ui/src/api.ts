@@ -1349,6 +1349,14 @@ export async function clearDataFolder(): Promise<void> {
   await invoke('clear_data_folder')
 }
 
+/** Ask the OS for a folder, so nobody has to type a filesystem path (#289). `null` means the
+ *  operator cancelled — not an error, and not a change: this only fills the field in, and
+ *  `setDataFolder` is still what adopts the folder. Desktop only; call it behind `isTauri()`,
+ *  because a browser has no filesystem to pick from. */
+export async function pickDataFolder(): Promise<string | null> {
+  return invoke<string | null>('pick_data_folder')
+}
+
 /** Open the SSTV gallery folder (Pictures/Nexus SSTV) in the OS file manager — #130. */
 export async function revealSstvGallery(): Promise<void> {
   await invoke('reveal_sstv_gallery')

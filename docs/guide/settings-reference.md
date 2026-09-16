@@ -1992,6 +1992,11 @@ live in one folder. By default that is `%APPDATA%\tempo` on Windows and
 - **Folder in use** — where this run is reading and writing, and where that came
   from: the default, your choice here, or the `NEXUS_DATA_DIR` environment
   variable (which wins for this launch).
+- **New folder** — the folder you want to use next. **Browse…** opens your
+  computer's own folder chooser and fills the box in, so you never have to type a
+  path; you can still type or paste one instead, which is how you reach a network
+  share like `\\nas\ham\nexus` that a chooser will not always show. Browse only
+  fills the box — nothing changes until you press one of the two buttons below.
 - **Use this folder** — point Nexus at a folder that *already* holds a log. This
   is the second computer in a shack picking up the log the first one keeps on a
   NAS. Nexus refuses a folder with no `log.adi` when your current folder has one,

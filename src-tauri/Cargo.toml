@@ -81,6 +81,14 @@ tauri-plugin-updater = "2"
 # Windows Run key / macOS LaunchAgent / XDG autostart entry. Called from Rust
 # (set_launch_at_login), so no ACL capability entry.
 tauri-plugin-autostart = "2"
+# The OS folder picker behind Settings ▸ Config ▸ Data & log folder (#289) — the operator was
+# otherwise typing a full filesystem path, and a typo there does not fail, it silently opens a
+# DIFFERENT folder. Tauri first-party, Apache-2.0 OR MIT; it pulls tauri-plugin-fs (Apache-2.0
+# OR MIT) and rfd (MIT) — all compatible with our GPL-3.0-only. OSS-integration checklist run
+# 2026-09-16; NOTICE updated. Called from Rust (pick_data_folder), so no ACL capability entry:
+# the webview cannot open a dialog of its own, and tauri-plugin-fs arrives as the dialog
+# plugin's own dependency, NOT registered as a plugin — the webview gets no filesystem ACL.
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Remote's outbound task is isolated from CAT/audio. These packages are already

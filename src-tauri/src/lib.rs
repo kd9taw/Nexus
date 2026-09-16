@@ -1899,6 +1899,38 @@ fn clear_data_folder() -> Result<(), String> {
     clear_data_dir_pointer_in(&config_dir_for(None))
 }
 
+/// The OS folder picker for #289, so the operator does not have to type a filesystem path.
+/// `None` means the dialog was cancelled — never an error, and never a change: this command
+/// only READS a path back. Adopting it is still `set_data_folder`, with the same copy /
+/// no-copy choice and the same refusals.
+///
+/// Driven from Rust like the notification and autostart plugins, so the webview needs no
+/// dialog ACL entry (project convention — see `capabilities/default.json` and the header of
+/// `ui/src/externalLinks.ts`, where granting a plugin the webview permission is deliberately
+/// not done).
+///
+/// The callback form, not `blocking_pick_folder`: the blocking one deadlocks on the main
+/// thread, and nothing here guarantees which thread a command body runs on. The oneshot ends
+/// with the callback, and a dropped sender resolves to `None` — a cancelled dialog and a
+/// vanished one both leave the typed path alone.
+#[tauri::command(async)]
+async fn pick_data_folder(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        // Open where the operator's data already is, not in the home directory.
+        .set_directory(shared_data_dir())
+        .pick_folder(move |picked| {
+            let _ = tx.send(picked);
+        });
+    rx.await
+        .ok()
+        .flatten()
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod data_folder_tests {
     use super::*;
@@ -23833,6 +23865,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Start at sign-in. Driven from Rust only (`set_launch_at_login`); no capability entry.
         .plugin(tauri_plugin_autostart::Builder::new().build())
+        // The data-folder picker (#289). Driven from Rust only (`pick_data_folder`); no
+        // capability entry, so the webview cannot open a dialog of its own.
+        .plugin(tauri_plugin_dialog::init())
         .manage(d.engine)
         .manage(remote_publisher)
         .manage(remote_service)
@@ -23916,6 +23951,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_data_folder,
             set_data_folder,
             clear_data_folder,
+            pick_data_folder,
             reveal_all_txt,
             open_qrz_page,
             open_dxped_page,

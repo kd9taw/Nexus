@@ -287,6 +287,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in by hand. Contacts through the ISS now carry ARISS, the name LoTW wants, and the TEVEL-2,
   TAURUS and SONATE birds carry theirs. (#296)
 
+- **Pick your data and log folder instead of typing it.** Settings ▸ Config ▸ Data & log folder
+  now has a **Browse…** button that opens your computer's own folder chooser and fills the box in
+  for you. Typing or pasting a path still works exactly as before — that is the way to reach a
+  network share like `\\nas\ham\nexus`, which a folder chooser will not always show you. Browse
+  only fills the box: nothing moves until you press *Use this folder* or *Copy my log and data
+  there*, same as always. (#289)
+
 
 ### Changed
 
