@@ -1477,13 +1477,17 @@ impl Logbook {
             return;
         }
         let tmp = path.with_extension(format!("adi.{}.scrub", std::process::id()));
-        let done = std::fs::write(&tmp, clean)
+        // fsync before the rename, for the reason spelled out in `save_at`: this replaces the
+        // whole log, so a rename that outruns its own data costs every QSO in the file.
+        let done = write_sync(&tmp, clean)
             .and_then(|()| std::fs::set_permissions(&tmp, meta.permissions()))
             .and_then(|()| std::fs::rename(&tmp, path));
         if let Err(e) = done {
             let _ = std::fs::remove_file(&tmp);
             eprintln!("tempo: could not clean {}: {e}", path.display());
+            return;
         }
+        sync_parent_dir(path);
     }
 
     /// Take a dated snapshot of the log **as it is on disk right now**, into a `backups/`
@@ -1715,11 +1719,23 @@ impl Logbook {
         // publish a corrupted file on rename. `log.adi.<pid>.tmp` gives each its own scratch, and
         // the rename onto the final path stays atomic (last writer wins the whole file, intact).
         let tmp = path.with_extension(format!("adi.{}.tmp", std::process::id()));
-        std::fs::write(&tmp, &body)?;
+        // FSYNC BEFORE THE RENAME. `fs::write` only hands the bytes to the page cache; the
+        // rename that publishes them is a separate metadata operation, and on ext4/xfs it can
+        // reach the disk FIRST. Lose power in that window and the machine comes back with
+        // `log.adi` pointing at an unwritten tmp — a zero-length or garbage file where the
+        // operator's whole station log was. This is a full REWRITE of every QSO ever logged,
+        // so the window is worth the sync: an append can lose its tail, this can lose the book.
+        write_sync(&tmp, body.as_bytes())?;
         let stamp = std::fs::metadata(&tmp)
             .ok()
             .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
         std::fs::rename(&tmp, path)?;
+        // …and the directory entry, so the rename itself survives the same power loss. Without
+        // it the log is intact but is still the PRE-save one — a merge or a mark-all the
+        // operator watched succeed, silently undone. Best-effort: the save has already
+        // succeeded, so a filesystem that refuses the directory open (and Windows, which has
+        // no directory handle to sync) must not turn a durability upgrade into a failed save.
+        sync_parent_dir(path);
         Ok(stamp)
     }
 
@@ -3556,6 +3572,38 @@ fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
     let days = era * 146_097 + doe - 719_468;
     let secs = days * 86_400 + (h as i64) * 3600 + (mi as i64) * 60 + s as i64;
     secs.max(0) as u64
+}
+
+/// [`std::fs::write`] that does not return until the bytes are on the disk.
+///
+/// The whole-file rewrite paths ([`Logbook::save_at`], [`Logbook::scrub_log_in_place`]) write a
+/// scratch file and rename it onto `log.adi`. The rename is what makes that all-or-nothing, but
+/// only against a CRASH: against power loss it is not enough on its own, because the rename and
+/// the scratch file's data blocks are separate transactions and the filesystem may commit them
+/// in either order. Publishing a file whose contents never landed is how a full rewrite turns
+/// into an empty logbook.
+fn write_sync(path: &Path, body: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(body)?;
+    f.sync_all()
+}
+
+/// Best-effort `fsync` of the directory holding `path`, so a rename INTO it is durable.
+///
+/// Best-effort on purpose, and only ever called after the write it protects has already
+/// succeeded: this upgrades "the save happened" to "the save survives a power cut", and a
+/// filesystem that will not open a directory for sync (or Windows, which has no directory
+/// handle to sync at all) must not turn that upgrade into a failed save.
+fn sync_parent_dir(path: &Path) {
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// A specific append's open file handles, never a path to reopen later. This

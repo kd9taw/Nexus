@@ -9596,6 +9596,30 @@ fn redact_for_backup(mut settings: serde_json::Value) -> serde_json::Value {
     settings
 }
 
+/// Drop every key carried by `Settings::unknown` from a serialised Settings object — the keys a
+/// NEWER build wrote into `settings.json` that this build has no field for.
+///
+/// Preserving them in the FILE is the whole point of that field; putting them in an exported
+/// BUNDLE is a different act, and the bundle's contract is that it carries no secrets (see
+/// [`export_settings_bundle`]). A redaction list can only name fields this build knows, so an
+/// API key a newer build added is a credential this one would copy into a file the operator is
+/// told is safe to email. Nothing is lost by leaving them out: a restore goes through
+/// `apply_settings`, which keeps every preserved key the incoming payload lacks, so the newer
+/// build's settings survive a restore in this build regardless. Takes the live settings rather
+/// than guessing from key names — this build cannot tell a newer build's key from its own by
+/// looking at it.
+fn strip_unknown_for_backup(
+    mut settings: serde_json::Value,
+    unknown: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    if let Some(obj) = settings.as_object_mut() {
+        for key in unknown.keys() {
+            obj.remove(key);
+        }
+    }
+    settings
+}
+
 /// Bundle everything that makes this station THIS station, as one JSON file (#28 item 4).
 ///
 /// Until now there was no way to back any of it up. `settings.json` sits in a config directory
@@ -9611,17 +9635,23 @@ fn redact_for_backup(mut settings: serde_json::Value) -> serde_json::Value {
 /// ⚠️ CARRIES NO SECRETS, deliberately. Passwords and API keys live in the OS keychain and are
 /// not in either file — so this bundle is safe to copy to a USB stick or email to yourself, and
 /// a restore will ask for those again. Anything that changes that has to revisit this comment.
+/// That is also why `Settings::unknown` is stripped here (`strip_unknown_for_backup`): those
+/// keys come from a NEWER build, and this one cannot tell whether one of them is a credential —
+/// `BACKUP_REDACTED_FIELDS` can only name fields it knows about.
 ///
 /// The QSO log is NOT here. It is a separate, much larger file with its own ADIF export, and
 /// silently folding it into a "settings" backup would produce a file operators would hand around
 /// without realising it held every contact they had made.
 #[tauri::command(async)]
 fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, String> {
-    let settings = {
+    let (settings, unknown) = {
         let eng = engine_lock(&state);
-        serde_json::to_value(eng.settings()).map_err(|e| e.to_string())?
+        (
+            serde_json::to_value(eng.settings()).map_err(|e| e.to_string())?,
+            eng.settings().unknown.clone(),
+        )
     };
-    let settings = redact_for_backup(settings);
+    let settings = strip_unknown_for_backup(redact_for_backup(settings), &unknown);
     let ui_state = serde_json::to_value(ui_state_load()).map_err(|e| e.to_string())?;
     let bundle = serde_json::json!({
         "kind": "nexus-settings-backup",
@@ -24912,6 +24942,55 @@ fn winlink_disconnect() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    /// The settings backup's stated contract is that it CARRIES NO SECRETS, and
+    /// `BACKUP_REDACTED_FIELDS` can only name credentials this build knows about. With
+    /// `Settings::unknown` preserving a newer build's keys through save/load, an API key that
+    /// build added would otherwise be copied straight into a file the operator is told is safe
+    /// to email — so the export drops every preserved key, identified from the live settings
+    /// rather than guessed from its name.
+    #[test]
+    fn an_exported_bundle_carries_neither_a_known_credential_nor_a_newer_builds_keys() {
+        let mut s = tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            clublog_api_key: "CLUBLOG-SECRET".into(),
+            cloudlog_key: "CLOUDLOG-SECRET".into(),
+            ..Default::default()
+        };
+        s.unknown.insert(
+            "futureApiKey".into(),
+            serde_json::json!("NEWER-BUILD-SECRET"),
+        );
+        s.unknown
+            .insert("futureKnobHz".into(), serde_json::json!(1234));
+
+        let value = serde_json::to_value(&s).expect("serialises");
+        // Control: every one of those really IS in the serialised settings, so the assertions
+        // below are removals and not four names that were never there.
+        for key in [
+            "clublogApiKey",
+            "cloudlogKey",
+            "futureApiKey",
+            "futureKnobHz",
+        ] {
+            assert!(
+                value.get(key).is_some(),
+                "control: {key} must be present before redaction"
+            );
+        }
+
+        let out = super::strip_unknown_for_backup(super::redact_for_backup(value), &s.unknown);
+        for key in [
+            "clublogApiKey",
+            "cloudlogKey",
+            "futureApiKey",
+            "futureKnobHz",
+        ] {
+            assert!(out.get(key).is_none(), "{key} must not reach the bundle");
+        }
+        // …and the bundle is still a bundle: the ordinary settings are all there.
+        assert_eq!(out.get("mycall"), Some(&serde_json::json!("KD9TAW")));
+    }
+
     #[test]
     fn the_hrdlog_leg_gets_a_couple_of_retries_and_no_other_leg_is_touched() {
         use tempo_app::engine::upload_legs as legs;

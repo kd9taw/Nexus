@@ -351,6 +351,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transmitter, so Stop — and the station read it is built from — still goes through.
 
 - **The callsign card names the state (#237).** A US or Canadian station's card showed the town,
+
+- **Running two Nexus builds on one computer no longer erases settings.** If you run a tester build
+  alongside the public release — both use the same settings file — then anything you configured in
+  the newer one was silently deleted the next time the older one saved. It kept only the settings it
+  recognised and wrote the rest away: no error, no warning, nothing to tell you it had happened. An
+  older build now carries settings it doesn't understand through untouched. It still can't show them
+  to you (it has no screen for a setting it doesn't have), but it can no longer destroy them, so
+  going back and forth between two builds is safe.
+
+- **Two Nexus instances saving settings at the same moment can no longer corrupt the file.** Both
+  wrote through the same scratch file, so their writes could land on top of each other and publish a
+  half-and-half settings file. Nexus reads that as damaged, sets it aside and starts from defaults —
+  which means your callsign, your radios and your licence class all reset. Each instance now uses its
+  own scratch file; whichever saves last wins, whole and intact.
+
+- **A logbook rewrite survives a power cut.** Rewriting `log.adi` (after a confirmation merge, a
+  mark-all, or a one-time cleanup at startup) wrote the new file and immediately swapped it in
+  without waiting for the disk. Lose power in that gap and the computer could come back with the log
+  pointing at a file that was never written — every contact gone. The swap now waits for the data to
+  be on the disk first. Nothing changes in normal use; this is only about the pull-the-plug case.
   the grid and the country but never the state, so a Hawaii station read "KEKAHA (BL01dx) · United
   States" while the Needed board and Worked All States already knew it was HI. The card now reads
   "KEKAHA, HI (BL01dx)", from the same resolved hint the award maths uses — so the two can never

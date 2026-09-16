@@ -776,6 +776,28 @@ impl StationCore {
     /// `merge_own_disk_leaves_a_cross_instance_edit_as_a_visible_duplicate`; told to
     /// the operator in the CHANGELOG. Making an edit detectable instead needs a
     /// per-record id persisted in the ADIF, which no existing log carries.
+    ///
+    /// # Two further cross-instance gaps, OPEN and deliberately left open
+    ///
+    /// Both are in the same family as the edit-becomes-a-duplicate trade above, both need the
+    /// same missing ingredient, and both were looked at (and scoped out) when the whole-file
+    /// rewrite gained its `fsync` in 2026-09. A partial fix to a log write path is worse than
+    /// a named gap, so they are named here rather than half-closed.
+    ///
+    /// - **The recover→rewrite window.** This function reads the file; `save_log` renames a
+    ///   full rewrite over it some time later. An append the other instance makes IN BETWEEN
+    ///   is in neither our memory nor the file we publish, so it is lost. The fingerprint gate
+    ///   narrows this to the width of one caller's work, and cannot close it: the two
+    ///   operations are not one atomic step. Closing it properly means holding an exclusive
+    ///   lock across read-and-rewrite — with its own crash story, because a lock file that
+    ///   outlives a crashed instance locks the operator out of their own log.
+    /// - **A delete can be resurrected.** `reconcile_disk` ADDS what the disk has and we lack;
+    ///   it never removes what we have and the disk lacks — correctly, because "absent from
+    ///   disk" is what an append-only log looks like to a stale reader. So if the OTHER
+    ///   instance deletes a QSO and rewrites, we still hold it, and our next rewrite puts it
+    ///   back. Distinguishing "deleted there" from "not yet written there" needs a persisted
+    ///   per-record id and a tombstone — the same ingredient the edit trade above lacks, and
+    ///   not something that can be added to an ADIF other loggers also read.
     fn recover_external_appends(&mut self) -> bool {
         let Some(path) = self.log_path.clone() else {
             return false;
