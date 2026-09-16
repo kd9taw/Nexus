@@ -88,6 +88,40 @@ else
   echo "warn: no '## [Unreleased]' section in CHANGELOG.md — write the release notes by hand." >&2
 fi
 
+# 3b. The release prose, and this one REFUSES rather than warns.
+#
+# publish.yml reads docs/RELEASE_NOTES-<ver>.md AT THE TAG and falls back to the GitHub
+# release body only when that file is absent. The fallback body is the auto-generated
+# commit list, and that text is what the update feed's `notes` field and every operator's
+# in-app update prompt then show. 1.0.2 shipped exactly that, on both public surfaces,
+# with every gate green — publish.yml now carries a detector for it.
+#
+# But the detector fires at PUBLISH time, after the tag exists and the release is out: the
+# recovery is `gh release edit` plus a re-run, through two approval gates. 1.13.0 was the
+# first release in 27 to reach the tag without this file, and it cost exactly that. The
+# convention held for 27 releases and then broke silently, because nothing made it fail
+# early. Checking here moves the refusal to the one moment the notes can still be written
+# before anything is public.
+NOTES_FILE="docs/RELEASE_NOTES-$NEW.md"
+if [ ! -s "$NOTES_FILE" ]; then
+  echo "error: $NOTES_FILE is missing or empty." >&2
+  echo "  publish.yml reads this file at the tag; without it the update feed and every" >&2
+  echo "  operator's update prompt get the auto-generated commit list instead of prose." >&2
+  echo "  Write it (see docs/RELEASE_NOTES-$CUR.md for the shape), then re-run." >&2
+  echo "  Deliberate override, for a release that genuinely wants the release body:" >&2
+  echo "    NEXUS_ALLOW_NO_RELEASE_NOTES=1 $0 $NEW" >&2
+  [ "${NEXUS_ALLOW_NO_RELEASE_NOTES:-}" = 1 ] || exit 1
+  echo "warn: continuing without $NOTES_FILE (NEXUS_ALLOW_NO_RELEASE_NOTES=1)" >&2
+else
+  # Same detector publish.yml uses, run here so the answer arrives before the tag.
+  if python3 -c "import re,sys; CC=re.compile(r'^- (feat|fix|test|docs|chore|refactor|build|ci|perf|style|revert)[(:]', re.M); sys.exit(0 if len(CC.findall(open(sys.argv[1],encoding='utf-8').read()))>=3 else 1)" "$NOTES_FILE"; then
+    echo "error: $NOTES_FILE reads as an auto-generated commit list, not operator prose." >&2
+    echo "  publish.yml refuses this at publish time; fix it now, before the tag." >&2
+    exit 1
+  fi
+  echo "release notes: $NOTES_FILE ($(wc -l < "$NOTES_FILE") lines)"
+fi
+
 # 4. The bundled TLE seed snapshot — src-tauri/resources/tles/tles.json, the
 # installer's offline satellite catalog (the mirror payload verbatim). It is a
 # SNAPSHOT, so it goes stale silently, and cutting a release is the one moment
