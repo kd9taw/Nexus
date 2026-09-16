@@ -824,11 +824,38 @@ mod tests {
             None,
         );
 
+        let after = steered_now_ms(&eng);
+
         let basis = deadline_basis_ms(&act, &backend);
+        // ⚠️ BRACKETED, NOT A TOLERANCE — the same fix the two sibling basis tests got in
+        // 8092abfa, which named THIS test in its subject and body but patched
+        // `a_slow_key_pushes_the_hold_out_by_the_time_the_key_itself_took` instead, leaving
+        // this one on the original `.abs() < 150`. A tolerance around a single pre-call
+        // reading measures how long THIS MACHINE took to run the call, not which clock the
+        // hold was built on: 3 ms idle here, but 32 ms at a ninth of a core and 256 ms under
+        // real contention, where it failed 6 runs in 12 — having already ambushed two agents
+        // at 155 ms.
+        //
+        // The window is the whole claim, and it needs no tolerance: the basis must lie
+        // between a reading taken before the call and one taken after it. As a PREDICATE
+        // that is strictly tighter — `.abs() < 150` admits a basis up to 150 ms before
+        // `steered`, this admits none — but do not claim it closes a hole a real defect
+        // could have used, because it was measured and it does not. `align_to_slot_start`
+        // puts `steered` on a boundary, so a key landing even slightly before it falls in
+        // the PREVIOUS slot and `tx_deadline_ms` clamps the hold to that boundary, which
+        // amplifies rather than hides: a simulated 100 ms stale-tick defect, well inside
+        // the old tolerance, surfaced as −13,390 ms and both bounds caught it. The gain
+        // here is load-immunity, not reach.
+        //
+        // It still fails on the defect this test exists for. A raw `now_unix_ms()` re-read
+        // puts the basis a whole OFFSET_MS past `after` — and past it either way, since the
+        // unsteered key lands at an arbitrary phase and `tx_deadline_ms` may clamp it to the
+        // boundary: 30 s out when it does not, ~32 s when it does.
         assert!(
-            (basis - steered).abs() < 150.0,
-            "the hold must be measured on the STEERED clock: {:.0} ms off (a raw \
-             now_unix_ms() re-read would be out by the whole {OFFSET_MS} ms offset)",
+            basis >= steered && basis <= after,
+            "the hold must be measured on the STEERED clock: expected the basis inside the \
+             window this call spanned ({steered:.0}..{after:.0}), got {basis:.0} — {:.0} ms \
+             off. A raw now_unix_ms() re-read would be out by the whole {OFFSET_MS} ms offset.",
             basis - steered,
         );
     }
