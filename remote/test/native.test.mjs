@@ -721,10 +721,20 @@ test('actual native controller pairs, stores authority, publishes real DTOs, dis
 // could not run at all (a stray quote made it a SyntaxError from 2dfadeb3 until it was fixed), so
 // nothing ever re-timed it. 180 s is ~3x the idle measurement, which leaves room for a loaded
 // machine while still catching a real hang. If v4 grows again, split it rather than raising this.
+//
+// This clock is NOT the only budget the block spends, and raising it exposed the other one. The
+// relay gives a browser a 60 s observation lease (OBSERVER_LEASE_MS), and this harness never
+// renewed: MEASURED on an idle box, the main observe socket was open 61.2 s, so the lease lapsed
+// 1.2 s before the block ended and killed whichever request was in flight with `browserAccessEnded`
+// (the page socket was at 20.3 s, a third of the way to the same cliff). `observing` below renews
+// it on the live client's own 30 s wall clock, which puts the budget on the GAP between renewals
+// (measured max 30.3 s against 60 s) instead of on the length of the block, so adding operations
+// here no longer walks toward that cliff. The node clock above still bounds the whole run.
 for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native operations v${operationVersion} produce one durable QSO, preserve receipts and refuse local takeover`, {timeout:operationVersion>=4?180000:60000},async()=>{
  assert.ok(process.env.NEXUS_REMOTE_TEST_BINARY)
  const app=await runtime(),probe=await nativeProbe(process.env.NEXUS_REMOTE_TEST_BINARY,app.origin)
  let socket
+ const renewals=new Map()
  try{
   await probe.ready();const browser=await app.owner();const begin=await probe.send({type:'begin',name:'Logging synthetic bench'}),stationId=begin.status.pairingId
   // One approval (operator decisions 2026-09-13/14): this browser confirms the pairing, so approving
@@ -733,7 +743,18 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   const {value:device}=await browser.post(`stations/${stationId}/device`,{name:'Logging browser'});assert.equal(device.approved,true,'the pairing browser is approved with the station');await probe.send({type:'refresh'});await probe.send({type:'enable'})
   const roomNamespace=await app.mf.getDurableObjectNamespace('STATIONS'),room=roomNamespace.get(roomNamespace.idFromName(stationId));for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100);assert.equal((await roomStatus(room)).online,true)
   assert.deepEqual(await probe.send({type:'seedLogging'}),{count:0,adif:'',txEnabled:false})
-  const ticket=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,ticket.ticket);socket.ackObservations();await socket.take(v=>v.type==='session')
+  // A live browser renews its observation on a WALL CLOCK: every 30 s against the relay's 60 s
+  // lease (ui/src/remote-web/client.ts sets that interval; relay.ts OBSERVER_LEASE_MS sets the
+  // lease). Nothing in this harness ever renewed, so the lease held only because the block finished
+  // inside 60 s — and the operations added for the satellite and program parity work pushed v4 past
+  // it, killing whichever request happened to be in flight with `browserAccessEnded`. Renew on the
+  // client's own clock, through the SERVICE's real renew route: a lapsed entitlement, a revoked
+  // device or a dead session still refuses it and the lease still ends, so expiry stays observable.
+  // A timer rather than a hook on `operation` is the point — the lease must not be something the
+  // next operation added below can spend, or this comes back the moment the block grows again.
+  const observing=(peer,sessionId)=>{const timer=setInterval(()=>{void browser.post(`stations/${stationId}/renew`,{sessionId}).catch(()=>{})},30000);timer.unref?.();renewals.set(peer,timer)}
+  const leaving=peer=>{clearInterval(renewals.get(peer));renewals.delete(peer);peer.close()}
+  const ticket=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,ticket.ticket);socket.ackObservations();observing(socket,(await socket.take(v=>v.type==='session')).sessionId)
   const envelope=request=>({type:'operationRequest',...(operationVersion>=2?{operationVersion}:{}),request})
   const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send(envelope(request));
     try{return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
@@ -767,7 +788,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const canon=v=>v===null?'z':typeof v==='boolean'?(v?'t':'f'):typeof v==='number'?`n${v<0&&Math.round(Math.abs(v)*1e6)!==0?'-':''}${BigInt(Math.round(Math.abs(v)*1e6))};`:typeof v==='string'?`s${Buffer.byteLength(v)}:${v}`:Array.isArray(v)?`a${v.length}[${v.map(canon).join('')}]`:`o${Object.keys(v).length}{${Object.keys(v).sort().map(k=>canon(k)+canon(v[k])).join('')}}`
    const target=row=>({call:row.call,whenUnix:row.whenUnix,key:createHash('sha256').update(canon(row),'utf8').digest('hex')})
    // One page socket for the whole block: any browser leaving ends the shared logging lease.
-   const {value:pageTicket}=await browser.post(`stations/${stationId}/ticket`);const pages=await browser.open(stationId,pageTicket.ticket);pages.ackObservations();await labeled(pages,'page session',v=>v.type==='session');pages.send({type:'applicationHello',version:3});await labeled(pages,'page capabilities',v=>v.type==='applicationCapabilities')
+   const {value:pageTicket}=await browser.post(`stations/${stationId}/ticket`);const pages=await browser.open(stationId,pageTicket.ticket);pages.ackObservations();observing(pages,(await labeled(pages,'page session',v=>v.type==='session')).sessionId);pages.send({type:'applicationHello',version:3});await labeled(pages,'page capabilities',v=>v.type==='applicationCapabilities')
    const logRows=async()=>{const requestId=crypto.randomUUID();pages.send({type:'applicationQuery',requestId,collection:'log',cursor:null,search:'',unconfirmed:false,after:null});const page=await labeled(pages,'log page',v=>v.requestId===requestId);assert.equal(page.type,'applicationPage');pages.send({type:'applicationQueryAck',requestId});return page.rows}
    // The station shares a page-zero capture for a few seconds, so read until the page shows the change.
    // A real page heartbeats every second whatever it is showing; without that the 5 s lease lapses mid-poll.
@@ -839,7 +860,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const ended=await write(s=>context(s,{kind:'clearActivation'}))
    assert.equal(ended.response.value.evidence,'stationState',JSON.stringify(ended.response));assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    // Closing the page socket ends the lease, as any departure does. Wait for that, then take it again.
-   pages.close()
+   leaving(pages)
    for(let i=0;i<50&&(await allowed(()=>operation({type:'state'}))).response.value?.phase==='controlling';i++)await delay(100)
    state=(await allowed(()=>operation({type:'acquire',stationBootId:state.stationBootId}))).response.value;assert.equal(state.phase,'controlling')
   }
@@ -1049,7 +1070,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   const current=(await heartbeat()).response.value;assert.equal(current.phase,'controlling')
   assert.equal((await probe.send({type:'takeOverLogging'})).ok,true);const refused=await operation({...logged.request,requestId:crypto.randomUUID(),expectedRevision:current.revision,commandWindowId:current.commandWindowId,clientSequence:current.nextSequence,record:{...record,call:'K2ABC'}});assert.equal(refused.response.error,'localPermissionRequired');assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
   await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal((await allowed(()=>operation({type:'result',operationId:logged.request.requestId}))).response.value.outcome,'applied')
-  socket.close();socket=null
+  leaving(socket);socket=null
   // Remote remembers being on (operator decision 2026-09-13), and since the one-approval decision the
   // same day, FT8/FT4 transmit is remembered too. Restarting the actual native controller turns Remote
   // back on and gives remote logging, station control (v4) and FT8/FT4 transmit (v4, where it was
@@ -1070,7 +1091,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.deepEqual(restarted.status.stationPermissions,[device.deviceId])
    for(let i=0;i<50&&restarted.status.phase!=='connected';i++){await delay(100);restarted=await probe.send({type:'status'})}
    for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100)
-   const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();await socket.take(v=>v.type==='session')
+   const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();observing(socket,(await socket.take(v=>v.type==='session')).sessionId)
    assert.equal((await probe.send({type:'seedFt',tier:'FT8'})).txEnabled,false)
    const fresh=(await allowed(()=>operation({type:'state'}))).response.value
    const leased=(await allowed(()=>operation({type:'acquire',stationBootId:fresh.stationBootId}))).response.value;assert.equal(leased.phase,'controlling')
@@ -1079,5 +1100,5 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.match(beat.transmitEpoch,/^[0-9a-f]{16}$/);assert.equal(beat.txArmed,false,'a restored grant and a fresh lease arm nothing')
    const armed=await probe.send({type:'ftEvidence'});assert.equal(armed.txEnabled,false);assert.equal(armed.owned,false)
   }
- }finally{socket?.close();try{await probe.stop()}finally{await app.mf.dispose()}}
+ }finally{for(const timer of renewals.values())clearInterval(timer);socket?.close();try{await probe.stop()}finally{await app.mf.dispose()}}
 })
