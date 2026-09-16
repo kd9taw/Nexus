@@ -16,6 +16,37 @@ import { tempoConversations } from './tempo-fixture.mjs'
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+// Scroll a node into view only once it has MOUNTED, and read it while it is still there, in one
+// page turn. A viewport/zoom/theme change re-renders whole panes, so the `document.querySelector`
+// a CDP round trip later returns null on a loaded runner: about thirty sites below dereferenced it
+// with no wait, which is why the suite's failure set MOVED from run to run instead of naming a
+// regression. Re-queries the locator on every animation frame against a bounded deadline, scrolls
+// only a node that exists, and re-queries after the scroll because the scroll itself can remount
+// it. `measure` runs once, on a node that is mounted at that instant.
+// A node that never arrives REJECTS, naming the locator. It must never resolve quietly: a guard
+// that skipped the scroll would trade a flaky red for a permanent green that measures nothing.
+// The setTimeout is the case the frame loop cannot see - if frames stop, the deadline is never
+// read, and without it the promise would hang out the whole test timeout with no message.
+const SCROLL_MOUNT_TIMEOUT_MS = 12000
+const scrolledIntoView = (expression, options, measure = '()=>true', what = '') => `new Promise((resolve,reject)=>{
+  const deadline=performance.now()+${SCROLL_MOUNT_TIMEOUT_MS},
+    find=()=>{try{return (${expression})||null}catch{return null}},
+    settle=value=>{clearTimeout(timer);resolve(value)},
+    fail=()=>{clearTimeout(timer);reject(new Error('scrolledIntoView: no node matched '+${JSON.stringify(expression)}+' within ${SCROLL_MOUNT_TIMEOUT_MS} ms'+${JSON.stringify(what ? ` (${what})` : '')}))},
+    timer=setTimeout(fail,${SCROLL_MOUNT_TIMEOUT_MS + 2000}),
+    attempt=()=>{
+      const element=find()
+      if(!element)return performance.now()>deadline?fail():requestAnimationFrame(attempt)
+      element.scrollIntoView(${JSON.stringify(options)})
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{
+        const mounted=find()
+        if(!mounted)return performance.now()>deadline?fail():attempt()
+        settle((${measure})(mounted))
+      }))
+    }
+  attempt()
+})`
+
 // The application versions come from the app's own table (ui/src/remote-web/application-capabilities.ts):
 // a hard-coded list here silently stops covering the newest version the moment one is added, which is how
 // v15/v16 arrived with every subtest failing on an 'unreviewed' applicationHello.
