@@ -1463,15 +1463,19 @@ pub fn spawn_rigctld(
     };
     let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line, lines);
     let bin = resolve_rigctld();
-    // EVERY CHILD PROCESS SAYS SO. Operator report 2026-08-19: "moving to cw, I saw an ultra
-    // quick flash of what looked like a terminal screen". A line per spawn turns the next flash
-    // into a timestamp with a binary beside it; a flash with NO line beside it is just as useful,
-    // because it rules the child processes out and points at the webview.
+    // Say so, so a flash can be dated. Operator report 2026-08-19: "moving to cw, I saw an ultra
+    // quick flash of what looked like a terminal screen". A line per spawn turns a flash into a
+    // timestamp with a binary beside it.
     //
-    // ⚠️ This comment used to say every spawn already carried CREATE_NO_WINDOW, "verified site by
-    // site". The 1.12.0 clock diagnosis added a site without it (see `clockdiag::capture`), and
-    // the claim stayed in place while the flashes came back. The flag now comes from
-    // `tempo_core::process::command`, and a test fails the build for any spawn that bypasses it.
+    // ⚠️ TWO CLAIMS THAT USED TO SIT HERE WERE FALSE, and each cost a hunt. The first was that
+    // every spawn already carried CREATE_NO_WINDOW, "verified site by site" — the 1.12.0 clock
+    // diagnosis added a site without it (see `clockdiag::capture`), and the claim stayed in place
+    // while the flashes came back. The flag now comes from `tempo_core::process::command`, and a
+    // test fails the build for any spawn that bypasses it. The second was that EVERY child
+    // process says so, and therefore that a flash with no line beside it rules the children out
+    // and points at the webview. This is the only site that logs — and the flash after 1.12.0 was
+    // a spawn inside a DEPENDENCY (`tract-linalg` runs `wmic`), which would never have logged
+    // here however many of our own call sites did. Absence of a line proves nothing.
     tempo_core::applog::info("proc", &format!("spawn rigctld: {}", bin.to_string_lossy()));
     // No console window for the daemon (Nexus is a GUI app).
     let mut cmd = tempo_core::process::command(bin);

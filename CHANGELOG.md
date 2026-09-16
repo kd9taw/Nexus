@@ -327,6 +327,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No more command-prompt window flashing on the CW screen.** A brief black command window
+  appeared over Nexus when you moved to CW and started decoding — once per run, at whatever
+  moment the AI CW decoder first looked at the audio, which made it feel random. It was not Nexus
+  itself: the maths library the AI decoder uses asks Windows about the CPU cache by running
+  `wmic`, and that tool opens a console window of its own. Nexus now settles that question at
+  startup, before there is any window to flash over, and the AI decoder is unaffected. The 1.12.0
+  clock-check flash was a different cause with the same symptom and was fixed separately; this is
+  the one that was left.
+
 - **Remote's Stop TX still works after your control lease has run out.** If the lease ticked over
   while you were watching the station transmit — a slow link, a tab left in the background — the
   next press of Stop TX was refused and the rig stayed keyed. Stopping is the one thing that must

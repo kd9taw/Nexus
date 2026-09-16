@@ -22140,6 +22140,14 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
+    // The AI CW decoder's matmul library probes the CPU cache by running `wmic`, with no
+    // CREATE_NO_WINDOW — a command-prompt window on screen the first time CW decodes. It
+    // is inside a crates.io dependency, so we cannot flag the spawn; we settle the probe
+    // here instead, while `PATH` can be edited safely because nothing has started a thread
+    // yet. See `deepcw::warm_cpu_cache_probe` for the whole of it.
+    #[cfg(feature = "radio")]
+    tempo_audio::warm_cpu_cache_probe();
+
     // ── Diagnostic log ───────────────────────────────────────────────────────────────────
     // Opened before anything else can fail, because the failures worth diagnosing are the
     // EARLY ones: the binary is `windows_subsystem = "windows"`, so a startup death produces
