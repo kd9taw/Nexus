@@ -18,6 +18,18 @@
 #   2. Release-tag gate: refs/tags/v* fires .github/workflows/release.yml, which builds and
 #      PUBLISHES a public GitHub Release. CLAUDE.md makes that maintainer-approval-gated per
 #      action; this makes it mechanical.          Override: NEXUS_RELEASE_APPROVED=1
+#     2b. …and the tag's commit must have a COMPLETED, SUCCESSFUL ci.yml run — approval is
+#      the operator deciding a release should go out, which is a different question from
+#      whether the commit was ever proven. Nothing used to ask the second one: release.yml
+#      runs no tests, and 1.12.0 published from a commit whose only ci.yml run was
+#      CANCELLED (and cancelled is the ordinary case — 43% of recent main runs, because
+#      ci.yml cancels superseded runs on the same ref). The decision lives in
+#      scripts/require-green-ci, which release.yml's ci-evidence job and publish.yml's
+#      resolve job also call; this copy exists so the answer arrives at the keyboard
+#      instead of forty minutes into a run. Fail-closed: an unreadable answer is not a
+#      green one.                                 Override: NEXUS_ALLOW_UNVERIFIED_CI=<tag>
+#      That override is deliberately NOT a boolean. Its value must be the exact tag being
+#      pushed, so it cannot outlive the release it was set for the way a sticky =1 does.
 #   3. Identity: author AND committer email on every outgoing commit must be the project's,
 #      or an identity named in .githooks/contributors. DEFAULT DENY — an unlisted identity
 #      still refuses the push. The maintainer's own non-project identity is denied FIRST,
@@ -146,6 +158,36 @@ while read -r _lref lsha rref rsha; do
         echo "pre-push: rules': a release needs maintainer approval for THAT action, every" >&2
         echo "pre-push: time — prior approval does not carry over." >&2
         echo "pre-push: deliberate override:  NEXUS_RELEASE_APPROVED=1 git push $remote $rref" >&2
+        exit 1
+      fi
+      # 2b. …AND the tag's commit must have a completed, successful ci.yml run.
+      #
+      #     Approval is the operator deciding a release SHOULD go out. This is the separate
+      #     question of whether the commit it is cut from was ever proven, and until now
+      #     nothing anywhere asked it: release.yml runs no tests, and 1.12.0 published from a
+      #     commit whose only ci.yml run was CANCELLED. release.yml now carries the same gate
+      #     as a job, so this one is not what makes the release safe — it is what makes the
+      #     answer arrive in two seconds at the keyboard instead of forty minutes into a run
+      #     that has already started building four platforms. Same script, same predicate.
+      #
+      #     FAIL-CLOSED, like every other check in this file. If gh is absent or cannot
+      #     reach the API the script exits 2 and the push is refused: an unreadable answer
+      #     is not a green one, and "the query returned nothing" is indistinguishable from
+      #     "the commit has no runs". That is this project's most-repeated defect class and
+      #     it is not worth re-learning on a release tag.
+      #
+      #     Skipped when release.yml's gate cannot exist yet (no script in the tree) —
+      #     stated, not silent, so an old tag does not fail for a confusing reason.
+      TOP=$(git rev-parse --show-toplevel 2>/dev/null || true)
+      GATE="${NEXUS_REQUIRE_GREEN_CI:-$TOP/scripts/require-green-ci}"
+      tag_commit=$(git rev-parse --verify --quiet "$lsha^{commit}" || true)
+      if [ ! -x "$GATE" ]; then
+        echo "pre-push: note — $GATE is absent, so the green-CI check did not run here." >&2
+        echo "pre-push: release.yml's ci-evidence job still gates the publish." >&2
+      elif [ -z "$tag_commit" ]; then
+        fail "could not resolve '$rref' ($lsha) to a commit — refusing rather than skipping the green-CI check."
+      elif ! "$GATE" --ref "${rref#refs/tags/}" --sha "$tag_commit"; then
+        echo "pre-push: the release tag was NOT pushed. Nothing is public." >&2
         exit 1
       fi ;;
   esac

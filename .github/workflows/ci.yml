@@ -336,6 +336,24 @@ jobs:
       - name: scripts/gates still derives the gate list from this workflow
         run: node --test scripts/gates.test.mjs
 
+      # scripts/require-green-ci is the predicate that decides whether a release may
+      # publish — release.yml's ci-evidence job, publish.yml's resolve job and the
+      # pre-push release-tag gate all call THIS ONE FILE. It is therefore the piece of
+      # this repo that is hardest to test at the moment it matters: a real release
+      # exercises it once, in public, with a tag already pushed.
+      #
+      # So it is exercised here instead, on every commit, in BOTH directions — the
+      # refusals (cancelled, timed_out, in_progress, a green run on the wrong commit, a
+      # pull_request run, no run at all) and the passes, plus the override. The suite
+      # carries its own positive control: a stubbed script that always exits 0 makes 28
+      # of its cases go red, so a suite that comes back green is a suite that can fail.
+      #
+      # Same argument as gates.test.mjs above and the doc generators below, which is not
+      # a coincidence: a tool whose only trigger is somebody remembering is not a gate.
+      # This one is worse than that, because the thing it guards is the publish.
+      - name: The release green-CI gate still refuses and still passes
+        run: bash scripts/require-green-ci.test.sh
+
       # The two doc generators, in --check mode: they write nothing, they exit 1
       # when the committed page is behind the source it is derived from.
       #

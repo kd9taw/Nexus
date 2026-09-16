@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A release can no longer be published from a commit whose tests never passed.** The release
+  pipeline now refuses to publish unless the exact commit being released has a completed,
+  successful CI run — not merely one that did not fail. A cancelled or still-running run does not
+  count, and neither does a green run on a parent commit. 1.12.0 went out on a cancelled run; that
+  cannot happen again. Break-glass releases are still possible and now leave a record of which
+  release skipped the check.
+
 - **The callsign card no longer squeezes Band Activity off the screen.** Click a station with a
   long history — eleven previous contacts was the case reported — and the card grew until it took
   half the right-hand rail, leaving Band Activity a couple of rows and shortening Rx Frequency to
@@ -74,6 +81,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command) the actual unkey happens a moment later. The browser now shows "Stop sent" until the
   station's own reading shows the transmitter free, and only then "Stopped" — it will not tell you
   the rig is off the air while it is still transmitting.
+
+- **A Windows or Linux build that lost its update signature can no longer be published.** If the
+  signing step produced no signature, the release went ahead anyway behind a one-line note in the
+  build log — and the result is invisible from the app: the update manifest simply omits that
+  platform, so "Check for updates" finds nothing, forever, and reports no error. macOS has
+  refused this since it shipped; Windows and Linux now refuse it too.
 
 - **The callsign card names the state (#237).** A US or Canadian station's card showed the town,
   the grid and the country but never the state, so a Hawaii station read "KEKAHA (BL01dx) · United

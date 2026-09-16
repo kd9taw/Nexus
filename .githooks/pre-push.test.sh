@@ -191,6 +191,42 @@ ENVV="NEXUS_RELEASE_APPROVED=1" expect PASS "  ... with NEXUS_RELEASE_APPROVED=1
 git tag nightly-1
 expect PASS "pushing a non-v tag is not gated" origin nightly-1
 
+# --- 2b: green-CI gate on the release tag -------------------------------------
+# Approval says the release SHOULD go out; this says the commit it is cut from was
+# actually proven. Both must hold, and the cases below are here because the FIRST run of
+# this suite against the new check passed for the wrong reason: the lab clone has no
+# scripts/ at all, so the "gate script absent" branch fired and nothing was exercised.
+# A gate that is only ever skipped is indistinguishable from one that works.
+#
+# NEXUS_REQUIRE_GREEN_CI points the hook at a stub instead of the real script, so these
+# stay offline and deterministic. The real predicate has its own suite
+# (scripts/require-green-ci.test.sh) and was run against the live API in both directions;
+# what is under test HERE is only that the hook calls it, honours its exit status, and
+# refuses the push when it says no.
+note "release-tag green-CI gate"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$LAB/ci-green"; chmod +x "$LAB/ci-green"
+printf '#!/usr/bin/env bash\necho "stub: no green ci run" >&2\nexit 1\n' > "$LAB/ci-red"; chmod +x "$LAB/ci-red"
+printf '#!/usr/bin/env bash\necho "stub: cannot read" >&2\nexit 2\n' > "$LAB/ci-unreadable"; chmod +x "$LAB/ci-unreadable"
+
+git tag v9.9.10
+ENVV="NEXUS_RELEASE_APPROVED=1 NEXUS_REQUIRE_GREEN_CI=$LAB/ci-green" \
+  expect PASS "approved + green CI" origin v9.9.10
+git tag v9.9.11
+ENVV="NEXUS_RELEASE_APPROVED=1 NEXUS_REQUIRE_GREEN_CI=$LAB/ci-red" \
+  expect BLOCK "approved but NO green CI run" origin v9.9.11
+git tag v9.9.12
+# Fail-closed: an unreadable answer (no gh, no network, API error) is not a green one.
+ENVV="NEXUS_RELEASE_APPROVED=1 NEXUS_REQUIRE_GREEN_CI=$LAB/ci-unreadable" \
+  expect BLOCK "approved, CI evidence UNREADABLE (exit 2)" origin v9.9.12
+git tag v9.9.13
+# Order matters: no approval must refuse before the CI check is even consulted, so a green
+# commit can never imply approval.
+ENVV="NEXUS_REQUIRE_GREEN_CI=$LAB/ci-green" \
+  expect BLOCK "green CI does not substitute for approval" origin v9.9.13
+git tag nightly-2
+ENVV="NEXUS_RELEASE_APPROVED=1 NEXUS_REQUIRE_GREEN_CI=$LAB/ci-red" \
+  expect PASS "a non-v tag is not CI-gated either" origin nightly-2
+
 # --- 1: wrong remote -------------------------------------------------------------
 note "wrong-remote guard"
 git remote add tempo "https://github.com/kd9taw/tempo.git"

@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# scripts/require-green-ci — refuse to publish a commit that CI has not proven green.
+#
+# WHY THIS EXISTS. Until this script, a release could publish with ZERO CI evidence.
+# release.yml runs no tests of its own — it builds artifacts and verifies the artifacts —
+# and NOTHING anywhere asked whether ci.yml had ever completed successfully on the commit
+# being released. The build jobs prove the tree COMPILES on four platforms and that the
+# bundles contain what they should. They do not run one test, one clippy lint, or one
+# typecheck. That is ci.yml's job, and ci.yml was not in the release path at all.
+#
+# It is not a theoretical hole. 1.12.0 shipped from tag commit 5badb66d, whose only ci.yml
+# run is CANCELLED — and cancelled is the normal case here, not the exception: of the last
+# 356 ci.yml runs on main, 153 were cancelled (43%), because ci.yml's `concurrency` block
+# cancels a superseded run on the same ref and this repo pushes main often. So the commit a
+# release is cut from is, far more often than anyone would guess, a commit whose tests were
+# killed halfway through. 1.12.0 went to ~1000 operators on that evidence.
+#
+# WHAT "GREEN" MEANS HERE, and every word of it is load-bearing:
+#
+#   status == "completed"   — a run still in progress proves nothing yet. This is the word
+#                             that "not failed" gets wrong: an in-progress run's conclusion
+#                             is null, and `[ "$conclusion" != "failure" ]` waves it through.
+#   conclusion == "success" — NOT "not failure". cancelled, timed_out, action_required,
+#                             neutral, skipped and stale are all `!= "failure"` and none of
+#                             them is evidence. 1.12.0's run is `cancelled`; a gate written
+#                             as a not-failure test would have passed it.
+#   headSha == the commit being released, EXACTLY.
+#
+# WHY EXACT SHA AND NOT `git merge-base --is-ancestor`. Ancestry is the wrong relation and
+# it fails open in the one direction that matters. A green run on an ANCESTOR of the tag
+# proves that some earlier tree passed; the tag's tree contains commits on top of it that
+# no run ever saw, and those commits are what ships. Ancestry would have accepted 1.12.0
+# (its parents are green) while the released tree itself had nothing but a cancelled run.
+# The relation that matters is "CI ran against THIS tree", and only headSha says that.
+#
+# WHY THE EVENT MATTERS TOO. A `pull_request` run's headSha is the PR branch's commit, but
+# what Actions actually checks out and tests is the MERGE of that commit with the base
+# branch's then-tip — a tree that exists nowhere and is not what a tag points at. So a
+# pull_request run is not evidence about the commit's own tree, and this script does not
+# accept one. `push` and `workflow_dispatch` runs check out the commit itself; both count.
+#
+# THE SHORT-SHA TRAP, found while building this. `gh run list --commit 5badb66d` returns
+# `[]` — an empty list, exit 0 — for a commit that HAS a run. The API matches head_sha
+# literally, so a short SHA silently matches nothing, which reads exactly like "no CI run
+# exists" and would make this gate refuse every release for a reason nobody could find.
+# A non-40-hex argument is therefore a usage error here, never a refusal.
+#
+# GH FAILURE IS A REFUSAL, NOT A PASS. If `gh` is missing, unauthenticated, rate-limited or
+# the network is down, this script refuses. An empty result from a broken query is
+# indistinguishable from an empty result from a commit with no runs, and CLAUDE.md's
+# most-repeated defect class is exactly that: a check that found nothing, believed.
+#
+# BREAK-GLASS OVERRIDE — deliberate and visible, in the project's existing style
+# (NEXUS_RELEASE_APPROVED=1, NEXUS_ALLOW_VENDOR=1), with one difference that is the point:
+#
+#   NEXUS_ALLOW_UNVERIFIED_CI=<the exact ref being released>
+#
+# It is NOT a boolean. `=1` does nothing. The value must equal the tag/ref this run is
+# publishing, which makes the override SINGLE-USE BY CONSTRUCTION: on the workflow side it
+# is a repository variable, and one left set to `v1.12.1` cannot wave `v1.12.2` through.
+# A sticky `=1` is how a gate becomes decoration — somebody sets it during an incident and
+# nobody ever unsets it, and there is no artifact afterwards saying which release went out
+# unverified. A ref-valued override leaves the release's own name in the repo settings and
+# in the run log. Every use prints a loud banner and, in Actions, a step-summary block.
+#
+# USAGE
+#   scripts/require-green-ci --sha <40-hex commit> --ref <tag or ref name> [--repo owner/name]
+#
+# EXIT CODES
+#   0  a completed, successful ci.yml run exists for exactly that commit (or the override
+#      was used for exactly that ref)
+#   1  refused — no such run, or the run is cancelled/failed/in-progress
+#   2  usage, or the evidence could not be READ at all (no gh, not authenticated, API error)
+#
+# Never pipe this into grep/tail/head: a pipe discards the exit status, which is how a
+# faked-green gate shipped in 1.10.3.
+
+set -uo pipefail
+
+WORKFLOW="ci.yml"
+
+# Test seam, and it is the seam the real code reads — the script under test is this file,
+# not a copy of it. When set, the recorded `gh run list --json` array in this file is used
+# in place of the live query, so the refusal/pass logic can be exercised against shapes the
+# live API will not produce on demand (a run still in progress, a headSha mismatch, a
+# malformed response). The live-API demonstrations remain the primary evidence.
+RUNS_JSON_FILE="${NEXUS_CI_RUNS_JSON:-}"
+
+die_usage() { echo "require-green-ci: $*" >&2; exit 2; }
+
+sha=''; ref=''; repo="${GITHUB_REPOSITORY:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sha)  sha="${2:-}";  shift 2 || die_usage "--sha needs a value" ;;
+    --ref)  ref="${2:-}";  shift 2 || die_usage "--ref needs a value" ;;
+    --repo) repo="${2:-}"; shift 2 || die_usage "--repo needs a value" ;;
+    -h|--help) sed -n '2,/^$/p' "$0"; exit 0 ;;
+    *) die_usage "unknown argument '$1'" ;;
+  esac
+done
+
+[ -n "$sha" ] || die_usage "--sha is required"
+[ -n "$ref" ] || die_usage "--ref is required (the tag being released — the override is keyed to it)"
+
+# See THE SHORT-SHA TRAP above. This is a usage error, not a refusal: a refusal here would
+# be indistinguishable from "this commit has no green run" and would send whoever hit it
+# looking for a CI problem that does not exist.
+case "$sha" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) : ;;
+  *) die_usage "--sha must be a full 40-character lowercase hex commit SHA (got '$sha').
+The GitHub API matches head_sha literally: an abbreviated SHA returns an EMPTY run list
+with exit 0, which would read as 'no CI run' for a commit that has one." ;;
+esac
+
+# ---------------------------------------------------------------------------------------
+# The override, checked FIRST so a genuine break-glass release never depends on the API
+# being reachable — that is the situation it exists for.
+# ---------------------------------------------------------------------------------------
+override="${NEXUS_ALLOW_UNVERIFIED_CI:-}"
+if [ -n "$override" ]; then
+  if [ "$override" = "$ref" ]; then
+    {
+      echo "================================================================"
+      echo "require-green-ci: OVERRIDDEN — publishing '$ref' WITHOUT green CI"
+      echo "  commit:   $sha"
+      echo "  override: NEXUS_ALLOW_UNVERIFIED_CI=$ref"
+      echo "This release has NOT been proven by ci.yml. Nothing below ran."
+      echo "================================================================"
+    } >&2
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+      {
+        echo "### ⚠️ Released without green CI"
+        echo
+        echo "\`$ref\` (\`$sha\`) was published with \`NEXUS_ALLOW_UNVERIFIED_CI\` set to its own ref."
+        echo "No completed, successful \`ci.yml\` run was required for this release."
+        echo
+        echo "Unset the \`NEXUS_ALLOW_UNVERIFIED_CI\` repository variable now — it is keyed to"
+        echo "this ref, so it cannot wave the next release through, but leaving it set leaves"
+        echo "a live break-glass switch in the repository settings."
+      } >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit 0
+  fi
+  # Set, but to something else. Loud, and still a refusal: a stale override from a previous
+  # release must not silently become the reason THIS one was not checked.
+  echo "require-green-ci: NEXUS_ALLOW_UNVERIFIED_CI is set to '$override', which is not the" >&2
+  echo "require-green-ci: ref being released ('$ref'). The override is deliberately keyed to" >&2
+  echo "require-green-ci: one ref so it cannot outlive the release it was set for. Continuing" >&2
+  echo "require-green-ci: with the normal check." >&2
+fi
+
+# ---------------------------------------------------------------------------------------
+# Read the evidence.
+# ---------------------------------------------------------------------------------------
+if [ -n "$RUNS_JSON_FILE" ]; then
+  [ -r "$RUNS_JSON_FILE" ] || die_usage "NEXUS_CI_RUNS_JSON='$RUNS_JSON_FILE' is unreadable"
+  runs=$(cat "$RUNS_JSON_FILE") || die_usage "could not read NEXUS_CI_RUNS_JSON='$RUNS_JSON_FILE'"
+  source_desc="recorded runs from $RUNS_JSON_FILE"
+else
+  command -v gh >/dev/null 2>&1 \
+    || die_usage "\`gh\` is not on PATH. This gate reads the CI evidence through it and
+CANNOT fall back to assuming the commit is fine — refusing to guess. Install gh, or use the
+named override if this is a genuine break-glass release."
+  if [ -z "$repo" ]; then
+    repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
+      || die_usage "could not determine the repository — pass --repo owner/name"
+  fi
+  runs=$(gh run list --repo "$repo" --workflow "$WORKFLOW" --commit "$sha" --limit 100 \
+           --json databaseId,status,conclusion,headSha,event,createdAt,url 2>&1)
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "require-green-ci: could not read ci.yml runs for $sha from $repo:" >&2
+    printf '%s\n' "$runs" | sed 's/^/require-green-ci:   /' >&2
+    die_usage "the evidence could not be READ. An unreadable answer is not a green one —
+a failed query returns the same empty list as a commit with no runs, so this refuses rather
+than pass a release on a network error."
+  fi
+  source_desc="$repo ci.yml runs for $sha"
+fi
+
+command -v jq >/dev/null 2>&1 || die_usage "\`jq\` is not on PATH (needed to read the run list)"
+
+printf '%s' "$runs" | jq -e 'type == "array"' >/dev/null 2>&1 \
+  || die_usage "unexpected shape from $source_desc — expected a JSON array of runs.
+Refusing rather than reading a shape this gate cannot place."
+
+# The accept predicate, and the ONLY one. Every clause is a separate way a release has been
+# or could be published on evidence that does not exist; see the header for each.
+green=$(printf '%s' "$runs" | jq -r --arg sha "$sha" '
+  [ .[]
+    | select(.headSha == $sha)
+    | select(.status == "completed")
+    | select(.conclusion == "success")
+    | select(.event == "push" or .event == "workflow_dispatch")
+  ] | .[0] // empty | "\(.databaseId)\t\(.event)\t\(.createdAt)\t\(.url)"')
+
+if [ -n "$green" ]; then
+  IFS=$'\t' read -r gid gevent gcreated gurl <<<"$green"
+  echo "require-green-ci: OK — ci.yml run $gid ($gevent, $gcreated) completed successfully"
+  echo "require-green-ci:      on exactly $sha"
+  [ -n "$gurl" ] && [ "$gurl" != "null" ] && echo "require-green-ci:      $gurl"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------------------
+# Refused. Say precisely WHAT was found, so nobody has to guess whether the gate is broken
+# or the commit really is unproven — the two look identical from a bare exit code.
+# ---------------------------------------------------------------------------------------
+{
+  echo "================================================================"
+  echo "require-green-ci: REFUSING to publish '$ref'."
+  echo "  commit: $sha"
+  echo "  repo:   ${repo:-<recorded>}"
+  echo
+  echo "No COMPLETED, SUCCESSFUL $WORKFLOW run exists for this exact commit."
+  echo "What the evidence actually shows:"
+  n=$(printf '%s' "$runs" | jq 'length')
+  if [ "$n" = "0" ]; then
+    echo "  (no $WORKFLOW run has ever been recorded for this commit)"
+  else
+    printf '%s' "$runs" | jq -r --arg sha "$sha" '.[] |
+      "  run \(.databaseId)  status=\(.status)  conclusion=\(.conclusion // "null")  event=\(.event)"
+      + (if .headSha == $sha then "" else "  ⚠ headSha=\(.headSha) — NOT this commit" end)'
+  fi
+  echo
+  echo "A release must be cut from a commit whose tests actually finished and passed."
+  echo "cancelled / timed_out / in_progress / a pull_request run are NOT evidence:"
+  echo "ci.yml cancels superseded runs on the same ref, so a cancelled run is the"
+  echo "ORDINARY outcome of pushing again quickly, and 43% of recent main runs are"
+  echo "cancelled. 1.12.0 published on exactly this footing."
+  echo
+  echo "What to do:"
+  echo "  1. Re-run ci.yml on this commit and let it finish:"
+  echo "       gh workflow run $WORKFLOW --repo ${repo:-<owner/repo>} --ref $ref"
+  echo "     then wait for it and read the result."
+  echo "  2. If it is red, fix it and cut the tag again. Do not publish around it."
+  echo "  3. Genuine break-glass only — deliberate, visible, and keyed to THIS ref:"
+  echo "       NEXUS_ALLOW_UNVERIFIED_CI=$ref"
+  echo "     (repository variable for the workflows; an env var for the pre-push hook)"
+  echo "================================================================"
+} >&2
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "### ❌ Publish blocked — no green CI for this commit"
+    echo
+    echo "\`$ref\` points at \`$sha\`, which has no completed, successful \`$WORKFLOW\` run."
+    echo "Nothing was published."
+    echo
+    echo "Set the \`NEXUS_ALLOW_UNVERIFIED_CI\` repository variable to \`$ref\` to override"
+    echo "deliberately, or re-run CI on this commit and re-tag."
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
+
+exit 1
