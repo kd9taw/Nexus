@@ -60,6 +60,11 @@ beforeEach(() => {
   api.get('getSettings').mockImplementation(() => Promise.resolve({ ...defaultSettings, mycall: 'KD9TAW' } as never))
   api.get('getDataFolder').mockImplementation(() => Promise.resolve(FOLDER))
   api.get('setDataFolder').mockImplementation(() => Promise.resolve({ files: 3, bytes: 42 }))
+  // The picker is desktop-only, so the panel asks. Mocked EXPLICITLY: the blanket mock above
+  // hands every export a `() => Promise.resolve(null)`, and a Promise is truthy — Browse would
+  // render for the wrong reason and the browser case could never be expressed.
+  api.get('isTauri').mockImplementation(() => true)
+  api.get('pickDataFolder').mockImplementation(() => Promise.resolve(null))
   Element.prototype.scrollIntoView = vi.fn()
 })
 afterEach(() => {
@@ -87,6 +92,7 @@ function renderPanel() {
 
 const useBtn = () => screen.getByRole('button', { name: EN['settings.dataFolder.use'] })
 const copyBtn = () => screen.getByRole('button', { name: EN['settings.dataFolder.copy'] })
+const browseBtn = () => screen.queryByRole('button', { name: EN['settings.dataFolder.browse'] })
 const path = () => screen.getByLabelText(EN['settings.dataFolder.path.label']) as HTMLInputElement
 
 describe('#289 the data & log folder control', () => {
@@ -123,6 +129,61 @@ describe('#289 the data & log folder control', () => {
     // The copy reports what it carried and verified, not a bare "done".
     expect(await screen.findByText(EN['settings.dataFolder.copied']
       .replace('{{files}}', '3').replace('{{bytes}}', '42'))).toBeTruthy()
+  })
+
+  // #289 follow-up — the operator's report was "there is no windows explorer popup to select a
+  // folder, I don't want users having to type out a full filesystem path". What can be pinned
+  // here is the wiring: which command the button reaches, what it does with the answer, and
+  // that it never became the ONLY way in. Whether a native dialog actually appears is not
+  // observable in jsdom and is the operator's machine to confirm.
+  describe('Browse', () => {
+    it('fills the field from the folder the operator picked, and adopts nothing by itself', async () => {
+      api.get('pickDataFolder').mockImplementation(() => Promise.resolve('D:\\Ham\\Nexus'))
+      renderPanel()
+      await waitFor(() => expect(api.get('getDataFolder')).toHaveBeenCalled())
+
+      fireEvent.click(browseBtn()!)
+      await waitFor(() => expect(api.get('pickDataFolder')).toHaveBeenCalled())
+      await waitFor(() => expect(path().value).toBe('D:\\Ham\\Nexus'))
+      // Picking is not choosing: the folder is only adopted by Use / Copy, which is what keeps
+      // the copy-or-not decision in the operator's hands.
+      expect(api.get('setDataFolder')).not.toHaveBeenCalled()
+
+      fireEvent.click(useBtn())
+      await waitFor(() => expect(api.get('setDataFolder')).toHaveBeenCalledWith('D:\\Ham\\Nexus', false))
+    })
+
+    it('leaves a typed path alone when the dialog is cancelled', async () => {
+      api.get('pickDataFolder').mockImplementation(() => Promise.resolve(null))
+      renderPanel()
+      await waitFor(() => expect(api.get('getDataFolder')).toHaveBeenCalled())
+      fireEvent.change(path(), { target: { value: '\\\\nas\\ham\\nexus' } })
+
+      fireEvent.click(browseBtn()!)
+      await waitFor(() => expect(api.get('pickDataFolder')).toHaveBeenCalled())
+      expect(path().value).toBe('\\\\nas\\ham\\nexus')
+      expect(useBtn().hasAttribute('disabled')).toBe(false)
+    })
+
+    it('a typed path still works with no picker in reach, and the dead button is not shown', async () => {
+      // A browser context: api.ts's bridge() throws, isTauri() is false. The UNC path is the
+      // reason the field must survive this — no OS folder dialog will reach one.
+      api.get('isTauri').mockImplementation(() => false)
+      renderPanel()
+      await waitFor(() => expect(api.get('getDataFolder')).toHaveBeenCalled())
+
+      expect(browseBtn()).toBeNull()
+      fireEvent.change(path(), { target: { value: '\\\\nas\\ham\\nexus' } })
+      fireEvent.click(useBtn())
+      await waitFor(() => expect(api.get('setDataFolder')).toHaveBeenCalledWith('\\\\nas\\ham\\nexus', false))
+      expect(api.get('pickDataFolder')).not.toHaveBeenCalled()
+    })
+
+    it('is shown at all when the desktop shell is there — the control for the check above', async () => {
+      renderPanel()
+      await waitFor(() => expect(api.get('getDataFolder')).toHaveBeenCalled())
+      expect(browseBtn()).not.toBeNull()
+    })
   })
 
   it('can go back to the default folder', async () => {

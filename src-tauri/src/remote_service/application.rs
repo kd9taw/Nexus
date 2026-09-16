@@ -831,6 +831,11 @@ mod tests {
             "halt_tx",
             "log_current_qso",
             "get_credentials_status",
+            // #289's folder picker opens an OS dialog on the STATION's screen. A browser has no
+            // filesystem to pick from, and a remote operator must never be able to raise a modal
+            // nobody is sitting in front of. It is excluded by construction — not a variant here
+            // — and this line is what keeps it that way if someone ever widens the vocabulary.
+            "pick_data_folder",
         ] {
             assert!(serde_json::from_value::<Command>(json!(command)).is_err());
         }

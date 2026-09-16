@@ -711,6 +711,12 @@ principal third-party components, not a substitute for that gate:
   LaunchAgent or an XDG autostart entry so Nexus can start when you sign in) — Apache-2.0 OR MIT.
   It arrives with **auto-launch** — MIT, **dirs** and **dirs-sys** (Linux and macOS) — MIT OR
   Apache-2.0, **redox_users** — MIT, and **winreg** (Windows) — MIT.
+- **tauri-plugin-dialog** (Settings ▸ Config ▸ Data & log folder: the OS "choose a folder"
+  dialog, so the data folder can be picked instead of typed) — Apache-2.0 OR MIT. It arrives
+  with **tauri-plugin-fs** — Apache-2.0 OR MIT, and **rfd** (the native file-dialog backend:
+  GTK on Linux, the Win32 common item dialog on Windows, NSOpenPanel on macOS) — MIT.
+  tauri-plugin-fs is a dependency of the dialog plugin only; it is not registered as a plugin,
+  so the webview is granted no filesystem permission.
 - **cpal** (sound-card audio transport) — MIT OR Apache-2.0.
 - **opus** / **opusic-sys** (the Opus codec for Nexus Remote's station audio; `opusic-sys`
   carries and statically links the libopus C source) — MIT OR Apache-2.0, and BSD-3-Clause.
