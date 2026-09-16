@@ -108,6 +108,21 @@ pub mod yaesu_wf;
 
 #[cfg(all(feature = "device", feature = "ai-cw"))]
 pub mod aicw;
+
+/// Settle the AI CW decoder's CPU-cache probe before any thread exists.
+///
+/// A pass-through to [`deepcw::warm_cpu_cache_probe`], which is where the reason lives:
+/// `tract-linalg` runs `wmic` on Windows without `CREATE_NO_WINDOW`, and that is the
+/// command-prompt flash operators reported on the CW screen. The shell calls it through
+/// here because `deepcw` is not one of its own dependencies.
+///
+/// Call once, from the top of the app's entry point — it mutates `PATH` around the probe
+/// and is only safe while the process is single-threaded. A no-op build without the AI CW
+/// decoder never links `tract` at all, so there is nothing to settle.
+pub fn warm_cpu_cache_probe() {
+    #[cfg(feature = "ai-cw")]
+    deepcw::warm_cpu_cache_probe();
+}
 #[cfg(feature = "device")]
 pub mod device;
 #[cfg(feature = "device")]

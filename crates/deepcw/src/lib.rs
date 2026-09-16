@@ -10,10 +10,90 @@
 //! Everything except the model itself is our code; the pure pieces (padding, window,
 //! spectrogram shape, CTC) are unit-tested against the reference's semantics.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use tract_onnx::prelude::*;
+
+/// `PATH` with every WBEM directory removed, or `None` if there was none to remove.
+///
+/// `wmic.exe` lives in `System32\wbem`, and that directory is reachable from
+/// `CreateProcess` ONLY through `PATH` — the image search covers the application
+/// directory, the current directory, the system and Windows directories and then
+/// `PATH`, and `wbem` is none of the first four. So dropping the `wbem` entries is
+/// exactly "make `wmic` unfindable", nothing wider.
+///
+/// Pure and matched case-insensitively on the final component, so it is testable off
+/// Windows — which is the whole reason it is split out from [`warm_cpu_cache_probe`].
+#[cfg_attr(not(windows), allow(dead_code))] // only APPLIED on Windows; tested everywhere
+fn path_without_wbem(path: &OsStr) -> Option<OsString> {
+    let kept: Vec<PathBuf> = std::env::split_paths(path)
+        .filter(|p| {
+            !p.file_name()
+                .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("wbem"))
+        })
+        .collect();
+    let rebuilt = std::env::join_paths(kept).ok()?;
+    (rebuilt != path).then_some(rebuilt)
+}
+
+/// Settle `tract`'s CPU-cache probe now, while it cannot open a console window.
+///
+/// ⚠️ **This is the second Windows console flash, and it is not our spawn.**
+/// `tract-linalg` sizes its matmul cache blocking from the real cache geometry, and
+/// its Windows probe is `std::process::Command::new("wmic")` with no
+/// `CREATE_NO_WINDOW` (`tract-linalg/src/cache.rs`, unchanged through 0.23.7 — the
+/// latest published version as of 2026-09-16). Nexus is a GUI process, so that spawn
+/// puts a command-prompt window on screen for as long as `wmic` runs, which is the
+/// better part of a second.
+///
+/// It reaches an operator only through here: `tract` is pulled in by this crate alone,
+/// this crate runs only on the AI CW decode thread, and that thread runs only in CW
+/// with the AI decoder on (which is the default). **That is why both flash reports
+/// named CW** — 2026-08-19 "moving to cw, I saw an ultra quick flash of what looked
+/// like a terminal screen", and 1.13.0-test3 "I saw it on the CW section while
+/// decoding". The probe is memoised in a `OnceLock`, so it is one flash per launch,
+/// at whatever moment the first inference happens — which reads as intermittent.
+///
+/// We cannot pass that spawn a flag; it is inside a crates.io dependency. What we can
+/// do is decide WHEN it runs and what it finds. Called once from the top of
+/// `tempo_lib::run`, before any thread exists:
+///
+/// 1. drop the WBEM directory from this process's `PATH`, so `CreateProcess` cannot
+///    find `wmic.exe` and fails outright — an error, never a window;
+/// 2. call `cache_info()`, which runs the probe, gets that error, and memoises
+///    "unknown" for the process lifetime;
+/// 3. put `PATH` back, so every child Nexus DOES spawn (rigctld, rotctld, TQSL,
+///    PowerShell, the clock-diagnosis tools) sees the environment it always saw.
+///
+/// The cost is that `tract` blocks against its documented fallback (256 KiB L2, no L3
+/// tier) instead of the machine's real cache. That is not a new code path: it is what
+/// `tract` uses on every platform without a probe, and what it already gets on Windows
+/// 11 24H2 and later, where Microsoft has removed `wmic` from the OS.
+///
+/// `std::env::set_var` is why this must run before threads start — it is safe in
+/// edition 2021 but not thread-safe, and `run()` is single-threaded at that point (it
+/// already sets `WEBKIT_DISABLE_DMABUF_RENDERER` there for the same reason).
+///
+/// Off Windows the probe reads `/sys` or `sysctl` in-process and spawns nothing, so
+/// this is just an early memoisation.
+pub fn warm_cpu_cache_probe() {
+    #[cfg(windows)]
+    let restore = std::env::var_os("PATH").and_then(|original| {
+        let stripped = path_without_wbem(&original)?;
+        std::env::set_var("PATH", &stripped);
+        Some(original)
+    });
+    // Reaching THROUGH tract-onnx rather than depending on tract-linalg directly: the
+    // version must be the one this crate's inference actually uses, and a second
+    // dependency line could drift from it.
+    let _ = tract_onnx::tract_core::tract_linalg::cache::cache_info();
+    #[cfg(windows)]
+    if let Some(original) = restore {
+        std::env::set_var("PATH", original);
+    }
+}
 
 /// The engine's `model.onnx.json` — the model I/O contract.
 #[derive(Debug, Clone, Deserialize)]
@@ -268,6 +348,48 @@ impl DeepCw {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a `PATH` string in this platform's separator, so the test says the same
+    /// thing on Windows (`;`) as it does in CI on Linux (`:`).
+    fn path_of(entries: &[&str]) -> OsString {
+        std::env::join_paths(entries.iter().map(Path::new)).expect("join")
+    }
+
+    /// The WBEM directory goes, in any case and with or without a trailing separator,
+    /// wherever it sits — and nothing else moves. That the REST is untouched is the half
+    /// that matters: this edits the live process `PATH`, and a child that cannot find
+    /// `rigctld` would be a worse bug than a flash.
+    ///
+    /// Forward slashes and no drive letters, because this test runs on Linux in CI:
+    /// `join_paths` rejects a `:` there, and `/` is a directory separator on Windows too.
+    /// What that leaves unproven on Linux is only `Path::file_name`'s handling of `\`,
+    /// which is std's own documented Windows behaviour.
+    #[test]
+    fn strips_only_the_wbem_entry() {
+        let winlike = ["/Windows/system32", "/Windows/System32/Wbem", "/ham"];
+        assert_eq!(
+            path_without_wbem(&path_of(&winlike)),
+            Some(path_of(&["/Windows/system32", "/ham"]))
+        );
+        // Lower case, trailing separator, and first rather than middle.
+        assert_eq!(
+            path_without_wbem(&path_of(&["/windows/system32/wbem/", "/ham"])),
+            Some(path_of(&["/ham"]))
+        );
+        // A directory that merely CONTAINS "wbem" is a different directory.
+        assert_eq!(path_without_wbem(&path_of(&["/wbem-tools"])), None);
+        // Nothing to strip → None, so the caller does not touch the environment at all.
+        assert_eq!(path_without_wbem(&path_of(&["/Windows/system32"])), None);
+        assert_eq!(path_without_wbem(OsStr::new("")), None);
+    }
+
+    /// The warm-up runs, does not panic, and leaves `PATH` exactly as it found it.
+    #[test]
+    fn warm_up_leaves_the_environment_alone() {
+        let before = std::env::var_os("PATH");
+        warm_cpu_cache_probe();
+        assert_eq!(std::env::var_os("PATH"), before);
+    }
 
     fn meta() -> Metadata {
         serde_json::from_str(

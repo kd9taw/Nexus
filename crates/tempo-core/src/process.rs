@@ -18,6 +18,13 @@
 //! the build for any `Command::new` in shipped source outside this file. Test code and `build.rs`
 //! are exempt: neither runs inside the operator's GUI process.
 //!
+//! **That guard covers our half of the process, and the flashes did not stop.** The next one
+//! came from `tract-linalg`, below the AI CW decoder, which probes the CPU cache by running
+//! `wmic` — a dependency's spawn, which no scan of `crates/` could see and no flag of ours can
+//! reach. [`tests::no_unreviewed_dependency_process_spawns`] runs the same detector over every
+//! crate in the lockfiles and makes each spawn it finds a written-down verdict; that one's
+//! mitigation is `deepcw::warm_cpu_cache_probe`.
+//!
 //! On a GUI-subsystem child (TQSL, Nexus relaunching itself) the flag is ignored by Windows, so
 //! routing those through here changes nothing. Off Windows it is a plain `Command::new`.
 
@@ -359,6 +366,269 @@ mod unix_tests { fn u() { let _ = Command::new("sleep"); } }
         // `not(test)` is shipped code.
         let not_test = "#[cfg(not(test))]\nfn f() { Command::new(\"x\"); }\n";
         assert_eq!(raw_spawn_lines(not_test), vec![2]);
+    }
+
+    // ── The dependency half of the same class ────────────────────────────────────────────
+    //
+    // `no_raw_process_spawns_outside_this_module` scans OUR source, and that is all it can
+    // ever see. It was written after the 1.12.0 clock-diagnosis flash, it was right about
+    // that flash, and it was still looking in the wrong half of the process when the next
+    // report arrived: `tract-linalg`, three crates below the AI CW decoder, probes the CPU
+    // cache by running `wmic` with no CREATE_NO_WINDOW. Nothing in `crates/` or
+    // `src-tauri/src` says so, so nothing in the first guard could.
+    //
+    // A console window does not care whose code opened it. The scan below therefore runs
+    // the same detector over every third-party crate in the lockfiles and demands that each
+    // spawn it finds has been looked at by a person and written down here.
+
+    /// Every child-process spawn in a locked dependency's shipped source, with the verdict
+    /// that admitted it. Keyed by crate NAME and file path only: a version bump should not
+    /// churn this list, but a crate that starts spawning from a new file must be reviewed.
+    ///
+    /// **Adding a line here is the review.** For each, answer: can this run inside the
+    /// operator's GUI process, and if it can, is it a console program on Windows? If both,
+    /// it is a flash and it needs a mitigation, not an entry.
+    const REVIEWED_DEPENDENCY_SPAWNS: &[&str] = &[
+        // ⚠️ THE ONE THAT REACHES AN OPERATOR: `wmic cpu get L2CacheSize,L3CacheSize` with no
+        // CREATE_NO_WINDOW, to size matmul cache blocking. Still there in 0.23.7, the latest
+        // published version. It runs on the AI CW decode thread — `tract` enters this tree
+        // through `deepcw` and nothing else — which is why both console-flash reports named the
+        // CW screen. Memoised in a `OnceLock`, so it is one flash per launch. NOT admitted:
+        // mitigated by `deepcw::warm_cpu_cache_probe`, which settles the probe at startup with
+        // the WBEM directory off `PATH`, so the spawn fails instead of opening a window. If this
+        // line ever stops matching, upstream changed — re-read the probe, and delete the
+        // mitigation with it.
+        "tract-linalg src/cache.rs",
+        // Windows, and harmless: `open` sets CREATE_NO_WINDOW on every command it builds.
+        "open src/windows.rs",
+        // Relaunches Nexus itself on an explicit restart. A GUI-subsystem child gets no console
+        // either way, so the flag would be a no-op.
+        "tauri src/process.rs",
+        // Runtime process APIs whose program comes from the caller — they spawn nothing of their
+        // own. Nexus makes no such call; the first guard in this file is what proves that.
+        "async-process src/lib.rs",
+        "tokio src/process/mod.rs",
+        "zbus src/abstractions/process.rs",
+        // Other targets: never compiled into a Windows build.
+        "auto-launch src/macos.rs",
+        "open src/haiku.rs",
+        "open src/ios.rs",
+        "open src/macos.rs",
+        "open src/redox.rs",
+        "open src/unix.rs",
+        "open src/wsl.rs",
+        "redox_users src/lib.rs",
+        "tokio src/process/unix/pidfd_reaper.rs",
+        // pkexec / sudo / zenity / kdialog, in the Linux+BSD install arm. The Windows arm ends
+        // in `ShellExecuteW`, which is the thing src-tauri's updater notes already describe.
+        "tauri-plugin-updater src/updater.rs",
+        // Compile time only — build scripts, their helpers, and proc-macro crates. None of this
+        // code is linked into the application binary.
+        "autocfg src/rustc.rs",
+        "bindgen features.rs",
+        "bindgen lib.rs",
+        "cargo_metadata src/lib.rs",
+        "cc src/lib.rs",
+        "cc src/tool.rs",
+        "clang-sys src/support.rs",
+        "cmake src/lib.rs",
+        "embed-resource src/non_windows.rs",
+        "embed-resource src/windows_msvc.rs",
+        "embed-resource src/windows_not_msvc.rs",
+        "find-msvc-tools src/find_tools.rs",
+        "find-msvc-tools src/tool.rs",
+        // A build script that is not named `build.rs`, so the directory filter cannot spot it.
+        "libdbus-sys build_vendored.rs",
+        "pkg-config src/lib.rs",
+        // Included by its own build script.
+        "portable-atomic version.rs",
+        "proc-macro-crate src/lib.rs",
+        "rustc_version src/lib.rs",
+        "tauri-macros src/command/wrapper.rs",
+        "version_check src/lib.rs",
+        // Test-support code this scanner's `#[cfg(test)]` stripper cannot see, because the gate
+        // is a directory layout or a cargo feature rather than an attribute. `nix` keeps its
+        // integration tests in `test/`, not `tests/`.
+        "native-tls src/test.rs",
+        "nix test/test_kmod/mod.rs",
+        "nix test/test_mount.rs",
+        "nix test/test_unistd.rs",
+        "rusty-fork src/fork.rs",
+        "windows-implement src/tests.rs",
+    ];
+
+    /// `$CARGO_HOME/registry/src/<index>/` — where cargo extracts dependency sources.
+    fn registry_src_roots() -> Vec<PathBuf> {
+        let home = std::env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")));
+        let Some(src) = home.map(|h| h.join("registry").join("src")) else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(&src) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect()
+    }
+
+    /// `(name, version)` for every package in a `Cargo.lock`. Both lockfiles matter: the
+    /// desktop shell is its own workspace, so the crates that only IT pulls in (tauri, the
+    /// updater, the opener) appear in nothing the workspace lock lists.
+    fn locked_packages(repo: &Path) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for lock in ["Cargo.lock", "src-tauri/Cargo.lock"] {
+            let Ok(text) = std::fs::read_to_string(repo.join(lock)) else {
+                continue;
+            };
+            let (mut name, mut version) = (None, None);
+            for line in text.lines() {
+                let value = |l: &str, key: &str| {
+                    l.strip_prefix(key)
+                        .map(|v| v.trim().trim_matches('"').to_string())
+                };
+                if line.starts_with("[[package]]") {
+                    (name, version) = (None, None);
+                } else if let Some(v) = value(line, "name =") {
+                    name = Some(v);
+                } else if let Some(v) = value(line, "version =") {
+                    version = Some(v);
+                }
+                if let (Some(n), Some(v)) = (&name, &version) {
+                    out.push((n.clone(), v.clone()));
+                    (name, version) = (None, None);
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Shipped `.rs` files of an extracted dependency: everything under the crate root
+    /// except the places whose code cannot run inside the operator's process. `build.rs`
+    /// and `build/` run at compile time; `tests/`, `benches/` and `examples/` are not
+    /// compiled into the library at all.
+    fn dependency_sources(krate: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(krate) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if p.is_dir() {
+                if !matches!(name.as_str(), "tests" | "benches" | "examples" | "build") {
+                    dependency_sources(&p, out);
+                }
+            } else if name.ends_with(".rs") && name != "build.rs" {
+                out.push(p);
+            }
+        }
+    }
+
+    /// THE SECOND GUARD. A dependency that spawns a child process spawns it inside Nexus,
+    /// and on Windows a console child with no `CREATE_NO_WINDOW` is a command-prompt window
+    /// on the operator's screen. We cannot pass those spawns a flag, so the least we do is
+    /// know about every one of them.
+    #[test]
+    fn no_unreviewed_dependency_process_spawns() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let roots = registry_src_roots();
+        assert!(
+            !roots.is_empty(),
+            "no cargo registry source directory found (CARGO_HOME / HOME) — this guard \
+             would pass while checking nothing"
+        );
+        let packages = locked_packages(&repo);
+        assert!(
+            packages.len() > 100,
+            "read {} packages from the lockfiles; that is not a parse, it is a misread",
+            packages.len()
+        );
+
+        let mut found: Vec<(String, String)> = Vec::new();
+        let mut scanned: Vec<String> = Vec::new();
+        for (name, version) in &packages {
+            let dir = roots
+                .iter()
+                .map(|r| r.join(format!("{name}-{version}")))
+                .find(|d| d.is_dir());
+            let Some(dir) = dir else { continue };
+            scanned.push(name.clone());
+            let mut files = Vec::new();
+            dependency_sources(&dir, &mut files);
+            for f in files {
+                let Ok(src) = std::fs::read_to_string(&f) else {
+                    continue;
+                };
+                // Cheap gate first: the detector below builds char vectors, and 18 000 files
+                // of dependency source is not something to do that to.
+                if !src.contains("Command::new") || raw_spawn_lines(&src).is_empty() {
+                    continue;
+                }
+                let rel = f
+                    .strip_prefix(&dir)
+                    .unwrap_or(&f)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                found.push((name.clone(), rel));
+            }
+        }
+        found.sort();
+        found.dedup();
+
+        // THE POSITIVE CONTROL, and it is a live one rather than a planted string:
+        // `tract-linalg` really does spawn `wmic`, so a scan that cannot see it is broken or
+        // reached nothing — the reassuring answer this guard exists to refuse.
+        assert!(
+            found
+                .iter()
+                .any(|(n, p)| n == "tract-linalg" && p == "src/cache.rs"),
+            "the dependency scan did not find tract-linalg's known `wmic` spawn \
+             ({} crates scanned). Either the sources are not extracted — build the \
+             workspace first, `cargo test --workspace` — or the scanner is broken.",
+            scanned.len()
+        );
+
+        let new: Vec<String> = found
+            .iter()
+            .map(|(n, p)| format!("{n} {p}"))
+            .filter(|f| !REVIEWED_DEPENDENCY_SPAWNS.contains(&f.as_str()))
+            .collect();
+        let gone: Vec<String> = REVIEWED_DEPENDENCY_SPAWNS
+            .iter()
+            .filter(|r| {
+                let (krate, path) = r.split_once(' ').expect("`<crate> <path>` per entry");
+                // Silent about a crate whose source is not extracted: that is this machine
+                // having built less, not upstream having changed. The control above is what
+                // refuses a scan that reached nothing at all.
+                scanned.iter().any(|s| s == krate)
+                    && !found.iter().any(|(n, p)| n == krate && p == path)
+            })
+            .map(|r| r.to_string())
+            .collect();
+        assert!(
+            new.is_empty(),
+            "unreviewed child-process spawn(s) in dependency source. On Windows a console \
+             child spawned without CREATE_NO_WINDOW flashes a command-prompt window inside \
+             Nexus, and we cannot pass a dependency's spawn a flag. Decide for each whether it \
+             can run in the GUI process, then add it to REVIEWED_DEPENDENCY_SPAWNS with the \
+             verdict as a comment:\n  {}",
+            new.join("\n  ")
+        );
+        assert!(
+            gone.is_empty(),
+            "reviewed dependency spawn(s) no longer exist — the upstream code changed, so \
+             the verdict (and any mitigation written for it) is out of date:\n  {}",
+            gone.join("\n  ")
+        );
     }
 
     /// The helper hands back an ordinary `Command` for the program it was given.
