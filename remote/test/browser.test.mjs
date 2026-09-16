@@ -27,13 +27,17 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 // that skipped the scroll would trade a flaky red for a permanent green that measures nothing.
 // The setTimeout is the case the frame loop cannot see - if frames stop, the deadline is never
 // read, and without it the promise would hang out the whole test timeout with no message.
-const SCROLL_MOUNT_TIMEOUT_MS = 12000
+// Both bounds sit UNDER browser-runtime's 10 s per-command ceiling, which an awaited Runtime.evaluate
+// is subject to: a longer in-page deadline can never be reached, and the caller is handed
+// "Browser command timed out: Runtime.evaluate" instead of the locator that never mounted. The
+// mountedMeasure this replaces used 12 s and could not reach it.
+const SCROLL_MOUNT_TIMEOUT_MS = 8000
 const scrolledIntoView = (expression, options, measure = '()=>true', what = '') => `new Promise((resolve,reject)=>{
   const deadline=performance.now()+${SCROLL_MOUNT_TIMEOUT_MS},
     find=()=>{try{return (${expression})||null}catch{return null}},
     settle=value=>{clearTimeout(timer);resolve(value)},
     fail=()=>{clearTimeout(timer);reject(new Error('scrolledIntoView: no node matched '+${JSON.stringify(expression)}+' within ${SCROLL_MOUNT_TIMEOUT_MS} ms'+${JSON.stringify(what ? ` (${what})` : '')}))},
-    timer=setTimeout(fail,${SCROLL_MOUNT_TIMEOUT_MS + 2000}),
+    timer=setTimeout(fail,${SCROLL_MOUNT_TIMEOUT_MS + 500}),
     attempt=()=>{
       const element=find()
       if(!element)return performance.now()>deadline?fail():requestAnimationFrame(attempt)
@@ -840,7 +844,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         }
         // Real modified waterfall gestures retain native TX-only / both semantics.
         for(const [modifiers,kind]of [[8,'txOffset'],[2,'bothOffsets']]){
-          await evaluate(`document.querySelector('.operate-cockpit .waterfall-canvas').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          await evaluate(scrolledIntoView(`document.querySelector('.operate-cockpit .waterfall-canvas')`,{block:'center',behavior:'instant'}));await settledLayout()
           const point=await evaluate(`(()=>{const e=document.querySelector('.operate-cockpit .waterfall-canvas'),r=e.getBoundingClientRect(),x=r.left+r.width*.4,y=r.top+r.height*.5;return{x,y,hit:e.contains(document.elementFromPoint(x,y))}})()`)
           assert.equal(point.hit,true)
           for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',modifiers,clickCount:1},session)
@@ -876,7 +880,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(stationRequests.length,++runtimeActions)
         assert.deepEqual(stationRequests.at(-1).action.change,{kind:'rxOffset',hz:850})
         assert.equal(stationRequests.at(-1).action.action,'ft.runtime')
-        await evaluate(`document.querySelector('.operate-cockpit .waterfall-canvas').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+        await evaluate(scrolledIntoView(`document.querySelector('.operate-cockpit .waterfall-canvas')`,{block:'center',behavior:'instant'}));await settledLayout()
         const point=await evaluate(`(()=>{const e=document.querySelector('.operate-cockpit .waterfall-canvas'),r=e.getBoundingClientRect(),x=r.left+r.width*.3,y=r.top+r.height*.5;return{x,y,hit:e.contains(document.elementFromPoint(x,y))}})()`)
         assert.equal(point.hit,true)
         for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',modifiers:0,clickCount:1},session)
@@ -1037,7 +1041,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         for(const [width,height,zoom]of [[1024,768,1],[1280,800,1],[1280,800,1.75]])for(const theme of ['dark','light']){
           await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
           await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
-          await settledLayout();await evaluate(`${expression}.scrollIntoView({block:'center',behavior:'instant'});true`);await settledLayout()
+          await settledLayout();await evaluate(scrolledIntoView(`${expression}`,{block:'center',behavior:'instant'}));await settledLayout()
           const shape=await evaluate(`(()=>{const e=${expression},r=e.getBoundingClientRect();return {rect:r.toJSON(),hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),width:innerWidth,height:innerHeight}})()`)
           assert.ok(shape.hit&&shape.rect.width>0&&shape.rect.height>0&&shape.rect.left>=0&&shape.rect.right<=width+1&&shape.rect.top>=0&&shape.rect.bottom<=height+1,JSON.stringify({kind,width,height,zoom,theme,shape}))
           selectionGeometry.push({kind,width,height,zoom,theme,shape})
@@ -1252,7 +1256,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
-        await evaluate(`${button('Clear draft and use N3DXCW')}.scrollIntoView({block:'center',behavior:'instant'});true`);await settledLayout()
+        await evaluate(scrolledIntoView(`${button('Clear draft and use N3DXCW')}`,{block:'center',behavior:'instant'}));await settledLayout()
         const shape=await evaluate(`(()=>{const e=${button('Clear draft and use N3DXCW')},r=e.getBoundingClientRect(),input=${input('cw')};return {target:r.toJSON(),hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),hitElement:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,200)??null,stale:document.querySelector('.app')?.dataset.remoteStale??null,availability:window.__availabilityTrace.slice(-4),toast:[...document.querySelectorAll('.ui-toast-msg')].map(m=>({text:m.textContent,rect:(m.closest('li')??m).getBoundingClientRect().toJSON()})),nav:document.querySelector('.remote-quick-nav')?.getBoundingClientRect().toJSON()??null,sameInput:input===window.__dxCwInput,call:input.value,docW:document.documentElement.scrollWidth,horizontal:[...document.querySelectorAll('.cw-cockpit, .cw-cockpit *')].filter(e=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+1&&/auto|scroll/.test(getComputedStyle(e).overflowX)).map(e=>e.className)}})()`)
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`draft-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'))}
         const draftShape=JSON.stringify({width,height,zoom,theme,shape})
@@ -1324,7 +1328,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       const chooseView=async(label,view)=>{
         await click(picker);await until(`!!${menu}`)
         const item=`[...${menu}.querySelectorAll('[role="menuitem"]')].find(e=>e.textContent===${JSON.stringify(label)})`
-        await evaluate(`${item}.scrollIntoView({block:'nearest',behavior:'instant'})`);await settledLayout()
+        await evaluate(scrolledIntoView(`${item}`,{block:'nearest',behavior:'instant'}));await settledLayout()
         await click(item);await until(`document.querySelector('.app').dataset.remoteView==='${view}'&&!${menu}`)
         assert.equal(await evaluate(`document.querySelector('${call}')===window.__quickNodes.call&&document.querySelector('.app')===window.__quickNodes.app`),true)
         modeTrips.push({label,view})
@@ -1350,7 +1354,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.ok(menuShape.rect.top>=0&&menuShape.rect.left>=0&&menuShape.rect.right<=width&&menuShape.rect.bottom<=height,'the real zoomed mode menu must fit its browser window')
         for(const edge of ['lastElementChild','firstElementChild']){
           const item=`${menu}.querySelector('[role="menuitem"]').parentElement.${edge}`
-          await evaluate(`${item}.scrollIntoView({block:'nearest',behavior:'instant'})`);await settledLayout()
+          await evaluate(scrolledIntoView(`${item}`,{block:'nearest',behavior:'instant'}));await settledLayout()
           assert.equal(await evaluate(`(()=>{const e=${item},r=e.getBoundingClientRect();return r.height>=44&&e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()`),true,'every end of the mode list must be reachable at the actual zoom')
         }
         if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`quick-modes-${width}-${zoom}-${theme}.png`),Buffer.from(shot.data,'base64'))}
@@ -1372,7 +1376,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await until(`document.querySelector('.${quickMode}-cockpit .remote-quick-details')?.getAttribute('aria-expanded')==='true'`)
       await waitScope(true)
       const scope=`document.querySelector('.${quickMode}-cockpit .ph-scope canvas')`
-      await evaluate(`${scope}.scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+      await evaluate(scrolledIntoView(`${scope}`,{block:'center',behavior:'instant'}));await settledLayout()
       assert.equal(await evaluate(`(()=>{const r=${scope}.getBoundingClientRect();return r.width>0&&r.height>0})()`),true)
       await click(`document.querySelector('.${quickMode}-cockpit .remote-quick-details')`)
       await until(`document.querySelector('.${quickMode}-cockpit .remote-quick-details')?.getAttribute('aria-expanded')==='false'`)
@@ -1525,7 +1529,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         const info=`document.querySelector('.remote-session-toggle')`
         await click(info);await until(`document.querySelector('.remote-session-toggle')?.getAttribute('aria-expanded')==='true'`)
         const disconnect=`document.querySelector('.remote-session-info button')`
-        await evaluate(`${disconnect}.scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+        await evaluate(scrolledIntoView(`${disconnect}`,{block:'center',behavior:'instant'}));await settledLayout()
         assert.equal(await evaluate(`(()=>{const b=${disconnect},r=b.getBoundingClientRect();return b.textContent==='Disconnect and return to stations'&&b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()`),true)
         // The session panel states what still needs permission, and that sentence changed when FT
         // transmit gained its own station permission: at operation v4 it must say FT8/FT4 needs a
@@ -1574,9 +1578,6 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       console.log('Compiled session layout: eight compact layouts, details, preserved authority and explicit release passed');return
     }
     if(operating){
-      // Scroll a target into view and measure it while it is MOUNTED, in one page turn. Resolves null
-      // only if it never mounts within 12 s; the caller's predicate runs once, on a mounted node.
-      const mountedMeasure=(selector,measure)=>`new Promise(resolve=>{const deadline=performance.now()+12000,attempt=()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return performance.now()>deadline?resolve(null):requestAnimationFrame(attempt);e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});requestAnimationFrame(()=>requestAnimationFrame(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return attempt();resolve((${measure})(e))}))};attempt()})`
       await click(button('CW'))
       await until(`!!document.querySelector('.cw-cockpit .remote-log-entry .le-log-btn')`)
       assert.equal(await evaluate(`document.querySelector('.cw-cockpit .le-log-btn').disabled`),true)
@@ -1666,7 +1667,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
         for(const selector of ['.psk-cockpit .le-call','.psk-cockpit .le-log-btn']){
-          await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          await evaluate(scrolledIntoView(`document.querySelector('${selector}')`,{block:'center',behavior:'instant'}));await settledLayout()
           const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2),chain=[];for(let p=e;p;p=p.parentElement){const r=p.getBoundingClientRect(),c=getComputedStyle(p);chain.push({class:p.className,rect:r.toJSON(),scroll:p.scrollHeight,client:p.clientHeight,at:p.scrollTop,y:c.overflowY})}return {rect:r.toJSON(),hit:hit?.outerHTML.slice(0,300),chain,docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
           if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'logging-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'logging-layout-failure.json'),JSON.stringify({selector,width,height,zoom,theme,shape},null,2))}
           assert.equal(shape.good,true,`Logging control reachable ${selector} ${width} ${zoom}: ${JSON.stringify(shape)}`)
@@ -1901,7 +1902,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
             await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout()
             for(const selector of [followInput,followSave]){
-              await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+              await evaluate(scrolledIntoView(`document.querySelector('${selector}')`,{block:'center',behavior:'instant'}));await settledLayout()
               const good=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1})()`)
               assert.equal(good,true,`Follow-band setting reachable ${selector} ${width} ${zoom} ${theme}`);followGeometry++
               if(selector===followInput){
@@ -1955,7 +1956,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
           await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
           await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
-          await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          await evaluate(scrolledIntoView(`document.querySelector('${selector}')`,{block:'center',behavior:'instant'}));await settledLayout()
           const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,300),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
           if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'mode-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'mode-layout-failure.json'),JSON.stringify({tab,width,height,zoom,theme,shape},null,2))}
           assert.equal(shape.good,true,`Mode entry reachable ${tab} ${width} ${zoom}: ${JSON.stringify(shape)}`);modeGeometry++
@@ -2095,8 +2096,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               // (`.readout-val[data-digit-tune="on"]`, asserted before each gesture below). The other
               // targets can still remount across the three CDP round trips this takes (presence, scroll,
               // measure), so measure a node that is mounted when measured; the predicate is unchanged.
-              const shape=await evaluate(mountedMeasure(target,`e=>{const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,250),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}}`))
-              assert.ok(shape,`Tuning target must mount: ${mode} ${target} ${width} ${zoom} ${theme}`)
+              const shape=await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'center',inline:'center',behavior:'instant'},`e=>{const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,250),good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}}`,`tuning target ${mode} ${target} ${width} ${zoom} ${theme}`))
               if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'wheel-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'wheel-layout-failure.json'),JSON.stringify({mode,target,width,height,zoom,theme,shape},null,2))}
               assert.equal(shape.good,true,`Tuning target reachable ${mode} ${target} ${width} ${zoom}: ${JSON.stringify(shape)}`);wheelGeometry++
               if(target===scope&&width===1280&&zoom===1.75&&theme==='light'&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`scope-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
@@ -2105,7 +2105,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               await until(`!!document.querySelector('${digit}')`)
               const before=stationRequests.length,from=applicationData.get_snapshot.radio.dialMhz
               const target=kind==='scope'?scope:kind==='nudge'?root+' .tuning-nudge:nth-of-type(3)':digit
-              assert.ok(await evaluate(mountedMeasure(target,'()=>true')),`Tuning target must mount: ${mode} ${kind}`)
+              await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'center',inline:'center',behavior:'instant'},'()=>true',`tuning target ${mode} ${kind}`))
               // The positive gesture starts AFTER scrolling and layout settle.
               // Prove both independent feeds fresh; a current lease does not
               // make an aged radio snapshot safe to tune. Never retry an input.
@@ -2292,7 +2292,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         receiverGeometry+=await decoderLayout(selector,`waterfall-${tab.toLowerCase()}`)
         await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
-        await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+        await evaluate(scrolledIntoView(`document.querySelector('${selector}')`,{block:'center',behavior:'instant'}));await settledLayout()
         const hit=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),x=r.left+r.width*${fraction},y=r.top+r.height/2,hit=document.elementFromPoint(x,y);return{x,y,rect:r.toJSON(),hit:hit?.outerHTML.slice(0,1000),visible:e.contains(hit)}})()`)
         if(!hit.visible&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'receiver-waterfall-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'receiver-waterfall-failure.json'),JSON.stringify({tab,selector,hit},null,2))}
         assert.equal(hit.visible,true,`RX waterfall reachable ${tab}: ${JSON.stringify(hit)}`)
@@ -2342,7 +2342,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           if(attempt===99)assert.fail(`Fresh receive readings must precede ${tab} RX gesture`)
           await sleep(50)
         }
-        await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+        await evaluate(scrolledIntoView(`document.querySelector('${selector}')`,{block:'center',behavior:'instant'}));await settledLayout()
         const prepared=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),x=r.left+r.width*${fraction},y=r.top+r.height/2,hit=document.elementFromPoint(x,y);return {x,y,rect:r.toJSON(),hit:hit?.outerHTML.slice(0,1000),visible:e.contains(hit),authority:document.querySelector('.remote-logging-authority')?.textContent}})()`)
         assert.equal(prepared.visible,true,`RX gesture must hit the refreshed ${tab} canvas`)
         for(const type of ['mousePressed','mouseReleased'])await browser.call('Input.dispatchMouseEvent',{type,x:prepared.x,y:prepared.y,button:'left',clickCount:1},session)
@@ -2442,7 +2442,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           await until(`Number(document.querySelector('${selector}').value)===${target}&&!document.querySelector('${selector}').disabled`)
           await browser.call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false},session)
           await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`);await settledLayout()
-          await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          await evaluate(scrolledIntoView(`document.querySelector('${selector}')`,{block:'center',behavior:'instant'}));await settledLayout()
           const prior=applicationData.get_snapshot.radio[field],start=stationRequests.length
           const rect=await evaluate(`document.querySelector('${selector}').getBoundingClientRect().toJSON()`)
           const y=rect.top+rect.height/2,point=f=>rect.left+rect.width*f
@@ -2470,7 +2470,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`);await settledLayout();await settledLayout()
         for(const selector of ['.cw-cockpit .amp-op','.cw-cockpit .cw-decode-clear']){
-          await evaluate(`document.querySelector('${selector}').scrollIntoView({block:'center',behavior:'instant'})`);await settledLayout()
+          await evaluate(scrolledIntoView(`document.querySelector('${selector}')`,{block:'center',behavior:'instant'}));await settledLayout()
           const shape=await evaluate(`(()=>{const e=document.querySelector('${selector}'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{rect:r.toJSON(),hit:hit?.outerHTML.slice(0,300),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,good:r.width>0&&r.height>0&&e.contains(hit)&&document.documentElement.scrollWidth<=innerWidth+1&&document.documentElement.scrollHeight<=innerHeight+1}})()`)
           if(!shape.good&&artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'control-layout-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'control-layout-failure.json'),JSON.stringify({selector,width,height,zoom,theme,shape},null,2))}
           assert.equal(shape.good,true,`Station control reachable ${selector} ${width} ${zoom}: ${JSON.stringify(shape)}`);controlGeometry++
@@ -2577,7 +2577,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           for (const selector of ['.cw-decode-text span', '.le-call', '.cockpit-txdock .rtty-stop']) {
             // Scroll above the sticky TX dock, as an operator would. "Nearest"
             // counts text covered by that dock as already in the viewport.
-            const reachable = await evaluate(`(()=>{const e=document.querySelector('.${mode}-cockpit ${selector}');e.scrollIntoView({block:'start',inline:'nearest'});const r=e.getBoundingClientRect();return r.width>0 && r.height>0 && e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()`)
+            const reachable = await evaluate(scrolledIntoView(`document.querySelector('.${mode}-cockpit ${selector}')`,{block:'start',inline:'nearest'},`e=>{const r=e.getBoundingClientRect();return r.width>0 && r.height>0 && e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}`,`${mode} ${selector} at ${width}x${height} zoom ${zoom}`))
             if (!reachable) {
               console.log('Keyboard geometry diagnostic', await evaluate(`(()=>{const e=document.querySelector('.${mode}-cockpit ${selector}'),r=e.getBoundingClientRect(),chain=[];for(let p=e;p;p=p.parentElement){const c=getComputedStyle(p),b=p.getBoundingClientRect();chain.push({class:p.className,top:b.top,bottom:b.bottom,height:b.height,scroll:p.scrollHeight,client:p.clientHeight,y:c.overflowY})}return{chain,hit:document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.className}})()`))
               if (artifacts) { const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`remote-nexus-${mode}-failure.png`),Buffer.from(shot.data,'base64')) }
@@ -2651,7 +2651,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           // At narrow effective widths Nexus stacks its panes in an existing
           // scroller. Check reachability, not an assumption that every pane is
           // above the fold. elementFromPoint also detects clipping/occlusion.
-          await evaluate(`document.querySelector('.operate-host .recall-card').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await evaluate(scrolledIntoView(`document.querySelector('.operate-host .recall-card')`,{block:'nearest',inline:'nearest'}))
           await settledLayout()
           const shape = await evaluate(`(()=>{const card=document.querySelector('.operate-host .recall-card'),r=card.getBoundingClientRect(),header=document.querySelector('.remote-application-status').getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,cardTop:r.top,cardBottom:r.bottom,cardHeight:r.height,headerTop:header.top,reachable:card.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}})()`)
           const reachable=shape.docW<=width+1 && shape.docH<=height+1 && shape.cardHeight>0 && shape.cardTop>=0 && shape.cardBottom<=height+1 && shape.headerTop>=0 && shape.reachable
@@ -2695,7 +2695,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
         await settledLayout()
         for (const target of ['.remote-insights-status button', `${selector} ${first}`, `${selector} ${last}`]) {
-          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest'}))
           await settledLayout()
           const shape = await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),s=document.querySelector('${scroller}');return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,height:r.height,scrollerHeight:s.clientHeight,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
           const reachable = shape.docW<=width+1 && shape.docH<=height+1 && shape.height>0 && shape.scrollerHeight>0 && shape.top<height && shape.bottom>0 && shape.reachable
@@ -2735,7 +2735,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
         await settledLayout()
         for (const target of ['.remote-insights-status button', '.worknow-card .wn-details', '.dxped-calendar .cal-viewtabs button:last-child']) {
-          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest'}))
           await settledLayout()
           const shape = await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
           const reachable = shape.docW<=width+1 && shape.docH<=height+1 && shape.height>0 && shape.top<height && shape.bottom>0 && shape.reachable
@@ -2775,7 +2775,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
         await settledLayout()
         for (const target of ['.remote-insights-status button', '.mv-search', '.mv-list .mv-row:last-child']) {
-          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest'}))
           await settledLayout()
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
@@ -2799,7 +2799,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await browser.call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false},session)
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');window.dispatchEvent(new Event('resize'))`)
         await settledLayout()
-        await evaluate(`document.querySelector('.mv-grid tbody tr:last-child td:nth-last-child(2)').scrollIntoView({block:'nearest',inline:'nearest'})`)
+        await evaluate(scrolledIntoView(`document.querySelector('.mv-grid tbody tr:last-child td:nth-last-child(2)')`,{block:'nearest',inline:'nearest'}))
         await settledLayout()
         const shape=await evaluate(`(()=>{const e=document.querySelector('.mv-grid tbody tr:last-child td:nth-last-child(2)'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height,hit:document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.className,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}})()`)
         if (!shape.reachable && artifacts) { const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-memories-grid-failure.png'),Buffer.from(shot.data,'base64')) }
@@ -2841,7 +2841,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
         await settledLayout()
         for (const target of ['.remote-insights-status button','.pota-sort-pick','.pota-spot-list .pota-spot:last-child .pota-spot-meta']) {
-          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest'}))
           await settledLayout()
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
@@ -2895,7 +2895,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
         await settledLayout()
         for (const target of ['.remote-insights-status button','.fd-bonuses-toggle','.fd-bonus-row:last-child .fd-bonus-label','.fd-log-row:last-child .fd-col.call']) {
-          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest'})`)
+          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest'}))
           await settledLayout()
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
@@ -2958,7 +2958,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         // the first layout wait, which invalidated an already-completed scroll.
         await settledLayout()
         for(const target of ['.js8-row:last-child .js8-text','.js8-station:last-child .js8-station-call','.js8-inbox-row:last-child .js8-text','.js8-offset-row:last-child .js8-text','.js8-compose','.js8-queue-item:last-of-type .js8-queue-text']){
-          const beforeScroll=await evaluate(`(()=>{window.__js8ScrollNode=document.querySelector('${target}');window.__js8ScrollNode.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});const chain=[];for(let e=window.__js8ScrollNode;e;e=e.parentElement){const r=e.getBoundingClientRect();chain.push({class:e.className,top:r.top,height:r.height,scroll:e.scrollHeight,client:e.clientHeight,at:e.scrollTop,cols:e.dataset.cols,flow:e.dataset.flow})}return chain})()`)
+          const beforeScroll=await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'},`node=>{window.__js8ScrollNode=node;const chain=[];for(let e=node;e;e=e.parentElement){const r=e.getBoundingClientRect();chain.push({class:e.className,top:r.top,height:r.height,scroll:e.scrollHeight,client:e.clientHeight,at:e.scrollTop,cols:e.dataset.cols,flow:e.dataset.flow})}return chain}`,`${target} at ${width}x${height} zoom ${zoom}`))
           await settledLayout()
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2));return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(x,y))}})()`)
@@ -3019,7 +3019,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await evaluate(`document.documentElement.style.setProperty('--ui-zoom','${zoom}');document.documentElement.dataset.theme='${theme}';window.dispatchEvent(new Event('resize'))`)
         await settledLayout();await settledLayout()
         for(const target of targets){
-          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`)
+          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'}))
           await settledLayout()
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2));return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(x,y))}})()`)
@@ -3075,7 +3075,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await settledLayout();await settledLayout()
         for(const target of targets){
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('Missing navigation target',label,target,JSON.stringify(await sessionDiagnostic()));
-          await evaluate(`(()=>{const e=document.querySelector('${target}');window.__navTarget=e;e.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});window.__navBefore=e.getBoundingClientRect().toJSON()})()`)
+          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'},`e=>{window.__navTarget=e;window.__navBefore=e.getBoundingClientRect().toJSON();return true}`,`${label} ${target} at ${width}x${height} zoom ${zoom}`))
           await settledLayout();await settledLayout()
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),hit:document.elementFromPoint(x,y)?.outerHTML.slice(0,500),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped}})()`)
@@ -3124,7 +3124,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await settledLayout();await settledLayout()
         for(const target of targets){
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('Missing navigation target',label,target,JSON.stringify(await sessionDiagnostic()));
-          await evaluate(`(()=>{const e=document.querySelector('${target}');window.__navTarget=e;e.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});window.__navBefore=e.getBoundingClientRect().toJSON()})()`)
+          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'},`e=>{window.__navTarget=e;window.__navBefore=e.getBoundingClientRect().toJSON();return true}`,`${label} ${target} at ${width}x${height} zoom ${zoom}`))
           await settledLayout();await settledLayout()
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect(),x=Math.max(r.left+1,Math.min(r.right-1,r.left+r.width/2)),y=Math.max(1,Math.min(innerHeight-1,r.top+r.height/2)),clipped=[];for(let p=e.parentElement;p;p=p.parentElement){const c=getComputedStyle(p);if(['hidden','clip'].includes(c.overflowY)&&p.scrollHeight>p.clientHeight+1)clipped.push({class:p.className,scroll:p.scrollHeight,client:p.clientHeight})}let exposed=0;if(e.tagName==='CANVAS')for(let py=Math.max(1,r.top+8);py<Math.min(innerHeight-1,r.bottom-8);py+=16)for(let px=Math.max(1,r.left+8);px<Math.min(innerWidth-1,r.right-8);px+=16)if(e.contains(document.elementFromPoint(px,py)))exposed++;return {zoom:Number(getComputedStyle(document.documentElement).getPropertyValue('--ui-zoom')),docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,rect:r.toJSON(),hit:document.elementFromPoint(x,y)?.outerHTML.slice(0,500),reachable:e.tagName==='CANVAS'?exposed>=4:e.contains(document.elementFromPoint(x,y)),exposed,clipped}})()`)
@@ -3171,7 +3171,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           if(target.includes('first-child')) {
             // A real wheel gesture leaves the native "follow newest" state
             // before inspecting old history while live snapshots keep arriving.
-            await evaluate(`document.querySelector('.message-scroll').scrollIntoView({block:'center',behavior:'instant'})`)
+            await evaluate(scrolledIntoView(`document.querySelector('.message-scroll')`,{block:'center',behavior:'instant'}))
             await settledLayout()
             const point=await evaluate(`(()=>{const e=document.querySelector('.message-scroll'),r=e.getBoundingClientRect(),x=r.left+r.width/2,ys=[];for(let y=Math.max(1,r.top+1);y<Math.min(innerHeight-1,r.bottom);y+=5)if(e.contains(document.elementFromPoint(x,y)))ys.push(y);return ys.length?{x,y:ys[Math.floor(ys.length/2)]}:null})()`)
             assert.ok(point,'the conversation has a reachable wheel-scroll surface')
@@ -3181,7 +3181,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           }
           // Match the native pin helper's instant positioning. A smooth trip
           // through 52 messages is not settled by a layout-only animation frame.
-          await evaluate(`document.querySelector('${target}').scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`)
+          await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'}))
           await settledLayout()
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
@@ -3196,7 +3196,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       await evaluate(`document.documentElement.style.setProperty('--ui-zoom','1');window.dispatchEvent(new Event('resize'))`)
       await settledLayout()
       if(tier==='TempoFast') {
-        await evaluate(`document.querySelector('.message-scroll').scrollIntoView({block:'center',behavior:'instant'})`)
+        await evaluate(scrolledIntoView(`document.querySelector('.message-scroll')`,{block:'center',behavior:'instant'}))
         const point=await evaluate(`(()=>{const r=document.querySelector('.message-scroll').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()`)
         await browser.call('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY:-180},session)
         await until(`(()=>{const e=document.querySelector('.message-scroll');return e.scrollTop>0&&e.scrollHeight-e.clientHeight-e.scrollTop>50})()`)
