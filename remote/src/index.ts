@@ -189,10 +189,24 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
         AND EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)
         AND NOT EXISTS(SELECT 1 FROM devices d WHERE d.station_id=e.id AND d.credential_hash=e.device_hash)`)
         .bind(uuid(), lifetime(request) ? now : null, now + APPROVAL_MS, stationId, hash, stationId, credentialHash),
+      // ONE TRIAL PER MAILBOX, DECIDED IN SQL. `ON CONFLICT(account_id)` is the concurrency
+      // argument for one ACCOUNT racing itself, and it always was; it is not one for one PERSON,
+      // because two sign-ins by the same human are two account rows and conflict with nothing.
+      // requireUnspentIdentity above is a check-then-write: two approvals in flight together both
+      // read "no sibling trial" before either wrote one, and both got a fourteen-day clock. The
+      // NOT EXISTS below closes that, and it closes it in the same statement as the write, so
+      // SQLite's single-writer serialization is what makes it atomic rather than a claim about
+      // where the await points fall. It is deliberately the same sibling test requireUnspentIdentity
+      // makes - mailbox hash, or an address hash recorded before that column existed - so the two
+      // cannot drift into disagreeing about who is the same person. An account with no verified
+      // address matches no sibling and is unaffected, which is the documented existing behaviour.
       env.DB.prepare(`INSERT INTO trials(account_id, enabled, expires_at, started_at, source)
         SELECT ?,1,?,?,'trial' WHERE EXISTS(SELECT 1 FROM stations WHERE id=? AND credential_hash=?)
+        AND NOT EXISTS(SELECT 1 FROM trials t JOIN accounts a ON a.id=t.account_id, accounts self
+          WHERE self.id=? AND t.account_id<>self.id
+          AND (a.mailbox_hash=self.mailbox_hash OR a.email_hash IN (self.email_hash, self.mailbox_hash)))
         ON CONFLICT(account_id) DO NOTHING`)
-        .bind(pending.account_id, now + TRIAL_MS, now, stationId, credentialHash),
+        .bind(pending.account_id, now + TRIAL_MS, now, stationId, credentialHash, pending.account_id),
     ])
     // Read both rows back before answering 200. That makes "the station and the clock landed
     // together" an observable property of the response rather than a claim about D1's rollback
@@ -201,6 +215,11 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       .bind(stationId, credentialHash).first()
     requireValue(accepted, 'stationLimit', 409)
     const started = await trial(env, pending.account_id, now)
+    // Losing the race above is not a service failure. The NOT EXISTS guard is what makes one
+    // trial per person true under concurrency, and the loser deserves the same named refusal a
+    // sequential caller would have been given - trialActiveElsewhere - rather than a bare 503
+    // that reads as "try again", which is exactly what it must not do.
+    if (started.state !== 'active') await requireUnspentIdentity(env, pending.account_id, now)
     requireValue(started.state === 'active', 'serviceUnavailable', 503)
     // The approved pairing browser, so the shack can give it station control and logging without
     // waiting for a browser list. Additive: the shack reads stationId and accountId by name and has

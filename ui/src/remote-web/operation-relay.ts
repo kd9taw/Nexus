@@ -5,7 +5,17 @@ import { object } from './display-validation'
 import { operationId, operationRequest, operationResponse } from './operation-protocol'
 import { controlVersion, parseOperationVersion, type OperationVersion } from './operation-version'
 import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
-type Browser = { sessionId: string; deviceId: string; peer: Peer }
+// `commandUntil` is how long this browser's account may still command the station: the adapter
+// sets it from the entitlement it read at admission or at the last renewal, and it is deliberately
+// shorter than the observer lease (see OPERATION_ENTITLEMENT_MS). Zero means never.
+type Browser = { sessionId: string; deviceId: string; peer: Peer; commandUntil: number }
+/** The requests that may not be forwarded once the entitlement behind the session has lapsed:
+ *  everything that CHANGES the station. Exported because the adapter has to recognise the same
+ *  set one step earlier, to refresh the entitlement before this relay is asked - two spellings
+ *  of "which commands are gated" would drift, and the drift would be silent and open. */
+export function entitledCommand(type: unknown): boolean {
+  return type === 'stationControl' || type === 'logManual' || type === 'logChange'
+}
 type Pending = {
   requestId: string
   sessionId: string
@@ -80,6 +90,41 @@ export class OperationRelay {
         at: now,
         mutation: request.type === 'logManual' || request.type === 'stationControl' || request.type === 'stopTransmit' || request.type === 'logChange',
         ...(request.type === 'stopTransmit' ? { stop: true as const } : {})
+      }
+      // THE PER-COMMAND ENTITLEMENT GATE, and it is first because entitlement outranks every
+      // other reason to refuse - an account that may not command must not learn the station's
+      // capabilities from a more specific refusal either.
+      //
+      // Until this existed the operation lane was entitlement-safe only by accident: the room
+      // happens to expire observers before dispatching a message, so a session whose lease had
+      // run out no longer appeared in `browsers`. Nothing here said so, no test asserted it, and
+      // the lease it inherited was a minute long. This states the rule in the lane that forwards
+      // the command, so a reordering upstream cannot silently re-open unmetered radio control.
+      //
+      // TWO THINGS ARE DELIBERATELY NOT GATED.
+      // - STOP. An operator who can no longer pay must still be able to unkey a transmitter;
+      //   refusing a Stop over billing would leave a real radio keyed with its only remote
+      //   control declining to help. Safety outranks entitlement, every time.
+      // - READS. `state` is how the browser learns the stationBootId, leaseId and transmitEpoch
+      //   that a Stop is composed from, so gating reads would gate Stop by the back door; and a
+      //   lapsed session should be able to see what it is lapsing out of. Observation is
+      //   untouched here and ends on its own lease.
+      // What IS gated is every command that changes the station: stationControl, logManual and
+      // logChange - `mutation` minus `stop`.
+      //
+      // `stationUnavailable` rather than a truer code because OPERATION_ERRORS is a closed list
+      // that every shipped browser parses strictly: a new code would fail their parser and take
+      // the socket down. It is honest about the outcome - the command did not reach the station
+      // and nothing changed - and it is NOT `operationUnknown`, which would wrongly offer the
+      // operator a "did that land?" check for a command that was never sent.
+      //
+      // The deadline is read defensively rather than trusted from the type. A caller that omits
+      // it leaves `undefined`, and `now >= undefined` is false - which would wave the command
+      // through. An absent deadline has to mean "not entitled", never "entitled forever".
+      const commandUntil = Number.isSafeInteger(browser.commandUntil) ? browser.commandUntil : 0
+      if (entitledCommand(request.type) && now >= commandUntil) {
+        this.error(p, 'stationUnavailable')
+        return
       }
       if (!this.station?.supported) {
         this.error(p, 'stationUnsupported')

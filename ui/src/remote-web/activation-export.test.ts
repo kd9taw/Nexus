@@ -192,7 +192,7 @@ it('the relay routes an export only as a versioned v4 read, and keeps an older s
   const station = { send: vi.fn<(s: string) => void>(), close: vi.fn() }
   const browser = { send: vi.fn<(s: string) => void>(), close: vi.fn() }
   const sessionId = id(), deviceId = id(), relay = new OperationRelay()
-  relay.sync({ peer: station, supported: true, operationVersion: 4 }, [{ sessionId, deviceId, peer: browser }], 100)
+  relay.sync({ peer: station, supported: true, operationVersion: 4 }, [{ sessionId, deviceId, commandUntil: Number.MAX_SAFE_INTEGER, peer: browser }], 100)
   const request = exportRequest()
   relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 3, request }, 101)
   expect(JSON.parse(browser.send.mock.lastCall![0]).error).toBe('stationUnsupported')
@@ -208,7 +208,7 @@ it('the relay routes an export only as a versioned v4 read, and keeps an older s
     base64: Buffer.alloc(ACTIVATION_EXPORT_CHUNK_BYTES).toString('base64') }
   relay.receiveStation({ type: 'operationResponse', sessionId, requestId: request.requestId, value: chunk })
   expect(JSON.parse(browser.send.mock.lastCall![0]).value).toEqual(chunk)
-  relay.sync({ peer: station, supported: true, operationVersion: 3 }, [{ sessionId, deviceId, peer: browser }], 2200)
+  relay.sync({ peer: station, supported: true, operationVersion: 3 }, [{ sessionId, deviceId, commandUntil: Number.MAX_SAFE_INTEGER, peer: browser }], 2200)
   station.send.mockClear()
   relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 4, request: exportRequest() }, 2201)
   expect(JSON.parse(browser.send.mock.lastCall![0]).error).toBe('stationUnsupported')

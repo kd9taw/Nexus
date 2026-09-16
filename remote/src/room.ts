@@ -1,14 +1,15 @@
 // One hibernating room per station. Socket attachments carry admission and bounded
 // ordering/ACK state; neither D1 nor Durable Object storage receives observations.
-import { OperationRelay, type OperationCheckpoint } from '../../ui/src/remote-web/operation-relay'
+import { entitledCommand, OperationRelay, type OperationCheckpoint } from '../../ui/src/remote-web/operation-relay'
 import { OPERATION_REQUEST_BYTES } from '../../ui/src/remote-web/operation-protocol'
+import { OPERATION_ENTITLEMENT_CHECK_MS, OPERATION_ENTITLEMENT_MS } from '../../ui/src/remote-web/operation-limits'
 import { parseOperationVersion } from '../../ui/src/remote-web/operation-version'
 import { DurableObject } from 'cloudflare:workers'
 import { ObservationRelay } from '../../ui/src/remote-monitor/relay'
 import type { BrowserIdentity, Entitlement, ObserverCheckpoint, Peer, StationAccess, StationIdentity } from '../../ui/src/remote-monitor/relay'
 import type { FrameOrderState } from '../../ui/src/remote-monitor/protocol'
 import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../../ui/src/remote-monitor/protocol'
-import { Refusal } from './authority'
+import { Refusal, trial } from './authority'
 import type { RemoteEnv } from './authority'
 import { ApplicationRelay } from '../../ui/src/remote-web/application-relay'
 import type { ApplicationCheckpoint } from '../../ui/src/remote-web/application-relay'
@@ -18,9 +19,19 @@ import { AudioRelay } from '../../ui/src/remote-web/audio-relay'
 type Saved = { access: StationAccess; order: FrameOrderState }
 type Sample = { requestId: string; at: number }
 type StationAttachment = { version: 1; role: 'station'; identity: StationIdentity; order: FrameOrderState; sample: Sample | null; applicationVersion?: number; operationVersion?: number; audioVersion?: number }
-type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; application?: ApplicationCheckpoint; operations?: OperationCheckpoint }
+type BrowserAttachment = Omit<ObserverCheckpoint, 'peer'> & { version: 1; role: 'browser'; application?: ApplicationCheckpoint; operations?: OperationCheckpoint; commandUntil?: number }
 type Attachment = StationAttachment | BrowserAttachment
 type Admission = { access: StationAccess; identity: StationIdentity & BrowserIdentity; entitlement: Entitlement; sessionId: string; applicationVersion?: number; operationVersion?: number; audioVersion?: number }
+
+/** When this browser's account may no longer command the station, from the entitlement the Worker
+ *  has just read out of D1. Admission and renewal both reach here, so it is never staler than one
+ *  renewal; a disabled or unparseable entitlement yields 0, which refuses every command. Fails
+ *  CLOSED on purpose - the alternative to "no deadline means no commands" is "no deadline means
+ *  all commands", which is the bug this exists to shut. */
+function commandDeadline(entitlement: Entitlement, now: number): number {
+  if (!entitlement?.enabled || !Number.isSafeInteger(entitlement.expiresAt) || entitlement.expiresAt <= now) return 0
+  return Math.min(entitlement.expiresAt, now + OPERATION_ENTITLEMENT_MS)
+}
 
 export class StationRoom extends DurableObject<RemoteEnv> {
   private relay: ObservationRelay | null = null
@@ -36,6 +47,13 @@ export class StationRoom extends DurableObject<RemoteEnv> {
   private audio = new AudioRelay()
   private audioVersions = new Map<WebSocket, number>()
   private operationVersions = new Map<WebSocket,number>()
+  // Per observer session, the command deadline from commandDeadline(). Checkpointed with the
+  // browser's attachment so a hibernation does not hand a woken room an empty one.
+  private commandUntil = new Map<string, number>()
+  // When that deadline was last taken from the database, for OPERATION_ENTITLEMENT_CHECK_MS.
+  // Deliberately NOT checkpointed: a woken room re-reads before the first command it forwards,
+  // which is the safe direction and costs one read.
+  private commandChecked = new Map<string, number>()
   private applicationVersions = new Map<WebSocket, number>()
   private applicationPeers = new Map<WebSocket, Peer>()
 
@@ -65,6 +83,10 @@ export class StationRoom extends DurableObject<RemoteEnv> {
             this.applicationVersions.set(ws, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(attachment.applicationVersion ?? 0) ? attachment.applicationVersion! : 0)
           } else if (attachment.role === 'browser') {
             observers.push({ ...attachment, peer })
+            // An attachment written before this field existed carries none, and gets 0: that
+            // session may watch and read but not command until its next renewal, which is at
+            // most thirty seconds away. Fail closed across a deploy, and heal by itself.
+            this.commandUntil.set(attachment.sessionId, Number.isSafeInteger(attachment.commandUntil) ? attachment.commandUntil! : 0)
             if (attachment.application) applicationSaved.push({ sessionId: attachment.sessionId, value: attachment.application })
           }
           else throw new Error('invalidCheckpoint')
@@ -81,7 +103,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         this.peers.clear()
         this.samples.clear(); this.applicationPeers.clear(); this.applicationVersions.clear()
         this.application = new ApplicationRelay()
-        this.operations = new OperationRelay();this.operationVersions.clear()
+        this.operations = new OperationRelay();this.operationVersions.clear();this.commandUntil.clear();this.commandChecked.clear()
         this.audio = new AudioRelay(); this.audioVersions.clear()
         this.relay = new ObservationRelay(this.saved.access)
       }
@@ -146,6 +168,9 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       if (path === '/policy') { await this.checkpoint(); return new Response(null, { status: 204 }) }
       if (path === '/renew') {
         relay.renewObserver(input.sessionId, input.identity, input.entitlement, now)
+        // Only after renewObserver has accepted it: a renewal the relay refuses must not
+        // extend the right to command either.
+        this.commandUntil.set(input.sessionId, commandDeadline(input.entitlement, now))
         await this.checkpoint()
         return new Response(null, { status: 204 })
       }
@@ -160,7 +185,10 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       if (path === '/station') this.applicationVersions.set(server, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
       try {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
-        else relay.connectObserver(input.sessionId, input.identity, input.entitlement, peer, now)
+        else {
+          relay.connectObserver(input.sessionId, input.identity, input.entitlement, peer, now)
+          this.commandUntil.set(input.sessionId, commandDeadline(input.entitlement, now))
+        }
       } catch (error) { this.peers.delete(server); this.samples.delete(server); this.applicationVersions.delete(server); throw error }
       this.ctx.acceptWebSocket(server)
       buffered.pending = false
@@ -204,7 +232,20 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     }
     if(parsed&&typeof parsed==='object'&&typeof parsed.type==='string'&&parsed.type.startsWith('operation')){
       if(attachment.role==='station')this.operations.receiveStation(parsed)
-      else this.operations.receiveBrowser(attachment.sessionId,parsed,Date.now())
+      else {
+        // The entitlement is re-read HERE, before the relay is asked, so that the relay's gate
+        // stays synchronous: every decision it makes about rate, conflict and pending state runs
+        // to completion with no await inside it, exactly as it did before.
+        const refreshed = await this.refreshCommandEntitlement(attachment.sessionId, parsed, Date.now())
+        // That await is the one place this handler yields to another message, and the socket can
+        // be gone by the time it returns - expired, revoked, or closed by its own peer.
+        if (refreshed && !this.peers.has(ws)) return
+        // Publish the refreshed deadline into the relay before it reads it. Only when there is
+        // one: a heartbeat spends the relay's whole budget four times a second and must not pay
+        // for a second sweep of every peer to learn nothing changed.
+        if (refreshed) this.syncApplication(Date.now())
+        this.operations.receiveBrowser(attachment.sessionId,parsed,Date.now())
+      }
       await this.checkpoint();return
     }
     if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string' && parsed.type.startsWith('application')) {
@@ -231,6 +272,38 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       } catch { this.relay.disconnectStation(peer, 1008, 'invalidPublication') }
     } else this.relay.receiveObserver(attachment.sessionId, message, Date.now())
     await this.checkpoint()
+  }
+
+  /** Re-read the account's entitlement before a command that would change the station.
+   *
+   *  The whole point of the per-command gate: a session admitted while the account was entitled
+   *  used to keep commanding a real radio for the rest of its observer lease, because the lease
+   *  was the only thing that ever ended a session and nothing looked at the database again. Now
+   *  a gated command past OPERATION_ENTITLEMENT_CHECK_MS pays for one indexed single-row read,
+   *  and the relay refuses on what that read said.
+   *
+   *  Only gated commands, so observation, reads and - above all - Stop never wait on D1 and can
+   *  never be refused because D1 was slow. A radio that is keyed must always be stoppable.
+   *
+   *  A read that FAILS changes nothing: the last good reading stands, carrying its own
+   *  OPERATION_ENTITLEMENT_MS expiry, so an outage degrades to a bounded window rather than to
+   *  "refuse every paying operator" or "allow everybody".
+   *
+   *  Returns whether it awaited anything, which is what tells the caller both that the deadline
+   *  may have moved and that this handler yielded. */
+  private async refreshCommandEntitlement(sessionId: string, raw: Record<string, unknown>, now: number): Promise<boolean> {
+    const request = (raw as { request?: { type?: unknown } }).request
+    if (!request || typeof request !== 'object' || !entitledCommand(request.type)) return false
+    if (now - (this.commandChecked.get(sessionId) ?? 0) < OPERATION_ENTITLEMENT_CHECK_MS) return false
+    const observer = this.relay?.checkpoint().observers.find(o => o.sessionId === sessionId)
+    if (!observer) return false
+    try {
+      const entitlement = await trial(this.env, observer.identity.accountId, Date.now())
+      const at = Date.now()
+      this.commandUntil.set(sessionId, commandDeadline(entitlement, at))
+      this.commandChecked.set(sessionId, at)
+    } catch { /* keep the last good reading; it expires on its own */ }
+    return true
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> { await this.disconnected(ws) }
@@ -263,12 +336,13 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     if (!this.relay) return
     this.syncApplication(Date.now())
     const state = this.relay.checkpoint()
+    for (const id of this.commandUntil.keys()) if (!state.observers.some(o => o.sessionId === id)) { this.commandUntil.delete(id); this.commandChecked.delete(id) }
     for (const [ws, peer] of this.peers) {
       let attachment: Attachment | undefined
       if (state.station?.peer === peer) attachment = { version: 1, role: 'station', identity: state.station.identity, order: state.order, sample: this.samples.get(ws) ?? null, applicationVersion: this.applicationVersions.get(ws) ?? 0, operationVersion:this.operationVersions.get(ws)??0, audioVersion: this.audioVersions.get(ws) ?? 0 }
       else {
         const observer = state.observers.find(o => o.peer === peer)
-        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, application: this.application.checkpoint(observer.sessionId),operations:this.operations.checkpoint(observer.sessionId) } }
+        if (observer) { const { peer: _peer, ...saved } = observer; attachment = { version: 1, role: 'browser', ...saved, application: this.application.checkpoint(observer.sessionId),operations:this.operations.checkpoint(observer.sessionId), commandUntil: this.commandUntil.get(observer.sessionId) ?? 0 } }
       }
       if (!attachment) { ws.close(1001, 'disconnected'); this.peers.delete(ws); continue }
       if (new TextEncoder().encode(JSON.stringify(attachment)).length > 2048) {
@@ -323,7 +397,8 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           close: (code, reason) => this.relay?.disconnectObserver(observer.sessionId, code, reason) }
         this.applicationPeers.set(socket, peer)
       }
-      return [{ sessionId: observer.sessionId, deviceId:observer.identity.deviceId, peer }]
+      return [{ sessionId: observer.sessionId, deviceId:observer.identity.deviceId, peer,
+        commandUntil: this.commandUntil.get(observer.sessionId) ?? 0 }]
     })
     this.application.sync(station, observers, now)
     this.operations.sync(station?{peer:station.peer,supported:!!stationSocket&&parseOperationVersion(this.operationVersions.get(stationSocket))!==null,operationVersion:stationSocket?this.operationVersions.get(stationSocket):0}:null,observers,now)

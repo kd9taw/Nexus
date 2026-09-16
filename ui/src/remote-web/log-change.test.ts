@@ -172,7 +172,7 @@ it('relays a change only as a versioned v4 mutation', () => {
   const station = { send: vi.fn<(s: string) => void>(), close: vi.fn() }
   const browser = { send: vi.fn<(s: string) => void>(), close: vi.fn() }
   const sessionId = id(), deviceId = id(), relay = new OperationRelay()
-  relay.sync({ peer: station, supported: true, operationVersion: 4 }, [{ sessionId, deviceId, peer: browser }], 100)
+  relay.sync({ peer: station, supported: true, operationVersion: 4 }, [{ sessionId, deviceId, commandUntil: Number.MAX_SAFE_INTEGER, peer: browser }], 100)
   const request = envelope({ kind: 'delete', target })
   relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 3, request }, 101)
   expect(JSON.parse(browser.send.mock.lastCall![0]).error).toBe('stationUnsupported')
@@ -186,7 +186,7 @@ it('relays a change only as a versioned v4 mutation', () => {
   relay.receiveStation({ type: 'operationResponse', sessionId, requestId: request.requestId, value })
   expect(JSON.parse(browser.send.mock.lastCall![0]).value).toEqual(value)
   // An older station negotiates v3 and never receives a request it cannot parse.
-  relay.sync({ peer: station, supported: true, operationVersion: 3 }, [{ sessionId, deviceId, peer: browser }], 200)
+  relay.sync({ peer: station, supported: true, operationVersion: 3 }, [{ sessionId, deviceId, commandUntil: Number.MAX_SAFE_INTEGER, peer: browser }], 200)
   station.send.mockClear()
   relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 4, request: envelope({ kind: 'delete', target }) }, 201)
   expect(JSON.parse(browser.send.mock.lastCall![0]).error).toBe('stationUnsupported')

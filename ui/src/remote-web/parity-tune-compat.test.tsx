@@ -71,7 +71,7 @@ it('old site with a new desktop: an older page drops the new hints and grants no
   const relay = new OperationRelay(), stationPeer = { frames: [] as any[], send(s: string) { this.frames.push(JSON.parse(s)) }, close: vi.fn() }
   const browser = { frames: [] as any[], send(s: string) { this.frames.push(JSON.parse(s)) }, close: vi.fn() }
   const sessionId = crypto.randomUUID(), requestId = crypto.randomUUID()
-  relay.sync({ peer: stationPeer, supported: true, operationVersion: 3 }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID() }], 1000)
+  relay.sync({ peer: stationPeer, supported: true, operationVersion: 3 }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID(), commandUntil: Number.MAX_SAFE_INTEGER }], 1000)
   relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 3, request: { type: 'state', requestId } }, 1000)
   relay.receiveStation({ type: 'operationResponse', sessionId, requestId, value: fromNewStation })
   expect(stationPeer.close).not.toHaveBeenCalled()

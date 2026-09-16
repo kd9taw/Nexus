@@ -1897,3 +1897,216 @@ test('control messages still arrive on time while audio flows', async () => {
   assert.ok(loaded < 500, `control round trip under audio load ${loaded.toFixed(1)} ms (quiet ${quiet.toFixed(1)} ms)`)
   console.log(`  control round trip: quiet ${quiet.toFixed(1)} ms, under audio load ${loaded.toFixed(1)} ms`)
 })
+
+// PER-COMMAND ENTITLEMENT. Admission used to be the whole of it: a session opened while the
+// account was entitled kept its sixty-second observer lease whatever became of the entitlement,
+// and for that minute every command still moved a real radio. Measured before this guard existed:
+// twelve stationControl commands reached the station after the revocation, and the socket closed
+// at t+60 s when the lease ran out - not when the access did.
+// Mirrors OPERATION_ENTITLEMENT_CHECK_MS in ui/src/remote-web/operation-limits.ts. This suite is
+// .mjs and cannot import the TypeScript source; if that constant moves, these waits move with it.
+const ENTITLEMENT_CHECK_MS = 2000
+const stationCommand = () => ({
+  type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(),
+  leaseId: crypto.randomUUID(), expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1,
+  context: { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null },
+  action: { action: 'radio.tier', tier: 'FT4' },
+})
+// Wait out the entitlement freshness window WITHOUT starving the station. A station that does
+// not answer its watch demand inside STALE_MS (3 s) is retired as stationTooSlow and takes its
+// observers with it - which would make every assertion below read as a refusal for the wrong
+// reason. Publishing through the wait is what a live shack does anyway.
+async function settleEntitlement(live) {
+  live.browser.ackObservations()
+  const until = Date.now() + ENTITLEMENT_CHECK_MS + 250
+  while (Date.now() < until) {
+    try {
+      const request = await live.station.take(value => value.type === 'watch' && value.enabled, 400)
+      const frame = sample(); frame.sequence = ++settleSequence
+      live.station.send({ type: 'publication', requestId: request.requestId, frame })
+    } catch { /* no demand outstanding right now - a hibernated room issues one on the next wake */ }
+    await delay(250)
+  }
+}
+let settleSequence = 0
+// Assert on WHAT REACHED THE STATION, never on what the browser was told. The round trip is
+// completed on success so the next command is judged by this gate and not by `remoteBusy`.
+async function commandReachesStation(live, request = stationCommand()) {
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request })
+  let routed
+  try { routed = await live.station.take(value => value.type === 'operationRequest' && value.request.requestId === request.requestId, 700) }
+  catch { return false }
+  live.station.send({ type: 'operationResponse', sessionId: routed.sessionId, requestId: request.requestId,
+    value: { operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' } })
+  await live.browser.take(value => value.type === 'operationResponse' && value.requestId === request.requestId)
+  return true
+}
+
+test('a revoked entitlement stops commands at the relay, and a live one does not', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, OPERATION_HEADERS)
+
+  // THE POSITIVE CONTROL, and it is not optional. Without it "the station received nothing"
+  // is a statement about this test, not about the guard: the first version of this case
+  // reported a clean refusal on every branch because its command shape was malformed.
+  assert.equal(await commandReachesStation(live), true, 'control: a live entitlement really does move this command through this socket')
+
+  // How an entitlement actually ends early today: by hand, in D1. Nothing in the Worker writes
+  // it - grant-trial only ever extends - so there is no push for the room to listen for, which
+  // is exactly why the room has to look.
+  await app.db.prepare('UPDATE trials SET enabled=0 WHERE account_id=?').bind(pair.browser.accountId).run()
+  await settleEntitlement(live)
+
+  assert.equal(await commandReachesStation(live), false, 'a revoked account must not command the radio')
+  const refusal = await live.browser.take(type('operationResponse'))
+  assert.equal(refusal.error, 'stationUnavailable', 'and it is told, rather than left waiting for a timeout')
+  assert.equal(live.station.closed, false, 'the station socket is untouched - this refuses a command, not a connection')
+
+  // Reinstate it: the guard has to be shown BOTH ways, or half of it is untested. A revocation
+  // that can never be lifted would pass an assertion that only ever looks for a refusal.
+  await app.db.prepare('UPDATE trials SET enabled=1,expires_at=? WHERE account_id=?')
+    .bind(Date.now() + 3600000, pair.browser.accountId).run()
+  await settleEntitlement(live)
+  assert.equal(await commandReachesStation(live), true, 'and a reinstated account commands again')
+  live.browser.close(); live.station.close()
+})
+
+test('an expired entitlement stops commands, while Stop and reads still reach the station', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, OPERATION_HEADERS)
+  assert.equal(await commandReachesStation(live), true, 'control: entitled, and commanding')
+
+  // Not disabled - simply out of time, which is what a trial or a subscription does on its own.
+  await app.db.prepare('UPDATE trials SET enabled=1,expires_at=? WHERE account_id=?')
+    .bind(Date.now() - 1000, pair.browser.accountId).run()
+  await settleEntitlement(live)
+  assert.equal(await commandReachesStation(live), false, 'an expired account must not command the radio')
+  assert.equal((await live.browser.take(type('operationResponse'))).error, 'stationUnavailable')
+
+  // WHAT A LAPSED SESSION MAY STILL DO, and both are deliberate.
+  // A READ, because `state` is where the stationBootId, leaseId and transmitEpoch a Stop is
+  // composed from come from: gating reads would gate Stop through the back door.
+  const stateId = crypto.randomUUID()
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request: { type: 'state', requestId: stateId } })
+  const read = await live.station.take(value => value.type === 'operationRequest' && value.request.requestId === stateId)
+  assert.equal(read.request.type, 'state', 'a lapsed session may still ask what the station is doing')
+  const boot = crypto.randomUUID(), lease = crypto.randomUUID()
+  live.station.send({ type: 'operationResponse', sessionId: read.sessionId, requestId: stateId,
+    value: { stationBootId: boot, allowed: true, phase: 'controlling', leaseId: lease, revision: 1,
+      commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: [],
+      txArmed: true, transmitEpoch: '000000000000002b' } })
+  await live.browser.take(value => value.type === 'operationResponse' && value.requestId === stateId)
+
+  // AND A STOP. Safety outranks billing: an operator who can no longer pay must still be able to
+  // unkey a transmitter, because the alternative is a keyed radio whose only remote control is
+  // refusing to help over an invoice.
+  const stop = { type: 'stopTransmit', requestId: crypto.randomUUID(), stationBootId: boot, leaseId: lease, transmitEpoch: '000000000000002b' }
+  live.browser.send({ type: 'operationRequest', operationVersion: 4, request: stop })
+  const routed = await live.station.take(value => value.type === 'operationRequest' && value.request.requestId === stop.requestId)
+  assert.equal(routed.request.type, 'stopTransmit', 'Stop is never gated on entitlement')
+  live.station.send({ type: 'operationResponse', sessionId: routed.sessionId, requestId: stop.requestId, value: { stop: 'accepted' } })
+  assert.deepEqual((await live.browser.take(value => value.type === 'operationResponse' && value.requestId === stop.requestId)).value, { stop: 'accepted' })
+  live.browser.close(); live.station.close()
+})
+
+test('a command whose entitlement lapses survives hibernation as a refusal, not as a hole', async () => {
+  const pair = await app.paired()
+  const live = await admitted(pair, 1, OPERATION_HEADERS)
+  assert.equal(await commandReachesStation(live), true, 'control: entitled before the eviction')
+  await app.db.prepare('UPDATE trials SET enabled=0 WHERE account_id=?').bind(pair.browser.accountId).run()
+  // A woken room rebuilds its state from socket attachments. A deadline that did not survive
+  // that, or a freshness stamp that wrongly did, would each reopen the hole in its own way.
+  await app.evict(pair.stationId)
+  await settleEntitlement(live)
+  assert.equal(await commandReachesStation(live), false, 'a revoked account cannot command a woken room either')
+  assert.equal((await live.browser.take(type('operationResponse'))).error, 'stationUnavailable')
+  live.browser.close(); live.station.close()
+})
+
+// THE ONE-TRIAL RACE. `requireEligible` + `requireUnspentIdentity` run before the approve batch,
+// so two approvals in flight together both read "no sibling trial has been spent" before either
+// wrote one. `ON CONFLICT(account_id) DO NOTHING` does not catch that: two sign-ins by the same
+// human are two account rows and conflict with nothing. The existing coverage was sequential and
+// therefore raced nothing - it could not have seen this.
+//
+// TWO THINGS ABOUT THE SHAPE OF THIS TEST, both learned by measuring rather than guessing.
+// It brings up its OWN runtime, and it runs the race repeatedly. Against the unfixed Worker the
+// double clock lands on the first couple of attempts of a COLD workerd and then stops landing -
+// once D1's pages are cached and the code is warm the two requests stop overlapping where it
+// matters, and one loses honestly. A single race late in a warm suite therefore passes on broken
+// code: measured 2 double trials in 10 attempts cold, 0 in 10 run late. So: cold instance, ten
+// attempts, and every one of them must come out with one clock.
+test('two approvals for one verified mailbox, racing, produce exactly one trial', { timeout: 300000 }, async () => {
+  const service = await runtime()
+  try {
+    const identity = async email => {
+      const who = service.client(await service.token(`auth0|${crypto.randomUUID()}`, { email, email_verified: true }))
+      const { value } = await who.post('session')
+      assert.equal(value.identityVerified, true, `control: ${email} really is a verified identity`)
+      return { who, accountId: value.accountId }
+    }
+    // Carry both pairings all the way to the gate, so the only thing left to run concurrently is
+    // the approve that starts a clock. Racing anything earlier would race the wrong statement.
+    const armed = async who => {
+      const desktop = service.client()
+      const { value: enrollment } = await desktop.post('enroll', { name: 'Racing shack' })
+      await who.post('pair/claim', { code: enrollment.code })
+      await who.post('pair/confirm', { id: enrollment.id })
+      return { desktop, enrollment, credential: credential() }
+    }
+    const race = ready => Promise.allSettled(ready.map(({ desktop, enrollment, credential }) =>
+      desktop.post('enroll/approve', { id: enrollment.id, proof: enrollment.proof, credential })))
+    const clocksFor = ids => service.db.prepare('SELECT account_id FROM trials WHERE account_id IN (?,?)')
+      .bind(ids[0], ids[1]).all()
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const tag = mailboxTag()
+      // The same person, two sign-ins: a password connection and a Google one, one inbox. The
+      // plus-tag is what makes them the same MAILBOX rather than the same string, which is the
+      // property the claim is actually keyed on.
+      const pair = [await identity(`op${tag}@gmail.com`), await identity(`op${tag}+second@gmail.com`)]
+      assert.notEqual(pair[0].accountId, pair[1].accountId, 'control: they really are two separate account rows')
+      const ready = await Promise.all(pair.map(({ who }) => armed(who)))
+      const outcomes = await race(ready)
+      const clocks = await clocksFor(pair.map(p => p.accountId))
+      assert.equal(clocks.results.length, 1, `attempt ${attempt}: one mailbox, one trial (got ${clocks.results.length})`)
+      const won = outcomes.filter(o => o.status === 'fulfilled')
+      assert.equal(won.length, 1, `attempt ${attempt}: exactly one approval reports success`)
+      assert.equal(won[0].value.value.entitlement.state, 'active')
+    }
+
+    // POSITIVE CONTROL on the instrument itself: the same race between two DIFFERENT people must
+    // still produce TWO trials. Without it, "one trial" could just as well mean this harness never
+    // ran the second approval at all, or that approve is broken for everybody.
+    const strangers = [await identity(`op${mailboxTag()}@example.invalid`), await identity(`op${mailboxTag()}@example.invalid`)]
+    const strangerReady = await Promise.all(strangers.map(({ who }) => armed(who)))
+    const strangerOutcomes = await race(strangerReady)
+    assert.equal(strangerOutcomes.filter(o => o.status === 'fulfilled').length, 2, 'control: both strangers are approved')
+    const unrelated = await clocksFor(strangers.map(s => s.accountId))
+    assert.equal(unrelated.results.length, 2, 'control: two different people racing still get two trials')
+  } finally { await service.mf.dispose() }
+})
+
+// The loser of that race must be told WHY, under the name a sequential caller would have been
+// given. A bare 503 reads as "try again", which is the one thing it must not say.
+test('the loser of the one-trial race is refused by name, not with a retryable failure', async () => {
+  const tag = mailboxTag()
+  const first = await verifiedAs(`op${tag}@example.invalid`)
+  await spendTrial(first)
+  const second = await verifiedAs(`op${tag}+again@example.invalid`)
+  const desktop = app.client()
+  const { value: enrollment } = await desktop.post('enroll', { name: 'Second attempt' })
+  // pair/claim is refused first, so reach the approve gate the way a race would: claim while the
+  // sibling trial does not yet exist, then let it exist before approving.
+  await app.db.prepare('DELETE FROM trials WHERE account_id=?').bind((await first.post('session')).value.accountId).run()
+  await second.post('pair/claim', { code: enrollment.code })
+  await second.post('pair/confirm', { id: enrollment.id })
+  await app.db.prepare("INSERT INTO trials(account_id,enabled,expires_at,started_at,source) VALUES(?,1,?,?,'trial')")
+    .bind((await first.post('session')).value.accountId, Date.now() + 3600000, Date.now()).run()
+  const { value: refusal } = await desktop.post('enroll/approve',
+    { id: enrollment.id, proof: enrollment.proof, credential: credential() }, 403)
+  assert.equal(refusal.error, 'trialActiveElsewhere', 'named, and not a 503')
+  const clock = await app.db.prepare('SELECT COUNT(*) AS count FROM trials WHERE account_id=?')
+    .bind((await second.post('session')).value.accountId).first()
+  assert.equal(clock.count, 0, 'and no second clock was written')
+})
