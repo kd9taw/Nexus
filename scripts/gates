@@ -460,7 +460,12 @@ function packagesInstalledBy(command) {
   for (const line of scannable(command).split('\n')) {
     const m = line.match(/(?:apt-get|apt|brew)\s+install\b(.*)/);
     if (!m) continue;
-    for (const w of m[1].split(/\s+/)) {
+    // Stop at the first shell operator. An installer riding an `&&` in front of a
+    // real gate (the mixedProvisioning shape) otherwise contributed `&&`, `echo`
+    // and the gate's own argv to the package list, so the tool reported shell
+    // words as "packages CI installs" and could never find them.
+    const args = m[1].split(/\s*(?:&&|\|\||[;|&#])\s*/)[0];
+    for (const w of args.split(/\s+/)) {
       if (!w || w.startsWith('-')) continue;
       pkgs.add(w);
     }
@@ -712,7 +717,10 @@ function jobBlockers(jobInst) {
   return why;
 }
 
-// Advisory, never blocking — see packagesInstalledBy.
+// Never blocking — see packagesInstalledBy — but NOT advisory: in a run these
+// cost the run its full-coverage claim (exit 3). A dependency CI installs and
+// this box cannot confirm is precisely a gate that may have passed without
+// testing anything, which is the one thing this tool exists not to print.
 function jobNotes(jobInst) {
   const notes = [];
   for (const step of jobInst.steps) {
@@ -723,7 +731,8 @@ function jobNotes(jobInst) {
         `could not confirm ${missing.length} package(s) CI installs in "${step.name}": ` +
           `${missing.join(', ')}. A gate below that dies on a missing dependency is why. ` +
           `(Checked dpkg and PATH; package names and binary names often differ, so this ` +
-          `is a note, not a verdict — it never skips a gate.)`
+          `never SKIPS a gate — but it does cost the run its full-coverage claim, because a ` +
+          `gate that quietly self-skips on the missing dependency passes either way.)`
       );
     }
   }
@@ -1084,6 +1093,19 @@ function runGates(model, only, allowPartial) {
     }
   }
 
+  // A package CI installs that cannot be confirmed here is a COVERAGE DEBIT, not
+  // decoration. `--list` has always said so; a RUN never mentioned it, because
+  // nothing called jobNotes — so a box missing `libhamlib-utils` ran the
+  // tempo-audio gate, watched its rigctld/rotctld suites self-skip, and got a
+  // full-coverage green for tests that never opened a socket. That is the
+  // header's rule #2 exactly: short of "every gate ran and passed", `scripts/gates
+  // && git push` must not be handed a green light.
+  //
+  // It is a DEBIT rather than a blocker on purpose. Blocking the step would also
+  // discard the ~1000 tempo-audio tests that need no daemon at all, which is a
+  // real loss of pre-push signal traded for a claim the debit already makes.
+  const pkgNotes = selected.flatMap((j) => jobNotes(j).map((n) => ({ job: j.label, note: n })));
+
   const notRun = model.insts.filter((j) => only && !only.has(j.id));
   const pass = results.filter((r) => r.state === 'PASS');
   const fail = results.filter((r) => r.state === 'FAIL');
@@ -1095,6 +1117,7 @@ function runGates(model, only, allowPartial) {
   for (const r of fail) console.log(`  FAIL     ${r.job} :: ${r.step} (exit ${r.code})`);
   for (const r of unknown) console.log(`  UNKNOWN  ${r.job} :: ${r.step} — ${r.why}`);
   for (const r of skip) console.log(`  SKIPPED  ${r.job} :: ${r.step} — ${r.why}`);
+  for (const n of pkgNotes) console.log(`  UNCONFIRMED DEPENDENCY  ${n.job} — ${n.note}`);
 
   const traps = derivedTraps(model.insts);
   if (traps.length) {
@@ -1107,6 +1130,10 @@ function runGates(model, only, allowPartial) {
   const scope = notRun.length
     ? `\nSCOPED to --job ${[...only].join(',')}: ${notRun.length} other job(s) in this workflow ` +
       `were NOT run (${notRun.map((j) => j.label).join(', ')}).`
+    : '';
+  const debit = pkgNotes.length
+    ? `\n${pkgNotes.length} dependency note(s) above: a package CI installs could not be confirmed ` +
+      `here, so a gate that self-skips without it passed for the wrong reason.`
     : '';
   const wfWarning = workflowKeyWarning(model);
   if (wfWarning) console.log(`\n${wfWarning}`);
@@ -1121,7 +1148,7 @@ function runGates(model, only, allowPartial) {
   // passed" must NOT hand that `&&` a green light. Exit 3, distinct from a red
   // gate's 1, and only --allow-partial turns it back into 0.
   const short = skip.length + unknown.length;
-  const incomplete = short || notRun.length || wfWarning;
+  const incomplete = short || notRun.length || wfWarning || pkgNotes.length;
   const verdict = allowPartial
     ? `\n(--allow-partial: exiting 0 anyway, on the caller's word that incomplete coverage is expected.)`
     : `\nEXIT 3 — not a green light. Coverage here is incomplete, and \`scripts/gates && ...\` must\n` +
@@ -1130,13 +1157,13 @@ function runGates(model, only, allowPartial) {
   if (short) {
     console.log(
       `\nPARTIAL — every gate that CAN run here passed, but ${short} could NOT run.\n` +
-        `This is NOT full coverage. For those, pushing and reading the CI run IS the gate.${scope}` +
+        `This is NOT full coverage. For those, pushing and reading the CI run IS the gate.${scope}${debit}` +
         verdict
     );
     return allowPartial ? EXIT_OK : EXIT_PARTIAL;
   }
   if (incomplete) {
-    console.log(`\nSELECTED GATES PASSED — all ${pass.length} of them.${scope}${verdict}`);
+    console.log(`\nSELECTED GATES PASSED — all ${pass.length} of them.${scope}${debit}${verdict}`);
     return allowPartial ? EXIT_OK : EXIT_PARTIAL;
   }
   console.log('\nALL GATES PASSED (every gate in this workflow ran here).');

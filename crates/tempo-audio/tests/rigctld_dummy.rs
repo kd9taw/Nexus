@@ -6,9 +6,11 @@
 //! RPRT formats, multi-line `m` replies, mode-token tables). These tests close
 //! that gap: same `Rig` code, real daemon on the other end.
 //!
-//! Skips (loudly, passing) when no `rigctld` is available so a contributor
-//! without Hamlib stays green; CI installs `libhamlib-utils` so the suite is
-//! real there. Override the binary with `NEXUS_RIGCTLD=/path/to/rigctld`
+//! Skips when no `rigctld` is available so a contributor without Hamlib stays
+//! green — but AUDIBLY, and never under CI, where a missing daemon means the
+//! `libhamlib-utils` install broke rather than that there is nothing to prove.
+//! Both halves of that rule live in `common::require_daemon`; read its header
+//! before changing one. Override the binary with `NEXUS_RIGCTLD=/path/to/rigctld`
 //! (inherits the environment, so `LD_LIBRARY_PATH` works for extracted debs).
 
 use std::io::{BufRead, BufReader, Write};
@@ -24,22 +26,7 @@ use tempo_audio::rig::{
     Rig,
 };
 
-/// Locate a usable rigctld, or None (→ tests skip).
-fn rigctld_bin() -> Option<String> {
-    if let Ok(p) = std::env::var("NEXUS_RIGCTLD") {
-        if std::path::Path::new(&p).exists() {
-            return Some(p);
-        }
-    }
-    let ok = Command::new("rigctld")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    ok.then(|| "rigctld".to_string())
-}
+mod common;
 
 /// Tests each own a daemon, but their LIFECYCLES must not overlap: parallel
 /// spawn/kill of several rigctld instances flaked ~1-in-6 runs (connection
@@ -206,15 +193,13 @@ impl Drop for DummyRig {
     }
 }
 
-/// Every test body runs behind this guard so a rigctld-less box skips loudly.
+/// Every test body runs behind this guard: it yields the daemon path, skips
+/// audibly on a box without Hamlib, and under CI refuses to skip at all.
 macro_rules! require_rigctld {
     () => {
-        match rigctld_bin() {
+        match common::require_daemon("rigctld", "NEXUS_RIGCTLD") {
             Some(bin) => bin,
-            None => {
-                eprintln!("SKIP: no rigctld found (install libhamlib-utils or set NEXUS_RIGCTLD)");
-                return;
-            }
+            None => return,
         }
     };
 }

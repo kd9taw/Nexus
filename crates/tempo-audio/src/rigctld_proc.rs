@@ -3090,6 +3090,44 @@ mod tests {
         }
     }
 
+    /// Say that a test asserted NOTHING, in a way that cannot be mistaken for a pass — and
+    /// refuse to say it at all under CI.
+    ///
+    /// `cargo test` CAPTURES `eprintln!` from a passing test, so the `SKIPPED:` lines this
+    /// replaces went to a buffer nobody read: the sweep below reported green on every box
+    /// without Hamlib, having enumerated no models. The notice goes to the process's real
+    /// stderr instead, which libtest does not capture.
+    ///
+    /// On GitHub Actions it is not a skip but a failure. `ci.yml`'s setup step installs
+    /// `libhamlib-utils` — which ships `rigctl` beside `rigctld` (verified against the Ubuntu
+    /// noble package, 4.5.5-3.2build2) — and every step of this job runs after it, so a missing
+    /// binary there means that install broke rather than that there is nothing to prove. (The
+    /// older doc claim on this test that "CI has none" predates that step.)
+    ///
+    /// The discriminator is `GITHUB_ACTIONS`, not `CI`: it is `ci.yml`'s apt line that promises
+    /// the binary, and `CI` is also set by `scripts/gates` on developer boxes that were promised
+    /// nothing. Keying on `CI` would make the local gate permanently red there, and a gate that
+    /// is always red is one everybody reads past.
+    fn not_run(why: &str) {
+        let promised = std::env::var_os("GITHUB_ACTIONS").is_some_and(|v| !v.is_empty());
+        assert!(
+            !promised,
+            "{why} — and this is GitHub Actions, so this sweep must not self-skip: it would \
+             report a pass having enumerated no models at all. `ci.yml`'s setup step installs \
+             `libhamlib-utils`, which ships `rigctl`; if that step was dropped or failed, THAT \
+             is the bug this failure is reporting. Point NEXUS_RIGCTL at a binary to run it."
+        );
+        use std::io::Write;
+        let thread = std::thread::current();
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(
+            err,
+            "!! NOT RUN, and NOT A PASS: {} — {why}. Set NEXUS_RIGCTL to run the full sweep.",
+            thread.name().unwrap_or("<unnamed test>")
+        );
+        let _ = err.flush();
+    }
+
     /// Run a command and GIVE UP after `secs`, killing it. `None` for "could not run, or would not
     /// finish" — both of which mean the same thing to the sweep: skip this model.
     ///
@@ -3133,9 +3171,9 @@ mod tests {
     /// `.ptt_type` out of `rigs/**` for that exact version), and a future release adding a third
     /// would fail here without anyone having to notice the release note.
     ///
-    /// Skipped, loudly, when there is no rigctld to ask: CI has none, and the alternative — a
-    /// baked-in model list — is the thing this whole module exists to avoid. Run it on a station
-    /// machine, or point `NEXUS_RIGCTLD` at a bundled binary.
+    /// Not run — audibly, and never under CI — when there is no rigctl to ask; see [`not_run`].
+    /// The alternative, a baked-in model list, is the thing this whole module exists to avoid.
+    /// Run it on a station machine, or point `NEXUS_RIGCTL` at a binary.
     #[test]
     fn no_model_is_ever_given_the_line_its_backend_keys_with() {
         // ⚠️ rigctl, THE CLIENT — never rigctld, the DAEMON. This asked the daemon to dump each
@@ -3152,13 +3190,11 @@ mod tests {
         // means, and the cost of being wrong here was six hours per run and a CI signal nobody
         // could trust.
         let Some(list) = run_bounded(&bin, &["-l"], 20) else {
-            eprintln!(
-                "SKIPPED: no usable rigctl to ask ({bin:?}). Set NEXUS_RIGCTL to run the full sweep."
-            );
+            not_run(&format!("no usable rigctl to ask ({bin:?})"));
             return;
         };
         if !list.status.success() {
-            eprintln!("SKIPPED: `rigctl -l` failed ({bin:?}).");
+            not_run(&format!("`rigctl -l` failed ({bin:?})"));
             return;
         }
         let models: Vec<u32> = String::from_utf8_lossy(&list.stdout)

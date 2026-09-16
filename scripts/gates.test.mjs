@@ -441,9 +441,18 @@ test('a machine-provisioning step is listed but never executed', () => {
     )
   );
   const r = gates(['--workflow', file]);
-  assert.equal(r.code, 0);
   assert.ok(!r.out.includes('=== RUN   alpha[install things]'), 'a provisioning step was run');
   assert.ok(!r.out.includes('cowsay-marker\n'), 'apt-get was invoked');
+  // NOT a green. The step is skipped, so `cowsay-marker` is absent here while CI
+  // has it — and a gate that quietly self-skips on a missing dependency passes
+  // either way. That is incomplete coverage (exit 3), and the run must say which
+  // package it could not confirm rather than hand `scripts/gates && git push` a 0.
+  // The rigctld/rotctld suites are the live instance: without `libhamlib-utils`
+  // they report every test passed having opened no socket.
+  assert.equal(r.code, 3, 'an unconfirmable CI dependency must cost the run its full-coverage claim');
+  assert.ok(/UNCONFIRMED DEPENDENCY/.test(r.out), 'the run did not name the unconfirmed dependency');
+  assert.ok(/cowsay-marker/.test(r.out), 'the run did not name WHICH package');
+  assert.ok(!r.out.includes('ALL GATES PASSED'), 'incomplete coverage read as full coverage');
   const list = gates(['--list', '--workflow', file]).out;
   assert.ok(/setup\s+install things/.test(list), 'the provisioning step vanished from --list');
 });

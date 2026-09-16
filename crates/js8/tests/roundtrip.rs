@@ -134,7 +134,15 @@ proptest! {
         let body = body.trim().to_string();
         prop_assume!(!body.is_empty());
         let toref = CallRef::Base(to);
-        let Ok(seq) = frames("KD9TAW", Some(&toref), &format!("MSG {body}"), speed) else { return Ok(()); };
+        // NOT `else { return Ok(()); }`. That swallowed a composer failure into a
+        // PASSING case, so if `frames` ever started erroring over this domain the
+        // whole property would go green having checked nothing — the same silent
+        // emptying as a test that skips itself. Measured over 4000 cases: it never
+        // errors, so this expect is unreachable today and a red here is a real
+        // regression rather than a flake. (`prop_assume!` is the right tool for an
+        // input the property does not cover; an Err is not that.)
+        let seq = frames("KD9TAW", Some(&toref), &format!("MSG {body}"), speed)
+            .expect("the frame composer must handle every generated body");
         prop_assume!(seq.len() >= 2);
         let period = speed.period_s() as u64 * 1000;
         let feed = |drop_idx: Option<usize>| -> Vec<js8::proto::reassembly::Message> {

@@ -5073,6 +5073,23 @@ mod tests {
     #![allow(clippy::field_reassign_with_default)]
     use super::*;
 
+    /// A scratch settings directory no CONCURRENT test process can reach.
+    ///
+    /// These tests used fixed `$TMPDIR/tempo_settings_<label>` paths and several
+    /// `remove_dir_all` them. Nothing in one process collides — the labels are
+    /// distinct — but several agents run `cargo test` at once from different
+    /// worktrees on this machine, and those runs share one `$TMPDIR`: one run's
+    /// setup deleted another run's fixture mid-test, so the failure surfaced in
+    /// whichever process lost the race and reproduced for neither.
+    ///
+    /// The pid salt is the fix already used by
+    /// `load_promotes_only_a_live_legacy_pair_to_uplink_consent` below; this is
+    /// that idiom, named once. Pure path arithmetic — no filesystem side effect,
+    /// so each caller keeps whatever create/remove/chmod dance it needs.
+    fn scratch_dir(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("tempo_settings_{label}_{}", std::process::id()))
+    }
+
     /// ⭐⭐ **The link that makes §2.5's every-sent-slot-has-a-source rule real.**
     ///
     /// A rules file names the source of a slot it sends; the loader refuses any name
@@ -5981,7 +5998,7 @@ mod tests {
     /// than as anything the container-level `#[serde(default)]` might be talked into.
     #[test]
     fn reverse_cw_round_trips_and_a_pre_field_settings_file_loads_it_off() {
-        let dir = std::env::temp_dir().join("tempo_settings_cw_reverse");
+        let dir = scratch_dir("cw_reverse");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("settings.json");
 
@@ -7676,9 +7693,7 @@ mod tests {
         assert_eq!(s.fd_join_addr, "");
         assert_eq!(s.fd_position_id, "");
 
-        let path = std::env::temp_dir()
-            .join("tempo_settings_fdsync")
-            .join("settings.json");
+        let path = scratch_dir("fdsync").join("settings.json");
         let s = Settings {
             fd_host_enable: true,
             fd_host_port: 42111,
@@ -7708,9 +7723,7 @@ mod tests {
         assert!(!s.fd_scoreboard, "an upgrade never turns the board on");
         assert_eq!(s.fd_scoreboard_port, 7373);
 
-        let path = std::env::temp_dir()
-            .join("tempo_settings_fdboard")
-            .join("settings.json");
+        let path = scratch_dir("fdboard").join("settings.json");
         let s = Settings {
             fd_scoreboard: true,
             fd_scoreboard_port: 7474,
@@ -7873,7 +7886,7 @@ mod tests {
     #[cfg(unix)]
     fn save_writes_the_settings_file_owner_only() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join("tempo_settings_mode");
+        let dir = scratch_dir("mode");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("settings.json");
         let s = Settings {
@@ -7991,9 +8004,7 @@ mod tests {
 
     #[test]
     fn save_then_load() {
-        let path = std::env::temp_dir()
-            .join("tempo_settings_test2")
-            .join("settings.json");
+        let path = scratch_dir("test2").join("settings.json");
         let s = Settings {
             mycall: "W9XYZ".into(),
             serial_port: "/dev/ttyUSB0".into(),
@@ -8013,7 +8024,7 @@ mod tests {
         // save() writes a sibling `.tmp` then renames it onto the target, so a save is
         // all-or-nothing (a crash mid-write can't truncate the live file). After a
         // successful save the temp file must be gone (renamed into place).
-        let dir = std::env::temp_dir().join("tempo_settings_atomic");
+        let dir = scratch_dir("atomic");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("settings.json");
         let s = Settings {
@@ -8037,7 +8048,7 @@ mod tests {
         // rename, so settings.json is untouched — the operator's callsign, license_class
         // (the Part 97 TX lockout), and rig config survive instead of collapsing to
         // Settings::default() (license = Open → lockout removed) on the next load.
-        let dir = std::env::temp_dir().join("tempo_settings_torn");
+        let dir = scratch_dir("torn");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("settings.json");
         let good = Settings {
@@ -8081,7 +8092,7 @@ mod tests {
         // operator's callsign/rig config, and resets license_class to Open (re-opening
         // TX privileges). load() must set the bad file aside as a sibling `.corrupt`
         // file so the operator (or support) can recover it, then fall back to defaults.
-        let dir = std::env::temp_dir().join("tempo_settings_corrupt");
+        let dir = scratch_dir("corrupt");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("settings.json");
         let good = Settings {
@@ -8119,7 +8130,7 @@ mod tests {
         // corrupt case. (unix-only: permission bits don't model a Windows lock,
         // but they exercise the same read-Err arm.)
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join("tempo_settings_unreadable");
+        let dir = scratch_dir("unreadable");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("settings.json");
         let good = Settings {
@@ -8142,9 +8153,7 @@ mod tests {
 
     #[test]
     fn load_drops_stale_cq_macros_but_keeps_custom() {
-        let path = std::env::temp_dir()
-            .join("tempo_settings_cqmacro")
-            .join("settings.json");
+        let path = scratch_dir("cqmacro").join("settings.json");
         let mut s = Settings::default();
         s.macros.band = vec!["CQ CQ".into(), "QRZ?".into(), "73 to all".into()];
         s.macros.chat = vec!["73".into(), "CQ".into(), "QSL".into()];
@@ -8266,9 +8275,7 @@ mod tests {
 
     #[test]
     fn load_migrates_legacy_cw_into_a_default_profile() {
-        let path = std::env::temp_dir()
-            .join("tempo_settings_cwprofiles")
-            .join("settings.json");
+        let path = scratch_dir("cwprofiles").join("settings.json");
         let mut s = Settings::default();
         s.macros.cw_profiles.clear(); // force the legacy (unmigrated) shape
         s.macros.active_cw_profile = 0;
@@ -8289,9 +8296,7 @@ mod tests {
 
     #[test]
     fn cw_profiles_survive_a_settings_round_trip() {
-        let path = std::env::temp_dir()
-            .join("tempo_settings_cwprofile_rt")
-            .join("settings.json");
+        let path = scratch_dir("cwprofile_rt").join("settings.json");
         let mut s = Settings::default();
         s.macros.cw_profiles = vec![
             CwMacroProfile {
@@ -8331,9 +8336,7 @@ mod tests {
         // cluster_host used to BE the RBN endpoint (digital-only) — that's why CW/Phone
         // needs never appeared. RBN is now wired automatically; an old RBN value must
         // migrate to a human node so SSB/phone spots start flowing.
-        let path = std::env::temp_dir()
-            .join("tempo_settings_clustermig")
-            .join("settings.json");
+        let path = scratch_dir("clustermig").join("settings.json");
         let mut s = Settings::default();
         s.cluster_host = "telnet.reversebeacon.net:7001".into();
         s.save(&path).unwrap();
@@ -8355,9 +8358,7 @@ mod tests {
         // An upgrading config has a single cluster_host but an empty cluster_hosts list
         // (the field is new); load must seed the aggregator from the legacy host so the
         // operator's node isn't lost.
-        let path = std::env::temp_dir()
-            .join("tempo_settings_hostsmig")
-            .join("settings.json");
+        let path = scratch_dir("hostsmig").join("settings.json");
         let mut s = Settings::default();
         s.cluster_hosts = vec![]; // simulate a pre-aggregator config
         s.cluster_host = "dxc.example.net:7300".into();
@@ -8371,9 +8372,7 @@ mod tests {
     fn load_sanitizes_cluster_hosts_list() {
         // The aggregator list must never contain RBN endpoints (auto-wired), blanks, or
         // dups — load strips them, preserving order and the first occurrence.
-        let path = std::env::temp_dir()
-            .join("tempo_settings_hostssan")
-            .join("settings.json");
+        let path = scratch_dir("hostssan").join("settings.json");
         let mut s = Settings::default();
         s.cluster_hosts = vec![
             " ve7cc.net:23 ".into(),                // trimmed
@@ -8401,9 +8400,7 @@ mod tests {
         // whole subsystem left DISABLED. Load must rewrite the host to a human node, RE-ENABLE
         // the cluster, and seed both default human nodes (incl. the port-23 fallback) so phone
         // flows — otherwise fixing the host alone leaves the operator with no spots at all.
-        let path = std::env::temp_dir()
-            .join("tempo_settings_legacyrbn")
-            .join("settings.json");
+        let path = scratch_dir("legacyrbn").join("settings.json");
         let mut s = Settings::default();
         s.cluster_enabled = false;
         s.cluster_host = "telnet.reversebeacon.net:7001".into();
@@ -8434,9 +8431,7 @@ mod tests {
         // Guard the migration's scope: a MODERN config (human host, no RBN signature) that the
         // operator deliberately disabled must stay disabled — the re-enable is only for the
         // legacy RBN-host signature, never a blanket override of the operator's choice.
-        let path = std::env::temp_dir()
-            .join("tempo_settings_moderndisabled")
-            .join("settings.json");
+        let path = scratch_dir("moderndisabled").join("settings.json");
         let mut s = Settings::default();
         s.cluster_enabled = false;
         s.cluster_host = "ve7cc.net:23".into();
@@ -8454,9 +8449,7 @@ mod tests {
     fn migrates_a_flat_config_to_a_single_radio_profile() {
         // An older settings.json (no `radios`) loads as exactly one profile mirroring the flat
         // rig/audio fields; the flat fields stay identical (single-radio behavior unchanged).
-        let path = std::env::temp_dir()
-            .join("tempo_settings_radiomigrate")
-            .join("settings.json");
+        let path = scratch_dir("radiomigrate").join("settings.json");
         let mut legacy = Settings::default();
         legacy.rig_model = 1042;
         legacy.rig_model_name = "Yaesu FTDX10".into();
@@ -8486,9 +8479,7 @@ mod tests {
     fn save_mirrors_a_flat_edit_into_the_active_profile() {
         // The mirror invariant: editing the flat rig fields (today's UI) and saving persists the
         // edit into the active profile, so a reload preserves it.
-        let path = std::env::temp_dir()
-            .join("tempo_settings_radiomirror")
-            .join("settings.json");
+        let path = scratch_dir("radiomirror").join("settings.json");
         let mut s = Settings::default();
         s.ensure_radio_profiles();
         s.rig_model = 3081;

@@ -21,10 +21,11 @@
 //! clock — the loop sleeps 3 s between ticks, and a 10-minute pass is not a
 //! unit test.
 //!
-//! Skips (loudly, passing) when no `rotctld` is available so a contributor
-//! without Hamlib stays green; CI installs `libhamlib-utils`, which ships both
-//! `rigctld` and `rotctld`, so the suite is real there. Override the binary
-//! with `NEXUS_ROTCTLD=/path/to/rotctld`.
+//! Skips when no `rotctld` is available so a contributor without Hamlib stays
+//! green — but AUDIBLY, and never under CI, which installs `libhamlib-utils`
+//! (it ships both `rigctld` and `rotctld`) precisely so the suite is real there.
+//! Both halves of that rule live in `common::require_daemon`; read its header
+//! before changing one. Override the binary with `NEXUS_ROTCTLD=/path/to/rotctld`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -35,22 +36,7 @@ use std::time::{Duration, Instant};
 
 use tempo_core::rotator::{RotOutcome, RotStep, RotatorConfig, TrackDriver};
 
-/// Locate a usable rotctld, or None (→ tests skip).
-fn rotctld_bin() -> Option<String> {
-    if let Ok(p) = std::env::var("NEXUS_ROTCTLD") {
-        if std::path::Path::new(&p).exists() {
-            return Some(p);
-        }
-    }
-    Command::new("rotctld")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-        .then(|| "rotctld".to_string())
-}
+mod common;
 
 /// Same discipline as the rigctld suite: parallel spawn/kill of several daemons
 /// flakes under connection churn, so lifecycles never overlap.
@@ -143,14 +129,13 @@ impl Drop for DummyRot {
     }
 }
 
+/// Yields the daemon path, skips audibly on a box without Hamlib, and under CI
+/// refuses to skip at all.
 macro_rules! require_rotctld {
     () => {
-        match rotctld_bin() {
+        match common::require_daemon("rotctld", "NEXUS_ROTCTLD") {
             Some(bin) => bin,
-            None => {
-                eprintln!("SKIP: no rotctld found (install libhamlib-utils or set NEXUS_ROTCTLD)");
-                return;
-            }
+            None => return,
         }
     };
 }

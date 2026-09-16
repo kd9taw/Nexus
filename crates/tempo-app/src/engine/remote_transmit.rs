@@ -424,8 +424,12 @@ mod tests {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let mut engine = Engine::new("KD9TAW", "EN52", 0);
         engine.set_tier(tier);
-        // One path per engine: a fixed name is shared by every engine in this
-        // module and by any parallel test that reaches for the same one.
+        // One path per CALL, not per thread. Eight tests in this module call `station()`;
+        // cargo runs them on parallel threads, and several agents run `cargo test` at once
+        // from different worktrees sharing one `$TMPDIR` — so a fixed filename here was one
+        // settings store shared by every one of them. The pid separates the concurrent runs;
+        // the counter separates every caller, including two on the same thread, which a
+        // thread id alone would not.
         engine.configure_remote_settings_store(std::env::temp_dir().join(format!(
             "nexus-remote-ft-authority-{}-{}.json",
             std::process::id(),

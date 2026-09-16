@@ -377,8 +377,12 @@ mod tests {
                 }
             });
             let mut e = Engine::new("KD9TAW", "EN52", 0);
-            // One path per engine: a fixed name is shared with any parallel test
-            // that reaches for the same one.
+            // Salted by pid AND scene: concurrent `cargo test` runs from sibling worktrees
+            // share one `$TMPDIR`, so a fixed filename here is one settings store shared by
+            // every run. The scene is in the name too, so the three scenes cannot carry
+            // persisted state into one another — the engine is rebuilt each iteration, so
+            // a shared store would be the only thing coupling them, and that coupling would
+            // be invisible.
             e.configure_remote_settings_store(
                 std::env::temp_dir()
                     .join(format!("nexus-ft-key-{}-{scene}.json", std::process::id())),
