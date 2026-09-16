@@ -45,7 +45,7 @@ function connected(pendingMutation = false) {
         : request.type === 'stopTransmit' ? { stop: 'accepted' } : structuredClone(state)
       queueMicrotask(() => relay.receiveStation({ type: 'operationResponse', sessionId, requestId: request.requestId, value }))
     }
-  } }, [{ sessionId, deviceId: crypto.randomUUID(), peer: {
+  } }, [{ sessionId, deviceId: crypto.randomUUID(), commandUntil: Number.MAX_SAFE_INTEGER, peer: {
     close: () => { throw Error('browser closed') }, send: raw => {
       const response = JSON.parse(raw)
       if (response.error) errors.push(response.error)

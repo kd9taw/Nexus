@@ -312,7 +312,7 @@ it('refuses station control on an old station while retaining legacy read negoti
   const frames: any[] = [], replies: any[] = [], relay = new OperationRelay()
   const station = { send: (v: unknown) => { frames.push(v) }, close: () => {} }, browser = { send: (v: unknown) => { replies.push(v) }, close: () => {} }
   // The legacy peer shape is accepted by the relay. Control is versioned separately.
-  relay.sync({ peer: station, supported: true }, [{ peer: browser, sessionId: 'browser', deviceId: crypto.randomUUID() }], 1000)
+  relay.sync({ peer: station, supported: true }, [{ peer: browser, sessionId: 'browser', deviceId: crypto.randomUUID(), commandUntil: Number.MAX_SAFE_INTEGER }], 1000)
   const requestId = crypto.randomUUID()
   const request = { type: 'stationControl', requestId, stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(), commandWindowId: crypto.randomUUID(), expectedRevision: 1, clientSequence: 1, context: { radioId: 1, radioConnection: 1, ampConnection: 1, ampReadSequence: 1 }, action }
   relay.receiveBrowser('browser', { type: 'operationRequest', operationVersion: 2, request }, 1000)

@@ -22,7 +22,7 @@ it('accepts only a bounded stop token and reports acceptance without asserting R
 
 it('routes Stop despite ordinary rate exhaustion and pending requests, retaining all routes across hibernation', () => {
   const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = id(), deviceId = id()
-  const peers = [{ sessionId, deviceId, peer: browser }]
+  const peers = [{ sessionId, deviceId, commandUntil: Number.MAX_SAFE_INTEGER, peer: browser }]
   relay.sync({ peer: station, supported: true, operationVersion: 4 }, peers, 1000)
   const send = (request: unknown) => relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 4, request }, 1000)
   for (let n = 0; n < 2; n++) {
@@ -51,7 +51,7 @@ it('routes Stop despite ordinary rate exhaustion and pending requests, retaining
 
 it.each([1, 2, 3])('refuses Stop through an older peer and projects v4 owner tokens away (v%s)', version => {
   const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = id()
-  relay.sync({ peer: station, supported: true, operationVersion: version }, [{ sessionId, deviceId: id(), peer: browser }], 1000)
+  relay.sync({ peer: station, supported: true, operationVersion: version }, [{ sessionId, deviceId: id(), commandUntil: Number.MAX_SAFE_INTEGER, peer: browser }], 1000)
   relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 4, request: stop() }, 1000)
   expect(station.frames).toHaveLength(0)
   expect(browser.frames[0].error).toBe('stationUnsupported')

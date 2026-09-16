@@ -35,7 +35,7 @@ it('preserves the original advertisement while explicitly negotiating expanded o
 it('negotiates each legacy/new browser and station pair without upgrading the older peer', () => {
   for (const browserVersion of [1, 2, 3, 4]) for (const stationVersion of [1, 2, 3, 4]) {
     const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = crypto.randomUUID()
-    relay.sync({ peer: station, supported: true, operationVersion: stationVersion }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID() }], 1000)
+    relay.sync({ peer: station, supported: true, operationVersion: stationVersion }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID(), commandUntil: Number.MAX_SAFE_INTEGER }], 1000)
     const request = { type: 'state', requestId: crypto.randomUUID() }
     relay.receiveBrowser(sessionId, { type: 'operationRequest', ...(browserVersion >= 2 ? { operationVersion: browserVersion } : {}), request }, 1000)
     const negotiated = Math.min(browserVersion, stationVersion)
@@ -52,7 +52,7 @@ it('negotiates each legacy/new browser and station pair without upgrading the ol
 
 it('refuses expanded actions before a legacy station receives them, and allows receiver controls', () => {
   const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = crypto.randomUUID()
-  relay.sync({ peer: station, supported: true, operationVersion: 2 }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID() }], 1000)
+  relay.sync({ peer: station, supported: true, operationVersion: 2 }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID(), commandUntil: Number.MAX_SAFE_INTEGER }], 1000)
   const request = { type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),
     expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1, context: state().controls!.context, action: { action: 'radio.tier', tier: 'FT4' } }
   relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 3, request }, 1000)
@@ -66,7 +66,7 @@ it('refuses expanded actions before a legacy station receives them, and allows r
 it('projects older station capability hints for each browser version after room hibernation', () => {
   for (const version of [1, 2, 3, 4]) {
     const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = crypto.randomUUID()
-    const peers = [{ peer: browser, sessionId, deviceId: crypto.randomUUID() }]
+    const peers = [{ peer: browser, sessionId, deviceId: crypto.randomUUID(), commandUntil: Number.MAX_SAFE_INTEGER }]
     relay.sync({ peer: station, supported: true, operationVersion: 3 }, peers, 1000)
     const requestId = crypto.randomUUID()
     relay.receiveBrowser(sessionId, { type: 'operationRequest', ...(version >= 2 ? { operationVersion: version } : {}), request: { type: 'state', requestId } }, 1000)
@@ -87,7 +87,7 @@ it('projects older station capability hints for each browser version after room 
 
 it('restores pre-v3 checkpoints conservatively and rejects malformed stored versions', () => {
   const station = peer(), browser = peer(), sessionId = crypto.randomUUID(), requestId = crypto.randomUUID()
-  const peers = [{ peer: browser, sessionId, deviceId: crypto.randomUUID() }]
+  const peers = [{ peer: browser, sessionId, deviceId: crypto.randomUUID(), commandUntil: Number.MAX_SAFE_INTEGER }]
   const restored = new OperationRelay()
   restored.sync({ peer: station, supported: true, operationVersion: 3 }, peers, 1001)
   restored.restore(sessionId, { version: 1, pending: [{ requestId, at: 1000, mutation: false }] })
@@ -122,7 +122,7 @@ it('ignores bounded future capability hints without admitting an unknown action 
 it('keeps FT CQ and Call authority out of older browser state projections', () => {
   for (const version of [1, 2, 3, 4]) {
     const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = crypto.randomUUID(), requestId = crypto.randomUUID()
-    relay.sync({ peer: station, supported: true, operationVersion: 4 }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID() }], 1000)
+    relay.sync({ peer: station, supported: true, operationVersion: 4 }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID(), commandUntil: Number.MAX_SAFE_INTEGER }], 1000)
     relay.receiveBrowser(sessionId, { type: 'operationRequest', ...(version > 1 ? { operationVersion: version } : {}), request: { type: 'state', requestId } }, 1000)
     const value = { ...state(), phase: 'controlling', leaseId: crypto.randomUUID(), commandWindowId: crypto.randomUUID(),
       nextSequence: 1, leaseRemainingMs: 5000, transmitEpoch: '0000000000000001', txArmed: true }

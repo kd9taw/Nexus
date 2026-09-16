@@ -231,7 +231,9 @@ function relaySetup() {
     sessionId = id(),
     deviceId = id(),
     relay = new OperationRelay()
-  const peers = [{ sessionId, deviceId, peer: browser }]
+  // Entitlement is the adapter's to supply and these cases are about routing, so the deadline is
+  // set out of the way. The gate itself has its own case below.
+  const peers = [{ sessionId, deviceId, peer: browser, commandUntil: Number.MAX_SAFE_INTEGER }]
   relay.sync({ peer: station, supported: true }, peers, 100)
   return { station, browser, sessionId, deviceId, relay, peers }
 }
@@ -383,6 +385,59 @@ it('finishes revocation when disconnected peers can no longer accept close notif
   relay.sync({ peer: station, supported: true }, peers, 103)
   expect(() => relay.sync({ peer: station, supported: true }, [], 104)).not.toThrow()
   expect(station.close).toHaveBeenCalledWith(1011, 'stationUnavailable')
+})
+
+// THE PER-COMMAND ENTITLEMENT GATE. Admission is not the whole of entitlement: a session stays
+// open on a lease that outlives a revocation, so the lane that forwards commands has to hold the
+// rule itself. Both directions, because one of them alone is half a test.
+it('refuses a command once the entitlement behind the session has lapsed, and only a command', () => {
+  const station = { send: vi.fn<(s: string) => void>(), close: vi.fn() },
+    browser = { send: vi.fn<(s: string) => void>(), close: vi.fn() },
+    sessionId = id(),
+    deviceId = id(),
+    relay = new OperationRelay()
+  const control = () => ({
+    type: 'stationControl', requestId: id(), stationBootId: id(), leaseId: id(), expectedRevision: 1,
+    commandWindowId: id(), clientSequence: 1,
+    context: { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null },
+    action: { action: 'radio.tier', tier: 'FT4' },
+  })
+  const send = (request: unknown) => relay.receiveBrowser(sessionId, { type: 'operationRequest', operationVersion: 4, request }, 1000)
+  const forwarded = () => station.send.mock.calls.map(([raw]) => JSON.parse(raw).request.type)
+  const refusals = () => browser.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter(m => 'error' in m).map(m => m.error)
+
+  // POSITIVE CONTROL first: entitled until after `now`, and the command goes through. Without
+  // this, the refusal below would equally be satisfied by a relay that forwards nothing at all.
+  relay.sync({ peer: station, supported: true, operationVersion: 4 },
+    [{ sessionId, deviceId, peer: browser, commandUntil: 2000 }], 1000)
+  send(control())
+  expect(forwarded()).toEqual(['stationControl'])
+  expect(refusals()).toEqual([])
+
+  // Lapsed: the same command, the same socket, and the station is handed nothing.
+  station.send.mockClear(); browser.send.mockClear()
+  relay.sync({ peer: station, supported: true, operationVersion: 4 },
+    [{ sessionId, deviceId, peer: browser, commandUntil: 999 }], 1000)
+  send(control())
+  expect(forwarded()).toEqual([])
+  expect(refusals()).toEqual(['stationUnavailable'])
+
+  // ...while a read and a Stop are untouched. Safety outranks entitlement: an operator who can no
+  // longer pay must still be able to unkey a transmitter, and `state` is where the ids a Stop is
+  // built from come from.
+  station.send.mockClear(); browser.send.mockClear()
+  send({ type: 'state', requestId: id() })
+  send({ type: 'stopTransmit', requestId: id(), stationBootId: id(), leaseId: id(), transmitEpoch: 'a'.repeat(16) })
+  expect(forwarded()).toEqual(['state', 'stopTransmit'])
+  expect(refusals()).toEqual([])
+
+  // And a deadline the adapter never supplied refuses, rather than waving everything through.
+  station.send.mockClear(); browser.send.mockClear()
+  relay.sync({ peer: station, supported: true, operationVersion: 4 },
+    [{ sessionId, deviceId, peer: browser } as never], 1000)
+  send(control())
+  expect(forwarded()).toEqual([])
+  expect(refusals()).toEqual(['stationUnavailable'])
 })
 
 it('records whether a failed manual log left the browser', async () => {
