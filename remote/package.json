@@ -8,7 +8,7 @@
     "dev": "wrangler dev --ip 127.0.0.1",
     "types": "wrangler types",
     "check": "tsc --noEmit",
-    "test": "node --test test/service.test.mjs",
+    "test": "node --test test/application-version.test.mjs test/service.test.mjs",
     "test:native": "node scripts/test-native.mjs",
     "test:browser": "node --test test/browser.test.mjs",
     "test:staging": "node --test test/staging.test.mjs"
