@@ -9,6 +9,7 @@ import { ObservationRelay } from '../../ui/src/remote-monitor/relay'
 import type { BrowserIdentity, Entitlement, ObserverCheckpoint, Peer, StationAccess, StationIdentity } from '../../ui/src/remote-monitor/relay'
 import type { FrameOrderState } from '../../ui/src/remote-monitor/protocol'
 import { ageFrame, MAX_FRAME_BYTES, parseFrame, STALE_MS } from '../../ui/src/remote-monitor/protocol'
+import { knownApplicationVersion } from './application-version'
 import { Refusal, trial } from './authority'
 import type { RemoteEnv } from './authority'
 import { ApplicationRelay } from '../../ui/src/remote-web/application-relay'
@@ -80,7 +81,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           if (attachment.role === 'station') {
             if (station) throw new Error('invalidCheckpoint')
             station = { peer, identity: attachment.identity }; order = attachment.order
-            this.applicationVersions.set(ws, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(attachment.applicationVersion ?? 0) ? attachment.applicationVersion! : 0)
+            this.applicationVersions.set(ws, knownApplicationVersion(attachment.applicationVersion ?? 0) ? attachment.applicationVersion! : 0)
           } else if (attachment.role === 'browser') {
             observers.push({ ...attachment, peer })
             // An attachment written before this field existed carries none, and gets 0: that
@@ -182,7 +183,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
       const peer = this.peer(server, path === '/station' ? 'station' : 'browser', buffered)
       if(path==='/station')this.operationVersions.set(server,parseOperationVersion(input.operationVersion)??0)
       if (path === '/station') this.audioVersions.set(server, input.audioVersion === 1 ? 1 : 0)
-      if (path === '/station') this.applicationVersions.set(server, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
+      if (path === '/station') this.applicationVersions.set(server, knownApplicationVersion(input.applicationVersion ?? 0) ? input.applicationVersion! : 0)
       try {
         if (path === '/station') relay.connectStation(input.identity, peer, now)
         else {
@@ -212,7 +213,7 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     this.syncApplication(Date.now())
     // Bounds apply before parsing. The larger envelope is available only to an
     // authenticated station that advertised this application protocol version.
-    const limit = attachment.role === 'station' && [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(this.applicationVersions.get(ws) ?? 0)
+    const limit = attachment.role === 'station' && knownApplicationVersion(this.applicationVersions.get(ws) ?? 0)
       ? APPLICATION_MAX_BYTES : attachment.role === 'station' ? MAX_FRAME_BYTES + 256 : Math.max(APPLICATION_REQUEST_BYTES,OPERATION_REQUEST_BYTES)
     if (new TextEncoder().encode(message).length > limit) {
       ws.close(1008, 'invalidMessage'); await this.disconnected(ws); return

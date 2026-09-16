@@ -3,6 +3,7 @@ import { account, access, APPROVAL_LIMIT_MS, APPROVAL_MS, body, browserOrigin, c
   lifetime, native, proof, rate, Refusal, renewsUntil, requireAdmin, requireEligible, requireTrial, requireUnspentIdentity, requireValue, secret, station,
   trial, TRIAL_MS, uuid } from './authority'
 import type { DeviceRow, RemoteEnv, StationRow } from './authority'
+import { APPLICATION_VERSION, negotiatedApplicationVersion } from './application-version'
 import { observerDeadline } from '../../ui/src/remote-monitor/relay'
 import { advertisedOperationVersion } from '../../ui/src/remote-web/operation-version'
 export { StationRoom } from './room'
@@ -37,7 +38,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, clientId: env.AUTH0_CLIENT_ID,
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
     revision: env.REMOTE_BUILD_REVISION ?? 'local',
-    applicationVersion: 17,
+    applicationVersion: APPLICATION_VERSION,
     operationVersion: 2,
     operationMaxVersion: 3,
     operationFtVersion: 1,
@@ -53,20 +54,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
       const row = await native(request, env, stationId)
       await rate(env, `connect:${stationId}`, now, 20)
       return room(env, stationId, 'station', { access: await access(env, row, now),
-        applicationVersion: request.headers.get('x-nexus-application-query-version') === '1' && request.headers.get('x-nexus-application-stream-version') === '2'
-          ? request.headers.get('x-nexus-application-recall-version') === '1'
-            ? request.headers.get('x-nexus-application-keyboard-version') === '1'
-              ? request.headers.get('x-nexus-application-insights-version') === '1'
-                ? request.headers.get('x-nexus-application-dxpeditions-version') === '1'
-                  ? request.headers.get('x-nexus-application-memories-version') === '1'
-                    ? request.headers.get('x-nexus-application-ota-version') === '1'
-                      ? request.headers.get('x-nexus-application-field-day-version') === '1'
-                        ? request.headers.get('x-nexus-application-js8-version') === '1' ? request.headers.get('x-nexus-application-station-modes-version') === '1' ? request.headers.get('x-nexus-application-navigation-version') === '1' ? request.headers.get('x-nexus-application-configuration-version') === '1' ? request.headers.get('x-nexus-application-lookups-version') === '1' ? request.headers.get('x-nexus-application-alerts-version') === '1' ? request.headers.get('x-nexus-application-rotator-version') === '1' ? 17 : 16 : 15 : 14 : 13 : 12 : 11 : 10 : 9 : 8 : 7 : 6
-                : 5
-              : 4
-            : 3
-          : request.headers.get('x-nexus-application-stream-version') === '2' ? 2
-          : ['1', '2'].includes(request.headers.get('x-nexus-application-version') ?? '') ? Number(request.headers.get('x-nexus-application-version')) : 0,
+        // Derived from the one ordered table in ./application-version, which also carries the
+        // per-header audit. The ladder used to be a fifteen-deep ternary here.
+        applicationVersion: negotiatedApplicationVersion(request.headers),
         operationVersion: advertisedOperationVersion(
           ['1','2'].includes(request.headers.get('x-nexus-operation-version')??'') ? Number(request.headers.get('x-nexus-operation-version')) : 0,
           request.headers.get('x-nexus-operation-max-version') === '3' ? 3 : 0,
