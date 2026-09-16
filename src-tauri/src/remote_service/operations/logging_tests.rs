@@ -836,7 +836,15 @@ fn spot(f: &Fixture, reference: &str) -> Request {
 
 #[test]
 fn self_spot_is_on_and_its_switch_still_refuses_before_anything_is_consumed() {
-    assert!(super::super::logging::SELF_SPOT);
+    // The SWITCH is a compile-time fact, so it is pinned at compile time: asserting it at
+    // runtime is a tautology (clippy's `assertions_on_constants` says so, correctly) and the
+    // pin is the point — flipping `SELF_SPOT` to false must say so here, by name, rather than
+    // leave the `offered` assertion below failing for a reason nobody can read off it.
+    const _: () = assert!(
+        super::super::logging::SELF_SPOT,
+        "self-spot is off: this test pins it ON, and its `offered` half asserts the capability \
+         is advertised — turn that half around before flipping the switch"
+    );
     let mut f = Fixture::new();
     acquire(&f);
     f.engine

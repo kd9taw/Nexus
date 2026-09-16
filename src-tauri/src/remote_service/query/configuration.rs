@@ -1139,12 +1139,14 @@ mod tests {
     }
     #[test]
     fn explicit_settings_schema_preserves_choices_and_omits_private_fields_before_serialization() {
-        let mut s = Settings::default();
-        s.mycall = "W1AW".into();
-        s.mygrid = "FN31RX09".into();
-        s.cw_wpm = 27;
-        s.amp_follow_band = true;
-        s.fd_class = "3A".into();
+        let mut s = Settings {
+            mycall: "W1AW".into(),
+            mygrid: "FN31RX09".into(),
+            cw_wpm: 27,
+            amp_follow_band: true,
+            fd_class: "3A".into(),
+            ..Default::default()
+        };
         s.ensure_radio_profiles();
         s.clublog_api_key = "must-not-leave-station".into();
         s.cloudlog_key = "must-not-leave-station".into();

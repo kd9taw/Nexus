@@ -280,9 +280,11 @@ mod tests {
         }
     }
     fn engine(count: usize) -> crate::SharedEngine {
-        let mut settings = tempo_app::settings::Settings::default();
-        settings.mycall = "W1AW".into();
-        settings.mygrid = "FN31".into();
+        let settings = tempo_app::settings::Settings {
+            mycall: "W1AW".into(),
+            mygrid: "FN31".into(),
+            ..Default::default()
+        };
         let mut engine = tempo_app::engine::Engine::with_settings(settings);
         let adif: String = (0..count).map(|i| {
             let call = format!("K1T{i}");

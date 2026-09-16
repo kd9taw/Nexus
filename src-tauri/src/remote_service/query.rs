@@ -663,6 +663,15 @@ fn log_window(
 }
 
 #[cfg(test)]
+pub(super) fn configuration_probe(
+    engine: &crate::SharedEngine,
+) -> Result<serde_json::Value, &'static str> {
+    Ok(
+        serde_json::json!({"settings":configuration::build(Collection::Settings,engine)?,"programming":configuration::build(Collection::Programming,engine)?}),
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     const ID: &str = "10000000-0000-4000-8000-000000000001";
@@ -840,13 +849,4 @@ mod tests {
         assert_eq!(journal.snapshot(None).0.len(), MAX_ROWS);
         assert!(journal.snapshot(None).2["dropped"].as_u64().unwrap() > 0);
     }
-}
-
-#[cfg(test)]
-pub(super) fn configuration_probe(
-    engine: &crate::SharedEngine,
-) -> Result<serde_json::Value, &'static str> {
-    Ok(
-        serde_json::json!({"settings":configuration::build(Collection::Settings,engine)?,"programming":configuration::build(Collection::Programming,engine)?}),
-    )
 }

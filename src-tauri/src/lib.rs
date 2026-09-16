@@ -27117,7 +27117,7 @@ mod tests {
         // spot handed to the detector says so. (`time: t` — the poll stamp — is the
         // original defect; this equality is what refuses it.)
         let heard_1min_ago = st(ft8.slot_index(now_ms) - 4);
-        let out = spots(&[heard_1min_ago.clone()], &ft8, 15.0);
+        let out = spots(std::slice::from_ref(&heard_1min_ago), &ft8, 15.0);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].time, t - 60, "real decode age, never the poll time");
 
@@ -29317,8 +29317,8 @@ mod tests {
 
     /// TWO-INSTANCE SHACK: instance A lands a file import on the shared cache;
     /// instance B — whose memory-first load predates it — refreshes and writes
-    /// ITS snapshot whole-file. B's write path must re-absorb A's `imported`
-    /// + aliases from a fresh disk read, or the import is silently gone for
+    /// ITS snapshot whole-file. B's write path must re-absorb A's `imported` +
+    /// aliases from a fresh disk read, or the import is silently gone for
     /// everyone once both restart. Elements stay last-writer-wins (both
     /// instances fetch the same group — the loser is equivalent).
     #[test]
