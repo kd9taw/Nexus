@@ -192,7 +192,7 @@ impl Authority {
 /// `halt_tx` leaves the TX-enable latch off exactly as a local Stop TX does. The shack's own Stop
 /// controls are untouched.
 ///
-/// ⭐ **AND IT ENDS AN ACTIVE SATELLITE TRACK** (`satellite::stop_track` — the rail Stop's own
+/// ⭐ **AND IT ENDS AN ACTIVE SATELLITE TRACK** (`satellite::disarm_track` — the rail Stop's own
 /// verb: disarm, hand the dial back, halt the mast). This is the ONE place the browser's Stop does
 /// more than the desktop's Stop TX does, and it is deliberate. At the shack those are two
 /// controls, a metre apart, and the operator picks; a browser has one Stop, and a satellite track
@@ -209,45 +209,80 @@ impl Authority {
 /// The acceptance never waits for Engine. When Engine is held (a radio-loop tick, another command),
 /// the stop runs on its own thread as soon as Engine is free: the same wait a Stop TX press at the
 /// shack has. A poisoned Engine is still stopped.
+///
+/// ⚠️ **ONE ENGINE ACQUISITION, NOT TWO.** The satellite disarm briefly ran on a thread of its own,
+/// which made the Stop contend with itself: the disarm's blocking lock and the ordinary-command
+/// path's `try_lock` raced, and the browser's very next request after pressing Stop was refused
+/// `stationBusy` by the Stop that preceded it (four times in five, measured). A Stop is never
+/// refused that way — its admission touches no Engine — but the request behind it was. Every verb
+/// therefore rides the single guard below, and only the mast halt (a blocking socket write, with no
+/// Engine in it) is allowed a thread.
 pub(super) fn stop_station(engine: &crate::SharedEngine) {
-    // On its own thread for the same reason the transmit stop below takes one when Engine is
-    // contended: the acceptance must never wait for Engine, and the disarm takes that lock. A
-    // thread that cannot be spawned runs it here instead — a Stop that quietly declined to stop
-    // the track is not an option.
-    #[cfg(feature = "radio")]
-    {
-        let owned = engine.clone();
-        if std::thread::Builder::new()
-            .name("remote-stop-satellite".into())
-            .spawn(move || super::station::satellite::stop_track(&owned))
-            .is_err()
-        {
-            super::station::satellite::stop_track(engine);
-        }
-    }
-    fn stop(e: &mut tempo_app::engine::Engine) {
+    /// Every stop verb under the one guard, returning the mast halt the caller runs once the guard
+    /// is gone. The satellite disarm goes first so `halt_tx` stays last, as it is in every combined
+    /// local stop.
+    fn stop(e: &mut tempo_app::engine::Engine) -> Option<String> {
         tempo_core::applog::info(
             "tx",
             "remote Stop TX: stopping every transmission at the station",
         );
+        #[cfg(feature = "radio")]
+        let halt = super::station::satellite::disarm_track(e);
+        #[cfg(not(feature = "radio"))]
+        let halt = None;
         e.stop_cw();
         e.rtty_stop();
         e.psk_stop();
         e.sstv_stop();
         e.stop_voice();
         e.halt_tx();
+        halt
+    }
+    // A blocking socket write, so the thread that owes the browser its acceptance never runs it. A
+    // thread that cannot be spawned runs it here instead — a Stop that quietly declined to halt the
+    // mast is not an option.
+    fn halt_off_thread(addr: Option<String>) {
+        #[cfg(feature = "radio")]
+        if let Some(addr) = addr {
+            let owned = addr.clone();
+            if std::thread::Builder::new()
+                .name("remote-stop-rotator".into())
+                .spawn(move || super::station::satellite::halt_mast(owned))
+                .is_err()
+            {
+                super::station::satellite::halt_mast(addr);
+            }
+        }
+        #[cfg(not(feature = "radio"))]
+        let _ = addr;
     }
     match engine.try_lock() {
-        Ok(mut e) => stop(&mut e),
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => stop(&mut poisoned.into_inner()),
+        Ok(mut e) => {
+            let halt = stop(&mut e);
+            drop(e);
+            halt_off_thread(halt);
+        }
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            let mut e = poisoned.into_inner();
+            let halt = stop(&mut e);
+            drop(e);
+            halt_off_thread(halt);
+        }
         Err(std::sync::TryLockError::WouldBlock) => {
             let engine = engine.clone();
             std::thread::spawn(move || {
-                stop(
+                let halt = stop(
                     &mut engine
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner()),
-                )
+                );
+                // Already off the accepting thread; the mast halt needs no second one.
+                #[cfg(feature = "radio")]
+                if let Some(addr) = halt {
+                    super::station::satellite::halt_mast(addr);
+                }
+                #[cfg(not(feature = "radio"))]
+                let _ = halt;
             });
         }
     }

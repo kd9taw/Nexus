@@ -193,6 +193,18 @@ pub fn stop_track(engine: &crate::SharedEngine) {
     if let Some(addr) = crate::disarm_sat_track(engine) {
         // The halt is a blocking socket write and the Engine lock is already released, so it runs
         // here rather than on a thread of its own.
-        let _ = tempo_audio::rotator::stop(&addr);
+        halt_mast(addr);
     }
+}
+
+/// The disarm half of `stop_track` for a caller that already holds Engine, returning the mast halt
+/// for it to run once it has let the lock go. The remote Stop uses this rather than `stop_track`:
+/// every verb of that Stop belongs under the one guard it already takes (see `stop_station`).
+pub(crate) fn disarm_track(eng: &mut tempo_app::engine::Engine) -> Option<String> {
+    crate::disarm_sat_track_locked(eng)
+}
+
+/// The mast halt on its own: a blocking socket write, with nothing of Engine left in it.
+pub(crate) fn halt_mast(addr: String) {
+    let _ = tempo_audio::rotator::stop(&addr);
 }
