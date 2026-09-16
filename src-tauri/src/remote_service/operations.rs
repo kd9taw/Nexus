@@ -20,6 +20,8 @@ use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome
 
 mod export;
 mod logging;
+mod program_edit;
+mod program_export;
 mod settings;
 mod station;
 mod transmit_stop;
@@ -132,6 +134,21 @@ pub enum Request {
         selection: Option<export::Selection>,
         index: u32,
     },
+    /// Read the station's working channel list as a CHIRP or spreadsheet CSV, under STATION
+    /// CONTROL and this browser's current lease. Operation v4. It spends no sequence and writes
+    /// nothing — see `program_export`.
+    ProgramExport {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "stationBootId")]
+        station_boot_id: String,
+        #[serde(rename = "leaseId")]
+        lease_id: String,
+        format: program_export::Format,
+        #[serde(rename = "nameCap")]
+        name_cap: u32,
+        index: u32,
+    },
 }
 impl Request {
     pub fn id(&self) -> &str {
@@ -145,7 +162,8 @@ impl Request {
             | Self::LogManual { request_id, .. }
             | Self::StationControl { request_id, .. }
             | Self::LogChange { request_id, .. }
-            | Self::ActivationExport { request_id, .. } => request_id,
+            | Self::ActivationExport { request_id, .. }
+            | Self::ProgramExport { request_id, .. } => request_id,
         }
     }
 }
@@ -780,6 +798,11 @@ impl Authority {
                 if c.control_grants.contains(device) {
                     capabilities.push("settingsControl");
                     capabilities.push("postSpot");
+                    // Rendering the working channel list to a CHIRP/CSV file the browser saves,
+                    // and curating that list. The hints are what let an older station stay silent
+                    // and an older page never offer the buttons.
+                    capabilities.push("programExport");
+                    capabilities.push("programEdit");
                     // Listening to the station's receive audio. The hint is what makes
                     // the negotiation work in BOTH directions: a browser that has never
                     // heard of it never offers a listen control, and a station built
@@ -838,7 +861,7 @@ impl Authority {
         }
         if !matches!(version, 1..=4)
             || matches!(request, Request::StationControl { action, .. } if version < action.minimum_version())
-            || matches!(request, Request::LogChange { .. } | Request::ActivationExport { .. } if version < 4)
+            || matches!(request, Request::LogChange { .. } | Request::ActivationExport { .. } | Request::ProgramExport { .. } if version < 4)
         {
             return Err("stationUnsupported");
         }
@@ -889,6 +912,25 @@ impl Authority {
                     return Err("notController");
                 }
                 export::respond(&engine, selection.as_ref(), *index)
+            }
+            Request::ProgramExport {
+                station_boot_id,
+                lease_id,
+                format,
+                name_cap,
+                index,
+                ..
+            } => {
+                // A read under station control (checked above) and this browser's own lease. Same
+                // shape as the activation read beside it: no sequence, no command window, no write.
+                if c.boot.as_deref() != Some(station_boot_id.as_str()) {
+                    return Err("staleStation");
+                }
+                let l = c.lease.as_ref().ok_or("leaseExpired")?;
+                if l.id != *lease_id || l.session != session || l.device != device {
+                    return Err("notController");
+                }
+                program_export::respond(&crate::radioprog_path(), *format, *name_cap, *index)
             }
             Request::Acquire {
                 station_boot_id, ..
@@ -1266,6 +1308,11 @@ fn permitted(c: &Core, version: u8, device: &str, request: &Request) -> bool {
             c.grants.contains(device) || version >= 2 && c.control_grants.contains(device)
         }
         Request::LogManual { .. } | Request::ActivationExport { .. } => c.grants.contains(device),
+        // The channel list itself is already readable by any observing browser (the `programming`
+        // collection), so this read reveals nothing new — but it renders a station file through a
+        // station writer, which is what station control means here, and it is the same grant the
+        // channel TUNE beside it already needs.
+        Request::ProgramExport { .. } => c.control_grants.contains(device),
         // A log change needs the logging grant; a preference change needs what its keys need.
         Request::LogChange { change, .. } => {
             let (logging, control) = change.grants();

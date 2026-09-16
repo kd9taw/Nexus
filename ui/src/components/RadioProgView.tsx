@@ -2,6 +2,10 @@ import { useNavigation } from '../remote-web/useNavigation'
 import type { ProgrammingConfiguration } from '../remote-web/configuration'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { useStationCapability } from '../stationAccess'
+import { sendLogChange, useLogChange, useRemoteOperations } from '../remote-web/operations'
+import type { ProgramEdit } from '../remote-web/operation-protocol'
+import { downloadProgramExport, programExportName } from '../remote-web/program-export'
+import { saveDownload } from '../remote-web/chunked-file'
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT, and this screen is dense with it: every repeater
 // callsign, output frequency, offset, CTCSS tone and DTCS code, the band chips, the mode badges
@@ -151,6 +155,15 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const remote=configuration.remote
   // A browser may Tune (never edit) while the station advertises the repeater transaction.
   const repeaterControl=useStationCapability('repeaterTuning')
+  // Exporting from a browser: the station renders the file with the desktop's own CHIRP/CSV
+  // writers and this page saves it. Locally it is always available; remotely only while the
+  // station advertises the verb, so an older Nexus leaves the buttons dead rather than refused.
+  const exportClient=useRemoteOperations(), exportOffered=useLogChange('programExport')
+  const exportControl=!remote||(!!exportClient&&exportOffered)
+  // Curating that list — rename, reorder, drop a row, clear it. Same shape as the export: always
+  // available locally, and remotely only while the station advertises the verb.
+  const editOffered=useLogChange('programEdit')
+  const editControl=!remote||(!!exportClient&&editOffered)
   if(remote)myGrid=configuration.value?.mygrid??''
   // ── query state ──
   const [originKind, setOriginKind] = useState<'station' | 'grid' | 'city'>('station')
@@ -406,7 +419,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       ...candidates.slice(0, 200).map((row) => ({ channel: { ...row.channel }, nameEdited: false })),
     ])
   }
+  /** One curation gesture at the station, against the document revision this page is SHOWING.
+   *  Whatever the station answers, re-read the list rather than guessing what it now holds: a
+   *  stale revision, a row somebody else removed and a half-written file all end the same way. */
+  const sendEdit = async (edit: ProgramEdit) => {
+    const revision = configuration.value?.revision
+    if (!exportClient || !revision) return
+    await sendLogChange(exportClient, { kind: 'programEdit', revision, edit })
+    configuration.refresh()
+  }
   const move = (i: number, d: -1 | 1) => {
+    if (remote) { void sendEdit({ action: 'move', id: rows[i]!.channel.id, by: d }); return }
     setRows((rs) => {
       const j = i + d
       if (j < 0 || j >= rs.length) return rs
@@ -415,11 +438,30 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       return next
     })
   }
-  const remove = (i: number) => setRows((rs) => rs.filter((_, k) => k !== i))
+  const remove = (i: number) => {
+    if (remote) { void sendEdit({ action: 'remove', id: rows[i]!.channel.id }); return }
+    setRows((rs) => rs.filter((_, k) => k !== i))
+  }
   const rename = (i: number, name: string) =>
     setRows((rs) =>
       rs.map((r, k) => (k === i ? { ...r, channel: { ...r.channel, name }, nameEdited: true } : r)),
     )
+  /** The name being typed in a browser, held OUTSIDE `rows`: the station's document is re-read on a
+   *  timer, and a refresh landing mid-word would otherwise take the half-typed name away. It is
+   *  sent on blur or Enter — one gesture, one transaction — the way the Memories fields commit.
+   *  Escape drops it, and nothing is sent.
+   *
+   *  ⚠️ Mirrored in a ref, and the ref is what commit reads. Escape clears the draft and then
+   *  leaves the field, and a `useState` value is still the OLD one inside the blur handler's
+   *  closure — which committed the name the operator had just abandoned. */
+  const [draftName, setDraftName] = useState<{ id: string; name: string } | null>(null)
+  const draftRef = useRef<{ id: string; name: string } | null>(null)
+  const setDraft = (draft: { id: string; name: string } | null) => { draftRef.current = draft; setDraftName(draft) }
+  const commitName = (id: string, was: string) => {
+    const draft = draftRef.current
+    setDraft(null)
+    if (draft?.id === id && draft.name !== was) void sendEdit({ action: 'rename', id, name: draft.name })
+  }
 
   // Auto-derived names for rows the operator hasn't touched (cap-aware).
   const displayRows = useMemo(() => {
@@ -449,18 +491,37 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const attribution = result?.source === 'repeaterbook' ? ATTRIB_REPEATERBOOK : ATTRIB_HEARHAM
 
   const exportList = (format: 'chirp' | 'csv') => {
-    if(remote)return
+    if(remote&&!exportClient)return
     const channels = displayRows.map((r) => ({ ...r.channel, name: r.displayName }))
     const analog = channels.filter((c) => c.mode === 'fm' || c.mode === 'nfm' || c.mode === 'am')
+    // Checked here for BOTH paths: the browser is holding the same rows the station would render,
+    // so an empty CHIRP export is refused without a round trip, in the same words.
     if (format === 'chirp' && analog.length === 0) {
       pushToast(t('program.export.noFm'), 'info')
       return
     }
+    const name = programExportName(format)
+    if (remote) {
+      // The file is built at the station — a second CHIRP writer in this browser would drift from
+      // the one the desktop uses — and lands in THIS machine's downloads.
+      void downloadProgramExport(exportClient!, format, nameCap)
+        .then((blob) => {
+          saveDownload(name, blob)
+          pushToast(format === 'chirp' ? t('program.export.browser.savedChirp', { name })
+            : t('program.export.browser.saved', { name }), 'success', 6000)
+        })
+        .catch((e) => {
+          const code = e instanceof Error ? e.message : ''
+          pushToast(code === 'notFound' ? t('program.export.browser.empty')
+            : code === 'tooLarge' ? t('program.export.browser.tooLarge')
+              : code === 'invalidProgramFile' ? t('program.export.browser.failed')
+                : controlFailureMessage(e), 'error', 6000)
+        })
+      return
+    }
     void exportChannels(channels, format, nameCap, attribution)
-      .then((text) => {
-        const stamp = new Date().toISOString().slice(0, 10)
-        const name = format === 'chirp' ? `nexus-chirp-${stamp}.csv` : `nexus-channels-${stamp}.csv`
-        return saveTextToDownloads(name, text).then((path) => {
+      .then((text) =>
+        saveTextToDownloads(name, text).then((path) => {
           pushToast(
             format === 'chirp'
               ? t('program.export.saved.chirp', { path })
@@ -468,8 +529,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             'success',
             6000,
           )
-        })
-      })
+        }),
+      )
       .catch((e) => pushToast(String(e), 'error'))
   }
 
@@ -986,7 +1047,10 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <label className="rp-cap">
               {t('program.builder.nameCap.label')}
               {/* The option labels name RIG MODELS (`features/radioprog.ts`) — tokens. */}
-              <select disabled={remote}
+              {/* The rig's name cap is part of the EXPORT, not of the saved list: it only
+                  truncates the names CHIRP is handed, and it is browser-local state either way.
+                  So it follows the export's own control rather than staying dead in a browser. */}
+              <select disabled={!exportControl}
                 className="settings-input"
                 value={nameCap}
                 onChange={(e) => setNameCap(Number(e.target.value))}
@@ -1021,13 +1085,20 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               return (
                 <div key={r.channel.id} className={`rp-chan-row${dup ? ' dup' : ''}`}>
                   <span className="rp-chan-num mono">{startAt + i}</span>
-                  <input disabled={remote}
+                  <input disabled={!editControl}
                     type="text"
                     className={`settings-input mono rp-chan-name${dup || over ? ' invalid' : ''}`}
-                    value={r.displayName}
+                    value={draftName?.id === r.channel.id ? draftName.name : r.displayName}
                     maxLength={24}
                     aria-label={t('program.chan.name.aria', { n: startAt + i })}
-                    onChange={(e) => rename(i, e.target.value)}
+                    onChange={(e) => { if (remote) setDraft({ id: r.channel.id, name: e.target.value }); else rename(i, e.target.value) }}
+                    onBlur={() => { if (remote) commitName(r.channel.id, r.displayName) }}
+                    onKeyDown={(e) => {
+                      if (!remote) return
+                      // Enter commits through the blur; Escape drops the draft and sends nothing.
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                      else if (e.key === 'Escape') { setDraft(null); e.currentTarget.blur() }
+                    }}
                     title={
                       dup
                         ? t('program.chan.dup.title')
@@ -1056,7 +1127,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     <button
                       type="button"
                       onClick={() => move(i, -1)}
-                      disabled={remote || (i === 0)}
+                      disabled={!editControl || i === 0}
                       aria-label={t('program.chan.moveUp.aria')}
                     >
                       ▲
@@ -1064,12 +1135,12 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     <button
                       type="button"
                       onClick={() => move(i, 1)}
-                      disabled={remote || (i === displayRows.length - 1)}
+                      disabled={!editControl || i === displayRows.length - 1}
                       aria-label={t('program.chan.moveDown.aria')}
                     >
                       ▼
                     </button>
-                    <button disabled={remote} type="button" onClick={() => remove(i)} aria-label={t('program.chan.remove.aria')}>
+                    <button disabled={!editControl} type="button" onClick={() => remove(i)} aria-label={t('program.chan.remove.aria')}>
                       ✕
                     </button>
                   </span>
@@ -1109,7 +1180,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <button
               type="button"
               className="settings-save rp-export-chirp"
-              disabled={remote || (rows.length === 0)}
+              disabled={!exportControl || rows.length === 0}
               onClick={onExportChirp}
               title={t('program.deliver.exportChirp.title')}
             >
@@ -1118,7 +1189,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <button
               type="button"
               className="settings-refresh"
-              disabled={remote || (rows.length === 0)}
+              disabled={!exportControl || rows.length === 0}
               onClick={() => exportList('csv')}
               title={t('program.deliver.exportCsv.title')}
             >
@@ -1136,17 +1207,19 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <button
               type="button"
               className="settings-refresh rp-clear"
-              disabled={remote || (rows.length === 0)}
+              disabled={!editControl || rows.length === 0}
               onClick={() => {
                 void (async () => {
                   if (
-                    await confirmDialog({
+                    !(await confirmDialog({
                       title: t('program.clear.confirm.title'),
                       confirmLabel: t('program.clear.confirm.ok'),
                       danger: true,
-                    })
+                    }))
                   )
-                    setRows([])
+                    return
+                  if (remote) await sendEdit({ action: 'clear' })
+                  else setRows([])
                 })()
               }}
             >

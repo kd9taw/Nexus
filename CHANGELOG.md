@@ -46,6 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Your QRZ confirmations are not at risk from the correction itself: QRZ works those out
   continuously from both operators' records and nothing you upload can set or clear one.
 
+- **Export your channel list to CHIRP or a spreadsheet from a browser.** In Nexus Remote, the
+  Program section's *Export CHIRP* and *Export CSV* buttons now work: the station builds the file
+  with exactly the same writer the desktop uses, and it lands in the downloads folder of whatever
+  machine you are sitting at. The rig name-cap picker beside them works too, because it is part of
+  the export. One difference from the shack: the file carries no "data courtesy of" line, because
+  the saved channel list does not record which directory each machine came from, and naming one
+  would be a guess. Exporting still needs station control, and the buttons stay dark against a
+  Nexus at the shack that is too old to offer it.
+
+- **Tidy the channel list from a browser too.** Still in Nexus Remote's Program section: rename a
+  channel, move it up or down, drop a row, or clear the list. Each one is a single change the
+  station applies to its own file, and it names the row by its channel ID rather than by where it
+  sat on screen — so a list that changed at the shack while you were looking at it is refused
+  rather than edited in the wrong place. A name is sent when you leave the field (or press Enter),
+  not per keystroke; Escape puts it back. Adding channels still happens at the shack: the
+  RepeaterBook search needs the station's API key, and importing a CHIRP CSV means sending a file
+  up, which Nexus Remote has no path for yet.
+
 
 ### Changed
 

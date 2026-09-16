@@ -31,6 +31,13 @@ pub(super) fn settings_revision(
     configuration::settings_revision(settings)
 }
 
+/// The `programming` document's revision for one `radioprog.json` — what a browser echoes back
+/// when it curates the working channel list. It is read out of the SAME document builder the
+/// browser was served, so a change can never be checked against a second, drifting computation.
+pub(super) fn programming_revision(path: &std::path::Path) -> Result<String, &'static str> {
+    configuration::programming_revision(path)
+}
+
 const PAGE_BYTES: usize = 256 * 1024;
 const CACHE_BYTES: usize = 16 * 1024 * 1024;
 const SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;

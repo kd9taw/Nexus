@@ -258,6 +258,12 @@ pub enum Change {
         revision: String,
         values: serde_json::Map<String, Value>,
     },
+    /// Curating the working channel list (see `program_edit.rs`), against the `programming`
+    /// document revision the browser showed. Nothing here reads or moves the radio.
+    ProgramEdit {
+        revision: String,
+        edit: super::program_edit::Edit,
+    },
 }
 
 impl Change {
@@ -273,7 +279,8 @@ impl Change {
             | Self::ClearActivation {}
             | Self::SelfSpot { .. }
             | Self::Spot { .. }
-            | Self::Settings { .. } => None,
+            | Self::Settings { .. }
+            | Self::ProgramEdit { .. } => None,
         }
     }
     /// An edit states when the contact happened; "station time" only means something for a new entry.
@@ -343,6 +350,7 @@ impl Change {
                     && (1..=32).contains(&values.len())
                     && super::settings::grants(values).is_some()
             }
+            Self::ProgramEdit { revision, edit } => key(revision, 64) && edit.valid(),
             Self::Delete { .. }
             | Self::QslCard { .. }
             | Self::ClearHunt {}
@@ -360,6 +368,9 @@ impl Change {
             // A public spot of someone else is not a log change: it posts from this station's
             // cluster login, so it needs station control and not the logging grant.
             Self::Spot { .. } => (false, true),
+            // Curating the channel list is not a log change either: it writes the station's own
+            // programming file, so it is station control and never the logging grant.
+            Self::ProgramEdit { .. } => (false, true),
             _ => (true, false),
         }
     }
@@ -376,9 +387,12 @@ pub(super) enum ChangeEvidence {
     ClusterQueued,
     /// Operating preferences saved to the station's settings file, then published.
     SettingsSaved,
+    /// The working channel list saved to the station's programming file.
+    ProgramSaved,
 }
 
 #[derive(Clone, Copy, Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 #[serde(rename_all = "camelCase")]
 pub(super) enum ChangeReason {
     ContextChanged,
@@ -499,6 +513,11 @@ pub(super) enum ChangeWork {
     /// A preference save that did not complete: nothing was published, and what the file holds is
     /// unknown.
     SettingsUnconfirmed,
+    /// The working channel list written to the station's programming file.
+    ProgramSaved,
+    /// A channel-list write that did not complete. A save that failed part way cannot say what the
+    /// file holds, so the browser is told "unknown" and re-reads rather than being told it worked.
+    ProgramUnconfirmed,
 }
 
 /// Apply under the Engine lock. Only the fields a remote edit carries change; everything else
@@ -559,6 +578,10 @@ pub(super) fn prepare_change(
         Change::Settings { revision, values } => {
             return super::settings::prepare(engine, revision, values)
         }
+        // The programming file, not the log and not the radio: the Engine is not consulted at all.
+        Change::ProgramEdit { revision, edit } => {
+            return super::program_edit::prepare(&crate::radioprog_path(), revision, edit)
+        }
         _ => {}
     }
     // Fold in another instance's appends first, so the index found below cannot shift under it.
@@ -599,7 +622,8 @@ pub(super) fn prepare_change(
             | Change::ClearActivation {}
             | Change::SelfSpot { .. }
             | Change::Spot { .. }
-            | Change::Settings { .. } => false,
+            | Change::Settings { .. }
+            | Change::ProgramEdit { .. } => false,
         };
         if !applied {
             return Err(ChangeReason::ContextChanged);
@@ -672,9 +696,15 @@ impl ChangeWork {
                     spot: None,
                 }
             }
-            Self::SettingsUnconfirmed => {
+            Self::SettingsUnconfirmed | Self::ProgramUnconfirmed => {
                 return ChangeOutcome::Unknown {
                     reason: ChangeReason::PersistenceUnconfirmed,
+                }
+            }
+            Self::ProgramSaved => {
+                return ChangeOutcome::Applied {
+                    evidence: ChangeEvidence::ProgramSaved,
+                    spot: None,
                 }
             }
             Self::ClusterSpot {

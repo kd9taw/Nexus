@@ -830,6 +830,10 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.equal(stalePref.response.value.outcome,'rejected');assert.equal(stalePref.response.value.reason,'contextChanged')
    const noControl=await allowed(async()=>operation(changeRequest(await fresh(),{kind:'settings',revision:savedPrefs.revision,values:{contestCheck:'73'}})))
    assert.equal(noControl.response.error,'localPermissionRequired')
+   // Rendering the channel list to a file is station control too, and this browser holds only the
+   // logging grant here. NOTHING is read: the refusal is the grant's, not the file's.
+   const noProgram=await allowed(async()=>{const s=await fresh();return operation({type:'programExport',stationBootId:s.stationBootId,leaseId:s.leaseId,format:'csv',nameCap:7,index:0})})
+   assert.equal(noProgram.response.error,'localPermissionRequired')
    const restored=await write(s=>changeRequest(s,{kind:'settings',revision:savedPrefs.revision,values:{autoLog:shownPrefs.autoLog}}))
    assert.equal(restored.response.value.evidence,'settingsSaved',JSON.stringify(restored.response));assert.equal((await probe.send({type:'settingsEvidence'})).autoLog,shownPrefs.autoLog)
    const ended=await write(s=>context(s,{kind:'clearActivation'}))
@@ -842,11 +846,29 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
    const controls=(await allowed(()=>operation({type:'state'}))).response.value
-   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning','fmReceiver','aiCw','redecode','splitTuning','ritTuning','workDigitalSpot','repeaterTuning','memoryRecall','aprsTuning','rotator','rigScope','workRttySpot','sstvGallery','satellite',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport','settingsLogging','selfSpot','settingsControl','postSpot','audioListen']:[])]:['decoder','amplifier'])
+   assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning','fmReceiver','aiCw','redecode','splitTuning','ritTuning','workDigitalSpot','repeaterTuning','memoryRecall','aprsTuning','rotator','rigScope','workRttySpot','sstvGallery','satellite',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport','settingsLogging','selfSpot','settingsControl','postSpot','programExport','programEdit','audioListen']:[])]:['decoder','amplifier'])
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
    assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+   if(operationVersion===4){
+    // Program, both halves, over the real relay and the real station — ONE state read shared by
+    // both, because this browser's access has a lifetime and every extra round trip spends it.
+    // Placed AFTER the clear above: that one uses the `controls` command window captured before it,
+    // so anything slipped in between leaves it stale.
+    //
+    // The station's profile is a fresh temp dir with no radioprog.json, so the export's honest
+    // answer is that there is nothing to export, and a curation against a revision this station
+    // cannot be holding is stale. Both are the station's own file reader replying; the refusal
+    // earlier in this run proved neither can be reached without station control. The export spends
+    // no sequence or window, so the curation after it can use the same state.
+    const s4=(await heartbeat()).response.value
+    const exported=await allowed(()=>operation({type:'programExport',stationBootId:s4.stationBootId,leaseId:s4.leaseId,format:'chirp',nameCap:7,index:0}))
+    assert.deepEqual(exported.response.value,{operation:'programExport',refused:'notFound'},JSON.stringify(exported.response))
+    const curate=await allowed(()=>operation({type:'logChange',stationBootId:s4.stationBootId,leaseId:s4.leaseId,expectedRevision:s4.revision,commandWindowId:s4.commandWindowId,clientSequence:s4.nextSequence,change:{kind:'programEdit',revision:'a'.repeat(64),edit:{action:'clear'}}}))
+    assert.equal(curate.response.value?.outcome,'rejected',JSON.stringify(curate.response))
+    assert.equal(curate.response.value.reason,'contextChanged')
+   }
    if(operationVersion>=3){
     // FT8/FT4 Work is its own v3 action. It must cross the real relay and native parser without
     // dropping the socket or the lease. The band does not match the dial, so the station answers a

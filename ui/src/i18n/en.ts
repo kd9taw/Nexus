@@ -4332,6 +4332,17 @@ export const EN = {
   // ⚠️ `CHIRP ▸ File ▸ Import` is another program's menu path — keep it as CHIRP prints it.
   'program.export.saved.chirp':
     'Saved {{path}} — open CHIRP ▸ File ▸ Import, then upload to your radio',
+  // From a browser the file lands in THIS machine's downloads, not the shack's, and the station
+  // names no directory in it (it does not record where a saved channel came from), so these say
+  // where the file went rather than quoting a path the operator cannot open.
+  'program.export.browser.saved': 'Saved {{name}} to this browser’s downloads.',
+  'program.export.browser.savedChirp':
+    'Saved {{name}} to this browser’s downloads — open CHIRP ▸ File ▸ Import, then upload to your radio',
+  'program.export.browser.empty': 'The station has no saved channel list to export.',
+  'program.export.browser.tooLarge':
+    'This channel list is too large to download here. Export it with Nexus at the station.',
+  'program.export.browser.failed':
+    'The channel file did not arrive intact, so nothing was saved. Try again.',
 
   // What the workbench says after it acts. The shift is a sign and a number of MHz.
   'program.tune.done': 'Tuned {{freq}} {{mode}} — {{shift}}{{tone}}',
