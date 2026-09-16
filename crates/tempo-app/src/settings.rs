@@ -8162,7 +8162,7 @@ mod tests {
     /// A unique scratch directory under the OS temp dir — no external tempfile crate, and
     /// no fixed name: two test processes (two worktrees, or a `--jobs` split) that shared a
     /// directory here would `remove_dir_all` each other's fixtures mid-run.
-    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+    fn scratch_dir_ready(tag: &str) -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU32, Ordering};
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
@@ -8182,7 +8182,7 @@ mod tests {
     /// the proof, and it FAILED before the `Settings::unknown` catch-all existed.
     #[test]
     fn keys_from_a_newer_build_survive_an_older_builds_load_and_save() {
-        let dir = scratch_dir("unknown_keys");
+        let dir = scratch_dir_ready("unknown_keys");
         let path = dir.join("settings.json");
         // A settings.json as a NEWER build would have written it: everything this build
         // knows, plus three keys it does not — a scalar, a nested object and an array.
@@ -8293,7 +8293,7 @@ mod tests {
     /// resurrect a real setting the operator changed in the older build.
     #[test]
     fn preserved_unknown_keys_are_stable_and_never_shadow_a_real_setting() {
-        let dir = scratch_dir("unknown_stable");
+        let dir = scratch_dir_ready("unknown_stable");
         let path = dir.join("settings.json");
         let mut file = serde_json::to_value(Settings::default()).expect("serialises");
         let obj = file.as_object_mut().expect("an object");
