@@ -406,9 +406,16 @@ mod tests {
     fn station(tier: Tier) -> Engine {
         let mut engine = Engine::new("KD9TAW", "EN52", 0);
         engine.set_tier(tier);
-        engine.configure_remote_settings_store(
-            std::env::temp_dir().join("nexus-remote-ft-authority-test.json"),
-        );
+        // Salted: eight tests in this module call `station()`, cargo runs them on
+        // parallel threads, and several agents run `cargo test` at once from
+        // different worktrees sharing one `$TMPDIR` — so a fixed filename here was
+        // one settings store shared by every one of them. The thread id separates
+        // the in-process callers, the pid the concurrent runs.
+        engine.configure_remote_settings_store(std::env::temp_dir().join(format!(
+            "nexus-remote-ft-authority-test-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        )));
         engine.set_tx_enabled(false);
         engine.take_immediate_retune();
         engine.take_slot_tx_abort();

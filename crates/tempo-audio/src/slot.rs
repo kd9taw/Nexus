@@ -377,7 +377,15 @@ mod tests {
                 }
             });
             let mut e = Engine::new("KD9TAW", "EN52", 0);
-            e.configure_remote_settings_store(std::env::temp_dir().join("nexus-ft-key-test.json"));
+            // Salted by pid + thread: concurrent `cargo test` runs from sibling
+            // worktrees share one `$TMPDIR`, so a fixed filename here is one
+            // settings store shared by every run. (The three scenes deliberately
+            // keep sharing it — they are one thread of one process.)
+            e.configure_remote_settings_store(std::env::temp_dir().join(format!(
+                "nexus-ft-key-test-{}-{:?}.json",
+                std::process::id(),
+                std::thread::current().id()
+            )));
             e.set_tx_enabled(false);
             e.take_immediate_retune();
             e.start_remote_ft_cq(

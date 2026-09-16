@@ -121,6 +121,20 @@ mod tests {
     use crate::channel::{to_i16, VirtualAir, ON_TIME_OFFSET};
     use crate::tx;
 
+    /// A scratch file in `$TMPDIR` that no concurrent test process can reach.
+    ///
+    /// Both tests below write a file and then `remove_file` it. With a fixed
+    /// name, two `cargo test` runs on this machine — several agents run them at
+    /// once from different worktrees, sharing one `$TMPDIR` — had one run
+    /// deleting the other's fixture between its write and its read.
+    fn scratch_path(stem: &str, ext: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "{stem}-{}-{:?}.{ext}",
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
     #[test]
     fn wav_roundtrip_decodes_captured_frame() {
         // Synthesize an off-air capture: a frame at −5 dB SNR placed in a slot.
@@ -130,7 +144,7 @@ mod tests {
         let rx = to_i16(&air.receive(&frame.wave, ON_TIME_OFFSET, -5.0));
 
         // Write it to a .wav, then replay that file through the decoder.
-        let path = std::env::temp_dir().join("ft1_wav_fixture_test.wav");
+        let path = scratch_path("ft1_wav_fixture_test", "wav");
         write_wav_i16(&path, &rx, 12_000).expect("write wav");
         tempo_fast::harq_reset();
         let decodes = decode_wav(&path).expect("decode wav");
@@ -144,7 +158,7 @@ mod tests {
 
     #[test]
     fn read_rejects_non_wav() {
-        let path = std::env::temp_dir().join("ft1_not_a_wav_test.bin");
+        let path = scratch_path("ft1_not_a_wav_test", "bin");
         fs::write(&path, b"this is not a wav file at all").unwrap();
         let r = read_wav_i16(&path);
         let _ = fs::remove_file(&path);
