@@ -205,8 +205,21 @@ jobs:
       # commit that added this flag; do not let it silently regrow. `chains.rs`'s
       # own `#![deny(warnings, clippy::all)]` is now redundant with this step but
       # left in place as a second, file-scoped backstop.
+      #
+      # `--all-targets`, and the scope is the point. This step read `--lib` until
+      # 2026-09-15 — copied down from the `cargo test` step above, where `--lib`
+      # is right because it names which tests RUN. On clippy it names what gets
+      # COMPILED, and `--lib` builds the library WITHOUT `cfg(test)`: every
+      # `#[cfg(test)] mod tests` in the crate — which is where nearly all of
+      # src-tauri's test code lives — was not leniently linted, it was never
+      # looked at. Nine findings were sitting in it when `--all-targets` was
+      # first tried. Test code is where the Remote fixtures and the grant/
+      # transmit assertions live; a lint that rots there rots unwatched. Every
+      # other clippy step in this file already says `--all-targets`; this one
+      # is not an exception, it was a transcription slip that stood from
+      # b5033af6 (2026-07-22), the commit that added the gate, to 2026-09-15.
       - name: cargo clippy src-tauri --features radio
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib --features radio -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features radio -- -D warnings
 
       - name: Set up Node.js for the native Remote integration
         uses: actions/setup-node@v7
