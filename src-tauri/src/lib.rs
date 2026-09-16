@@ -8804,6 +8804,15 @@ async fn stop_sat_track(state: State<'_, SharedEngine>) -> Result<(), String> {
 /// and each caller runs it the way its own context allows. Everything that touches Engine or the
 /// badge has already happened when this returns.
 fn disarm_sat_track(engine: &SharedEngine) -> Option<String> {
+    disarm_sat_track_locked(&mut engine_lock(engine))
+}
+
+/// [`disarm_sat_track`] for a caller that ALREADY holds Engine, so a combined stop takes the lock
+/// once instead of racing itself for it. The remote Stop runs every one of its verbs under a single
+/// guard (`transmit_stop::stop_station`); when the disarm took a lock of its own from a thread of
+/// its own, the station refused the browser's very next request `stationBusy` while the two
+/// contended — its own Stop making it look busy.
+fn disarm_sat_track_locked(eng: &mut Engine) -> Option<String> {
     SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     // Was a track actually LIVE? (The badge is the live marker.) Stopping one
     // is also the dial handback: the loop's own LOS handback never runs on
@@ -8816,7 +8825,6 @@ fn disarm_sat_track(engine: &SharedEngine) -> Option<String> {
         .lock()
         .map(|mut g| g.take().is_some())
         .unwrap_or(false);
-    let mut eng = engine_lock(engine);
     if was_live {
         eng.set_sat_transponder(None);
     }

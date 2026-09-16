@@ -1051,6 +1051,41 @@ fn transmit_stop_invalidates_an_unsent_arm_even_if_its_command_window_still_matc
     assert!(f.engine.lock().unwrap().tx_enabled());
 }
 
+/// A Stop must not leave the station fighting itself for Engine.
+///
+/// The satellite disarm briefly ran on a thread of its own, so the request the browser sends right
+/// after pressing Stop — the State poll that repaints the rail, or a re-arm — could be refused
+/// `stationBusy` by the Stop that preceded it. The Stop itself was never at risk (its admission
+/// takes no Engine lock), which is exactly why nothing caught this: the failure lands on the NEXT
+/// request. Looped because it is a race, and the count is MEASURED rather than guessed: against the
+/// defect a single pass failed 33 of 40 runs but twenty passes only 8 of 10 (the outcome correlates
+/// within a process, so iterations are not independent) — two hundred failed 20 of 20, and still
+/// finish in hundredths of a second.
+#[test]
+fn transmit_stop_does_not_leave_the_station_busy_for_the_next_request() {
+    let (f, _, _) = ready_ft(tempo_app::dto::Tier::Ft8);
+    for _ in 0..200 {
+        let state = control_state_version(&f, Instant::now(), 4);
+        assert_eq!(
+            ft_run(&f, &stop_request(&f, &state)).unwrap(),
+            json!({"stop":"accepted"})
+        );
+        let after = f.authority.handle_version(
+            (f.connection, 4),
+            SESSION,
+            DEVICE,
+            &Request::State { request_id: id() },
+            &f.engine,
+            Instant::now(),
+        );
+        assert_ne!(
+            after.err(),
+            Some("stationBusy"),
+            "the Stop's own work refused the request behind it"
+        );
+    }
+}
+
 #[test]
 fn transmit_browser_arm_requires_its_own_grant_and_fresh_radio_context() {
     for cause in [
