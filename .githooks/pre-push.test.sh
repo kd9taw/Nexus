@@ -240,5 +240,59 @@ ENVV="NEXUS_LEAK_PATTERNS=$LAB/nope" expect BLOCK "missing patterns file refuses
 printf 'LEAKNAME\n\nleak[-_ ]?user\n' > "$LAB/blankpat"; chmod 600 "$LAB/blankpat"
 ENVV="NEXUS_LEAK_PATTERNS=$LAB/blankpat" expect BLOCK "blank line in patterns file is refused, not obeyed" origin HEAD:refs/heads/main
 
+# --- 7: CHANGELOG merge-superset --------------------------------------------------
+# A merge may not delete a CHANGELOG bullet a parent had. Both directions, plus the
+# override, because a gate proven in one direction is half a test. The lab clone has no
+# scripts/ of its own, so the tool is copied in; without it check 7 is inert by design.
+#
+# THE FIXTURE HEADINGS ARE LONG ON PURPOSE. The first version of this test used headings
+# like "- **Main bullet.**" (11 chars) and the BLOCK case PASSED: the tool ignores any
+# heading under 12 characters, because a shorter one cannot identify an entry. The test was
+# wrong, not the tool — but only the must-trip direction could have revealed that, which is
+# exactly why it is here. Keep these headings sentence-shaped, like real entries.
+note "CHANGELOG merge-superset"
+CLTOOL=$(cd "$(dirname "$HOOK")/.." && pwd)/scripts/check-changelog-merges.mjs
+if [ ! -f "$CLTOOL" ] || ! command -v node >/dev/null 2>&1; then
+  printf '  skip  check 7 (tool or node not available)\n'
+else
+  mkdir -p "$W/scripts"; cp "$CLTOOL" "$W/scripts/check-changelog-merges.mjs"
+  git -C "$W" checkout -q main 2>/dev/null || git -C "$W" checkout -q -B main
+  printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- **The base entry that was already here.** Body text here.\n' > "$W/CHANGELOG.md"
+  git -C "$W" add CHANGELOG.md scripts/check-changelog-merges.mjs
+  git -C "$W" commit -qm "changelog: base"
+  git -C "$W" push -q origin HEAD:refs/heads/main 2>/dev/null
+
+  # main gains a bullet; a branch gains a different one.
+  git -C "$W" checkout -q -b cl-side
+  printf -- '- **The branch adds a way to see the band.** Added on the branch.\n' >> "$W/CHANGELOG.md"
+  git -C "$W" commit -qm "changelog: side bullet" -- CHANGELOG.md
+  git -C "$W" checkout -q main
+  printf -- '- **Mainline adds a way to log a contact.** Added on main.\n' >> "$W/CHANGELOG.md"
+  git -C "$W" commit -qm "changelog: main bullet" -- CHANGELOG.md
+  git -C "$W" push -q origin HEAD:refs/heads/main 2>/dev/null
+
+  # A GOOD merge: keep both bullets.
+  git -C "$W" checkout -q -b cl-good
+  git -C "$W" merge -q --no-commit --no-ff cl-side >/dev/null 2>&1 || true
+  printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- **The base entry that was already here.** Body text here.\n- **Mainline adds a way to log a contact.** Added on main.\n- **The branch adds a way to see the band.** Added on the branch.\n' > "$W/CHANGELOG.md"
+  git -C "$W" add CHANGELOG.md
+  git -C "$W" commit -qm "Merge cl-side (kept both)"
+  expect PASS "a merge that keeps both parents' bullets" origin cl-good:refs/heads/cl-good
+
+  # A BAD merge: the resolution drops main's bullet — the exact 1.13.0 defect.
+  git -C "$W" checkout -q main
+  git -C "$W" checkout -q -b cl-bad
+  git -C "$W" merge -q --no-commit --no-ff cl-side >/dev/null 2>&1 || true
+  printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- **The base entry that was already here.** Body text here.\n- **The branch adds a way to see the band.** Added on the branch.\n' > "$W/CHANGELOG.md"
+  git -C "$W" add CHANGELOG.md
+  git -C "$W" commit -qm "Merge cl-side (DROPPED main's bullet)"
+  expect BLOCK "a merge that deletes a parent's bullet" origin cl-bad:refs/heads/cl-bad
+  ENVV="NEXUS_ALLOW_CHANGELOG_LOSS=1" \
+    expect PASS "  ... with NEXUS_ALLOW_CHANGELOG_LOSS=1" origin cl-bad:refs/heads/cl-bad
+  ENVV="NEXUS_SKIP_CHANGELOG_MERGE=1" \
+    expect PASS "  ... with NEXUS_SKIP_CHANGELOG_MERGE=1" origin cl-bad:refs/heads/cl-bad
+fi
+
+
 printf '\n== %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

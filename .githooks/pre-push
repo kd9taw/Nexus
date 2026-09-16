@@ -13,7 +13,7 @@
 #
 # This file stays the source of truth and the thing to edit; the shim only guarantees it runs.
 #
-# FIVE CHECKS, fail-closed:
+# SEVEN CHECKS, fail-closed (check 6 is the one deliberate exception — it advises):
 #   1. Wrong-remote guard: kd9taw/tempo is an UNRELATED repo — never push there.
 #   2. Release-tag gate: refs/tags/v* fires .github/workflows/release.yml, which builds and
 #      PUBLISHES a public GitHub Release. CLAUDE.md makes that maintainer-approval-gated per
@@ -49,6 +49,20 @@
 #      receipt is on file. It NEVER blocks today — operator ruling 2026-09-15, advisory first.
 #      It also runs the tool's own test suite when the push changes the tool.
 #                                                  Override: NEXUS_SKIP_OPREVIEW=1
+#   7. CHANGELOG merge-superset: a merge in the pushed range may not DELETE a CHANGELOG
+#      bullet one of its parents had. Six merges in the 1.13.0 integration silently dropped
+#      28 finished, operator-facing entries — 40% of that release's notes — and every one of
+#      those merges compiled, tested green and was reviewed. This BLOCKS, which is a measured
+#      call and not a preference: over a release cycle the false-positive count is zero, and
+#      every innocent finding in the repo's whole history is a release-time heading rewrite
+#      that the scoped range excludes. See scripts/check-changelog-merges.mjs's header.
+#                                                  Override: NEXUS_ALLOW_CHANGELOG_LOSS=1
+#      That override is for the one correct deletion — a revert that drops its own bullet.
+#      It still PRINTS every bullet it lets through, so the decision lands on the record.
+#                                                  Skip:     NEXUS_SKIP_CHANGELOG_MERGE=1
+#      The blunt instrument, listed so it is discoverable here rather than only by reading
+#      the code. Prefer the override above: it leaves a record of what it let past, and this
+#      leaves none.
 #
 # WHY CHECK 4 IS PER-COMMIT: it used to scan only the endpoint diff, so content added and
 # then removed inside one pushed range was invisible to it. Pushing such a range publishes
@@ -318,6 +332,65 @@ before it is pushed; a review tool nobody can trust is worse than none."
       "$TOP/scripts/operator-review" --range "$rsha..$lsha" >&2 || true
     fi
   fi
+  # 7. CHANGELOG merge-superset — BLOCKS. See scripts/check-changelog-merges.mjs's header.
+  #
+  #    WHY THIS ONE BLOCKS WHERE CHECK 6 ADVISES. Check 6 asks a question only a human can
+  #    answer (was this reviewed against ground truth?), so a red would be a proxy. This one
+  #    asks a question git answers exactly: does the merge's bullet set contain both parents'?
+  #    Deleting a bullet at a merge is never correct inside a release cycle, so a trip is the
+  #    defect rather than a judgement call — and the measured false-positive count over the
+  #    1.13.0 cycle is zero.
+  #
+  #    WHY IT IS NOT ALSO IN CI, THOUGH IT COULD BE. Unlike check 6 — whose receipts live under
+  #    gitignored tasks/ and are invisible to CI — CHANGELOG.md is tracked, so CI could run this
+  #    identical command as a backstop against a --no-verify push. It does not, and the reason is
+  #    a measurement: actions/checkout defaults to depth 1, a shallow clone has no merge history,
+  #    and the tool REFUSES there (exit 2) rather than reporting a green it never earned. Making
+  #    it work needs `fetch-depth: 0`, which is a 337 MB transfer on every run of that job. That
+  #    is not a price worth paying to catch a deliberate --no-verify by the maintainer, when the
+  #    check costs 2 s here and runs before the push it actually needs to stop. Revisit if the
+  #    repo ever gets cheaper to clone, or if a --no-verify push ever does land a loss.
+  #
+  #    SCOPED TO THE PUSHED RANGE, NEVER THE WHOLE HISTORY. Run over all of history the tool
+  #    reports 19 innocent findings — release-time heading rewrites, every one traced. Those
+  #    are outside any pushed range in normal use, and scanning wide would make this red on a
+  #    healthy tree, which is how a gate earns a --no-verify. On a first push of a branch with
+  #    no remote ref, the range falls back to the last tag, not to the root.
+  if [ "${NEXUS_SKIP_CHANGELOG_MERGE:-}" != "1" ] && [ -n "$TOP" ] \
+       && [ -f "$TOP/scripts/check-changelog-merges.mjs" ] && command -v node >/dev/null 2>&1; then
+    # The tool gates its own correctness, as check 6 and scripts/gates.test.mjs do. Exit 3 is
+    # "passed, coverage incomplete" — a shallow clone legitimately cannot run every pinned
+    # case — and must not be read as a failure.
+    if git log --name-only --format='' "${rspec[@]}" 2>/dev/null \
+         | grep -qE '^scripts/check-changelog-merges\.mjs'; then
+      echo "pre-push: this push changes the CHANGELOG merge check — running its selftest." >&2
+      node "$TOP/scripts/check-changelog-merges.mjs" --selftest >&2
+      st=$?
+      if [ "$st" != "0" ] && [ "$st" != "3" ]; then
+        fail "scripts/check-changelog-merges.mjs --selftest is RED (exit $st). A gate whose own
+suite is failing cannot be trusted to judge anyone else's merge."
+      fi
+    fi
+    if [ "$rsha" = "$ZERO" ]; then
+      base=$(git describe --tags --abbrev=0 "$lsha" 2>/dev/null || true)
+      clrange="${base:+$base..}$lsha"
+    else
+      clrange="$rsha..$lsha"
+    fi
+    # Deliberately NOT piped: a pipe discards the exit status, which is how a faked-green gate
+    # shipped in 1.10.3.
+    node "$TOP/scripts/check-changelog-merges.mjs" "$clrange" >&2
+    st=$?
+    if [ "$st" = "1" ]; then
+      fail "a merge in this push DELETED a CHANGELOG bullet (see above). Recover it from the
+commit that wrote it — the text still exists. If the removal was deliberate (a revert that
+correctly dropped its own bullet), re-run with NEXUS_ALLOW_CHANGELOG_LOSS=1."
+    elif [ "$st" = "2" ]; then
+      fail "scripts/check-changelog-merges.mjs could not read this range (exit 2). Refusing
+rather than passing the check vacuously."
+    fi
+  fi
+
 done
 
 exit 0
