@@ -37,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Remote: ending someone's access now stops them commanding the radio straight away.** Access was
+  checked when a browser session opened and never again, so a session that was already running kept
+  full control of the radio for up to a minute after the trial was ended or switched off — it only
+  stopped when the session's own lease ran out. A command that changes the station (a frequency or
+  mode change, a setting, a log write) is now checked against live service access before it is passed
+  to the shack, and is refused within about two seconds of access ending. Watching is unchanged, and
+  **Stop is never refused**: an operator whose access has lapsed must always be able to unkey a
+  transmitter, so Stop — and the station read it is built from — still goes through.
+
 - **The callsign card names the state (#237).** A US or Canadian station's card showed the town,
   the grid and the country but never the state, so a Hawaii station read "KEKAHA (BL01dx) · United
   States" while the Needed board and Worked All States already knew it was HI. The card now reads
