@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nexus Remote grew from watching the station to operating it.** Over this release the hosted
+  browser stopped being a window onto the shack and became a way to work it. The individual pieces
+  are listed separately below where they stand on their own; this is the shape of the whole.
+
+  **Operating.** Split, XIT, RIT and the VFO choice are on the hosted page. Spots on the Spots,
+  Needed, map and DXpedition boards are clickable and now include FT8 and FT4 as well as CW and
+  Phone. The AI CW decoder can be switched on and off and an FT8 or FT4 period re-decoded. The rig's
+  scope span, reference and position can be set. An FM repeater can be tuned from the hosted Program
+  list — licence-checked at the machine's *input*, exactly as at the shack — the APRS channel set
+  from the APRS board, and a stored memory recalled from Memories. **Every one of these needs station
+  control, and every one is still refused while the rig is keyed.**
+
+  **Logging.** The hosted Logbook gains the entry form, so a contact can be logged from the browser.
+  Contacts already in the log can be edited or deleted, and QSL cards marked sent and received. One
+  POTA or SOTA activation's ADIF can be downloaded on its own. Awards shows the station's
+  confirmation diagnostics, so "why is this one not confirmed yet" can be answered away from the
+  radio. Editing and deleting change the permanent record, so they are station-control only.
+
+  **Activations, and spotting yourself.** An activation can be started and ended from the browser,
+  stamping the reference on every contact, and another operator's can be hunted; the station's park
+  directory is searchable while you log. Nexus can post **your own spot to pota.app and to the DX
+  cluster**, so chasers find you without you leaving the radio. Posting to POTA is on and the cluster
+  half is off until you turn it on — and **every spot asks first, because it goes out publicly under
+  your callsign.** Nothing is ever posted on a timer or in the background.
+
+  **Being told things.** Optional browser alerts for a new need on the station board, for rare DX,
+  and for a new POTA activation. Off until you turn them on, and they only notify — **nothing moves
+  the radio on its own.**
+
+  **Settings and housekeeping.** A safe subset of operating preferences, Units among them, can be
+  changed from the hosted Settings page rather than only read. A received SSTV picture can be saved
+  to the browser. Credentials, licence class and audio or CAT device configuration are deliberately
+  not there and never will be.
+
+- **A browser approval renews while you use it, up to 90 days from the shack approval.** An approval
+  used to run out on a fixed clock whether you were using it or not. It now renews each time the
+  browser connects, to a ceiling of 90 days after the approval you gave at the shack, and both the
+  browser and the station warn you seven days before it lapses — so you are not locked out from
+  somewhere else with no warning. Re-approving is unchanged and is still done at the shack.
+
+- **Nexus Remote says what actually happened, in its own words.** A trial that ends mid-session now
+  names itself rather than reading as though the shack had gone off the air; there is a Sign out on
+  both the workspace and the station monitor; and when a pairing is gone, the card at both ends says
+  why rather than simply failing.
+
 - **Correct one contact at QRZ.** Phone contacts already in your QRZ logbook carry no sideband,
   because Nexus never recorded one until now — and an ordinary push cannot repair them: QRZ sees
   the contact is already there, answers "duplicate", and keeps its copy. Each row in the logbook
