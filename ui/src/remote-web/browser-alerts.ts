@@ -1,7 +1,7 @@
 // What every Remote browser alert shares: the operator's opt-in, the site's notification
 // permission, the post itself and the baseline poll. NOTIFY ONLY: nothing here tunes, works,
 // logs or sends a station command, and clicking an alert only brings this tab forward.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 export type AlertToggle = { supported: boolean; blocked: boolean; enabled: boolean; toggle: () => void }
 /** An alert whose news comes from a station read. `offered` is false when the station's Nexus is
@@ -30,7 +30,14 @@ export function useAlertOptIn(storageKey: string): AlertToggle {
       if (result === 'granted') { setWanted(true); store(storageKey, true) }
     }).catch(() => {})
   }, [enabled, storageKey])
-  return { supported, blocked: supported && permission === 'denied', enabled, toggle }
+  // STABLE IDENTITY, and it is load-bearing rather than tidiness. BrowserApplication's `status`
+  // memo takes this object as a dependency, and that memo feeds the `remote` object every cockpit
+  // reads; a fresh literal here changes identity on every one of its 500 ms ticks and re-renders
+  // the whole workspace at 2 Hz, which reads as the page flashing and swallows clicks. See the
+  // contract note above that memo — it was prose, so nothing stopped an unstable dep being added
+  // underneath it in 1.13.0.
+  const blocked = supported && permission === 'denied'
+  return useMemo(() => ({ supported, blocked, enabled, toggle }), [supported, blocked, enabled, toggle])
 }
 
 export function postAlert(title: string, body: string, tag: string): void {

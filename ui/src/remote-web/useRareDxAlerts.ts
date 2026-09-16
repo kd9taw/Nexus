@@ -5,7 +5,7 @@
 // threshold, its per-call/band/mode cooldown and its spot freshness all apply as they do on the
 // desktop, and each alert is worded the way the desktop's notification words it (usePounce.ts).
 // The read is one argument-free query (application v16); an older station is never asked.
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { t } from '../i18n'
 import type { PounceAlert } from '../usePounce'
 import type { RemoteCollections } from './collections'
@@ -51,5 +51,8 @@ export function useRareDxAlerts(source: RemoteCollections | null, ready: boolean
       announce(result.fresh)
       return result.seen
     })
-  return { ...control, offered, note: active && threshold === 'off' ? 'stationOff' : null }
+  // Stable identity — see the note in browser-alerts.ts: this object is a dependency of the memo
+  // that feeds every cockpit, so a fresh literal here re-renders the workspace twice a second.
+  const note: StationAlertControl['note'] = active && threshold === 'off' ? 'stationOff' : null
+  return useMemo(() => ({ ...control, offered, note }), [control, offered, note])
 }

@@ -7,7 +7,7 @@
 // adds no station command. A station read can only ever see the cache, never fill it: when the
 // station has no fresh POTA spots, the alert says so and takes a new baseline when they return,
 // so parks that came on the air while nobody could see them never arrive as a burst.
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { t } from '../i18n'
 import { newlySpottedRefs } from '../features/potaAlert'
 import type { OtaSpot } from '../types'
@@ -48,5 +48,8 @@ export function usePotaAlerts(source: RemoteCollections | null, ready: boolean, 
       if (seen) announce(fresh, spots)
       return next
     })
-  return { ...control, offered, note: active && stale ? 'stale' : null }
+  // Stable identity — see the note in browser-alerts.ts: this object is a dependency of the memo
+  // that feeds every cockpit, so a fresh literal here re-renders the workspace twice a second.
+  const note: StationAlertControl['note'] = active && stale ? 'stale' : null
+  return useMemo(() => ({ ...control, offered, note }), [control, offered, note])
 }
