@@ -228,8 +228,10 @@ fn follow_enable_requires_idle_fresh_current_hardware_but_disable_works_offline_
 fn follow_disk_failure_preserves_file_and_memory_and_a_duplicate_never_retries() {
     let f = station(false);
     let before = std::fs::read(f.dir.join("settings.json")).unwrap();
-    // A real failing native save, independent of Unix root permission behavior.
-    let block = f.dir.join("settings.json.tmp");
+    // A real failing native save, independent of Unix root permission behavior. The scratch
+    // path comes from `Settings::tmp_path`, never a literal: it is per-process, so a literal
+    // would block nothing and this test would pass on a save that actually SUCCEEDED.
+    let block = tempo_app::settings::Settings::tmp_path(&f.dir.join("settings.json"));
     std::fs::create_dir(&block).unwrap();
     let request = command(&f, action(&f, true));
     let result = run(&f, &request).unwrap();

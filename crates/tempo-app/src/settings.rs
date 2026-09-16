@@ -2378,7 +2378,59 @@ pub struct Settings {
     /// Defaulted to six labelled-but-empty casual slots.
     #[serde(default = "default_voice_messages")]
     pub voice_messages: Vec<VoiceMessage>,
+
+    /// ⛔ **THE FORWARD-COMPATIBILITY CATCH-ALL. Not a setting — do not read it.** Every
+    /// key `settings.json` carries that this build has no field for, held verbatim so the
+    /// next `save` writes it back out.
+    ///
+    /// # Why it exists
+    ///
+    /// `settings.json` is ONE file shared by every build that opens the data directory, and
+    /// the operator routinely runs a tester build (`1.13.0-test1`) beside the public release
+    /// against that same directory. Saves are whole-struct: without this field, serde drops
+    /// the keys it does not recognise at load and the next save writes them out of existence.
+    /// Open the tester, configure something new, open the release — and the new configuration
+    /// is gone, with no error and nothing on screen to say it happened. With it, a key an
+    /// older build does not understand is carried through untouched: the older build cannot
+    /// USE the setting, but it can no longer destroy it.
+    ///
+    /// # Why not `deny_unknown_fields`
+    ///
+    /// That is the other way to stop the erasure, and it is worse: the older build would
+    /// REFUSE to parse the file at all, take the `.corrupt` path in [`Settings::load`], and
+    /// start from defaults — blanking the operator's identity and rig config and resetting
+    /// `license_class` to `Open` (which drops the Part 97 TX lockout) over one key it did not
+    /// know. Losing one field is bad; losing the whole file and the TX lockout is worse.
+    ///
+    /// # What this does NOT do, and the cost
+    ///
+    /// It preserves; it cannot interpret. An older build still shows the operator none of
+    /// these settings and still behaves as if they were unset — the preserved value only
+    /// matters again in the build that owns the field. And a key a newer build DELIBERATELY
+    /// removes would otherwise become immortal, carried forward by every build that has the
+    /// catch-all and no field for it. [`RETIRED_KEYS`] is the answer to that: a key this
+    /// build knows is dead is pruned on load rather than preserved, so retirement stays a
+    /// decision this build can make. Nothing prunes a key this build has never heard of,
+    /// which is correct — it cannot know whether that key is new or dead.
+    ///
+    /// `flatten` (rather than reading the raw JSON and diffing key sets) because serde's own
+    /// field matcher decides what is unknown. A hand-rolled diff against a serialized
+    /// `Settings::default()` would call `cloudlogKey` unknown — it is `skip_serializing_if`,
+    /// so an empty one is absent from that serialization — and re-inject a cleared API key
+    /// the operator had just deleted.
+    #[serde(flatten)]
+    pub unknown: serde_json::Map<String, serde_json::Value>,
 }
+
+/// Keys this build knows are RETIRED: dropped from [`Settings::unknown`] on load rather
+/// than carried forward forever. A key that is merely *unknown* is never pruned — this
+/// build cannot tell a new setting from a dead one, and preserving is the safe guess.
+///
+/// - `satDoppler` — the pre-0.26 satellite master switch. Dead as a switch; [`Settings::load`]
+///   reads it straight out of the raw text for the one-time consent migration and nothing else
+///   ever wants it again. Writing it back would also put a live-looking opt-in beside the
+///   per-radio consent that replaced it.
+const RETIRED_KEYS: &[&str] = &["satDoppler"];
 
 /// One phone voice-keyer slot: an F-key-numbered label bound to a recorded WAV. `file`
 /// is empty until the operator records or imports a message into the slot.
@@ -3950,6 +4002,8 @@ impl Default for Settings {
             opening_regional: true,
             macros: Macros::default(),
             voice_messages: default_voice_messages(),
+            // A fresh install has no file, so nothing unknown to carry.
+            unknown: serde_json::Map::new(),
         }
     }
 }
@@ -4565,6 +4619,14 @@ impl Settings {
                 }
             },
         };
+        // Keys this build has no field for were just captured by `Settings::unknown` so a
+        // save cannot write them out of existence (see that field). Prune the ones this
+        // build knows are RETIRED — everything else is carried forward, because "unknown"
+        // and "dead" are not distinguishable from here. Runs before the migrations below so
+        // a retired key can never be read back out of the catch-all as if it were live.
+        for key in RETIRED_KEYS {
+            s.unknown.remove(*key);
+        }
         // One-time migration: drop the known-bad free-text "CQ"/"CQ CQ" macro chips that
         // persisted from older defaults. A CQ now goes through the structured Call-CQ
         // button; a free-text "CQ CQ" chip went out as a chunked, gridless "DE <CALL>
@@ -4720,14 +4782,47 @@ impl Settings {
         s
     }
 
-    /// Persist settings to `path` (creating parent directories). Writes a sibling
-    /// `.tmp` file, fsyncs it, then renames it into place (the [`Logbook::save`]
+    /// The scratch path [`save`](Self::save) writes before renaming it onto `path`.
+    ///
+    /// **Per-PROCESS, never a fixed `settings.json.tmp`** — the [`tempo_core::logbook`] shape.
+    /// The operator runs a tester build beside the public release against the same data
+    /// directory, so two instances can each be mid-save at the same instant; on one shared
+    /// scratch path their two `write_all`s interleave into ONE file and the rename publishes
+    /// the mixture. A mixed settings.json does not read as half a config — it is invalid JSON,
+    /// so the next load takes the `.corrupt` path and starts from defaults, blanking the
+    /// operator's identity and rig config and resetting `license_class` to `Open` (which drops
+    /// the Part 97 TX lockout). With a scratch path each, the only thing the two instances
+    /// share is the rename, which is atomic: last writer wins the whole file, intact.
+    ///
+    /// `pub` for the tests that simulate a failing save by BLOCKING this path (a directory
+    /// cannot be overwritten by a write). A literal `settings.json.tmp` in such a test blocks
+    /// nothing now, so the save succeeds and the test passes while asserting the opposite of
+    /// what it says — which is exactly what two of them did when the name became per-process.
+    pub fn tmp_path(path: &Path) -> std::path::PathBuf {
+        path.with_extension(format!("json.{}.tmp", std::process::id()))
+    }
+
+    /// Persist settings to `path` (creating parent directories). Writes a per-process
+    /// sibling `.tmp` file, fsyncs it, then renames it into place (the [`Logbook::save`]
     /// pattern), so a crash / power loss mid-write can't truncate `settings.json`. A
     /// torn write of the live file would silently collapse to [`Settings::default`] on
     /// the next load — blanking the operator's identity/rig config and resetting
     /// `license_class` to `Open`, which drops the Part 97 TX lockout. The rename makes
     /// a save all-or-nothing; the fsync stops a filesystem from committing the rename
     /// before the tmp's data blocks on power loss (which would publish a torn file).
+    ///
+    /// # Two instances saving at once
+    ///
+    /// LAST WRITER WINS THE WHOLE FILE, and that is the deliberate choice. Each save is a
+    /// complete, self-consistent configuration; the loser's save is simply superseded, and
+    /// the operator sees the settings of whichever instance saved last. Anything stronger —
+    /// a lock file, or a compare-and-swap on the file's mtime — buys ordering between two
+    /// instances the operator is driving one at a time anyway, and costs a failure mode that
+    /// is strictly worse than losing a redundant save: a lock file outlives a crash, and a
+    /// save that REFUSES leaves the operator's change only in memory, where the next thing
+    /// to happen is that it evaporates. The erasure this all exists to stop was never a race
+    /// — it was an older build dropping fields it did not understand at load
+    /// ([`Settings::unknown`]), which no amount of write ordering would have changed.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -4737,7 +4832,7 @@ impl Settings {
         let mut to_save = self.clone();
         to_save.sync_active_from_flat();
         let json = serde_json::to_string_pretty(&to_save).map_err(std::io::Error::other)?;
-        let tmp = path.with_extension("json.tmp");
+        let tmp = Self::tmp_path(path);
         // ⛔ Owner-only. settings.json holds the ClubLog API key (and a Cloudlog key until the
         // keychain migration completes) and sits beside conn-health.json; `File::create` leaves it
         // world-readable at 0644 (round 7 F8). Create the temp 0600 from the first byte on unix, and
@@ -4765,7 +4860,21 @@ impl Settings {
         drop(f);
         // No pre-remove of `path`: rename replaces it atomically on Unix and Windows
         // (MOVEFILE_REPLACE_EXISTING); a remove-first would open a no-file crash window.
-        std::fs::rename(&tmp, path)
+        std::fs::rename(&tmp, path)?;
+        // …and fsync the DIRECTORY, so the rename itself survives a power loss. The fsync
+        // above makes the tmp's CONTENT durable; on ext4/xfs the directory entry that
+        // publishes it is a separate transaction, so without this the machine can come back
+        // with the pre-save file and a save the operator watched succeed. Best-effort, and
+        // deliberately so: it is a durability upgrade on a save that has already succeeded,
+        // and some filesystems (and every Windows path — there is no directory handle to
+        // sync) refuse the open outright. Failing the save over it would be a regression.
+        #[cfg(unix)]
+        if let Some(dir) = path.parent() {
+            if let Ok(d) = std::fs::File::open(dir) {
+                let _ = d.sync_all();
+            }
+        }
+        Ok(())
     }
 
     /// Dial frequency in Hz (for the rig / PSK Reporter).
@@ -8022,11 +8131,193 @@ mod tests {
         };
         s.save(&path).unwrap();
         assert!(path.exists(), "settings.json written");
+        // Nothing left behind under ANY scratch name — the name is per-process now
+        // (`Settings::tmp_path`), so a check pinned to the old fixed `settings.json.tmp`
+        // would pass while a real leftover sat beside it.
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
         assert!(
-            !path.with_extension("json.tmp").exists(),
-            "temp file renamed away, none left behind"
+            leftovers.is_empty(),
+            "temp file renamed away, none left behind: {leftovers:?}"
         );
         assert_eq!(Settings::load(&path).mycall, "W9XYZ");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A unique scratch directory under the OS temp dir — no external tempfile crate, and
+    /// no fixed name: two test processes (two worktrees, or a `--jobs` split) that shared a
+    /// directory here would `remove_dir_all` each other's fixtures mid-run.
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("tempo_settings_{tag}_{}_{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// THE DATA-LOSS REGRESSION (the operator runs a tester build beside the public release
+    /// against the SAME data directory). A newer build writes a `settings.json` carrying keys
+    /// an older build has never heard of; the older build's whole-struct save then writes them
+    /// out of existence, silently, with no error and nothing on screen to say it happened.
+    ///
+    /// The fix is that unknown keys survive a load → save round trip untouched. This test is
+    /// the proof, and it FAILED before the `Settings::unknown` catch-all existed.
+    #[test]
+    fn keys_from_a_newer_build_survive_an_older_builds_load_and_save() {
+        let dir = scratch_dir("unknown_keys");
+        let path = dir.join("settings.json");
+        // A settings.json as a NEWER build would have written it: everything this build
+        // knows, plus three keys it does not — a scalar, a nested object and an array.
+        let mut file = serde_json::to_value(Settings::default()).expect("serialises");
+        let obj = file.as_object_mut().expect("a struct is an object");
+        obj.insert("mycall".into(), serde_json::json!("KD9TAW"));
+        obj.insert("futureKnobHz".into(), serde_json::json!(1234));
+        obj.insert(
+            "futureProfile".into(),
+            serde_json::json!({"host": "10.0.0.7", "slots": [1, 2, 3]}),
+        );
+        obj.insert("futureList".into(), serde_json::json!(["a", "b"]));
+        // …and the one key this build knows is RETIRED, which is the positive control below.
+        obj.insert("satDoppler".into(), serde_json::json!(true));
+        std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+
+        let s = Settings::load(&path);
+        assert_eq!(s.mycall, "KD9TAW", "control: a KNOWN field still loads");
+        s.save(&path).expect("saves");
+
+        let back: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let back = back.as_object().expect("an object");
+        for (key, want) in [
+            ("futureKnobHz", serde_json::json!(1234)),
+            (
+                "futureProfile",
+                serde_json::json!({"host": "10.0.0.7", "slots": [1, 2, 3]}),
+            ),
+            ("futureList", serde_json::json!(["a", "b"])),
+        ] {
+            assert_eq!(
+                back.get(key),
+                Some(&want),
+                "{key} was written out of existence by an older build's save — this is the \
+                 erasure: {:?}",
+                back.keys().collect::<Vec<_>>()
+            );
+        }
+        // POSITIVE CONTROL. The same lookup MUST report a key that really was dropped, or the
+        // three assertions above prove nothing. `satDoppler` is retired (see RETIRED_KEYS):
+        // this build deliberately does not carry it forward, and the check sees that.
+        assert_eq!(
+            back.get("satDoppler"),
+            None,
+            "the control key must be ABSENT, or this check cannot fail"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `#[serde(flatten)]` on `Settings::unknown` changes HOW the whole struct is
+    /// deserialized: serde buffers the object and replays it, instead of driving
+    /// serde_json's parser field by field. That replay is where a coercion serde_json does
+    /// natively could quietly stop happening — and a `Settings` that stops parsing is not a
+    /// lost field, it is [`Settings::load`]'s `.corrupt` path: the whole file set aside, the
+    /// operator's identity and rig config blanked, and `license_class` reset to `Open`,
+    /// which drops the Part 97 TX lockout.
+    ///
+    /// So: a hand-edited or older-build `settings.json` whose numeric fields are written as
+    /// bare integers (`"dialMhz": 14`, not `14.0` — what every JSON writer emits for a whole
+    /// number) must still load, and the enums, options and nested structs with it.
+    #[test]
+    fn the_catch_all_did_not_change_how_an_ordinary_settings_file_parses() {
+        let file = serde_json::json!({
+            "mycall": "KD9TAW",
+            "dialMhz": 14,                 // integer where the field is f64
+            "ctcssToneHz": 100,            // integer where the field is f32
+            "txLevel": 1,                  // ditto
+            "licenseClass": "general",     // enum
+            "operatingMode": "cw",         // enum
+            "cqMaxCalls": 4,               // Option<u32>
+            "maxPowerAm": 25,              // Option<f32> as an integer
+            "macros": {"band": ["73"], "chat": []},   // nested struct
+            "radios": [{"id": 0, "name": "FTDX10"}],  // nested struct in a Vec
+        });
+        let s: Settings =
+            serde_json::from_value(file).expect("an ordinary settings.json still parses");
+        assert_eq!(s.mycall, "KD9TAW");
+        assert!((s.dial_mhz - 14.0).abs() < f64::EPSILON, "integer → f64");
+        assert!(
+            (s.ctcss_tone_hz - 100.0).abs() < f32::EPSILON,
+            "integer → f32"
+        );
+        assert!((s.tx_level - 1.0).abs() < f32::EPSILON);
+        assert_eq!(s.license_class, LicenseClass::General);
+        assert_eq!(s.operating_mode, OperatingMode::Cw);
+        assert_eq!(s.cq_max_calls, Some(4));
+        assert_eq!(s.max_power_am, Some(25.0));
+        assert_eq!(s.macros.band, vec!["73".to_string()]);
+        assert_eq!(s.radios.len(), 1);
+        assert_eq!(s.radios[0].name, "FTDX10");
+        // …and a field the file omitted still takes its own default, not a zero.
+        assert_eq!(s.q65_period_s, default_q65_period_s());
+        assert!(
+            s.cat_broker_ptt,
+            "a `default = ...` field kept its true default"
+        );
+        // POSITIVE CONTROL. A parse that cannot fail proves nothing: a value of the WRONG
+        // SHAPE must still be rejected, which is what makes `.corrupt` reachable at all.
+        assert!(
+            serde_json::from_value::<Settings>(serde_json::json!({"dialMhz": "fourteen"})).is_err(),
+            "a type error must still be an error"
+        );
+    }
+
+    /// The other half of the round trip: a key preserved this way must survive REPEATEDLY
+    /// (an operator opens the older build many times), and must not be able to shadow or
+    /// resurrect a real setting the operator changed in the older build.
+    #[test]
+    fn preserved_unknown_keys_are_stable_and_never_shadow_a_real_setting() {
+        let dir = scratch_dir("unknown_stable");
+        let path = dir.join("settings.json");
+        let mut file = serde_json::to_value(Settings::default()).expect("serialises");
+        let obj = file.as_object_mut().expect("an object");
+        obj.insert("mycall".into(), serde_json::json!("KD9TAW"));
+        obj.insert("futureKnobHz".into(), serde_json::json!(1234));
+        std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+
+        // Five ordinary open-change-close cycles in the older build.
+        for i in 0..5 {
+            let mut s = Settings::load(&path);
+            s.op_name = format!("cycle{i}");
+            s.save(&path).expect("saves");
+        }
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let back: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            back.get("futureKnobHz"),
+            Some(&serde_json::json!(1234)),
+            "the newer build's key survived five cycles"
+        );
+        assert_eq!(
+            raw.matches("\"futureKnobHz\"").count(),
+            1,
+            "written exactly once — a catch-all that also emitted a duplicate key would make \
+             the file ambiguous to the build that owns the field"
+        );
+        let s = Settings::load(&path);
+        assert_eq!(
+            s.op_name, "cycle4",
+            "the older build's own edit is what stuck"
+        );
+        assert_eq!(
+            s.mycall, "KD9TAW",
+            "and the newer build's KNOWN fields are unharmed"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -8048,8 +8339,10 @@ mod tests {
         };
         good.save(&path).unwrap();
         // Block the sibling temp path (a directory can't be overwritten by write()), a
-        // stand-in for a torn write / full disk / power loss at the write-tmp step.
-        let tmp = path.with_extension("json.tmp");
+        // stand-in for a torn write / full disk / power loss at the write-tmp step. The
+        // name comes from `Settings::tmp_path`, not a literal: it is per-process now, and a
+        // literal here would block nothing and let this test pass on a save that succeeded.
+        let tmp = Settings::tmp_path(&path);
         std::fs::create_dir_all(&tmp).unwrap();
         let doomed = Settings {
             mycall: "OTHER".into(),

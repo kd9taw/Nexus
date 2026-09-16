@@ -4870,6 +4870,19 @@ impl Engine {
         // every save path — form Save, reset AND restore — at their one common point (round 10 Finding 1;
         // three earlier partial fixes each patched only the path their author was testing).
         let live_cloudlog_key = std::mem::take(&mut self.settings.cloudlog_key);
+        // The forward-compatibility catch-all (`Settings::unknown`) — the keys a NEWER build
+        // wrote into settings.json that this build has no field for. Same one-writer shape as
+        // the Cloudlog key, and for the same reason: this is the only session-time wholesale
+        // replace, so if it adopted the incoming empty map the very next save would write the
+        // newer build's settings out of existence — which is exactly the erasure the field
+        // exists to stop, arriving through the Settings form instead of through load().
+        //
+        // UNION, not "live wins": an incoming RESTORE bundle can legitimately carry keys of
+        // its own, and the form path carries whatever the frontend round-tripped. Incoming
+        // values win per key (they are the newer statement of that key); every live key the
+        // incoming payload lacks is put back. Preserving is always the safe side here —
+        // neither build can interpret the other's keys, so neither can judge one dead.
+        let live_unknown = std::mem::take(&mut self.settings.unknown);
         // Which radio the incoming flat fields describe. A P2-aware Settings form carries the roster
         // + its edited radio in `active_radio`. A LEGACY payload with no `radios` (an old settings.json
         // or a pre-P2 saved config profile) describes the LIVE active radio — fold its flat CAT there,
@@ -4886,6 +4899,10 @@ impl Engine {
         // every real path today.
         if self.settings.cloudlog_key.is_empty() {
             self.settings.cloudlog_key = live_cloudlog_key;
+        }
+        // Put back every preserved key the incoming payload did not carry (see the capture).
+        for (key, value) in live_unknown {
+            self.settings.unknown.entry(key).or_insert(value);
         }
         // Implicit-ACK toggle lives app-side (the observe loop consumes it).
         self.app.set_implicit_ack(self.settings.chat_implicit_ack);
@@ -27619,6 +27636,99 @@ mod tests {
         assert_eq!(
             back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
             "DATA LOSS: a settings-bundle restore destroyed the locally-pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ DATA LOSS, the FORM arm. `Settings::unknown` stops an older build erasing a newer
+    /// build's settings at LOAD — but load is not the only wholesale replace. Every Settings
+    /// form Save, every factory reset and every bundle restore posts a complete `Settings` at
+    /// `apply_settings_inner`, and if that adopted the incoming empty catch-all the very next
+    /// save would write the newer build's keys out of existence anyway. The operator would then
+    /// see the erasure exactly as before, just triggered by clicking Save instead of by
+    /// launching the app — which is the worse of the two, because it is the click they trust.
+    ///
+    /// The three payload paths, and the UNION rule: incoming keys win, live keys the payload
+    /// lacks are put back.
+    #[test]
+    fn a_form_save_a_reset_and_a_restore_all_keep_a_newer_builds_settings() {
+        let dir = std::env::temp_dir().join(format!("nexus-unknown-form-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+
+        let live = || {
+            let mut s = Settings {
+                mygrid: "EN37".into(),
+                ..Settings::default()
+            };
+            s.unknown
+                .insert("futureKnobHz".into(), serde_json::json!(1234));
+            s
+        };
+
+        // 1. FORM SAVE. The frontend posts back a Settings it built from the fields it knows,
+        //    so the payload carries no catch-all at all — the common case.
+        let mut e = Engine::with_settings(live());
+        e.apply_settings(Settings {
+            mygrid: "FN20".into(),
+            ..Settings::default()
+        });
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.mygrid, "FN20",
+            "control: the form save actually applied, so a surviving key is preservation and \
+             not an ignored save"
+        );
+        assert_eq!(
+            back.unknown.get("futureKnobHz"),
+            Some(&serde_json::json!(1234)),
+            "DATA LOSS: a Settings form Save destroyed a newer build's setting"
+        );
+        // POSITIVE CONTROL for that lookup: it must report a key that is NOT carried.
+        assert_eq!(
+            back.unknown.get("aKeyNobodyEverWrote"),
+            None,
+            "the control key must be absent, or the assertion above cannot fail"
+        );
+
+        // 2. FACTORY RESET — `Settings::default()`, which carries nothing at all. This build
+        //    cannot reset a setting it cannot see, and clearing the keys here would be the same
+        //    silent erasure with the operator's own click on it.
+        let mut e = Engine::with_settings(live());
+        e.apply_settings(Settings::default());
+        assert_eq!(
+            e.settings().unknown.get("futureKnobHz"),
+            Some(&serde_json::json!(1234)),
+            "DATA LOSS: a factory reset destroyed a newer build's setting"
+        );
+
+        // 3. RESTORE from a bundle that carries a catch-all key of its own. Incoming wins for
+        //    the key it names; the live-only key is still put back.
+        let mut e = Engine::with_settings(live());
+        let mut bundle = Settings {
+            mygrid: "IO91".into(),
+            ..Settings::default()
+        };
+        bundle
+            .unknown
+            .insert("futureKnobHz".into(), serde_json::json!(9999));
+        bundle
+            .unknown
+            .insert("otherFutureKey".into(), serde_json::json!("x"));
+        e.apply_restored_settings(bundle);
+        assert_eq!(e.settings().mygrid, "IO91", "control: the restore applied");
+        assert_eq!(
+            e.settings().unknown.get("futureKnobHz"),
+            Some(&serde_json::json!(9999)),
+            "the restore is authoritative for the key it carries"
+        );
+        assert_eq!(
+            e.settings().unknown.get("otherFutureKey"),
+            Some(&serde_json::json!("x")),
+            "…and brings its own"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
