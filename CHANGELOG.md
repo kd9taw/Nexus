@@ -64,6 +64,229 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RepeaterBook search needs the station's API key, and importing a CHIRP CSV means sending a file
   up, which Nexus Remote has no path for yet.
 
+- **Click a received SSTV picture to look at it, in its own window.** Clicking a gallery
+  thumbnail used to do nothing at all — the gallery offered delete, edit-and-resend and Reveal
+  in folder, so examining a picture that had just come in meant leaving Nexus for a file
+  manager. It now opens big, in a window of its own that you can park on a second monitor and
+  leave open while the next picture arrives. The window shows the mode, the time, the frequency
+  and the sender's callsign when their software sent one, and offers Save a copy and Reveal in
+  folder. Esc closes it; ← and → step through the gallery. Clicking another thumbnail re-points
+  the window that is already open rather than opening a second one. Desktop only for now — in a
+  browser the gallery still shows thumbnails.
+
+- **SSTV can send your callsign as an FSK ID after each picture — off by default.** Nexus has
+  always *read* the callsign burst that trails a received picture and shown it under the
+  thumbnail; it could not send one. Settings ▸ Digital ▸ SSTV ▸ "Send my callsign after each
+  picture" turns the transmit half on. It is off to begin with and stays off when you update,
+  because it adds about a second and a quarter of key-down to every transmission and nobody's
+  over should grow because they installed a new version. Your callsign is still drawn into the
+  picture either way — this rides alongside that, for the stations whose software shows the
+  trailer. The key-down time on the compose bar includes the burst when it is on.
+
+- **The callsign under a received picture now appears for the long modes too.** Nexus read the
+  FSK ID after a Scottie 1 or a Martin, but never after PD-240, PD-290, Scottie DX or Pasokon P7:
+  it stopped looking before the burst arrived on any mode with a line longer than about three
+  quarters of a second. Those four now report the sender's callsign like the rest.
+
+- **Start an SSTV receive by hand, without waiting for a header** (#202). Tune into a picture
+  that is already halfway through, or one whose header was lost to a burst of noise, pick the
+  mode beside the Arm button and press Start: the decode begins from the next line. The picture
+  comes out straight — the line timing is recovered from the sync pulses the same way it always
+  was, so joining mid-line is fine. Two things a header would have told Nexus are yours to
+  supply: the mode (nothing guesses it, and you will get the mode you name), and the assumption
+  that the radio is tuned correctly. Nothing in the audio can start a receive on its own; only
+  this button can. Receive only — it never transmits.
+
+- **SSTV receives two more mode families: Wraase SC-2 180 and Pasokon P5 and P7** (#264). Nexus
+  recognises their VIS headers and decodes them like any other mode — the picture paints line by
+  line and lands in the gallery with its mode name. Wraase SC-2 180 and Pasokon P5 can also be
+  sent; Pasokon P7 cannot, because one P7 picture is nearly seven minutes of key-down and Nexus
+  will not key the rig that long for one image, so it is not in the transmit picker. A VIS code
+  Nexus still does not know — Pasokon P3, Wraase SC-2 120 — is reported as an unrecognised mode
+  exactly as before, rather than being decoded as a neighbour and coming out slanted.
+
+- **Listen to the radio from Nexus Remote.** The browser workspace has a Listen button in its
+  header, beside the station-control line. Press it and you hear what the receiver hears; press it
+  again and it stops. It is muted until you ask for it, it stops on its own when you hide the tab
+  or lose station control, and only a browser that holds station control can start it — a browser
+  approved for logging alone cannot listen. A station nobody is listening to sends nothing at all.
+  The line beside the button tells you what the audio is doing: connecting, listening, a gap while
+  the link is losing packets, or stalled. That distinction is the point. A gap is filled with a
+  faint synthetic hiss rather than silence, so a dropping link never sounds like a dead band. If
+  your browser cannot play the audio (Firefox on Android, and Safari before 26), the page says so
+  instead of offering a button that does nothing.
+
+  **1.12.0 said no audio reaches the browser in either direction.** Receive audio now does.
+  Transmit audio still does not: you can hear the station, you cannot speak through it.
+
+- **Every panel you can remove now has an × in its own corner.** Panels could always be taken off
+  a screen from the ⊞ Panels menu, but there was nothing on the panel itself to say so — if you
+  did not already know the menu was there, there was no way to close anything. Now each removable
+  panel carries a small × in its own header: on the FT8 screen that is Band Activity, Rx Frequency,
+  Tx Messages, the Call Roster, Stations, the callsign card and the waterfall, and the same goes
+  for the CW, Phone, RTTY, PSK, SSTV and JS8 screens. The × does exactly what unticking the panel
+  in ⊞ Panels does — same setting, remembered the same way — and ⊞ Panels is still where you put a
+  panel back, with Undo one click away if you close the wrong one. Panels that are part of
+  something else rather than a panel of their own (the TX meters strip, CW's merged Rig controls
+  frame, the log strips) have no × and are unchanged. Phone's Voice Keyer × warns, before you
+  press it, that closing the keyer stops a voice message that is playing and throws away a
+  recording in progress — the same warning its menu entry has always carried.
+
+- **Click-to-work an RTTY spot from a browser.** Nexus Remote could already work a CW, Phone, FT8
+  or FT4 spot from the Needed board or the Spots board; an RTTY one was quietly refused. Clicking
+  it now retunes the station to the spot's exact frequency and puts it in the RTTY section, the
+  same single change the desktop makes. It is a receive change only: it never enables transmit,
+  and the station still refuses it while a transmission is armed. A station running an older
+  Nexus simply does not offer the control, so nothing is sent to one that could not do it.
+
+- **The browser shows where the rotator is actually pointing.** Nexus Remote could already point
+  the antenna by azimuth, point it at a callsign and stop it, but the heading itself read "—".
+  The cockpit strip and the Needed board now show the station's own reading, refreshed while a
+  heading is on screen and never when it is not. The station's honesty is kept intact: no rotator
+  configured, or a rotctld that does not answer, still reads "—" rather than a made-up bearing,
+  and a station running an older Nexus keeps the "—" it has always shown.
+
+- **Spot another station from a browser.** Nexus Remote could already spot your own activation;
+  spotting someone else was refused. The Spot button in Operate's roster now works from a browser
+  with station control, opening the same review popup the desktop shows and asking once more
+  before the spot goes out — it posts publicly from your station's cluster login, so it is
+  deliberately not something a logging-only browser can do. If no cluster node is connected the
+  browser is told so plainly instead of being left to guess.
+
+- **Delete a received SSTV picture from a browser.** Saving one already worked; deleting it was
+  desktop-only, so a browser could fill the gallery and never tidy it. The ✕ on a gallery card now
+  works from a browser with station control, with the same confirm the desktop asks for — it is
+  permanent, and a received picture is the only copy of what somebody sent. The browser names the
+  picture by the card it is looking at and the station finds the file itself; no file path is ever
+  sent, and a card the station no longer has is refused rather than guessed at.
+
+- **Nexus now knows which parks and summits you have already worked, and when.** A park you have
+  not worked is a genuine need on the Needed board and in the Call Roster — a NEW PARK chip
+  alongside the award chips, with its own filter chip on the board — so an activator you have
+  worked before still stands out when they are somewhere new. It works off the reference your log
+  already stores for every hunted contact, POTA and SOTA alike, so there is nothing to set up.
+
+  The board also stops nagging. A park you have already worked in the activation that is running
+  now drops to the bottom and keeps only its POTA/SOTA chip: you logged them, you are done with
+  them. Tomorrow is a different matter — an activator who goes back to the same park is a fresh
+  contact for a hunter, so the park is needed again. The line between "this activation" and "the
+  next one" is UTC midnight, the same boundary POTA credits an activation on and the same one the
+  activation export already splits your log at, and it counts each activator separately: two
+  operators at one park on one day are two visits and two contacts to be had.
+
+  Two things it cannot see, both honest gaps rather than bugs. A hunt made in a mode that never
+  passes the reference over the air — CW, usually — leaves nothing in the log to go on, so the
+  park keeps reading as needed; the imported Hunted Parks.CSV cannot fill that in because it has
+  no dates, though it still drives the hunter panel's NEW PARK badge as before.
+
+- **Stop transmitting when SWR is high** (Settings ▸ Radio ▸ Transmit limits & sharing). Off by
+  default. Turn it on and two readings in a row above your threshold — 2.5:1 unless you change it
+  — stop the transmission exactly as Stop TX does, and Nexus tells you why. It never starts a
+  transmission and never turns TX back on: that is yours to do once the antenna is sorted out. A
+  single high reading is ignored, so a tuner stepping or a keyup transient will not cut you off.
+
+  **The switch is greyed out on most radios, and that is on purpose.** Nexus only trusts an SWR
+  figure where it knows the radio's own scale — Icom over native CI-V, and FlexRadio. Everywhere
+  else the number arrives with no scale Nexus can vouch for and can be far out: some radios show a
+  near-perfect match on their own meter while reporting a fault here. A cut-off driven by that
+  would take you off the air for nothing, so it is not offered.
+
+- **The band dropdown shows how each band is doing.** In every cockpit (Phone, CW, Operate, RTTY,
+  PSK, SSTV, JS8 and Tempo) and the top bar, the band list now shows a coloured dot and a word
+  beside each band: Open, Marginal or Closed. It uses the same data as the Band conditions strip
+  on the map. If there is no recent data for a band, it shows a grey outline and "No data", never
+  green. The dropdown is now a Nexus menu rather than the system list, so it looks the same on
+  Windows, macOS and Linux (including the dark theme on Linux, where the system list was drawn
+  light). It works from the keyboard and reads out each band and its condition to a screen reader.
+  In the Remote browser page the menu works the same way; the dots stay grey there, because the
+  browser does not receive propagation data yet.
+
+- **Optional local-time clock beside UTC** (#253). Settings ▸ Appearance ▸ Workspace ▸ "Local time
+  beside UTC" adds a second clock in the top bar showing this computer's local time. It is off by
+  default and remembered per computer. Logs, spots and FT slots still use UTC.
+
+- **Band Activity can show the newest decodes at the top** (#276). A new "Newest on top" chip in
+  the Band Activity pane draws the newest period first and keeps the pane following the top. It is
+  off by default, so the pane keeps the WSJT-X order unless you turn it on. If you scroll down to
+  read, new decodes arrive above without moving what you are reading; scroll back to the top to
+  follow again. It applies when the pane is sorted by time.
+
+- **The CW screen has a His call field** (#286). It sits at the start of the send row and shows
+  the station you are working; a decoded call fills it in. Type over it to answer a station the
+  decoder missed or misread, then press Enter or a macro key: the `!` in your macros sends the
+  call in the box.
+
+- **SSTV pictures paint while they arrive, and the gallery has a Reveal button** (#130). A
+  received picture used to stay black until the last line (about two minutes for Scottie 1) and
+  then appear all at once. Now each line shows as its audio comes in. If the sending station's
+  timing is slightly off, the picture may lean a little while it arrives; it straightens when the
+  picture completes, and the saved picture is the corrected one. The Gallery pane also has a Reveal
+  button that opens the folder the pictures are saved in (Pictures/Nexus SSTV).
+
+- **You can choose where your log and data are kept** (#289). Settings ▸ Config ▸ "Data & log
+  folder" points Nexus at another folder — a NAS or a synced folder, so a second computer in the
+  shack can reach the same log. Either adopt a folder that already holds a log, or have Nexus copy
+  your logbook, data tables and Winlink mailbox across; a copy is checked file by file against the
+  original. **Nothing is ever moved or deleted** — your old folder is left exactly as it was — and
+  the new folder is used the next time Nexus starts, never half-way through a session. Nexus
+  refuses a folder that would open an empty logbook unless you asked for the copy. One warning
+  worth repeating: only one Nexus should use a synced folder at a time, or you get a conflicted
+  copy instead of a merged log.
+
+- **You can hide the Logbook globe (D#278).** Settings ▸ Appearance ▸ Workspace has a new Logbook
+  globe switch. Turn it off and the Logbook table starts at the top of the screen. It is on by
+  default.
+
+- **FT8 and FT4 contacts the sequencer logs now carry the other operator's name.** The log strip
+  in Phone, CW and the manual log form already filled Name from the callbook, but a contact the
+  FT sequencer logged for you went into the Logbook with no name, even when the callsign card had
+  just shown it. Nexus now keeps the name from any QRZ or HamQTH lookup it already did this
+  session (the card's own, or the log strip's), QRZ nickname first like the log strip, and puts it
+  on the logged contact, its ADIF and its uploads. It never looks a station up just to log it; if
+  nothing was looked up, the name stays blank as before. (#293)
+
+- **Filter spots by where they were spotted from.** The Spots panel's filters now include the
+  continents and the countries of the stations reporting each spot, so you can keep "spotted
+  from Europe" or "spotted from France" only. A spot stays if any station that reported it
+  matches, and the chips only offer places present in the current feed. "Heard on my continent"
+  is unchanged and still on by default. (#174)
+
+- **Hide whole continents from FT8/FT4 Band Activity.** The Countries picker in Band Activity now
+  has a "Hide whole continents" submenu beside its 18 quick picks, so "only Europe and Asia" no
+  longer means ticking country after country. It works like the country ticks: stations calling
+  you, the one you're working and new entities or band slots still show, Pause keeps your ticks,
+  and the hidden-count chip now counts continents (and countries picked by name, which it
+  missed before). (#229)
+
+- **More in the Logbook: your own grid and rig on each contact, QSL status in the edit form, and
+  a wide table.** Each contact can now carry your own grid square and the rig you used, and both
+  go out in ADIF (MY_GRIDSQUARE, MY_RIG) and come back on import. The rig fills itself from the
+  active radio when a contact is logged; your grid is yours to enter, for the contacts made away
+  from home. Editing a contact now also lets you mark a QSL card sent (bureau, direct or
+  electronic) and a card received. A new "More columns" button above the log shows your grid,
+  rig, name, QTH, state, power and operator in a wider table that scrolls sideways; it is off
+  until you turn it on, so the log looks the same as before. (#239)
+
+- **The callsign card is a panel of its own in Operate.** It has its own entry under ⊞ Panels, so
+  you can hide it or keep it, and hiding the Stations list no longer takes the card with it.
+  Pressing S&P clears the card, as F4 does. And when the card is about a station that is calling
+  someone else, it shows "Calling" and that call: click it to see the called station's card. (#204)
+
+- **Cloudlog and Wavelog can tell Nexus your station locations.** Settings ▸ Logging & Connectors
+  ▸ Cloudlog / Wavelog has a **Find my station locations** button beside the station profile id.
+  Press it and Nexus asks your own instance which locations it has, lists them by number, name,
+  callsign and grid, and fills the number in when you pick one. It asks only when you press it —
+  never on its own — and it goes to your instance over https only. An older Cloudlog without that
+  endpoint says so and asks you to enter the number by hand. (#226)
+
+- **Satellite contacts no longer carry a satellite name LoTW won't accept.** Nexus worked the
+  name out from the bird's catalog name, which produced plenty LoTW has never heard of — GO-32,
+  AO-95, IO-26, and cubesats like CUBY-1 whose names only look like an OSCAR number. LoTW refuses
+  a contact like that, and it can take the rest of the upload with it. Nexus now stamps a name
+  only when it is one LoTW takes, and leaves the field empty otherwise, which you can still fill
+  in by hand. Contacts through the ISS now carry ARISS, the name LoTW wants, and the TEVEL-2,
+  TAURUS and SONATE birds carry theirs. (#296)
+
 
 ### Changed
 
@@ -334,6 +557,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   why, and where it can work out what you meant from your own words it names the form that would
   work — `CQ POTA KD9WES`. It does not rewrite the box for you and it does not change what a CQ
   may look like: the message that goes on the air is always the one on the screen.
+
+- **"Hide worked" stops hiding park and summit activators.** If you had ever worked a callsign —
+  once, years ago, on any band — the Call Roster's Hide worked dropped that station even while it
+  was on the air right then from a park or a summit. The Needed board listed the activation and
+  the roster threw it away, so the two panes disagreed about the same station at the same moment.
+  Hide worked now keeps a station that is at a park or summit you have not worked in the
+  activation running right now, whatever the log says about the call — and it is the same fact
+  the Needed board is reading, so the two panes cannot drift apart again. It still hides a worked
+  station with nothing to offer, and a DXpedition you have already worked on the band still does
+  not count as a reason to keep the row — that is a label, not something you can need.
 
 ### Changed (60 m)
 
