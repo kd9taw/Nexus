@@ -401,14 +401,36 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::remote_control::transmit::TransmitAuthority;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
+    /// Browser authority for cases about native parity, not the command window.
+    /// The host mints a permit ending 5 s after it accepts a request and commits
+    /// it inside that same call (`operations.rs`: `current + 5 s`, min'd against
+    /// the lease, then `execute_transmit`), so the window bounds the *commit*,
+    /// not the operator. A whole-process stall between mint and commit (swap or
+    /// CPU starvation under workspace load) therefore lapses it inside the
+    /// product's own check, which correctly answers `AuthorityExpired` — the
+    /// guarantee that a stale controller cannot key a radio. That answer is
+    /// right, so a parity test must not ask the question. Expiry stays asserted
+    /// where it is the subject, on instants these tests supply themselves:
+    /// `remote_cq_preserves_native_ft_state_and_expiry_uses_the_existing_halt`,
+    /// every `authority.revoke()` case here, and `remote_control`'s own tests.
+    pub(super) fn unexpired_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(24 * 60 * 60)
+    }
+
     fn station(tier: Tier) -> Engine {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let mut engine = Engine::new("KD9TAW", "EN52", 0);
         engine.set_tier(tier);
-        engine.configure_remote_settings_store(
-            std::env::temp_dir().join("nexus-remote-ft-authority-test.json"),
-        );
+        // One path per engine: a fixed name is shared by every engine in this
+        // module and by any parallel test that reaches for the same one.
+        engine.configure_remote_settings_store(std::env::temp_dir().join(format!(
+            "nexus-remote-ft-authority-{}-{}.json",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )));
         engine.set_tx_enabled(false);
         engine.take_immediate_retune();
         engine.take_slot_tx_abort();
@@ -429,11 +451,7 @@ mod tests {
                     let mut native = station(tier);
                     let mut remote = station(tier);
                     let authority = TransmitAuthority::default();
-                    let permit = || {
-                        authority
-                            .permit(Instant::now() + Duration::from_secs(5))
-                            .unwrap()
-                    };
+                    let permit = || authority.permit(unexpired_deadline()).unwrap();
                     native.start_cq(None).unwrap();
                     remote.start_remote_ft_cq(permit(), None).unwrap();
                     native.set_tx_enabled(false);
@@ -466,11 +484,7 @@ mod tests {
     fn remote_message_refuses_changed_exchange_and_invalid_or_self_targets() {
         let mut engine = station(Tier::Ft8);
         let authority = TransmitAuthority::default();
-        let permit = || {
-            authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap()
-        };
+        let permit = || authority.permit(unexpired_deadline()).unwrap();
         engine.start_remote_ft_cq(permit(), None).unwrap();
         engine.take_immediate_retune();
         let context = FtExchangeContext::from(&engine.snapshot().qso.unwrap());
@@ -516,11 +530,7 @@ mod tests {
                     let mut native = station(tier);
                     let mut remote = station(tier);
                     let authority = TransmitAuthority::default();
-                    let permit = || {
-                        authority
-                            .permit(Instant::now() + Duration::from_secs(5))
-                            .unwrap()
-                    };
+                    let permit = || authority.permit(unexpired_deadline()).unwrap();
                     native.start_cq(None).unwrap();
                     remote.start_remote_ft_cq(permit(), None).unwrap();
                     if !armed {
@@ -556,11 +566,7 @@ mod tests {
     fn remote_exchange_refuses_changed_messages_and_expired_authority() {
         let mut engine = station(Tier::Ft8);
         let authority = TransmitAuthority::default();
-        let permit = || {
-            authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap()
-        };
+        let permit = || authority.permit(unexpired_deadline()).unwrap();
         engine.start_remote_ft_cq(permit(), None).unwrap();
         engine.take_immediate_retune();
         let before = FtExchangeContext::from(&engine.snapshot().qso.unwrap());
@@ -602,11 +608,7 @@ mod tests {
     fn remote_monitor_refuses_a_busy_decoder_before_mutating_the_exchange() {
         let mut engine = station(Tier::Ft8);
         let authority = TransmitAuthority::default();
-        let permit = || {
-            authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap()
-        };
+        let permit = || authority.permit(unexpired_deadline()).unwrap();
         engine.start_remote_ft_cq(permit(), None).unwrap();
         engine.take_immediate_retune();
         let before = engine.snapshot().qso;
@@ -632,7 +634,10 @@ mod tests {
             let mut remote = station(tier);
             let authority = TransmitAuthority::default();
             let now = Instant::now();
-            let deadline = now + Duration::from_secs(5);
+            // Expiry is this case's subject, and it is asserted on instants the
+            // test supplies (`now`, `deadline`) — never on the wall clock the
+            // product reads inside `start_remote_ft_cq`.
+            let deadline = now + Duration::from_secs(24 * 60 * 60);
             native.start_cq(Some("DX")).unwrap();
             remote
                 .start_remote_ft_cq(authority.permit(deadline).unwrap(), Some("DX"))
@@ -661,9 +666,7 @@ mod tests {
     fn revoked_authority_cannot_commit_a_previously_planned_ft_over() {
         let mut engine = station(Tier::Ft8);
         let authority = TransmitAuthority::default();
-        let permit = authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap();
+        let permit = authority.permit(unexpired_deadline()).unwrap();
         engine.start_remote_ft_cq(permit, None).unwrap();
         let slot = if engine.tx_even() { 0 } else { 1 };
         let plan = engine
@@ -681,11 +684,7 @@ mod tests {
             let mut native = station(tier);
             let mut remote = station(tier);
             let authority = TransmitAuthority::default();
-            let permit = || {
-                authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap()
-            };
+            let permit = || authority.permit(unexpired_deadline()).unwrap();
             native.start_cq(None).unwrap();
             remote.start_remote_ft_cq(permit(), None).unwrap();
             native.set_tx_enabled(false);
@@ -717,11 +716,7 @@ mod tests {
             let mut native = station(tier);
             let mut remote = station(tier);
             let authority = TransmitAuthority::default();
-            let permit = || {
-                authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap()
-            };
+            let permit = || authority.permit(unexpired_deadline()).unwrap();
             native
                 .call_station_ctx("W1AW", Some("FN31"), None, None, Some(950.0))
                 .unwrap();
@@ -755,9 +750,7 @@ mod tests {
             let authority = TransmitAuthority::default();
             assert_eq!(
                 engine.call_remote_ft_station(
-                    authority
-                        .permit(Instant::now() + Duration::from_secs(5))
-                        .unwrap(),
+                    authority.permit(unexpired_deadline()).unwrap(),
                     "W1AW",
                     Some("FN31"),
                     None,
@@ -785,9 +778,7 @@ mod tests {
             let authority = TransmitAuthority::default();
             remote
                 .call_remote_ft_station(
-                    authority
-                        .permit(Instant::now() + Duration::from_secs(5))
-                        .unwrap(),
+                    authority.permit(unexpired_deadline()).unwrap(),
                     "W1AW",
                     Some("FN31"),
                     None,
@@ -832,11 +823,7 @@ mod tests {
                 freq: Some(decode.freq),
             };
             let authority = TransmitAuthority::default();
-            let permit = || {
-                authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap()
-            };
+            let permit = || authority.permit(unexpired_deadline()).unwrap();
             for cause in ["message", "snr", "frequency", "call"] {
                 let mut changed = selection.clone();
                 match cause {
@@ -905,11 +892,7 @@ mod tests {
             freq: station.freq_hz.map(|hz| hz as f32),
         };
         let authority = TransmitAuthority::default();
-        let permit = || {
-            authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap()
-        };
+        let permit = || authority.permit(unexpired_deadline()).unwrap();
         remote
             .call_remote_ft_selection(permit(), &selection)
             .unwrap();
@@ -936,13 +919,9 @@ mod tests {
         let mut remote = station(Tier::Ft8);
         let authority = TransmitAuthority::default();
         let other = TransmitAuthority::default();
-        let permit = authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap();
+        let permit = authority.permit(unexpired_deadline()).unwrap();
         remote.start_remote_ft_cq(permit.clone(), None).unwrap();
-        let foreign = other
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap();
+        let foreign = other.permit(unexpired_deadline()).unwrap();
         assert_eq!(remote.stop_remote_ft(&foreign), Err(Reason::ContextChanged));
         assert!(remote.tx_enabled());
         remote.set_tx_enabled(true);
@@ -959,21 +938,14 @@ mod tests {
         let mut engine = station(Tier::Ft8);
         let authority = TransmitAuthority::default();
         engine
-            .start_remote_ft_cq(
-                authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
-                None,
-            )
+            .start_remote_ft_cq(authority.permit(unexpired_deadline()).unwrap(), None)
             .unwrap();
         engine.set_tx_enabled(true);
         authority.revoke();
         assert!(!engine.poll_remote_transmit(Instant::now()));
         assert!(engine.tx_enabled());
         assert!(!engine.renew_remote_transmit(
-            authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap(),
+            authority.permit(unexpired_deadline()).unwrap(),
             Instant::now()
         ));
     }

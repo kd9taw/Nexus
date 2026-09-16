@@ -377,12 +377,21 @@ mod tests {
                 }
             });
             let mut e = Engine::new("KD9TAW", "EN52", 0);
-            e.configure_remote_settings_store(std::env::temp_dir().join("nexus-ft-key-test.json"));
+            // One path per engine: a fixed name is shared with any parallel test
+            // that reaches for the same one.
+            e.configure_remote_settings_store(
+                std::env::temp_dir()
+                    .join(format!("nexus-ft-key-{}-{scene}.json", std::process::id())),
+            );
             e.set_tx_enabled(false);
             e.take_immediate_retune();
+            // Authority that cannot lapse mid-test: the 5 s window the host mints
+            // bounds its own commit, and a whole-process stall inside it makes the
+            // product refuse correctly. Revocation, not the clock, is this case's
+            // subject — `authority.revoke()` drives all three scenes.
             e.start_remote_ft_cq(
                 authority
-                    .permit(Instant::now() + Duration::from_secs(5))
+                    .permit(Instant::now() + Duration::from_secs(24 * 60 * 60))
                     .unwrap(),
                 None,
             )

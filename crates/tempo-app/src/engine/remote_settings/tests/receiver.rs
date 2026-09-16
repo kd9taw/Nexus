@@ -201,10 +201,7 @@ fn receiver_choices_refuse_bad_values_stale_tiers_and_expired_authority_before_s
         assert_eq!(s.apply(setting), Err(Reason::ContextChanged));
     }
     let connection = s.connection_generation();
-    let permit = s
-        .authority
-        .permit(Instant::now() + Duration::from_secs(5))
-        .unwrap();
+    let permit = s.authority.permit(unexpired_deadline()).unwrap();
     for setting in choices(&s) {
         assert_eq!(
             s.engine
@@ -310,9 +307,7 @@ fn native_receiver_adjustment_invalidates_pending_remote_radio_work_even_for_the
                 "40m",
                 "USB",
                 connection,
-                s.authority
-                    .permit(Instant::now() + Duration::from_secs(5))
-                    .unwrap(),
+                s.authority.permit(unexpired_deadline()).unwrap(),
             )
             .unwrap();
         let work = s.engine.take_remote_radio().unwrap();

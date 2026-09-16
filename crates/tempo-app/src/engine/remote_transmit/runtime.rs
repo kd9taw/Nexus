@@ -69,9 +69,9 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::remote_transmit::tests::unexpired_deadline;
     use crate::remote_control::transmit::TransmitAuthority;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::Duration;
 
     struct Fixture {
         engine: Engine,
@@ -100,9 +100,7 @@ mod tests {
             }
         }
         fn permit(&self) -> TransmitPermit {
-            self.authority
-                .permit(Instant::now() + Duration::from_secs(5))
-                .unwrap()
+            self.authority.permit(unexpired_deadline()).unwrap()
         }
         fn apply(&mut self, change: &FtRuntimeChange) -> Result<(), Reason> {
             let expected = self.engine.remote_ft_runtime().unwrap();

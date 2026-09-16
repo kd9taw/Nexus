@@ -6,6 +6,17 @@ use super::station::rotator::{self, test_rotor, Command};
 use super::*;
 use tempo_app::remote_control::{Completion, Reason};
 
+/// Authority that cannot lapse mid-test. The host mints a permit ending 5 s after
+/// it accepts a request and commits it inside the same call, so the window bounds
+/// the *commit*, not the operator; a whole-process stall between mint and commit
+/// (swap or CPU starvation under workspace load) lapses it inside the product's own
+/// check, which then correctly refuses. Expiry stays asserted where it is the
+/// subject, by the already-lapsed permit in
+/// `a_permit_that_lapsed_before_the_worker_ran_never_moves_the_mast`.
+fn unexpired_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(24 * 60 * 60)
+}
+
 /// A station with a rotator configured at a fake address this test alone owns.
 fn station() -> (Fixture, std::sync::Arc<test_rotor::Fake>) {
     let f = Fixture::new();
@@ -127,11 +138,7 @@ fn a_permit_that_lapsed_before_the_worker_ran_never_moves_the_mast() {
         tempo_app::remote_control::Outcome::Applied { .. }
     ));
     // Positive control: the same write with a live permit reaches rotctld once.
-    let completion = Completion::guarded(
-        authority
-            .permit(Instant::now() + Duration::from_secs(5))
-            .unwrap(),
-    );
+    let completion = Completion::guarded(authority.permit(unexpired_deadline()).unwrap());
     rotator::write(&completion, fake.addr(), Command::Point(90.0));
     assert_eq!(fake.lines(), vec![tempo_audio::rotator::point_line(90.0)]);
 }
@@ -142,7 +149,7 @@ fn a_satellite_track_refuses_a_point_but_never_a_stop() {
     let settings = f.engine.lock().unwrap().settings().clone();
     let permit = || {
         tempo_app::remote_control::Revocation::default()
-            .permit(Instant::now() + Duration::from_secs(5))
+            .permit(unexpired_deadline())
             .unwrap()
     };
     assert!(matches!(

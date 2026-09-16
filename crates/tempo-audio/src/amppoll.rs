@@ -794,8 +794,12 @@ mod tests {
                 o.radio.readings.cat.unwrap().connection_generation,
                 a.connection_generation,
                 a.read_sequence,
+                // Authority that cannot lapse mid-test: the 5 s window the host
+                // mints bounds its own commit, and a whole-process stall inside it
+                // makes the product refuse correctly. This case is about dispatch
+                // holding no engine lock, not about the command window.
                 authority
-                    .permit(Instant::now() + Duration::from_secs(5))
+                    .permit(Instant::now() + Duration::from_secs(24 * 60 * 60))
                     .unwrap(),
             )
             .unwrap()
