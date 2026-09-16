@@ -192,10 +192,39 @@ impl Authority {
 /// `halt_tx` leaves the TX-enable latch off exactly as a local Stop TX does. The shack's own Stop
 /// controls are untouched.
 ///
+/// ⭐ **AND IT ENDS AN ACTIVE SATELLITE TRACK** (`satellite::stop_track` — the rail Stop's own
+/// verb: disarm, hand the dial back, halt the mast). This is the ONE place the browser's Stop does
+/// more than the desktop's Stop TX does, and it is deliberate. At the shack those are two
+/// controls, a metre apart, and the operator picks; a browser has one Stop, and a satellite track
+/// is the app's only standing instruction to keep MOVING the radio and the mast by itself. A Stop
+/// that left it running would leave the station steering after the operator said stop, which is
+/// the failure the rule against moving the radio unattended exists to prevent. Ending it is also
+/// the safe direction in the sense every other verb here is: it releases the dial, it commands no
+/// new position, and it arms nothing.
+///
+/// It ends ANY live track, not only one this browser armed. A browser holding station control is
+/// the operator, and a Stop that silently declined to stop what is in front of them — because the
+/// pass happened to be armed at the shack — would be the worse surprise of the two.
+///
 /// The acceptance never waits for Engine. When Engine is held (a radio-loop tick, another command),
 /// the stop runs on its own thread as soon as Engine is free: the same wait a Stop TX press at the
 /// shack has. A poisoned Engine is still stopped.
 pub(super) fn stop_station(engine: &crate::SharedEngine) {
+    // On its own thread for the same reason the transmit stop below takes one when Engine is
+    // contended: the acceptance must never wait for Engine, and the disarm takes that lock. A
+    // thread that cannot be spawned runs it here instead — a Stop that quietly declined to stop
+    // the track is not an option.
+    #[cfg(feature = "radio")]
+    {
+        let owned = engine.clone();
+        if std::thread::Builder::new()
+            .name("remote-stop-satellite".into())
+            .spawn(move || super::station::satellite::stop_track(&owned))
+            .is_err()
+        {
+            super::station::satellite::stop_track(engine);
+        }
+    }
     fn stop(e: &mut tempo_app::engine::Engine) {
         tempo_core::applog::info(
             "tx",

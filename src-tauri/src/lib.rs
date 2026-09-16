@@ -6644,6 +6644,25 @@ fn get_tle_status() -> TleStatus {
 /// at all" (a refresh already in flight, a poisoned cache).
 #[tauri::command]
 async fn fetch_tles_now() -> Result<TleStatus, String> {
+    let flight = tle_refresh_flight_now()?;
+    if let Some(flight) = flight {
+        tauri::async_runtime::spawn_blocking(flight)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(tle_status())
+}
+
+/// The manual element refresh's DECISION half, with no Tauri in it: every policy gate (the
+/// single-flight latch, the Celestrak floor, the 403/404 stop) and the `Err` that means "could not
+/// attempt at all". `Ok(None)` = the decision function said not now, which is a status, not a
+/// failure. `Ok(Some(flight))` is the blocking fetch itself, which the caller runs on a thread of
+/// its own choosing — the desktop on Tauri's blocking pool, a Remote browser's gesture on its own
+/// worker, so neither holds a lock across the network.
+///
+/// ⚠️ The single-flight latch is TAKEN here (`TLE_FETCHING`) and released inside the flight, so a
+/// returned `Some` must be run: dropping it strands the latch and every later refresh is refused.
+fn tle_refresh_flight_now() -> Result<Option<impl FnOnce() + Send + 'static>, String> {
     use std::sync::atomic::Ordering;
     tles_load_from_disk();
     let now = now_unix();
@@ -6660,22 +6679,18 @@ async fn fetch_tles_now() -> Result<TleStatus, String> {
     ) else {
         // The decision function owns policy; manual always gets a target
         // today, but if it ever says "not now" the honest answer is status.
-        return Ok(tle_status());
+        return Ok(None);
     };
     if TLE_FETCHING.swap(true, Ordering::SeqCst) {
         return Err("an element refresh is already running — it will land shortly".into());
     }
     TLE_LAST_TRY.store(now, Ordering::SeqCst);
-    // The attempt's failure (if any) is IN the returned status — kind + raw
-    // — so the UI composes one operator-voiced result from one source of
-    // truth instead of parsing a rejected string. Only the spawn itself can
-    // Err from here on.
-    tauri::async_runtime::spawn_blocking(move || {
-        tle_refresh_flight(target, prev_count, prev_source, etag, true)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(tle_status())
+    // The attempt's failure (if any) is IN the status the caller reads afterwards — kind + raw —
+    // so the UI composes one operator-voiced result from one source of truth instead of parsing a
+    // rejected string. Nothing can Err from here on.
+    Ok(Some(move || {
+        tle_refresh_flight(target, prev_count, prev_source, etag, true);
+    }))
 }
 
 /// Merge `new` element sets into `into`, NORAD-keyed with the newest epoch
@@ -7300,8 +7315,20 @@ async fn set_sat_transponder(
     index: Option<usize>,
     auto: Option<bool>,
 ) -> Result<(), String> {
+    pick_sat_transponder(&state, name, index, auto.unwrap_or(false))
+}
+
+/// The pick itself, with no Tauri in it, so a Remote browser's transponder card and its lock-on
+/// reach exactly this code — the same index rule, the same mid-pass re-pick refusal, the same
+/// tune-on-pick — rather than a second copy of it.
+fn pick_sat_transponder(
+    state: &SharedEngine,
+    name: String,
+    index: Option<usize>,
+    auto: bool,
+) -> Result<(), String> {
     let Some(index) = index else {
-        engine_lock(&state).set_sat_transponder(None);
+        engine_lock(state).set_sat_transponder(None);
         return Ok(());
     };
     // ⚠️ MACHINERY DOES NOT CHANGE THE ROW MID-PASS. `auto` = this pick came from
@@ -7316,7 +7343,7 @@ async fn set_sat_transponder(
     // Asked HERE and not in the engine for the one thing the engine cannot know:
     // whether a human clicked. An operator choosing another transponder mid-pass
     // is what the picker is for, and it re-pins (`Engine::set_sat_transponder`).
-    if auto.unwrap_or(false) && engine_lock(&state).sat_row_pinned_against(index) {
+    if auto && engine_lock(state).sat_row_pinned_against(index) {
         return Err(format!(
             "{name}: a pass is being worked on another transponder — keeping it"
         ));
@@ -7396,7 +7423,7 @@ async fn set_sat_transponder(
         .filter_map(|(_, t)| t.uplink_centre_hz())
         .filter(|&hz| hz != 0 && hz != uplink)
         .collect();
-    let mut eng = engine_lock(&state);
+    let mut eng = engine_lock(state);
     eng.set_sat_transponder(Some((
         label,
         index,
@@ -7822,6 +7849,14 @@ enum SatTrackLoss {
     /// changes: the pass clock, the Doppler tick and the transponder hold all
     /// run to a real LOS.
     RotorGaveUp,
+    /// A pass a REMOTE BROWSER armed, whose browser is no longer there: its lease expired or was
+    /// released, its socket closed, the operator took the station back or revoked it.
+    ///
+    /// This ENDS THE PASS, and it is the whole reason the loop carries a `standing` at all. A
+    /// track moves the radio and the mast for minutes on its own; leaving one running for a
+    /// browser that has gone is the app moving the station with nobody watching, which is the one
+    /// thing the satellite path may never do. The dial goes back exactly as it does at LOS.
+    RemoteAuthorityEnded,
 }
 
 impl SatTrackLoss {
@@ -7835,6 +7870,62 @@ impl SatTrackLoss {
 
 static SAT_TRACK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static SAT_TRACK: Mutex<Option<SatTrackDto>> = Mutex::new(None);
+
+/// Serializes every test that touches the process-wide track badge — a simulated pass here, a
+/// Remote stop in `remote_service`. A second track starting mid-test would (correctly) stop the
+/// first's badge writes dead, which reads as flake rather than as the collision it is.
+#[cfg(test)]
+pub(crate) static TEST_SAT_TRACK: Mutex<()> = Mutex::new(());
+
+/// Occupy the live-track badge without flying a pass.
+///
+/// `SAT_TRACK.is_some()` is what "a track is live" MEANS to every reader of it — the stop path's
+/// `was_live`, the rotator's "is the satellite loop steering the mast", the Remote live sample —
+/// so a test about what STOPPING a track does needs exactly this and nothing else. A test about
+/// what a track DOES drives the shipped loop instead (`run_simulated_pass_as`).
+#[cfg(test)]
+pub(crate) fn test_live_sat_track(name: &str) {
+    let gen = SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let now = now_unix();
+    let mut guard = SAT_TRACK.lock().unwrap_or_else(|e| e.into_inner());
+    if SAT_TRACK_GEN.load(std::sync::atomic::Ordering::SeqCst) == gen {
+        *guard = Some(SatTrackDto {
+            name: name.into(),
+            state: "tracking".into(),
+            mode: "doppler-only".into(),
+            doppler_downlink: true,
+            doppler_uplink: false,
+            uplink_offer: "none".into(),
+            uplink_offer_map: None,
+            uplink_radio: String::new(),
+            uplink_radio_id: 0,
+            tx_mode: None,
+            rotor_lost: false,
+            az_deg: None,
+            el_deg: None,
+            aos_az_deg: 0.0,
+            max_el_deg: 45.0,
+            sat_az_deg: None,
+            sat_el_deg: None,
+            range_km: None,
+            range_rate_km_s: None,
+            alt_km: None,
+            downlink_hz: None,
+            uplink_hz: None,
+            downlink_shift_hz: None,
+            uplink_shift_hz: None,
+            transponder: None,
+            transponder_index: None,
+            inverting: false,
+            offset_hz: None,
+            half_width_hz: None,
+            element_age_days: 0.0,
+            element_epoch_unix: now,
+            aos_unix: now - 60,
+            los_unix: now + 600,
+        });
+    }
+}
 
 /// The Doppler half of the badge, read WHOLE from the engine the tick is
 /// about to run on. One read, one snapshot: the label, the two legs and the
@@ -7959,8 +8050,24 @@ async fn start_sat_track(
     name: String,
     aos_unix: Option<i64>,
 ) -> Result<Option<SatTrackDto>, String> {
+    arm_sat_track(&state, name, aos_unix, None)
+}
+
+/// The arm itself, with no Tauri in it, so a Remote browser's own gesture reaches exactly this
+/// code rather than a second copy of it (`remote_service::operations::station`).
+///
+/// `standing` is the browser authority the gesture was admitted under, `None` for a gesture made
+/// at the shack. A track steers the dial and the mast for the length of a pass, so a remotely
+/// armed one must not outlive the browser that armed it: the loop ends the pass — dial handback
+/// and all — as soon as that authority stops being held (`SatTrackLoss::RemoteAuthorityEnded`).
+fn arm_sat_track(
+    engine: &SharedEngine,
+    name: String,
+    aos_unix: Option<i64>,
+    standing: Option<tempo_app::remote_control::Standing>,
+) -> Result<Option<SatTrackDto>, String> {
     let (mygrid, addr, rot_cfg, consent0, sat_held, sat_tx_mode0) = {
-        let eng = engine_lock(&state);
+        let eng = engine_lock(engine);
         let st = eng.settings();
         (
             st.mygrid.clone(),
@@ -7999,7 +8106,7 @@ async fn start_sat_track(
     };
     let gen = SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     // The pass drives Doppler as well as the rotor, so the loop needs the engine.
-    let dop_engine: SharedEngine = (*state).clone();
+    let dop_engine: SharedEngine = engine.clone();
     let initial = SatTrackDto {
         name: name.clone(),
         state: if now >= pass.aos_unix {
@@ -8075,6 +8182,7 @@ async fn start_sat_track(
                 gen,
                 element_age_days,
                 element_epoch_unix,
+                standing,
             },
             &now_unix,
             &|| std::thread::sleep(std::time::Duration::from_secs(3)),
@@ -8117,6 +8225,10 @@ struct SatTrackRun {
     gen: u64,
     element_age_days: f64,
     element_epoch_unix: i64,
+    /// The Remote browser authority that armed this pass, `None` for an arm made at the shack.
+    /// Re-read every tick: a track the browser is no longer there to watch ends at once, with the
+    /// same dial handback a stop performs. See [`tempo_app::remote_control::Standing`].
+    standing: Option<tempo_app::remote_control::Standing>,
 }
 
 /// THE TRACK LOOP — pass clock, geometry, Doppler and the rotator until the
@@ -8136,6 +8248,7 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         gen,
         element_age_days,
         element_epoch_unix,
+        standing,
     } = run;
     use propagation::sat;
     use std::sync::atomic::Ordering;
@@ -8238,6 +8351,14 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
     loop {
         if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
             return; // replaced or stopped — the newer owner drives the rotor
+        }
+        // ⭐ THE BROWSER THAT ARMED THIS IS GONE. Asked BEFORE the pass clock and before any
+        // rotor or Doppler work, so no tick runs under an authority that has already ended, and
+        // asked every tick rather than once, because losing the browser is not an event this
+        // loop can be told about. A locally armed track carries no `standing` and never asks.
+        if standing.as_ref().is_some_and(|held| !held.held()) {
+            ending = SatTrackLoss::RemoteAuthorityEnded;
+            break;
         }
         let t = clock();
         if t > pass.los_unix {
@@ -8670,6 +8791,19 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
 /// Disarm auto-track: the loop exits on its next tick; halt the rotor now.
 #[tauri::command]
 async fn stop_sat_track(state: State<'_, SharedEngine>) -> Result<(), String> {
+    let halt = disarm_sat_track(&state);
+    if let Some(addr) = halt {
+        let _ =
+            tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::stop(&addr)).await;
+    }
+    Ok(())
+}
+
+/// The disarm itself, with no Tauri in it, so a Remote browser's Stop reaches exactly this code.
+/// Returns the rotator address still to be halted, if any: the halt is a blocking socket write,
+/// and each caller runs it the way its own context allows. Everything that touches Engine or the
+/// badge has already happened when this returns.
+fn disarm_sat_track(engine: &SharedEngine) -> Option<String> {
     SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     // Was a track actually LIVE? (The badge is the live marker.) Stopping one
     // is also the dial handback: the loop's own LOS handback never runs on
@@ -8682,18 +8816,11 @@ async fn stop_sat_track(state: State<'_, SharedEngine>) -> Result<(), String> {
         .lock()
         .map(|mut g| g.take().is_some())
         .unwrap_or(false);
-    let addr = {
-        let mut eng = engine_lock(&state);
-        if was_live {
-            eng.set_sat_transponder(None);
-        }
-        effective_rotator_addr(eng.settings())
-    };
-    if let Some(addr) = addr {
-        let _ =
-            tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::stop(&addr)).await;
+    let mut eng = engine_lock(engine);
+    if was_live {
+        eng.set_sat_transponder(None);
     }
-    Ok(())
+    effective_rotator_addr(eng.settings())
 }
 
 /// The live auto-track state; `None` = idle.
@@ -11787,24 +11914,60 @@ fn confirm_sat_uplink(
     map: Option<tempo_app::settings::SatVfoMap>,
     radio_id: Option<u32>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
+    write_sat_uplink(&state, map, radio_id);
+    Ok(engine_lock(&state).snapshot())
+}
+
+/// The uplink mapping + its consent, with no Tauri in it, so a Remote browser's VFO-map select and
+/// its confirm pill reach exactly this code. The consent pair is engine-owned live state, which is
+/// why this is its own verb rather than a settings write (see the command above).
+fn write_sat_uplink(
+    state: &SharedEngine,
+    map: Option<tempo_app::settings::SatVfoMap>,
+    radio_id: Option<u32>,
+) {
+    let mut eng = engine_lock(state);
     eng.confirm_sat_uplink(radio_id, map);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: confirm_sat_uplink save failed: {e}");
     }
-    Ok(eng.snapshot())
 }
 
 /// Peg-lock the active radio (dual-radio): when on, selecting a band never auto-switches the
 /// active radio (P4 routing respects it). Persisted. Returns the refreshed snapshot.
 #[tauri::command(async)]
 fn set_peg_lock(state: State<'_, SharedEngine>, on: bool) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
+    write_peg_lock(&state, on);
+    Ok(engine_lock(&state).snapshot())
+}
+
+/// Peg-lock, with no Tauri in it, so a Remote browser's 🔒 in the satellite radio-binding line
+/// reaches exactly this code. `radio_pegged` is live roster state a whole-settings payload cannot
+/// carry, which is why this is its own verb (see the command above).
+fn write_peg_lock(state: &SharedEngine, on: bool) {
+    let mut eng = engine_lock(state);
     eng.set_radio_pegged(on);
     if let Err(e) = eng.settings().save(&settings_path()) {
         eprintln!("tempo: set_peg_lock save failed: {e}");
     }
-    Ok(eng.snapshot())
+}
+
+/// The readiness rail's Doppler fix: the one Settings switch the satellite section turns on where
+/// the operator already is. `satDopplerOff` is an ordinary persisted preference, so this goes
+/// through the atomic remote-preference save — but it names its OWN key rather than widening the
+/// browser's general settings allow-list: turning Doppler on is a satellite gesture, and nothing
+/// here should make `satDopplerOff` writable from a preferences form.
+///
+/// Fail-safe direction is preserved: this only ever writes the switch the operator clicked, and
+/// the per-tick consent gates inside `sat_doppler_tick` are untouched — a confirmed uplink mapping
+/// is still what admits the transmit leg.
+fn write_sat_doppler(
+    state: &SharedEngine,
+    on: bool,
+) -> Result<(), tempo_app::remote_control::Reason> {
+    let mut values = serde_json::Map::new();
+    values.insert("satDopplerOff".into(), serde_json::Value::Bool(!on));
+    engine_lock(state).save_remote_preferences(&values, &["satDopplerOff"])
 }
 
 /// Add a radio to the roster (dual-radio). Appends a new profile with distinct daemon ports; does
@@ -28287,6 +28450,25 @@ mod tests {
         rot_addr: Option<String>,
         rot_cfg: tempo_core::rotator::RotatorConfig,
     ) -> Vec<SatTrackDto> {
+        run_simulated_pass_as(engine, rot_addr, rot_cfg, None)
+    }
+
+    /// The same simulated pass, armed under a Remote browser's authority. `standing` is what the
+    /// loop re-reads every tick; revoking its `Revocation` mid-run is how a test watches a track
+    /// end because the browser went away.
+    fn run_simulated_pass_as(
+        engine: &SharedEngine,
+        rot_addr: Option<String>,
+        rot_cfg: tempo_core::rotator::RotatorConfig,
+        standing: Option<tempo_app::remote_control::Standing>,
+    ) -> Vec<SatTrackDto> {
+        // ONE PASS AT A TIME. The loop publishes through the process-wide `SAT_TRACK`/
+        // `SAT_TRACK_GEN`, and a second track starting mid-run would (correctly) stop this one's
+        // badge writes dead — which reads as a flaky empty result rather than as the collision it
+        // is. Held for the whole run and released between runs, so a test may fly several.
+        let _one_at_a_time = crate::TEST_SAT_TRACK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tle = iss_tle();
         let pass = propagation::sat::passes(&tle, EN52, ISS_EPOCH_UNIX, 24)
             .into_iter()
@@ -28309,6 +28491,7 @@ mod tests {
                 gen,
                 element_age_days: 0.0,
                 element_epoch_unix: ISS_EPOCH_UNIX,
+                standing,
             },
             &|| now.get(),
             // One tick: advance the simulated clock, and take down whatever
@@ -28498,6 +28681,67 @@ mod tests {
         assert!(SatTrackLoss::BirdSet.ends_pass());
         assert!(SatTrackLoss::PropagationDiverged.ends_pass());
         assert!(!SatTrackLoss::RotorGaveUp.ends_pass());
+        // …and the browser going away ends the pass for the same reason the bird setting does:
+        // there is nobody the correction is being made for any more.
+        assert!(SatTrackLoss::RemoteAuthorityEnded.ends_pass());
+    }
+
+    /// ⛔ **A PASS A BROWSER ARMED DOES NOT OUTLIVE THAT BROWSER.** A track steers the dial, the
+    /// split and the mast for the length of a pass with nobody touching anything; armed from a
+    /// browser whose lease then expires, whose socket closes, or whose permission the operator
+    /// withdraws, it would be the station moving the radio unattended — the one thing the
+    /// satellite path may never do.
+    ///
+    /// ⚠️ THIS DRIVES THE SHIPPED LOOP over a real ISS pass, for the reason the give-up test
+    /// above states: asserting on `ends_pass` and re-applying the guard by hand tests a copy, and
+    /// the defect would go straight back at the real site with the suite green. The authority is
+    /// the real `Revocation` the operations layer revokes — `revoke_execution`, which is what
+    /// every lease expiry, release, socket close, epoch change and permission withdrawal calls.
+    #[test]
+    fn a_remotely_armed_pass_ends_when_the_browser_that_armed_it_goes_away() {
+        use tempo_app::remote_control::Revocation;
+        let cfg = tempo_core::rotator::RotatorConfig::default();
+        let authority = Revocation::default();
+        let standing = authority.standing();
+
+        // POSITIVE CONTROL FIRST, so "no badges" below cannot be a broken harness: the same pass,
+        // the same standing, while the authority is still held. It flies, tick after tick.
+        let eng = sat_station();
+        let held = run_simulated_pass_as(&eng, None, cfg, Some(standing.clone()));
+        assert!(
+            !held.is_empty(),
+            "the control pass must publish badges, or the assertion below proves nothing"
+        );
+
+        // THE BROWSER GOES AWAY. One revoke is every way it can happen.
+        authority.revoke();
+        let eng = sat_station();
+        {
+            let mut e = engine_lock(&eng);
+            assert!(
+                e.sat_transponder_held().is_some(),
+                "the station starts this pass holding the dial"
+            );
+            e.set_sat_pass_engaged(true);
+        }
+        let gone = run_simulated_pass_as(&eng, None, cfg, Some(standing));
+        assert!(
+            gone.is_empty(),
+            "not one tick ran under an authority that had already ended: {} published",
+            gone.len()
+        );
+        // It ends the PASS, so the dial goes back exactly as it does at LOS — leaving the radio
+        // under a correction nobody is watching is the whole failure being prevented.
+        assert!(
+            engine_lock(&eng).sat_transponder_held().is_none(),
+            "the dial is the operator's again"
+        );
+        assert!(!engine_lock(&eng).sat_doppler_legs().downlink);
+
+        // A pass armed AT THE SHACK carries no standing and is never touched by any of this.
+        let eng = sat_station();
+        let local = run_simulated_pass_as(&eng, None, cfg, None);
+        assert!(!local.is_empty(), "a local arm flies whatever Remote did");
     }
 
     /// A written snapshot round-trips through its own serde (camelCase keys on

@@ -414,6 +414,56 @@ pub enum Action {
     /// Stop the rotator.
     #[serde(rename = "rotator.stop")]
     RotatorStop {},
+    /// ⭐ ARM AUTO-TRACK for one pass of one bird. The gesture that makes the station steer the
+    /// dial, the split and the mast on its own for the length of a pass, so it is an operator
+    /// gesture and nothing else: no timer, no alarm and no spot reaches it, exactly as on the
+    /// desktop. `aos_unix` names WHICH pass — the schedule row the operator clicked.
+    ///
+    /// The track it arms does not outlive the browser that armed it: the loop carries this
+    /// gesture's authority and ends the pass, dial handback and all, the moment that authority
+    /// stops being held (see `arm_sat_track`).
+    #[serde(rename = "satellite.track")]
+    SatTrack {
+        name: String,
+        #[serde(rename = "aosUnix")]
+        aos_unix: i64,
+    },
+    /// Disarm auto-track: the rail's Stop. Never refused for being busy — a stop is always the
+    /// safe direction.
+    #[serde(rename = "satellite.stopTrack")]
+    SatStopTrack {},
+    /// Hand a transponder to the Doppler engine (`index`), or hand the dial back (`null`).
+    /// `index` is the raw row into the list the `satellite` detail page returned, which is the
+    /// list the station indexes. `auto` marks a pick made by the "Work this pass" chain rather
+    /// than by a click on a card; the station refuses an auto re-pick against a pinned row.
+    #[serde(rename = "satellite.transponder")]
+    SatTransponder {
+        name: String,
+        index: Option<usize>,
+        auto: bool,
+    },
+    /// The readiness rail's Doppler fix: turn the `satDopplerOff` switch on or off in place.
+    #[serde(rename = "satellite.doppler")]
+    SatDoppler { on: bool },
+    /// The uplink VFO mapping and, in the same act, the operator's confirmation that it is the
+    /// mapping for the radio Doppler is driving. `map` absent = confirm the mapping ALREADY IN
+    /// FORCE, resolved at the station at write time. `radio_id` is the rig the browser's rail
+    /// NAMED, so a radio switch between the poll and the click can never grant a rig the operator
+    /// never saw named.
+    #[serde(rename = "satellite.uplinkMap")]
+    SatUplinkMap {
+        map: Option<tempo_app::settings::SatVfoMap>,
+        #[serde(rename = "radioId")]
+        radio_id: Option<u32>,
+    },
+    /// Peg-lock the active radio from the satellite radio-binding line — the app-wide
+    /// "don't auto-switch radios" override, the same switch as the TopBar's 🔒.
+    #[serde(rename = "satellite.peg")]
+    SatPeg { on: bool },
+    /// The manual element refresh ("update elements"): one attempt, now. Every policy gate the
+    /// desktop button obeys still applies at the station.
+    #[serde(rename = "satellite.elements")]
+    SatElements {},
     /// ⛔ Delete one received SSTV picture, permanently. The browser names the picture by what its
     /// own gallery row showed — the finish time and the mode — never by a path: the station finds
     /// the row itself, and refuses anything but exactly one match.
@@ -487,6 +537,10 @@ pub enum Action {
 #[path = "rotator.rs"]
 pub(super) mod rotator;
 
+#[cfg(feature = "radio")]
+#[path = "satellite.rs"]
+pub(super) mod satellite;
+
 /// Whether the desktop's satellite loop is steering the mast right now. An unreadable marker
 /// answers yes, so a remote point never fights a track it could not see.
 #[cfg(feature = "radio")]
@@ -494,15 +548,19 @@ fn satellite_track_live() -> bool {
     crate::SAT_TRACK.lock().map(|g| g.is_some()).unwrap_or(true)
 }
 
+/// `shared` is the same Engine as `engine`, unlocked: the satellite verbs take the Engine lock
+/// themselves and so cannot be handed the guard, and they never run on this thread. Nothing else
+/// here may use it — an arm that locked it would deadlock against the guard above it.
 pub fn execute(
     engine: &mut Engine,
+    shared: &crate::SharedEngine,
     context: &Context,
     action: &Action,
     permit: Permit,
     spots: Option<&crate::SharedSpots>,
 ) -> Result<Completion, Reason> {
     #[cfg(not(feature = "radio"))]
-    let _ = spots;
+    let _ = (spots, shared);
     if !permit.valid(std::time::Instant::now()) {
         return Err(Reason::AuthorityExpired);
     }
@@ -740,6 +798,58 @@ pub fn execute(
         #[cfg(feature = "radio")]
         Action::RotatorStop {} => {
             return rotator::queue(engine.settings(), rotator::Command::Stop, permit, false);
+        }
+        // The satellite section. Each verb is the desktop's own, run on its own worker because the
+        // Engine lock held here is the lock each of them takes — see `satellite`'s module header.
+        #[cfg(feature = "radio")]
+        Action::SatTrack { name, aos_unix } => {
+            return satellite::queue(
+                satellite::Command::Track {
+                    name: name.clone(),
+                    aos_unix: *aos_unix,
+                },
+                permit,
+                shared,
+            );
+        }
+        #[cfg(feature = "radio")]
+        Action::SatStopTrack {} => {
+            return satellite::queue(satellite::Command::StopTrack, permit, shared);
+        }
+        #[cfg(feature = "radio")]
+        Action::SatTransponder { name, index, auto } => {
+            return satellite::queue(
+                satellite::Command::Transponder {
+                    name: name.clone(),
+                    index: *index,
+                    auto: *auto,
+                },
+                permit,
+                shared,
+            );
+        }
+        #[cfg(feature = "radio")]
+        Action::SatDoppler { on } => {
+            return satellite::queue(satellite::Command::Doppler { on: *on }, permit, shared);
+        }
+        #[cfg(feature = "radio")]
+        Action::SatUplinkMap { map, radio_id } => {
+            return satellite::queue(
+                satellite::Command::UplinkMap {
+                    map: *map,
+                    radio_id: *radio_id,
+                },
+                permit,
+                shared,
+            );
+        }
+        #[cfg(feature = "radio")]
+        Action::SatPeg { on } => {
+            return satellite::queue(satellite::Command::Peg { on: *on }, permit, shared);
+        }
+        #[cfg(feature = "radio")]
+        Action::SatElements {} => {
+            return satellite::queue(satellite::Command::Elements, permit, shared);
         }
         #[cfg(feature = "radio")]
         Action::RxGain {
@@ -1326,6 +1436,13 @@ impl Action {
             | Self::RotatorPoint { .. }
             | Self::RotatorPointAtCall { .. }
             | Self::RotatorStop { .. }
+            | Self::SatTrack { .. }
+            | Self::SatStopTrack { .. }
+            | Self::SatTransponder { .. }
+            | Self::SatDoppler { .. }
+            | Self::SatUplinkMap { .. }
+            | Self::SatPeg { .. }
+            | Self::SatElements { .. }
             | Self::SstvDeleteImage { .. }
             | Self::MemoryRecall { .. }
             | Self::Tier { .. }
@@ -1390,6 +1507,10 @@ pub fn capabilities(version: u8) -> Vec<&'static str> {
                 // predates one never names it and a page never sends that action to it.
                 "workRttySpot",
                 "sstvGallery",
+                // The satellite section. One hint for the whole section, because its verbs are one
+                // operator act: a transponder pick tunes the radio, an arm steers it for the pass,
+                // and the Stop that ends both has to be live wherever they are.
+                "satellite",
             ]
         }
     }
