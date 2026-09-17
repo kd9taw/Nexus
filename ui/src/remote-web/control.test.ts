@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { OperationClient } from './operation-client'
+import { OperationClient, OperationFailure } from './operation-client'
 import { OperationRelay } from './operation-relay'
 import { pendingControlStorage } from './control-storage'
 import { pendingLogStorage, type ReceiptLock } from './operation-storage'
@@ -649,6 +649,25 @@ it('marks a Log QSO gesture refused before sending as not sent', async () => {
     expectedQso: { dxcall: 'W1AW', state: 'done', txNow: null, cqRunning: false } }).catch(e => e)
   await h.advance(250)
   expect(await dropped).toMatchObject({ message: 'windowExpired', sent: false })
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})
+
+// THE REFUSAL BEHIND THE BUTTON. The Log button now waits for the sample that carries this QSO's
+// key (QsoLoggingControls.test.tsx), and that is where the race is fixed. The refusal under it has
+// to stay exactly as it was: a gesture that reaches the transport without a key is refused before
+// anything is sent, and it is refused OUT LOUD — an OperationFailure the caller says, never a
+// silent no-op.
+it('control: a Log QSO gesture with no key is still refused, unsent, and says so', async () => {
+  const h = setup(storage(), ['qsoLogging'], 4)
+  await h.advance(1000)
+  const reads = { kind: 'remote', invoke: vi.fn() } as unknown as ApplicationTransport
+  const transport = controlTransport(reads, { age: () => Infinity } as unknown as ApplicationClient, h.client)
+  const refused = await transport.invoke('log_current_qso', { expectedKey: null, expectedTier: 'FT8',
+    expectedQso: { dxcall: 'W1AW', state: 'done', txNow: null, cqRunning: false } }).catch(e => e)
+  expect(refused).toBeInstanceOf(OperationFailure)
+  expect(refused).toMatchObject({ message: 'invalidOperation', sent: false })
+  expect(controlFailureMessage(refused), 'the operator is told, not left guessing').toBe(t('remote.controlNotSent'))
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
   h.client.disconnected()
 })
