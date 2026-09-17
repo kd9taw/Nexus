@@ -81,7 +81,7 @@ The board is rebuilt from three independent sources:
 
 - **Own-radio decodes** — highest confidence, zero latency; your FT8/FT4 decoder is already copying the station.
 - **PSK Reporter** — the near-region feed retains spots where at least one endpoint is within 800 km of your grid (`REGION_RADIUS_KM`). Both the live-paths and region-paths feeds use a 900-second (15-minute) recency window.
-- **Cluster/RBN** — on by default: the VE7CC human node (`ve7cc.net:23`) is pre-configured with a `dxc.wa9pie.net:8000` fallback, and RBN CW/digital feeds are auto-wired separately, so CW and Phone rows appear without any setup. Spot recency window for board admission is 900 seconds. The `SpotBuffer` retains spots for 20 minutes on an age-based policy under an 8,000-entry memory ceiling, so the 15-minute admission window is never starved by buffer churn.
+- **Cluster/RBN** — on by default: four human nodes (`ve7cc.net:23`, `dxc.wa9pie.net:8000`, `dx.w1nr.net:23`, `dxspots.com:7300`) are pre-configured, and RBN CW/digital feeds are auto-wired separately, so CW and Phone rows appear without any setup. Spot recency window for board admission is 900 seconds. The `SpotBuffer` retains spots for 20 minutes on an age-based policy under an 8,000-entry memory ceiling, so the 15-minute admission window is never starved by buffer churn.
 
 The board refreshes every 30 seconds in the main window and every 15 seconds in a popped-out second-monitor window.
 

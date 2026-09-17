@@ -206,6 +206,38 @@ pub enum SatUplinkOffer {
 /// other way.
 pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 
+/// The human DX-cluster nodes a fresh install connects to — the SSB/phone source (the RBN CW
+/// and digital skimmer feeds are wired automatically and carry no phone; `load` strips any
+/// RBN endpoint from this list). Diverse in HOST, in PORT and in SOFTWARE, on purpose: a
+/// default that is one node is one outage away from an empty Phone board, and a default that
+/// is all on port 23 is one hotel firewall away from it — networks that block outbound telnet
+/// still pass RBN on 7000/7001, so phone dies there SILENTLY while CW keeps flowing.
+///
+/// * `ve7cc.net:23` — CC Cluster, the long-standing community node, standard telnet port.
+/// * `dxc.wa9pie.net:8000` — the high-port fallback for port-23-blocked networks.
+/// * `dx.w1nr.net:23` — DXSpider (YCCC), a different codebase on a different host.
+/// * `dxspots.com:7300` — CC Cluster (AE5E) on DXSpider's conventional high port: the second
+///   non-23 entry, so a port-23-blocked operator is not single-sourced on wa9pie alone.
+///
+/// Verified 2026-09-17 the way Nexus logs in — wait for the trailing login prompt, send the
+/// callsign — and both new nodes then streamed phone-segment spots; reachability is a fact
+/// about that day, not a promise. NOT `dxc.nc7j.com:7373`, although it answers: that is NC7J's
+/// skimmer port, which duplicates RBN and carries no human SSB — the `load` migration resets
+/// exactly that value for that reason.
+///
+/// The first two are the pair every install up to 1.13.0 shipped with. On 2026-09-16 both
+/// were down at once — ve7cc accepted TCP and never sent a login prompt, wa9pie refused — and
+/// every default-config install had no phone source at all; that is the whole reason the list
+/// grew. ve7cc was answering again by 2026-09-17, so read the `load` migration as adding
+/// margin, not as retiring either node. The migration recognises exactly that shipped pair and
+/// appends the rest; the operator edits the list in Settings ▸ Connections.
+pub const DEFAULT_CLUSTER_HOSTS: [&str; 4] = [
+    "ve7cc.net:23",
+    "dxc.wa9pie.net:8000",
+    "dx.w1nr.net:23",
+    "dxspots.com:7300",
+];
+
 /// The subset of [`MAIN_SUB_SAT_RIGS`] that Nexus's OWN CI-V daemon can ever
 /// serve — the intersection with `tempo_audio::rigmodels::icom_scope_model`,
 /// which is the table `native_civ_addr` gates on. **IC-9700 (3081) and
@@ -3852,15 +3884,7 @@ impl Default for Settings {
             // operators can blank this. (NOTE: dxc.nc7j.com:7373 is NC7J's *skimmer* port,
             // not its human port — don't use it here; the migration in `load` fixes it.)
             cluster_host: "ve7cc.net:23".to_string(),
-            // The aggregator seeds with TWO diverse-port nodes: ve7cc on the standard telnet
-            // port 23, plus wa9pie on 8000 — a firewall-friendly fallback, since some
-            // networks/ISPs block outbound port 23 (which would silently kill phone while RBN
-            // on 7000/7001 keeps working). The operator adds more in Settings ▸ Connections.
-            // (RBN endpoints don't belong here — they're auto-wired; `load` strips any.)
-            cluster_hosts: vec![
-                "ve7cc.net:23".to_string(),
-                "dxc.wa9pie.net:8000".to_string(),
-            ],
+            cluster_hosts: DEFAULT_CLUSTER_HOSTS.map(str::to_string).to_vec(),
             // APRS-IS is OFF until the operator asks for it: it is an outbound connection to a
             // public service under their callsign, which is theirs to opt into. The uplink is a
             // second, separate opt-in for the same reason, doubly so — it publishes.
@@ -4682,10 +4706,7 @@ impl Settings {
                 .iter()
                 .any(|h| !h.trim().is_empty() && !h.contains("reversebeacon.net"));
             if !has_human_host {
-                s.cluster_hosts = vec![
-                    "ve7cc.net:23".to_string(),
-                    "dxc.wa9pie.net:8000".to_string(),
-                ];
+                s.cluster_hosts = DEFAULT_CLUSTER_HOSTS.map(str::to_string).to_vec();
             }
         }
         // Migration: `cluster_hosts` (the multi-cluster aggregator) is newer than the single
@@ -4707,6 +4728,20 @@ impl Settings {
                     && seen.insert(h.to_ascii_lowercase())
             })
             .collect();
+        // Migration (2026-09-16): the default list was the ve7cc + wa9pie PAIR, and both died
+        // on the same day — every default-config install lost its only SSB/phone sources at
+        // once. A list that is still exactly that pair is the shipped default, not a choice,
+        // so it gains the nodes added since; any other list is the operator's and is kept.
+        let shipped_pair = &DEFAULT_CLUSTER_HOSTS[..2];
+        if s.cluster_hosts.len() == shipped_pair.len()
+            && s.cluster_hosts
+                .iter()
+                .zip(shipped_pair)
+                .all(|(h, d)| h.eq_ignore_ascii_case(d))
+        {
+            s.cluster_hosts
+                .extend(DEFAULT_CLUSTER_HOSTS[2..].iter().map(|h| h.to_string()));
+        }
         // Migration: SATELLITE UPLINK CONSENT (0.26). A file with no
         // `satUplinkRadios` key predates per-radio confirmation. Its mapping
         // was only ever a live uplink grant when the retired `satDoppler`
@@ -8715,6 +8750,60 @@ mod tests {
             back.cluster_hosts.iter().any(|h| h.contains("wa9pie")),
             "seeded the port-23-blocked fallback too: {:?}",
             back.cluster_hosts
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_adds_the_new_default_nodes_to_the_shipped_pair() {
+        // 2026-09-16: "no SSB spots any more" from several operators at once. Both shipped
+        // human nodes were dead the same day — ve7cc.net:23 accepted TCP and never sent a
+        // login prompt, dxc.wa9pie.net:8000 refused — and every default-config install holds
+        // exactly that pair, so every one of them had zero phone sources. More nodes, on more
+        // than one port, make the default survive that; an upgrading operator only gets them
+        // when the list is STILL the shipped pair, so a curated list is never touched.
+        let path = scratch_dir("thirdnode").join("settings.json");
+        let mut s = Settings::default();
+        s.cluster_hosts = vec!["ve7cc.net:23".into(), "dxc.wa9pie.net:8000".into()];
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.cluster_hosts,
+            vec![
+                "ve7cc.net:23".to_string(),
+                "dxc.wa9pie.net:8000".to_string(),
+                "dx.w1nr.net:23".to_string(),
+                "dxspots.com:7300".to_string(),
+            ],
+            "the shipped pair gains the nodes added since"
+        );
+        assert_eq!(
+            Settings::default().cluster_hosts,
+            back.cluster_hosts,
+            "a migrated pair and a fresh install end up with the same list"
+        );
+        // Port diversity is the point: a port-23-blocked network must be left with more than
+        // one nominal source, or one outage single-sources it again.
+        let non_23 = DEFAULT_CLUSTER_HOSTS
+            .iter()
+            .filter(|h| !h.ends_with(":23"))
+            .count();
+        assert!(
+            non_23 >= 2,
+            "at least two default nodes off port 23, got {non_23}"
+        );
+        // The CONTROL: a list the operator curated is not the shipped pair and stays as it is.
+        let mut s = Settings::default();
+        s.cluster_hosts = vec!["ve7cc.net:23".into(), "dxc.example.net:7300".into()];
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.cluster_hosts,
+            vec![
+                "ve7cc.net:23".to_string(),
+                "dxc.example.net:7300".to_string()
+            ],
+            "a curated list is left alone"
         );
         let _ = std::fs::remove_file(&path);
     }

@@ -5,6 +5,21 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **SSB/phone spots stopped arriving, and the Spots panel showed no Phone chip.** Both of the
+  human DX-cluster nodes Nexus shipped with, `ve7cc.net:23` and `dxc.wa9pie.net:8000`, went
+  down on the same day, and every install that still had the default list had no phone source
+  left — RBN kept CW and the digital modes flowing, which is why only Phone (and the mode chip
+  the Spots panel builds from what it is actually receiving) vanished. Two more nodes are now
+  in the default list — `dx.w1nr.net:23` (DXSpider) and `dxspots.com:7300` (CC Cluster, on a
+  high port for networks that block telnet port 23) — and an install still on the original
+  pair gains both on the next launch; a list you edited yourself is left alone. Until you
+  upgrade, add either one under **Settings › Connections › DX cluster nodes** (both are in
+  the **Add a known node** presets) and phone spots return at once.
+
 ## [1.13.0] — 2026-09-16
 
 ### Added

@@ -112,7 +112,7 @@ The datagram carries: `mycall`, `call`, `band`, `mode`, `timestamp`, `section`, 
 
 Nexus connects to a human DX-cluster node via a standard telnet session; the RBN CW and digital skimmer feeds are wired in automatically alongside it.
 
-**Default host: `ve7cc.net:23`** (the CC-Cluster community node, which carries human-posted spots including SSB/phone), with `dxc.wa9pie.net:8000` as a fallback. Change it in **Settings › Logging & Connectors › Integrations & Feeds** to reach a private cluster or a regional node. The RBN CW/digital skimmer feeds (`reversebeacon.net:7000` / `:7001`) are auto-wired separately and should **not** be entered as the Cluster Host — the RBN skimmer network carries no human SSB/phone spots, so pointing the Cluster Host at it empties the Phone rows of the Needed board.
+**Default hosts: `ve7cc.net:23`** (the CC-Cluster community node, which carries human-posted spots including SSB/phone), `dxc.wa9pie.net:8000` and `dxspots.com:7300` (high-port nodes for networks that block telnet port 23) and `dx.w1nr.net:23` (DXSpider) — four nodes, on two ports, so one or two outages do not empty the Phone rows. Change them in **Settings › Logging & Connectors › Integrations & Feeds** to reach a private cluster or a regional node. The RBN CW/digital skimmer feeds (`reversebeacon.net:7000` / `:7001`) are auto-wired separately and should **not** be entered as the Cluster Host — the RBN skimmer network carries no human SSB/phone spots, so pointing the Cluster Host at it empties the Phone rows of the Needed board.
 
 Spots admitted to the Needed board must be within 900 seconds old (15 minutes). The spot buffer holds 200 spots by default; high-activity periods can push older spots out faster than the admission window.
 

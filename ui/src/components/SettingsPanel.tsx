@@ -760,6 +760,7 @@ const CLUSTER_PRESETS: { label: string; host: string }[] = [
   { label: 'VE7CC-1 — human SSB/CW, clean (recommended)', host: 've7cc.net:23' },
   { label: 'WA9PIE-2 — port 8000 (use if port 23 is blocked)', host: 'dxc.wa9pie.net:8000' },
   { label: 'W1NR — DXSpider, phone-rich', host: 'dx.w1nr.net:23' },
+  { label: 'AE5E — CC Cluster, port 7300 (use if port 23 is blocked)', host: 'dxspots.com:7300' },
   { label: 'W3LPL — firehose (skimmer-heavy)', host: 'w3lpl.net:7373' },
 ]
 
