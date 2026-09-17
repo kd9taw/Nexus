@@ -918,6 +918,34 @@ test('four observers are admitted and a fifth cannot consume an untracked socket
   live.station.close()
 })
 
+// The desktop turns Remote off - and remembers it off across restarts - on a 401/403 from the socket
+// upgrade. That is right for a station that is no longer approved and wrong for everything else the
+// room can refuse: an access record that lost a race with a policy bump, or a failure of the room's
+// own storage. Every room refusal used to be a bare 403, so any of those turned Remote off for good
+// and told the remote operator to turn it on at the shack. A refusal now carries its own status, and
+// only an approval decision is a 403.
+test('a station refused for a stale access record or a room failure is told to retry, not to turn Remote off', async () => {
+  const pair = await app.paired(), live = await admitted(pair)
+  const row = await app.db.prepare('SELECT account_id, generation, policy_version FROM stations WHERE id=?').bind(pair.stationId).first()
+  const ns = await app.mf.getDurableObjectNamespace('STATIONS'), room = ns.get(ns.idFromName(pair.stationId))
+  const admit = (admission, header = JSON.stringify(admission)) => room.fetch('https://station.internal/station',
+    { method: 'GET', headers: { upgrade: 'websocket', 'x-nexus-admission': header } })
+  const access = version => ({ stationId: pair.stationId, accountId: row.account_id, enabled: true,
+    policyVersion: version, stationGeneration: row.generation, devices: [] })
+  const identity = generation => ({ stationId: pair.stationId, accountId: row.account_id, generation, expiresAt: Date.now() + 60000 })
+  const stale = await admit({ access: access(row.policy_version - 1), identity: identity(row.generation) })
+  assert.deepEqual({ status: stale.status, body: await stale.json() }, { status: 409, body: { error: 'obsoleteStationAccess' } })
+  // Only index.ts writes this header, so one the room cannot read is the room's own failure.
+  const broken = await admit(null, 'not an admission')
+  assert.deepEqual({ status: broken.status, body: await broken.json() }, { status: 503, body: { error: 'serviceUnavailable' } })
+  // Positive control: a station whose approval generation is gone IS refused as not approved.
+  const revoked = await admit({ access: access(row.policy_version), identity: identity(row.generation + 1) })
+  assert.deepEqual({ status: revoked.status, body: await revoked.json() }, { status: 403, body: { error: 'stationNotApproved' } })
+  // None of that touched the station that is actually connected.
+  assert.equal((await roomStatus(room)).online, true)
+  live.browser.close(); live.station.close()
+})
+
 test('trial expiry alarms retire an observer even if it never attempts renewal', async () => {
   const pair = await app.paired()
   await app.db.prepare('UPDATE trials SET expires_at=? WHERE account_id=?').bind(Date.now()+1800, pair.browser.accountId).run()

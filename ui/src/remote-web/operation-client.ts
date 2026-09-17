@@ -433,6 +433,19 @@ export class OperationClient {
       return
     }
     if ('error' in r) {
+      // An automatic read the station was merely too busy to answer (`stationBusy`: one of its own
+      // operation tasks in flight; `remoteBusy`: its authority lock held) is contention, not a
+      // refusal, and it decided nothing about this browser's authority. The station itself keeps
+      // feeding audio through it on purpose. Keep the lease and the last state; the freshness
+      // window still runs out on its own, so commands wait for a current state, and the next
+      // heartbeat - one second on - re-asks under the same lease. Treating it as the end of
+      // authority blanked every control and released the audio each time the station was busy.
+      const automatic = p.request.type === 'heartbeat' || p.request.type === 'state'
+      if (automatic && (r.error === 'stationBusy' || r.error === 'remoteBusy')) {
+        this.update({ busy: false, submitting: false })
+        p.reject(new Error(r.error))
+        return
+      }
       this.heartbeatLeaseId = null
       this.leaseUntil = 0
       const write = p.request.type === 'logManual' || p.request.type === 'logChange'

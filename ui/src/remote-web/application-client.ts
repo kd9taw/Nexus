@@ -19,7 +19,9 @@ import { POUNCE_COMMAND, PARKS_COMMAND, CONFIRMATIONS_COMMAND, CONFIGURATION_COM
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
 type Job = { command: ApplicationCommand; resolve: (value: unknown) => void; reject: (reason: Error) => void }
-type Current = Job & { requestId: string; at: number; timer: ReturnType<typeof setTimeout> }
+/** `abandoned` marks a read whose deadline has already failed it for its caller; the slot stays held
+ * until its late answer arrives, because the relay is still holding its own slot for the same read. */
+type Current = Job & { requestId: string; at: number; timer: ReturnType<typeof setTimeout>; abandoned?: boolean }
 const interval: Record<ApplicationCommand, number> = { get_snapshot: 500, get_spectrum_row: 100, get_meters: 200, get_settings: 1000, get_band_plan: 1000 }
 export class ApplicationClient implements ApplicationTransport {
   readonly kind = 'remote' as const
@@ -158,6 +160,9 @@ export class ApplicationClient implements ApplicationTransport {
     if (this.version >= 2) { this.stream.receive(message); return }
     const pending = this.current
     if (!pending || pending.requestId !== message.requestId) throw new Error('unexpectedApplicationResult')
+    // Its caller was told this read failed when the deadline passed; the answer is merely late.
+    // ACK so the relay releases its slot, drop the contents unread, and let the lane carry on.
+    if (pending.abandoned) { this.current = null; this.send(JSON.stringify({ type: 'applicationAck', requestId: pending.requestId })); this.pump(); return }
     if (message.type === 'applicationError' && Object.keys(message).length === 3 && APPLICATION_ERRORS.includes(message.error as never)) {
       clearTimeout(pending.timer); this.current = null
       this.send(JSON.stringify({ type: 'applicationAck', requestId: pending.requestId }))
@@ -172,12 +177,23 @@ export class ApplicationClient implements ApplicationTransport {
     this.send(JSON.stringify({ type: 'applicationAck', requestId: pending.requestId }))
     pending.resolve(current.value); this.pump()
   }
+  /** A v1 read the station did not answer in time fails THAT read, never the session. These are
+   * background panel reads; closing the socket here ended the operating session - operations, lease
+   * and all - over one slow read. The lane stays held until the late answer lands, because the relay
+   * is still holding its own slot for this read and refuses a fresh one on top of it; the answer is
+   * then ACKed unread. Whether the station is gone is the observation stream's question. */
+  private expire(): void {
+    const pending = this.current
+    if (!pending) return
+    pending.abandoned = true
+    pending.reject(new Error('applicationUnavailable'))
+  }
   private pump(): void {
     if (this.current || this.phase !== 'ready') return
     const job = this.queue.shift()
     if (!job) return
     const requestId = crypto.randomUUID()
-    const timer = setTimeout(() => { this.disconnected(); this.close() }, APPLICATION_TIMEOUT_MS)
+    const timer = setTimeout(() => this.expire(), APPLICATION_TIMEOUT_MS)
     this.current = { ...job, requestId, timer, at: performance.now() }
     try {
       this.send(JSON.stringify({ type: 'applicationRead', requestId, command: job.command,

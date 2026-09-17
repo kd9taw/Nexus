@@ -116,10 +116,18 @@ export class ApplicationRelay {
     this.stream.expire(now)
     this.query.expire(now)
     for (const browser of this.browsers.values()) {
-      if (browser.pending && now - browser.pending.at >= APPLICATION_TIMEOUT_MS) {
-        this.closeBrowser(browser, 1008, 'applicationTimeout')
-      }
+      if (browser.pending && now - browser.pending.at >= APPLICATION_TIMEOUT_MS) this.timeout(browser)
     }
+  }
+  /** A read the station did not answer in time fails THAT read and frees the slot. It must not
+   * close the observer: this lane carries background panel reads, and closing it ended the whole
+   * operating session - operations, lease and all - over one slow read from a station that was
+   * still publishing. Whether the station is still there is the observation relay's question.
+   * Same shape as the query lane's fix; a consumer whose socket is gone is still closed. */
+  private timeout(browser: Browser): void {
+    const pending = browser.pending!
+    browser.pending = null
+    this.error(browser.peer, pending.requestId, 'applicationUnavailable')
   }
   nextDeadline(): number | null {
     const times = [...this.browsers.values()].flatMap(b => b.pending ? [b.pending.at + APPLICATION_TIMEOUT_MS] : [])

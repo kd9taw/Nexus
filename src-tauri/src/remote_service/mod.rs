@@ -336,8 +336,10 @@ impl SessionStatus {
             }
             if value == "disabled" {
                 control.stop();
-                // The connection refused itself (access denied, a malformed service reply). Remote
-                // is off now, so the next launch must not turn it back on.
+                // The service refused this station (access denied) or its credential is unusable.
+                // Remote is off now, so the next launch must not turn it back on. A malformed
+                // service reply is deliberately NOT this: it reconnects (see `supervise`), because
+                // an off that is remembered can only be undone at the shack.
                 control.remember(Persist::Off);
             }
             phase(&self.status, value, error);
