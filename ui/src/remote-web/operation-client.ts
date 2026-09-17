@@ -505,8 +505,15 @@ export class OperationClient {
       const settledByEvent = p.request.type === 'stationControl' && this.view.controlResult?.operationId === result.operationId &&
         this.view.controlResult.outcome !== 'pending'
       if (settledByEvent) {
-        this.update({ busy: false, submitting: false, error: null })
-        p.resolve(this.view.controlResult!)
+        // This reply holds the storage lock the event could not take (`clearReceipt` failed
+        // against it): a terminal outcome's receipt is cleared here, inside it.
+        const outcome = this.view.controlResult!
+        let cleared = false
+        if ((outcome.outcome === 'applied' || outcome.outcome === 'rejected') && this.view.controlPending?.operationId === outcome.operationId) {
+          try { this.controlStorage?.write(null); cleared = true } catch {}
+        }
+        this.update({ busy: false, submitting: false, error: null, ...(cleared ? { controlPending: null } : {}) })
+        p.resolve(outcome)
         return
       }
       const terminal = result.outcome === 'applied' || result.outcome === 'rejected'
@@ -614,18 +621,35 @@ export class OperationClient {
     if (this.operationVersion < 5) throw Error('invalidOperation')
     if (!this.view.connected) return
     if (this.view.controlPending?.operationId === e.operationId) {
-      // Terminal clears the receipt as a `result` reply does; an UNKNOWN outcome keeps it, for
-      // the operator to acknowledge after checking the station.
-      let cleared = false
-      if (e.value.outcome === 'applied' || e.value.outcome === 'rejected') {
-        // The pushed path, stamped as such: without this the instrument is blind to the one path
-        // it was built to show working (responsiveness.test.ts holds it).
-        this.probe?.confirmed(e.operationId, e.value.outcome, 'pushed')
-        try { this.controlStorage?.write(null); cleared = true } catch {}
-      }
-      this.update({ controlResult: e.value, controlError: null, ...(cleared ? { controlPending: null } : {}) })
+      const terminal = e.value.outcome === 'applied' || e.value.outcome === 'rejected'
+      // The pushed path, stamped as such: without this the instrument is blind to the one path
+      // it was built to show working (responsiveness.test.ts holds it).
+      if (terminal) this.probe?.confirmed(e.operationId, e.value.outcome, 'pushed')
+      // The outcome at once: the control's waiter reads it here. An UNKNOWN outcome keeps the
+      // receipt, for the operator to acknowledge after checking the station.
+      this.update({ controlResult: e.value, controlError: null })
+      // A terminal outcome clears the receipt, UNDER THE STORAGE LOCK. Cleared bare, as a reply's
+      // clear is, the write was refused (it is only allowed inside `exclusive`, which every
+      // polled clear holds by construction) and the refusal swallowed: the receipt outlived the
+      // event by a second, until the fallback poll cleared it — every held control dead for that
+      // second and the wheel refusing steps, so a v5 page accepted FEWER steps than a v4 one.
+      if (terminal) this.clearReceipt(e.operationId)
     }
     this.installState(e.state, this.now())
+  }
+  /** Clear the pending-control receipt for `operationId` under the storage lock, where a receipt
+   * write is allowed. The lock is `ifAvailable`: held — by a fallback poll or by the control's own
+   * reply still in flight — this fails at once, swallowed, and THAT holder clears the receipt when
+   * its reply lands (a poll through its terminal outcome, the control's reply through
+   * `settledByEvent`), so the receipt never outlives the event by more than that round trip and
+   * the reply's crossed-reply check always finds the receipt it expects. */
+  private clearReceipt(operationId: string) {
+    if (!this.controlStorage) { this.update({ controlPending: null }); return }
+    void this.controlStorage.exclusive(() => {
+      if (this.view.controlPending?.operationId !== operationId) return
+      this.controlStorage!.write(null)
+      this.update({ controlPending: null })
+    }).catch(() => {})
   }
   async acquire() {
     const s = this.view.state
