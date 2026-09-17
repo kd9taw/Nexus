@@ -677,10 +677,12 @@ pub async fn supervise(
         if *stop.borrow() {
             break;
         }
-        if matches!(
-            result,
-            Err("accessDenied" | "invalidResponse" | "credentialStoreUnavailable")
-        ) {
+        // Only a refusal of THIS STATION ends Remote: `disabled` is remembered as off across
+        // restarts, and the remote operator is then told to turn Remote on at the shack. A
+        // message this build cannot parse (`invalidResponse`) is not that - it is a newer
+        // service's shape or a corrupt frame, and it used to turn Remote off for good, which
+        // the one person affected could not undo. It ends this connection and backs off.
+        if matches!(result, Err("accessDenied" | "credentialStoreUnavailable")) {
             status.set("disabled", result.err());
             return;
         }

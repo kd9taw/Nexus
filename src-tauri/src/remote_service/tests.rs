@@ -959,6 +959,57 @@ fn actual_native_socket_refuses_cloud_commands_after_a_valid_publication() {
     });
 }
 
+/// One message this build cannot parse - a newer service's shape, or a corrupt frame - ends THAT
+/// connection and nothing more. It used to end Remote for good: `supervise` treated `invalidResponse`
+/// like `accessDenied`, and the session status turned that into `control.stop()` plus
+/// `Persist::Off`, so the station stayed off across restarts and the remote operator was told to
+/// turn Remote on at the shack - the one thing a remote operator cannot do. A parse failure is not
+/// an access decision; the station backs off and reconnects, and the moment it is updated it works.
+#[test]
+fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let client = Client::new(&origin).unwrap();
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let control = Arc::new(Mutex::new(Control { enabled: true, ..Default::default() }));
+        let status = SessionStatus { status: Arc::new(Mutex::new(Status::default())), control: control.clone(), generation: 0 };
+        let (cancel, cancellation) = watch::channel(false);
+        // Every connection is greeted with a message from a service this build has never met.
+        let server = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    socket.send(Message::Text(r#"{"type":"applicationWatch","watchId":"bbe7d95a-6fbd-47aa-95a7-ab1e4c083dd6","topics":[],"requestId":null,"newerField":true}"#.into())).await.unwrap();
+                    let _ = tokio::time::timeout(Duration::from_secs(3), socket.next()).await;
+                });
+            }
+        });
+        let binding = Binding { origin: origin.clone(), station_id: STATION.into(), account_id: ACCOUNT.into() };
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None };
+        let supervised = tokio::spawn(transport::supervise(client, binding, transport::random_secret().unwrap(), cancellation, engine, feeds, status.clone()));
+        let mut seen = None;
+        for _ in 0..250 {
+            let current = status.status.lock().unwrap().clone();
+            if current.phase == "disabled" || current.phase == "reconnecting" {
+                seen = Some(current);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let seen = seen.expect("the connection ended one way or the other");
+        assert_eq!((seen.phase.as_str(), seen.error), ("reconnecting", Some("invalidResponse")), "a parse failure backs off; it is not an access decision");
+        assert!(control.lock().unwrap().enabled, "Remote is still on");
+        assert!(!supervised.is_finished(), "the supervisor is still trying");
+        let _ = cancel.send(true);
+        supervised.await.unwrap();
+        server.abort();
+    });
+}
+
 // ---- Remote across a Nexus restart (operator decision 2026-09-13) --------------------------------
 //
 // A restart is simulated the way the probe's `restart` does it: drop the Service and start a new

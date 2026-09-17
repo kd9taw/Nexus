@@ -34,6 +34,9 @@ function commandDeadline(entitlement: Entitlement, now: number): number {
   return Math.min(entitlement.expiresAt, now + OPERATION_ENTITLEMENT_MS)
 }
 
+/** What `ObservationRelay.connectStation` / `connectObserver` refuse admission with, by name. */
+const ADMISSION_REFUSALS = new Set(['stationNotApproved', 'stationOffline', 'sessionAlreadyConnected', 'observerLimit', 'deviceNotApproved', 'serviceAccessExpired'])
+
 export class StationRoom extends DurableObject<RemoteEnv> {
   private relay: ObservationRelay | null = null
   private peers = new Map<WebSocket, Peer>()
@@ -143,7 +146,10 @@ export class StationRoom extends DurableObject<RemoteEnv> {
     if (!this.relay) this.relay = new ObservationRelay(access)
     else {
       const current = this.relay.checkpoint().access
-      if (current.stationId !== access.stationId || current.accountId !== access.accountId || current.policyVersion > access.policyVersion) throw new Refusal('obsoleteStationAccess')
+      // 409, not 403: the record the Worker just read lost a race with a policy bump. The next
+      // attempt reads a fresh one. A 403 on the station socket turns Remote off at the shack, for
+      // good, and that is reserved for a station that is actually no longer approved.
+      if (current.stationId !== access.stationId || current.accountId !== access.accountId || current.policyVersion > access.policyVersion) throw new Refusal('obsoleteStationAccess', 409)
       if (current.policyVersion < access.policyVersion) this.relay.updateAccess(access, Date.now())
     }
     if (this.saved?.access.policyVersion !== access.policyVersion) {
@@ -190,7 +196,14 @@ export class StationRoom extends DurableObject<RemoteEnv> {
           relay.connectObserver(input.sessionId, input.identity, input.entitlement, peer, now)
           this.commandUntil.set(input.sessionId, commandDeadline(input.entitlement, now))
         }
-      } catch (error) { this.peers.delete(server); this.samples.delete(server); this.applicationVersions.delete(server); throw error }
+      } catch (error) {
+        this.peers.delete(server); this.samples.delete(server); this.applicationVersions.delete(server)
+        // The relay's admission refusals are decisions about this peer, and the only thing this
+        // room may answer with a 403: the station turns Remote off on one, permanently, so nothing
+        // that is not an approval decision - a socket the runtime would not close, say - may reach
+        // it as one. Named, not "any Error": the relay refuses by code, a failure by sentence.
+        throw error instanceof Error && ADMISSION_REFUSALS.has(error.message) ? new Refusal(error.message) : error
+      }
       this.ctx.acceptWebSocket(server)
       buffered.pending = false
       for (const message of buffered.messages) server.send(message)
@@ -200,8 +213,12 @@ export class StationRoom extends DurableObject<RemoteEnv> {
         headers: path === '/browser' ? { 'sec-websocket-protocol': 'nexus-observe-v1' } : undefined })
     } catch (error) {
       await this.checkpoint()
-      const code = error instanceof Refusal ? error.code : 'sessionNotApproved'
-      return Response.json({ error: code }, { status: 403 })
+      // The same rule as index.ts: a refusal answers with its own code and status; anything else -
+      // storage, the runtime, an admission this room cannot read - is the service's failure, and
+      // a 503 the station retries. It used to be a bare 403 for everything, which the station
+      // reads as "no longer approved" and remembers as Remote OFF across restarts.
+      if (error instanceof Refusal) return Response.json({ error: error.code }, { status: error.status })
+      return Response.json({ error: 'serviceUnavailable' }, { status: 503 })
     }
   }
 
