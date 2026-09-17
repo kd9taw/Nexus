@@ -1,0 +1,1 @@
+ruleset arrlfd/2026: bonus station call "W9AWE/M" carries a portable affix (the match is against each logged call's BASE, so this one would never fire)

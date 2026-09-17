@@ -76,6 +76,61 @@ pub struct Bonus {
     pub points: u32,
 }
 
+/// ⭐ **A bonus the LOG earns, not one the operator claims** — a station worth points
+/// to whoever works it.
+///
+/// ILQP's own 2025 rules (w9awe.org, read 2026-09-17): *"any entrant contacting these
+/// stations will have a 100 point bonus added to the final score. Total of 200 points
+/// possible."* Every [`Bonus`] above it is a box the operator ticks; this one is in the
+/// log already, so offering it as a box would leave an entrant who did not know about
+/// the box submitting a score 200 points light.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BonusStation {
+    /// The callsign, uppercase and without a portable affix — matched against each
+    /// logged call's BASE ([`crate::message::base_call`]), so `W9AWE/M` counts and
+    /// `KW9AWE` does not. A file writing an affix is refused, because the match would
+    /// never fire and nothing would say so.
+    pub call: &'static str,
+    pub points: u32,
+}
+
+/// Points earned by working the bonus stations `stations` declares — **once per
+/// station, whatever the band, mode or number of contacts.**
+///
+/// A free function so it can be tested against a literal list rather than a whole
+/// installed ruleset; [`FdRuleset::bonus_station_points`] is the method every caller
+/// actually uses.
+pub fn bonus_station_points<'a, I>(stations: &[BonusStation], calls: I) -> u32
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    if stations.is_empty() {
+        return 0;
+    }
+    let mut hit = vec![false; stations.len()];
+    for call in calls {
+        if hit.iter().all(|h| *h) {
+            break;
+        }
+        let call = call.trim();
+        // The base-call walk allocates, so it is reached only by a call that could
+        // need it — the ordinary log row is one `eq_ignore_ascii_case`.
+        let base = call.contains('/').then(|| crate::message::base_call(call));
+        for (i, s) in stations.iter().enumerate() {
+            hit[i] = hit[i]
+                || base
+                    .as_deref()
+                    .map_or_else(|| call.eq_ignore_ascii_case(s.call), |b| b == s.call);
+        }
+    }
+    stations
+        .iter()
+        .zip(hit)
+        .filter(|(_, h)| *h)
+        .map(|(s, _)| s.points)
+        .sum()
+}
+
 /// One ARRL/RAC Field Day section: the exchange abbreviation sent on the air
 /// (e.g. `WI`), its full name, and the ARRL division it sits in (so the
 /// worked-sections board can lay the cells out division-by-division).
@@ -164,6 +219,10 @@ pub struct FdRuleset {
     pub exchange: &'static crate::contest::ExchangeSpec,
     pub scoring: crate::contest::Scoring,
     pub bonuses: &'static [Bonus],
+    /// ⭐ **Stations worth points to whoever works them** ([`BonusStation`]) — ILQP's
+    /// two club calls. Empty for every contest that names none, which is every contest
+    /// written before this key existed.
+    pub bonus_stations: &'static [BonusStation],
     pub dupe_rule: DupeRule,
     /// Tempo (FT1 keyboard chat) is a first-class FD contact surface for this
     /// event: WFD `true` (the digital-friendly event), SFD `false`.
@@ -253,6 +312,19 @@ impl FdRuleset {
     /// Total points for a set of claimed bonus ids (unknown ids score nothing).
     pub fn bonus_points(&self, claimed: &[String]) -> u32 {
         claimed.iter().filter_map(|id| self.bonus(id)).sum()
+    }
+
+    /// ⭐ **Points this LOG earns from the contest's bonus stations** — once per
+    /// station, whatever the band or mode ([`bonus_station_points`]).
+    ///
+    /// Separate from [`bonus_points`](Self::bonus_points) because the two answer
+    /// different questions: that one is what the operator CLAIMED, this one is what the
+    /// log holds. 0 for every ruleset that declares no bonus station.
+    pub fn bonus_station_points<'a, I>(&self, calls: I) -> u32
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        bonus_station_points(self.bonus_stations, calls)
     }
 
     /// True if the ACTUAL on-air mode (e.g. `FT8`, `RTTY`) is banned by this
@@ -751,6 +823,16 @@ struct RulesetSpec {
     domains: Vec<DomainSpec>,
     exchange: ExchangeBlockSpec,
     bonuses: Vec<BonusSpec>,
+    /// ⭐ **Stations worth points to whoever works them** — ILQP's two club calls,
+    /// `[{"call": "W9AWE", "points": 100}, …]`.
+    ///
+    /// ⚠️ `#[serde(default)]` for the `score_note_key` reason: absent is `[]`, which is
+    /// what every contest written before this key existed means and already does. A
+    /// list that IS present is validated in full — an empty, lower-case or affixed
+    /// call, a call named twice and a zero-point station are each refused by name,
+    /// because each is a bonus that silently never fires.
+    #[serde(default)]
+    bonus_stations: Vec<BonusStationSpec>,
     banned_modes: Vec<String>,
     tempo_fd: bool,
     assistance: AssistanceSpec,
@@ -1269,6 +1351,15 @@ struct WindowOverrideSpec {
 struct BonusSpec {
     id: String,
     label: String,
+    points: u32,
+}
+
+/// One [`BonusStation`] in the rules file.
+#[derive(Debug, serde::Deserialize)]
+struct BonusStationSpec {
+    /// The callsign, uppercase and WITHOUT a portable affix — the match is against
+    /// each logged call's base, so `"W9AWE/M"` here would never fire.
+    call: String,
     points: u32,
 }
 
@@ -1965,6 +2056,34 @@ mode class ({})",
             }
             ids.push(&b.id);
         }
+        // ⭐ BONUS STATIONS. Each refusal is a bonus that would load and then never
+        // fire — the silent 100 points an entrant's submitted score is short.
+        let mut bonus_calls: Vec<&str> = Vec::new();
+        for b in &r.bonus_stations {
+            if b.call.is_empty() || b.call != b.call.trim().to_ascii_uppercase() {
+                return Err(format!(
+                    "{tag}: bonus station call {:?} is not a trimmed uppercase callsign",
+                    b.call
+                ));
+            }
+            if b.call.contains('/') {
+                return Err(format!(
+                    "{tag}: bonus station call {:?} carries a portable affix (the match \
+is against each logged call's BASE, so this one would never fire)",
+                    b.call
+                ));
+            }
+            if bonus_calls.contains(&b.call.as_str()) {
+                return Err(format!("{tag}: duplicate bonus station {:?}", b.call));
+            }
+            bonus_calls.push(&b.call);
+            if b.points == 0 {
+                return Err(format!(
+                    "{tag}: bonus station {:?} is worth 0 points",
+                    b.call
+                ));
+            }
+        }
         for m in &r.banned_modes {
             if m.is_empty() || *m != m.to_ascii_uppercase() {
                 return Err(format!("{tag}: banned mode {m:?} not uppercase"));
@@ -2383,6 +2502,16 @@ fn build(spec: FileSpec) -> RulesTable {
                 contest_id: leak_str(r.contest_id),
                 scoring,
                 bonuses: leak_bonuses(r.bonuses),
+                bonus_stations: Box::leak(
+                    r.bonus_stations
+                        .into_iter()
+                        .map(|b| BonusStation {
+                            call: leak_str(b.call),
+                            points: b.points,
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
                 domains: domains_built,
                 exchange: exchange_built,
                 dupe_rule: DupeRule {
@@ -2641,6 +2770,93 @@ mod tests {
         for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
             assert_eq!(ruleset(e, 2026).contest_id, e.contest_id());
         }
+    }
+
+    /// ⭐ **A bonus you EARN by working a station, not one you tick a box for.**
+    ///
+    /// The Illinois QSO Party, w9awe.org's own 2025 rules (read 2026-09-17):
+    /// > *"NEW FOR 2025: BONUS STATIONS!! The sponsoring club of ILQP is the Western
+    /// > Illinois ARC, which is authorized to use two callsigns: W9AWE (the historical
+    /// > call) and W9OAB … any entrant contacting these stations will have a 100 point
+    /// > bonus added to the final score. Total of 200 points possible."*
+    ///
+    /// Every bonus this build shipped before is CLAIMED — the operator ticks
+    /// "W1AW bulletin copied" and nothing in the log says so. This one is in the log,
+    /// which is why it is derived rather than offered: an entrant who worked both club
+    /// calls and did not know there was a box to tick would submit a score 200 points
+    /// light.
+    #[test]
+    fn a_bonus_station_scores_once_per_log_however_many_times_it_is_worked() {
+        static ILQP: &[BonusStation] = &[
+            BonusStation {
+                call: "W9AWE",
+                points: 100,
+            },
+            BonusStation {
+                call: "W9OAB",
+                points: 100,
+            },
+        ];
+        let earned = |calls: &[&str]| bonus_station_points(ILQP, calls.iter().copied());
+        assert_eq!(earned(&["K1ABC", "W9XYZ"]), 0, "neither club call worked");
+        assert_eq!(earned(&["W9AWE"]), 100);
+        assert_eq!(
+            earned(&["W9AWE", "W9AWE", "W9AWE"]),
+            100,
+            "ONCE per log — three bands, three modes, one bonus"
+        );
+        assert_eq!(
+            earned(&["W9OAB", "K1ABC", "W9AWE"]),
+            200,
+            "both, in any order"
+        );
+        // Case and whitespace are what any other callsign comparison ignores.
+        assert_eq!(earned(&[" w9awe "]), 100);
+        // ⭐ A PORTABLE club call still counts: the entrant worked that station. Matched
+        // on the BASE call, the same rule the rest of the build matches callsigns by.
+        assert_eq!(earned(&["W9AWE/M"]), 100);
+        assert_eq!(earned(&["W9AWE/9", "W9OAB/P"]), 200);
+        // …and a call that merely CONTAINS one is not it.
+        assert_eq!(earned(&["W9AWES", "KW9AWE"]), 0);
+        // POSITIVE CONTROL for the whole mechanism: a ruleset that declares no bonus
+        // station — every contest but this one — earns nothing from the same log.
+        assert_eq!(bonus_station_points(&[], ["W9AWE", "W9OAB"]), 0);
+    }
+
+    /// ⭐ **The four ways a declared bonus station can fail to fire**, each refused at
+    /// load. A bonus that never fires is not a loud failure anywhere else: the entrant
+    /// works the club call, sees no extra points, and has no reason to suspect the
+    /// rules file rather than their own memory of the rules.
+    #[test]
+    fn a_bonus_station_that_could_never_fire_is_refused() {
+        let with = |stations: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["bonus_stations"] = stations;
+            parse_spec(&v.to_string())
+        };
+        let e = with(serde_json::json!([{"call": "w9awe", "points": 100}])).unwrap_err();
+        assert!(e.contains("\"w9awe\"") && e.contains("uppercase"), "{e}");
+        let e = with(serde_json::json!([{"call": "", "points": 100}])).unwrap_err();
+        assert!(e.contains("uppercase"), "{e}");
+        let e = with(serde_json::json!([{"call": "W9AWE/M", "points": 100}])).unwrap_err();
+        assert!(e.contains("portable affix"), "{e}");
+        let e = with(serde_json::json!([
+            {"call": "W9AWE", "points": 100},
+            {"call": "W9AWE", "points": 100},
+        ]))
+        .unwrap_err();
+        assert!(e.contains("duplicate bonus station"), "{e}");
+        let e = with(serde_json::json!([{"call": "W9AWE", "points": 0}])).unwrap_err();
+        assert!(e.contains("0 points"), "{e}");
+        // POSITIVE CONTROLS: ILQP's own pair loads, and so does the absent key every
+        // shipped ruleset relies on.
+        assert!(with(serde_json::json!([
+            {"call": "W9AWE", "points": 100},
+            {"call": "W9OAB", "points": 100},
+        ]))
+        .is_ok());
+        assert!(with(serde_json::json!([])).is_ok());
+        assert!(parse_spec(SEED).is_ok(), "the file that actually ships");
     }
 
     #[test]
