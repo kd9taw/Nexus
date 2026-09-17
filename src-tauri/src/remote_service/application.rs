@@ -412,12 +412,21 @@ impl Publisher {
 
 /// One shared publisher for the room's union of topics. A batch spends exactly
 /// one room-issued credit; the next credit acknowledges its revision bases.
+///
+/// A credit that is slow to come back stalls the stream and nothing else: `next` publishes
+/// nothing until it arrives, and it is honoured whenever it does. There is deliberately no
+/// deadline here. The one there was (three seconds awaiting, then `serviceUnavailable`) was
+/// propagated by the transport with `?`, which dropped the STATION'S socket - every connected
+/// browser gone, transmit revoked, control lapsed - over a credit that was merely late, and a
+/// large send blocking the same select loop was enough to make it late. Whether the station is
+/// still answering is the relay's question: it keeps its own deadline on an unanswered credit
+/// and closes the socket from its side, and the transport's ping/pong covers a dead service.
 #[derive(Default)]
 pub(super) struct Stream {
     watch: String,
     topics: Vec<Command>,
     credit: Option<String>,
-    awaiting: Option<(String, Instant)>,
+    awaiting: Option<String>,
     bases: HashMap<Command, u64>,
     offered: HashMap<Command, u64>,
     sent: HashMap<Command, Instant>,
@@ -466,13 +475,7 @@ impl Stream {
         if watch != self.watch {
             return Ok(());
         } // an old watch cannot replenish this one
-        if self.awaiting.as_ref().map(|(id, _)| id.as_str()) != Some(previous)
-            || self.credit.is_some()
-            || self
-                .awaiting
-                .as_ref()
-                .is_some_and(|(_, at)| at.elapsed() >= Duration::from_secs(3))
-        {
+        if self.awaiting.as_deref() != Some(previous) || self.credit.is_some() {
             return Err("invalidResponse");
         }
         self.awaiting = None;
@@ -489,13 +492,6 @@ impl Stream {
         engine: &crate::SharedEngine,
         now: Instant,
     ) -> Result<Option<String>, &'static str> {
-        if self
-            .awaiting
-            .as_ref()
-            .is_some_and(|(_, at)| now.saturating_duration_since(*at) >= Duration::from_secs(3))
-        {
-            return Err("serviceUnavailable");
-        }
         let Some(request) = &self.credit else {
             return Ok(None);
         };
@@ -542,7 +538,7 @@ impl Stream {
         if data.len() > MAX_BYTES {
             return Err("invalidResponse");
         }
-        self.awaiting = Some((self.credit.take().ok_or("invalidResponse")?, now));
+        self.awaiting = Some(self.credit.take().ok_or("invalidResponse")?);
         Ok(Some(data))
     }
 }
@@ -711,16 +707,44 @@ mod tests {
             .next(&mut publisher, &engine, now + Duration::from_secs(10))
             .unwrap()
             .is_none());
+    }
+    /// A credit the relay is slow to return stalls the STREAM, never the station's socket. The
+    /// old contract failed `next` with `serviceUnavailable` after three seconds awaiting, and the
+    /// transport propagated that with `?` - one late credit dropped the station's link, which took
+    /// every connected browser with it, revoked TX and lapsed control. The relay keeps its own
+    /// deadline on an unanswered credit and is the one that decides whether the station is gone.
+    #[test]
+    fn a_late_credit_stalls_the_stream_and_is_honoured_when_it_arrives() {
+        use std::sync::{Arc, Mutex};
+        let engine = Arc::new(Mutex::new(tempo_app::engine::Engine::with_settings(
+            Default::default(),
+        )));
+        let mut publisher = Publisher::default();
+        let mut stream = Stream::default();
+        let now = Instant::now();
+        let watch = "bbe7d95a-6fbd-47aa-95a7-ab1e4c083dd6";
+        let next = "056c07c9-65c3-48fc-a188-957de3338a4a";
         stream
             .watch(watch.into(), vec![Command::Meters], Some(REQUEST.into()))
             .unwrap();
+        assert!(stream.next(&mut publisher, &engine, now).unwrap().is_some());
+        for seconds in [1, 3, 4, 60] {
+            assert_eq!(
+                stream.next(&mut publisher, &engine, now + Duration::from_secs(seconds)),
+                Ok(None),
+                "{seconds} s without a credit is a stalled stream, not a dead session"
+            );
+        }
         stream
-            .next(&mut publisher, &engine, Instant::now())
-            .unwrap();
-        stream.awaiting.as_mut().unwrap().1 = Instant::now() - Duration::from_secs(4);
+            .credit(watch, REQUEST, next.into())
+            .expect("a late credit is still the credit for the batch in flight");
+        assert!(stream
+            .next(&mut publisher, &engine, now + Duration::from_secs(61))
+            .unwrap()
+            .is_some());
         assert!(
             stream.credit(watch, REQUEST, next.into()).is_err(),
-            "a late ACK cannot replenish an expired credit before the next tick"
+            "positive control: an ACK for a batch already credited is still refused"
         );
     }
     #[test]
