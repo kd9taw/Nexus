@@ -22,8 +22,20 @@ class Socket {
   end() { this.readyState = 3; this.onclose?.() }
 }
 let sockets: Socket[] = []
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); sockets = [] })
-async function connection(applicationMode = false,operationVersion=0) {
+afterEach(() => {
+  vi.useRealTimers(); vi.unstubAllGlobals(); sockets = []
+  delete (document as { hidden?: unknown }).hidden
+  delete (document as { visibilityState?: unknown }).visibilityState
+  localStorage.clear()
+})
+/** jsdom reports a visible tab and has no way to change it; shadow both readings and announce it
+ *  exactly as a browser does. Removed again in afterEach, so no test inherits a hidden tab. */
+function tab(hidden: boolean) {
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => hidden ? 'hidden' : 'visible' })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
+async function connection(applicationMode = false,operationVersion=0,stationId=crypto.randomUUID()) {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
   vi.stubGlobal('WebSocket', Socket)
   const ticket = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
@@ -32,7 +44,7 @@ async function connection(applicationMode = false,operationVersion=0) {
     const startedAt = performance.now()
     return { body: await post(`stations/${stationId}/ticket`, {}, signal), startedAt }
   }
-  const remote = new HostedConnection({ post, observationTicket, operationVersion } as unknown as BrowserClient, crypto.randomUUID(), applicationMode)
+  const remote = new HostedConnection({ post, observationTicket, operationVersion } as unknown as BrowserClient, stationId, applicationMode)
   remote.start(); await vi.advanceTimersByTimeAsync(0)
   return { remote, post, ticket, socket: sockets[sockets.length - 1] }
 }
@@ -354,6 +366,102 @@ it.each([
   expect(socket.readyState).toBe(2)
   expect(socket.closeReason).toBe(reason)
   expect(remote.operations.getSnapshot().connected).toBe(false)
+  remote.stop()
+})
+
+// A backgrounded tab is the biggest hosting cost left: the room bills for the wall-clock it is
+// kept awake, and a tab nobody is looking at keeps it fully awake. Control and listening already
+// let go on hide; these four pin the feed doing the same.
+it('sleeps the feed while the tab is in the background, and schedules nothing behind it', async () => {
+  const { remote, post, socket } = await connection()
+  socket.receive({ type: 'session', sessionId: crypto.randomUUID() })
+  const tickets = post.mock.calls.length
+  tab(true)
+  expect(socket.readyState).toBe(2)
+  expect(socket.closeReason).toBe('backgrounded')
+  expect(remote.feed.getSnapshot().asleep).toBe(true)
+  // The close event a real browser delivers afterwards must not read as a drop worth retrying.
+  socket.end()
+  await vi.advanceTimersByTimeAsync(120_000)
+  expect(sockets).toHaveLength(1)
+  expect(post).toHaveBeenCalledTimes(tickets)
+  // Nothing is left that could be shown as live: the workspace goes stale exactly as on any loss.
+  await expect(remote.source.read(new AbortController().signal)).rejects.toThrow('remoteUnavailable')
+  remote.stop()
+})
+
+it('resumes the feed the moment the tab comes back, without waiting out a backoff step', async () => {
+  const { remote, socket } = await connection()
+  // Climb the ladder first: a tab that returns to a station which recovered while nobody was
+  // looking must not sit out the rest of a step it earned in the meantime.
+  let live = socket
+  for (const expected of [1000, 2000, 4000]) live = await expectNextAttemptAfter(live, expected)
+  tab(true)
+  expect(remote.feed.getSnapshot().asleep).toBe(true)
+  const slept = sockets.length
+  tab(false)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(sockets).toHaveLength(slept + 1)
+  expect(remote.feed.getSnapshot()).toMatchObject({ asleep: false, resumed: true })
+  // The reason clears itself when the feed is actually back, not when it is merely asked for.
+  sockets[sockets.length - 1].receive({ type: 'session', sessionId: crypto.randomUUID() })
+  expect(remote.feed.getSnapshot().resumed).toBe(false)
+  remote.stop()
+})
+
+it('keeps watching in the background when the operator asked for it, and remembers the choice', async () => {
+  const stationId = crypto.randomUUID()
+  const { remote, socket } = await connection(false, 0, stationId)
+  remote.feed.keepWatching(true)
+  tab(true)
+  expect(socket.readyState).toBe(1)
+  expect(remote.feed.getSnapshot().asleep).toBe(false)
+  // Control: the same hidden tab sleeps at once the moment the choice is taken back.
+  remote.feed.keepWatching(false)
+  expect(remote.feed.getSnapshot().asleep).toBe(true)
+  expect(socket.closeReason).toBe('backgrounded')
+  // And choosing it while already asleep brings the feed straight back.
+  remote.feed.keepWatching(true)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(remote.feed.getSnapshot().asleep).toBe(false)
+  expect(sockets).toHaveLength(2)
+  remote.stop()
+  // A second screen keeps its choice across a reload; a different station does not inherit it.
+  const same = await connection(false, 0, stationId)
+  expect(same.remote.feed.getSnapshot().keepWatching).toBe(true)
+  same.remote.stop()
+  const other = await connection()
+  expect(other.remote.feed.getSnapshot().keepWatching).toBe(false)
+  other.remote.stop()
+})
+
+// ⚠️ THE STOP LINE. Closing the socket is what takes Stop away — `disconnected` drops the stop
+// token and a reconnect cannot get it back without acquiring control again — so a tab that hides
+// holding one stays awake and billing until the token goes. It goes on its own: hiding already
+// releases the lease, and an explicit release clears the station's stop owner.
+it('will not sleep a hidden tab while this browser can still stop a transmission', async () => {
+  const { remote, socket, state } = await controlled()
+  expect(remote.operations.getSnapshot().stopAvailable).toBe(true)
+  tab(true)
+  expect(socket.readyState).toBe(1)
+  expect(remote.feed.getSnapshot().asleep).toBe(false)
+  // Hiding releases the lease, which is what retires the stop token at the station.
+  await vi.advanceTimersByTimeAsync(250)
+  const released = lastOf(operationRequests(socket))
+  expect(released.type).toBe('release')
+  // It is not a timer that ends the wait: with the station silent the tab stays awake, because
+  // the token it is holding open is still this browser's to use.
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(remote.operations.getSnapshot().stopAvailable).toBe(true)
+  expect(remote.feed.getSnapshot().asleep).toBe(false)
+  expect(socket.readyState).toBe(1)
+  // The station's answer carries no transmit epoch: the token is retired, and only now may the
+  // room go back to sleep.
+  socket.receive({ type: 'operationResponse', requestId: released.requestId, value: { ...state, phase: 'available',
+    leaseId: null, commandWindowId: null, nextSequence: null, leaseRemainingMs: null, transmitEpoch: null, revision: state.revision + 1 } })
+  expect(remote.operations.getSnapshot().stopAvailable).toBe(false)
+  expect(remote.feed.getSnapshot().asleep).toBe(true)
+  expect(socket.closeReason).toBe('backgrounded')
   remote.stop()
 })
 
