@@ -289,7 +289,7 @@ impl ExchangeSpec {
                 .flatten()
                 .map(|(_, name)| *name)
         };
-        match self.field(&v.key)?.kind {
+        match self.field(v.key)?.kind {
             FieldKind::Enum { domain } => named(domain),
             FieldKind::OneOf(arms) => arms.iter().find_map(|a| match a {
                 FieldKind::Enum { domain } => named(domain),
