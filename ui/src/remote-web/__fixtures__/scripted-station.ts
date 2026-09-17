@@ -20,7 +20,10 @@ export const SCRIPTED_CAT_MS = 150
 const DIAL: Record<string, number> = { '40m': 7.2, '20m': 14.2, '17m': 18.13 }
 const BOOT = '11111111-1111-4111-8111-111111111111', LEASE = '22222222-2222-4222-8222-222222222222'
 
-export function scriptedStation(rttMs: number) {
+/** `version` 4 leaves the browser to discover a control's outcome by its `result` poll; 5 is
+ * push-completion — the station sends the settled outcome, with the state a `state` read would
+ * return, the moment its radio loop lands the target. */
+export function scriptedStation(rttMs: number, version: 4 | 5 = 4) {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date', 'requestAnimationFrame', 'cancelAnimationFrame'] })
   const half = rttMs / 2
   const wire: { at: number; type: string }[] = []
@@ -50,6 +53,8 @@ export function scriptedStation(rttMs: number) {
             if (action.action === 'radio.frequency') radio.dialMhz = action.dialMhz
             else if (action.action === 'radio.band') { radio.band = action.band; radio.dialMhz = DIAL[action.band] }
             completion.done = true
+            if (version >= 5) setTimeout(() => operations.receiveEvent({ type: 'operationEvent', operationId: request.requestId,
+              value: { operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' }, state: state() }), half)
           }, SCRIPTED_CAT_MS)
           reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'pending' })
           break
@@ -62,7 +67,7 @@ export function scriptedStation(rttMs: number) {
         case 'stopTransmit': reply({ stop: 'accepted' }); break
       }
     }, half)
-  }, true, () => performance.now(), undefined, 4, pendingControlStorage(() => storage, 'scripted-station', async (_key, run) => run()))
+  }, true, () => performance.now(), undefined, version, pendingControlStorage(() => storage, 'scripted-station', async (_key, run) => run()))
   operations.subscribe(() => { notifications.operations++ })
   // The instrument stream: one sample per 500 ms on the station's clock, sent on the credit it holds.
   let topics: string[] = [], credit: string | null = null, frameRevision = 0
@@ -94,5 +99,5 @@ export function scriptedStation(rttMs: number) {
   tuning.activate()
   operations.open()
   const close = () => { clearInterval(sampler); tuning.dispose(); operations.disconnected(); application.disconnected(); vi.useRealTimers() }
-  return { operations, tuning, application, wire, notifications, failures, radio, close, rttMs }
+  return { operations, tuning, application, wire, notifications, failures, radio, close, rttMs, version }
 }

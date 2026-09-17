@@ -609,6 +609,7 @@ export class OperationClient {
       // the operator to acknowledge after checking the station.
       let cleared = false
       if (e.value.outcome === 'applied' || e.value.outcome === 'rejected') {
+        this.probe?.confirmed(e.operationId, e.value.outcome)
         try { this.controlStorage?.write(null); cleared = true } catch {}
       }
       this.update({ controlResult: e.value, controlError: null, ...(cleared ? { controlPending: null } : {}) })

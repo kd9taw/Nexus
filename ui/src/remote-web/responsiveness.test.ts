@@ -21,8 +21,8 @@ const open: Station[] = []
 afterEach(() => { open.splice(0).forEach(s => s.close()) })
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
-async function measure(rttMs: number, probe = new ResponsivenessProbe(), attach = true): Promise<{ station: Station; report: CheckReport }> {
-  const station = scriptedStation(rttMs)
+async function measure(rttMs: number, version: 4 | 5 = 4, probe = new ResponsivenessProbe(), attach = true): Promise<{ station: Station; report: CheckReport }> {
+  const station = scriptedStation(rttMs, version)
   open.push(station)
   if (attach) probe.attach(station)
   // Control current and the first snapshot in, as when the operator reaches the panel.
@@ -42,14 +42,23 @@ async function measure(rttMs: number, probe = new ResponsivenessProbe(), attach 
  * 3 of 10 sent. The polled result read is what makes a confirmation seconds instead of a round
  * trip, and refusing steps while one is in flight is what loses most of the ten. */
 const BASELINE = {
-  100: { screen: 130, tuneConfirmed: 1200, bandConfirmed: 650, readout: 1100, stepsSent: 4 },
-  400: { screen: 220, tuneConfirmed: 2050, bandConfirmed: 1550, readout: 1650, stepsSent: 3 }
+  'v4/100': { screen: 130, tuneConfirmed: 1200, bandConfirmed: 650, readout: 1100, stepsSent: 4 },
+  'v4/400': { screen: 220, tuneConfirmed: 2050, bandConfirmed: 1550, readout: 1650, stepsSent: 3 },
+  // Operation v5 (push-completion): the confirmation is the station's own word, so a band change
+  // confirms in a round trip plus the CAT time. Measured: at 100 ms — tune confirmed 750, band
+  // confirmed 300, 3 of 10 steps sent; at 400 ms — tune confirmed 1100, band confirmed 550, 2 of
+  // 10 sent. The screen and readout clocks do not move with it: they are the wheel's debounce
+  // and the 500 ms snapshot cadence, which are batches 1 and 3.
+  'v5/100': { screen: 130, tuneConfirmed: 850, bandConfirmed: 350, readout: 1100, stepsSent: 3 },
+  'v5/400': { screen: 220, tuneConfirmed: 1250, bandConfirmed: 650, readout: 1650, stepsSent: 2 }
 } as const
 
-describe.each([100, 400] as const)('on a %i ms link', rttMs => {
+describe.each([
+  { rttMs: 100, version: 4 }, { rttMs: 400, version: 4 }, { rttMs: 100, version: 5 }, { rttMs: 400, version: 5 }
+] as const)('on a $rttMs ms link at operation v$version', ({ rttMs, version }) => {
   it('measures every clock, and today reads as the recorded baseline or better', async () => {
-    const { report: r } = await measure(rttMs)
-    console.info(reportText(r))
+    const { report: r } = await measure(rttMs, version)
+    console.info(`operation v${version}\n` + reportText(r))
     expect(r.refused).toBeNull()
     expect(r.skipped).toEqual({ tune: null, band: null, stop: null })
     // The measured round trip IS the injected one: the probe's clocks are honest.
@@ -58,7 +67,7 @@ describe.each([100, 400] as const)('on a %i ms link', rttMs => {
     expect(r.band.made).toBe(2); expect(r.band.sent).toBe(2); expect(r.band.confirmed!.count).toBe(2)
     expect(r.stop!.accepted).toBe(rttMs)
     expect(r.stop!.readout).not.toBeNull()
-    const line = BASELINE[rttMs]
+    const line = BASELINE[`v${version}/${rttMs}`]
     expect(r.tune.sent).toBeGreaterThanOrEqual(line.stepsSent)
     expect(r.tune.screen!.worst).toBeLessThanOrEqual(line.screen)
     expect(r.tune.confirmed!.worst).toBeLessThanOrEqual(line.tuneConfirmed)
@@ -66,7 +75,7 @@ describe.each([100, 400] as const)('on a %i ms link', rttMs => {
     expect(r.tune.readout!.worst).toBeLessThanOrEqual(line.readout)
   })
   it.fails('meets the programme budget (flip to `it` when it does)', async () => {
-    const { report: r } = await measure(rttMs)
+    const { report: r } = await measure(rttMs, version)
     expect(r.budget).toEqual({ screen: true, tune: true, band: true, readout: true, flicker: true, steps: true })
     expect(r.tune.screen!.worst).toBeLessThanOrEqual(BUDGET.screenMs)
     expect(r.tune.confirmed!.worst).toBeLessThanOrEqual(rttMs + BUDGET.tuneAfterRttMs)
@@ -81,7 +90,7 @@ const behaviour = (s: Station) => ({ wire: s.wire.map(w => ({ type: w.type, at: 
 
 it('the probe does not change what it measures: attached or not, the wire and the render-path notifications are the same', async () => {
   const measured = await measure(100)
-  const bare = await measure(100, new ResponsivenessProbe(), false)
+  const bare = await measure(100, 4, new ResponsivenessProbe(), false)
   expect(behaviour(measured.station)).toEqual(behaviour(bare.station))
   expect(measured.station.wire.length).toBeGreaterThan(30)
   // Control: the comparison can fail. A different link differs...
