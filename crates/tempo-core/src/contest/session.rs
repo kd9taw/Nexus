@@ -844,10 +844,22 @@ fn location_hints(
         .split(|c: char| !c.is_ascii_alphanumeric())
         .collect();
     let mut out: Vec<&'static str> = Vec::new();
-    for f in exchange.fields {
-        let super::FieldKind::Enum { domain } = f.kind else {
-            continue;
-        };
+    // ⚠️ **Every domain the slot can draw on, including a `OneOf`'s arms.** A QSO party's
+    // QTH is county-or-state-or-anything-else, so a walk that looked only at plain `Enum`
+    // slots found no universe at all there and the warning shipped with no suggestion —
+    // exactly where the mistake (a section typed into the state box) is most likely.
+    let domains = exchange.fields.iter().flat_map(|f| match f.kind {
+        super::FieldKind::Enum { domain } => vec![domain],
+        super::FieldKind::OneOf(arms) => arms
+            .iter()
+            .filter_map(|a| match a {
+                super::FieldKind::Enum { domain } => Some(*domain),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    });
+    for domain in domains {
         for (code, name) in domain.values {
             // A place name, without the call area the sponsor appends: "Ontario (VE3)".
             let place = name.split(" (").next().unwrap_or(name);

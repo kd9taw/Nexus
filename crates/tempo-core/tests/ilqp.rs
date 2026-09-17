@@ -437,6 +437,48 @@ fn the_claimed_score_carries_the_bonus_stations() {
         .contains("CLAIMED-SCORE: 2\n"));
 }
 
+/// ⭐ **An operator who typed a SECTION where this party wants a state is told which
+/// state to type** — the warning CQ WW RTTY shipped, reaching a QSO party for the first
+/// time.
+///
+/// The trigger is a W/VE callsign about to send the DX exchange: `EMA` is an ARRL section
+/// and not a state, so the role falls through to `dx` and the operator would send
+/// "EMA" as a country. The hint is read off the section table (`EMA` is "Eastern
+/// Massachusetts", so `MA`), never guessed.
+#[test]
+fn a_section_typed_where_a_state_belongs_is_warned_about_with_the_state_to_type() {
+    let s = select(&StationData {
+        mycall: "W1ABC".to_string(),
+        ..station("EMA", "")
+    });
+    assert_eq!(
+        s.role().id,
+        "dx",
+        "a section is in neither exchange universe"
+    );
+    let w = s
+        .location_warning
+        .as_ref()
+        .expect("a W/VE call about to send the DX exchange");
+    assert_eq!(w.typed, "EMA");
+    assert_eq!(w.hints, vec!["MA"], "Eastern Massachusetts is MA here");
+    // CONTROL: the same operator with a state this party lists gets the w_ve role and no
+    // warning at all.
+    let ok = select(&StationData {
+        mycall: "W1ABC".to_string(),
+        ..station("MA", "")
+    });
+    assert_eq!(ok.role().id, "w_ve");
+    assert!(ok.location_warning.is_none());
+    // …and a real DX entrant is never warned: they are not a W/VE station at all.
+    let dx = select(&StationData {
+        mycall: "DL1AAA".to_string(),
+        ..station("GERMANY", "")
+    });
+    assert_eq!(dx.role().id, "dx");
+    assert!(dx.location_warning.is_none());
+}
+
 /// ⭐ **FT8 and FT4 earn nothing** — *"Due to the complexity of creating a log entry
 /// conforming to ILQP log submission rules, FT4 and FT8 contacts will receive no contact
 /// credit. Other digital modes are encouraged."* — and the advisory band list is the
