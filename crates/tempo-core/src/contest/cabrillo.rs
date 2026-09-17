@@ -109,6 +109,17 @@ pub struct CabrilloHeaders {
     pub email: String,
     /// `NAME` — the entrant's name. Optional: `""` writes no line.
     pub name: String,
+    /// ⭐ **`IL-COUNTY`** — the Illinois QSO Party's own header, the NAME of the county
+    /// an Illinois entry was operated from (`Adams`), beside QSO lines that carry its
+    /// code. Optional: `""` writes no line, which is what every other contest and every
+    /// entry from outside Illinois means.
+    ///
+    /// ⚠️ **Not a Cabrillo 3.0 header, and there is no generic mechanism for one.** A
+    /// sponsor-named header earns a field here, a name in
+    /// [`fd_rules::CABRILLO_OPTIONAL_HEADERS`](crate::fd_rules) and a source this build
+    /// can actually fill — the three together being what stops "extra headers" from
+    /// becoming a place to put anything.
+    pub il_county: String,
     /// `X-` headers, emitted last in the order given. Cabrillo-legal and ignored by
     /// robots; `X-NEXUS-RULES-YEAR` says which rules data scored the entry.
     pub x_headers: Vec<(String, String)>,
@@ -141,6 +152,7 @@ impl CabrilloHeaders {
         s.push_str(&format!("CREATED-BY: {}\n", self.created_by));
         optional(&mut s, "EMAIL", &self.email);
         optional(&mut s, "NAME", &self.name);
+        optional(&mut s, "IL-COUNTY", &self.il_county);
         for (tag, val) in &self.x_headers {
             s.push_str(&format!("{tag}: {val}\n"));
         }
@@ -595,6 +607,50 @@ mod tests {
             bare.render(),
             "START-OF-LOG: 3.0\n\
              CONTEST: CQ-WW-RTTY\n\
+             CALLSIGN: W9XYZ\n\
+             CATEGORY-OPERATOR: SINGLE-OP\n\
+             LOCATION: IL\n\
+             CREATED-BY: Nexus\n"
+        );
+    }
+
+    /// ⭐ **A SPONSOR'S OWN HEADER, and only for the entrant it is about.**
+    ///
+    /// ILQP's Sample_Excel_Log (w9awe.org, read 2026-09-17) heads an Illinois entry
+    /// `IL-COUNTY: ADAMS` — the county's NAME, beside QSO lines carrying its code. It
+    /// is not a Cabrillo 3.0 header and no other contest writes it, so it renders only
+    /// when the ruleset asked for it and the entrant has one.
+    #[test]
+    fn a_sponsors_own_header_renders_beside_the_standard_ones() {
+        let il = CabrilloHeaders {
+            contest: "ILLINOIS QSO PARTY".into(),
+            callsign: "W9XYZ".into(),
+            location: "IL".into(),
+            created_by: "Nexus".into(),
+            il_county: "Adams".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            il.render(),
+            "START-OF-LOG: 3.0\n\
+             CONTEST: ILLINOIS QSO PARTY\n\
+             CALLSIGN: W9XYZ\n\
+             CATEGORY-OPERATOR: SINGLE-OP\n\
+             LOCATION: IL\n\
+             CREATED-BY: Nexus\n\
+             IL-COUNTY: Adams\n"
+        );
+        // CONTROL: the same entry from outside Illinois — no county, no line, and the
+        // block is byte-identical to what every other contest writes.
+        let outside = CabrilloHeaders {
+            il_county: String::new(),
+            ..il.clone()
+        };
+        assert!(!outside.render().contains("IL-COUNTY"));
+        assert_eq!(
+            outside.render(),
+            "START-OF-LOG: 3.0\n\
+             CONTEST: ILLINOIS QSO PARTY\n\
              CALLSIGN: W9XYZ\n\
              CATEGORY-OPERATOR: SINGLE-OP\n\
              LOCATION: IL\n\

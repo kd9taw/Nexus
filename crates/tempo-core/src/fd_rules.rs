@@ -909,6 +909,12 @@ const CABRILLO_OPTIONAL_HEADERS: &[&str] = &[
     "CATEGORY-POWER",
     "CLAIMED-SCORE",
     "EMAIL",
+    // ⭐ A SPONSOR'S OWN header, not a Cabrillo 3.0 one: the Illinois QSO Party's sample
+    // log heads an Illinois entry `IL-COUNTY: ADAMS`, the county's NAME beside QSO lines
+    // carrying its code. It is here rather than behind a generic "extra headers" key
+    // because this build can SOURCE it — a header nothing can fill is a header that
+    // ships blank.
+    "IL-COUNTY",
     "NAME",
 ];
 

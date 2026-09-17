@@ -1087,6 +1087,26 @@ impl FieldDayLog {
             .then(|| rs.scoring.score(self.score_rows(), 1).3),
             email: declared("EMAIL", entrant.email.trim().to_string()),
             name: declared("NAME", entrant.name.trim().to_string()),
+            // ⭐ THE SPONSOR'S OWN HEADER, for the entrant it is about. ILQP's sample
+            // log heads an Illinois entry `IL-COUNTY: ADAMS` — the NAME of the county,
+            // beside QSO lines carrying its code — and an entry from anywhere else has
+            // no Illinois county to name. The value is read back off the exchange this
+            // session is COMPOSING (the first slot whose copied value matched a domain,
+            // which is the in-state role's own location slot), so the header and the
+            // QSO lines cannot disagree about where the entry ran from.
+            il_county: declared(
+                "IL-COUNTY",
+                (self.session.role().id == "in_state")
+                    .then(|| {
+                        self.session
+                            .my_exchange
+                            .iter()
+                            .find_map(|v| spec.name_of(v))
+                    })
+                    .flatten()
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
         };
         let mut s = headers.render();
         for q in &self.qsos {
