@@ -322,6 +322,37 @@ fn a_wae_entity_counts_and_a_blank_or_dx_qth_does_not() {
     );
 }
 
+/// ⭐ **A QTH the contest does not list logs, and counts for nothing.** IV.C.3's QTH
+/// multiplier is *"each continental US state (48), The District of Columbia and each
+/// Canadian call area (14)"* — a mistyped or out-of-list value (an ARRL section, a
+/// Canada Post spelling the sponsor does not use) is not one of them. The contact is
+/// still kept: what was copied is a fact, and the operator may fix the row.
+#[test]
+fn an_invalid_received_qth_logs_but_counts_no_multiplier() {
+    let mut log = FieldDayLog::new("DL9XYZ", select(&station("DL9XYZ", "14", "")), "20m");
+    let ema = [("RST", "599"), ("ZN", "5"), ("QTH", "EMA")];
+    assert!(
+        work(&mut log, "20m", "W1ABC", &ema, 1),
+        "a section still logs"
+    );
+    let xx = [("RST", "599"), ("ZN", "5"), ("QTH", "XX")];
+    assert!(work(&mut log, "20m", "W1DEF", &xx, 2), "a typo still logs");
+    assert_eq!(log.qso_count(), 2);
+    let mults = |log: &FieldDayLog| log.ruleset().scoring.mult_counts(log.score_rows());
+    assert_eq!(mults(&log)[2], ("qth", 0), "neither is a W/VE QTH");
+    // The rest of the row still scores: points and the zone.
+    assert_eq!(mults(&log)[0], ("zone", 1));
+    // POSITIVE CONTROL: a listed QTH on the same log counts.
+    let ma = [("RST", "599"), ("ZN", "5"), ("QTH", "MA")];
+    assert!(work(&mut log, "20m", "K1ABC", &ma, 3));
+    assert_eq!(mults(&log)[2], ("qth", 1));
+    // …and survives the journal: a restored log counts exactly what the live one did.
+    let mut restored = FieldDayLog::new("DL9XYZ", select(&station("DL9XYZ", "14", "")), "20m");
+    restored.merge_adif(&log.adif(), 0);
+    assert_eq!(restored.qso_count(), 3);
+    assert_eq!(mults(&restored)[2], ("qth", 1));
+}
+
 // ---------------------------------------------------------------------------
 // The Cabrillo log
 // ---------------------------------------------------------------------------
