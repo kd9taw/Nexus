@@ -7,6 +7,7 @@ import { RemoteCollectionsContext } from './collections'
 import { CONFIRMATIONS_COMMAND, INSIGHTS_COMMAND, type InsightCollection } from './application-query-protocol'
 import { parseInsights, type Insights } from './insights'
 import { parseConfirmations, type Confirmations } from './confirmations'
+import { RemoteResponsiveness } from './RemoteResponsiveness'
 
 export function RemoteInsights({ kind, showGamification = true }: { kind: InsightCollection; showGamification?: boolean }) {
   const source = useContext(RemoteCollectionsContext)
@@ -64,5 +65,6 @@ export function RemoteInsights({ kind, showGamification = true }: { kind: Insigh
     </div>
     {value?.kind === 'awards' && <AwardsJourney showGamification={showGamification} observation={value.awards} diagnostics={report} />}
     {value?.kind === 'statistics' && <StatsView observation={value} />}
+    {kind === 'awards' && <RemoteResponsiveness />}
   </div>
 }

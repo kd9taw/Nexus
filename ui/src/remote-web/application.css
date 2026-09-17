@@ -69,6 +69,30 @@
 }
 .remote-insights-status button { min-height: 48px; }
 .remote-insights-status span { flex: 1 1 20em; }
+/* The responsiveness check: a content-height strip under the award summary. Its report scrolls
+   inside a bounded box so a long copy never pushes the summary off the screen. */
+.remote-responsiveness {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 0.5em;
+  padding: 0.5em 1em;
+  min-width: 0;
+}
+.remote-responsiveness-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5em 1em; }
+.remote-responsiveness-row h3 { margin: 0; flex: 1 1 10em; }
+.remote-responsiveness-row button { min-height: 48px; }
+.remote-responsiveness p { margin: 0; }
+.remote-responsiveness-report {
+  width: 100%;
+  box-sizing: border-box;
+  max-height: min(16em, calc(0.4 * var(--vh-eff, 100vh)));
+  resize: none;
+  font: inherit;
+  font-family: ui-monospace, monospace;
+  white-space: pre;
+  overflow: auto;
+}
 .remote-dxpeditions-view > .dxped-view { flex: 1 1 auto; min-height: 0; overflow: auto; }
 /* The board owns scrolling. Its calendar is an existing .panel, whose generic
    flex shrink/hidden overflow would otherwise collapse it below the cards. */
