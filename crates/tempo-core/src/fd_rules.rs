@@ -236,6 +236,11 @@ pub struct FdRuleset {
     /// ruleset names none. Nothing scores or dupes off it: a contact on another band is
     /// logged, and the entry strip says the contest does not use that band.
     pub bands: &'static [&'static str],
+    /// Other spellings of a W/VE location the operator may type into the state field,
+    /// read as the code a role lists: `(typed, listed)`. CQ WW RTTY's exchange writes
+    /// `PEI` and `NWT`, and Canada Post (and the sponsor's LOCATION list) write `PE` and
+    /// `NT`. Empty for every contest that names none.
+    pub location_aliases: &'static [(&'static str, &'static str)],
 }
 
 impl FdRuleset {
@@ -778,6 +783,12 @@ struct RulesetSpec {
     /// contest before it means, and nothing scores off it.
     #[serde(default)]
     bands: Vec<String>,
+    /// Typed spelling → the listed location code it means (`{"PE": "PEI"}`); `{}` = none.
+    /// `#[serde(default)]` for the `score_note_key` reason: absent is what every contest
+    /// before it means. A map that is present is validated: it may only point at a code a
+    /// role lists, and may not re-point one.
+    #[serde(default)]
+    location_aliases: std::collections::BTreeMap<String, String>,
 }
 
 /// A ruleset's Cabrillo template in the rules file. Every part defaults to "what the
@@ -1805,6 +1816,44 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 }
             }
         }
+        // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
+        // lists — otherwise it silently selects nothing — and it must not re-point a code
+        // that is already listed, which would move an operator out of the role their own
+        // code puts them in.
+        {
+            let listed: Vec<&str> = x
+                .roles
+                .iter()
+                .filter_map(|role| match &role.selector {
+                    SelectorSpec::MyLocationIn { locations } => Some(locations),
+                    _ => None,
+                })
+                .flatten()
+                .map(String::as_str)
+                .collect();
+            for (from, to) in &r.location_aliases {
+                // The state field is read upper-cased, so a key that is not could never match.
+                if from.is_empty()
+                    || !from
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                {
+                    return Err(format!(
+                        "{tag}: location alias {from:?} is not an uppercase code"
+                    ));
+                }
+                if listed.contains(&from.as_str()) {
+                    return Err(format!(
+                        "{tag}: location alias {from:?} is itself a listed location"
+                    ));
+                }
+                if !listed.contains(&to.as_str()) {
+                    return Err(format!(
+                        "{tag}: location alias {from:?} -> {to:?} names a location no role lists"
+                    ));
+                }
+            }
+        }
         let mut mult_ids: Vec<&str> = Vec::new();
         for m in &r.scoring.multipliers {
             if m.id.is_empty() {
@@ -2313,6 +2362,13 @@ fn build(spec: FileSpec) -> RulesTable {
                         .into_boxed_slice(),
                 ),
                 bands: leak_keys(r.bands),
+                location_aliases: Box::leak(
+                    r.location_aliases
+                        .into_iter()
+                        .map(|(from, to)| (leak_str(from), leak_str(to)))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
                 window: WindowRule {
                     month: r.window.month,
                     weekend: match r.window.weekend.as_str() {
@@ -4328,6 +4384,11 @@ mod tests {
                 x.event
             );
             assert_eq!(x.bands, y.bands, "{}: bands", x.event);
+            assert_eq!(
+                x.location_aliases, y.location_aliases,
+                "{}: location aliases",
+                x.event
+            );
             assert_eq!(
                 x.domains.len(),
                 y.domains.len(),

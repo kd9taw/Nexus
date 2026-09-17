@@ -21,7 +21,9 @@ use tempo_core::fieldday::FieldDayLog;
 
 /// The stub country file: prefix → (entity, continent), longest prefix wins. Entity
 /// spellings are cty.dat's own; Sicily is a WAE entity (`*IT9`) and a country of its own.
+/// src-tauri pins the real file's spellings for the entities a warning keys on.
 const TABLE: &[(&str, &str, &str)] = &[
+    ("VP2V", "British Virgin Islands", "NA"),
     ("KL7", "Alaska", "NA"),
     ("KH6", "Hawaii", "OC"),
     ("IT9", "Sicily", "EU"),
@@ -38,6 +40,14 @@ const TABLE: &[(&str, &str, &str)] = &[
 
 fn place(call: &str) -> Option<CallLocation> {
     let up = call.trim().to_ascii_uppercase();
+    // The country file's portable rule, as `propagation::dxcc::base_call` applies it: an
+    // operating suffix keeps the base call, otherwise the shorter side names the entity
+    // (`W1XYZ/VP2V` is in the British Virgin Islands).
+    let up = match up.split_once('/') {
+        Some((a, b)) if matches!(b, "P" | "M" | "MM") || a.len() <= b.len() => a.to_string(),
+        Some((_, b)) => b.to_string(),
+        None => up,
+    };
     let mut best: Option<(usize, &'static str, &'static str)> = None;
     for (p, entity, cont) in TABLE {
         if up.starts_with(p) && best.is_none_or(|(n, _, _)| p.len() > n) {
@@ -184,6 +194,75 @@ fn the_window_is_the_last_full_weekend_of_september() {
         assert_eq!(w.start_unix, start, "{year} starts 0000Z Saturday");
         assert_eq!(w.end_unix - w.start_unix, 48 * 3600, "{year} runs 48 hours");
     }
+}
+
+/// ⭐ **A station whose own call is in the USA or Canada, with no listed QTH, is WARNED
+/// before it sends the DX exchange — and never refused.** III: *"Stations in the
+/// continental USA and Canada also send QTH"*. The role is chosen by where the operator
+/// says they are, so a blank or unlisted state lands in the dx role and sends no QTH;
+/// the call is the only evidence that this is probably a mistake, and it is not proof —
+/// a US call operating from abroad, or maritime mobile, really is DX.
+#[test]
+fn a_us_or_canadian_call_without_a_listed_qth_is_warned_not_refused() {
+    let warning = |call: &str, qth: &str| select(&station(call, "5", qth)).location_warning;
+    let blank = warning("W9XYZ", "").expect("a US call with no state is warned");
+    assert_eq!(blank.typed, "");
+    assert!(blank.hints.is_empty());
+    // A warning, not a refusal: the session builds, in the dx role.
+    assert_eq!(select(&station("W9XYZ", "4", "")).role().id, "dx");
+    assert!(warning("VE3XYZ", "").is_some(), "Canada too");
+    // CONTROLS. A listed QTH. Alaska and Hawaii, which are separate DXCC entities and
+    // countries only (IV.C.3). A US call operating from another entity. A declared DX.
+    assert_eq!(warning("W9XYZ", "IL"), None);
+    assert_eq!(warning("KH6XYZ", ""), None);
+    assert_eq!(warning("KL7XYZ", ""), None);
+    assert_eq!(warning("W1XYZ/VP2V", ""), None);
+    let declared = StationData {
+        dxcc: true,
+        ..station("W9XYZ", "4", "DX")
+    };
+    assert_eq!(select(&declared).location_warning, None);
+    // A contest with no W/VE role has nothing to warn about.
+    resolver();
+    let cw = ruleset_by_id("cqww_cw", CURRENT_RULES_YEAR).expect("shipped");
+    let session = ContestSession::for_ruleset(cw, &station("W9XYZ", "4", "")).expect("builds");
+    assert_eq!(session.location_warning, None);
+}
+
+/// An unlisted value is named, with the QTH it most likely means when its ARRL/RAC section
+/// name says so — and never a guess: NL is Newfoundland AND Labrador, two call areas.
+#[test]
+fn an_unlisted_value_gets_a_hint_and_an_ambiguous_one_is_not_guessed() {
+    let hints = |call: &str, qth: &str| {
+        let w = select(&station(call, "5", qth))
+            .location_warning
+            .unwrap_or_else(|| panic!("{qth} is warned"));
+        assert_eq!(w.typed, qth);
+        w.hints
+    };
+    assert_eq!(hints("W1XYZ", "EMA"), vec!["MA"]);
+    assert_eq!(hints("K2XYZ", "WNY"), vec!["NY"]);
+    assert_eq!(hints("VO1XYZ", "NL"), vec!["NF", "LB"]);
+    assert_eq!(hints("W3XYZ", "MDC"), vec!["DC", "MD"]);
+    assert_eq!(hints("VE3XYZ", "ONS"), vec!["ON"]);
+    // A section whose name does not say where it is, and a typo, get no hint.
+    assert!(hints("W6XYZ", "SV").is_empty());
+    assert!(hints("W9XYZ", "ZZ").is_empty());
+}
+
+/// ⭐ **The Canada Post spellings locations.htm uses are the exchange's own codes:** `PE`
+/// is `PEI` and `NT` is `NWT`, so an operator who types either sends the sponsor's code.
+/// `NL` is deliberately not mapped — it is two call areas.
+#[test]
+fn the_postal_spellings_pe_and_nt_are_the_exchanges_pei_and_nwt() {
+    let pe = select(&station("VY2XYZ", "5", "PE"));
+    assert_eq!(pe.role().id, "w_ve");
+    assert_eq!(pe.field("QTH"), "PEI");
+    assert_eq!(pe.location_warning, None);
+    let nt = select(&station("VE8XYZ", "1", "nt"));
+    assert_eq!(nt.role().id, "w_ve");
+    assert_eq!(nt.field("QTH"), "NWT");
+    assert_eq!(select(&station("VO1XYZ", "5", "NL")).role().id, "dx");
 }
 
 // ---------------------------------------------------------------------------
