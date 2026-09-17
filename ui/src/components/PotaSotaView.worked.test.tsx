@@ -26,6 +26,10 @@ vi.mock('../api', () => ({
 }))
 
 import { PotaSotaView } from './PotaSotaView'
+// The REAL toast bus and its host — so "no toast" is what the operator would not see, rather
+// than a spy that `withErrorToast` never reaches (it calls its own module-local `pushToast`).
+import { Toasts } from './Toasts'
+import { dismissToast, subscribeToasts } from '../toast'
 
 const spot = (activator: string, reference: string, over: Partial<OtaSpot> = {}): OtaSpot => ({
   program: 'POTA',
@@ -44,10 +48,21 @@ const spot = (activator: string, reference: string, over: Partial<OtaSpot> = {})
 })
 const snap = (logTick: number) => ({ hunt: null, radio: { dialMhz: 14.285 }, logTick }) as unknown as AppSnapshot
 
-beforeEach(() => api.getOtaSpots.mockReset())
+beforeEach(() => {
+  // BRACES, and they are load-bearing: a concise arrow returns `mockReset()`'s value — the mock
+  // itself — and vitest calls a hook's return as its teardown, so the mock was being invoked with
+  // no arguments after every test. Harmless while it resolved; an unhandled rejection the moment
+  // one test made it reject.
+  api.getOtaSpots.mockReset()
+})
 afterEach(() => {
   cleanup()
   localStorage.clear()
+  // The toast bus is module state, so one test's toast would otherwise be the next test's
+  // "there is a toast on screen". Drain it.
+  let live: { id: number }[] = []
+  subscribeToasts((all) => { live = all })()
+  for (const toast of live) dismissToast(toast.id)
 })
 
 describe('Hide worked today', () => {
@@ -104,13 +119,29 @@ describe('Hide worked today', () => {
     expect(api.getOtaSpots, 'a log change must never fetch pota.app').not.toHaveBeenCalledWith('POTA')
   })
 
-  it('keeps what it shows when nothing is cached to re-read', async () => {
+  it('keeps what it shows when nothing is cached, and says nothing about it', async () => {
+    // A cold cache is not an operator's problem: the next poll fetches anyway, so the board keeps
+    // its rows and raises nothing. An error toast on a log change would be pure noise, and the
+    // log changes several times per contact.
     api.getOtaSpots.mockResolvedValueOnce([spot('K1ABC', 'US-0001')])
-    const view = render(<PotaSotaView snap={snap(1)} />)
+    const view = render(<><PotaSotaView snap={snap(1)} /><Toasts /></>)
     await screen.findByText('K1ABC')
     api.getOtaSpots.mockRejectedValueOnce('No POTA spots cached yet.')
-    view.rerender(<PotaSotaView snap={snap(2)} />)
+    view.rerender(<><PotaSotaView snap={snap(2)} /><Toasts /></>)
     await waitFor(() => expect(api.getOtaSpots).toHaveBeenCalledWith('POTA', true))
-    expect(screen.getByText('K1ABC')).toBeTruthy()
+    expect(screen.getByText('K1ABC'), 'the board keeps the rows it had').toBeTruthy()
+    expect(document.querySelectorAll('.ui-toast')).toHaveLength(0)
+  })
+
+  // POSITIVE CONTROL for the silence above, and it is the whole of what makes that assertion
+  // mean anything: a FETCH that fails is a different event — the operator asked for fresh spots
+  // and did not get them — and it still says so, through the same real toast bus and host.
+  it('a failed FETCH still says so', async () => {
+    api.getOtaSpots.mockImplementation(async () => { throw new Error('offline') })
+    render(<><PotaSotaView snap={snap(1)} /><Toasts /></>)
+    await waitFor(() => expect(document.querySelectorAll('.ui-toast').length).toBeGreaterThan(0))
+    expect(document.querySelector('.ui-toast-msg')?.textContent).toContain(
+      t('ota.spots.failed', { program: 'POTA' }),
+    )
   })
 })
