@@ -509,3 +509,30 @@ it('a confirmed command shows refresh progress, but a failed refresh and disconn
   act(() => h.client.disconnected()); await tick()
   expect(ui.container.textContent).toContain('Station control disconnected')
 })
+
+// Since batch 1 the controls stay lit while a command confirms, so the banner is the ONLY place the
+// page says a command is out — and the only thing a test can wait on, the enabled state having
+// stopped being evidence that the last command landed.
+it('marks the confirming window in the banner, and an unknown outcome is not one', async () => {
+  const h = fixture(), ui = render(<LoggingAuthority client={h.client}/>)
+  const banner = () => ui.container.querySelector('.remote-logging-authority')!
+  expect(banner().hasAttribute('data-confirming')).toBe(false)
+  h.tuning.nudge(100, h.source()); await tick(120)
+  expect(h.sent.filter(w => w.request.type === 'stationControl'), 'a command really is out').toHaveLength(1)
+  expect(banner().getAttribute('data-confirming')).toBe('true')
+  act(() => h.finish()); await tick()
+  expect(banner().hasAttribute('data-confirming')).toBe(false)
+  ui.unmount()
+
+  // An outcome the browser could not resolve keeps its receipt, but it is a question for the
+  // operator rather than a confirming window: useStationHeld greys the controls for it, and the
+  // banner must not say the opposite. Its own fixture, because the command above spent this one's
+  // window and a second nudge would never leave.
+  const u = fixture(), other = render(<LoggingAuthority client={u.client}/>)
+  const held = () => other.container.querySelector('.remote-logging-authority')!
+  u.tuning.nudge(100, u.source()); await tick(120)
+  expect(held().getAttribute('data-confirming')).toBe('true')
+  act(() => u.finish('unknown')); await tick()
+  expect(u.client.getSnapshot().controlPending, 'the receipt is held for the operator').not.toBeNull()
+  expect(held().hasAttribute('data-confirming')).toBe(false)
+})
