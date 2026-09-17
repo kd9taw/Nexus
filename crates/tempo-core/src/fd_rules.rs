@@ -3063,6 +3063,58 @@ mod tests {
         assert_ne!(short, domain.values.to_vec());
     }
 
+    /// ⭐ **The Illinois QSO Party's two universes, mirrored into the UI and guarded.**
+    ///
+    /// The strip answers three questions on every keystroke — is this a legal county, what
+    /// county is the operator typing the NAME of, and which cells does the board have —
+    /// and all three must cost no IPC, so the tables live in TypeScript as well. A
+    /// mirror that drifts is a county the operator cannot type or a suggestion that fills
+    /// in the wrong code, so both directions are compared here: every code, every name
+    /// and the order.
+    #[test]
+    fn the_typescript_ilqp_mirror_matches_the_seed_domains() {
+        let ts_src = include_str!("../../../ui/src/features/ilqpQth.ts");
+        let ts: Vec<(&str, &str)> = ts_src
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+            .filter_map(|l| Some((ts_str_field(l, "code")?, ts_str_field(l, "name")?)))
+            .collect();
+        // A parser that found nothing would pass the comparisons below it.
+        assert!(
+            ts.len() > 150,
+            "parsed only {} rows out of ilqpQth.ts — the parser is broken, not the mirror",
+            ts.len()
+        );
+        let rs = ruleset_by_id("ilqp", CURRENT_RULES_YEAR).expect("ilqp is seeded");
+        let domain = |id: &str| {
+            rs.domains
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap_or_else(|| panic!("{id} is declared"))
+                .values
+                .to_vec()
+        };
+        let counties = domain("il_counties");
+        let mults = domain("il_mults");
+        assert_eq!(counties.len(), 102, "Illinois' whole county chart");
+        assert_eq!(
+            mults.len(),
+            66,
+            "49 states + DC + the Canadian codes, both spellings"
+        );
+        let want: Vec<(&str, &str)> = counties.iter().chain(&mults).copied().collect();
+        assert_eq!(
+            ts, want,
+            "ui/src/features/ilqpQth.ts drifted from the seed's ILQP domains \
+             (code, name and order)"
+        );
+        // POSITIVE CONTROL: a mirror missing one county is not equal.
+        let mut short = ts.clone();
+        short.retain(|(c, _)| *c != "COOK");
+        assert_ne!(short, want);
+    }
+
     /// ⭐ **Every contest the bundled rules table carries is on the picker's menu.**
     ///
     /// The picker (`CONTESTS` in ui/src/fdEvent.ts) is a hand-written list, because a ruleset

@@ -134,6 +134,14 @@ impl Engine {
             // next transmission, never a logged row (those carry `mex`).
             sent_exchange: self.contest_sent_exchange().unwrap_or_default(),
             bands: rs.bands.iter().map(|b| b.to_string()).collect(),
+            // The dupe rule's mode grouping, so the strip's badge and the engine's
+            // refusal answer the same question.
+            dupe_mode_groups: rs
+                .dupe_rule
+                .mode_class_groups
+                .iter()
+                .map(|g| g.iter().map(|m| m.to_string()).collect())
+                .collect(),
             location_warning: log
                 .session
                 .location_warning

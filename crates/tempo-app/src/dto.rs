@@ -1502,6 +1502,17 @@ pub struct FieldDayStatus {
     /// ruleset names none, which is every contest before CQ WW RTTY.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bands: Vec<String>,
+    /// ⭐ **Mode classes this contest's dupe rule counts as ONE mode** — ILQP's *"once
+    /// per band and mode (phone and CW/digital)"*, `[["CW", "DIG"]]`.
+    ///
+    /// The strip's while-typing DUPE badge compares the mode it is about to log against
+    /// the log's rows, and without this it would compare `DIG` with `CW` and show no
+    /// badge for a contact the engine is about to refuse. Empty for every contest that
+    /// counts its three classes separately, which is every one but this. Mirrors
+    /// [`DupeRule::mode_class_groups`](tempo_core::contest::DupeRule::mode_class_groups);
+    /// the engine remains the authority at log time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dupe_mode_groups: Vec<Vec<String>>,
     /// ⭐ **This station's call is in the USA or Canada, and it is about to send the DX
     /// exchange** (no QTH) because the contest state it was given is blank or not listed —
     /// a WARNING the strip shows, never a refusal. `None` for every other session. Data,
@@ -1601,6 +1612,21 @@ pub struct FdFieldDto {
     /// buyer. The UI keeps the value sets, keyed by this id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// ⭐ **Every domain this slot can draw a value from**, in the order the rules file
+    /// declares them: one entry for an `enum`, one per `enum` ARM of a `oneOf`, empty for
+    /// a slot with no domain at all.
+    ///
+    /// [`domain`](Self::domain) above stays the VERDICT and a `oneOf` has none — its
+    /// free-text arm is how a sponsor says "or anything else", so membership cannot
+    /// refuse a value there. This is what the strip SUGGESTS from, which is a different
+    /// question: an Illinois county typed as `Cook` is a legal value the operator has
+    /// not finished typing, and the strip can only offer `COOK` if it knows which
+    /// universes the slot draws on.
+    ///
+    /// ⚠️ The VALUES still do not ride here, for the reason `domain` gives: the UI keeps
+    /// the tables, keyed by these ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domains: Vec<String>,
     /// For a `number` slot, its inclusive bounds (a CQ zone: 1 and 40) — what lets the
     /// strip refuse `41` while it is typed. `None` for every other kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1632,6 +1658,17 @@ impl FdFieldDto {
             domain: match f.kind {
                 FieldKind::Enum { domain } => Some(domain.id.to_string()),
                 _ => None,
+            },
+            domains: match f.kind {
+                FieldKind::Enum { domain } => vec![domain.id.to_string()],
+                FieldKind::OneOf(arms) => arms
+                    .iter()
+                    .filter_map(|a| match a {
+                        FieldKind::Enum { domain } => Some(domain.id.to_string()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
             },
             min,
             max,

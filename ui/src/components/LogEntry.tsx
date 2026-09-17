@@ -16,7 +16,12 @@ import type {
 import { t } from '../i18n'
 import { contestIMoved, contestLogManual, contestZoneHint, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
-import { inDomain } from '../features/contestDomains'
+import {
+  domainSuggestions,
+  inDomain,
+  resolveDomainValue,
+  type DomainValue,
+} from '../features/contestDomains'
 import { composingSlot } from '../features/contestExchange'
 import { slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
@@ -95,8 +100,22 @@ function fdVerdict(spec: ContestFieldSpec, raw: string): string {
  *  stations only, and a DX contact has none to type. A value that IS typed still has to
  *  be legal. A `number` slot carrying its bounds (a CQ zone, 1–40) must be a whole number
  *  inside them. */
+/** ⭐ **What a box actually means** — the code, whether the operator typed the code or the
+ *  NAME beside it in the contest's own list ("Cook" → COOK, "St. Clair" → SCLA).
+ *
+ *  A county exchange is four letters an operator has to know and the name is the part they
+ *  do know, so both are accepted; a name that could mean several counties resolves to
+ *  nothing and the box keeps exactly what was typed. It is ONE function because the
+ *  verdict below, the suggestion list and the value that is logged must agree — a strip
+ *  that shows a value good and logs a different one is the screen lying about what was
+ *  written. */
+function fdSlotValue(spec: ContestFieldSpec, raw: string): string {
+  const v = raw.trim().toUpperCase()
+  return resolveDomainValue(spec.domains, v) ?? v
+}
+
 function fdFieldOk(spec: ContestFieldSpec, raw: string): boolean {
-  const v = raw.trim()
+  const v = fdSlotValue(spec, raw)
   if (v === '') return !spec.required
   if (spec.kind === 'enum') return inDomain(spec.domain, v)
   if (spec.kind === 'number' && spec.min != null && spec.max != null) {
@@ -464,6 +483,24 @@ export function LogEntry({
   }))
   const setFdField = (key: string, v: string) =>
     setFdFields((prev) => ({ ...prev, [key]: v.toUpperCase() }))
+  // ⭐ THE EXCHANGE TYPE-AHEAD — which box is open and what it is offering. One entry,
+  // not one per slot: only the box being typed in shows a list, and a stale list under
+  // another box would be a menu of the wrong universe.
+  const [fdHits, setFdHits] = useState<{ key: string; values: DomainValue[] }>({
+    key: '',
+    values: [],
+  })
+  const closeFdHits = () => setFdHits((h) => (h.key === '' ? h : { key: '', values: [] }))
+  /** Commit a box: a typed NAME becomes the code that goes on the air, and the list
+   *  closes. Called where the operator LEAVES the box (space, tab, blur) rather than on
+   *  every keystroke — resolving "CO" to Coles while somebody is still typing "COOK"
+   *  would fight the fingers. */
+  const commitFdField = (f: ContestFieldSpec) => {
+    const raw = fdValue(f)
+    const code = fdSlotValue(f, raw)
+    if (code !== raw.trim().toUpperCase()) setFdField(f.key, code)
+    closeFdHits()
+  }
   // What a box holds: what was typed or filled, else — for a signal report nobody has
   // touched — the default report. A box is empty only because somebody emptied it, so the
   // report is there from the first contact however late the session's slots arrive.
@@ -1057,7 +1094,9 @@ export function LogEntry({
       // and CQP receives a serial + QTH, so the first two slots of the wire meant a
       // different thing per contest and the UI would have had to know which.
       const ex = fdReceives.map(
-        (f) => [f.key, fdValue(f).trim().toUpperCase()] as [string, string],
+        // The RESOLVED value, so a county typed by name reaches the log as its code —
+        // the same function the verdict above used to admit it.
+        (f) => [f.key, fdSlotValue(f, fdValue(f))] as [string, string],
       )
       const fmode = fdMode ?? 'PH'
       // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
@@ -1238,6 +1277,13 @@ export function LogEntry({
   // and the host keeps both rows.
   const fdTypedCall = logCall.trim().toUpperCase()
   const fdModeClass = fdMode ?? 'PH'
+  // ⭐ MODE CLASSES THIS CONTEST COUNTS AS ONE. ILQP works a station "once per band and
+  // mode (phone and CW/digital)", so CW and RTTY are one mode there and three separate
+  // classes everywhere else. Folding here is what keeps the badge and the engine's
+  // refusal asking the same question — without it the operator calls a station the log
+  // is about to reject, and finds out after the over.
+  const fdDupeMode = (m: string): string =>
+    (fieldDay?.dupeModeGroups ?? []).find((g) => g.includes(m))?.[0] ?? m
   const fdOwnDupe =
     fdActive &&
     fdTypedCall !== '' &&
@@ -1245,7 +1291,7 @@ export function LogEntry({
       (q) =>
         q.call.toUpperCase() === fdTypedCall &&
         q.band === snap.radio.band &&
-        (q.mode ?? '') === fdModeClass,
+        fdDupeMode(q.mode ?? '') === fdDupeMode(fdModeClass),
     )
   const fdClubDupe =
     fdActive &&
@@ -1418,20 +1464,52 @@ export function LogEntry({
                 }}
                 className="settings-input mono le-fd-input le-fd-input-code"
                 value={fdValue(f)}
-                onChange={(e) => setFdField(f.key, e.target.value)}
+                onChange={(e) => {
+                  setFdField(f.key, e.target.value)
+                  // The list is offered from every universe this slot draws on, which for
+                  // a QSO party's one QTH box is counties AND states.
+                  setFdHits({ key: f.key, values: domainSuggestions(f.domains, e.target.value) })
+                }}
                 onKeyDown={(e) => {
                   const next = fdReceives[i + 1]
+                  // SPACE leaves the box, so it is where a typed name becomes its code —
+                  // before the eye moves on, and before Enter can log anything.
+                  if (e.key === ' ' || e.code === 'Space' || e.key === 'Tab') commitFdField(f)
                   onExchangeSpace(
                     e,
                     next ? (fdBoxRefs.current[next.key] ?? null) : callInputRef.current,
                   )
                   onEnter(e)
                 }}
+                onBlur={() => {
+                  commitFdField(f)
+                  // …after any click on the list itself has been taken (mouse-down picks).
+                  window.setTimeout(closeFdHits, 150)
+                }}
                 placeholder={f === zoneSlot && zoneHint ? zoneHint : FD_FIELD_EXAMPLES[f.key]}
                 autoComplete="off"
                 spellCheck={false}
                 title={slotTitle(f.key)}
               />
+              {fdHits.key === f.key && fdHits.values.length > 0 && (
+                <ul className="le-fd-suggest">
+                  {fdHits.values.map((v) => (
+                    <li key={v.code}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault() // pick before the input's onBlur closes the list
+                          setFdField(f.key, v.code)
+                          closeFdHits()
+                        }}
+                      >
+                        <span className="mono le-fd-hit-code">{v.code}</span>
+                        <span className="le-fd-hit-name">{v.name}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </label>
           ))}
           {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`

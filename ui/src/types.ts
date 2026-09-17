@@ -2718,6 +2718,11 @@ export interface FieldDayStatus {
   /** The bands this contest runs on (`'20m'`) — advisory: the strip warns when the rig is on
    *  another band and never refuses the contact. Absent when the ruleset names none. */
   bands?: string[]
+  /** ⭐ Mode classes this contest's dupe rule counts as ONE mode — ILQP's "once per band and
+   *  mode (phone and CW/digital)" is `[['CW', 'DIG']]`. The DUPE badge folds the mode through
+   *  it so it asks the same question the engine will answer at log time. Absent for every
+   *  contest that counts its three classes separately. */
+  dupeModeGroups?: string[][]
   /** ⭐ This station's call is in the USA or Canada, and the contest state it was given would
    *  send the DX exchange (no QTH) — a WARNING the strip shows, never a refusal. Absent when it
    *  does not apply. Worded by `features/contestLocation.ts`. */
@@ -2744,6 +2749,11 @@ export interface ContestFieldSpec {
    *  The VALUES live in the UI (`features/contestDomains.ts`), because the verdict runs
    *  on every keystroke and must cost no IPC. */
   domain?: string
+  /** ⭐ Every domain this slot can draw a value from — one for an `enum`, one per `enum`
+   *  arm of a `oneOf`, absent for a slot with none. `domain` is the VERDICT (a `oneOf`
+   *  has none, because its free-text arm accepts what no domain holds); this is what the
+   *  strip SUGGESTS from, which is how "Cook" can offer the county code COOK. */
+  domains?: string[]
   /** For a `number` slot, its inclusive bounds — a CQ zone is 1–40. Absent for every other
    *  kind, and a number slot without them gets the non-blank test only. */
   min?: number
