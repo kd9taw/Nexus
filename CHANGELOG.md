@@ -74,8 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   background now pauses the feed the same way it already stops the audio and hands back station
   control, and bringing the tab back to the front picks it up again straight away. If you are
   watching a frequency on a second screen, **Keep watching** — next to Listen in the Remote
-  header — keeps it running; the choice is remembered for that station. The feed never pauses
-  while your browser can still stop a transmission, and coming back from a pause says so.
+  header, or in that header's settings panel on a narrow screen — keeps it running; the choice is
+  remembered for that station. The feed never pauses while your browser can still stop a
+  transmission, and coming back from a pause says so.
 - **A Remote browser that lost its station stopped hammering at it once a second.** When the
   connection dropped after the service had already answered, the browser retried exactly once
   every second, forever — a station that was off, or a shack PC mid-reboot, was called a
