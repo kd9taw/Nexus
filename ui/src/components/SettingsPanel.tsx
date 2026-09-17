@@ -9156,6 +9156,22 @@ export function SettingsPanel({
                     {t('settings.integrations.clusterNodes.hint')}
                   </span>
                 </div>
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.integrations.clusterSsid.label')}
+                  </span>
+                  <input disabled={remote}
+                    className="settings-input"
+                    value={form.clusterSsid ?? ''}
+                    onChange={(e) => update('clusterSsid', e.target.value)}
+                    placeholder="2"
+                    inputMode="numeric"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">
+                    {t('settings.integrations.clusterSsid.hint')}
+                  </span>
+                </label>
               </div>
             </div>
 

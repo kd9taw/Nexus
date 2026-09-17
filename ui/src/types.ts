@@ -2859,6 +2859,10 @@ export interface Settings {
   /** DX-cluster nodes (host:port) — the SSB/phone aggregator. We connect to ALL of them
    * and union their human spots; RBN CW/digital connect automatically. */
   clusterHosts: string[]
+  /** SSID appended to your callsign at cluster login ("2" -> W9XYZ-2), so a second Nexus
+   * (or another cluster client) on the same call does not knock this one off. 1-99, digits
+   * only; empty = log in with the bare call. */
+  clusterSsid?: string
   /** Connect to APRS-IS and plot internet-reported stations beside the ones your antenna hears.
    * Independent of the APRS RF decoder's arm state: the feed costs no RF resource and can key
    * nothing, and internet stations arriving while the RF side stays silent is the diagnostic

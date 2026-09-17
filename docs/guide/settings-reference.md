@@ -1380,6 +1380,14 @@ correctness — Nexus connects to all of them and merges what they report.*
   23 is blocked; W1NR phone-rich; W3LPL the skimmer-heavy firehose) or
   **+ Custom**. An added node connects on the next Save; removing one takes
   effect on restart.
+- **Cluster login SSID** — added to your callsign at login (`2` → `W9XYZ-2`).
+  A node allows one session per callsign and drops the older one, so a second
+  Nexus, or another cluster program on the same call, knocks this one off unless
+  each uses a different SSID. `1`–`99`, or leave it empty to log in with your
+  bare call (the default). Your spots still reach the network under your plain
+  callsign — relaying nodes strip the suffix. On a node that requires
+  registration, register the suffixed call there too, or it will not let you post
+  spots. Takes effect on the next Save.
 
 **Propagation**
 

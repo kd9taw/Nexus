@@ -1598,6 +1598,29 @@ pub struct Settings {
     /// in `load` and seeded from `cluster_host`; the Default impl seeds the community node.
     #[serde(default)]
     pub cluster_hosts: Vec<String>,
+    /// The SSID appended to `mycall` when logging into a cluster node ("2" → `W9XYZ-2`),
+    /// applied to every node and to the RBN feeds alike. `-1`…`-99`, digits only — the
+    /// node's range, enforced in [`tempo_net::cluster::login_call`], which drops anything
+    /// else rather than send a login the node would reject.
+    ///
+    /// A node allows one session per callsign and disconnects the older one, so a second
+    /// Nexus — or Nexus beside another cluster client — on the same bare call bumps the
+    /// first off, and each reconnect bumps back. A distinct SSID is what lets them coexist.
+    ///
+    /// **Empty by default, and Nexus must not pick a value.** Two reasons, both of which
+    /// cost the operator something if we guess:
+    /// - A node with registration required treats `W9XYZ-2` as a SEPARATE, unregistered
+    ///   user — read-only, refusing DX and ANNOUNCE. An SSID we chose on their behalf would
+    ///   silently stop an operator posting spots on the node they are registered with.
+    /// - A value we chose could collide with the SSID the operator already uses in the very
+    ///   client they are trying to run alongside, recreating the bug it was meant to fix.
+    ///
+    /// Stable, never per-connection: node-side per-user state (spot filters, `set/seeme`,
+    /// registration) keys on the exact SSID'd call, so a rotating suffix would abandon the
+    /// operator's node configuration on every reconnect — and reclaiming the same session
+    /// after a dropped link is precisely what the node's bump-the-older rule is good for.
+    #[serde(default)]
+    pub cluster_ssid: String,
 
     // --- APRS-IS (the internet side of APRS) ---
     /// Connect to APRS-IS and plot internet-reported stations alongside the ones our own antenna
@@ -3885,6 +3908,8 @@ impl Default for Settings {
             // not its human port — don't use it here; the migration in `load` fixes it.)
             cluster_host: "ve7cc.net:23".to_string(),
             cluster_hosts: DEFAULT_CLUSTER_HOSTS.map(str::to_string).to_vec(),
+            // Empty: the operator's to choose, never ours — see the field's doc comment.
+            cluster_ssid: String::new(),
             // APRS-IS is OFF until the operator asks for it: it is an outbound connection to a
             // public service under their callsign, which is theirs to opt into. The uplink is a
             // second, separate opt-in for the same reason, doubly so — it publishes.

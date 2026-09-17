@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Cluster login SSID — stop two stations on one callsign knocking each other off.** A cluster
+  node allows one session per callsign and disconnects the older one, so running a second Nexus,
+  or Nexus beside another cluster program on the same call, made the two bump each other
+  indefinitely: a cluster connection that flapped with no explanation on screen. Under
+  **Settings › Connections › Cluster login SSID** you can now give each one its own SSID (`2`
+  logs in as `W9XYZ-2`), which the node treats as a separate user, and both stay connected.
+  **Nexus does not choose one for you** — it is empty by default and logs in exactly as before,
+  because a node that requires registration treats the suffixed call as a different, unregistered
+  user and will not let it post spots, and because an SSID picked for you could collide with the
+  one you already use in the other program. Your spots still reach the network under your plain
+  callsign either way; nodes relaying them strip the suffix.
+
 ### Changed
 
 - **Remote: the dial follows the wheel, and it stops swallowing your corrections.** Spinning the
@@ -35,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A cluster node that was working could be reported as dead.** Nexus asked the system for the
+  node's address and then only ever tried the first one it was handed. Many nodes have both an
+  IPv6 and an IPv4 address, and on a connection with no working IPv6 route the IPv6 one is
+  commonly offered first — so the attempt failed and the IPv4 address sitting right behind it,
+  which would have connected, was never tried. The node read as down while it was answering
+  perfectly well, and no phone spots arrived from it. Nexus now tries every address the node
+  has, in turn, and only reports it unreachable once they have all failed. When one does fail,
+  **Settings › Connections** now says so and names what was tried, so "this node is down" can
+  be told from "this connection cannot reach it over IPv6".
 - **SSB/phone spots stopped arriving, and the Spots panel showed no Phone chip.** Both of the
   human DX-cluster nodes Nexus shipped with, `ve7cc.net:23` and `dxc.wa9pie.net:8000`, went
   down on the same day, and every install that still had the default list had no phone source

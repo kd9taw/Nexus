@@ -4542,6 +4542,8 @@ export const FR: PartialCatalog = {
   "settings.integrations.clusterNodes.addCustom.title": "Ajouter une ligne de nœud personnalisé",
   "settings.integrations.clusterNodes.empty": "Aucun nœud — ajoutez-en un ci-dessous pour les manquants SSB/phonie (le RBN ne porte que le CW et le numérique).",
   "settings.integrations.clusterNodes.hint": "Nexus se connecte à TOUS les nœuds listés et réunit leurs spots humains SSB/phonie — plus de nœuds = meilleure couverture phonie (le RBN CW + numérique se connecte tout seul ; les points d'accès RBN sont ignorés ici). Un nœud ajouté se connecte au prochain Enregistrer ; un retrait prend effet au redémarrage.",
+  "settings.integrations.clusterSsid.label": "SSID de connexion au cluster",
+  "settings.integrations.clusterSsid.hint": "Ajouté à votre indicatif à la connexion (2 = W9XYZ-2). Un nœud n'autorise qu'une session par indicatif et coupe la plus ancienne : un second Nexus — ou un autre logiciel de cluster sous le même indicatif — déconnecte donc celui-ci, sauf si chacun utilise une SSID différente. 1-99, ou laissez vide pour vous connecter avec l'indicatif seul. Vos spots parviennent toujours au réseau sous votre indicatif normal. Sur un nœud exigeant une inscription, inscrivez-y aussi l'indicatif suffixé, sinon vous ne pourrez pas envoyer de spots. Effectif au prochain Enregistrer.",
   "settings.integrations.clusterNodes.label": "Nœuds cluster phonie/SSB",
   "settings.integrations.clusterNodes.remove.aria": "Retirer {{host}}",
   "settings.integrations.clusterNodes.remove.ariaBlank": "Retirer le nœud",

@@ -74,6 +74,7 @@
       "ve7cc.net:23",
       "dxc.wa9pie.net:8000"
     ],
+    "clusterSsid": "",
     "companionAddr": "127.0.0.1:2237",
     "connectWeb": false,
     "connectWebPort": 7374,

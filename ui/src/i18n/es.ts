@@ -4542,6 +4542,8 @@ export const ES: PartialCatalog = {
   "settings.integrations.clusterNodes.addCustom.title": "Añadir una fila de nodo personalizado",
   "settings.integrations.clusterNodes.empty": "Sin nodos — añade uno abajo para recibir necesarios de SSB/fonía (RBN solo lleva CW + digitales).",
   "settings.integrations.clusterNodes.hint": "Nos conectamos a TODOS los nodos listados y unimos sus spots humanos de SSB/fonía — más nodos = más cobertura de fonía (RBN CW + digitales se conectan solos; aquí se ignoran los endpoints de RBN). Un nodo añadido se conecta al siguiente Guardar; quitar uno tiene efecto al reiniciar.",
+  "settings.integrations.clusterSsid.label": "SSID de acceso al cluster",
+  "settings.integrations.clusterSsid.hint": "Se añade a tu indicativo al iniciar sesión (2 = W9XYZ-2). Un nodo permite una sola sesión por indicativo y corta la más antigua, así que un segundo Nexus — u otro programa de cluster con el mismo indicativo — echa a este salvo que cada uno use una SSID distinta. 1-99, o déjalo vacío para entrar con el indicativo sin sufijo. Tus spots siguen llegando a la red con tu indicativo normal. En un nodo que exige registro, registra allí también el indicativo con sufijo o no te dejará enviar spots. Efectivo al siguiente Guardar.",
   "settings.integrations.clusterNodes.label": "Nodos de cluster de fonía/SSB",
   "settings.integrations.clusterNodes.remove.aria": "Quitar {{host}}",
   "settings.integrations.clusterNodes.remove.ariaBlank": "Quitar el nodo",
