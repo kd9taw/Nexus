@@ -30,7 +30,8 @@ function fixture(options: { capabilities?: ControlCapability[]; supported?: bool
   const values = new Map<string, string>()
   const storage = { getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => { values.set(key, value) }, removeItem: (key: string) => { values.delete(key) } }
-  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => 1000, undefined,
+  let now = 1000
+  const client = new OperationClient(wire => sent.push(JSON.parse(wire)), true, () => now, undefined,
     4, pendingControlStorage(() => storage, 'audio-test', async (_key, run) => run()))
   clients.push(client)
   const phase = options.phase ?? 'controlling'
@@ -50,7 +51,10 @@ function fixture(options: { capabilities?: ControlCapability[]; supported?: bool
   const rendered = render(<AudioListen audio={link} client={client} />)
   const reply = (value: unknown) =>
     client.receive({ type: 'operationResponse', requestId: sent[sent.length - 1]!.request.requestId, value })
-  return { ...rendered, link, client, messages, state, reply, sent }
+  const refuse = (error: string) =>
+    client.receive({ type: 'operationResponse', requestId: sent[sent.length - 1]!.request.requestId, error })
+  const advance = (ms: number) => { now += ms }
+  return { ...rendered, link, client, messages, state, reply, refuse, advance, sent }
 }
 const listen = () => screen.getByRole('button', { name: 'Listen' })
 
@@ -115,6 +119,40 @@ it('stops the sound itself the moment station control is lost', async () => {
   // is the half that stops the SOUND at once, which is the half the operator hears - and
   // it also tells the station, so a shack's upload is not spent on audio nobody wants.
   await act(async () => { h.client.disconnected() })
+  expect(h.link.getSnapshot()).toMatchObject({ phase: 'ended', reason: 'notController' })
+  expect(h.messages[h.messages.length - 1]).toMatchObject({ type: 'audioListen', listening: false })
+})
+
+// The station answers a heartbeat `stationBusy` while an operation of ITS OWN is in flight - it is
+// contention, not a refusal, and the station keeps feeding audio through it on purpose (its audio
+// lane tolerates a busy authority). The browser used to undo that: any error reply nulled the lease,
+// and this component then released the audio saying control was lost.
+it('keeps listening through a heartbeat the station was merely too busy to answer', async () => {
+  for (const busy of ['stationBusy', 'remoteBusy']) {
+    const h = fixture()
+    await act(async () => { fireEvent.click(listen()) })
+    await act(async () => { h.link.receive(bundle(0)) })
+    h.advance(1000)
+    await act(async () => { vi.advanceTimersByTime(250) })
+    expect(h.sent[h.sent.length - 1]!.request.type).toBe('heartbeat')
+    const before = h.messages.length
+    await act(async () => { h.refuse(busy) })
+    expect(screen.getByRole('status').textContent).toBe('Listening to the station')
+    expect(h.messages).toHaveLength(before)
+    expect(h.client.getSnapshot().state?.phase).toBe('controlling')
+    // And the NEXT heartbeat still carries the lease: control was kept, not merely displayed.
+    h.advance(1000)
+    await act(async () => { vi.advanceTimersByTime(250) })
+    expect(h.sent[h.sent.length - 1]!.request).toMatchObject({ type: 'heartbeat', leaseId: h.state.leaseId })
+    cleanup()
+  }
+  // Positive control: a refusal that IS about this browser's control still stops the sound at once.
+  const h = fixture()
+  await act(async () => { fireEvent.click(listen()) })
+  await act(async () => { h.link.receive(bundle(0)) })
+  h.advance(1000)
+  await act(async () => { vi.advanceTimersByTime(250) })
+  await act(async () => { h.refuse('leaseExpired') })
   expect(h.link.getSnapshot()).toMatchObject({ phase: 'ended', reason: 'notController' })
   expect(h.messages[h.messages.length - 1]).toMatchObject({ type: 'audioListen', listening: false })
 })

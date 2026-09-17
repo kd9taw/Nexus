@@ -346,6 +346,47 @@ it('coordinates a click with its in-flight heartbeat without changing context or
   expect((await action).outcome).toBe('applied')
   c.disconnected()
 })
+// The station refuses a heartbeat `stationBusy` while one of its own operation tasks is in flight
+// and `remoteBusy` when its authority lock is held: contention, which it deliberately tolerates on
+// its audio lane. The browser used to treat EVERY error reply as the end of authority - lease and
+// state nulled - so a busy moment at the station blanked every control and released the audio.
+it('keeps the lease and the last state through a heartbeat the station was too busy to answer', async () => {
+  for (const busy of ['stationBusy', 'remoteBusy']) {
+    const { c, sent, reply, advance } = setup()
+    const a = c.acquire(), owned = state(true)
+    reply(owned)
+    await a
+    advance(1000)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(sent[sent.length - 1]!.request.type).toBe('heartbeat')
+    c.receive({ type: 'operationResponse', requestId: sent[sent.length - 1]!.request.requestId, error: busy })
+    expect(c.getSnapshot()).toMatchObject({ state: owned, busy: false, error: null, leaseHeld: true })
+    // The reply's freshness window still runs out on its own, so commands wait for a current state.
+    advance(300)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(c.getSnapshot().fresh).toBe(false)
+    // The next automatic read is a heartbeat under the SAME lease, not a fresh anonymous state read.
+    advance(700)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(sent[sent.length - 1]!.request).toMatchObject({ type: 'heartbeat', leaseId: owned.leaseId })
+    reply({ ...owned, commandWindowId: id() })
+    expect(c.getSnapshot()).toMatchObject({ fresh: true, leaseHeld: true })
+    c.disconnected()
+  }
+  // Positive control: a refusal that names this browser's authority still ends it.
+  const { c, sent, reply, advance } = setup()
+  const a = c.acquire(), owned = state(true)
+  reply(owned)
+  await a
+  advance(1000)
+  await vi.advanceTimersByTimeAsync(250)
+  c.receive({ type: 'operationResponse', requestId: sent[sent.length - 1]!.request.requestId, error: 'leaseExpired' })
+  expect(c.getSnapshot()).toMatchObject({ state: null, error: 'leaseExpired', leaseHeld: false })
+  advance(1000)
+  await vi.advanceTimersByTimeAsync(250)
+  expect(sent[sent.length - 1]!.request.type).toBe('state')
+  c.disconnected()
+})
 it('refuses a heartbeat wait that crosses a native context change or the click deadline', async () => {
   for (const change of ['context', 'deadline']) {
     const { c, sent, reply, advance } = setup()
