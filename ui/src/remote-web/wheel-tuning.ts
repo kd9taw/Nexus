@@ -4,6 +4,7 @@ import { clampWheelTarget } from '../wheelTuningPolicy'
 import type { ApplicationClient } from './application-client'
 import { OperationFailure, type OperationClient } from './operation-client'
 import type { StationAction, ControlOutcome, ControlContext } from './station-operation'
+import type { Interaction, ResponsivenessProbe } from './responsiveness'
 
 export type WheelSource = { dialMhz: number; sideband: string; owner?: object; context?: ControlContext | null }
 type Burst = WheelSource & {
@@ -18,6 +19,8 @@ type Burst = WheelSource & {
   send?: (action: StationAction) => Promise<ControlOutcome>
   /** Waiting out a brief control lapse. Later steps still join the burst; nothing is sent yet. */
   held?: boolean
+  /** The responsiveness probe's record of each step in this burst; allocated only while it measures. */
+  probes?: Interaction[]
 }
 
 /** One short input burst per browser station, shared by readout digits and
@@ -41,10 +44,12 @@ export class WheelTuning {
   private live = false
   private sending = false
   private listeners = new Set<() => void>()
+  /** The responsiveness probe, attached only while its panel is open (see responsiveness.ts). */
+  probe: ResponsivenessProbe | null = null
   constructor(private operations: OperationClient, private application: ApplicationClient, private failed: (error: OperationFailure) => void) {}
   subscribe = (f: () => void) => { this.listeners.add(f); return () => { this.listeners.delete(f) } }
   getPending = () => this.sending
-  private notify() { for (const f of this.listeners) f() }
+  private notify() { for (const f of this.listeners) f(); this.probe?.responded('tuning') }
   activate() {
     this.live = true
     this.unsubscribe?.()
@@ -116,6 +121,17 @@ export class WheelTuning {
     }
   }
   nudge(deltaHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
+    const probe = this.probe
+    if (!probe) return this.step(deltaHz, source, onEdge)
+    // Measured: the step is a gesture; refused, or joined to the burst it will be sent with.
+    const gesture = probe.gesture('tune')
+    const accepted = this.step(deltaHz, source, onEdge)
+    if (!gesture) return accepted
+    if (accepted && this.burst) (this.burst.probes ??= []).push(gesture)
+    else probe.refused(gesture)
+    return accepted
+  }
+  private step(deltaHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
     if (this.sending || !this.inputReady() || !this.matchesSource(source) || !Number.isFinite(deltaHz) || !deltaHz || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
       !['USB', 'LSB', 'AM', 'FM'].includes(source.sideband)) return false
     const fromHz = Math.round(source.dialMhz * 1e6), context = this.context()
@@ -155,6 +171,7 @@ export class WheelTuning {
     }
     this.burst = null
     if (b.targetHz === b.fromHz) return
+    if (b.probes) this.probe?.dispatch(b.probes, { dialHz: b.targetHz })
     this.reading = b; this.sending = true; this.notify()
     let submitted = false
     try {

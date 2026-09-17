@@ -25,6 +25,7 @@ import {
   type ProgramExportFormat,
   type ProgramExportValue
 } from './operation-protocol'
+import type { ResponsivenessProbe } from './responsiveness'
 /** A station command or manual log that failed. `sent` records whether its request actually left
  * this browser: false means nothing reached the station, so nothing there changed. `busy` records
  * that the station answered stationBusy, which it does before changing anything (its Engine was
@@ -137,6 +138,9 @@ export class OperationClient {
   private resultIntent: object | null = null
   private controlPolledAt = -Infinity
   private requestBudget: { requestId: string; until: number }[] = []
+  /** The responsiveness probe, attached only while its panel is open. Every use below is a null
+   * check that stamps a clock and returns: it never updates the view, sends, or schedules. */
+  probe: ResponsivenessProbe | null = null
   constructor(
     private send: (message: string) => void,
     readonly enabled: boolean,
@@ -187,6 +191,7 @@ export class OperationClient {
       leaseHeld: this.now() < this.leaseUntil
     }
     for (const f of this.listeners) f()
+    this.probe?.responded('operations')
   }
   open() {
     if (!this.enabled) return
@@ -322,6 +327,7 @@ export class OperationClient {
       try {
         this.send(JSON.stringify({ type: 'operationRequest', ...(this.operationVersion >= 2 ? { operationVersion: this.operationVersion } : {}), request }))
         onSent?.()
+        if (request.type === 'stationControl') this.probe?.sent(request.requestId)
       } catch {
         clearTimeout(p.timer)
         this.pending = null
@@ -360,7 +366,7 @@ export class OperationClient {
       }, 7500) }
       this.pendingStop = p
       this.update({ stopError: null, stopAccepted: false })
-      try { this.send(JSON.stringify({ type: 'operationRequest', operationVersion: 4, request })) }
+      try { this.send(JSON.stringify({ type: 'operationRequest', operationVersion: 4, request })); this.probe?.sentStop(request.requestId) }
       catch {
         clearTimeout(p.timer)
         this.pendingStop = null
@@ -379,11 +385,14 @@ export class OperationClient {
       if (bytes > OPERATION_RESPONSE_BYTES || ('value' in r && !('stop' in r.value))) throw Error('invalidOperation')
       clearTimeout(stop.timer)
       this.pendingStop = null
+      this.probe?.replied(r.requestId)
       if ('error' in r) {
+        this.probe?.confirmed(r.requestId, r.error)
         this.update({ stopError: r.error, stopAccepted: false })
         stop.reject(new Error(r.error))
       } else {
         // ACCEPTANCE, never a claim that RF stopped — see `stopAccepted`.
+        this.probe?.confirmed(r.requestId, 'accepted')
         this.stopTarget = null
         this.polledAt = -Infinity
         this.update({ stopError: null, stopAccepted: true })
@@ -393,6 +402,7 @@ export class OperationClient {
     }
     const p = this.pending
     if (!p || p.request.requestId !== r.requestId) return
+    this.probe?.replied(r.requestId)
     // Either export answers with a chunk that may be over the ordinary ceiling, and each must come
     // back to the request that asked for THAT one — a programming CSV arriving for an activation
     // read is a crossed reply, not a large one.
@@ -453,6 +463,7 @@ export class OperationClient {
       if (p.request.type === 'stationControl' && r.error !== 'operationUnknown') {
         try { this.controlStorage?.write(null); this.update({ controlPending: null }) } catch {}
       }
+      if (p.request.type === 'stationControl') this.probe?.confirmed(p.request.requestId, r.error)
       this.update({
         busy: false,
         submitting: false,
@@ -509,6 +520,7 @@ export class OperationClient {
       const terminal = result.outcome === 'applied' || result.outcome === 'rejected'
       let cleared = false
       if (terminal) {
+        this.probe?.confirmed(result.operationId, result.outcome)
         try { this.controlStorage?.write(null); cleared = true } catch {}
       }
       const refreshing = result.outcome === 'applied' && (p.request.type === 'stationControl' || !this.view.state)

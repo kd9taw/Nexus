@@ -2,6 +2,7 @@ import { APPLICATION_TIMEOUT_MS, applyApplicationReply } from './application-pro
 import type { ApplicationValue } from './application-protocol'
 import { STREAM_INTEREST_MS, STREAM_INTERVAL, streamExact, streamUpdates } from './application-stream-protocol'
 import type { StreamTopic, StreamVersion } from './application-stream-protocol'
+import type { ResponsivenessProbe } from './responsiveness'
 
 type Waiting = { promise: Promise<unknown>; resolve: (value: unknown) => void; reject: (error: Error) => void }
 // api.ts polling expresses local interest only. One socket subscription serves
@@ -17,6 +18,8 @@ export class ApplicationStreamClient {
   private sweep: ReturnType<typeof setInterval> | undefined
   private flushTimer: ReturnType<typeof setTimeout> | undefined
   private deadline: ReturnType<typeof setTimeout> | undefined
+  /** The responsiveness probe, attached only while its panel is open (see responsiveness.ts). */
+  probe: ResponsivenessProbe | null = null
   constructor(private readonly send: (message: string) => void, private readonly fail: () => void) {}
   negotiate(version: StreamVersion): void { this.version = version }
   age(command: StreamTopic): number { const value = this.values.get(command); return value ? performance.now() - value.at : Infinity }
@@ -59,6 +62,10 @@ export class ApplicationStreamClient {
       this.waiting.delete(update.command)
       if (value) { this.values.set(update.command, value); waiting?.resolve(value.value) }
       else { this.values.delete(update.command); waiting?.reject(new Error(update.type === 'applicationError' ? update.error : 'applicationUnavailable')) }
+    }
+    if (this.probe) for (const { update, value } of next) {
+      if (update.command !== 'get_snapshot') continue
+      if (value) this.probe.reading(value.value); else this.probe.readingRefused()
     }
     const previous = this.credit.id
     this.newCredit()
