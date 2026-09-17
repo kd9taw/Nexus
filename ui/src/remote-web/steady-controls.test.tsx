@@ -55,8 +55,10 @@ function station(capabilities: ControlCapability[] = CAPABILITIES) {
   const link = { roundTripMs: 260, answering: true }
   const values = new Map<string, string>()
   const storage = { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => { values.set(k, v) }, removeItem: (k: string) => { values.delete(k) } }
+  const sent: { type: string; requestId: string }[] = []
   const client: OperationClient = new OperationClient(raw => {
     const { request } = JSON.parse(raw)
+    sent.push(request)
     if (!link.answering) return
     const value = request.type === 'state' || request.type === 'heartbeat' ? structuredClone(state) : null
     if (value) setTimeout(() => client.receive({ type: 'operationResponse', requestId: request.requestId, value }), link.roundTripMs)
@@ -69,7 +71,7 @@ function station(capabilities: ControlCapability[] = CAPABILITIES) {
     wasFresh = view.fresh
   })
   client.open()
-  return { client, link, state, lapses: () => lapses }
+  return { client, link, state, sent, lapses: () => lapses }
 }
 
 const baseFrame = (over: Partial<MonitorFrame['station']['radio']> = {}): MonitorFrame => ({
@@ -153,6 +155,49 @@ it('no station control toggles disabled while control is held and the observatio
   // Positive controls: control really lapsed, and the reading really aged past its window.
   expect(h.lapses()).toBeGreaterThan(0)
   expect(observed(1400).frame!.station.radio.readings.ptt!.ageMs).toBeGreaterThan(1000)
+  expect({ toggles, ampToggles }).toEqual({ toggles: {}, ampToggles: 0 })
+  expect(Object.values(flags()).every(Boolean)).toBe(true)
+})
+
+// The other way a held control went grey: after EVERY command the client dropped its state until the
+// station's re-read answered, so all of these went dead for about a second per click (operator
+// ruling 2026-09-16: a control stays lit while it confirms). The state is kept through the gap now;
+// control.test.ts proves the spent window still refuses a second command on its own.
+it('no station control toggles disabled across a confirmed command and the station re-read', async () => {
+  const h = station()
+  const snap = snapshot()
+  const ui = render(page(h, observed(0), snap, ampStrip(snap)))
+  const flags = () => JSON.parse(ui.container.querySelector('span')!.dataset.flags!) as Record<string, boolean>
+  const buttons = () => [...ui.container.querySelectorAll('.amp-strip button')] as HTMLButtonElement[]
+  await until(() => h.client.getSnapshot().fresh && flags().rfPowerSlider && !buttons()[0]?.disabled)
+  expect(Object.values(flags()).every(Boolean)).toBe(true)
+  expect(buttons().map(b => b.disabled)).toEqual([false, false, false])
+
+  const toggles: Record<string, number> = {}
+  let previous = flags(), ampBefore = buttons().map(b => b.disabled), ampToggles = 0, refreshing = 0
+  const sample = () => {
+    const now = flags()
+    for (const key of Object.keys(now)) if (now[key] !== previous[key]) toggles[key] = (toggles[key] ?? 0) + 1
+    previous = now
+    const amp = buttons().map(b => b.disabled)
+    if (amp.join() !== ampBefore.join()) ampToggles++
+    ampBefore = amp
+    if (h.client.getSnapshot().controlRefreshing) refreshing++
+  }
+  let command!: Promise<unknown>
+  await act(async () => { command = h.client.control({ action: 'amplifier.operate', expectedOperate: false, operate: true }); await Promise.resolve() })
+  const request = h.sent[h.sent.length - 1]
+  expect(request.type).toBe('stationControl')
+  // The station applied it and spent the window; its re-read answers after the link's round trip.
+  Object.assign(h.state, { revision: 2, commandWindowId: crypto.randomUUID(), nextSequence: 2 })
+  await act(async () => {
+    h.client.receive({ type: 'operationResponse', requestId: request.requestId, value: { operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' } })
+    await command
+  })
+  for (let elapsed = 0; elapsed < 2000; elapsed += 50) { sample(); await step(50) }
+  // Positive controls: the confirming gap really happened, and the re-read really landed.
+  expect(refreshing).toBeGreaterThan(0)
+  expect(h.client.getSnapshot()).toMatchObject({ fresh: true, controlRefreshing: false, state: { revision: 2 } })
   expect({ toggles, ampToggles }).toEqual({ toggles: {}, ampToggles: 0 })
   expect(Object.values(flags()).every(Boolean)).toBe(true)
 })

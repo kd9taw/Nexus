@@ -323,7 +323,10 @@ it('a confirmed command shows refresh progress, but a failed refresh and disconn
   act(() => h.finish()); await tick()
   expect(ui.container.textContent).toContain('Updating station controls')
   await tick(1500)
-  expect(ui.container.textContent).toContain('Logging control status unavailable')
+  // The re-read has not answered, but the state is held through a command now and the lease the
+  // station reported still runs: the steady label, as in any gap between heartbeats. It goes
+  // unavailable once that lease has run out with nothing heard.
+  expect(ui.container.textContent).toContain('Station control active')
   await tick(9000)
   expect(ui.container.textContent).toContain('Logging control status unavailable')
   expect(ui.container.textContent).not.toContain('Updating station controls')

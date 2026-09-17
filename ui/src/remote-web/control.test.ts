@@ -40,6 +40,22 @@ function setup(store = storage(), capabilities: ControlCapability[] = ['decoder'
   client.open(); reply(s)
   return { client, controls, logs, sent, state: s, reply, store, advance: async (ms: number) => { now += ms; await vi.advanceTimersByTimeAsync(ms) } }
 }
+/** A command made while the last one is still confirming — its window spent, the station's re-read
+ * not yet answered — is a lapse: it waits for that re-read and, with none landing, is refused as not
+ * sent. The state is held through the gap (operator ruling 2026-09-16), so the refusal is no longer
+ * the instant `notController` of a dropped state. */
+async function refusedWhileConfirming(h: ReturnType<typeof setup>, action: Parameters<OperationClient['control']>[0]) {
+  const later = h.client.control(action).catch(e => e as Error)
+  await h.advance(1600)
+  expect(await later).toMatchObject({ message: 'notController', sent: false })
+}
+/** The station's re-read after a command goes out on the next tick the request budget admits. */
+async function nextHeartbeat(h: ReturnType<typeof setup>) {
+  for (let i = 0; i < 8 && h.sent[h.sent.length - 1].request.type !== 'heartbeat'; i++) await h.advance(250)
+  const request = h.sent[h.sent.length - 1].request
+  expect(request.type).toBe('heartbeat')
+  return request
+}
 
 it('refuses to borrow a newer radio or amplifier connection for the displayed gesture', async () => {
   for (const changed of ['radioId', 'radioConnection', 'ampConnection'] as const) {
@@ -95,7 +111,7 @@ it('adapts a frequency gesture through its own capability and returns only a lat
   await h.advance(50)
   expect(await result).toEqual({ radio: { dialMhz: 7.074 } })
   expect(getSnapshot).toHaveBeenCalledExactlyOnceWith('get_snapshot')
-  await expect(h.client.control({ action: 'radio.mode', mode: 'cw', followFrequency: true })).rejects.toThrow('notController')
+  await refusedWhileConfirming(h, { action: 'radio.mode', mode: 'cw', followFrequency: true })
   await expect(transport.invoke('set_frequency', { dialMhz: 7.074, band: '40m', mode: 'USB', command: 'key' })).rejects.toThrow('invalidOperation')
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
   h.client.disconnected()
@@ -120,7 +136,7 @@ it('adapts explicit mode entry separately from frequency and waits for a later s
   for (const args of [{ mode: 'cw', followFreq: true, arm: true }, { mode: 'cw' }, { mode: 'future', followFreq: true }]) {
     await expect(transport.invoke('set_operating_mode', args)).rejects.toThrow('invalidOperation')
   }
-  await expect(h.client.control({ action: 'radio.frequency', dialMhz: 7.074, band: '40m', sideband: 'USB' })).rejects.toThrow('notController')
+  await refusedWhileConfirming(h, { action: 'radio.frequency', dialMhz: 7.074, band: '40m', sideband: 'USB' })
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
   h.client.disconnected()
 })
@@ -213,7 +229,7 @@ it('adapts the existing tier selector through its own v3 capability and later sn
   expect(await result).toEqual({ link: { tier: 'FT4' } })
   expect(read).toHaveBeenCalledExactlyOnceWith('get_snapshot')
   for (const args of [{ tier: 'FT4', arm: true }, { tier: 'future' }, {}]) await expect(transport.invoke('set_tier', args)).rejects.toThrow('invalidOperation')
-  await expect(h.client.control({ action: 'radio.mode', mode: 'cw', followFrequency: true })).rejects.toThrow('notController')
+  await refusedWhileConfirming(h, { action: 'radio.mode', mode: 'cw', followFrequency: true })
   h.client.disconnected()
   const legacy = setup(storage(), ['tier'], 2)
   await expect(legacy.client.control({ action: 'radio.tier', tier: 'FT4' })).rejects.toThrow('stationUnsupported')
@@ -338,6 +354,80 @@ it('a prepared tuning gesture cannot borrow a newer lease, revision or command d
     expect(request.action).toEqual(frequency)
     h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' })
     expect(await fresh).toMatchObject({ outcome: 'applied' })
+    h.client.disconnected()
+  }
+})
+
+// A confirmed command CONSUMES its window: the station clears every command window when it answers
+// a control. The client used to enforce that by dropping its state, which greyed every held control
+// out for a second after every click (operator ruling 2026-09-16: a control stays lit while it
+// confirms). The state is now kept, so the refusal of a second command from the spent window has to
+// hold on its own — "the button was disabled" is no longer evidence. Both directions are asserted:
+// nothing leaves on the spent window, and the same command goes out once on the re-read's window.
+it('keeps the state through a confirmed command, refuses a second command from its spent window, and sends it on the next', async () => {
+  const transmitEpoch = '000000000000002a'
+  const confirmed = async () => {
+    const h = setup(storage(), ['amplifier', 'ftOperate'], 4)
+    await h.advance(1000)
+    const heartbeat = h.sent[h.sent.length - 1].request
+    expect(heartbeat.type).toBe('heartbeat')
+    h.client.receive({ type: 'operationResponse', requestId: heartbeat.requestId, value: { ...h.state, transmitEpoch } })
+    // A gesture prepared on this window, before the command spends it.
+    const prepared = h.client.prepareControl()
+    const first = h.client.control(action)
+    await Promise.resolve(); await Promise.resolve()
+    const request = h.sent[h.sent.length - 1].request
+    expect(request).toMatchObject({ type: 'stationControl', commandWindowId: h.state.commandWindowId, clientSequence: 1, expectedRevision: 1 })
+    h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+    expect(await first).toMatchObject({ outcome: 'applied' })
+    // The state is held — this browser still controls — but its window is spent.
+    expect(h.client.getSnapshot()).toMatchObject({ fresh: false, controlRefreshing: true, controlPending: null,
+      state: { phase: 'controlling', commandWindowId: h.state.commandWindowId } })
+    // The 250 ms tick must not revive the spent window; it does ask the station for the re-read.
+    const reread = await nextHeartbeat(h)
+    expect(h.client.getSnapshot()).toMatchObject({ fresh: false, state: { phase: 'controlling' } })
+    const commands = () => h.sent.filter(w => w.request.type === 'stationControl')
+    expect(commands()).toHaveLength(1)
+    return { h, prepared, reread, commands }
+  }
+  {
+    // A transmit action carries its epoch and never waits out a lapse: refused at once, not sent.
+    const { h, commands } = await confirmed()
+    const transmit = h.client.control({ action: 'ft.txEnabled', expectedTier: 'FT8', transmitEpoch, on: true }).catch(e => e)
+    await h.advance(10)
+    expect(await transmit).toMatchObject({ sent: false, busy: false })
+    expect(commands()).toHaveLength(1)
+    h.client.disconnected()
+  }
+  {
+    // An ordinary command inside the confirming window is a lapse: it waits for the re-read and
+    // leaves once on the NEW window, never the spent one. The gesture prepared on the spent window
+    // is refused when it fires — the revision it captured is gone.
+    const { h, prepared, reread, commands } = await confirmed()
+    const second = h.client.control(action)
+    await h.advance(100)
+    expect(commands()).toHaveLength(1)
+    const next = { ...h.state, transmitEpoch, revision: 2, commandWindowId: crypto.randomUUID(), nextSequence: 2 }
+    h.client.receive({ type: 'operationResponse', requestId: reread.requestId, value: next })
+    await h.advance(10)
+    expect(commands()).toHaveLength(2)
+    expect(commands()[1].request).toMatchObject({ commandWindowId: next.commandWindowId, clientSequence: 2, expectedRevision: 2 })
+    h.reply({ operation: 'stationControl', operationId: commands()[1].request.requestId, outcome: 'applied', evidence: 'stationState' })
+    expect(await second).toMatchObject({ outcome: 'applied' })
+    const again = await nextHeartbeat(h)
+    h.client.receive({ type: 'operationResponse', requestId: again.requestId, value: { ...next, revision: 3, nextSequence: 3 } })
+    expect(h.client.getSnapshot()).toMatchObject({ fresh: true, state: { revision: 3 } })
+    await expect(prepared(action)).rejects.toMatchObject({ message: 'staleContext', sent: false })
+    expect(commands()).toHaveLength(2)
+    h.client.disconnected()
+  }
+  {
+    // The re-read never lands: the command made in the confirming window is refused as not sent.
+    const { h, commands } = await confirmed()
+    const second = h.client.control(action).catch(e => e)
+    await h.advance(1600)
+    expect(await second).toMatchObject({ message: 'notController', sent: false, busy: false })
+    expect(commands()).toHaveLength(1)
     h.client.disconnected()
   }
 })

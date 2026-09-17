@@ -73,11 +73,14 @@ it('keeps the banner still and its controls mounted across a command result and 
     h.reply({ operation: 'stationControl', operationId: command.requestId, outcome: 'applied', evidence: 'stationState' })
     await pending
   })
-  // The gap: the client holds no state, and the next heartbeat has not answered yet.
-  expect(h.client.getSnapshot().state).toBeNull()
+  // The gap: the command spent the state's window and the re-read has not answered yet. The state
+  // itself is held (operator ruling 2026-09-16: a control stays lit while it confirms), so nothing
+  // in the banner is disabled; the client's own refusal keeps a second command off the spent window.
+  expect(h.client.getSnapshot()).toMatchObject({ fresh: false, controlRefreshing: true, state: { phase: 'controlling' } })
   expect(screen.getByText('The station confirmed the command.')).toBeTruthy()
+  expect(screen.getByText('Updating station controls…')).toBeTruthy()
   expect(release()).toBe(releaseButton)
-  expect(release().disabled).toBe(true)
+  expect(release().disabled).toBe(false)
   await h.advance(250)
   const reread = h.sent[h.sent.length - 1]!.request
   expect(reread.type).toBe('heartbeat')
@@ -126,7 +129,11 @@ it('shows station data loss without adding or removing anything in the banner', 
   detector.stop()
 })
 
-it('renders retained station state disabled: a click in the re-read gap sends nothing, the same click after it does', async () => {
+// The state is held through the re-read gap (operator ruling 2026-09-16: a control stays lit while
+// it confirms), so the banner's Release is live there and its click really leaves — it is bound to
+// the lease, not to the command window the command just spent. A gesture still cannot capture that
+// spent window; control.test.ts proves no command leaves on it.
+it('keeps the banner live in the re-read gap: Release sends, a gesture cannot capture the spent window', async () => {
   const h = fixture()
   let pending!: Promise<unknown>
   await act(async () => {
@@ -139,16 +146,11 @@ it('renders retained station state disabled: a click in the re-read gap sends no
     h.reply({ operation: 'stationControl', operationId: command.requestId, outcome: 'applied', evidence: 'stationState' })
     await pending
   })
-  const before = h.sent.length
-  fireEvent.click(release())
-  expect(h.sent).toHaveLength(before)
-  // The command gate still refuses on the retained state: nothing may be actionable on it.
-  await expect(h.client.control({ action: 'amplifier.operate', expectedOperate: true, operate: false })).rejects.toThrow('notController')
+  expect(h.client.getSnapshot()).toMatchObject({ fresh: false, state: { phase: 'controlling' } })
   expect(() => h.client.prepareControl()).toThrow('notController')
-  expect(h.sent).toHaveLength(before)
-  await h.advance(250)
-  act(() => h.reply({ ...h.state, revision: 2, nextSequence: 2 }))
-  // Positive control on the spy: the same gesture on a current state really does send.
+  const before = h.sent.length
+  expect(release().disabled).toBe(false)
   fireEvent.click(release())
+  expect(h.sent).toHaveLength(before + 1)
   expect(h.sent[h.sent.length - 1]!.request.type).toBe('release')
 })

@@ -90,7 +90,8 @@ it('releases the original lease after a command invalidates its displayed state'
     const action = h.client.control({ action: 'ft.txEnabled', expectedTier: 'FT8',
       transmitEpoch: h.state.transmitEpoch!, on: true })
     await vi.advanceTimersByTimeAsync(0); await action
-    expect(h.client.getSnapshot().state).toBeNull()
+    // The command spent the displayed state's window; the state itself is held, not fresh.
+    expect(h.client.getSnapshot()).toMatchObject({ fresh: false, state: { phase: 'controlling' } })
     const release = h.client.release(); await vi.advanceTimersByTimeAsync(0); await release
     expect(h.forwarded[h.forwarded.length - 1].type).toBe('release')
     expect(h.state.phase).toBe('available')
