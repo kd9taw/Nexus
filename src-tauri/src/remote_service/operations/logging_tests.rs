@@ -1275,3 +1275,219 @@ fn a_test_build_with_no_poster_refuses_a_spot_instead_of_posting_it() {
     assert_eq!(result["outcome"], "rejected");
     assert_eq!(result["reason"], "invalidChange");
 }
+
+/// The shack's log view and a Remote browser are two writers of one log. The view used to
+/// address a row by its position at load time; a browser's delete above that row shifted
+/// every later one, and the shack's next Delete or Edit went to a DIFFERENT contact, with a
+/// toast naming the one the operator meant. The shack now carries the row's key exactly as the
+/// browser does, and `locate` turns it into today's position — or refuses.
+#[test]
+fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
+    let f = Fixture::new();
+    seed(&f);
+    f.engine.lock().unwrap().import_adif(
+        "<CALL:5>N2XYZ<BAND:3>15m<MODE:3>SSB<FREQ:6>21.300<QSO_DATE:8>20260909<TIME_ON:6>030000<EOR>\n",
+    );
+    acquire(&f);
+    // The shack loaded its list: K1ABC sits at position 1, and the view keeps that ROW — it is
+    // what the desktop commands hand back as their target, and the station keys it.
+    let stale_position = 1;
+    let held_row = crate::log_row(&f.engine.lock().unwrap(), stale_position).unwrap();
+    assert_eq!(held_row.call, "K1ABC");
+    let held_target = super::super::logging::seen_target(&held_row);
+
+    // The browser deletes the row ABOVE it.
+    let result = run(
+        &f,
+        &change(
+            &f,
+            json!({"kind":"delete","target":target(&row(&f, "W1AW"))}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "applied");
+
+    let mut e = f.engine.lock().unwrap();
+    // The defect, made visible: the position the shack held now names another contact.
+    assert_eq!(e.log_records()[stale_position].call, "N2XYZ");
+    // The key finds the contact the operator can see, where it is TODAY.
+    let found = super::super::logging::locate(&mut e, &held_target)
+        .expect("the row the shack holds is still in the log");
+    assert_eq!(found, 0);
+    assert_eq!(e.log_records()[found].call, "K1ABC");
+    assert!(e.delete_qso(found));
+    let left: Vec<&str> = e.log_records().iter().map(|r| r.call.as_str()).collect();
+    assert_eq!(left, ["N2XYZ"], "K1ABC went and the bystander survived");
+
+    // A key the log no longer holds is refused, not approximated: the deleted row's own key,
+    // and a row that was edited since the view loaded (its key changed with its content).
+    assert_eq!(super::super::logging::locate(&mut e, &held_target), None);
+    let survivor_key: super::super::logging::Target = serde_json::from_value(
+        json!({"call":"N2XYZ","whenUnix":e.log_records()[0].when_unix,
+            "key":super::super::logging::row_key(&e.log_records()[0])}),
+    )
+    .unwrap();
+    let mut changed = e.log_records()[0].clone();
+    changed.comment = Some("changed at the browser".into());
+    assert!(e.update_qso(0, changed));
+    assert_eq!(super::super::logging::locate(&mut e, &survivor_key), None);
+    // Positive control: the key of the row as it is now is found.
+    let fresh: super::super::logging::Target = serde_json::from_value(
+        json!({"call":"N2XYZ","whenUnix":e.log_records()[0].when_unix,
+            "key":super::super::logging::row_key(&e.log_records()[0])}),
+    )
+    .unwrap();
+    assert_eq!(super::super::logging::locate(&mut e, &fresh), Some(0));
+}
+
+/// WWFF is a real stored program (an ADIF SIG kept verbatim, as the desktop edit path keeps
+/// it). The browser used to narrow the program to SOTA-or-POTA and the station applied it
+/// unconditionally, so a Remote grid fix rewrote a WWFF park to POTA.
+#[test]
+fn a_remote_edit_keeps_a_wwff_park_as_wwff() {
+    let f = Fixture::new();
+    seed(&f);
+    f.engine.lock().unwrap().import_adif(
+        "<CALL:6>DL1ABC<BAND:3>20m<MODE:3>SSB<FREQ:6>14.250<QSO_DATE:8>20260909<TIME_ON:6>040000\
+         <SIG:4>WWFF<SIG_INFO:9>DLFF-0001<EOR>\n",
+    );
+    acquire(&f);
+    let stored = |f: &Fixture| {
+        let e = f.engine.lock().unwrap();
+        let r = e.log_records().iter().find(|r| r.call == "DL1ABC").unwrap();
+        (
+            r.ota.their_program.clone(),
+            r.ota.their_ref.clone(),
+            r.grid.clone(),
+        )
+    };
+    assert_eq!(
+        stored(&f),
+        (Some("WWFF".into()), Some("DLFF-0001".into()), None)
+    );
+    let record = |ota: Value| {
+        let mut record = json!({"call":"DL1ABC","grid":"JO31","country":null,"state":null,"band":"20m",
+            "freqMhz":14.25,"mode":"SSB","rstSent":null,"rstRcvd":null,"name":null,"qth":null,"comment":null,
+            "notes":null,"whenUnix":row(&f, "DL1ABC")["whenUnix"],"confirmed":false,"awardConfirmed":false});
+        if !ota.is_null() {
+            record["ota"] = ota;
+        }
+        json!({"kind":"edit","target":target(&row(&f, "DL1ABC")),"record":record})
+    };
+    // The program the browser read back, exactly as stored.
+    let result = run(
+        &f,
+        &change(
+            &f,
+            record(json!({"theirProgram":"WWFF","theirRef":"DLFF-0001"})),
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "applied");
+    assert_eq!(
+        stored(&f),
+        (
+            Some("WWFF".into()),
+            Some("DLFF-0001".into()),
+            Some("JO31".into())
+        )
+    );
+    // A program the log would never hold is an invalid record, refused before it is a change.
+    let refused = run(
+        &f,
+        &change(
+            &f,
+            record(json!({"theirProgram":"pota","theirRef":"DLFF-0001"})),
+        ),
+    );
+    assert_eq!(refused, Err("invalidRecord"));
+    assert_eq!(stored(&f).0.as_deref(), Some("WWFF"));
+}
+
+/// The whole design rests on a row's key naming ONE contact. Call + time alone does not: a
+/// contest station works the same call on two bands in the same minute, and both rows share
+/// them. The key is a SHA-256 over the entire row, so it tells the pair apart, and `locate`
+/// acts on the one the operator saw. Two rows can share a key only by being identical in every
+/// field, and then either is the same contact to delete.
+#[test]
+fn a_duplicate_call_and_time_pair_has_two_keys_and_each_finds_its_own_row() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().import_adif(
+        "<CALL:4>W1AW<BAND:3>20m<MODE:2>CW<FREQ:6>14.030<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>\n\
+         <CALL:4>W1AW<BAND:3>40m<MODE:2>CW<FREQ:5>7.030<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>\n",
+    );
+    let mut e = f.engine.lock().unwrap();
+    let records = e.log_records();
+    assert_eq!(records.len(), 2, "the pair is two contacts, not one dupe");
+    assert_eq!(
+        (&records[0].call, records[0].when_unix),
+        (&records[1].call, records[1].when_unix),
+        "call + time alone cannot tell them apart"
+    );
+    let key = |r: &tempo_core::logbook::QsoRecord| -> super::super::logging::Target {
+        serde_json::from_value(json!({"call":r.call,"whenUnix":r.when_unix,
+            "key":super::super::logging::row_key(r)}))
+        .unwrap()
+    };
+    let (first, second) = (key(&records[0]), key(&records[1]));
+    assert_ne!(
+        super::super::logging::row_key(&records[0]),
+        super::super::logging::row_key(&records[1]),
+        "the row key does"
+    );
+    assert_eq!(super::super::logging::locate(&mut e, &first), Some(0));
+    assert_eq!(super::super::logging::locate(&mut e, &second), Some(1));
+    // Delete the 40 m contact by its key: the 20 m one, same call and time, survives.
+    let index = super::super::logging::locate(&mut e, &second).unwrap();
+    assert!(e.delete_qso(index));
+    assert_eq!(e.log_records().len(), 1);
+    assert_eq!(e.log_records()[0].band, "20m");
+    assert_eq!(super::super::logging::locate(&mut e, &first), Some(0));
+    assert_eq!(super::super::logging::locate(&mut e, &second), None);
+}
+
+/// The desktop hands a row back exactly as `get_log` gave it, and the station keys that echo.
+/// The key it derives must be the key it holds for the record — the same bytes a Remote page
+/// row keys to — or every shack action would be refused as stale. Pins the JSON round trip
+/// (`LoggedQso` → wire → `LoggedQso`) as key-preserving, so a serde attribute that drops or
+/// defaults a field on one side cannot creep in unnoticed.
+#[test]
+fn the_shacks_echoed_row_keys_to_the_stations_own_key() {
+    let f = Fixture::new();
+    seed(&f);
+    f.engine.lock().unwrap().import_adif(
+        "<CALL:6>DL1ABC<BAND:3>20m<MODE:3>SSB<FREQ:6>14.250<QSO_DATE:8>20260909<TIME_ON:6>040000\
+         <SIG:4>WWFF<SIG_INFO:9>DLFF-0001<NAME:9>José 日本<COMMENT:4>a\"b}<EOR>\n",
+    );
+    // The records and the rows handed out for them, read under one lock; the page read below
+    // takes the lock again.
+    let handed_out: Vec<(tempo_core::logbook::QsoRecord, tempo_app::dto::LoggedQso)> = {
+        let e = f.engine.lock().unwrap();
+        assert_eq!(e.log_records().len(), 3);
+        (0..3)
+            .map(|index| {
+                (
+                    e.log_records()[index].clone(),
+                    crate::log_row(&e, index).unwrap(),
+                )
+            })
+            .collect()
+    };
+    for (record, handed_out) in handed_out {
+        // Over the wire and back, as Tauri's IPC carries it.
+        let echoed: tempo_app::dto::LoggedQso =
+            serde_json::from_value(serde_json::to_value(&handed_out).unwrap()).unwrap();
+        let target = serde_json::to_value(super::super::logging::seen_target(&echoed)).unwrap();
+        assert_eq!(
+            target["key"],
+            super::super::logging::row_key(&record),
+            "{}",
+            record.call
+        );
+        // And it is the key the browser's page row carries for the same record.
+        assert_eq!(
+            target["key"],
+            super::super::logging::value_key(&row(&f, &record.call))
+        );
+    }
+}

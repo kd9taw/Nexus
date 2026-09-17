@@ -107,6 +107,12 @@ pub struct StationCore {
     pub(crate) upload_note: Option<String>,
     pub(crate) upload_ok: bool,
     pub(crate) upload_tick: u32,
+    /// Bumped on EVERY change to the in-memory log — an append, a full rewrite (edit, delete,
+    /// QSL mark, import, sync, upload stamp) or another instance's appends folded in. The
+    /// desktop log view reloads on change. It exists because Remote made the log a
+    /// two-writer resource: the view used to load once and address rows by position, and a
+    /// browser's delete shifted every later row under the operator's next click.
+    pub(crate) log_tick: u32,
     /// Persistent QSO logbook (worked-before / ADIF), loaded from `log_path`.
     pub(crate) logbook: Logbook,
     /// ADIF file the logbook is persisted to, if the shell set one.
@@ -220,6 +226,7 @@ impl StationCore {
             upload_note: None,
             upload_ok: false,
             upload_tick: 0,
+            log_tick: 0,
             logbook: Logbook::new(),
             log_path: None,
             last_log_mtime: None,
@@ -834,6 +841,7 @@ impl StationCore {
             self.logbook.reconcile_disk(&disk);
         }
         self.last_log_mtime = stamp;
+        self.log_tick = self.log_tick.wrapping_add(1);
         true
     }
 
@@ -889,6 +897,9 @@ impl StationCore {
         recs: &[QsoRecord],
         receipt: bool,
     ) -> Option<Vec<tempo_core::logbook::LogAppendReceipt>> {
+        // The records are in memory already (the contract above), so the log HAS changed
+        // whether or not a file exists to append to.
+        self.log_tick = self.log_tick.wrapping_add(1);
         let path = self.log_path.clone()?;
         debug_assert!(
             self.logbook.records().ends_with(recs),
@@ -929,6 +940,9 @@ impl StationCore {
     /// so the recovery gate above doesn't re-parse our own write on the next
     /// stamp. Every full-log rewrite in this file funnels through here.
     fn save_log(&mut self, context: &str) {
+        // Memory changed before the caller got here; the view must reload even when there is
+        // no file, or the write fails.
+        self.log_tick = self.log_tick.wrapping_add(1);
         let Some(path) = self.log_path.clone() else {
             return;
         };

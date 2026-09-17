@@ -6,7 +6,7 @@ mod aprs;
 /// encoder lives in tempo-audio, which a build without it does not have at all.
 #[cfg(feature = "radio")]
 mod audio;
-mod operations;
+pub(crate) mod operations;
 pub(crate) mod query;
 pub(crate) mod sstv;
 #[cfg(test)]

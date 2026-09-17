@@ -8,6 +8,7 @@ import { RemoteCollectionsContext, type RemoteCollections } from './collections'
 import { OperationClient } from './operation-client'
 import { logTarget } from './operation-protocol'
 import type { QueryPage } from './application-query-protocol'
+import type { Json } from './application-protocol'
 import { t } from '../i18n'
 
 beforeAll(() => {
@@ -19,11 +20,12 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 const qso = (call: string) => ({ call, band: '20m', mode: 'FT8', freqMhz: 14.074, whenUnix: 1788940800,
   confirmed: false, awardConfirmed: false, grid: 'FN31', country: 'United States', rstSent: '-10', rstRcvd: '-12' })
-const page = (calls: string[]): QueryPage => ({ type: 'applicationPage', requestId: crypto.randomUUID(), collection: 'log',
-  snapshotId: crypto.randomUUID(), offset: 0, total: calls.length, retained: calls.length, nextCursor: null, ageMs: 0,
-  rows: calls.map(qso), meta: {} })
+type Row = ReturnType<typeof qso> & Extract<Json, object>
+const page = (rows: (string | Row)[]): QueryPage => ({ type: 'applicationPage', requestId: crypto.randomUUID(), collection: 'log',
+  snapshotId: crypto.randomUUID(), offset: 0, total: rows.length, retained: rows.length, nextCursor: null, ageMs: 0,
+  rows: rows.map(r => typeof r === 'string' ? qso(r) : r), meta: {} })
 
-function station(capabilities: string[]) {
+function station(capabilities: string[], rows: (string | Row)[] = ['W1AW', 'K1ABC']) {
   const sent: Record<string, any>[] = []
   // A still clock: the first poll leaves, the state stays current, and no heartbeat interleaves
   // with the replies below.
@@ -34,7 +36,7 @@ function station(capabilities: string[]) {
   reply({ stationBootId: crypto.randomUUID(), allowed: true, phase: 'controlling', leaseId: crypto.randomUUID(), revision: 1,
     commandWindowId: crypto.randomUUID(), nextSequence: 1, leaseRemainingMs: 5000, actions: ['log.manual'], txArmed: false,
     transmitEpoch: null, controls: { context: { radioId: 1, radioConnection: null, ampConnection: null, ampReadSequence: null }, capabilities } })
-  const source = { page: vi.fn(async () => page(['W1AW', 'K1ABC'])) }
+  const source = { page: vi.fn(async () => page(rows)) }
   const view = render(<StationControlContext.Provider value={false}><RemoteOperationsContext.Provider value={client}>
     <RemoteCollectionsContext.Provider value={source as unknown as RemoteCollections}>
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />
@@ -113,6 +115,12 @@ it('edits a remote row through the log form without the fields the station keeps
   fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: 'W1AW' }) }))
   expect(screen.queryByText(t('logbook.field.txPower.label'))).toBeNull()
   expect(screen.queryByText(t('logbook.field.parkMine.label'))).toBeNull()
+  // Nor the four the record cannot carry: the form used to show them, take the operator's tick,
+  // and drop it under an "updated" toast. (The shack's form shows all four: Logbook.fields.test.)
+  expect(screen.queryByText(t('logbook.field.myGrid.label'))).toBeNull()
+  expect(screen.queryByText(t('logbook.field.myRig.label'))).toBeNull()
+  expect(screen.queryByText(t('logbook.field.qslSent.label'))).toBeNull()
+  expect(screen.queryByText(t('logbook.field.qslCard.label'))).toBeNull()
   fireEvent.change(screen.getByDisplayValue('FN31'), { target: { value: 'FN42' } })
   fireEvent.click(screen.getByRole('button', { name: t('logbook.form.save') }))
   await waitFor(() => expect(test.changes()).toHaveLength(1))
@@ -124,5 +132,21 @@ it('edits a remote row through the log form without the fields the station keeps
   await act(async () => test.reply({ operation: 'logChange', operationId: request.requestId, outcome: 'rejected', reason: 'contextChanged' }))
   expect(test.source.page).toHaveBeenCalledTimes(1)
   expect(screen.getByRole('button', { name: t('logbook.form.save') })).toBeTruthy()
+  test.client.disconnected()
+})
+
+it('keeps a WWFF park as WWFF through an edit of an unrelated field', async () => {
+  // WWFF is a real stored program (an ADIF SIG kept verbatim); the form used to narrow it to
+  // SOTA-or-POTA, so a grid fix from the browser rewrote the park to POTA.
+  const wwff = { ...qso('DL1ABC'), ota: { theirProgram: 'WWFF', theirRef: 'DLFF-0001', myProgram: null, myRef: null, iota: null } }
+  const test = station(['logEdit'], [wwff])
+  await screen.findByText('DL1ABC')
+  fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: 'DL1ABC' }) }))
+  fireEvent.change(screen.getByDisplayValue('FN31'), { target: { value: 'JO31' } })
+  fireEvent.click(screen.getByRole('button', { name: t('logbook.form.save') }))
+  await waitFor(() => expect(test.changes()).toHaveLength(1))
+  const [request] = test.changes()
+  expect(request.change.record.ota).toEqual({ theirProgram: 'WWFF', theirRef: 'DLFF-0001' })
+  expect(request.change.record.grid).toBe('JO31')
   test.client.disconnected()
 })

@@ -2696,6 +2696,7 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           <Logbook
             focusCall={logFocus}
             onConsumeFocusCall={() => setLogFocus(null)}
+            logTick={snap.logTick}
             defaultBand={snap.radio.band}
             defaultFreqMhz={snap.radio.dialMhz}
             // Seed manual entries from the mode the operator was ACTUALLY running —

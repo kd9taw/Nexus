@@ -490,6 +490,36 @@ pub(super) fn row_key(record: &QsoRecord) -> String {
         .unwrap_or_default()
 }
 
+/// The identity of a row the SHACK's log view showed: the row itself, exactly as `get_log`
+/// handed it out. The station keys it the way a browser keys its page row — the same canonical
+/// bytes, the same SHA-256 — and [`locate`] then finds the record whose OWN key matches, so
+/// the row is a claim to be matched, never an address to trust. The view computes no hash (the
+/// desktop webview has no proven `crypto.subtle`), and `get_log` hands out no keys: keying a
+/// whole log on every reload would cost a serialise and a digest per record under the engine
+/// lock, where keying one row on one click costs nothing anyone can notice.
+pub(crate) fn seen_target(seen: &tempo_app::dto::LoggedQso) -> Target {
+    Target {
+        call: seen.call.clone(),
+        when_unix: seen.when_unix,
+        key: serde_json::to_value(seen)
+            .map(|v| value_key(&v))
+            .unwrap_or_default(),
+    }
+}
+
+/// The position TODAY of the row a writer saw — the browser's log page or the shack's log
+/// view — or `None` when no row holds exactly that content any more. This is the one way
+/// either writer turns a row into an index: a position kept from an earlier read is stale the
+/// moment the OTHER writer deletes above it, and acting on it deleted or rewrote a different
+/// contact. Another instance's appends are folded in first so the index cannot shift under
+/// the caller.
+pub(crate) fn locate(engine: &mut Engine, target: &Target) -> Option<usize> {
+    engine.sync_shared_log_if_changed();
+    engine.log_records().iter().position(|r| {
+        r.call == target.call && r.when_unix == target.when_unix && row_key(r) == target.key
+    })
+}
+
 pub(super) enum ChangeWork {
     /// A proven rewrite: the file must hold exactly `count` copies of `expected` afterwards.
     Rewrite {
@@ -584,14 +614,8 @@ pub(super) fn prepare_change(
         }
         _ => {}
     }
-    // Fold in another instance's appends first, so the index found below cannot shift under it.
-    engine.sync_shared_log_if_changed();
     let t = change.target().ok_or(ChangeReason::ContextChanged)?;
-    let index = engine
-        .log_records()
-        .iter()
-        .position(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
-        .ok_or(ChangeReason::ContextChanged)?;
+    let index = locate(engine, t).ok_or(ChangeReason::ContextChanged)?;
     let stored = engine.log_records()[index].clone();
     let copies = |records: &[QsoRecord], of: &QsoRecord, text: &str| {
         records

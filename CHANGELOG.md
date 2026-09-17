@@ -5,6 +5,27 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A delete or edit from a Remote browser could make the shack's Logbook delete or overwrite
+  the wrong contact.** The shack's list loaded once and remembered each row by its position;
+  when the browser deleted a contact above it, every later row moved up one, and the next
+  Delete or Edit at the shack went to the contact now sitting at that position — deleted, or
+  rewritten with another contact's details — while the message on screen named the one you
+  meant. Both sides now identify a contact by what it is, not where it sits: an action from the
+  shack is refused with a "reload the log" message if that exact contact is no longer there,
+  and the list refreshes itself whenever the log changes, so that refusal is rare.
+- **Editing a WWFF contact from a Remote browser no longer turns its park into a POTA one.** The
+  hosted edit form only knew POTA and SOTA, so saving any correction — a grid, a name — rewrote
+  the park's program to POTA. The program now rides through exactly as the log holds it, as it
+  already did at the shack.
+- **The Remote edit form no longer offers four fields it could not save.** My grid, Rig, QSL sent
+  and Card received were shown in the hosted form, took your entry, and dropped it under an
+  "updated" message. They are shack-only for now; QSL sent and Card received are still on the
+  hosted row menu, where they do save.
+
 ## [1.13.0] — 2026-09-16
 
 ### Added

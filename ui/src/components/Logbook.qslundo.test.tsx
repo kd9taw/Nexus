@@ -86,8 +86,9 @@ describe('QSL sent — undoing a mis-click (#180)', () => {
   it('clears the sent mark when that entry is chosen', async () => {
     const { select } = await renderWithSentQsl()
     fireEvent.change(select, { target: { value: 's' } })
+    // The row on screen, never its position (a Remote delete shifts positions).
     await waitFor(() =>
-      expect(api.markQslSent as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(0, null),
+      expect(api.markQslSent as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(sentLog()[0], null),
     )
   })
 

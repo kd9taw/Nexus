@@ -961,6 +961,7 @@ impl AppState {
             upload_note: None,
             upload_ok: false,
             upload_tick: 0,
+            log_tick: 0,
         }
     }
 
