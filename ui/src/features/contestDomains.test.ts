@@ -109,20 +109,40 @@ describe('what a typed value resolves to', () => {
   it('never turns a state name into one of the several sections that cover it', () => {
     const FD = ['fd_sections']
     expect(resolveDomainValue(FD, 'Wisconsin')).toBe('WI') // one section, one answer
+    // …however it is typed: the fold is the same one every other value gets.
+    expect(resolveDomainValue(FD, 'wisconsin ')).toBe('WI')
+    expect(resolveDomainValue(FD, '  WISCONSIN')).toBe('WI')
     expect(resolveDomainValue(FD, 'New York')).toBeUndefined()
     expect(resolveDomainValue(FD, 'California')).toBeUndefined()
     // A state that is not a section name at all resolves to nothing rather than to the
     // section whose name happens to begin with it.
     expect(resolveDomainValue(FD, 'Texas')).toBeUndefined()
     expect(resolveDomainValue(FD, 'Massachusetts')).toBeUndefined()
-    // …and the operator is not left guessing: the list OFFERS every section that covers
-    // the state, which is the hint.
+    // …and in every one of those cases the operator is not left guessing: the list
+    // OFFERS the sections that cover the state, which is the hint.
     expect(domainSuggestions(FD, 'New York', 99).map((v) => v.code).sort()).toEqual([
       'ENY',
       'NLI',
       'NNY',
       'WNY',
     ])
+    expect(domainSuggestions(FD, 'Texas', 99).map((v) => v.code).sort()).toEqual([
+      'NTX',
+      'STX',
+      'WTX',
+    ])
+    expect(domainSuggestions(FD, 'Massachusetts', 99).map((v) => v.code).sort()).toEqual([
+      'EMA',
+      'WMA',
+    ])
+    // ⚠️ AND THE HONEST LIMIT, recorded rather than assumed: California's ten sections are
+    // named East Bay, Los Angeles, Orange, Pacific, Sacramento Valley, San Diego, San
+    // Francisco, San Joaquin Valley, Santa Barbara and Santa Clara Valley — not one of
+    // them contains the word "California", so an operator who types the state gets no
+    // suggestion either. The list can only offer what the data NAMES; the section table
+    // carries no state field, and inventing a state→section map would be this build's
+    // data wearing the ARRL's name.
+    expect(domainSuggestions(FD, 'California', 99)).toEqual([])
   })
 
   it('refuses to guess between several, which is the whole safety of it', () => {
