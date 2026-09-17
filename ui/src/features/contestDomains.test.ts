@@ -89,13 +89,40 @@ describe('what a typed value resolves to', () => {
     expect(resolveDomainValue(COUNTIES, '  cook  ')).toBe('COOK')
     expect(resolveDomainValue(COUNTIES, 'St. Clair')).toBe('SCLA')
     expect(resolveDomainValue(COUNTIES, 'Jo Daviess')).toBe('JODA')
-    // An unambiguous PREFIX of one name resolves too: nothing else starts "Kanka".
-    expect(resolveDomainValue(COUNTIES, 'Kanka')).toBe('KANK')
+    // ⚠️ A PREFIX does NOT resolve, however unambiguous it looks — nothing else starts
+    // "Kanka", and it still refuses. The rule is deliberately blunt because the case it
+    // protects is ARRL's section list (see the state-name test below): a prefix rule
+    // turns "New York" into one of the four sections that cover New York. What replaces
+    // the convenience is the list, which offers KANK while the operator types.
+    expect(resolveDomainValue(COUNTIES, 'Kanka')).toBeUndefined()
+    expect(domainSuggestions(COUNTIES, 'Kanka').map((v) => v.code)).toEqual(['KANK'])
   })
 
   it('leaves a code alone', () => {
     expect(resolveDomainValue(COUNTIES, 'JODA')).toBe('JODA')
     expect(resolveDomainValue(COUNTIES, 'lee')).toBe('LEE')
+  })
+
+  // ⭐ THE CASE THAT MUST NEVER RESOLVE. Several ARRL sections cover one state — New York
+  // is NLI, ENY, NNY and WNY; California is ten — and a resolver that picks one is worse
+  // than one that refuses, because the operator sees a plausible code and logs it.
+  it('never turns a state name into one of the several sections that cover it', () => {
+    const FD = ['fd_sections']
+    expect(resolveDomainValue(FD, 'Wisconsin')).toBe('WI') // one section, one answer
+    expect(resolveDomainValue(FD, 'New York')).toBeUndefined()
+    expect(resolveDomainValue(FD, 'California')).toBeUndefined()
+    // A state that is not a section name at all resolves to nothing rather than to the
+    // section whose name happens to begin with it.
+    expect(resolveDomainValue(FD, 'Texas')).toBeUndefined()
+    expect(resolveDomainValue(FD, 'Massachusetts')).toBeUndefined()
+    // …and the operator is not left guessing: the list OFFERS every section that covers
+    // the state, which is the hint.
+    expect(domainSuggestions(FD, 'New York', 99).map((v) => v.code).sort()).toEqual([
+      'ENY',
+      'NLI',
+      'NNY',
+      'WNY',
+    ])
   })
 
   it('refuses to guess between several, which is the whole safety of it', () => {

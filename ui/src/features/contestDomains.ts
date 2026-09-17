@@ -184,13 +184,24 @@ export function domainSuggestions(
 
 /**
  * ⭐ **The CODE the operator means by `typed`, when exactly one value can be meant** —
- * `Cook` → `COOK` — and `undefined` when more than one can, so nothing is ever guessed
- * onto the air.
+ * `Cook` → `COOK` — and `undefined` whenever more than one can, so nothing is ever
+ * guessed onto the air.
  *
  * A value that is already a code is returned as itself (upper-cased), so this is safe to
- * run over a box that holds `COOK` as well as one that holds `cook county`. A name has to
- * match in full or be an unambiguous prefix: `Ma` is Macon, Macoupin, Madison, Marion,
- * Marshall, Mason and Massac, so it resolves to nothing at all.
+ * run over a box holding `COOK` as well as one holding `cook county`. Otherwise the name
+ * must match **in full**, punctuation and spacing aside.
+ *
+ * ⚠️ **A PREFIX is not enough, and the reason is ARRL's section list.** An earlier
+ * version accepted an unambiguous name prefix, which reads as generous and is not:
+ * several sections cover one state, and `New York` is a prefix of exactly one of the
+ * four names that cover New York ("New York City-Long Island"), so it resolved to `NLI`
+ * — a plausible code for a state the operator did not name. A resolver that picks one of
+ * several is worse than one that refuses, because the refusal is visible and the pick is
+ * not. What replaces the convenience is [`domainSuggestions`], which offers all four
+ * while they type.
+ *
+ * Two values sharing a name (ILQP lists `PE` and `PEI` as Prince Edward Island) are
+ * likewise several, and resolve to nothing.
  */
 export function resolveDomainValue(
   domainIds: string[] | undefined,
@@ -204,8 +215,6 @@ export function resolveDomainValue(
   }
   if (values.some((v) => v.code === q)) return q
   const qk = nameKey(q)
-  const exact = values.filter((v) => nameKey(v.name) === qk)
-  if (exact.length === 1) return exact[0].code
-  const prefix = values.filter((v) => nameKey(v.name).startsWith(qk))
-  return prefix.length === 1 ? prefix[0].code : undefined
+  const named = values.filter((v) => nameKey(v.name) === qk)
+  return named.length === 1 ? named[0].code : undefined
 }
