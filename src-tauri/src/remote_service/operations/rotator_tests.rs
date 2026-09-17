@@ -46,6 +46,7 @@ fn settle(f: &Fixture, command: &Request) -> Value {
 
 #[test]
 fn rotator_point_needs_v3_its_hint_and_one_rotctld_command_off_the_engine_lock() {
+    let _alone = alone(); // a point is refused while a track is live: see `alone()`
     let (f, fake) = station();
     let state = acquire_controls_version(&f, Instant::now(), 3);
     assert!(state["controls"]["capabilities"]
@@ -71,7 +72,8 @@ fn rotator_point_needs_v3_its_hint_and_one_rotctld_command_off_the_engine_lock()
 
 #[test]
 fn a_station_with_no_rotator_refuses_and_a_failed_rotctld_reply_is_unknown_not_applied() {
-    // No rotator configured: nothing to point.
+    let _alone = alone(); // a point is refused while a track is live: see `alone()`
+                          // No rotator configured: nothing to point.
     let f = Fixture::new();
     let state = acquire_controls_version(&f, Instant::now(), 3);
     let command = control_request(&state, json!({"action":"rotator.stop"}));
@@ -92,6 +94,7 @@ fn a_station_with_no_rotator_refuses_and_a_failed_rotctld_reply_is_unknown_not_a
 
 #[test]
 fn stop_reaches_rotctld_and_point_at_call_uses_the_desktop_bearing() {
+    let _alone = alone(); // a point is refused while a track is live: see `alone()`
     let (f, fake) = station();
     let state = acquire_controls_version(&f, Instant::now(), 3);
     let stop = control_request(&state, json!({"action":"rotator.stop"}));
@@ -170,8 +173,9 @@ fn a_satellite_track_refuses_a_point_but_never_a_stop() {
 
 #[test]
 fn a_pending_point_holds_the_single_receipt_so_stop_waits_behind_it() {
-    // Documented, not designed: the station admits one pending control receipt at a time, so a
-    // Stop sent while a point is still waiting on rotctld is refused as busy until it settles.
+    let _alone = alone(); // a point is refused while a track is live: see `alone()`
+                          // Documented, not designed: the station admits one pending control receipt at a time, so a
+                          // Stop sent while a point is still waiting on rotctld is refused as busy until it settles.
     let (f, fake) = station();
     let release = fake.hold();
     let state = acquire_controls_version(&f, Instant::now(), 3);
@@ -186,6 +190,7 @@ fn a_pending_point_holds_the_single_receipt_so_stop_waits_behind_it() {
 
 #[test]
 fn rotator_actions_refuse_extra_fields_and_a_logging_only_grant() {
+    let _alone = alone(); // a point is refused while a track is live: see `alone()`
     for (action, extra) in [
         (
             json!({"action":"rotator.point","azimuthDeg":90}),

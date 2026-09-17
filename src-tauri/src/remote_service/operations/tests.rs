@@ -82,21 +82,26 @@ fn id() -> String {
 
 /// Exclusive use of the process-wide satellite track badge for the length of one test.
 ///
-/// `SAT_TRACK` and `SAT_TRACK_GEN` are process-wide, and TWO kinds of test reach them:
+/// `SAT_TRACK` and `SAT_TRACK_GEN` are process-wide, and THREE kinds of test reach them:
 ///
 /// * the satellite tests, which arm a badge (`test_live_sat_track`) and then assert on it;
 /// * **every test that issues a station Stop** — `stop_station` disarms the satellite track
 ///   (`transmit_stop` → `satellite::disarm_track` → `disarm_sat_track_locked`), which bumps the
-///   generation and TAKES the badge, whoever put it there.
+///   generation and TAKES the badge, whoever put it there;
+/// * **every test that points the rotator** — a point is REFUSED while a track is live
+///   (`satellite_track_live` feeds `rotator::queue`), so a sibling's badge turns its "applied"
+///   into a "rejected".
 ///
-/// Only the first kind used to hold this, so a sibling's Stop landing inside a satellite test
-/// (correctly) won, in either of two shapes seen in real gate runs:
+/// Only the first kind used to hold this, so a sibling landing inside a satellite test
+/// (correctly) won, in three shapes seen in real runs:
 ///
 /// * between `test_live_sat_track`'s `fetch_add` and its generation check, the badge is never
 ///   published at all — `assertion failed: crate::SAT_TRACK…is_some()`;
 /// * after it is published, the sibling's disarm takes it, so that test's OWN Stop then sees
 ///   `was_live == false` and skips the dial handback it exists to prove — "the dial is the
-///   operator's again".
+///   operator's again";
+/// * the other way round, a satellite test's live badge reaches a rotator test and its point is
+///   refused — `left: String("rejected"), right: "applied"`.
 ///
 /// Neither is a product race: the shipped app has one engine and one track, and the badge, the
 /// generation and the handback are coherent for it. It is two tests sharing one global.
@@ -114,22 +119,39 @@ fn alone() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// ⭐ THE GUARD ON THE GUARD — [`alone`] is a convention, and a convention nobody can see is one
-/// the next test quietly breaks. This COMPUTES the rule over the source of the two files that
-/// issue Stops: every `#[test]` whose body issues one must take the badge guard.
+/// the next test quietly breaks. This COMPUTES the rule over the source of the three files whose
+/// tests reach the badge: every `#[test]` whose body writes it (a Stop) or reads it (a rotator
+/// point) must hold the guard.
 ///
-/// It is here rather than in either file because the rule spans both, and because the collision
-/// it prevents is invisible until it flakes — twice, in two different agents' gate runs, before
-/// anyone went looking.
+/// It is here rather than in any one of them because the rule spans all three, and because the
+/// collision it prevents is invisible until it flakes — it did, in two different agents' gate
+/// runs and again in a third, before anyone went looking.
 #[test]
-fn every_test_that_stops_the_station_takes_the_badge_guard() {
-    const SOURCES: [(&str, &str); 2] = [
+fn every_test_that_touches_the_track_badge_takes_the_guard() {
+    const SOURCES: [(&str, &str); 3] = [
         ("transmit_tests.rs", include_str!("transmit_tests.rs")),
         ("satellite_tests.rs", include_str!("satellite_tests.rs")),
+        ("rotator_tests.rs", include_str!("rotator_tests.rs")),
     ];
-    /// A Stop reaches `stop_station`, which disarms the satellite track. These are the shapes a
-    /// test issues one in; a new shape belongs here beside them.
-    fn stops(body: &str) -> bool {
-        body.contains("StopTransmit") || body.contains("stop_request(") || body.contains("stop_v4(")
+    /// The two ways a test's outcome depends on the process-wide badge. Named for the rule, not
+    /// for one of its halves: a reader is caught by exactly the same convention.
+    ///
+    /// WRITE — a Stop reaches `stop_station`, which disarms the satellite track: it bumps the
+    /// generation and takes the badge, whoever put it there.
+    ///
+    /// READ — a rotator POINT is refused while a track is live (`station::satellite_track_live`
+    /// feeds `rotator::queue`'s `tracking`), so a sibling's live badge turns an "applied" into a
+    /// "rejected". That half was found the same day as the write half, from the same collision
+    /// wearing the other hat: "left: String(\"rejected\"), right: \"applied\"" on two rotator
+    /// tests, interleaved in the log with a satellite test that held a live badge. A Stop is
+    /// never refused that way and needs no guard for reading.
+    ///
+    /// These are the shapes each reaches the badge in; a new shape belongs here beside them.
+    fn touches_badge(body: &str) -> bool {
+        body.contains("StopTransmit")
+            || body.contains("stop_request(")
+            || body.contains("stop_v4(")
+            || body.contains("rotator.point")
     }
     fn guarded(body: &str) -> bool {
         body.contains("alone()")
@@ -145,24 +167,25 @@ fn every_test_that_stops_the_station_takes_the_badge_guard() {
     // nothing — or merges every body into one — would otherwise report a clean sheet forever.
     assert!(
         bodies.len() >= 30,
-        "the scan found only {} test bodies in two files",
+        "the scan found only {} test bodies in three files",
         bodies.len()
     );
     let stopping: Vec<&(&str, String, String)> =
-        bodies.iter().filter(|(_, _, b)| stops(b)).collect();
+        bodies.iter().filter(|(_, _, b)| touches_badge(b)).collect();
     assert!(
-        stopping.len() >= 11,
-        "the scan found only {} tests issuing a Stop",
+        stopping.len() >= 16,
+        "the scan found only {} tests reaching the badge",
         stopping.len()
     );
     // …and it sees the two specific tests this rule was written about, one per file.
     for named in [
         "a_replayed_stop_transmit_has_no_further_effect",
         "a_remote_stop_ends_an_active_satellite_track_and_hands_the_dial_back",
+        "rotator_point_needs_v3_its_hint_and_one_rotctld_command_off_the_engine_lock",
     ] {
         assert!(
             stopping.iter().any(|(_, name, _)| name == named),
-            "{named} issues a Stop and the scan did not see it"
+            "{named} reaches the badge and the scan did not see it"
         );
     }
 
@@ -173,13 +196,20 @@ fn every_test_that_stops_the_station_takes_the_badge_guard() {
         .collect();
     assert!(
         offenders.is_empty(),
-        "these tests issue a station Stop without `let _alone = alone();` — a Stop disarms the \
-         satellite track, so they race every satellite test: {offenders:?}"
+        "these tests reach the process-wide satellite badge without `let _alone = alone();` — a \
+         Stop disarms the track and a rotator point is refused while one is live, so they race \
+         every satellite test: {offenders:?}"
     );
 
     // CONTROL: the detector fires. Both directions, on bodies written to break each rule.
-    assert!(stops("let r = stop_request(&f, &state);") && !guarded("let r = stop_request(&f);"));
-    assert!(guarded("let _alone = alone();") && !stops("let _alone = alone();"));
+    assert!(
+        touches_badge("let r = stop_request(&f, &state);") && !guarded("let r = stop_request(&f);")
+    );
+    assert!(
+        touches_badge("json!({\"action\":\"rotator.point\"})")
+            && !touches_badge("json!({\"action\":\"rotator.stop\"})")
+    );
+    assert!(guarded("let _alone = alone();") && !touches_badge("let _alone = alone();"));
 }
 
 /// Every `#[test] fn NAME() { … }` in `src`, as `(name, body)`, by brace matching.
