@@ -44,16 +44,18 @@ fn resolver() {
     });
 }
 
-/// One contest's golden log: the station, and three received rows `(call, band, fields)`.
+/// One row's received exchange, as the entry strip hands it over: `(slot, raw)` pairs.
+type Fields = &'static [(&'static str, &'static str)];
+
+/// One row of a golden log: the call worked, the band it was worked on, and what it sent.
+type Row = (&'static str, &'static str, Fields);
+
+/// One contest's golden log: the station, and three received rows.
 struct Case {
     event: &'static str,
     mode: &'static str,
     station: StationData,
-    rows: [(
-        &'static str,
-        &'static str,
-        &'static [(&'static str, &'static str)],
-    ); 3],
+    rows: [Row; 3],
 }
 
 fn station(fd_class: &str) -> StationData {
@@ -75,14 +77,14 @@ fn station(fd_class: &str) -> StationData {
 fn cases() -> Vec<Case> {
     const HF: [&str; 3] = ["20m", "20m", "40m"];
     const VHF: [&str; 3] = ["6m", "6m", "2m"];
-    let hf = |f: [&'static [(&'static str, &'static str)]; 3]| {
+    let hf = |f: [Fields; 3]| {
         [
             ("K1ABC", HF[0], f[0]),
             ("DL1ABC", HF[1], f[1]),
             ("JA1ABC", HF[2], f[2]),
         ]
     };
-    let vhf = |f: [&'static [(&'static str, &'static str)]; 3]| {
+    let vhf = |f: [Fields; 3]| {
         [
             ("K1ABC", VHF[0], f[0]),
             ("W2DEF", VHF[1], f[1]),
@@ -124,7 +126,7 @@ fn cases() -> Vec<Case> {
             ][..],
         ),
     ];
-    let party = |q: [&'static str; 3]| -> [&'static [(&'static str, &'static str)]; 3] {
+    let party = |q: [&'static str; 3]| -> [Fields; 3] {
         match q {
             ["FRAN", "MI", "ON"] => [
                 &[("RST", "599"), ("QTH", "FRAN")],

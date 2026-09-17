@@ -25362,11 +25362,13 @@ mod tests {
         // in this test binary is refused, which is fine: it is the same resolver).
         let _ = tempo_core::contest::install_call_resolver(super::contest_place_call);
         let preview = |state: &str| {
-            let mut s = tempo_app::settings::Settings::default();
-            s.mycall = "W9XYZ".into();
-            s.fd_event = "cqww_rtty".into();
-            s.contest_cq_zone = 4;
-            s.contest_qth_state = state.into();
+            let s = tempo_app::settings::Settings {
+                mycall: "W9XYZ".into(),
+                fd_event: "cqww_rtty".into(),
+                contest_cq_zone: 4,
+                contest_qth_state: state.into(),
+                ..Default::default()
+            };
             super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s))
         };
         let blank = preview("");
