@@ -51,11 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moment is held instead of refused.** Every held control used to go grey for about a second after
   each command while the browser re-read the station, and anything pressed in that gap came back
   "Not sent. Nothing reached the station" — most often a call, a Resend or an exchange pressed
-  right after turning TX on. The controls now stay lit while the command confirms, and a gesture
-  made in that moment waits for the station's own answer and goes out once it lands, a second and a
-  half at the outside. It is never sent late or behind your back: if the answer does not come, or
-  you press Stop or turn TX off while it waits, or the station's transmit permission moves under
-  it, the gesture is refused and says so, with nothing reaching the radio.
+  right after turning TX on. The controls now stay lit throughout, and once the station has
+  answered, a gesture made while the browser is still re-reading waits for the fresh state and goes
+  out on it, a second and a half at the outside. It is never sent late or behind your back: if the
+  re-read does not come, or you press Stop or turn TX off while it waits, or the station's transmit
+  permission moves under it, the gesture is refused and says so, with nothing reaching the radio.
+  While a command is still on its way to the station a second one is refused the same way, "Not
+  sent", with nothing reaching the radio — the same answer as before, from a control that no longer
+  goes dead to give it.
 
 ### Fixed
 
