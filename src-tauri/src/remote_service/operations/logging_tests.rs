@@ -1339,3 +1339,67 @@ fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
     .unwrap();
     assert_eq!(super::super::logging::locate(&mut e, &fresh), Some(0));
 }
+
+/// WWFF is a real stored program (an ADIF SIG kept verbatim, as the desktop edit path keeps
+/// it). The browser used to narrow the program to SOTA-or-POTA and the station applied it
+/// unconditionally, so a Remote grid fix rewrote a WWFF park to POTA.
+#[test]
+fn a_remote_edit_keeps_a_wwff_park_as_wwff() {
+    let f = Fixture::new();
+    seed(&f);
+    f.engine.lock().unwrap().import_adif(
+        "<CALL:6>DL1ABC<BAND:3>20m<MODE:3>SSB<FREQ:6>14.250<QSO_DATE:8>20260909<TIME_ON:6>040000\
+         <SIG:4>WWFF<SIG_INFO:9>DLFF-0001<EOR>\n",
+    );
+    acquire(&f);
+    let stored = |f: &Fixture| {
+        let e = f.engine.lock().unwrap();
+        let r = e.log_records().iter().find(|r| r.call == "DL1ABC").unwrap();
+        (
+            r.ota.their_program.clone(),
+            r.ota.their_ref.clone(),
+            r.grid.clone(),
+        )
+    };
+    assert_eq!(
+        stored(&f),
+        (Some("WWFF".into()), Some("DLFF-0001".into()), None)
+    );
+    let record = |ota: Value| {
+        let mut record = json!({"call":"DL1ABC","grid":"JO31","country":null,"state":null,"band":"20m",
+            "freqMhz":14.25,"mode":"SSB","rstSent":null,"rstRcvd":null,"name":null,"qth":null,"comment":null,
+            "notes":null,"whenUnix":row(&f, "DL1ABC")["whenUnix"],"confirmed":false,"awardConfirmed":false});
+        if !ota.is_null() {
+            record["ota"] = ota;
+        }
+        json!({"kind":"edit","target":target(&row(&f, "DL1ABC")),"record":record})
+    };
+    // The program the browser read back, exactly as stored.
+    let result = run(
+        &f,
+        &change(
+            &f,
+            record(json!({"theirProgram":"WWFF","theirRef":"DLFF-0001"})),
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "applied");
+    assert_eq!(
+        stored(&f),
+        (
+            Some("WWFF".into()),
+            Some("DLFF-0001".into()),
+            Some("JO31".into())
+        )
+    );
+    // A program the log would never hold is an invalid record, refused before it is a change.
+    let refused = run(
+        &f,
+        &change(
+            &f,
+            record(json!({"theirProgram":"pota","theirRef":"DLFF-0001"})),
+        ),
+    );
+    assert_eq!(refused, Err("invalidRecord"));
+    assert_eq!(stored(&f).0.as_deref(), Some("WWFF"));
+}

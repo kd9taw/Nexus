@@ -1001,7 +1001,9 @@ export function Logbook({
           rstSent: parseReport(draft.rstSent), rstRcvd: parseReport(draft.rstRcvd), name: draft.name.trim() || null,
           qth: draft.qth.trim() || null, comment: draft.comment.trim() || null, notes: draft.notes.trim() || null,
           whenUnix: parseUtcLocal(draft.whenUtc) ?? existing?.whenUnix ?? null, confirmed: false, awardConfirmed: false,
-          ...(parkTheirRef ? { ota: { theirProgram: existing?.ota?.theirProgram === 'SOTA' ? 'SOTA' : 'POTA', theirRef: parkTheirRef } } : {}),
+          // The stored program rides through, as on the desktop path: WWFF (an ADIF SIG kept
+          // verbatim) is a real value, and coercing it to SOTA-or-POTA rewrote the park on any edit.
+          ...(parkTheirRef ? { ota: { theirProgram: existing?.ota?.theirProgram || 'POTA', theirRef: parkTheirRef } } : {}),
         })
       } catch {
         setErr(t('remote.logEntryInvalid'))

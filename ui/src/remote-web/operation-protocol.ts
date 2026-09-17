@@ -35,7 +35,9 @@ export type ManualRecord = {
   whenUnix: number | null
   confirmed: false
   awardConfirmed: false
-  ota?: { theirProgram: 'POTA' | 'SOTA'; theirRef: string }
+  /** `theirProgram` is the stored program as the log holds it — POTA, SOTA, or an ADIF SIG such
+   * as WWFF kept verbatim — never narrowed to the two the hunt/activation changes name. */
+  ota?: { theirProgram: string; theirRef: string }
 }
 /** A log row as the station's log page sent it. The station finds the row again by this key and
  * never by a position: a position is stale the moment anything else changes the log. */
@@ -272,7 +274,8 @@ export function manualRecord(raw: unknown): ManualRecord {
   if (r.ota !== undefined) {
     const o = object(r.ota, ['theirProgram', 'theirRef'])
     if (
-      !['POTA', 'SOTA'].includes(String(o.theirProgram)) ||
+      typeof o.theirProgram !== 'string' ||
+      !/^[A-Z0-9]{2,16}$/.test(o.theirProgram) ||
       typeof o.theirRef !== 'string' ||
       !/^[A-Za-z0-9/-]{1,32}$/.test(o.theirRef)
     )

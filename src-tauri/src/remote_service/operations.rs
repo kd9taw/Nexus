@@ -231,7 +231,13 @@ impl ManualRecord {
             && field(&self.comment, 512)
             && field(&self.notes, 1024)
             && self.ota.as_ref().is_none_or(|o| {
-                ["POTA", "SOTA"].contains(&o.their_program.as_str())
+                // The stored program as the log holds it (POTA, SOTA, or an ADIF SIG such as
+                // WWFF kept verbatim), so an edit hands back what it read and rewrites nothing.
+                // Mirrors `manualRecord` in ui/src/remote-web/operation-protocol.ts.
+                (2..=16).contains(&o.their_program.len())
+                    && o.their_program
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
                     && !o.their_ref.is_empty()
                     && o.their_ref.len() <= 32
                     && o.their_ref

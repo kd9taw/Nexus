@@ -33,6 +33,12 @@ it('closes the log change grammar around a row key and a complete edit', () => {
     { kind: 'edit', target }
   ])
     expect(() => operationRequest(envelope(bad))).toThrow()
+  // The park program is whatever the log holds — WWFF is stored verbatim from ADIF SIG — and is
+  // never narrowed to POTA/SOTA; lower case, empty and free text are still refused.
+  for (const theirProgram of ['POTA', 'SOTA', 'WWFF'])
+    expect(logChange({ kind: 'edit', target, record: { ...record, ota: { theirProgram, theirRef: 'DLFF-0001' } } })).toBeTruthy()
+  for (const theirProgram of ['pota', '', 'W', 'A'.repeat(17), 'WW FF', 'WWFF-'])
+    expect(() => logChange({ kind: 'edit', target, record: { ...record, ota: { theirProgram, theirRef: 'DLFF-0001' } } })).toThrow()
 })
 
 it('marks a QSL sent only as B, D, E or a withdrawal, and a card only as received or not', () => {
