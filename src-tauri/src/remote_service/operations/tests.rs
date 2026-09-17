@@ -79,6 +79,143 @@ const OTHER: &str = "30000000-0000-4000-8000-000000000001";
 fn id() -> String {
     super::super::query::snapshot_id().unwrap()
 }
+
+/// Exclusive use of the process-wide satellite track badge for the length of one test.
+///
+/// `SAT_TRACK` and `SAT_TRACK_GEN` are process-wide, and TWO kinds of test reach them:
+///
+/// * the satellite tests, which arm a badge (`test_live_sat_track`) and then assert on it;
+/// * **every test that issues a station Stop** — `stop_station` disarms the satellite track
+///   (`transmit_stop` → `satellite::disarm_track` → `disarm_sat_track_locked`), which bumps the
+///   generation and TAKES the badge, whoever put it there.
+///
+/// Only the first kind used to hold this, so a sibling's Stop landing inside a satellite test
+/// (correctly) won, in either of two shapes seen in real gate runs:
+///
+/// * between `test_live_sat_track`'s `fetch_add` and its generation check, the badge is never
+///   published at all — `assertion failed: crate::SAT_TRACK…is_some()`;
+/// * after it is published, the sibling's disarm takes it, so that test's OWN Stop then sees
+///   `was_live == false` and skips the dial handback it exists to prove — "the dial is the
+///   operator's again".
+///
+/// Neither is a product race: the shipped app has one engine and one track, and the badge, the
+/// generation and the handback are coherent for it. It is two tests sharing one global.
+///
+/// TAKE IT ONCE, at the top of the test body, and never again inside anything that body calls:
+/// `std::sync::Mutex` is not reentrant, so a second take deadlocks rather than flakes. It also
+/// starts the test from an idle badge, so "no track is running" is a fact the test established
+/// rather than whatever the previous one happened to leave behind.
+fn alone() -> std::sync::MutexGuard<'static, ()> {
+    let guard = crate::TEST_SAT_TRACK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *crate::SAT_TRACK.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    guard
+}
+
+/// ⭐ THE GUARD ON THE GUARD — [`alone`] is a convention, and a convention nobody can see is one
+/// the next test quietly breaks. This COMPUTES the rule over the source of the two files that
+/// issue Stops: every `#[test]` whose body issues one must take the badge guard.
+///
+/// It is here rather than in either file because the rule spans both, and because the collision
+/// it prevents is invisible until it flakes — twice, in two different agents' gate runs, before
+/// anyone went looking.
+#[test]
+fn every_test_that_stops_the_station_takes_the_badge_guard() {
+    const SOURCES: [(&str, &str); 2] = [
+        ("transmit_tests.rs", include_str!("transmit_tests.rs")),
+        ("satellite_tests.rs", include_str!("satellite_tests.rs")),
+    ];
+    /// A Stop reaches `stop_station`, which disarms the satellite track. These are the shapes a
+    /// test issues one in; a new shape belongs here beside them.
+    fn stops(body: &str) -> bool {
+        body.contains("StopTransmit") || body.contains("stop_request(") || body.contains("stop_v4(")
+    }
+    fn guarded(body: &str) -> bool {
+        body.contains("alone()")
+    }
+
+    let mut bodies: Vec<(&str, String, String)> = Vec::new();
+    for (file, src) in SOURCES {
+        for (name, body) in test_bodies(src) {
+            bodies.push((file, name, body));
+        }
+    }
+    // CONTROL: the extractor really found the tests. A brace-matching scan that silently returns
+    // nothing — or merges every body into one — would otherwise report a clean sheet forever.
+    assert!(
+        bodies.len() >= 30,
+        "the scan found only {} test bodies in two files",
+        bodies.len()
+    );
+    let stopping: Vec<&(&str, String, String)> =
+        bodies.iter().filter(|(_, _, b)| stops(b)).collect();
+    assert!(
+        stopping.len() >= 11,
+        "the scan found only {} tests issuing a Stop",
+        stopping.len()
+    );
+    // …and it sees the two specific tests this rule was written about, one per file.
+    for named in [
+        "a_replayed_stop_transmit_has_no_further_effect",
+        "a_remote_stop_ends_an_active_satellite_track_and_hands_the_dial_back",
+    ] {
+        assert!(
+            stopping.iter().any(|(_, name, _)| name == named),
+            "{named} issues a Stop and the scan did not see it"
+        );
+    }
+
+    let offenders: Vec<String> = stopping
+        .iter()
+        .filter(|(_, _, body)| !guarded(body))
+        .map(|(file, name, _)| format!("{file}::{name}"))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "these tests issue a station Stop without `let _alone = alone();` — a Stop disarms the \
+         satellite track, so they race every satellite test: {offenders:?}"
+    );
+
+    // CONTROL: the detector fires. Both directions, on bodies written to break each rule.
+    assert!(stops("let r = stop_request(&f, &state);") && !guarded("let r = stop_request(&f);"));
+    assert!(guarded("let _alone = alone();") && !stops("let _alone = alone();"));
+}
+
+/// Every `#[test] fn NAME() { … }` in `src`, as `(name, body)`, by brace matching.
+#[cfg(test)]
+fn test_bodies(src: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = src;
+    while let Some(at) = rest.find("#[test]") {
+        let after = &rest[at + "#[test]".len()..];
+        let (Some(fn_at), Some(open)) = (after.find("fn "), after.find('{')) else {
+            break;
+        };
+        let name: String = after[fn_at + 3..]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        let mut depth = 0usize;
+        let mut end = open;
+        for (i, b) in after.as_bytes().iter().enumerate().skip(open) {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push((name, after[open..=end].to_string()));
+        rest = &after[end..];
+    }
+    out
+}
 struct Fixture {
     authority: Authority,
     engine: crate::SharedEngine,

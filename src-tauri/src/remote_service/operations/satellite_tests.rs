@@ -8,19 +8,9 @@
 use super::receiver_filter::run;
 use super::*;
 
-/// Exclusive use of the process-wide track badge for the length of one test. Held by every test
-/// in this file, because `SAT_TRACK`/`SAT_TRACK_GEN` are process-wide: a sibling arming or
-/// clearing a badge mid-test would (correctly) win, which reads as flake rather than as the
-/// collision it is.
-/// It also starts the test from an idle badge, so "no track is running" is a fact this test
-/// established rather than whatever the previous one happened to leave behind.
-fn alone() -> std::sync::MutexGuard<'static, ()> {
-    let guard = crate::TEST_SAT_TRACK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *crate::SAT_TRACK.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    guard
-}
+// `alone()` — exclusive use of the process-wide track badge — is the shared harness's
+// (`tests.rs`): every test in this file holds it, and so does every test anywhere that issues a
+// station Stop, because a Stop disarms the track. One helper, one rule, one place to read why.
 
 /// A station holding a transponder with a live track badge — what a Stop has to end.
 fn tracking() -> Fixture {

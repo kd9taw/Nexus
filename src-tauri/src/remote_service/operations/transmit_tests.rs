@@ -171,6 +171,7 @@ fn stop_request(f: &Fixture, state: &Value) -> Request {
 
 #[test]
 fn transmit_stop_does_not_wait_for_engine_or_a_pending_file_operation() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = armed();
     let request = stop_request(&f, &state);
     let mut engine = f.engine.lock().unwrap();
@@ -187,6 +188,7 @@ fn transmit_stop_does_not_wait_for_engine_or_a_pending_file_operation() {
 
 #[test]
 fn transmit_stop_rejects_a_replay_after_a_new_remote_arm() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = armed();
     let request = stop_request(&f, &state);
     f.authority
@@ -324,6 +326,7 @@ fn stop_v4(
 
 #[test]
 fn a_controlling_browser_stops_any_local_transmission_with_or_without_transmit_permission() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     for transmit in [false, true] {
         for kind in LOCAL_TRANSMISSIONS {
             let (f, now, state) = controlling(transmit);
@@ -344,6 +347,7 @@ fn a_controlling_browser_stops_any_local_transmission_with_or_without_transmit_p
 
 #[test]
 fn a_browser_without_station_control_is_refused_and_stops_nothing() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     for scene in ["noLease", "loggingOnly", "controlRevoked", "otherDevice"] {
         let f = Fixture::new();
         let now = Instant::now();
@@ -437,9 +441,10 @@ fn a_browser_without_station_control_is_refused_and_stops_nothing() {
 
 #[test]
 fn an_expired_lease_still_stops_and_starts_nothing() {
-    // `settled` is the ORDINARY case, not the exception: the browser polls state while it watches
-    // the station transmit, so by the time the operator presses Stop the station has already
-    // reconciled the expired lease away and taken the generation it was issued with.
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
+                          // `settled` is the ORDINARY case, not the exception: the browser polls state while it watches
+                          // the station transmit, so by the time the operator presses Stop the station has already
+                          // reconciled the expired lease away and taken the generation it was issued with.
     for settled in [false, true] {
         let (f, now, state) = controlling(false);
         key_locally(&mut f.engine.lock().unwrap(), "ptt");
@@ -480,6 +485,7 @@ fn an_expired_lease_still_stops_and_starts_nothing() {
 
 #[test]
 fn a_stop_token_ends_with_the_grant_and_with_any_lease_that_did_not_run_out() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     for scene in ["released", "revokedAfterExpiry", "takenOverAfterExpiry"] {
         let (f, now, state) = controlling(false);
         key_locally(&mut f.engine.lock().unwrap(), "ptt");
@@ -575,6 +581,7 @@ fn a_stop_token_ends_with_the_grant_and_with_any_lease_that_did_not_run_out() {
 
 #[test]
 fn a_replayed_stop_transmit_has_no_further_effect() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = controlling(false);
     key_locally(&mut f.engine.lock().unwrap(), "ptt");
     let request = stop_request(&f, &state);
@@ -598,6 +605,7 @@ fn a_replayed_stop_transmit_has_no_further_effect() {
 
 #[test]
 fn a_stop_is_accepted_at_once_while_the_engine_is_busy_and_stops_as_soon_as_it_is_free() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, now, state) = controlling(false);
     key_locally(&mut f.engine.lock().unwrap(), "ptt");
     let busy = f.engine.lock().unwrap();
@@ -623,6 +631,7 @@ fn a_stop_is_accepted_at_once_while_the_engine_is_busy_and_stops_as_soon_as_it_i
 // The lease's IDENTITY is still required; its CLOCK is not. Expiry left this list on 2026-09-15 —
 // see `an_expired_lease_still_stops_and_starts_nothing`.
 fn transmit_stop_requires_the_exact_granted_lease_and_new_protocol() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     for scene in [
         "version",
         "device",
@@ -995,6 +1004,7 @@ fn transmit_exchange_controls_reuse_native_policy_and_reject_an_advanced_display
 
 #[test]
 fn transmit_browser_cq_tx_off_and_stop_preserve_native_ft_behavior() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     use tempo_app::dto::Tier;
     for tier in [Tier::Ft8, Tier::Ft4] {
         let (f, _, state) = ready_ft(tier);
@@ -1031,6 +1041,7 @@ fn transmit_browser_cq_tx_off_and_stop_preserve_native_ft_behavior() {
 
 #[test]
 fn transmit_stop_invalidates_an_unsent_arm_even_if_its_command_window_still_matches() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, _, state) = ready_ft(tempo_app::dto::Tier::Ft8);
     let command = ft_command(
         &state,
@@ -1063,6 +1074,7 @@ fn transmit_stop_invalidates_an_unsent_arm_even_if_its_command_window_still_matc
 /// finish in hundredths of a second.
 #[test]
 fn transmit_stop_does_not_leave_the_station_busy_for_the_next_request() {
+    let _alone = alone(); // a Stop disarms the satellite track: see `alone()`
     let (f, _, _) = ready_ft(tempo_app::dto::Tier::Ft8);
     for _ in 0..200 {
         let state = control_state_version(&f, Instant::now(), 4);
