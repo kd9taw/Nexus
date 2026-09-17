@@ -151,6 +151,24 @@ describe('classifyGrab — a contest exchange, from the session\'s own received 
     expect(classifyGrab('600', two)).toEqual({ kind: 'exchange', slot: 'SERIAL', value: '600' })
   })
 
+  it('a CALL-shaped word stays a call, even where a slot would take its letters-plane number', () => {
+    // CQ WPX RTTY receives a serial, and a serial's ceiling is four digits — wide enough to
+    // swallow a callsign read as a number. W9OP is 2990 on the letters plane and W1RY is 2146,
+    // and filing the station's own call as their serial is the one mistake this must not make:
+    // a double-click on a call is the commonest gesture in the cockpit.
+    const wpx = {
+      slots: [
+        { key: 'RST', kind: 'rst', required: true },
+        { key: 'NR', kind: 'serial', required: true, min: 1, max: 9999 },
+      ],
+    }
+    expect(classifyGrab('W9OP', wpx)).toEqual({ kind: 'call', value: 'W9OP' })
+    expect(classifyGrab('W1RY', wpx)).toEqual({ kind: 'call', value: 'W1RY' })
+    // POSITIVE CONTROL: the garble path is not gone — a word that could not be a callsign
+    // still fills the slot (PT is 05, and two characters are never a call).
+    expect(classifyGrab('PT', wpx)).toEqual({ kind: 'exchange', slot: 'NR', value: '5' })
+  })
+
   it('still grabs calls, and still refuses the report', () => {
     expect(classifyGrab('W1AW', contest)).toEqual({ kind: 'call', value: 'W1AW' })
     expect(classifyGrab('599', contest)).toBeNull()

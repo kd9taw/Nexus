@@ -161,32 +161,44 @@ export function classifyGrab(raw: string, ctx: GrabContext = {}): GrabResult | n
   const t = clean(raw)
   if (!t || KEYWORDS.has(t) || isRst(t)) return null
   const slots = ctx.slots ?? []
-  if (slots.length > 0) {
-    const n = numberOf(t)
-    const digits = /^[0-9]+$/.test(t)
-    // A number fills a numeric slot only when EXACTLY ONE of them accepts it: two slots that
-    // both could take it is an ambiguity, and a grab guessing between them would file the
-    // operator's zone as a serial. A garbled number needs the slot to carry bounds — without
-    // them any word off the letters plane would be a number.
-    const numeric = (s: GrabSlot) =>
-      (s.kind === 'number' || s.kind === 'serial') &&
-      (digits || s.min !== undefined || s.max !== undefined) &&
-      (s.min === undefined || (n ?? -1) >= s.min) &&
-      (s.max === undefined || (n ?? -1) <= s.max)
-    // Plain digits first: nothing else an exchange carries is a bare number.
-    if (n !== null && digits) {
-      const fits = slots.filter(numeric)
-      if (fits.length === 1) return { kind: 'exchange', slot: fits[0].key, value: String(n) }
-    }
-    // The domain before the garble: WI is Wisconsin before it is zone 28 on the letters plane.
-    const codes = slots.filter((s) => s.kind === 'enum' && (ctx.knownCode?.(s.domain, t) ?? false))
-    if (codes.length === 1) return { kind: 'exchange', slot: codes[0].key, value: t }
-    if (n !== null && !digits) {
-      const fits = slots.filter(numeric)
-      if (fits.length === 1) return { kind: 'exchange', slot: fits[0].key, value: String(n) }
-    }
+  const n = slots.length > 0 ? numberOf(t) : null
+  const digits = /^[0-9]+$/.test(t)
+  // A number fills a numeric slot only when EXACTLY ONE of them accepts it: two slots that
+  // both could take it is an ambiguity, and a grab guessing between them would file the
+  // operator's zone as a serial. A garbled number needs the slot to carry bounds — without
+  // them any word off the letters plane would be a number.
+  const numeric = (s: GrabSlot) =>
+    (s.kind === 'number' || s.kind === 'serial') &&
+    (digits || s.min !== undefined || s.max !== undefined) &&
+    (s.min === undefined || (n ?? -1) >= s.min) &&
+    (s.max === undefined || (n ?? -1) <= s.max)
+  const onlyNumericFit = (): GrabSlot | null => {
+    const fits = slots.filter(numeric)
+    return fits.length === 1 ? fits[0] : null
   }
-  return isCall(t) ? { kind: 'call', value: t } : null
+  // THE ORDER IS THE WHOLE DESIGN, and each step is there because the one below it would
+  // otherwise take a word that is not its own:
+  //   1. PLAIN DIGITS. Nothing else in an exchange is a bare number, and no callsign is.
+  if (n !== null && digits) {
+    const slot = onlyNumericFit()
+    if (slot) return { kind: 'exchange', slot: slot.key, value: String(n) }
+  }
+  //   2. A DOMAIN CODE the build knows: WI is Wisconsin before it is 28 on the letters plane,
+  //      and before the callsign shape a two-letter code cannot have anyway.
+  const codes = slots.filter((s) => s.kind === 'enum' && (ctx.knownCode?.(s.domain, t) ?? false))
+  if (codes.length === 1) return { kind: 'exchange', slot: codes[0].key, value: t }
+  //   3. A CALLSIGN — ⚠️ BEFORE the letters-plane number, not after. A serial slot's ceiling is
+  //      four digits, and plenty of real calls are made only of digits and the QWERTYUIOP row:
+  //      W9OP reads 2990, W1RY 2146. Judged as numbers first, the station's own call would land
+  //      in their serial box — from the commonest double-click in the cockpit. A word that
+  //      could be a call is a call; only what could NOT be one is read off the letters plane.
+  if (isCall(t)) return { kind: 'call', value: t }
+  //   4. A NUMBER THAT ARRIVED GARBLED (the sender's unshift-on-space, so 05 prints PT).
+  if (n !== null) {
+    const slot = onlyNumericFit()
+    if (slot) return { kind: 'exchange', slot: slot.key, value: String(n) }
+  }
+  return null
 }
 
 /** The token under `offset` in `text`, classified. */
