@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Remote: the dial follows the wheel, and it stops swallowing your corrections.** Spinning the
+  readout digits over a remote link used to ignore every notch made while a command was still out
+  — on a 100 ms link four of ten notches reached the radio, on a 400 ms link three — and the
+  digits themselves did not move until the burst went out a fifth of a second later. Every notch
+  now counts: a step made while the radio is still working joins the next command and is sent from
+  the dial the station read back, so ten notches move the dial ten notches. The digits move on the
+  gesture itself rather than when the radio answers, shown dimmed with a trailing "…" until the
+  station's own reading confirms them. A value the station never confirms is never left standing —
+  after two and a half seconds the digits go back to the station's dial and say the tune was not
+  confirmed. Only the dial digits are shown ahead of the radio; the band, the mode, the sideband,
+  the privilege shading, the S-meter and every transmit control keep reading the station and
+  nothing else.
+
 - **Remote: a tune, band or mode change confirms the moment the radio does it.** Until now every
   rig-touching control was answered "pending" and the browser found out it had landed by asking —
   a state read, then a result read, each a round trip through the relay, with a one-second wait

@@ -3478,6 +3478,13 @@ body.resizing-row {
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
+  /* ASKED FOR, NOT YET CONFIRMED — the Remote optimistic dial and the confirming indicator on a
+     control whose command is still out. De-emphasised ink rather than a colour of its own: the
+     signal is "this is not the station's word yet", which is the same thing --text-dim says
+     everywhere else, and routing it through that token carries the field-mode contrast lift
+     (data-contrast='high') for free instead of stranding one hex outdoors. Declared in the light
+     block too, like the three above it, so the pairing is visible at both sites. */
+  --state-pending: var(--text-dim);
   --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 
   /* APRS symbol categories. Colour says WHAT a station is, never how urgent it is — the map is
@@ -3574,6 +3581,7 @@ body.resizing-row {
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
+  --state-pending: var(--text-dim);
   --shadow: 0 4px 14px rgba(30, 50, 80, 0.12);
   /* The light --need-* inks do NOT live here — see the palette further down. */
 }
@@ -4762,6 +4770,33 @@ select optgroup {
 }
 .readout.blocked .readout-val {
   color: var(--tx);
+}
+/* THE OPTIMISTIC DIAL, while the station has not read it back (FrequencyReadout's
+   `provisionalMhz`). Dimmed and trailed by an ellipsis so the number never claims to be the
+   radio's: what you see is what was asked for. `--tx` red still wins over it, because a dial off
+   the operator's privileges is the louder thing to say.
+   THE INK IS PAINT-ONLY, like the digit regions below: a colour change costs no layout, so the
+   digits do not jitter as one burst confirms and the next starts. THE ELLIPSIS IS NOT — it is a
+   real element (a `::after` glyph would be exactly the "presence in CSS" a test cannot see), so
+   it takes width in the flex row. It is therefore mounted for as long as the readout has a
+   provisional dial at all and only made invisible in between, which keeps the unit and the band
+   chip beside it still through a whole spin instead of nudging them on every step. The digits
+   never move either way: `.readout-val` is the first item in the row. */
+.readout.awaiting .readout-val {
+  color: var(--state-pending);
+}
+.readout.awaiting.blocked .readout-val {
+  color: var(--tx);
+  opacity: 0.72;
+}
+.readout-awaiting {
+  color: var(--state-pending);
+  font-size: 0.7em;
+  line-height: 1;
+  align-self: center;
+}
+.readout-awaiting.settled {
+  visibility: hidden;
 }
 /* Per-digit tuning hit regions (the main dial only — CockpitHeader passes digitTune).
    NOTHING here may affect layout: `.readout-val` is tabular-nums precisely so the digits don't

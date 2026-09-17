@@ -55,9 +55,9 @@ function fixture(dialMhz = 7.2) {
     reply({ operation: 'stationControl', operationId: request.requestId, outcome,
       ...(outcome === 'applied' ? { evidence: 'radioReadback' } : { reason: 'hardwareUnconfirmed' }) })
   }
-  const fresh = async (dial = snapshot.radio.dialMhz) => {
+  const fresh = async (dial = snapshot.radio.dialMhz, waitMs = 1000) => {
     snapshot = { ...snapshot, radio: { ...snapshot.radio, dialMhz: dial } }
-    await tick(1000)
+    await tick(waitMs)
     act(() => reply({ ...state, revision: ++revision, commandWindowId: crypto.randomUUID(), nextSequence: ++sequence }))
     await tick()
   }
@@ -141,21 +141,80 @@ it.each(['radio', 'connection'] as const)('rejects both an old scope press and a
   act(() => h.finish()); await tick()
 })
 
-it('coalesces readout and scope input once and queues nothing behind a submitted command', async () => {
+it('coalesces readout and scope input once, and a step made behind a submitted command joins the next burst', async () => {
   const h = fixture(), readout = {}, scope = {}
   expect(h.tuning.nudge(100, { ...h.source(), owner: readout })).toBe(true)
   expect(h.tuning.nudge(1000, { ...h.source(), owner: scope })).toBe(true)
   await tick(119); expect(h.writes()).toHaveLength(0)
   await tick(1); expect(h.writes()).toHaveLength(1)
   expect(h.writes()[0].request.action).toEqual({ action: 'radio.frequency', dialMhz: 7.2011, band: '40m', sideband: 'LSB' })
-  expect(h.tuning.nudge(1000, h.source())).toBe(false)
-  act(() => h.finish()); await tick(); await h.fresh(7.2011)
+  // ONE IN FLIGHT, ONE QUEUED. This step used to be dropped on the floor while a command was out —
+  // the operator's correction, refused with nothing said. It is kept now, built on the dial the
+  // command in flight is asking for, and nothing extra goes on the wire for it.
+  expect(h.tuning.nudge(1000, h.source())).toBe(true)
   expect(h.writes()).toHaveLength(1)
-  expect(h.tuning.nudge(100, h.source())).toBe(true); await tick(120)
+  act(() => h.finish()); await tick(); await h.fresh(7.2011)
+  // Sent the moment the first command confirmed and control was current again: 7.2011 + 1 kHz.
   expect(h.writes()).toHaveLength(2)
-  expect(h.writes()[1].request.action.dialMhz).toBe(7.2012)
+  expect(h.writes()[1].request.action).toEqual({ action: 'radio.frequency', dialMhz: 7.2021, band: '40m', sideband: 'LSB' })
   act(() => h.finish()); await tick()
   expect(h.failed).not.toHaveBeenCalled(); expect(setFrequency).not.toHaveBeenCalled()
+})
+
+it('sends a queued burst from the dial the station read back, while its own sample still reads the old one', async () => {
+  const h = fixture()
+  h.tuning.nudge(100, h.source()); await tick(120)
+  expect(h.writes()[0].request.action.dialMhz).toBe(7.2001)
+  expect(h.tuning.nudge(100, h.source())).toBe(true)
+  // The station's reading was taken BEFORE it told us the radio had landed, so it is older news
+  // than that readback and not evidence the dial moved. The sample still says 7.2.
+  h.setAge(400)
+  act(() => h.finish()); await h.fresh(7.2, 300)
+  expect(h.writes()).toHaveLength(2)
+  expect(h.writes()[1].request.action.dialMhz).toBe(7.2002)
+  expect(h.failed).not.toHaveBeenCalled()
+  act(() => h.finish()); await tick()
+})
+
+it('control: a reading taken AFTER that readback, disagreeing, still refuses the queued burst', async () => {
+  // The same run with one thing changed: the sample is current, so its 7.2 is the station saying
+  // the dial is elsewhere. That is the case the pre-dispatch re-read exists for, and it still bites.
+  const h = fixture()
+  h.tuning.nudge(100, h.source()); await tick(120)
+  expect(h.tuning.nudge(100, h.source())).toBe(true)
+  h.setAge(0)
+  act(() => h.finish()); await h.fresh(7.2, 300)
+  expect(h.writes()).toHaveLength(1)
+  expect(h.failed).toHaveBeenCalledOnce()
+  expect(h.failed.mock.calls[0][0].message).toBe('staleContext')
+})
+
+it('refuses a queued burst whole when the LEASE it was made under is replaced, and says so', async () => {
+  // The command window (the revision) is deliberately not part of a burst's authority any more —
+  // a queued burst exists to be sent on the window AFTER the command it waits behind spent its
+  // own, so folding the revision in would discard every one of them. Everything else about
+  // authority is untouched, and this is the half that does the work: a new lease is a different
+  // browser's grant, and input made under the old one is refused rather than replayed onto it.
+  const h = fixture()
+  h.tuning.nudge(100, h.source()); await tick(120)
+  expect(h.tuning.nudge(100, h.source())).toBe(true)
+  act(() => h.finish()); await tick(1000)
+  act(() => h.reply({ ...h.state, leaseId: crypto.randomUUID(), revision: 2, commandWindowId: crypto.randomUUID(), nextSequence: 2 }))
+  await tick(1600)
+  expect(h.writes()).toHaveLength(1)
+  expect(h.failed.mock.calls.map(c => c[0].message)).toEqual(['notController'])
+})
+
+it('refuses a queued burst whole, and says so, when the command it waited behind never confirmed', async () => {
+  const h = fixture()
+  h.tuning.nudge(100, h.source()); await tick(120)
+  expect(h.tuning.nudge(100, h.source())).toBe(true)
+  act(() => h.finish('unknown')); await tick()
+  // Two failures: the command's own unknown outcome, and the queued burst that has no dial left to
+  // build on — said as "Not sent", never silently dropped.
+  expect(h.writes()).toHaveLength(1)
+  expect(h.failed.mock.calls.map(c => [c[0].message, c[0].sent])).toEqual([['operationUnconfirmed', true], ['notController', false]])
+  expect(h.tuning.getProvisionalHz()).toBeNull()
 })
 
 it('drops a removed control and permits only a new explicit burst', async () => {
