@@ -41,7 +41,7 @@ pub struct FieldSpec {
     /// value rides the private carrier instead of being exported under a tag that
     /// means something else.
     pub adif: AdifTags,
-    /// The on-air label that introduces this field (`"NAME SETH"`), or `None` when
+    /// The on-air label that introduces this field (`"NAME ALEX"`), or `None` when
     /// the field is positional.
     pub label: Option<&'static str>,
     /// Whether a QSO can be logged without this field.

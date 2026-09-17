@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn report_received_recommends_73() {
         // We answered; they sent a report → next is 73.
-        let sent = vec!["W1ABC DE KD9TAW UR 599 NAME SETH HW? W1ABC".to_string()];
+        let sent = vec!["W1ABC DE KD9TAW UR 599 NAME ALEX HW? W1ABC".to_string()];
         let a = analyze(
             "KD9TAW DE W1ABC UR 599 NAME BOB",
             &sent,
@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn closing_recommends_finish_and_log() {
-        let sent = vec!["W1ABC DE KD9TAW UR 599 SETH".to_string()];
+        let sent = vec!["W1ABC DE KD9TAW UR 599 ALEX".to_string()];
         let a = analyze(
             "KD9TAW DE W1ABC TU 73 SK",
             &sent,

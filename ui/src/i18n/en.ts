@@ -520,7 +520,7 @@ export const EN = {
 
   'settings.station.opName.label': 'Operator name',
   // Prose, not a token: a locale should offer a first name its operators recognise.
-  'settings.station.opName.placeholder': 'Seth',
+  'settings.station.opName.placeholder': 'Alex',
   // ⚠️ `{NAME}` is a CW macro token matched literally by the expander — it must survive
   // translation unchanged. It is safe here only because interpolation is `{{double}}`.
   'settings.station.opName.hint': 'Used by the CW {NAME} macro and logging.',

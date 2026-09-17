@@ -259,7 +259,7 @@ mod tests {
     fn ctx<'a>() -> CwContext<'a> {
         CwContext {
             mycall: "W9XYZ",
-            myname: "SETH",
+            myname: "ALEX",
             mygrid: "EN61",
             mystate: "WI",
             hiscall: "K2DEF",
@@ -290,7 +290,7 @@ mod tests {
         // The default F2 answer macro.
         assert_eq!(
             expand("! DE {MYCALL} UR {RST} {RST} NAME {NAME} {NAME} HW? !", &c),
-            "K2DEF DE W9XYZ UR 5NN 5NN NAME SETH SETH HW? K2DEF",
+            "K2DEF DE W9XYZ UR 5NN 5NN NAME ALEX ALEX HW? K2DEF",
         );
         assert_eq!(expand("{MYGRID}", &c), "EN61");
     }
@@ -304,7 +304,7 @@ mod tests {
                 "! DE {MYCALL} UR {RST} QTH {MYSTATE} NAME {NAME} HW CPY BOB? !",
                 &c
             ),
-            "K2DEF DE W9XYZ UR 5NN QTH WI NAME SETH HW CPY BOB? K2DEF",
+            "K2DEF DE W9XYZ UR 5NN QTH WI NAME ALEX HW CPY BOB? K2DEF",
         );
         assert_eq!(expand("R FB {HISNAME}", &c), "R FB BOB");
         assert_eq!(expand("{HISSTATE}", &c), "OH");
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(expand("R TU {HISNAME} DE {MYCALL}", &bare), "R TU DE W9XYZ");
         assert_eq!(expand("QTH {MYSTATE}", &bare), "QTH");
         // {HISNAME} must NOT be touched by the {NAME} substitution.
-        assert_eq!(expand("{NAME} vs {HISNAME}", &c), "SETH vs BOB");
+        assert_eq!(expand("{NAME} vs {HISNAME}", &c), "ALEX vs BOB");
     }
 
     #[test]

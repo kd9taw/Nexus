@@ -643,7 +643,7 @@ pub struct Settings {
     // --- identity / operating ---
     pub mycall: String,
     pub mygrid: String,
-    /// The operator's name (e.g. "Seth") — the `{NAME}` token in CW/voice macros and
+    /// The operator's name (e.g. "Alex") — the `{NAME}` token in CW/voice macros and
     /// a casual ragchew staple. Empty until set.
     pub op_name: String,
     /// The operator's US state / province (e.g. "WI") — the `{MYSTATE}` CW-macro token for a

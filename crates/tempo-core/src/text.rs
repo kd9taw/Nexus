@@ -306,7 +306,7 @@ mod tests {
     // active band in order to fix a rare one.
     #[test]
     fn a_message_still_assembles_when_the_talker_context_drifts() {
-        let frames = chunk("YOU ARE THE MAN SETH", 'B');
+        let frames = chunk("YOU ARE THE MAN ALEX", 'B');
         assert_eq!(frames.len(), 3, "need a multi-chunk message");
         let mut r = Reassembler::new();
 
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(r.accept("W1ABC", &frames[1], 12), None);
         // And another. The message is still N9UM's and must still complete.
         let done = r.accept("K2DEF", &frames[2], 14);
-        assert_eq!(done.as_deref(), Some("YOU ARE THE MAN SETH"));
+        assert_eq!(done.as_deref(), Some("YOU ARE THE MAN ALEX"));
         assert!(r.pending().is_empty());
     }
 
@@ -324,7 +324,7 @@ mod tests {
     // names the station that actually started it rather than whoever last transmitted.
     #[test]
     fn attribution_binds_to_the_first_chunk_not_the_latest_frame() {
-        let frames = chunk("YOU ARE THE MAN SETH", 'B');
+        let frames = chunk("YOU ARE THE MAN ALEX", 'B');
         let mut r = Reassembler::new();
         r.accept("N9UM", &frames[0], 10);
         r.accept("W1ABC", &frames[1], 12); // context drifted; message is still N9UM's
@@ -342,7 +342,7 @@ mod tests {
     // activity, chat window empty, no explanation.
     #[test]
     fn an_incomplete_set_ages_out_and_reports_what_it_had() {
-        let frames = chunk("YOU ARE THE MAN SETH", 'B');
+        let frames = chunk("YOU ARE THE MAN ALEX", 'B');
         assert_eq!(frames.len(), 3);
         let mut r = Reassembler::new();
         // Chunks 1 and 2 arrive; 3 never does.

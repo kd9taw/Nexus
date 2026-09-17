@@ -349,11 +349,11 @@ mod tests {
 
     #[test]
     fn sanitize_redacts_paths_and_truncates() {
-        let s = sanitize_detail("Unable to open C:\\Users\\seth\\tmp\\up.adi for reading").unwrap();
+        let s = sanitize_detail("Unable to open C:\\Users\\alex\\tmp\\up.adi for reading").unwrap();
         assert!(!s.contains("Users"), "windows path redacted: {s}");
         assert!(s.contains("up.adi"));
-        let p = sanitize_detail("cannot read /home/seth/.tqsl/cert.p12 now").unwrap();
-        assert!(!p.contains("/home/seth"), "posix path redacted: {p}");
+        let p = sanitize_detail("cannot read /home/alex/.tqsl/cert.p12 now").unwrap();
+        assert!(!p.contains("/home/alex"), "posix path redacted: {p}");
         assert!(p.contains("cert.p12"));
         assert_eq!(sanitize_detail("   ").map(|s| s.len()), None);
         let long = "x ".repeat(300);

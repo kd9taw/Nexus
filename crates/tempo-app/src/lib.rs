@@ -1495,7 +1495,7 @@ mod tests {
         // Switching to FT1 resumes real chat folding (no replay of the FT8 frames).
         app.set_tier(Tier::TempoFast);
         app.observe(&[dec("K2DEF N0ABC EM48", -8)], 10);
-        for (i, f) in text::chunk("HI SETH", 'B').iter().enumerate() {
+        for (i, f) in text::chunk("HI ALEX", 'B').iter().enumerate() {
             app.observe(&[dec(f, -8)], 11 + i as u64);
         }
         assert!(

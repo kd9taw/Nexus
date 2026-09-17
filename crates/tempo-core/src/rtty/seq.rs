@@ -552,7 +552,7 @@ pub struct RttySeq {
     pub templates: Templates,
     pub cfg: SeqConfig,
     /// My own exchange values, `(key, value)` — e.g. `[("RST","599"),
-    /// ("NAME","SETH"),("QTH","MADISON")]` or `[("CLASS","2A"),
+    /// ("NAME","ALEX"),("QTH","MADISON")]` or `[("CLASS","2A"),
     /// ("SECTION","WI")]`. Feeds `{EXCH}`/`{RST}`/`{KEY}` substitution.
     my_exchange: Vec<(String, String)>,
     state: SeqState,
@@ -1121,7 +1121,7 @@ mod tests {
         RttySeq::new(
             MYCALL,
             crate::contest::casual(),
-            &[("RST", "599"), ("NAME", "SETH"), ("QTH", "MADISON")],
+            &[("RST", "599"), ("NAME", "ALEX"), ("QTH", "MADISON")],
         )
     }
 
@@ -1211,7 +1211,7 @@ mod tests {
         let s = sends(&seq.take_actions());
         assert_eq!(s.len(), 1);
         assert!(
-            s[0].contains("W1AW") && s[0].contains("599") && s[0].contains("NAME SETH"),
+            s[0].contains("W1AW") && s[0].contains("599") && s[0].contains("NAME ALEX"),
             "exchange: {}",
             s[0]
         );
@@ -1344,7 +1344,7 @@ mod tests {
         );
         assert_eq!(seq.state(), SeqState::ExchangeSent);
         let s = sends(&seq.take_actions());
-        assert!(s[0].contains("NAME SETH"), "my exchange: {}", s[0]);
+        assert!(s[0].contains("NAME ALEX"), "my exchange: {}", s[0]);
 
         // He confirms; we log and send our closing.
         seq.feed_text("KD9TAW QSL TU 73 DE W1AW SK\n", 35_000);

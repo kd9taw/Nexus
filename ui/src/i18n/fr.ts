@@ -5083,7 +5083,7 @@ export const FR: PartialCatalog = {
   "settings.station.licenseClass.technician": "Technician (US)",
   "settings.station.opName.hint": "Utilisé par la macro CW {NAME} et par l'enregistrement au journal.",
   "settings.station.opName.label": "Nom de l'opérateur",
-  "settings.station.opName.placeholder": "Seth",
+  "settings.station.opName.placeholder": "Pierre",
   "settings.station.opState.hint": "Votre état ou province US — la macro CW {MYSTATE} (QTH en ragchew).",
   "settings.station.opState.label": "État",
   "settings.tabs.appearance": "Apparence",

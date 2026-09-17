@@ -456,7 +456,7 @@
 "1","settings.station.grid.label","Grid","","","Short label on: Settings ▸ Station. The same English text ""Grid"" is used by 7 different keys (e.g. logbook.field.grid.label, logEntry.grid.placeholder, logPrompt.grid.label) — each can take a different Portuguese word, so choose the one that fits THIS screen."
 "1","settings.station.grid.hint","Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square.","","Maidenhead",""
 "1","settings.station.opName.label","Operator name","","",""
-"1","settings.station.opName.placeholder","Seth","","","One-word control on: Settings ▸ Station. Out of context this could be a noun or a verb — open that screen (or read the key name) before choosing the Portuguese word."
+"1","settings.station.opName.placeholder","Alex","","","One-word control on: Settings ▸ Station. Out of context this could be a noun or a verb — open that screen (or read the key name) before choosing the Portuguese word."
 "1","settings.station.opName.hint","Used by the CW {NAME} macro and logging.","","{NAME} | CW","Contains CW macro tokens in SINGLE braces ({NAME}, {RST}...). These are matched literally by the macro expander — copy them exactly, do not translate or reorder them against the words that explain them."
 "1","settings.station.fdOperator.label","Operator at the key","","","Short label on: Settings ▸ Station. The same English text ""Operator at the key"" is used by 2 different keys (e.g. settings.fdWho.operator.label) — each can take a different Portuguese word, so choose the one that fits THIS screen."
 "1","settings.station.fdOperator.placeholder","leave blank if that is you","","",""
