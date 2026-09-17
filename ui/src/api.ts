@@ -427,7 +427,7 @@ export interface FdRulesetDto {
   /**
    * The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp' |
    * 'arrlss_cw' | 'arrlss_ssb' | 'arrlvhf_jan' | 'arrlvhf_jun' | 'arrlvhf_sep' |
-   * 'cqww_cw' | 'cqww_ssb' | 'cqwpx_cw' | 'cqwpx_ssb'.
+   * 'cqww_cw' | 'cqww_ssb' | 'cqww_rtty' | 'cqwpx_cw' | 'cqwpx_ssb'.
    */
   event: string
   rulesYear: number

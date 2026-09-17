@@ -58,9 +58,9 @@ const cqwwRtty = (over: Partial<FieldDayStatus> = {}): FieldDayStatus =>
     receives: [
       { key: 'RST', kind: 'rst', required: true, adif: 'RST_RCVD' },
       { key: 'ZN', kind: 'number', required: true, min: 1, max: 40, adif: 'CQZ' },
-      // An OPTIONAL enum: DX stations send no QTH. `fd_sections` stands in for the QTH
-      // domain because it is a value set the UI already carries.
-      { key: 'QTH', kind: 'enum', required: false, domain: 'fd_sections' },
+      // An OPTIONAL enum: DX stations send no QTH. The contest's own QTH list, which the UI
+      // carries as a guarded mirror of the rules seed.
+      { key: 'QTH', kind: 'enum', required: false, domain: 'cqww_rtty_qth' },
     ],
     composing: [
       { key: 'RST', raw: '599' },
@@ -198,8 +198,14 @@ describe('3 — an optional enum slot may be left blank', () => {
     // POSITIVE CONTROL: optional is not "anything" — a value must still be a member.
     fireEvent.change(box('QTH'), { target: { value: 'ZZZ' } })
     expect(logBtn().disabled, 'bogus QTH').toBe(true)
+    // An ARRL section is not a CQ WW RTTY QTH: Eastern Massachusetts sends MA.
     fireEvent.change(box('QTH'), { target: { value: 'EMA' } })
+    expect(logBtn().disabled, 'a section is not a QTH').toBe(true)
+    fireEvent.change(box('QTH'), { target: { value: 'MA' } })
     expect(logBtn().disabled, 'real QTH').toBe(false)
+    // The sponsor's own three-letter Canadian call areas are real QTHs too.
+    fireEvent.change(box('QTH'), { target: { value: 'PEI' } })
+    expect(logBtn().disabled, 'PEI').toBe(false)
   })
 })
 
@@ -248,8 +254,8 @@ describe('5 — the fill API: one slot, refilled on every new ts, focus left alo
     expect(box('Zone').value).toBe('16')
     // A value is uppercased like typing does, and a slot this contest does not receive is
     // not invented.
-    view.rerender(strip(cqwwRtty(), { fillExchange: { key: 'QTH', value: 'ema', ts: 3 } }))
-    expect(box('QTH').value).toBe('EMA')
+    view.rerender(strip(cqwwRtty(), { fillExchange: { key: 'QTH', value: 'nwt', ts: 3 } }))
+    expect(box('QTH').value).toBe('NWT')
     view.rerender(strip(cqwwRtty(), { fillExchange: { key: 'CLASS', value: '3A', ts: 4 } }))
     const caps = [...document.querySelectorAll('.le-fd-big .le-fd-cap')].map((n) => n.textContent)
     expect(caps).toEqual(['Call', 'RST', 'Zone', 'QTH'])

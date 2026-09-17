@@ -128,12 +128,13 @@ describe('the contest picker', () => {
     renderPanel()
     await openContesting()
     const group = await groupFor('Contest')
-    // ⭐ FIFTEEN contests: the two Field Day events, the four state QSO parties batch 8
+    // ⭐ SIXTEEN contests: the two Field Day events, the four state QSO parties batch 8
     // shipped as rulesets and nobody could select, Sweepstakes' TWO weekends, ARRL VHF's
-    // THREE runnings, and CQ WW's and CQ WPX's two each — ARRL and CQ both run the CW and
+    // THREE runnings, CQ WW's and CQ WPX's two each — ARRL and CQ both run the CW and
     // Phone runnings as separate contests on separate weekends, with separate scores and
     // separate Cabrillo tokens, and ARRL VHF's three differ in their point table as well
-    // as their weekend. The names are the sponsors' own.
+    // as their weekend — and CQ WW RTTY, a different sponsor's contest with its own
+    // exchange. The names are the sponsors' own.
     expect([...group.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
       'ARRL Field Day',
       'Winter Field Day',
@@ -144,6 +145,7 @@ describe('the contest picker', () => {
       'ARRL September VHF Contest',
       'CQ World-Wide DX Contest (CW)',
       'CQ World-Wide DX Contest (SSB)',
+      'CQ World-Wide RTTY DX Contest',
       'CQ World-Wide WPX Contest (CW)',
       'CQ World-Wide WPX Contest (SSB)',
       'California QSO Party',

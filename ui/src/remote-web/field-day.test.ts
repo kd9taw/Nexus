@@ -59,7 +59,7 @@ it('accepts a row\'s received values, and still bounds them',()=>{
 // saw nothing at all through Remote. The list below is read from the same seed the app ships, so
 // adding a contest without teaching the validator fails here rather than on the air.
 it('accepts every event id the shipped rules file can produce',()=>{
- const shipped=["arrlfd", "arrlss_cw", "arrlss_ssb", "arrlvhf_jan", "arrlvhf_jun", "arrlvhf_sep", "cqp", "cqwpx_cw", "cqwpx_ssb", "cqww_cw", "cqww_ssb", "ohqp", "tnqp", "txqp", "wfd"]
+ const shipped=["arrlfd", "arrlss_cw", "arrlss_ssb", "arrlvhf_jan", "arrlvhf_jun", "arrlvhf_sep", "cqp", "cqwpx_cw", "cqwpx_ssb", "cqww_cw", "cqww_rtty", "cqww_ssb", "ohqp", "tnqp", "txqp", "wfd"]
  for(const event of shipped){
   const page=fieldDayPage()
   ;(page.meta as {source:{fieldDay:{event:string}}}).source.fieldDay.event=event

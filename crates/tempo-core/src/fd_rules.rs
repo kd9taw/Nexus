@@ -2495,6 +2495,48 @@ mod tests {
         );
     }
 
+    /// ⭐ **CQ WW RTTY's QTH list is the same list on both sides of the IPC.** The UI holds a
+    /// copy (`ui/src/features/cqwwRttyQth.ts`) so the entry strip can refuse a typo while it
+    /// is typed, with no round trip; a code on one side and not the other is a legal QTH
+    /// refused, or a typo accepted and logged as a multiplier.
+    #[test]
+    fn the_typescript_cqww_rtty_qth_mirror_matches_the_seed_domain() {
+        let ts_src = include_str!("../../../ui/src/features/cqwwRttyQth.ts");
+        let ts: Vec<(&str, &str)> = ts_src
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+            .filter_map(|l| Some((ts_str_field(l, "code")?, ts_str_field(l, "name")?)))
+            .collect();
+        // A parser that found nothing would pass nothing below — but say so by name.
+        assert!(
+            ts.len() > 50,
+            "parsed only {} QTH rows out of cqwwRttyQth.ts — the parser is broken, not the mirror",
+            ts.len()
+        );
+        let rs = ruleset_by_id("cqww_rtty", CURRENT_RULES_YEAR).expect("cqww_rtty is seeded");
+        let domain = rs
+            .domains
+            .iter()
+            .find(|d| d.id == "cqww_rtty_qth")
+            .expect("the QTH domain is declared");
+        assert_eq!(
+            domain.values.len(),
+            63,
+            "48 states + DC + 14 Canadian call areas"
+        );
+        assert_eq!(
+            ts,
+            domain.values.to_vec(),
+            "ui/src/features/cqwwRttyQth.ts drifted from the seed's cqww_rtty_qth \
+             (code, name and order)"
+        );
+        // POSITIVE CONTROL: a mirror missing one code is not equal.
+        let mut short = ts.clone();
+        short.retain(|(c, _)| *c != "PEI");
+        assert_ne!(short, domain.values.to_vec());
+    }
+
     /// ⭐ **Every contest the bundled rules table carries is on the picker's menu.**
     ///
     /// The picker (`CONTESTS` in ui/src/fdEvent.ts) is a hand-written list, because a ruleset
@@ -4032,9 +4074,9 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            15,
+            16,
             "two Field Day events + four QSO parties + both Sweepstakes weekends + \
-             CQ WW's two and CQ WPX's two + ARRL VHF's three runnings"
+             CQ WW's two and CQ WPX's two + ARRL VHF's three runnings + CQ WW RTTY"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());
         for (x, y) in a.rulesets.iter().zip(b.rulesets) {
