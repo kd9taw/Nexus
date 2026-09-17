@@ -126,6 +126,9 @@ impl Engine {
                     domain: v.domain.map(|d| d.to_string()),
                 })
                 .collect(),
+            // What `{EXCH}` keys next — the RTTY macros read it here. It describes the
+            // next transmission, never a logged row (those carry `mex`).
+            sent_exchange: self.contest_sent_exchange().unwrap_or_default(),
             role: role.id.to_string(),
             boards: tempo_core::contest::boards(&rs.scoring, spec, role)
                 .into_iter()
@@ -173,6 +176,9 @@ impl Engine {
         for v in &log.session.my_exchange {
             check(&v.raw)?;
         }
+        // …and the one string rendered from them, which is bounded by the browser's own
+        // per-string rule and must be refused here first rather than there.
+        check(&self.contest_sent_exchange().unwrap_or_default())?;
         if let Some(s) = &station.dxcall {
             check(s)?;
         }

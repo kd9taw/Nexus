@@ -27,12 +27,19 @@ pub struct CwContext<'a> {
     pub class: &'a str,
     /// The Field Day ARRL/RAC section — `{SECTION}` (e.g. "WI"). Empty outside Field Day.
     pub section: &'a str,
+    /// The running contest's sent exchange WITHOUT the signal report — `{EXCH}` for every
+    /// contest that is not Field Day (`"4"` in CQ WW CW, `"5 MA"` for a W/VE station in CQ
+    /// WW RTTY). Empty means "no such contest", and `{EXCH}` falls back to Field Day's
+    /// `{CLASS} {SECTION}`, which is also empty outside Field Day.
+    pub exch: &'a str,
 }
 
 /// Expand a CW macro template into the literal text to key. Recognized tokens:
 /// `{MYCALL}` `{NAME}` `{MYGRID}` `{MYSTATE}` `{RST}` (cut numbers), `!` (worked call),
-/// `{HISNAME}` / `{HISSTATE}` (the worked station's QRZ name/state), and the Field Day
-/// exchange `{CLASS}` / `{SECTION}` / `{EXCH}` (= "`{CLASS} {SECTION}`", e.g. "3A WI").
+/// `{HISNAME}` / `{HISSTATE}` (the worked station's QRZ name/state), the Field Day
+/// exchange `{CLASS}` / `{SECTION}`, and `{EXCH}` — the running contest's exchange
+/// ([`CwContext::exch`]) or, when none is supplied, Field Day's "`{CLASS} {SECTION}`"
+/// (e.g. "3A WI").
 /// The FD tokens are empty outside Field Day, and `{HISNAME}`/`{HISSTATE}` are empty until a
 /// QRZ lookup resolves for the current call — an empty token collapses to nothing (like an
 /// unfilled `{NAME}`). Unknown `{...}` tokens are left as-is so typos are visible rather than
@@ -51,9 +58,14 @@ pub fn expand(template: &str, ctx: &CwContext) -> String {
     out = out.replace("{RST}", &cut_numbers(ctx.rst));
     // Field Day exchange. `{EXCH}` is the full "CLASS SECTION"; trimmed so it (and the
     // whitespace-collapse below) leaves nothing when not operating FD (both fields blank).
+    // Any other contest supplies its own exchange, which wins.
     out = out.replace("{CLASS}", ctx.class);
     out = out.replace("{SECTION}", ctx.section);
-    let exch = format!("{} {}", ctx.class, ctx.section);
+    let exch = if ctx.exch.trim().is_empty() {
+        format!("{} {}", ctx.class, ctx.section)
+    } else {
+        ctx.exch.to_string()
+    };
     out = out.replace("{EXCH}", exch.trim());
     // `!` = the worked station's call (N1MM/WinWarbler convention).
     out = out.replace('!', ctx.hiscall);
@@ -268,6 +280,7 @@ mod tests {
             rst: "599",
             class: "3A",
             section: "WI",
+            exch: "",
         }
     }
 
@@ -341,6 +354,31 @@ mod tests {
         assert_eq!(expand("{SECTION}", &off), "");
         assert_eq!(expand("{EXCH}", &off), "");
         assert_eq!(expand("! DE {MYCALL} {EXCH} K", &off), "DE W9XYZ K");
+    }
+
+    /// ⭐ **`{EXCH}` is the running contest's exchange when the caller supplies one** — the
+    /// zone in CQ WW CW, the zone and state of a W/VE station in CQ WW RTTY — and Field
+    /// Day's class + section only when it does not.
+    #[test]
+    fn exch_is_the_contest_exchange_when_the_caller_supplies_one() {
+        let cq_ww = CwContext {
+            mycall: "W9XYZ",
+            hiscall: "DL1ABC",
+            rst: "599",
+            exch: "4",
+            ..Default::default()
+        };
+        assert_eq!(expand("! {RST} {EXCH}", &cq_ww), "DL1ABC 5NN 4");
+        let w_ve = CwContext {
+            exch: "5 MA",
+            ..cq_ww
+        };
+        assert_eq!(expand("{EXCH} {EXCH}", &w_ve), "5 MA 5 MA");
+        // A contest exchange does not reach the Field Day tokens.
+        assert_eq!(expand("{CLASS}{SECTION}", &w_ve), "");
+        // POSITIVE CONTROL: with no contest exchange supplied, `{EXCH}` is Field Day's
+        // pair exactly as it has always been.
+        assert_eq!(expand("{EXCH}", &ctx()), "3A WI");
     }
 
     #[test]

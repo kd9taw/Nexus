@@ -29,9 +29,11 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
+    // What {EXCH} keys next (the macros read it). A string, bounded like every other.
+    (f.sentExchange !== undefined && !text(f.sentExchange)) ||
     (f.scoreNoteKey !== undefined && !text(f.scoreNoteKey)) || (f.role !== undefined && !text(f.role)) ||
     (f.multCount !== undefined && f.multCount !== null && !integer(f.multCount)) ||
     // `composing` is a VECTOR by design, never a preformatted exchange string - a row's own sent

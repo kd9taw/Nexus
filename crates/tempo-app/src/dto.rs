@@ -1476,6 +1476,17 @@ pub struct FieldDayStatus {
     /// side, never the record of one: a row already logged carries its own.
     #[serde(default)]
     pub composing: Vec<FdFieldValueDto>,
+    /// ⭐ **What `{EXCH}` keys right now** — this session's sent exchange WITHOUT the
+    /// signal report, as the text a macro puts on the air (`"5"` in CQ WW CW, `"5 MA"`
+    /// for a W/VE station in CQ WW RTTY, `"3A WI"` in Field Day). The RTTY macros read it
+    /// here so they key exactly what the CW keyer's `{EXCH}` keys.
+    ///
+    /// ⚠️ **It describes the NEXT transmission and nothing else.** The rule above is not
+    /// suspended: a string rendered from the session must never label a contact already
+    /// logged, because a mobile's session moves and its rows must not. An emitter that
+    /// describes a row reads that row's own `mex`.
+    #[serde(default)]
+    pub sent_exchange: String,
     /// The session's current role id — `""` for a symmetric contest, which is both
     /// Field Day events. The strip shows it beside the exchange only when it names
     /// something, so an operator can see which role they are in before they cross a

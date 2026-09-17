@@ -7561,12 +7561,21 @@ impl Engine {
         } else {
             ("", "")
         };
-        // Field Day exchange tokens ({CLASS}/{SECTION}/{EXCH}) are live only while the FD
-        // master switch is on; outside FD they're empty so a stray token collapses cleanly.
-        let (class, section): (&str, &str) = if self.settings.fd_active {
+        // Field Day exchange tokens ({CLASS}/{SECTION}, and {EXCH} built from them) are live
+        // only while the contest switch is on AND the contest is one of the two Field Day
+        // events; outside FD they're empty so a stray token collapses cleanly. Every other
+        // contest keys its own running exchange through {EXCH} — Field Day's settings sent
+        // in the Ohio QSO Party were a wrong exchange at every station worked.
+        let field_day = self.settings.fd_active && self.contest_is_field_day();
+        let (class, section): (&str, &str) = if field_day {
             (&self.settings.fd_class, &self.settings.fd_section)
         } else {
             ("", "")
+        };
+        let exch = if self.settings.fd_active && !field_day {
+            self.contest_sent_exchange().unwrap_or_default()
+        } else {
+            String::new()
         };
         let ctx = tempo_core::cw::CwContext {
             mycall: &self.settings.mycall,
@@ -7579,8 +7588,46 @@ impl Engine {
             rst: "599",
             class,
             section,
+            exch: &exch,
         };
         tempo_core::cw::expand(text, &ctx)
+    }
+
+    /// ⭐ **The exchange this station is about to SEND, without the signal report** — what
+    /// `{EXCH}` keys in a contest that is not Field Day, and what the RTTY macros read off
+    /// the snapshot as `sentExchange`. `None` outside a contest session.
+    ///
+    /// The running session's composing slots, in its role's send order. Two kinds are left
+    /// out, each because it has its own answer: an RST, which `{RST}` keys (and which a
+    /// phone contact sends as 59, not the session's 599); and a SERIAL, whose session
+    /// value is a placeholder — a number is issued to a contact, not to a session, and
+    /// keying the placeholder would put a serial nobody was given on the air.
+    ///
+    /// ⚠️ **It describes the NEXT transmission, never a contact already logged.** A row
+    /// carries its own sent exchange (`LoggedQso::tx`, rendered by
+    /// `contest::sent_exchange`), and a mobile's session moves under rows that must not —
+    /// the defect `contest::render` exists to make unrepresentable. This reads forward in
+    /// time, exactly as `ContestSession::field` does.
+    pub fn contest_sent_exchange(&self) -> Option<String> {
+        use tempo_core::contest::FieldKind;
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return None;
+        };
+        let session = &station.log.session;
+        let words: Vec<&str> = session
+            .role()
+            .sends
+            .iter()
+            .filter(|key| {
+                matches!(
+                    session.exchange.field(key).map(|f| f.kind),
+                    Some(kind) if !matches!(kind, FieldKind::Rst { .. } | FieldKind::Serial { .. })
+                )
+            })
+            .map(|key| session.field(key))
+            .filter(|v| !v.is_empty())
+            .collect();
+        Some(words.join(" "))
     }
 
     /// Record the worked station's QRZ name + US state for the `{HISNAME}`/`{HISSTATE}` CW
@@ -33323,6 +33370,82 @@ mod tests {
             Some("K1ABC"),
             "a declined restore must not disturb the contact in flight (#100)"
         );
+    }
+
+    /// ⭐ **`{EXCH}` keys the exchange of the contest that is running**, not Field Day's.
+    ///
+    /// The CW expander read `fd_class`/`fd_section` whenever the contest switch was on,
+    /// so an operator in the Ohio QSO Party with last June's `3A WI` still in Settings
+    /// keyed `3A WI` at every station — and with no class set, keyed nothing at all.
+    /// `{EXCH}` is now the running session's SENT exchange without the signal report
+    /// (the report has its own token), and the two Field Day tokens are empty outside
+    /// the two Field Day events.
+    #[test]
+    fn exch_keys_the_running_contests_sent_exchange_and_field_day_is_unchanged() {
+        // A Michigan station in the Ohio QSO Party sends RST + its state.
+        let mut s = Engine::new("W8ABC", "EN82", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "MI".into();
+        // Field Day's exchange, left over from June — it must not reach the air here.
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        let mut e = Engine::with_settings(s);
+        e.set_mode("fieldday-sp")
+            .expect("a Michigan OhQP session builds");
+        assert_eq!(
+            e.preview_cw("{EXCH}"),
+            "MI",
+            "the party's exchange, without RST"
+        );
+        assert_eq!(
+            e.preview_cw("{CLASS}"),
+            "",
+            "no Field Day class in this contest"
+        );
+        assert_eq!(e.preview_cw("{SECTION}"), "", "no Field Day section either");
+        assert_eq!(
+            e.preview_cw("TU {RST} {EXCH} DE {MYCALL}"),
+            "TU 5NN MI DE W8ABC"
+        );
+        // The same string the RTTY macros read off the snapshot.
+        assert_eq!(
+            e.snapshot().field_day.map(|fd| fd.sent_exchange).as_deref(),
+            Some("MI")
+        );
+
+        // POSITIVE CONTROL — Field Day keys exactly what it always has, from Settings,
+        // in the mode and before it.
+        for event in ["", "arrlfd"] {
+            let mut s = Engine::new("W9XYZ", "EN61", 0).settings().clone();
+            s.fd_active = true;
+            s.fd_event = event.into();
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            let mut e = Engine::with_settings(s.clone());
+            // `with_settings` does not enter the mode — the tokens are live on the switch.
+            assert_eq!(
+                e.preview_cw("{EXCH}"),
+                "3A WI",
+                "event {event:?}, out of the mode"
+            );
+            e.set_mode("fieldday-run").expect("Field Day builds");
+            assert_eq!(
+                e.preview_cw("{EXCH}"),
+                "3A WI",
+                "event {event:?}, in the mode"
+            );
+            assert_eq!(e.preview_cw("{CLASS}"), "3A");
+            assert_eq!(e.preview_cw("{SECTION}"), "WI");
+            assert_eq!(
+                e.snapshot().field_day.map(|fd| fd.sent_exchange).as_deref(),
+                Some("3A WI")
+            );
+        }
+
+        // …and outside any contest every exchange token is empty, as it always was.
+        let e = Engine::new("W9XYZ", "EN61", 0);
+        assert_eq!(e.preview_cw("! {EXCH} {CLASS} {SECTION} K"), "K");
     }
 
     /// M15: the Field Day contest log is memory-only, so the shell needs a way to

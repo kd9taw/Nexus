@@ -27,6 +27,18 @@ it('refuses stale, incomplete, oversized and open-ended display shapes',()=>{
  expect(()=>parseFieldDay({...fieldDayPage(),meta:{capturedAgeMs:60000,source:fixture}})).toThrow()
 })
 
+// A station sends `sentExchange` (what {EXCH} keys next) on every contest payload. The validator
+// refuses keys it does not know, so without it here every Field Day view went blank through Remote.
+it('accepts the sent exchange a newer station sends, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const fd=(page.meta as {source:{fieldDay:Record<string,unknown>}}).source.fieldDay
+ fd.sentExchange='5 MA'
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ // Negative control: the same key over the per-string bound is refused.
+ fd.sentExchange='x'.repeat(1025)
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+})
+
 // Every contest in the rules file has to survive the browser's validator. This pins the defect
 // where it only accepted arrlfd and wfd: thirteen of the fifteen events then in the rules table
 // had their ENTIRE Field Day payload rejected, so a station running a QSO party or a VHF contest

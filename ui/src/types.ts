@@ -2697,6 +2697,13 @@ export interface FieldDayStatus {
    *  A VECTOR, never a preformatted string: a rendered session-level exchange is the
    *  thing three emitters got wrong by stamping it on rows it did not describe. */
   composing?: ContestFieldValue[]
+  /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
+   *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
+   *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.
+   *
+   *  ⚠️ It describes the NEXT transmission only. A logged row's own sent exchange is its
+   *  `mex`; never label a row with this. Absent on a build older than the field. */
+  sentExchange?: string
   /** The session's role id — `''` for a symmetric contest (both Field Day events).
    *  Shown beside the exchange only when it names something. */
   role?: string

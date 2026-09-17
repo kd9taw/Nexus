@@ -49,6 +49,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A contest other than Field Day comes back after a restart.** If you left a QSO party or
+  another contest running and restarted Nexus, it came back in Chat unless a Field Day class and
+  section happened to be filled in, and the contacts you had logged stayed out of view. Nexus now
+  reopens the contest you left running. A contest whose own exchange is incomplete still stays
+  closed, and entering it tells you what to fill in.
+- **`{EXCH}` in a CW macro sends the exchange of the contest you are running.** It always sent your
+  Field Day class and section, so in any other contest a macro with `{EXCH}` sent the wrong
+  exchange, or nothing at all. It now sends that contest's exchange without the signal report —
+  your zone in CQ WW CW, for example. Field Day sends exactly what it did before. `{CLASS}` and
+  `{SECTION}` are empty outside Field Day.
 - **A cluster node that accepts a connection and then goes silent no longer kills that feed
   slot for the rest of the session.** Some nodes accept the connection and never send a login
   prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it
