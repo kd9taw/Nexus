@@ -28,6 +28,7 @@
     "state": "idle",
     "tier": "FT8"
   },
+  "logTick": null,
   "loggedTick": null,
   "mode": "chat",
   "mycall": "W9XYZ",
