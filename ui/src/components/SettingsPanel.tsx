@@ -10820,6 +10820,22 @@ export function SettingsPanel({
                 </div>
               ))}
               <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
+              {/* The address a contest log's Cabrillo EMAIL line carries. Optional, and read
+                  when the log is exported rather than when a contest starts: nothing sent on
+                  the air depends on it. NAME is the Station tab's operator name. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.email.label')}</span>
+                <input
+                  disabled={locked('contestEmail')}
+                  className="settings-input"
+                  type="email"
+                  value={form.contestEmail ?? ''}
+                  onChange={(e) => update('contestEmail', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.contestPick.email.hint')}</span>
+              </label>
             </fieldset>
           )}
 

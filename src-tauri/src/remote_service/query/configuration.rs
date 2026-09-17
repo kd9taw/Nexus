@@ -331,6 +331,9 @@ pub(super) const WITHHELD_KEYS: &[&str] = &[
     "cloudlogStationId",
     "cloudlogKey",
     "voiceMessages",
+    // The address a contest log's EMAIL header carries. Personal contact data that no browser
+    // needs to show or change, so it stays at the station like the account identities above.
+    "contestEmail",
     // How THIS computer starts, and the answer to a one-time prompt at the shack: station-local
     // facts no browser needs, so they stay home rather than widening the settings document.
     "launchAtLogin",

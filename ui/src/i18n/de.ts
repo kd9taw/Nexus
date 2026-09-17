@@ -462,6 +462,8 @@ export const DE: PartialCatalog = {
   "settings.contestPick.station.aria": "Ob dies eine Schulclub-Station ist",
   "settings.contestPick.entryAxes.unset": "Nicht gesetzt",
   "settings.contestPick.entryAxes.hint": "Der Rest dessen, was dein Cabrillo-Log über den Beitrag erklärt. Sweepstakes sendet diese Angaben auch auf Sendung, als Precedence-Buchstaben, und startet deshalb erst, wenn du in jeder Zeile eine Auswahl getroffen hast: die ARRL zählt 5 Watt oder weniger als QRP, 100 Watt oder weniger als niedrige Leistung und alles darüber als hohe Leistung, und ein Beitrag mit Spots, Skimmer oder Cluster ist Single Operator Unlimited.",
+  "settings.contestPick.email.label": "E-Mail für Contest-Logs",
+  "settings.contestPick.email.hint": "Steht in der EMAIL-Zeile des Cabrillo-Logs, das du für einen Contest mit dieser Zeile exportierst (CQ WW RTTY), damit dich der Veranstalter wegen deines Beitrags erreichen kann. Die NAME-Zeile ist dein Operatorname aus dem Tab Station. Leer lassen, um die Zeile wegzulassen.",
   "settings.contestStation.legend": "Deine Stationsdaten",
   "settings.contestStation.note": "Was deine Station sendet, wenn ein Contest danach fragt. Trage die Felder ein, die dein Contest nutzt — eine QSO Party will deinen County oder deinen Staat, Sweepstakes will deinen Check. Nichts davon wird geraten: ein Rapport, der auf Sendung geht, muss einer sein, den du eingetippt hast.",
   "settings.contestStation.county.label": "County",

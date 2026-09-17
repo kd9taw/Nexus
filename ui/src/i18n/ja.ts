@@ -2144,6 +2144,8 @@ export const JA: PartialCatalog = {
   "settings.contestPick.station.aria": "スクールクラブ局かどうか",
   "settings.contestPick.entryAxes.unset": "未設定",
   "settings.contestPick.entryAxes.hint": "Cabrillo ログがエントリーについて申告する残りの項目です。Sweepstakes ではこれらがプリシーデンス文字としてオンエアでも送られるため、各行を選ぶまでコンテストは始まりません。ARRL は 5 W 以下を QRP、100 W 以下をローパワー、それより上をハイパワーとし、スポット・スキマー・クラスターを使うエントリーは Single Operator Unlimited です。",
+  "settings.contestPick.email.label": "コンテストログ用メールアドレス",
+  "settings.contestPick.email.hint": "EMAIL 行があるコンテスト（CQ WW RTTY）の Cabrillo ログを書き出すとその行に入り、主催者がエントリーについて連絡できるようにします。NAME 行は「局情報」タブのオペレーター名です。空欄なら行を省きます。",
   "settings.contestStation.legend": "自局のデータ",
   "settings.contestStation.note": "コンテストが求めたときに自局が送る内容です。参加するコンテストが使うものを入れてください。QSO パーティはカウンティまたは州を、Sweepstakes はチェックを求めます。ここは推測しません。電波に乗る交換内容は、自分で入力したものだけです。",
   "settings.contestStation.county.label": "カウンティ",

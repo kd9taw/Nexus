@@ -3338,6 +3338,9 @@ export interface Settings {
   contestCategoryAssisted?: string
   /** Cabrillo `CATEGORY-STATION` — 'SCHOOL', '' = the ordinary entry. */
   contestCategoryStation?: string
+  /** Cabrillo `EMAIL` for a contest log, '' = the header is left out. Not the ClubLog login.
+   *  Withheld from Remote. */
+  contestEmail?: string
   /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
    *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
    *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else

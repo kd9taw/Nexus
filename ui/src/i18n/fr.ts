@@ -4281,6 +4281,8 @@ export const FR: PartialCatalog = {
   "settings.contestPick.station.aria": "S’il s’agit d’une station de club scolaire",
   "settings.contestPick.entryAxes.unset": "Non défini",
   "settings.contestPick.entryAxes.hint": "Le reste de ce que ton log Cabrillo déclare sur la participation. Sweepstakes envoie aussi ces informations sur l’air, sous forme de lettre de précédence, et ne démarrera donc pas tant que tu n’auras pas choisi dans chaque ligne : l’ARRL compte 5 watts ou moins comme QRP, 100 watts ou moins comme faible puissance et tout le reste comme forte puissance, et une participation utilisant des spots, un skimmer ou un cluster est Single Operator Unlimited.",
+  "settings.contestPick.email.label": "E-mail pour les logs de concours",
+  "settings.contestPick.email.hint": "Figure sur la ligne EMAIL du log Cabrillo que tu exportes pour un concours dont le log en a une (CQ WW RTTY), pour que l'organisateur puisse te joindre au sujet de ta participation. La ligne NAME est ton nom d'opérateur de l'onglet Station. Laisse vide pour omettre la ligne.",
   "settings.contestStation.legend": "Les données de ta station",
   "settings.contestStation.note": "Ce que ta station envoie quand un concours le demande. Remplis ceux que ton concours utilise : une QSO Party veut ton comté ou ton état, Sweepstakes veut ton check. Rien n’est deviné ici : un échange qui part sur l’air doit être un échange que tu as saisi.",
   "settings.contestStation.county.label": "Comté",
