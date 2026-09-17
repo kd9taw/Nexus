@@ -2629,6 +2629,10 @@ export interface FieldDayQso {
    *  a contact worked before the move sent the old one. Absent on a snapshot from a
    *  build older than this field. */
   mex?: string
+  /** What THIS contact received — one value per entry of `FieldDayStatus.receives`, in
+   *  that order: the contest log table's columns. Absent for Field Day, whose two slots
+   *  are `class` and `section`, and on a build older than the field. */
+  rcvd?: string[]
 }
 
 /** Field Day operating + scoring status. */

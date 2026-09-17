@@ -76,6 +76,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you type. A box the contest does not require — the QTH a DX station never sends in CQ WW RTTY —
   can be left blank. The strip's label, hint and button now say "contest log" instead of Field
   Day, and the zone box is captioned Zone. Field Day's strip is unchanged.
+- **The contest screen names the contest you are running.** Outside Field Day the banner still
+  read "ARRL Field Day", the header showed an empty class and section, the log table's columns were
+  Class and Section (blank on every row), the Score Summary printed a station class, a power
+  multiplier and a bonus list, and the Field Day bonus checklist sat under the score. The banner
+  and header now name the contest and show what you are sending, the log table has one column
+  per field that contest exchanges, the Score Summary shows QSO points × multipliers, and the
+  bonus checklist appears only in Field Day. Field Day's screen is unchanged.
 - **A cluster node that accepts a connection and then goes silent no longer kills that feed
   slot for the rest of the session.** Some nodes accept the connection and never send a login
   prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it

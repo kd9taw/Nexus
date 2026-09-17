@@ -12642,6 +12642,7 @@ mod tests {
             submode: "FT8".into(),
             when_unix,
             mex: mex.into(),
+            rcvd: Vec::new(),
         }
     }
 

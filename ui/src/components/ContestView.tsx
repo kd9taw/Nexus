@@ -12,11 +12,12 @@ import type {
 import { exportLog, fdClubExport, fdMergeToGeneral, fdSetUpload, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
 import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
-import { fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
+import { contestName, contestShortName, fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, isFieldDay, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { contestDomain, type DomainGroup } from '../features/contestDomains'
-import { composingSlot } from '../features/contestExchange'
+import { composingSlot, composingText } from '../features/contestExchange'
+import { slotCaption } from '../features/contestSlots'
 import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
@@ -210,6 +211,13 @@ function modeCounts(log: FieldDayQso[]): { dig: number; cw: number; ph: number }
   return { dig, cw, ph }
 }
 
+/** The log table's grid for a contest that is not Field Day: one column per received slot,
+ *  sized in styles.css off `--fd-slots` (the rules validator caps a role at five). Field
+ *  Day passes 0 and keeps its own six-column rule untouched. */
+function slotGrid(n: number): { 'data-slots'?: number; style?: CSSProperties } {
+  return n > 0 ? { 'data-slots': n, style: { '--fd-slots': n } as CSSProperties } : {}
+}
+
 /** "HH:MM" UTC for the FD log's time column. Blank the column when the QSO
  * predates the timestamp field or hasn't been logged yet. */
 function qsoTimeUtc(q: FieldDayQso): string {
@@ -260,6 +268,10 @@ interface SummaryArgs {
   bonusPoints: number
   totalScore: number
   claimedBonuses: FdBonus[]
+  /** A contest that is NOT Field Day: what the session sends and how many multipliers the
+   *  log has. Absent means Field Day's summary, byte for byte — class, section, sections
+   *  worked, power multiplier and bonuses are Field Day's words and nobody else's. */
+  contest?: { sending: string; multCount: number | null }
 }
 
 /**
@@ -275,7 +287,8 @@ interface SummaryArgs {
 export function buildSummaryText(a: SummaryArgs): string {
   const L: string[] = []
   L.push(`${a.eventName.toUpperCase()} — SCORE SUMMARY`)
-  L.push(`Station class ${a.myClass || '—'}   Section ${a.mySection || '—'}`)
+  if (a.contest) L.push(`Sending ${a.contest.sending || '—'}`)
+  else L.push(`Station class ${a.myClass || '—'}   Section ${a.mySection || '—'}`)
   L.push(`Generated ${new Date().toISOString()}`)
   // Which rules parameters scored this document (design 3f) — a data update
   // that changes a number is visible on the artifact an operator hands over.
@@ -288,6 +301,22 @@ export function buildSummaryText(a: SummaryArgs): string {
   const bands = bandCounts(a.log)
   L.push(`  By band:  ${bands.length ? bands.map((b) => `${b.band} ${b.n}`).join('   ') : '—'}`)
   L.push('')
+  if (a.contest) {
+    // The score the engine computed: QSO points × multipliers, with no power tier and no
+    // claimed bonuses — neither exists outside Field Day.
+    const mults = a.contest.multCount
+    if (mults !== null) {
+      L.push(`Multipliers: ${mults}`)
+      L.push('')
+    }
+    L.push('SCORE')
+    L.push(`  QSO points                 ${a.qsoPts}`)
+    if (mults !== null) L.push(`  × multipliers              ${mults}`)
+    L.push('  --------------------------------')
+    L.push(`  TOTAL                      ${a.totalScore}`)
+    L.push('')
+    return L.join('\n')
+  }
   const secs = [...a.workedSet].sort()
   L.push(`Sections worked (${secs.length}):  ${secs.length ? secs.join(' ') : '—'}`)
   L.push('')
@@ -312,20 +341,24 @@ export function buildSummaryText(a: SummaryArgs): string {
   return L.join('\n')
 }
 
-/** Dupe / multiplier check sheet: new-section multipliers + alphabetical callsign list. */
-function buildDupeSheetText(rows: LogRowMeta[]): string {
+/** Dupe / multiplier check sheet: new-section multipliers + alphabetical callsign list.
+ *  `contestName` is set for a contest that is not Field Day, whose sheet is the callsign
+ *  check alone: its multipliers are not sections, and its board says what they are. */
+function buildDupeSheetText(rows: LogRowMeta[], contestName?: string): string {
   const L: string[] = []
-  L.push('FIELD DAY — DUPE & MULTIPLIER SHEET')
+  L.push(contestName ? `${contestName.toUpperCase()} — DUPE SHEET` : 'FIELD DAY — DUPE & MULTIPLIER SHEET')
   L.push(`Generated ${new Date().toISOString()}`)
   L.push('')
 
-  const mults = rows.filter((r) => r.isNewSection)
-  L.push(`MULTIPLIERS — sections worked (${mults.length})`)
-  if (mults.length === 0) L.push('  (none yet)')
-  else for (const r of mults) {
-    L.push(`  ${r.qso.section.padEnd(5)} first worked by ${r.qso.call} on ${r.qso.band}`)
+  if (!contestName) {
+    const mults = rows.filter((r) => r.isNewSection)
+    L.push(`MULTIPLIERS — sections worked (${mults.length})`)
+    if (mults.length === 0) L.push('  (none yet)')
+    else for (const r of mults) {
+      L.push(`  ${r.qso.section.padEnd(5)} first worked by ${r.qso.call} on ${r.qso.band}`)
+    }
+    L.push('')
   }
-  L.push('')
 
   const byCall = new Map<string, FieldDayQso[]>()
   for (const r of rows) {
@@ -1531,10 +1564,18 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   // rollover and the active→next transition need no client-side clock walk.
   const eventKind: FdKind = (fieldDay?.event === 'wfd' ? 'wfd' : 'arrlfd')
   const isWfd = eventKind === 'wfd'
+  // ⭐ WHICH CONTEST THIS IS. Every Field Day word on this screen — the banner, the header,
+  // the class/section, the log table's columns, the summary — used to be printed whatever
+  // the picker said, so a CQ WW log sat under an "ARRL Field Day" banner with Class and
+  // Section columns empty on every row.
+  const fdEventIsFieldDay = isFieldDay(fieldDay?.event)
+  const eventName = fdEventIsFieldDay ? FD_EVENT_NAMES[eventKind] : contestName(fieldDay?.event)
   const fdEvent = useMemo(
-    () => fdEventFromWindow(eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix),
-    [eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix],
+    () => fdEventFromWindow(eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix, eventName),
+    [eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix, eventName],
   )
+  // The contest's received slots, one log-table column each (Field Day keeps its own two).
+  const slotColumns = fdEventIsFieldDay ? [] : (fieldDay?.receives ?? [])
   const subtitle = useMemo(() => (fdEvent ? fdHeaderSubtitle(new Date(), fdEvent) : ''), [fdEvent])
 
   // Score components (shared with the scoreboard tiles) — needed here for the
@@ -1565,7 +1606,7 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
       let text: string
       if (format === 'summary') {
         text = buildSummaryText({
-          eventName: isWfd ? FD_EVENT_NAMES.wfd : FD_EVENT_NAMES.arrlfd,
+          eventName,
           isWfd,
           rulesYear: fieldDay?.rulesYear ?? 0,
           rulesGenerated: fieldDay?.rulesGenerated ?? '',
@@ -1580,9 +1621,12 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           bonusPoints,
           totalScore,
           claimedBonuses: FD_BONUSES.filter((b) => claimedBonuses.includes(b.id)),
+          contest: fdEventIsFieldDay
+            ? undefined
+            : { sending: composingText(fieldDay?.composing), multCount: fieldDay?.multCount ?? null },
         })
       } else if (format === 'dupesheet') {
-        text = buildDupeSheetText(rows)
+        text = buildDupeSheetText(rows, fdEventIsFieldDay ? undefined : eventName)
       } else if (format === 'club-cabrillo' || format === 'club-adif') {
         // The MERGED club log from the host, deduped earliest-wins — the
         // submittable club artifact (host role only; the backend refuses
@@ -1615,7 +1659,7 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
     <section className="conversation panel fieldday">
       {/* EVENT BANNER */}
       <div className="fd-event-banner">
-        <span className="fd-event-name">{isWfd ? FD_EVENT_NAMES.wfd : FD_EVENT_NAMES.arrlfd}</span>
+        <span className="fd-event-name">{eventName}</span>
         <span className="fd-event-subtitle">{subtitle}</span>
         {/* Warn-only rule advisories (banned mode + assistance) — passive status
             lines; nothing is ever removed or disabled by rule. */}
@@ -1638,16 +1682,24 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
 
       <div className="panel-header fd-header">
         <div className="fd-ident">
-          <h2 className="conv-peer">{isWfd ? FD_SHORT_NAMES.wfd : FD_SHORT_NAMES.arrlfd}</h2>
+          <h2 className="conv-peer">
+            {fdEventIsFieldDay
+              ? isWfd ? FD_SHORT_NAMES.wfd : FD_SHORT_NAMES.arrlfd
+              : contestShortName(fieldDay?.event)}
+          </h2>
           {/* What the SESSION is composing — the exchange the next contact will get.
               A logged row's own exchange is in the log table below, off `mex`. */}
-          <span className="fd-class">
-            {composingSlot(fieldDay?.composing, 'CLASS') || '—'}
-            <span className="fd-section">
-              {' '}
-              {composingSlot(fieldDay?.composing, 'SECTION') || '—'}
+          {fdEventIsFieldDay ? (
+            <span className="fd-class">
+              {composingSlot(fieldDay?.composing, 'CLASS') || '—'}
+              <span className="fd-section">
+                {' '}
+                {composingSlot(fieldDay?.composing, 'SECTION') || '—'}
+              </span>
             </span>
-          </span>
+          ) : (
+            <span className="fd-class">{fieldDay?.sentExchange || '—'}</span>
+          )}
         </div>
         <div className="fd-role-toggle" role="group" aria-label={t('fieldDay.role.aria')}>
           <button
@@ -1825,6 +1877,9 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           make. The multiplier keeps its Settings home (that is the registry's, and the
           manual's, address for it) and is MIRRORED here on the same field: an operator
           meets scoring where the score is, and there is only ever one value. */}
+      {/* Field Day's bonus menu and power tier. No other contest has either, so it is not
+          offered under a score it cannot change. */}
+      {fdEventIsFieldDay && (
       <div className="fd-bonuses-section">
         <button
           type="button"
@@ -1944,15 +1999,24 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           </div>
         )}
       </div>
+      )}
 
       {/* LOG TABLE */}
       <div className="fd-log">
-        <div className="fd-log-head">
+        <div className="fd-log-head" {...slotGrid(slotColumns.length)}>
           <span className="fd-col time">{t('fieldDay.log.column.time')}</span>
           <span className="fd-col call">{t('fieldDay.log.column.call')}</span>
-          <span className="fd-col cls">{classLabel}</span>
-          {/* H/I/M/O are the WFD location letters — exchange codes, never translated. */}
-          <span className="fd-col sec">{t('fieldDay.log.column.section')}{isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}</span>
+          {fdEventIsFieldDay ? (
+            <>
+              <span className="fd-col cls">{classLabel}</span>
+              {/* H/I/M/O are the WFD location letters — exchange codes, never translated. */}
+              <span className="fd-col sec">{t('fieldDay.log.column.section')}{isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}</span>
+            </>
+          ) : (
+            slotColumns.map((f) => (
+              <span className="fd-col slot" key={f.key}>{slotCaption(f.key)}</span>
+            ))
+          )}
           <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
           <span className="fd-col mode">{t('fieldDay.log.column.mode')}</span>
         </div>
@@ -1960,23 +2024,32 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
           {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
           {rows.map((r, i) => (
             <div
-              className={`fd-log-row${r.isNewSection ? ' mult' : ''}${r.isDupe ? ' dupe' : ''}`}
+              className={`fd-log-row${fdEventIsFieldDay && r.isNewSection ? ' mult' : ''}${r.isDupe ? ' dupe' : ''}`}
               key={`${r.qso.call}-${i}`}
+              {...slotGrid(slotColumns.length)}
               title={
                 r.isDupe
                   ? t('fieldDay.log.dupe.title')
-                  : r.isNewSection
+                  : fdEventIsFieldDay && r.isNewSection
                     ? t('fieldDay.log.mult.title')
                     : undefined
               }
             >
               <span className="fd-col time mono">{qsoTimeUtc(r.qso)}</span>
               <span className="fd-col call mono">{r.qso.call}</span>
-              <span className="fd-col cls mono">{r.qso.class}</span>
-              <span className="fd-col sec mono">
-                {r.qso.section}
-                {r.isNewSection && <span className="fd-mult-tag">{t('fieldDay.log.mult')}</span>}
-              </span>
+              {fdEventIsFieldDay ? (
+                <>
+                  <span className="fd-col cls mono">{r.qso.class}</span>
+                  <span className="fd-col sec mono">
+                    {r.qso.section}
+                    {r.isNewSection && <span className="fd-mult-tag">{t('fieldDay.log.mult')}</span>}
+                  </span>
+                </>
+              ) : (
+                slotColumns.map((f, j) => (
+                  <span className="fd-col slot mono" key={f.key}>{r.qso.rcvd?.[j] ?? ''}</span>
+                ))
+              )}
               <span className="fd-col band">{r.qso.band}</span>
               <span className="fd-col mode">
                 {r.qso.mode && (

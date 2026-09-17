@@ -1372,6 +1372,16 @@ pub struct FieldDayQso {
     /// is deleted; this is what replaced it.
     #[serde(default)]
     pub mex: String,
+    /// ⭐ **What THIS contact received** — one value per slot of the session's
+    /// [`FieldDayStatus::receives`], in that order (blank where the row has none): the
+    /// contest log table's columns.
+    ///
+    /// **Empty for Field Day's exchange**, whose two slots already ride
+    /// [`class`](Self::class) and [`section`](Self::section) — carrying them twice would
+    /// spend bytes of every Remote capture of a large Field Day log, which is close to
+    /// its bound already.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rcvd: Vec<String>,
 }
 
 /// Field Day mode status: my exchange, the log, score and multipliers.

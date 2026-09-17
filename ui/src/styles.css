@@ -9664,6 +9664,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .fd-log-row {
   grid-template-columns: 0.55fr 1.3fr 0.7fr 0.9fr 0.7fr 0.7fr;
 }
+/* …and a contest that is not Field Day: Time · Call · one column per received slot · Band ·
+   Mode. `--fd-slots` is set beside `data-slots` by ContestView (1–5). */
+.fd-log-head[data-slots],
+.fd-log-row[data-slots] {
+  grid-template-columns: 0.55fr 1.3fr repeat(var(--fd-slots), 0.7fr) 0.7fr 0.7fr;
+}
 .fd-col.mode {
   /* Mode chip column */
 }

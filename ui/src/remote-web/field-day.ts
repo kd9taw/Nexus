@@ -49,8 +49,11 @@ function status(v: unknown): void {
     // `mex` is the row's OWN sent exchange, which is where a per-QSO exchange belongs now that
     // the session-level class/section pair is gone from the status struct. Optional so a log
     // written by an older station still validates.
-    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex'])
-    if (![q.call,q.class,q.section,q.band,q.submode].every(text) || !['CW','PH','DIG'].includes(String(q.mode)) || !integer(q.whenUnix)) throw new Error('invalidFieldDay')
+    // `rcvd` is what a contest that is not Field Day received on the row, one value per
+    // received slot (the rules validator caps a role at five).
+    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd'])
+    if (![q.call,q.class,q.section,q.band,q.submode].every(text) || !['CW','PH','DIG'].includes(String(q.mode)) || !integer(q.whenUnix) ||
+      (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
   }
   if (f.club !== undefined && f.club !== null) {
     const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError'])

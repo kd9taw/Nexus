@@ -39,6 +39,20 @@ it('accepts the sent exchange a newer station sends, and still bounds it',()=>{
  expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
 })
 
+// A contest that is not Field Day carries each row's received values (`rcvd`) for the log
+// table's columns. Same refusal hazard as above for an unknown key, and still bounded.
+it('accepts a row\'s received values, and still bounds them',()=>{
+ const page=fieldDayPage()
+ const log=(page.meta as {source:{fieldDay:{log:Record<string,unknown>[]}}}).source.fieldDay.log
+ log[0].rcvd=['599','14']
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ // Negative controls: more values than any role receives, and a value that is not text.
+ log[0].rcvd=Array(9).fill('5')
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+ log[0].rcvd=[14]
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+})
+
 // Every contest in the rules file has to survive the browser's validator. This pins the defect
 // where it only accepted arrlfd and wfd: thirteen of the fifteen events then in the rules table
 // had their ENTIRE Field Day payload rejected, so a station running a QSO party or a VHF contest

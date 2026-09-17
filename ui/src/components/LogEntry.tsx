@@ -13,11 +13,12 @@ import type {
   FieldDayStatus,
   LoggedQso,
 } from '../types'
-import { t, type MessageKey } from '../i18n'
+import { t } from '../i18n'
 import { contestIMoved, contestLogManual, contestZoneHint, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { inDomain } from '../features/contestDomains'
 import { composingSlot } from '../features/contestExchange'
+import { slotCaption, slotTitle } from '../features/contestSlots'
 import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
@@ -46,26 +47,11 @@ const FD_RECEIVES_FALLBACK: ContestFieldSpec[] = [
   { key: 'SECTION', kind: 'enum', required: true, domain: 'fd_sections' },
 ]
 
-/** The catalog keys for one slot's caption and tooltip.
- *
- *  A slot id is an INVARIANT TOKEN; its caption is PROSE. Field Day's two slots keep
- *  the captions and tooltips they shipped with, so a Field Day operator reads exactly
- *  what they read before. A slot with no entry falls back to the slot id itself —
- *  which is a token, correctly untranslated, rather than an invented English word. */
-const FD_FIELD_TEXT: Record<string, { labelKey: MessageKey; titleKey: MessageKey }> = {
-  CLASS: { labelKey: 'logEntry.fd.class.label', titleKey: 'logEntry.fd.class.title' },
-  SECTION: { labelKey: 'logEntry.fd.section.label', titleKey: 'logEntry.fd.section.title' },
-  // CQ WW's zone slot. `ZN` is the rules file's slot id, which is a token and not a word an
-  // operator reads; `RST` and `QTH` are Q-code-style tokens hams read as they are, and keep
-  // the fallback below.
-  ZN: { labelKey: 'logEntry.fd.zone.label', titleKey: 'logEntry.fd.zone.title' },
-}
-
-/** The operator-facing caption for a slot. */
-function fdFieldLabel(key: string): string {
-  const m = FD_FIELD_TEXT[key]
-  return m ? t(m.labelKey) : key
-}
+/** The operator-facing caption for a slot — `features/contestSlots.ts`, the one table the
+ *  strip and the contest log table both read. A slot id is an INVARIANT TOKEN; its caption
+ *  is PROSE. Field Day's two slots keep the captions they shipped with, and a slot with no
+ *  entry shows its id — a token, correctly untranslated, rather than an invented word. */
+const fdFieldLabel = slotCaption
 
 /** One received value off a logged DTO row, by slot id.
  *
@@ -1422,7 +1408,7 @@ export function LogEntry({
                 placeholder={f === zoneSlot && zoneHint ? zoneHint : FD_FIELD_EXAMPLES[f.key]}
                 autoComplete="off"
                 spellCheck={false}
-                title={FD_FIELD_TEXT[f.key] ? t(FD_FIELD_TEXT[f.key].titleKey) : undefined}
+                title={slotTitle(f.key)}
               />
             </label>
           ))}

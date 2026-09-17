@@ -42,36 +42,49 @@ export const FD_EVENT_NAMES: Record<FdKind, string> = {
  * costs the operator that contest and nothing else. Adding a contest is a rules-file
  * row plus a line here; nothing else in the UI knows a contest by name.
  */
-export const CONTESTS: { id: string; name: string }[] = [
-  { id: 'arrlfd', name: FD_EVENT_NAMES.arrlfd },
-  { id: 'wfd', name: FD_EVENT_NAMES.wfd },
+export const CONTESTS: { id: string; name: string; short: string }[] = [
+  { id: 'arrlfd', name: FD_EVENT_NAMES.arrlfd, short: 'Field Day' },
+  { id: 'wfd', name: FD_EVENT_NAMES.wfd, short: 'WFD' },
   // ⚠️ Sweepstakes is TWO contests, not one with two modes: ARRL runs the CW weekend
   // and the Phone weekend separately, scores them separately and gives each its own
   // Cabrillo token. The sponsor's own names, so an operator reads the same words here
   // and on arrl.org.
-  { id: 'arrlss_cw', name: 'ARRL November Sweepstakes (CW)' },
-  { id: 'arrlss_ssb', name: 'ARRL November Sweepstakes (Phone)' },
+  { id: 'arrlss_cw', name: 'ARRL November Sweepstakes (CW)', short: 'SS CW' },
+  { id: 'arrlss_ssb', name: 'ARRL November Sweepstakes (Phone)', short: 'SS Phone' },
   // ⚠️ ARRL VHF is THREE contests, not one row with three dates. The January running
   // prices 902/1296 MHz and 2.3 GHz-and-up differently from June and September
   // (VHF-Rules.pdf v1.2 §5.1 vs §5.2), each running has its own ADIF id and Cabrillo
   // token, and each is on its own weekend in its own month. ARRL's own current names,
   // as they appear on the contest calendar.
-  { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest' },
-  { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest' },
-  { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest' },
+  { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest', short: 'January VHF' },
+  { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest', short: 'June VHF' },
+  { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest', short: 'September VHF' },
   // CQ WW and CQ WPX are likewise two contests each, on separate weekends with separate
   // Cabrillo tokens. The sponsors' own names, from cqww.com and cqwpx.com.
   // NB the RTTY runnings of both are a DIFFERENT sponsor's contests (CQ/RJ, with the RTTY
   // Journal) and have their own rules, so they are not arms of these rows.
-  { id: 'cqww_cw', name: 'CQ World-Wide DX Contest (CW)' },
-  { id: 'cqww_ssb', name: 'CQ World-Wide DX Contest (SSB)' },
-  { id: 'cqwpx_cw', name: 'CQ World-Wide WPX Contest (CW)' },
-  { id: 'cqwpx_ssb', name: 'CQ World-Wide WPX Contest (SSB)' },
-  { id: 'cqp', name: 'California QSO Party' },
-  { id: 'ohqp', name: 'Ohio QSO Party' },
-  { id: 'tnqp', name: 'Tennessee QSO Party' },
-  { id: 'txqp', name: 'Texas QSO Party' },
+  { id: 'cqww_cw', name: 'CQ World-Wide DX Contest (CW)', short: 'CQ WW CW' },
+  { id: 'cqww_ssb', name: 'CQ World-Wide DX Contest (SSB)', short: 'CQ WW SSB' },
+  { id: 'cqwpx_cw', name: 'CQ World-Wide WPX Contest (CW)', short: 'CQ WPX CW' },
+  { id: 'cqwpx_ssb', name: 'CQ World-Wide WPX Contest (SSB)', short: 'CQ WPX SSB' },
+  { id: 'cqp', name: 'California QSO Party', short: 'CQP' },
+  { id: 'ohqp', name: 'Ohio QSO Party', short: 'OhQP' },
+  { id: 'tnqp', name: 'Tennessee QSO Party', short: 'TNQP' },
+  { id: 'txqp', name: 'Texas QSO Party', short: 'TXQP' },
 ]
+
+/** The sponsor's name for a contest by its rules-file id — the id itself for one this menu
+ *  does not list (a contest a downloaded rules file added), which is a token rather than a
+ *  guess. */
+export function contestName(id: string | undefined): string {
+  return CONTESTS.find((c) => c.id === id)?.name ?? id ?? ''
+}
+
+/** The short form of that name, for the contest view's header (`short` above — every one
+ *  an invariant token, never translated). */
+export function contestShortName(id: string | undefined): string {
+  return CONTESTS.find((c) => c.id === id)?.short ?? id ?? ''
+}
 
 /** Is this one of the two events Field Day Setup (class + section) describes? */
 export const isFieldDay = (id: string | undefined): boolean =>
@@ -99,13 +112,15 @@ export function fdEventFromWindow(
   kind: FdKind,
   startUnix: number | undefined,
   endUnix: number | undefined,
+  /** The event's name when it is not one of the two Field Days (`contestName`). */
+  label?: string,
 ): FdEvent | null {
   if (!startUnix || !endUnix) return null
   return {
     kind,
     startUnix,
     endUnix,
-    label: FD_EVENT_NAMES[kind],
+    label: label ?? FD_EVENT_NAMES[kind],
     year: new Date(startUnix * 1000).getUTCFullYear(),
   }
 }

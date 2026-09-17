@@ -84,6 +84,16 @@ impl Engine {
                     // looping over these rows has the right value in hand and
                     // no reason to reach out to the session.
                     mex: tempo_core::contest::sent_exchange_string(q, spec),
+                    // What this contact RECEIVED, aligned with `receives` below — the
+                    // contest log table's columns. Field Day's already ride class/section.
+                    rcvd: if spec.name == "fieldday" {
+                        Vec::new()
+                    } else {
+                        role.receives
+                            .iter()
+                            .map(|k| q.rcvd(k).to_string())
+                            .collect()
+                    },
                 })
                 .collect(),
             club: self.fd_club_dto(log),
@@ -180,6 +190,14 @@ impl Engine {
             }
             check(q.class())?;
             check(q.section())?;
+            // The received values a contest that is not Field Day carries per row
+            // (`FieldDayQso::rcvd`). Field Day's are the class/section just checked, and
+            // are not serialised twice, so they are not counted twice either.
+            if log.session.exchange.name != "fieldday" {
+                for v in &q.rx {
+                    check(&v.raw)?;
+                }
+            }
         }
         if self.fd_sync_enabled() {
             for s in [&self.fd_mirror.event, &self.fd_mirror.host_call] {
@@ -312,6 +330,42 @@ mod tests {
         assert!(e.snapshot().field_day.unwrap().club.is_none());
         assert_eq!(e.snapshot().field_day.unwrap().qso_count, 2);
     }
+    /// ⭐ **A row of a contest that is not Field Day carries what it RECEIVED**, one value
+    /// per slot the session receives, in `receives` order — the contest log table's
+    /// columns. A DTO row carried `class` and `section` only, so every CQ WW or QSO-party
+    /// row showed two empty cells and nothing it had actually copied.
+    #[test]
+    fn a_contest_row_carries_its_received_values_and_a_field_day_row_does_not() {
+        let mut e = Engine::with_settings(crate::settings::Settings {
+            mycall: "W8ABC".into(),
+            fd_active: true,
+            fd_event: "ohqp".into(),
+            contest_qth_state: "MI".into(),
+            ..Default::default()
+        });
+        e.restore_field_day_if_enabled();
+        let ex = vec![
+            ("RST".to_string(), "579".to_string()),
+            ("QTH".to_string(), "CUYA".to_string()),
+        ];
+        assert!(e.contest_log_manual("W8XYZ", &ex, "CW", None).unwrap());
+        let fd = e.snapshot().field_day.expect("in the party");
+        assert_eq!(
+            fd.receives.iter().map(|f| f.key.as_str()).collect::<Vec<_>>(),
+            vec!["RST", "QTH"]
+        );
+        assert_eq!(fd.log[0].rcvd, vec!["579".to_string(), "CUYA".to_string()]);
+
+        // CONTROL: Field Day's row is unchanged on the wire — its two received values
+        // already ride class/section, and no `rcvd` key is sent at all.
+        let e = engine("arrlfd", 1);
+        let fd = e.snapshot().field_day.expect("in Field Day");
+        assert!(fd.log[0].rcvd.is_empty());
+        let wire = serde_json::to_value(&fd.log[0]).unwrap();
+        assert!(wire.get("rcvd").is_none(), "{wire}");
+        assert_eq!(wire["class"], "2A");
+    }
+
     #[test]
     fn size_refusal_does_not_truncate_or_change_the_native_event() {
         let e = engine("arrlfd", 2049);
