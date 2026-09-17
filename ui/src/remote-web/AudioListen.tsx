@@ -27,7 +27,12 @@ export function AudioListen({ audio, client }: { audio: AudioLink; client?: Oper
   useEffect(() => {
     if (on && !lease) audio.release('notController')
   }, [on, lease, audio])
-  useEffect(() => () => { audio.close() }, [audio])
+  // Unmount RELEASES; it never closes. The link is one per connection and outlives this
+  // control: the workspace host renders this control in its pre-boot shell and again, as
+  // a fresh mount, inside the booted workspace. A close() here made the first unmount
+  // permanent, and the remounted button was enabled and sent nothing for the rest of the
+  // session. The device is freed by HostedConnection.stop(), where the connection ends.
+  useEffect(() => () => { audio.release() }, [audio])
 
   if (!offered) return null
   if (!view.supported) return <span className="remote-audio remote-audio--off" role="note">{t('remote.audio.unsupported')}</span>
