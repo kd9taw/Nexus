@@ -304,17 +304,29 @@ impl ClusterSession {
         let mut out = Vec::new();
         // Extract complete lines; the trailing partial stays buffered. Pre-login
         // these are banner lines (parse_dx_spot ignores them).
+        //
+        // The last one is kept, because a prompt is not always left waiting: k1ttt.net:7373
+        // (AR-Cluster, measured 2026-09-17) ends its greeting with "Please enter your call: "
+        // and a CR/LF, then says nothing. That prompt was drained here as an ordinary line and
+        // never answered, so Nexus held the socket open for good without ever logging in.
+        let mut last_line = String::new();
         while let Some(nl) = self.buf.find('\n') {
             let line: String = self.buf.drain(..=nl).collect();
             if let Some(spot) = parse_dx_spot(line.trim_end_matches(['\r', '\n'])) {
                 out.push(Action::Spot(spot));
             }
+            last_line = line;
         }
-        // A login prompt as the trailing (newline-less) line — answer it EVERY time
-        // it appears, not just once: some DXSpider/RBN hosts keep the socket open
-        // and RE-prompt after a rejected/unregistered call, and answering only the
-        // first prompt wedged the session forever (open TCP, no spots, no retry).
-        if is_login_prompt(&self.buf) {
+        // THE RULE: a login prompt is answered when it is the LAST thing the node has sent —
+        // left waiting at the end of the input (telnet's usual way), or as the final line of
+        // what just arrived. A prompt-shaped line with more text behind it is MOTD, and
+        // answering that would send the callsign into a banner.
+        //
+        // Answered EVERY time it appears, not just once: some DXSpider/RBN hosts keep the socket
+        // open and RE-prompt after a rejected/unregistered call, and answering only the first
+        // prompt wedged the session forever (open TCP, no spots, no retry).
+        let ended_with_prompt = self.buf.trim_end().is_empty() && is_login_prompt(&last_line);
+        if is_login_prompt(&self.buf) || ended_with_prompt {
             out.push(Action::Send(format!("{}\r\n", self.call)));
             self.logged_in = true;
             self.buf.clear(); // discard the prompt/banner
@@ -327,15 +339,20 @@ impl ClusterSession {
     }
 }
 
-/// Is the buffer's TRAILING (incomplete) line a login prompt? Telnet prompts
-/// arrive without a newline, so we look only at the text after the last `\n` and
-/// require a prompt-terminal pattern — so MOTD/help body lines that merely mention
-/// "login"/"callsign" can't trigger a premature, session-wedging login.
+/// Is the LAST line of `s` a login prompt? Telnet prompts usually arrive without a newline, so
+/// the caller passes the trailing incomplete line; but a node may also end its greeting with a
+/// prompt and a CR/LF (k1ttt.net:7373 does), so trailing whitespace and line endings are trimmed
+/// FIRST and the last line is read out of what remains.
+///
+/// A prompt-terminal pattern is still required, so MOTD/help body lines that merely mention
+/// "login"/"callsign" can't trigger a premature, session-wedging login — and the caller is what
+/// decides that a line-ended prompt counts only while nothing has followed it.
 fn is_login_prompt(s: &str) -> bool {
-    let tail = s
+    let trimmed = s.trim_end();
+    let tail = trimmed
         .rsplit('\n')
         .next()
-        .unwrap_or(s)
+        .unwrap_or(trimmed)
         .trim_end()
         .to_ascii_lowercase();
     tail.ends_with("login:")
@@ -595,11 +612,6 @@ fn pump<R: Read, W: Write>(
     let mut session = ClusterSession::new(call);
     let mut buf = [0u8; 4096];
     let opened = Instant::now();
-    // `heard` is also what disarms the greeting deadline: set by the node's FIRST byte and never
-    // cleared — see [`GREETING_DEADLINE`]. Bounding the greeting rather than the login is what
-    // makes "a quiet band drops the session" unrepresentable instead of merely guarded: an
-    // established session has by definition already received bytes, and a slow MOTD is itself
-    // bytes.
     let mut trace = Session::default();
     // When the LATEST login prompt was answered. A node that refuses a call commonly asks again,
     // and an answer it asked for again was not accepted — so every answer restarts the clock.
@@ -612,6 +624,15 @@ fn pump<R: Read, W: Write>(
     };
     loop {
         if stop.load(Ordering::Relaxed) {
+            return trace;
+        }
+        // THE HANDSHAKE DEADLINE, and the whole of it: until a login prompt has been ANSWERED,
+        // the session has until `greeting_deadline` to get there — see [`GREETING_DEADLINE`].
+        // Checked on every pass rather than only on a read timeout, so a node that chats without
+        // ever prompting is bounded too. After the answer nothing here ends a session, which is
+        // what keeps "a quiet band drops the session" unrepresentable rather than merely guarded:
+        // a logged-in session on a dead band legitimately sends nothing for hours.
+        if answered.is_none() && opened.elapsed() >= timing.greeting_deadline {
             return trace;
         }
         // Checked on every wake-up, which the live socket's read timeout guarantees even on a
@@ -647,12 +668,9 @@ fn pump<R: Read, W: Write>(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                // On a peer that never speaks this timeout is the ONLY thing that ever
-                // fires, so without this the loop spins here for the life of the process.
-                // Ending the session is what hands it back to `run`'s reconnect backoff.
-                if !trace.heard && opened.elapsed() >= timing.greeting_deadline {
-                    return trace;
-                }
+                // On a peer that never speaks this timeout is the ONLY thing that ever fires, so
+                // the loop would spin here for the life of the process. The deadline at the top
+                // is what ends it, and hands the session back to `run`'s reconnect backoff.
                 continue;
             }
             Err(_) => return trace,
@@ -888,21 +906,26 @@ fn next_backoff(prev: Duration, took: Duration, outcome: Attempt) -> Duration {
 /// How long ONE resolved address gets to answer.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// How long a node has to send ANYTHING before the session is abandoned to [`run`]'s
-/// reconnect backoff.
+/// How long a node has to ASK FOR THE CALLSIGN before the session is abandoned to [`run`]'s
+/// reconnect backoff. A HANDSHAKE deadline, and only that: it is disarmed the moment a login
+/// prompt is answered, and an established session is never bounded by time.
 ///
-/// This bounds the socket that ACCEPTS and then never speaks. `ve7cc.net:23` — a
-/// SHIPPED default node — was measured in exactly that state: connection accepted,
-/// not one byte in 22 seconds. Such a peer makes every read time out, so [`pump`]
-/// spins forever and never returns; the backoff never runs, the caller's per-host
-/// start latch stays taken, and that feed slot is dead for the life of the process
-/// while the operator sees an honest "not connected" with nothing retrying behind it.
+/// This bounds two kinds of socket, both measured on real nodes, and both of which used to hold
+/// their slot for the life of the process — no outcome, so nothing could even skip them:
+/// - **accepts and never speaks.** `ve7cc.net:23`, a SHIPPED default node, was measured in
+///   exactly that state: connection accepted, not one byte in 22 seconds.
+/// - **speaks and never prompts.** Every read then returns data or times out, so [`pump`] spins
+///   forever. Bounding only the first byte left this one open, which is how a node that greets
+///   and stops could not be told from a working one.
 ///
-/// **Measured, not guessed.** Every reachable node greets inside the FIRST read
-/// (DXSpider and CC Cluster both send a banner ending `login:`; RBN sends
-/// `Please enter your call:`), and DXSpider's own server-side login timeout is 60 s.
-/// 30 s therefore sits far above any healthy greeting and well inside the node's own
-/// limit.
+/// **Measured, not guessed.** Every reachable node checked on 2026-09-17 sent its whole greeting,
+/// prompt included, inside the first read (0.04–0.17 s to the first byte), and DXSpider's own
+/// server-side login timeout is 60 s. 30 s therefore sits far above any healthy handshake and
+/// well inside the node's own limit.
+///
+/// ⚠️ What it still does NOT bound: a node that answers a prompt and then RE-PROMPTS for ever.
+/// That has answered, so the deadline is off, and it never proves itself either (each answer
+/// restarts [`SESSION_PROOF`]), so it reports nothing at all. No node has been seen doing it.
 const GREETING_DEADLINE: Duration = Duration::from_secs(30);
 
 /// How long a logged-in session must stay up, with no spot, to count as working — see
@@ -1175,6 +1198,53 @@ mod tests {
         // only the trailing prompt does.
         assert!(s.feed("Type HELP for login commands.\r\n").is_empty());
         // Still not logged in → the real trailing prompt now triggers it.
+        assert_eq!(
+            s.feed("login: "),
+            vec![Action::Send("W9XYZ\r\n".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_prompt_that_ends_the_greeting_is_answered_even_with_a_newline_after_it() {
+        // MEASURED on a real node (k1ttt.net:7373, AR-Cluster, 2026-09-17): it greets with
+        // "Please enter your call: " terminated by CR/LF and then says nothing at all. Answering
+        // only a prompt left waiting at the END of the input meant Nexus never logged in there —
+        // the prompt was drained as a complete line and the session sat open for good.
+        let mut s = ClusterSession::new("W9XYZ");
+        let acts = s.feed(
+            "Welcome to the K1TTT AR-Cluster Telnet Server\r\n\
+             At the login prompt please enter your amateur radio callsign.\r\n\
+             Please enter your call: \r\n",
+        );
+        assert!(
+            matches!(&acts[..], [Action::Send(c)] if c == "W9XYZ\r\n"),
+            "a prompt that ends the greeting must be answered, got {acts:?}"
+        );
+    }
+
+    #[test]
+    fn a_prompt_with_more_text_after_it_is_a_banner_and_is_not_answered() {
+        // POSITIVE CONTROL for the test above, and the reason it is worded "the LAST thing the
+        // node sent": a line that merely READS like a prompt, with more text behind it, is MOTD.
+        // Answering it would send the callsign into a banner and wedge the session.
+        let mut s = ClusterSession::new("W9XYZ");
+        assert!(
+            s.feed("login: \r\nType HELP for login commands.\r\n")
+                .is_empty(),
+            "a prompt-shaped line with a line of text after it is a banner"
+        );
+        assert!(s
+            .feed("your call: is your identity here\r\nmore\r\n")
+            .is_empty());
+        // AND the case the "last thing sent" wording is really about: text after the prompt that
+        // has not ended in a newline yet. Without it this test passes whether or not the rule
+        // looks past the drained lines at all — measured: it did.
+        let mut unfinished = ClusterSession::new("W9XYZ");
+        assert!(
+            unfinished.feed("login: \r\nType HELP for").is_empty(),
+            "the prompt is not the last thing the node sent"
+        );
+        // …and the real prompt, whichever shape it arrives in, is still answered.
         assert_eq!(
             s.feed("login: "),
             vec![Action::Send("W9XYZ\r\n".to_string())]
@@ -1815,6 +1885,73 @@ mod tests {
         assert!(
             !connected.load(Ordering::Relaxed),
             "a peer that never prompted is never a connected session"
+        );
+    }
+
+    /// Sends a banner once — no login prompt — then behaves like a peer that never speaks again.
+    struct TalksThenQuiet {
+        reads: usize,
+    }
+    impl Read for TalksThenQuiet {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            if self.reads == 1 {
+                let banner = b"Welcome to the node\r\nPlease wait\r\n";
+                buf[..banner.len()].copy_from_slice(banner);
+                return Ok(banner.len());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+        }
+    }
+
+    #[test]
+    fn a_node_that_talks_and_never_prompts_ends_at_the_deadline() {
+        // THE GAP THIS CLOSES, measured in the wild: a node that SPEAKS and never asks for a
+        // callsign used to hold its slot for the life of the process. The first byte disarmed the
+        // deadline, the session never logged in, and nothing else ever ended it — no outcome, so
+        // it could not even be skipped. The deadline is armed until a prompt is ANSWERED.
+        let deadline = Duration::from_millis(200);
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        let (stop_ref, connected_ref, outbox_ref) = (&stop, &connected, &outbox);
+        // On its own thread, so "never returns" is a bounded failure with a name.
+        std::thread::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            s.spawn(move || {
+                let session = pump(
+                    TalksThenQuiet { reads: 0 },
+                    Vec::new(),
+                    "W9XYZ",
+                    &mut |_| {},
+                    stop_ref,
+                    connected_ref,
+                    outbox_ref,
+                    SessionTiming {
+                        greeting_deadline: deadline,
+                        ..LIVE_TIMING
+                    },
+                    &mut || {},
+                );
+                let _ = tx.send(session);
+            });
+            let finished = rx.recv_timeout(Duration::from_secs(5));
+            stop.store(true, Ordering::Relaxed); // release the worker before asserting
+            let session = finished.expect(
+                "pump must END a node that talks and never prompts, handing it back to run's \
+                 backoff — it is still looping",
+            );
+            assert!(session.heard, "it did speak");
+            assert_eq!(
+                session.outcome(false),
+                Some(Outcome::NoPrompt),
+                "…and that is what the operator is told"
+            );
+        });
+        assert!(
+            !connected.load(Ordering::Relaxed),
+            "a node that never prompted is never a connected session"
         );
     }
 

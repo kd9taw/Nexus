@@ -65,16 +65,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A cluster node that accepts a connection and then goes silent no longer kills that feed
-  slot for the rest of the session.** Some nodes accept the connection and never send a login
-  prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it
-  forever: it never logged in, never gave up, and never retried, so that node stayed dead
-  until you restarted the app, and nothing on screen said why. Nexus now gives a node 30
-  seconds to say anything at all, then disconnects and tries again later, waiting longer after
-  each silent try, up to ten minutes, so a node that never answers is not called over and over.
-  **Settings › Connections** records that the node accepted the connection but never
-  prompted. A node that has greeted you is never dropped for being quiet afterwards — a
-  cluster on a dead band can be silent for a long time and that is not a fault.
+- **A cluster node that never asks for your callsign no longer kills that feed slot for the
+  rest of the session.** Some nodes accept the connection and never send a login prompt — one
+  of the nodes Nexus ships with was doing exactly that — and some send a prompt Nexus could not
+  read (next entry). Nexus waited on them forever: it never logged in, never gave up, and never
+  retried, so that node stayed dead until you restarted the app, and nothing on screen said why.
+  Nexus now gives a node 30 seconds to ask for your callsign, then disconnects and tries again
+  later, waiting longer after each try, up to ten minutes, so a node that never answers is not
+  called over and over. **Settings › Connections** records which it was: the node said nothing at
+  all, or it spoke and never prompted. Once a node has asked for your callsign and Nexus has
+  answered, it is never dropped for being quiet afterwards — a cluster on a dead band can be
+  silent for a long time and that is not a fault.
+- **Nexus now logs in to nodes whose prompt ends with a new line.** A node that greets with
+  "Please enter your call:" and then a line ending — AR-Cluster nodes do, and `k1ttt.net:7373`
+  was measured doing it — was never answered, because Nexus replied only to a prompt left
+  waiting at the end of what it had received. It now answers a prompt that is the last thing the
+  node sent, in either shape. A prompt-looking line with more text behind it is still read as
+  part of the greeting, so your callsign is never sent into a welcome message.
 - **A cluster node that was working could be reported as dead.** Nexus asked the system for the
   node's address and then only ever tried the first one it was handed. Many nodes have both an
   IPv6 and an IPv4 address, and on a connection with no working IPv6 route the IPv6 one is

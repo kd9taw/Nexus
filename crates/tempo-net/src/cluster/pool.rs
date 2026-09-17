@@ -75,9 +75,12 @@ pub struct Node {
 ///   earlier the same day.
 /// - `dxc.wa9pie.net:8000` (WA9PIE-2) — refused on IPv4, no IPv6 route from the checking host.
 /// - `w6cua.no-ip.org:7300` — refused. `k0wl.ddns.net:7373` — timed out.
-/// - `k1ttt.net:7373` (AR-Cluster) — greets, but its `Please enter your call:` line ENDS IN A
-///   NEWLINE and nothing follows, and Nexus answers only a prompt left waiting at the end of
-///   the input: it would never log in.
+/// - `k1ttt.net:7373` (AR-Cluster) — greets with `Please enter your call:` and a CR/LF. Nexus
+///   could not answer that shape when this list was drawn, and the finding is what fixed it
+///   (`a_prompt_that_ends_the_greeting_is_answered_even_with_a_newline_after_it`), so the node is
+///   usable now. Still left out here: the balance above was measured without it, and AR-Cluster
+///   is a third codebase no release has run for any length of time. A candidate for the next
+///   review of this list, not a node that cannot be used.
 /// - `dxc.n4zkf.com:7373` (CC Cluster) — greets, but its banner says RBN CW spots are on until
 ///   `SET/NOCW`: a skimmer feed Nexus already takes from RBN.
 /// - `k4zr.no-ip.org:7300`, `n7od.pentux.net:7300` (DXSpider) — greet; left out to keep DXSpider
