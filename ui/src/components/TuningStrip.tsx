@@ -15,6 +15,7 @@ import { stepFrom } from '../wheelTuningPolicy'
 import { t } from '../i18n'
 import { pushToast } from '../toast'
 import { controlFailureMessage } from '../remote-web/control-failure'
+import { OperationFailure } from '../remote-web/operation-client'
 import { RemoteWheelTuningContext } from '../remote-web/wheel-tuning-context'
 import { useRemoteStation } from '../remote-web/amplifier-observation'
 
@@ -103,7 +104,14 @@ export function TuningStrip({
   // `nudgeSteps` keeps the rounding above and hands the press to the one pipeline (wheel-tuning.ts).
   const nudge = (steps: number) => {
     if (!control && remoteTuning) {
-      remoteTuning.nudgeSteps(steps, step, { dialMhz: dial, sideband: snap.radio.sideband || 'USB', context: observation.context })
+      // A PRESS IS ONE GESTURE, SO IT SAYS SOMETHING. The burst refuses a wheel spin quietly on
+      // purpose — ten notches must not raise ten toasts — but an arrow that does nothing and says
+      // nothing reads as a broken button, and the state that gets here is a real one (the
+      // observation this browser is looking at is not current, so the pipeline will not build a
+      // command on it). The button stays offered; the press carries the refusal, in the same words
+      // as every other gesture refused before anything left the browser.
+      if (!remoteTuning.nudgeSteps(steps, step, { dialMhz: dial, sideband: snap.radio.sideband || 'USB', context: observation.context }))
+        pushToast(controlFailureMessage(new OperationFailure('notController', false)), 'error')
       return
     }
     void tuneTo(stepFrom(Math.round(dial * 1e6), steps, step) / 1e6)

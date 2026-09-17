@@ -23,6 +23,8 @@ import { useRemoteScopeClick } from './useRemoteScopeClick'
 vi.mock('../api', async original => ({ ...await original<Record<string, unknown>>(), setFrequency: vi.fn(async () => null) }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 import { setFrequency } from '../api'
+import { pushToast } from '../toast'
+import { t } from '../i18n'
 
 const closes: (() => void)[] = []
 afterEach(() => { cleanup(); closes.splice(0).forEach(f => f()); vi.useRealTimers(); vi.clearAllMocks() })
@@ -229,6 +231,7 @@ it('a nudge pressed while the page still draws the sample from before a readback
   expect(h.writes()[1].request.action.dialMhz).toBe(7.2011)
   act(() => h.finish()); await tick()
   expect(h.failed).not.toHaveBeenCalled()
+  expect(pushToast, 'a press the pipeline took says nothing').not.toHaveBeenCalled()
 })
 
 // ONE WRITER ON ONE DIAL. The strip's arrows used to command an absolute dial of their own, built
@@ -261,6 +264,31 @@ it('a nudge rounds to the step grid first, from the burst\'s own dial', async ()
   expect(h.tuning.nudgeSteps(1, 100, h.source())).toBe(true); await tick(120)
   expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.action.dialMhz).toBe(7.2003)
   act(() => h.finish()); await tick()
+})
+
+// A PRESS IS ONE GESTURE, SO IT SAYS SOMETHING. A wheel spin refuses quietly on purpose — ten
+// notches must not raise ten toasts — but an arrow that does nothing and says nothing reads as a
+// broken button. The button stays offered (the operator ruling is that held controls stay lit); the
+// press itself carries the refusal, in the same words every other refused-before-sending gesture
+// uses. Here the pipeline cannot take it because the observation this browser is looking at is not
+// current, which is the one state that leaves the arrows enabled and the controller refusing.
+it('a nudge the tuning pipeline cannot take says so once, rather than doing nothing', async () => {
+  const h = fixture()
+  const ui = render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+    <RemoteOperationsContext.Provider value={h.client}><RemoteWheelTuningContext.Provider value={h.tuning}>
+      <RemoteObservationContext.Provider value={{ ...h.observation, status: 'unavailable' } as MonitorState}>
+        <TuningStrip snap={h.getSnapshot()} step={100} showReadout={false}/>
+      </RemoteObservationContext.Provider>
+    </RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>)
+  await tick()
+  const up = ui.getByRole('button', { name: 'Tune up 100 Hz' }) as HTMLButtonElement
+  expect(up.disabled, 'the button is still offered').toBe(false)
+  fireEvent.click(up); await tick(120)
+  expect(h.writes(), 'and nothing reached the station').toHaveLength(0)
+  expect(setFrequency).not.toHaveBeenCalled()
+  expect(pushToast).toHaveBeenCalledOnce()
+  expect(vi.mocked(pushToast).mock.calls[0][0]).toBe(t('remote.controlNotSent'))
 })
 
 it('control: once the station moved the dial after that readback, a nudge steps from the dial the page draws', async () => {
