@@ -2726,6 +2726,14 @@ export interface ContestFieldSpec {
    *  The VALUES live in the UI (`features/contestDomains.ts`), because the verdict runs
    *  on every keystroke and must cost no IPC. */
   domain?: string
+  /** For a `number` slot, its inclusive bounds — a CQ zone is 1–40. Absent for every other
+   *  kind, and a number slot without them gets the non-blank test only. */
+  min?: number
+  max?: number
+  /** The ADIF tag a RECEIVED value of this slot exports under (`'CQZ'`, `'RST_RCVD'`), when
+   *  it has one. It says what a slot MEANS without the UI guessing from a slot id — the
+   *  zone hint is offered on the slot tagged `CQZ`. */
+  adif?: string
 }
 
 /** One copied exchange value. */

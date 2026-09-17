@@ -14,10 +14,11 @@ import type {
   LoggedQso,
 } from '../types'
 import { t, type MessageKey } from '../i18n'
-import { contestIMoved, contestLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
+import { contestIMoved, contestLogManual, contestZoneHint, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { inDomain } from '../features/contestDomains'
 import { composingSlot } from '../features/contestExchange'
+import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
 import { RemoteCollectionsContext } from '../remote-web/collections'
@@ -54,6 +55,10 @@ const FD_RECEIVES_FALLBACK: ContestFieldSpec[] = [
 const FD_FIELD_TEXT: Record<string, { labelKey: MessageKey; titleKey: MessageKey }> = {
   CLASS: { labelKey: 'logEntry.fd.class.label', titleKey: 'logEntry.fd.class.title' },
   SECTION: { labelKey: 'logEntry.fd.section.label', titleKey: 'logEntry.fd.section.title' },
+  // CQ WW's zone slot. `ZN` is the rules file's slot id, which is a token and not a word an
+  // operator reads; `RST` and `QTH` are Q-code-style tokens hams read as they are, and keep
+  // the fallback below.
+  ZN: { labelKey: 'logEntry.fd.zone.label', titleKey: 'logEntry.fd.zone.title' },
 }
 
 /** The operator-facing caption for a slot. */
@@ -83,6 +88,10 @@ function fdVerdict(spec: ContestFieldSpec, raw: string): string {
   // be a change to what a Field Day operator reads, which this batch does not make.
   if (spec.key === 'CLASS' && v === '') return t('logEntry.fd.needClass')
   if (spec.key === 'SECTION') return t('logEntry.fd.badSection', { section: v || '—' })
+  // A bounded number with a value in it: say the range, which is what fixes it.
+  if (spec.kind === 'number' && v !== '' && spec.min != null && spec.max != null) {
+    return t('logEntry.fd.badNumber', { field: fdFieldLabel(spec.key), min: spec.min, max: spec.max })
+  }
   return v === ''
     ? t('logEntry.fd.needField', { field: fdFieldLabel(spec.key) })
     : t('logEntry.fd.badField', { field: fdFieldLabel(spec.key), value: v })
@@ -91,14 +100,33 @@ function fdVerdict(spec: ContestFieldSpec, raw: string): string {
 /** Is this slot's typed value good enough to log?
  *
  *  Byte-for-byte Field Day's shipped rule, generalised by KIND and by nothing else:
- *  an `enum` slot must be a member of its domain (a blank is not), anything else
- *  required must be non-blank. A kind this build has no matcher for gets the non-blank
- *  test and no more — never an approximated verdict (the `Pattern` rule). */
+ *  an `enum` slot must be a member of its domain, anything else required must be
+ *  non-blank. A kind this build has no matcher for gets the non-blank test and no more
+ *  — never an approximated verdict (the `Pattern` rule).
+ *
+ *  An OPTIONAL slot may be blank, whatever its kind: CQ WW RTTY's QTH is sent by W/VE
+ *  stations only, and a DX contact has none to type. A value that IS typed still has to
+ *  be legal. A `number` slot carrying its bounds (a CQ zone, 1–40) must be a whole number
+ *  inside them. */
 function fdFieldOk(spec: ContestFieldSpec, raw: string): boolean {
   const v = raw.trim()
-  if (spec.kind === 'enum') return v !== '' && inDomain(spec.domain, v)
-  return !spec.required || v !== ''
+  if (v === '') return !spec.required
+  if (spec.kind === 'enum') return inDomain(spec.domain, v)
+  if (spec.kind === 'number' && spec.min != null && spec.max != null) {
+    return /^\d{1,3}$/.test(v) && Number(v) >= spec.min && Number(v) <= spec.max
+  }
+  return true
 }
+
+/** The report a contest strip offers before anything is typed: 59 on phone, 599 on CW and
+ *  digital — the same split the engine makes for a sent RST on a phone row. */
+function defaultContestRst(fdMode: 'CW' | 'PH' | 'DIG' | undefined): string {
+  return (fdMode ?? 'PH') === 'PH' ? '59' : '599'
+}
+
+/** The cty.dat names of the two countries whose stations send a QTH in CQ WW RTTY —
+ *  `propagation::dxcc`'s own spellings, which src-tauri's country-file test pins. */
+const WVE_ENTITIES: ReadonlySet<string> = new Set(['United States', 'Canada'])
 
 // Manual-override band picker for logging a contact made on a radio NOT connected to Nexus
 // (V/UHF especially). One ordered table drives BOTH directions so band and freq can never
@@ -312,6 +340,17 @@ interface Props {
    */
   fdSubmode?: string
   /**
+   * CONTEST STRIP ONLY — fill ONE received exchange box from outside the strip: the RTTY
+   * cockpit's double-click grab of a zone or a QTH out of the decoded text.
+   *
+   * `key` is the slot id (`'ZN'`, `'QTH'`), `value` the text, and `ts` makes each grab an
+   * event: the box is refilled on every NEW `ts`, including the same value again after the
+   * operator overtyped it. A slot this session does not receive is ignored rather than
+   * invented, focus is never moved, and nothing is logged — a fill is a keystroke the
+   * operator did not have to make, not a commit.
+   */
+  fillExchange?: { key: string; value: string; ts: number } | null
+  /**
    * Does this strip render its OWN "Log this QSO" heading? Default true — today's
    * behaviour, unchanged, for every host that does not say otherwise.
    *
@@ -350,6 +389,7 @@ export function LogEntry({
   fieldDay,
   fdMode,
   fdSubmode,
+  fillExchange,
   titled = true,
   remote,
 }: Props) {
@@ -437,6 +477,12 @@ export function LogEntry({
   }))
   const setFdField = (key: string, v: string) =>
     setFdFields((prev) => ({ ...prev, [key]: v.toUpperCase() }))
+  // What a box holds: what was typed or filled, else — for a signal report nobody has
+  // touched — the default report. A box is empty only because somebody emptied it, so the
+  // report is there from the first contact however late the session's slots arrive.
+  const rstDefault = defaultContestRst(fdMode)
+  const fdValue = (f: ContestFieldSpec): string =>
+    fdFields[f.key] ?? (f.kind === 'rst' ? rstDefault : '')
 
   // Pre-fill the exchange from the last logged FD contact — but ONLY when the
   // log actually GREW. `fieldDay` is a fresh object every 300 ms snapshot poll;
@@ -445,9 +491,11 @@ export function LogEntry({
   // made the fields jump mid-keystroke).
   //
   // ⚠️ The per-row RECEIVED VECTOR does not reach the UI yet — a DTO row carries
-  // `class`/`section`, which is what this reads through `fdRcvd`. The generalised
-  // row lands with the contests that receive something else (§11 item 8); until
-  // then this prefills exactly the two slots a Field Day row has.
+  // `class`/`section`, which is what this reads through `fdRcvd`. That carries Field
+  // Day's two slots and nothing else, so every other slot starts the next contact
+  // EMPTY — the next station's zone is not the last one's — except a signal report,
+  // which goes back to its default: it read blank here, and every contest that sends
+  // one needed it retyped on every contact.
   const fdLogLen = fieldDay?.log?.length ?? 0
   const fdSeenLen = useRef(fdLogLen)
   useEffect(() => {
@@ -456,7 +504,9 @@ export function LogEntry({
       if (lastEntry) {
         setFdFields((prev) => {
           const next = { ...prev }
-          for (const f of fdReceives) next[f.key] = fdRcvd(lastEntry, f.key)
+          for (const f of fdReceives) {
+            next[f.key] = f.kind === 'rst' ? rstDefault : fdRcvd(lastEntry, f.key)
+          }
           return next
         })
       }
@@ -464,6 +514,17 @@ export function LogEntry({
     fdSeenLen.current = fdLogLen
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdActive, fdLogLen])
+
+  // THE FILL API (`fillExchange`): one box, refilled on every new `ts`. Keyed on the
+  // stamp alone so a snapshot re-render never refills, and a slot this session does not
+  // receive is dropped rather than added — a box nobody renders would still ride the
+  // wire. Focus is deliberately untouched.
+  useEffect(() => {
+    if (!fdActive || !fillExchange) return
+    if (!fdReceives.some((f) => f.key === fillExchange.key)) return
+    setFdField(fillExchange.key, fillExchange.value)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fillExchange?.ts])
 
   // "I moved" (§4.1): the read-only sent exchange becomes editable, one box per
   // composing slot, and takes effect on the NEXT contact.
@@ -741,6 +802,30 @@ export function LogEntry({
   const entityForBadge = logEntity ?? logCountry
   const newEntity = useMemo(() => isNewEntity(allLog, entityForBadge), [allLog, entityForBadge])
 
+  // THE COUNTRY FILE'S ZONE, as a HINT in a contest that receives a CQ zone — the slot the
+  // DTO tags with ADIF's `CQZ`. It is the placeholder of that box and never its value: a
+  // prefix's zone is the likely one, and a station in a zone other than its prefix's
+  // (a portable, a W6 in zone 4) is exactly what the operator must still copy.
+  const zoneSlot = fdActive ? fdReceives.find((f) => f.adif === 'CQZ') : undefined
+  const [zoneHint, setZoneHint] = useState<string | null>(null)
+  useEffect(() => {
+    const call = logCall.trim()
+    if (remoteMode || !zoneSlot || call.length < 3) {
+      setZoneHint(null)
+      return
+    }
+    let stale = false
+    void contestZoneHint(call)
+      .then((z) => {
+        if (!stale) setZoneHint(z != null ? String(z) : null)
+      })
+      .catch(() => {})
+    return () => {
+      stale = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logCall, remoteMode, zoneSlot?.key])
+
   // DXCC-Challenge axis: the entity is already worked, but is THIS band (or mode) a new
   // slot for it? Only meaningful once the entity is in the log (an ATNO is owned by
   // `newEntity` above; a blank/unresolved entity yields workedEver=false and falls through
@@ -913,7 +998,7 @@ export function LogEntry({
   // Field Day is the same two slots and the same two tests: CLASS non-blank, SECTION a member of
   // `fd_sections`. `FD_SECTION_CODES` above is that domain's value set, and `contestDomains.ts`
   // is where the strip and the board now read it from.
-  const fdBadField = fdReceives.find((f) => !fdFieldOk(f, fdFields[f.key] ?? ''))
+  const fdBadField = fdReceives.find((f) => !fdFieldOk(f, fdValue(f)))
   const fdExchangeOk = fdBadField === undefined
 
   // GRID GATE. A blank grid is normal and logs fine — most HF contacts have none.
@@ -985,7 +1070,7 @@ export function LogEntry({
       // and CQP receives a serial + QTH, so the first two slots of the wire meant a
       // different thing per contest and the UI would have had to know which.
       const ex = fdReceives.map(
-        (f) => [f.key, (fdFields[f.key] ?? '').trim().toUpperCase()] as [string, string],
+        (f) => [f.key, fdValue(f).trim().toUpperCase()] as [string, string],
       )
       const fmode = fdMode ?? 'PH'
       // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
@@ -1002,7 +1087,8 @@ export function LogEntry({
         pushToast(
           t('logEntry.fd.logged', {
             call,
-            exchange: ex.map(([, v]) => v).join(' '),
+            // A blank optional slot (a DX station's QTH) is not a word in the toast.
+            exchange: ex.map(([, v]) => v).filter((v) => v !== '').join(' '),
             mode: fmode,
           }),
           'success',
@@ -1181,13 +1267,35 @@ export function LogEntry({
     (fieldDay?.club?.dupes ?? []).some(
       ([c, b, m]) => c === fdTypedCall && b === snap.radio.band && m === fdModeClass,
     )
+  // ⭐ WHICH CONTEST'S WORDS. Field Day's chip, hint and button name Field Day; every
+  // other contest's contacts go to the same contest log under that contest's rules, and
+  // telling a CQ WW operator their contacts go "to the Field Day log" is simply wrong.
+  const fdEventIsFieldDay = isFieldDay(fieldDay?.event)
+  // A USA or Canada station logged with no QTH, in a contest where a QTH is part of what
+  // such a station sends (an OPTIONAL received QTH slot — DX stations send none). A
+  // WARNING, never a refusal: the operator may not have copied it, and a contact is still
+  // a contact. The entity is the cty.dat resolve the badges already use.
+  const qthSlot = fdReceives.find((f) => f.key === 'QTH' && !f.required)
+  const wveMissingQth =
+    fdActive &&
+    qthSlot !== undefined &&
+    fdTypedCall !== '' &&
+    logEntity !== null &&
+    WVE_ENTITIES.has(logEntity) &&
+    fdValue(qthSlot).trim() === ''
   if (fdActive) {
     return (
       <div className="log-entry log-entry-fd">
         <div className="le-fd-header">
-          <span className="le-fd-chip">{t('logEntry.fd.chip')}</span>
+          <span className="le-fd-chip">
+            {fdEventIsFieldDay ? t('logEntry.fd.chip') : t('logEntry.contest.chip')}
+          </span>
           <span className="le-fd-mode">{fdMode ?? 'PH'}</span>
-          <span className="le-fd-hint">{t('logEntry.fd.hint', { band: snap.radio.band })}</span>
+          <span className="le-fd-hint">
+            {fdEventIsFieldDay
+              ? t('logEntry.fd.hint', { band: snap.radio.band })
+              : t('logEntry.contest.hint', { band: snap.radio.band })}
+          </span>
 
           {/* ⭐ THE SENT SIDE, READ-ONLY (§9) — what is going on the air right now.
               It is the SESSION's composing exchange, never a row's: a row already
@@ -1301,7 +1409,7 @@ export function LogEntry({
                   fdBoxRefs.current[f.key] = el
                 }}
                 className="settings-input mono le-fd-input le-fd-input-code"
-                value={fdFields[f.key] ?? ''}
+                value={fdValue(f)}
                 onChange={(e) => setFdField(f.key, e.target.value)}
                 onKeyDown={(e) => {
                   const next = fdReceives[i + 1]
@@ -1311,7 +1419,7 @@ export function LogEntry({
                   )
                   onEnter(e)
                 }}
-                placeholder={FD_FIELD_EXAMPLES[f.key]}
+                placeholder={f === zoneSlot && zoneHint ? zoneHint : FD_FIELD_EXAMPLES[f.key]}
                 autoComplete="off"
                 spellCheck={false}
                 title={FD_FIELD_TEXT[f.key] ? t(FD_FIELD_TEXT[f.key].titleKey) : undefined}
@@ -1328,7 +1436,7 @@ export function LogEntry({
             onClick={logIt}
             disabled={!logCall.trim() || !fdExchangeOk}
           >
-            {t('logEntry.fd.log')}
+            {fdEventIsFieldDay ? t('logEntry.fd.log') : t('logEntry.log')}
           </button>
           <button
             type="button"
@@ -1354,7 +1462,7 @@ export function LogEntry({
         <div className="le-fd-verdicts">
         {logCall.trim() !== '' && fdBadField !== undefined && (
           <div className="le-fd-hint" role="alert">
-            {fdVerdict(fdBadField, fdFields[fdBadField.key] ?? '')}
+            {fdVerdict(fdBadField, fdValue(fdBadField))}
           </div>
         )}
         {fdOwnDupe && (
@@ -1373,6 +1481,11 @@ export function LogEntry({
               band: snap.radio.band,
               mode: fdModeClass,
             })}
+          </div>
+        )}
+        {wveMissingQth && (
+          <div className="le-fd-hint" role="status">
+            {t('logEntry.contest.qthMissing', { call: fdTypedCall })}
           </div>
         )}
         </div>

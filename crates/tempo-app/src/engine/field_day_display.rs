@@ -101,17 +101,7 @@ impl Engine {
                 .receives
                 .iter()
                 .filter_map(|k| spec.field(k))
-                .map(|f| crate::dto::FdFieldDto {
-                    key: f.key.to_string(),
-                    kind: crate::dto::field_kind_tag(&f.kind).to_string(),
-                    required: f.required,
-                    domain: match f.kind {
-                        tempo_core::contest::FieldKind::Enum { domain } => {
-                            Some(domain.id.to_string())
-                        }
-                        _ => None,
-                    },
-                })
+                .map(crate::dto::FdFieldDto::from_spec)
                 .collect(),
             // The read-only sent display, as a VECTOR — §3.3 mechanism 2. It
             // describes the session, which is what is about to go on the air;

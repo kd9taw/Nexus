@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one you already use in the other program. Your spots still reach the network under your plain
   callsign either way; nodes relaying them strip the suffix.
 
+- **The contest strip suggests a CQ zone and flags a missing QTH.** Type a call in a contest that
+  exchanges CQ zones and the zone box shows the zone the country file gives that call as a faint
+  hint — it never fills the box, because a station outside its prefix's zone sends its own. And
+  when a USA or Canada station is about to be logged without a QTH in a contest where they send
+  one, the strip says so; you can still log it.
+
 ### Changed
 
 - **Remote: the dial follows the wheel, and it stops swallowing your corrections.** Spinning the
@@ -64,6 +70,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Day class and section to every station it worked. In any contest other than ARRL Field Day or
   Winter Field Day it now refuses to turn on and says why: send your exchange with the macros and
   log each contact yourself. Outside a contest, and in both Field Days, Auto works as before.
+- **The contest log strip works for contests other than Field Day.** In a contest whose exchange
+  includes a signal report, the report box came back blank after every contact; it now goes back
+  to 599 (59 on phone). A CQ zone has to be a number from 1 to 40, and the strip says so while
+  you type. A box the contest does not require — the QTH a DX station never sends in CQ WW RTTY —
+  can be left blank. The strip's label, hint and button now say "contest log" instead of Field
+  Day, and the zone box is captioned Zone. Field Day's strip is unchanged.
 - **A cluster node that accepts a connection and then goes silent no longer kills that feed
   slot for the rest of the session.** Some nodes accept the connection and never send a login
   prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it

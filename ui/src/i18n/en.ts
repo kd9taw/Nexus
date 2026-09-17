@@ -1349,6 +1349,12 @@ export const EN = {
   'logEntry.fd.dupe.club': 'Club dupe: another position already worked {{call}} on {{band}} {{mode}} — logging is allowed but adds no points',
   'logEntry.fd.needField': 'Enter their {{field}} to log.',
   'logEntry.fd.badField': '{{field}} "{{value}}" isn\'t a known value — required to log.',
+  'logEntry.fd.badNumber': '{{field}} must be a number from {{min}} to {{max}}.',
+  'logEntry.fd.zone.label': 'Zone',
+  'logEntry.fd.zone.title': 'Their CQ zone, 1–40',
+  'logEntry.contest.chip': 'CONTEST LOG',
+  'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
+  'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
   'logEntry.sent.aria': 'What you are sending',
   'logEntry.sent.label': 'Sending',
   'logEntry.sent.title':
