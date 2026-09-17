@@ -32,6 +32,8 @@
 /// parser both the geometry store and the (future) chain resolver share, and the one-entry
 /// chain registry. Inert at runtime — see the module docs.
 mod chains;
+/// The human DX-cluster node feeds: which run, which should, and how each node is doing.
+mod cluster_nodes;
 mod pouncer;
 mod profile_sync;
 mod remote_monitor;
@@ -284,17 +286,6 @@ static CLUSTER_OUTBOX: std::sync::Mutex<std::collections::VecDeque<String>> =
 static RBN_DEAD_OUTBOX: std::sync::Mutex<std::collections::VecDeque<String>> =
     std::sync::Mutex::new(std::collections::VecDeque::new());
 
-/// Per-host once-latch for the human DX-cluster nodes (the SSB/phone aggregator): the set of
-/// node hosts already spawned this process. `set_settings` re-runs the spawn for every save,
-/// so this lets a NEWLY-added node connect live (skipping ones already up) without a restart.
-/// Also the source for the phone-source health label. Cleared on a callsign restart.
-static HUMAN_NODES_STARTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-/// One connected-flag per spawned human node, so "phone source up" can mean ANY node is up
-/// (a single shared bool would flicker false whenever one of several nodes reconnected).
-/// `get_feed_health` ORs them; cleared alongside [`HUMAN_NODES_STARTED`] on a restart.
-static PHONE_NODE_CONNS: Mutex<Vec<Arc<std::sync::atomic::AtomicBool>>> = Mutex::new(Vec::new());
-
 /// The RBN skimmer firehoses (connected automatically when cluster spotting is on): CW/RTTY
 /// on 7000, FT8/FT4 digital on 7001. Huge volume + exact frequencies → the CW + digital need
 /// evidence. SSB/phone has no skimmer network, so it comes from the human nodes (cluster_hosts).
@@ -377,7 +368,7 @@ struct FeedHealthState {
     /// actually arriving?" signal. Stamped ONLY when a human-node spot classifies as Phone
     /// (a human node's feed is mostly CW; stamping on every spot made the pill read live off
     /// CW traffic and masked a phone drought). Per-node connected state lives in
-    /// [`PHONE_NODE_CONNS`].
+    /// `cluster_nodes::FEEDS`.
     phone_cluster_last: std::sync::atomic::AtomicI64,
     /// Running count of PHONE-classed spots seen from human nodes this session — the
     /// diagnostic number behind "N SSB spots" on the Needed board. Reset on a feed restart.
@@ -578,19 +569,21 @@ fn is_real_call(call: &str) -> bool {
 }
 
 /// Connect ALL enabled spot sources (SpotCollector-style aggregation): the RBN CW + RBN
-/// digital skimmer firehoses, plus EVERY human DX-cluster node in `cluster_hosts` — the
-/// SSB/phone aggregator. RBN endpoints are wired once via fixed latches; the human nodes use
-/// a per-host latch ([`HUMAN_NODES_STARTED`]) so a node added in Settings connects on the next
-/// save with no restart, and an RBN endpoint that sneaks into the list is skipped (no
-/// double-connect). No-op per feed unless `mycall` is a [`is_real_call`]; the caller owns the
-/// `Settings::cluster_active` gate (which folds in Unassisted mode). All push into the one
-/// shared `spots` buffer the need-matcher reads.
+/// digital skimmer firehoses, plus the human DX-cluster nodes — the SSB/phone aggregator —
+/// that should run: the nodes Nexus picks, or every node in the operator's own list (see
+/// `cluster_nodes`). RBN endpoints are wired once via fixed latches; the human nodes are
+/// RECONCILED, so a node added in Settings connects on the next save and a node removed
+/// disconnects on it. No-op per feed unless `mycall` is a [`is_real_call`]; the caller owns the
+/// `Settings::cluster_active` gate (which folds in Unassisted mode) and publishes the node
+/// settings (`cluster_nodes::set_config`) first. All push into the one shared `spots` buffer
+/// the need-matcher reads. `restarting` is `restart_live_feeds`' own call — see
+/// `cluster_nodes::reconcile`.
 fn start_cluster_feeds(
     spots: &SharedSpots,
-    cluster_hosts: &[String],
     mycall: &str,
     cluster_ssid: &str,
     health: &SharedHealth,
+    restarting: bool,
 ) {
     start_cluster_feed(
         spots,
@@ -608,13 +601,7 @@ fn start_cluster_feeds(
         health,
         &RBN_DIGITAL_STARTED,
     );
-    for host in cluster_hosts {
-        let h = host.trim();
-        if h.is_empty() || h.contains("reversebeacon.net") {
-            continue; // blank, or an RBN endpoint already wired above
-        }
-        start_human_cluster_feed(spots, h, mycall, cluster_ssid, health);
-    }
+    cluster_nodes::reconcile(spots, health, restarting);
 }
 
 /// Spawn one RBN skimmer telnet feed (CW or digital). Once-latched via `started`; each parsed
@@ -895,45 +882,28 @@ fn aprs_is_bridge(
     }
 }
 
-/// Spawn ONE human DX-cluster node feed (an SSB/phone source). Per-host once-latch via
-/// [`HUMAN_NODES_STARTED`] (so re-running the aggregator only spawns nodes not already up).
-/// Each parsed spot stamps BOTH the aggregate `cluster_last` AND `phone_cluster_last`, and the
-/// session toggles this node's own connected flag (registered in [`PHONE_NODE_CONNS`]) so the
-/// phone-source pill reflects "any node up" — readable independently of the busy RBN feeds.
+/// Start the thread for ONE human DX-cluster node feed (an SSB/phone source), on the flags of
+/// its `cluster_nodes::Feed` — the registry entry that starts, stops and counts it. `call` is the
+/// login identity. Each parsed spot stamps BOTH the aggregate `cluster_last` AND
+/// `phone_cluster_last`; the session keeps the feed's own connected flag, so the phone-source
+/// pill reflects "any node up" — readable independently of the busy RBN feeds — and every
+/// attempt's outcome goes to the node pool as well as the connection log.
 fn start_human_cluster_feed(
     spots: &SharedSpots,
-    host: &str,
-    mycall: &str,
-    cluster_ssid: &str,
     health: &SharedHealth,
+    feed: &cluster_nodes::Feed,
+    call: &str,
 ) {
-    // The BARE call, for `start_cluster_feed`'s reason.
-    if !is_real_call(mycall) {
-        return;
-    }
-    {
-        let mut started = match HUMAN_NODES_STARTED.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        if started.iter().any(|h| h.eq_ignore_ascii_case(host)) {
-            return; // this node is already connected this session (case-insensitive)
-        }
-        started.push(host.to_string());
-    }
-    let call = tempo_net::cluster::login_call(mycall, cluster_ssid);
     conn_log(
         "DX Cluster",
         "info",
-        format!("connecting to {host} as {call}"),
+        format!("connecting to {} as {call}", feed.host()),
     );
-    let conn = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    if let Ok(mut v) = PHONE_NODE_CONNS.lock() {
-        v.push(conn.clone());
-    }
+    let (stop, conn) = feed.flags();
     let buf = spots.clone();
     let hp = health.clone();
-    let host = host.to_string();
+    let host = feed.host().to_string();
+    let call = call.to_string();
     std::thread::spawn(move || {
         let mut log = tempo_net::cluster::LogFilter::default();
         tempo_net::cluster::run(
@@ -966,13 +936,14 @@ fn start_human_cluster_feed(
                     b.push_ranked(sp.clone(), spotter_evidence_rank);
                 }
             },
-            &CLUSTER_STOP,
+            &stop,
             &conn,
             &CLUSTER_OUTBOX, // the post target — `post_spot` pushes DX lines here
             |outcome| {
                 if let Some(line) = log.line(&host, outcome) {
                     conn_log("DX Cluster", "error", line);
                 }
+                cluster_nodes::on_outcome(&buf, &hp, &host, outcome);
             },
         );
     });
@@ -1186,8 +1157,9 @@ struct FeedHealth {
     /// the aggregate `cluster` pill (which the RBN CW/digital firehose keeps green on its own).
     /// `connected` = ANY node up; `enabled: false` when no human node is configured (RBN-only).
     phone_cluster: FeedStatus,
-    /// Compact phone-source label: the host for one node, "host +N" for several, `None` for
-    /// none (RBN-only operator).
+    /// Compact phone-source label: the nodes logged in right now — the host for one, "host +N"
+    /// for several — or, while none is, the nodes being tried; `None` when no node feed is
+    /// running (RBN-only operator). Never a node that is down beside one that is up.
     phone_cluster_host: Option<String>,
     /// Count of PHONE-classed spots received from human nodes this session — lets the Needed
     /// board show "N SSB spots", splitting "SSB isn't arriving" (0) from "arriving but not a
@@ -1247,25 +1219,29 @@ fn get_feed_health(health: State<'_, SharedHealth>) -> FeedHealth {
     read_feed_health(&health)
 }
 
+/// Each human DX-cluster node's standing, for Settings ▸ Spot Sources: the nodes built into this
+/// release and the operator's own, whether each is running and logged in, and why one is failing
+/// or skipped. Desktop only — the Remote page renders no Spot Sources section, and no Remote
+/// collection reads this.
+#[tauri::command]
+fn get_cluster_nodes() -> cluster_nodes::NodesView {
+    cluster_nodes::view()
+}
+
 fn read_feed_health(health: &SharedHealth) -> FeedHealth {
     use std::sync::atomic::Ordering::Relaxed;
     let now = now_unix();
-    // The human DX-cluster nodes (the SSB/phone aggregator): the spawned host list drives the
-    // started flag + label, and "connected" = ANY node's session up.
-    let human_hosts: Vec<String> = HUMAN_NODES_STARTED
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
-    let phone_connected = PHONE_NODE_CONNS
-        .lock()
-        .map(|v| v.iter().any(|b| b.load(Relaxed)))
-        .unwrap_or(false);
+    // The human DX-cluster nodes (the SSB/phone aggregator): the running feeds drive the
+    // started flag, "connected" = ANY node's session up, and the label names only nodes that
+    // are — never a started node that is down beside one that is up.
+    let (nodes_running, phone_connected, phone_label) = {
+        let feeds = cluster_nodes::feeds();
+        (!feeds.is_empty(), feeds.any_connected(), feeds.label())
+    };
     FeedHealth {
         cluster: feed_status(
             // Any of the cluster sources spawned (RBN CW/digital firehoses + any human node).
-            RBN_CW_STARTED.load(Relaxed)
-                || RBN_DIGITAL_STARTED.load(Relaxed)
-                || !human_hosts.is_empty(),
+            RBN_CW_STARTED.load(Relaxed) || RBN_DIGITAL_STARTED.load(Relaxed) || nodes_running,
             health.cluster_connected.load(Relaxed),
             health.cluster_last.load(Relaxed),
             now,
@@ -1279,12 +1255,12 @@ fn read_feed_health(health: &SharedHealth) -> FeedHealth {
         // The human nodes as a group — their own started/connected/last, so a down SSB
         // source is visible even while RBN keeps the aggregate `cluster` pill green.
         phone_cluster: feed_status(
-            !human_hosts.is_empty(),
+            nodes_running,
             phone_connected,
             health.phone_cluster_last.load(Relaxed),
             now,
         ),
-        phone_cluster_host: summarize_hosts(&human_hosts),
+        phone_cluster_host: phone_label,
         phone_spots_seen: health.phone_spots_seen.load(Relaxed),
     }
 }
@@ -5587,14 +5563,8 @@ fn post_spot(freq_mhz: f64, call: String, comment: String) -> Result<(), String>
     if !is_real_call(&call) {
         return Err("enter a valid callsign to spot".into());
     }
-    let connected = PHONE_NODE_CONNS
-        .lock()
-        .map(|v| {
-            v.iter()
-                .any(|b| b.load(std::sync::atomic::Ordering::Relaxed))
-        })
-        .unwrap_or(false);
-    if !connected {
+    // Only a node still in the registry counts: one being stopped has left it already.
+    if !cluster_nodes::feeds().any_connected() {
         return Err("no DX cluster connected — set a cluster host in Settings".into());
     }
     let line = tempo_net::cluster::format_dx_spot(freq_mhz * 1000.0, &call, &comment);
@@ -9374,7 +9344,7 @@ fn apply_and_persist(
         std::sync::atomic::Ordering::Relaxed,
     );
     journal_assistance(&settings, "settings saved", false);
-    let cluster_hosts = settings.cluster_hosts.clone();
+    let node_config = cluster_nodes::NodeConfig::of(&settings);
     let cluster_ssid = settings.cluster_ssid.clone();
     let mycall = settings.mycall.clone();
     let mygrid = settings.mygrid.clone();
@@ -9490,14 +9460,11 @@ fn apply_and_persist(
         return Ok(snap);
     }
 
+    // Published only here and not before the rename check above: a callsign change leaves the
+    // node settings to the drain, which re-reads the latest and publishes them itself.
+    cluster_nodes::set_config(node_config);
     if cluster_active {
-        start_cluster_feeds(
-            spots.inner(),
-            &cluster_hosts,
-            &mycall,
-            &cluster_ssid,
-            health.inner(),
-        );
+        start_cluster_feeds(spots.inner(), &mycall, &cluster_ssid, health.inner(), false);
     }
     // Reconnects only when the server, filter, callsign or uplink actually changed — the login
     // line carries all of them, so any edit to one needs a fresh session.
@@ -9537,6 +9504,9 @@ fn restart_live_feeds(
         "callsign changed — restarting cluster + PSK Reporter + WSPR feeds under the new call",
     );
     CLUSTER_STOP.store(true, SeqCst);
+    // Node feeds stop on their own flags, and leave the registry now, under its lock: after this
+    // no feed can start until the drain below has published the new callsign.
+    cluster_nodes::stop_all();
     PSKR_STOP.store(true, SeqCst);
     std::thread::spawn(move || {
         // Both feed loops observe their stop flags within the socket read timeout;
@@ -9570,30 +9540,25 @@ fn restart_live_feeds(
         // leaving their latches set would strand RBN (CW/digital) down after a rename.
         RBN_CW_STARTED.store(false, SeqCst);
         RBN_DIGITAL_STARTED.store(false, SeqCst);
-        if let Ok(mut v) = HUMAN_NODES_STARTED.lock() {
-            v.clear();
-        }
-        if let Ok(mut v) = PHONE_NODE_CONNS.lock() {
-            v.clear();
-        }
         PSKR_STARTED.store(false, SeqCst);
         PSKR_REGION_STARTED.store(false, SeqCst);
-        let (cluster_active, cluster_hosts, cluster_ssid, mycall, mygrid, opening_regional) = {
+        let (cluster_active, node_config, cluster_ssid, mycall, mygrid, opening_regional) = {
             let eng = engine_lock(&engine);
             let st = eng.settings();
             (
                 // `cluster_active` folds in Unassisted mode: a re-arm during an
                 // unassisted entry must not bring the cluster back up.
                 st.cluster_active(),
-                st.cluster_hosts.clone(),
+                cluster_nodes::NodeConfig::of(st),
                 st.cluster_ssid.clone(),
                 st.mycall.clone(),
                 st.mygrid.clone(),
                 st.opening_regional,
             )
         };
+        cluster_nodes::set_config(node_config);
         if cluster_active {
-            start_cluster_feeds(&spots, &cluster_hosts, &mycall, &cluster_ssid, &health);
+            start_cluster_feeds(&spots, &mycall, &cluster_ssid, &health, true);
         }
         start_pskr_feed(&live_paths, &mycall, &health);
         start_wspr_feed(&live_paths, &mycall);
@@ -15402,6 +15367,7 @@ struct ConnEventView {
 /// | Sink | Lifetime | Server text? | What makes that true |
 /// |---|---|---|---|
 /// | `conn-health.json` (0644) | until overwritten | **no** | [`ConnDetail`]: literal-only by type, and [`conn_health_from_json`] runs the same allow-list on the way IN |
+/// | `cluster-nodes.json` (0644) | until overwritten | **no** | `tempo_net::cluster::pool::Failure`: reason CODES and times only, by type — a node's banner or a connect error has no field to go in; the node's own words go no further than the `CONN_LOG` ring |
 /// | stderr → `~/.xsession-errors` (0644) | until next login | **no** | [`conn_log`] prints `connector`/`level` only, both `&'static str`; this type has no `Display`/`Debug` to print. The qrz-sync worker is the other printer on this row and prints [`QrzSyncFailure::detail`], a [`ConnDetail`] |
 /// | [`CONN_LOG`] ring (200) → [`get_connection_log`] | the process | yes | it is a screen — that is #226's whole point |
 /// | a command's `Err(String)` → the operator's toast | the moment | yes | same |
@@ -22549,7 +22515,7 @@ pub fn run() {
         settings.unassisted_mode,
         std::sync::atomic::Ordering::Relaxed,
     );
-    let cluster_hosts = settings.cluster_hosts.clone();
+    let node_config = cluster_nodes::NodeConfig::of(&settings);
     let cluster_ssid = settings.cluster_ssid.clone();
     let cluster_call = settings.mycall.clone();
     let region_grid = settings.mygrid.clone();
@@ -22609,14 +22575,9 @@ pub fn run() {
         propagation::REGION_SPOT_CAP,
     ))));
     let health: SharedHealth = Arc::new(FeedHealthState::default());
+    cluster_nodes::set_config(node_config);
     if cluster_active {
-        start_cluster_feeds(
-            &spots,
-            &cluster_hosts,
-            &cluster_call,
-            &cluster_ssid,
-            &health,
-        );
+        start_cluster_feeds(&spots, &cluster_call, &cluster_ssid, &health, false);
     }
     start_pskr_feed(&live_paths, &cluster_call, &health);
     start_wspr_feed(&live_paths, &cluster_call);
@@ -24371,6 +24332,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_xray_now,
             get_dxped_windows,
             get_feed_health,
+            get_cluster_nodes,
             qsy_set_enabled,
             qsy_configure,
             qsy_move_now,
