@@ -665,6 +665,7 @@ fn start_cluster_feed(
             &CLUSTER_STOP,
             &hp_conn.cluster_connected,
             &RBN_DEAD_OUTBOX, // RBN is receive-only — never post to a skimmer
+            |why| conn_log("RBN", "error", why.to_string()),
         );
     });
 }
@@ -946,6 +947,7 @@ fn start_human_cluster_feed(spots: &SharedSpots, host: &str, mycall: &str, healt
             &CLUSTER_STOP,
             &conn,
             &CLUSTER_OUTBOX, // the post target — `post_spot` pushes DX lines here
+            |why| conn_log("DX Cluster", "error", why.to_string()),
         );
     });
 }

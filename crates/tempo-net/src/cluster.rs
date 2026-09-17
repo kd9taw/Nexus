@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -557,6 +557,14 @@ fn pump<R: Read, W: Write>(
 /// tested logic). `connected` mirrors the session state (true while a TCP session
 /// is up) so the UI can tell "connected but quiet" from "can't connect" — a
 /// spotless session previously read as an indistinguishable-from-broken "waiting".
+///
+/// `on_reach_error` reports that the node could not be reached, with a rendered reason
+/// naming every address tried. It exists because "cannot reach this node" was previously
+/// silent: a node answering on IPv4 while the box's resolver offered an unreachable AAAA
+/// first looked exactly like a dead node, with nothing anywhere saying which had happened.
+/// Called only when the reason CHANGES (a node unreachable the same way for an hour is one
+/// fact, not sixty) — the sink is a small ring shared with every other connector, and a
+/// per-retry line would evict everything else in it.
 pub fn run(
     addr: &str,
     call: &str,
@@ -564,18 +572,32 @@ pub fn run(
     stop: &AtomicBool,
     connected: &AtomicBool,
     outbox: &Mutex<VecDeque<String>>,
+    mut on_reach_error: impl FnMut(&str),
 ) {
     const BASE: Duration = Duration::from_secs(2);
     const MAX: Duration = Duration::from_secs(60);
     let mut backoff = BASE;
+    // The last reach failure reported, so an unchanged one isn't re-reported every
+    // backoff. Cleared on a successful connect, so a node that goes away AGAIN after
+    // coming back is reported again rather than swallowed as a repeat.
+    let mut reported: Option<String> = None;
     while !stop.load(Ordering::Relaxed) {
         let started = Instant::now();
-        if let Some(stream) = connect(addr) {
-            if let Ok(reader) = stream.try_clone() {
-                // `connected` flips true inside pump when the login prompt is
-                // ANSWERED (not on bare TCP-establish), and clears on session end.
-                let _ = pump(reader, stream, call, &mut on_spot, stop, connected, outbox);
-                connected.store(false, Ordering::Relaxed);
+        match connect(addr) {
+            Ok(stream) => {
+                reported = None;
+                if let Ok(reader) = stream.try_clone() {
+                    // `connected` flips true inside pump when the login prompt is
+                    // ANSWERED (not on bare TCP-establish), and clears on session end.
+                    let _ = pump(reader, stream, call, &mut on_spot, stop, connected, outbox);
+                    connected.store(false, Ordering::Relaxed);
+                }
+            }
+            Err(why) => {
+                if reported.as_deref() != Some(why.as_str()) {
+                    on_reach_error(&why);
+                    reported = Some(why);
+                }
             }
         }
         // A real session (stayed up a while) resets backoff; a fast connect-fail /
@@ -604,12 +626,59 @@ fn sleep_interruptible(dur: Duration, stop: &AtomicBool) -> bool {
     true
 }
 
-fn connect(addr: &str) -> Option<TcpStream> {
-    let sa = addr.to_socket_addrs().ok()?.next()?;
-    let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(8)).ok()?;
-    // A read timeout so the pump loop can periodically observe `stop`.
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
-    Some(stream)
+/// How long ONE resolved address gets to answer.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The socket read timeout — not a protocol deadline, it just wakes the pump loop
+/// often enough to observe `stop`.
+const READ_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Resolve `addr` ("host:port") and connect to the first address that answers.
+///
+/// The error names the host AND every address tried, because those are different
+/// operator problems: a node that is genuinely down reads nothing like a box that
+/// cannot route to the address its own resolver handed back first.
+fn connect(addr: &str) -> Result<TcpStream, String> {
+    let addrs: Vec<SocketAddr> = addr
+        .to_socket_addrs()
+        .map_err(|e| format!("cannot resolve {addr}: {e}"))?
+        .collect();
+    connect_any(&addrs, CONNECT_TIMEOUT).map_err(|why| format!("cannot reach {addr}: {why}"))
+}
+
+/// Connect to the first of `addrs` that answers, each bounded by its OWN `timeout`.
+///
+/// A hostname commonly resolves to several addresses — typically an AAAA and an A for
+/// the same node — and the resolver's order is not a statement about which one works.
+/// Taking only the first reported a healthy node as dead on any box whose DNS answers
+/// v6-first without a working v6 route: the AAAA connect failed and the A sitting right
+/// behind it was never tried. So every address gets a turn, and failure is reported only
+/// once they have ALL failed.
+///
+/// Split from [`connect`] so the multi-address path is testable without a resolver —
+/// the resolver's answer for a real host is exactly what a test cannot pin down.
+///
+/// ⚠️ A returned stream proves only that something ACCEPTED a TCP connection on that
+/// port. It is NOT evidence that a cluster node is there: `connected` stays false until
+/// [`pump`] answers a login prompt, and nothing here may be used to claim otherwise.
+fn connect_any(addrs: &[SocketAddr], timeout: Duration) -> Result<TcpStream, String> {
+    if addrs.is_empty() {
+        return Err("no addresses resolved".to_string());
+    }
+    let mut tried: Vec<String> = Vec::with_capacity(addrs.len());
+    for sa in addrs {
+        match TcpStream::connect_timeout(sa, timeout) {
+            // A read timeout so the pump loop can periodically observe `stop`. If it
+            // cannot be set this socket is unusable, so it counts as a failed address
+            // rather than a returned stream the pump would then block forever on.
+            Ok(stream) => match stream.set_read_timeout(Some(READ_TIMEOUT)) {
+                Ok(()) => return Ok(stream),
+                Err(e) => tried.push(format!("{sa}: {e}")),
+            },
+            Err(e) => tried.push(format!("{sa}: {e}")),
+        }
+    }
+    Err(tried.join("; "))
 }
 
 #[cfg(test)]
@@ -1310,6 +1379,83 @@ mod tests {
             outbox.lock().unwrap().len(),
             1,
             "the unsent command stays buffered"
+        );
+    }
+
+    /// A loopback port with nothing listening: bound to learn a free port, then
+    /// dropped. Connecting to it fails immediately (refused) rather than hanging.
+    fn dead_port() -> u16 {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let p = l.local_addr().unwrap().port();
+        drop(l);
+        p
+    }
+
+    #[test]
+    fn connect_tries_every_resolved_address_not_just_the_first() {
+        // THE BUG: a node whose DNS answers AAAA-first, on a box with no working
+        // IPv6 route, was reported dead while answering perfectly well on IPv4 —
+        // only the FIRST resolved address was ever tried.
+        let live = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let live_addr = live.local_addr().unwrap();
+        // v6 loopback with nothing on it: refused where v6 exists, unreachable
+        // where it doesn't — both are the real-world first-address failure.
+        let v6_first: std::net::SocketAddr = format!("[::1]:{}", dead_port()).parse().unwrap();
+        let addrs = [v6_first, live_addr];
+        let got = connect_any(&addrs, Duration::from_secs(2));
+        assert!(
+            got.is_ok(),
+            "must fall past the unreachable first address to the live one, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn connect_reports_failure_only_when_every_address_failed_and_names_them() {
+        // POSITIVE CONTROL for the test above: with NO live address behind them,
+        // the same path must still fail — otherwise "it connected" proves nothing.
+        let a: std::net::SocketAddr = format!("127.0.0.1:{}", dead_port()).parse().unwrap();
+        let b: std::net::SocketAddr = format!("[::1]:{}", dead_port()).parse().unwrap();
+        let err = connect_any(&[a, b], Duration::from_secs(2)).unwrap_err();
+        // The error has to say what was actually TRIED: "the node is dead" and
+        // "this box cannot reach it over IPv6" are different operator problems.
+        assert!(
+            err.contains(&a.to_string()) && err.contains(&b.to_string()),
+            "error must name every address tried, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_host_that_accepts_tcp_but_never_prompts_is_not_connected() {
+        // The reach fix must not become a liveness claim. A port that ACCEPTS a
+        // connection and then talks without ever prompting for a login is not a
+        // working cluster node, and `connected` — the flag the UI reads — must
+        // stay false. (`pump_logs_in_writes_the_call_and_surfaces_spots` is the
+        // other direction: an answered prompt DOES set it.)
+        let reader = ScriptReader {
+            chunks: vec![
+                b"\xef\xbb\xbfWelcome to the node\r\n".to_vec(),
+                b"Please wait, checking your callsign...\r\n".to_vec(),
+            ]
+            .into(),
+        };
+        let mut writer: Vec<u8> = Vec::new();
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        pump(
+            reader,
+            &mut writer,
+            "W9XYZ",
+            &mut |_| {},
+            &stop,
+            &connected,
+            &outbox,
+        )
+        .unwrap();
+        assert!(writer.is_empty(), "nothing to answer, nothing sent");
+        assert!(
+            !connected.load(Ordering::Relaxed),
+            "TCP accepted + chatter but no login prompt is NOT a connected session"
         );
     }
 }
