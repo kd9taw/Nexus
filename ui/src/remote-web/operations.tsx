@@ -25,14 +25,16 @@ export function LoggingAuthority({ client, unavailable }: { client: OperationCli
   const phase = shown?.phase
   if (shown?.controls || view.controlPending || view.controlResult || view.controlError) sawControls.current = true
   const station = sawControls.current
-  // A command outcome's re-read keeps its own wording ("Updating…", then unavailable if it lapses):
-  // with no current state the label reports that, and only the drawn button uses the retained one.
+  // A command outcome's re-read keeps its own wording ("Updating…", then unavailable if it lapses).
+  // The state is held through that re-read (its window spent, the controls still lit), so the
+  // wording follows `controlRefreshing`, not the absence of a state.
   // The steady label applies to the ordinary gap between heartbeats, where a state is held.
   const label = !view.connected
     ? station ? t('remote.controlOffline') : t('remote.loggingOffline')
-    : !view.state && view.supported
-      ? !view.error && !view.controlError && view.controlRefreshing
-        ? t('remote.controlRefreshing') : t('remote.loggingStatusUnavailable')
+    : view.supported && view.controlRefreshing && !view.error && !view.controlError
+      ? t('remote.controlRefreshing')
+      : !view.state && view.supported
+        ? t('remote.loggingStatusUnavailable')
       : view.error === 'stationUnsupported'
         ? t('remote.loggingUnsupported')
         : phase === 'controlling'

@@ -7,8 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Remote: a tune, band or mode change confirms the moment the radio does it.** Until now every
+  rig-touching control was answered "pending" and the browser found out it had landed by asking —
+  a state read, then a result read, each a round trip through the relay, with a one-second wait
+  between them — so a control felt half a second to two seconds slow, and the tuning wheel ignored
+  input for all of it. The station now tells the browser the outcome itself (operation protocol
+  v5), together with the fresh control state, the instant its radio loop reads the new dial back;
+  the browser installs both and is ready for the next gesture with nothing in between. Polling
+  stays as the safety net, so a pushed message that is lost costs the old delay and never the
+  outcome. A desktop or site on the previous version keeps polling exactly as before; the push
+  needs both updated.
+
 ### Fixed
 
+- **SSB/phone spots stopped arriving, and the Spots panel showed no Phone chip.** Both of the
+  human DX-cluster nodes Nexus shipped with, `ve7cc.net:23` and `dxc.wa9pie.net:8000`, went
+  down on the same day, and every install that still had the default list had no phone source
+  left — RBN kept CW and the digital modes flowing, which is why only Phone (and the mode chip
+  the Spots panel builds from what it is actually receiving) vanished. Two more nodes are now
+  in the default list — `dx.w1nr.net:23` (DXSpider) and `dxspots.com:7300` (CC Cluster, on a
+  high port for networks that block telnet port 23) — and an install still on the original
+  pair gains both on the next launch; a list you edited yourself is left alone. Until you
+  upgrade, add either one under **Settings › Connections › DX cluster nodes** (both are in
+  the **Add a known node** presets) and phone spots return at once.
 - **The Listen button in the Remote browser did nothing.** Opening the workspace replaced the
   connecting page with the operating one, and that swap permanently closed the audio channel
   before the button you could see was ever wired to it — so it looked enabled and sent nothing,

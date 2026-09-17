@@ -271,18 +271,30 @@ struct Receipt {
     device: String,
     fingerprint: Vec<u8>,
     at: Instant,
-    value: Value,
+    /// `None` while the write is still in flight (a control receipt's answer is its completion
+    /// and never lives here). See `value`.
+    value: Option<Value>,
     control: Option<Completion>,
     // The result payload can require a newer decoder than the Result request.
     // Never send v4 QSO evidence to a browser which only understands v2/v3.
     result_version: u8,
 }
 impl Receipt {
-    fn value(&self) -> Value {
-        if let Some(control) = &self.control {
-            control_value(&self.id, control.outcome())
-        } else {
-            self.value.clone()
+    /// What a replay or a Result request is answered with. A receipt whose write has not come
+    /// back — its file sync or network post runs with Core released — answers `remoteBusy`,
+    /// exactly what the browser was told while that work held the lock, so it waits rather than
+    /// appending or posting twice.
+    fn value(&self) -> Result<Value, &'static str> {
+        match (&self.control, &self.value) {
+            (Some(control), _) => Ok(control_value(&self.id, control.outcome())),
+            (None, Some(value)) => Ok(value.clone()),
+            (None, None) => Err("remoteBusy"),
+        }
+    }
+    fn pending(&self) -> bool {
+        match &self.control {
+            Some(control) => control.outcome() == Outcome::Pending,
+            None => self.value.is_none(),
         }
     }
 }
@@ -292,6 +304,17 @@ fn control_value(id: &str, outcome: Outcome) -> Value {
     value["operation"] = json!("stationControl");
     value["operationId"] = json!(id);
     value
+}
+/// A control's outcome has settled: what the transport needs to tell the browser unprompted
+/// (operation v5). Carries nothing the browser could not poll for — it is the poll, arriving
+/// early — so a notice that is dropped costs a round trip and never an outcome.
+#[derive(Clone, Debug)]
+pub struct CompletionNotice {
+    pub session: String,
+    pub device: String,
+    pub operation_id: String,
+    pub version: u8,
+    pub connection: u64,
 }
 struct Core {
     epoch: u64,
@@ -306,6 +329,16 @@ struct Core {
     context: Option<Vec<u8>>,
     windows: VecDeque<Window>,
     receipts: VecDeque<Receipt>,
+}
+impl Core {
+    /// Record a receipt and spend the command window it was admitted under.
+    fn open(&mut self, receipt: Receipt) {
+        self.receipts.push_back(receipt);
+        while self.receipts.len() > 1024 {
+            self.receipts.pop_front();
+        }
+        self.windows.clear();
+    }
 }
 impl Default for Core {
     fn default() -> Self {
@@ -344,6 +377,10 @@ pub struct Authority {
     transmit: TransmitAuthority,
     stop_owner: Mutex<Option<transmit_stop::Owner>>,
     transmit_revocations: Mutex<BTreeSet<String>>,
+    /// Where a settled control's notice goes (see `CompletionNotice`): the live transport's
+    /// bounded queue, set per socket. None, or a full queue, means the browser polls as it did
+    /// before operation v5 — this is never load-bearing.
+    completions: Mutex<Option<tokio::sync::mpsc::Sender<CompletionNotice>>>,
     #[cfg(test)]
     before_sync: Option<Box<dyn Fn() + Send + Sync>>,
     /// Tests post self-spots here, one poster per target. A test build has no path to pota.app or
@@ -527,6 +564,86 @@ impl Authority {
         }
         c.revision += 1;
         Ok(())
+    }
+    /// Re-take Core to record what a write that ran with it released came back with. Waiting is
+    /// fine here: nothing else holds Core across anything slow, and this thread holds nothing.
+    fn record(&self, id: &str, value: Value) -> Result<(), &'static str> {
+        let mut c = self.core.lock().map_err(|_| "authorityUnavailable")?;
+        if let Some(receipt) = c.receipts.iter_mut().find(|r| r.id == id) {
+            receipt.value = Some(value);
+        }
+        Ok(())
+    }
+    /// The transport's queue for settled controls. One socket at a time holds the station, so
+    /// the newest simply replaces the last; a notice for an older connection is refused by
+    /// `completion_event` anyway.
+    pub fn watch_completions(&self, sink: tokio::sync::mpsc::Sender<CompletionNotice>) {
+        if let Ok(mut current) = self.completions.lock() {
+            *current = Some(sink);
+        }
+    }
+    /// Arrange for `notice` to reach the transport when `completion` settles — only for a
+    /// browser that negotiated v5, because an older page has no parser for the event and its
+    /// socket would close on it. `try_send`, never a wait: the queue is bounded and a full one
+    /// drops the notice, which the browser's own polling covers.
+    fn notify_on_finish(&self, completion: &Completion, notice: CompletionNotice) {
+        if notice.version < 5 {
+            return;
+        }
+        let Some(sink) = self.completions.lock().ok().and_then(|s| s.clone()) else {
+            return;
+        };
+        completion.on_finish(std::sync::Arc::new(move || {
+            let _ = sink.try_send(notice.clone());
+        }));
+    }
+    /// The unprompted `operationEvent` for a settled control: its outcome and the state a
+    /// `State` request would return now — computed under the same locks, in the same order, as
+    /// `handle_version`, so the browser can install it exactly as it installs a reply. None when
+    /// there is nothing to say (the receipt is gone, the socket has changed) and the browser is
+    /// left to its poll.
+    ///
+    /// Waits for both locks rather than answering `stationBusy`: the radio loop that settled
+    /// the outcome still holds Engine when the notice arrives, and this runs on a blocking
+    /// thread the transport does not wait on. Engine is taken first, as `handle_version` takes
+    /// Core then tries Engine and every other Core user only tries, so nothing can wait on
+    /// this thread while it waits.
+    pub fn completion_event(
+        &self,
+        notice: &CompletionNotice,
+        engine: &crate::SharedEngine,
+    ) -> Option<String> {
+        let now = Instant::now();
+        let engine = engine.lock().ok()?;
+        let mut c = self.core.lock().ok()?;
+        self.reconcile(&mut c, now).ok()?;
+        if notice.connection != self.connection.load(Ordering::SeqCst) {
+            return None;
+        }
+        let value = c
+            .receipts
+            .iter()
+            .find(|r| {
+                r.id == notice.operation_id
+                    && r.session == notice.session
+                    && r.device == notice.device
+            })?
+            .value()
+            .ok()?;
+        self.context(&mut c, &engine).ok()?;
+        let control = Some((
+            notice.version,
+            station::Context::capture(&engine),
+            engine.remote_ft_available(),
+            engine.remote_ft_tx_owned(),
+        ));
+        let state = self
+            .state(&mut c, &notice.session, &notice.device, now, control)
+            .ok()?;
+        Some(
+            json!({"type":"operationEvent","sessionId":notice.session,"operationId":notice.operation_id,"value":value,"state":state})
+                .to_string(),
+        )
     }
     /// The epoch every local grant belongs to. Any local decision that clears permissions
     /// (Turn off Remote, take over, revoking a browser, turning Remote on again) moves it.
@@ -867,7 +984,7 @@ impl Authority {
             transmit_stop::stop_station(engine);
             return Ok(json!({"stop":"accepted"}));
         }
-        if !matches!(version, 1..=4)
+        if !matches!(version, 1..=5)
             || matches!(request, Request::StationControl { action, .. } if version < action.minimum_version())
             || matches!(request, Request::LogChange { .. } | Request::ActivationExport { .. } | Request::ProgramExport { .. } if version < 4)
         {
@@ -1013,7 +1130,7 @@ impl Authority {
                         if version < receipt.result_version {
                             Err("stationUnsupported")
                         } else {
-                            Ok(receipt.value())
+                            receipt.value()
                         }
                     })
             }
@@ -1055,7 +1172,7 @@ impl Authority {
                         && r.device == device
                         && r.fingerprint == fingerprint
                     {
-                        Ok(r.value())
+                        r.value()
                     } else {
                         Err("requestConflict")
                     };
@@ -1093,11 +1210,7 @@ impl Authority {
                 {
                     return Err("windowExpired");
                 }
-                if c.receipts.iter().any(|r| {
-                    r.control
-                        .as_ref()
-                        .is_some_and(|r| r.outcome() == Outcome::Pending)
-                }) {
+                if c.receipts.iter().any(Receipt::pending) {
                     return Err("remoteBusy");
                 }
                 if let Request::LogChange { change, .. } = request {
@@ -1116,12 +1229,28 @@ impl Authority {
                     c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
                     let prepared = logging::prepare_change(&mut engine, change);
                     drop(engine);
+                    // Engine is released, and so is Core: the receipt goes in as in flight first,
+                    // so a replay meanwhile is told the station is busy rather than posting twice,
+                    // and a revoke, audio recheck or status read at the shack never waits behind
+                    // the network post or the file sync that follow. A self-spot's pota.app post
+                    // can take 15 s; while Core was held across it, a revoke silently did nothing.
+                    c.open(Receipt {
+                        id: request.id().into(),
+                        session: session.into(),
+                        device: device.into(),
+                        fingerprint,
+                        at: current,
+                        value: None,
+                        control: None,
+                        result_version: 4,
+                    });
+                    drop(c);
                     #[cfg(test)]
                     if let Some(probe) = &self.before_sync {
                         probe();
                     }
                     let outcome = match prepared {
-                        // Engine is released; a spot is posted only now, and only once per receipt.
+                        // Nothing is held; a spot is posted only now, and only once per receipt.
                         Ok(work) => work.finish(
                             |context| self.self_spot(context),
                             |freq_mhz, call, comment| self.cluster_spot(freq_mhz, call, comment),
@@ -1129,20 +1258,7 @@ impl Authority {
                         Err(reason) => logging::ChangeOutcome::Rejected { reason, spot: None },
                     };
                     let value = logging::change_value(request.id(), &outcome);
-                    c.receipts.push_back(Receipt {
-                        id: request.id().into(),
-                        session: session.into(),
-                        device: device.into(),
-                        fingerprint,
-                        at: current,
-                        value: value.clone(),
-                        control: None,
-                        result_version: 4,
-                    });
-                    while c.receipts.len() > 1024 {
-                        c.receipts.pop_front();
-                    }
-                    c.windows.clear();
+                    self.record(request.id(), value.clone())?;
                     return Ok(value);
                 }
                 if let Request::StationControl {
@@ -1154,6 +1270,30 @@ impl Authority {
                         c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
                         let prepared = logging::prepare(&mut engine, action);
                         drop(engine);
+                        // The hardware receipt's own shape: pending under Core, finished once
+                        // the file sync comes back with Core released (see the log change above).
+                        let completion = Completion::default();
+                        c.open(Receipt {
+                            id: request.id().into(),
+                            session: session.into(),
+                            device: device.into(),
+                            fingerprint,
+                            at: current,
+                            value: None,
+                            control: Some(completion.clone()),
+                            result_version: 4,
+                        });
+                        drop(c);
+                        self.notify_on_finish(
+                            &completion,
+                            CompletionNotice {
+                                session: session.into(),
+                                device: device.into(),
+                                operation_id: request.id().into(),
+                                version,
+                                connection,
+                            },
+                        );
                         #[cfg(test)]
                         if let Some(probe) = &self.before_sync {
                             probe();
@@ -1162,24 +1302,8 @@ impl Authority {
                             Ok(work) => work.finish(shared_engine),
                             Err(reason) => Outcome::Rejected { reason },
                         };
-                        let completion = Completion::default();
                         completion.finish(outcome.clone());
-                        let value = control_value(request.id(), outcome);
-                        c.receipts.push_back(Receipt {
-                            id: request.id().into(),
-                            session: session.into(),
-                            device: device.into(),
-                            fingerprint,
-                            at: current,
-                            value: value.clone(),
-                            control: Some(completion),
-                            result_version: 4,
-                        });
-                        while c.receipts.len() > 1024 {
-                            c.receipts.pop_front();
-                        }
-                        c.windows.clear();
-                        return Ok(value);
+                        return Ok(control_value(request.id(), outcome));
                     }
                     let deadline = (current + Duration::from_secs(5)).min(l.until);
                     let transmit_permit = if let Some(epoch) = action.transmit_epoch() {
@@ -1230,20 +1354,29 @@ impl Authority {
                         }
                     };
                     let value = control_value(request.id(), completion.outcome());
-                    c.receipts.push_back(Receipt {
+                    c.open(Receipt {
                         id: request.id().into(),
                         session: session.into(),
                         device: device.into(),
                         fingerprint,
                         at: current,
-                        value: value.clone(),
-                        control: Some(completion),
+                        value: None,
+                        control: Some(completion.clone()),
                         result_version: 2,
                     });
-                    while c.receipts.len() > 1024 {
-                        c.receipts.pop_front();
-                    }
-                    c.windows.clear();
+                    // After the receipt is in, so a settlement that races this registration
+                    // (the radio loop can be that fast on a rejected target) finds the receipt
+                    // the event is built from. `on_finish` tells at once if it already settled.
+                    self.notify_on_finish(
+                        &completion,
+                        CompletionNotice {
+                            session: session.into(),
+                            device: device.into(),
+                            operation_id: request.id().into(),
+                            version,
+                            connection,
+                        },
+                    );
                     return Ok(value);
                 }
                 let Request::LogManual { record, .. } = request else {
@@ -1265,6 +1398,18 @@ impl Authority {
                 c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
                 let outcome = engine.log_qso_for_sync(rec.into());
                 drop(engine);
+                // The file sync runs with Core released too (see the log change above).
+                c.open(Receipt {
+                    id: request.id().into(),
+                    session: session.into(),
+                    device: device.into(),
+                    fingerprint,
+                    at: current,
+                    value: None,
+                    control: None,
+                    result_version: 1,
+                });
+                drop(c);
                 let value = match outcome {
                     tempo_app::engine::LogWriteOutcome::PendingSync(receipts) => {
                         #[cfg(test)]
@@ -1288,20 +1433,7 @@ impl Authority {
                         json!({"outcome":"rejected","reason":"alreadyPresent","operationId":request.id()})
                     }
                 };
-                c.receipts.push_back(Receipt {
-                    id: request.id().into(),
-                    session: session.into(),
-                    device: device.into(),
-                    fingerprint,
-                    at: current,
-                    value: value.clone(),
-                    control: None,
-                    result_version: 1,
-                });
-                while c.receipts.len() > 1024 {
-                    c.receipts.pop_front();
-                }
-                c.windows.clear();
+                self.record(request.id(), value.clone())?;
                 Ok(value)
             }
         }

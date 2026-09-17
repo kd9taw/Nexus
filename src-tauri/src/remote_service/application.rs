@@ -9,6 +9,11 @@ use std::time::{Duration, Instant};
 
 pub const MAX_BYTES: usize = 768 * 1024;
 const MAX_REVISION: u64 = 9_007_199_254_740_991;
+/// How old a cached sample may be and still be served while the Engine is busy. The relay drops
+/// the station's socket over a sample whose age plus its credit's round trip reaches the 3 s
+/// freshness window, and a batch can wait up to the longest topic interval (1 s) for a due
+/// topic, so one second of age keeps a second of transit margin.
+const BUSY_GRACE: Duration = Duration::from_millis(1000);
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
 pub enum Command {
     #[serde(rename = "get_snapshot")]
@@ -240,7 +245,10 @@ impl Publisher {
             }
             // Never queue behind the radio loop. The browser retries a refused READ;
             // there is no deferred engine operation that can execute after disconnect.
-            let eng = engine.try_lock().map_err(|_| "applicationBusy")?;
+            let eng = match engine.try_lock() {
+                Ok(eng) => eng,
+                Err(_) => return self.cached(command, request_id, base, now),
+            };
             // Clone the typed result while locked; encoding and diffing belong
             // outside the engine lock, independently of the radio loop.
             let value = match command {
@@ -253,7 +261,10 @@ impl Publisher {
                     let class = eng.settings().license_class;
                     let captured_at_ms = super::now_ms();
                     drop(eng);
-                    self.sstv_images.try_lock().map_err(|_| "applicationBusy")?.project(&mut state.gallery)?;
+                    match self.sstv_images.try_lock() {
+                        Ok(mut images) => images.project(&mut state.gallery)?,
+                        Err(_) => return self.cached(command, request_id, base, now),
+                    }
                     let plan: Vec<_> = tempo_app::bandplan::sstv_band_plan().into_iter().map(|mut c| {
                         c.tx = tempo_app::privileges::tx_allowed(class, c.dial_mhz, tempo_app::settings::OperatingMode::Phone);
                         c
@@ -328,6 +339,25 @@ impl Publisher {
             self.insert(command, value, now)?;
         }
         self.reply(command, request_id, base, now)
+    }
+    /// The radio loop holds the Engine across blocking CAT, so a `try_lock` miss is routine, not
+    /// a fault. The cached sample is what the browser is already showing: it is served again with
+    /// its true age rather than an error, which made the browser drop a known-good value and
+    /// disable every station control on it at once. Only a topic never yet read, or a sample too
+    /// old for the wire, is refused as busy; the browser then keeps its value and ages it.
+    fn cached(
+        &self,
+        command: Command,
+        request_id: &str,
+        base: Option<u64>,
+        now: Instant,
+    ) -> Result<String, &'static str> {
+        match self.entries.get(&command) {
+            Some(entry) if now.saturating_duration_since(entry.at) < BUSY_GRACE => {
+                self.reply(command, request_id, base, now)
+            }
+            _ => Err("applicationBusy"),
+        }
     }
     fn insert(&mut self, command: Command, value: Value, now: Instant) -> Result<(), &'static str> {
         if command == Command::Snapshot {
@@ -521,7 +551,12 @@ impl Stream {
                     value
                 }
                 Err(error) => {
-                    self.offered.remove(&topic);
+                    // A busy miss changes nothing at either end: the relay keeps its last value
+                    // through an error, so the base it acknowledged still stands and the next good
+                    // read is a delta, not a full resend. Any other error drops the base.
+                    if error != "applicationBusy" {
+                        self.offered.remove(&topic);
+                    }
                     serde_json::json!({"type":"applicationError", "requestId":request, "command":topic, "error":error})
                 }
             };
@@ -907,6 +942,123 @@ mod tests {
         assert_eq!(meter["data"]["smeterDb"], -12);
     }
 
+    /// The radio loop holds the Engine across blocking CAT, so a `try_lock` miss is routine. It
+    /// used to answer `applicationBusy`, which the browser turned into a deleted snapshot and
+    /// every station control disabled at once. A miss now serves the cached sample with its true
+    /// age while it is within BUSY_GRACE, and the stream keeps its delta base through the error
+    /// that follows once the grace runs out.
+    #[test]
+    fn busy_engine_serves_the_cached_sample_aged_and_the_stream_keeps_its_base() {
+        use std::sync::{Arc, Mutex};
+        let engine = Arc::new(Mutex::new(tempo_app::engine::Engine::with_settings(
+            Default::default(),
+        )));
+        let mut publisher = Publisher::default();
+        let now = Instant::now();
+        let fresh: Value = serde_json::from_str(
+            &publisher
+                .read(&engine, Command::Snapshot, REQUEST, None, now)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fresh["revision"], 1);
+        let busy = engine.lock().unwrap();
+        // Past the interval, so the read reaches for the Engine and misses: the cached sample.
+        let served: Value = serde_json::from_str(
+            &publisher
+                .read(
+                    &engine,
+                    Command::Snapshot,
+                    REQUEST,
+                    Some(1),
+                    now + Duration::from_millis(600),
+                )
+                .expect("a busy Engine serves the cached sample"),
+        )
+        .unwrap();
+        assert_eq!(served["revision"], 1);
+        assert_eq!(served["ageMs"], 600, "served with its true age");
+        assert_eq!(served["baseRevision"], 1);
+        assert_eq!(
+            served["data"],
+            json!({}),
+            "an unchanged sample is an empty delta"
+        );
+        assert_eq!(
+            publisher
+                .read(
+                    &engine,
+                    Command::Snapshot,
+                    REQUEST,
+                    Some(1),
+                    now + Duration::from_millis(1000)
+                )
+                .unwrap_err(),
+            "applicationBusy",
+            "a sample at BUSY_GRACE is too old for the wire"
+        );
+        // Positive control: with nothing cached a busy Engine is still busy.
+        assert_eq!(
+            Publisher::default()
+                .read(&engine, Command::Snapshot, REQUEST, None, now)
+                .unwrap_err(),
+            "applicationBusy"
+        );
+        drop(busy);
+
+        let mut stream = Stream::default();
+        let watch = "bbe7d95a-6fbd-47aa-95a7-ab1e4c083dd6";
+        let credits = [
+            "056c07c9-65c3-48fc-a188-957de3338a4a",
+            "1b0d5a2e-2c6f-4d3e-9d4a-3f5c7e8b9a01",
+            "2c1e6b3f-3d7a-4e4f-8e5b-4a6d8f9c0b12",
+        ];
+        stream
+            .watch(watch.into(), vec![Command::Snapshot], Some(REQUEST.into()))
+            .unwrap();
+        let base = now + Duration::from_secs(10);
+        let first: Value =
+            serde_json::from_str(&stream.next(&mut publisher, &engine, base).unwrap().unwrap())
+                .unwrap();
+        assert_eq!(first["updates"][0]["revision"], 1);
+        stream.credit(watch, REQUEST, credits[0].into()).unwrap();
+        let busy = engine.lock().unwrap();
+        let cached: Value = serde_json::from_str(
+            &stream
+                .next(&mut publisher, &engine, base + Duration::from_millis(600))
+                .unwrap()
+                .expect("a busy miss within the grace is a sample, not an error"),
+        )
+        .unwrap();
+        assert_eq!(cached["updates"][0]["type"], "applicationResult");
+        assert_eq!(cached["updates"][0]["baseRevision"], 1);
+        assert_eq!(cached["updates"][0]["ageMs"], 600);
+        stream.credit(watch, credits[0], credits[1].into()).unwrap();
+        let refused: Value = serde_json::from_str(
+            &stream
+                .next(&mut publisher, &engine, base + Duration::from_millis(1200))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(refused["updates"][0]["type"], "applicationError");
+        assert_eq!(refused["updates"][0]["error"], "applicationBusy");
+        stream.credit(watch, credits[1], credits[2].into()).unwrap();
+        drop(busy);
+        // The browser still holds revision 1, so the read after the error is a delta against it.
+        let resumed: Value = serde_json::from_str(
+            &stream
+                .next(&mut publisher, &engine, base + Duration::from_millis(1800))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(resumed["updates"][0]["type"], "applicationResult");
+        assert_eq!(
+            resumed["updates"][0]["baseRevision"], 1,
+            "a busy error must not force a full resend"
+        );
+    }
     #[test]
     fn oversized_reads_do_not_replace_a_valid_cached_revision() {
         let mut publisher = Publisher::default();

@@ -1,6 +1,10 @@
 import type { StationAction } from './station-operation'
 
-export const OPERATION_VERSIONS = [1, 2, 3, 4] as const
+/** The operation lane's own ladder. v5 adds nothing a browser can SEND: it is the station's
+ * `operationEvent` - a settled control's outcome and a fresh state, pushed the moment the radio
+ * loop finishes it, where v4 left the browser to poll `state` and `result` for both. A v5 page
+ * against a v4 station polls as before; a v5 station never pushes to a page below v5. */
+export const OPERATION_VERSIONS = [1, 2, 3, 4, 5] as const
 export type OperationVersion = (typeof OPERATION_VERSIONS)[number]
 export function parseOperationVersion(raw: unknown): OperationVersion | null {
   return OPERATION_VERSIONS.includes(raw as OperationVersion) ? raw as OperationVersion : null
@@ -8,9 +12,10 @@ export function parseOperationVersion(raw: unknown): OperationVersion | null {
 
 /** Keep the original v2 advertisement for older cloud/browser builds. New
  * peers explicitly opt into the expanded version; absence preserves v1/v2. */
-export function advertisedOperationVersion(base: unknown, maximum?: unknown, ft?: unknown): OperationVersion | 0 {
+export function advertisedOperationVersion(base: unknown, maximum?: unknown, ft?: unknown, push?: unknown): OperationVersion | 0 {
   const legacy = base === 1 ? 1 : base === 2 ? 2 : 0
-  return legacy === 2 && maximum === 3 ? (ft === 1 ? 4 : 3) : legacy
+  if (legacy !== 2 || maximum !== 3) return legacy
+  return ft === 1 ? (push === 1 ? 5 : 4) : 3
 }
 
 export function controlVersion(action: StationAction): 2 | 3 | 4 {

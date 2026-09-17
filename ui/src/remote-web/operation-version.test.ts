@@ -15,6 +15,11 @@ it('preserves the original advertisement while explicitly negotiating expanded o
   expect(advertisedOperationVersion(2)).toBe(2)
   expect(advertisedOperationVersion(2, 3)).toBe(3)
   expect(advertisedOperationVersion(2, 3, 1)).toBe(4)
+  // v5 (pushed control outcomes) needs every rung below it: push without FT is still v3.
+  expect(advertisedOperationVersion(2, 3, 1, 1)).toBe(5)
+  expect(advertisedOperationVersion(2, 3, 1, 0)).toBe(4)
+  expect(advertisedOperationVersion(2, 3, 0, 1)).toBe(3)
+  expect(advertisedOperationVersion(2, 3, 1, '1')).toBe(4)
   expect(advertisedOperationVersion(2, 4, 1)).toBe(2)
   expect(advertisedOperationVersion(2, 3, 2)).toBe(3)
   expect(advertisedOperationVersion(2, 999)).toBe(2)
@@ -33,7 +38,7 @@ it('preserves the original advertisement while explicitly negotiating expanded o
 })
 
 it('negotiates each legacy/new browser and station pair without upgrading the older peer', () => {
-  for (const browserVersion of [1, 2, 3, 4]) for (const stationVersion of [1, 2, 3, 4]) {
+  for (const browserVersion of [1, 2, 3, 4, 5]) for (const stationVersion of [1, 2, 3, 4, 5]) {
     const relay = new OperationRelay(), station = peer(), browser = peer(), sessionId = crypto.randomUUID()
     relay.sync({ peer: station, supported: true, operationVersion: stationVersion }, [{ peer: browser, sessionId, deviceId: crypto.randomUUID(), commandUntil: Number.MAX_SAFE_INTEGER }], 1000)
     const request = { type: 'state', requestId: crypto.randomUUID() }
@@ -95,7 +100,7 @@ it('restores pre-v3 checkpoints conservatively and rejects malformed stored vers
   wire.controls!.capabilities = ['decoder', 'frequency', 'mode']
   restored.receiveStation({ type: 'operationResponse', sessionId, requestId, value: wire })
   expect(browser.frames[0].value.controls.capabilities).toEqual(['decoder'])
-  for (const version of [0, 5, '3', null]) {
+  for (const version of [0, 6, '3', null]) {
     expect(() => restored.restore(sessionId, { version: 1, pending: [{ requestId, at: 1000, mutation: false, operationVersion: version as never }] })).toThrow('invalidOperationCheckpoint')
   }
 })

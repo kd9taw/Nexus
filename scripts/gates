@@ -39,6 +39,16 @@
 //    not understood, or --job scoped the run). A caller that genuinely accepts
 //    incomplete coverage says so, out loud, with --allow-partial.
 //
+// 3. A RED NAMES ITS TEST. Five red runs in one day (2026-09-16) across three
+//    suites, and not one left behind WHICH test failed — each was answered with
+//    "re-run, it's green", which is exactly how a real regression gets waved
+//    through. So every gate's full output is written to a per-run log
+//    directory, and a gate that goes red has its failing tests pulled out of
+//    that log BY NAME — cargo/libtest, vitest and `node --test` are all read —
+//    and printed under the FAIL line and into the run's summary.txt. A red whose
+//    output names no test at all (a compile error, a crashed runner) says so and
+//    shows the log's tail, because "1 failed" with no name is not a result.
+//
 // Usage:
 //   scripts/gates                     run every gate this machine can run
 //   scripts/gates --list              print every gate CI runs, grouped by job
@@ -47,14 +57,19 @@
 //   scripts/gates --allow-partial     exit 0 on incomplete coverage instead of 3
 //   scripts/gates --workflow PATH     read a different workflow (used by the tests)
 //
+// Every run writes target/gates/<stamp>-<pid>/ (override: GATES_LOG_DIR): one
+// .log per gate, and summary.txt with each verdict and the failing test names.
+//
 // NEVER pipe this into grep/tail/head. A pipe discards the exit status of the
 // left-hand side; this project shipped a gate faked green exactly that way in
-// 1.10.3. Gates run with inherited stdio and their real exit codes are printed.
+// 1.10.3. Gates stream to the terminal and to their log from inside this
+// process; the exit code printed is read off the child itself, no shell pipe
+// between them.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -316,6 +331,16 @@ function parseYaml(text) {
 // and the same shape as the shared-CARGO_TARGET_DIR trap that runs a sibling's
 // binary. One process, one directory.
 const RUNNER_TEMP = path.join(os.tmpdir(), `nexus-gates-runner-${process.pid}`);
+
+// Where a run leaves its evidence: one .log per gate and a summary.txt. Under
+// the tree's own (gitignored) target/, so the worktree that ran the gates is
+// where the record is found. Per-run, for the same reason as RUNNER_TEMP — two
+// concurrent runs writing one directory would read each other's logs as their
+// own. GATES_LOG_DIR moves it; the tests keep their scratch runs out of the tree.
+const LOG_DIR = path.join(
+  process.env.GATES_LOG_DIR || path.join(ROOT, 'target', 'gates'),
+  `${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)}-${process.pid}`
+);
 
 function gitRepoSlug() {
   const r = spawnSync('git', ['-C', ROOT, 'remote', 'get-url', 'origin'], { encoding: 'utf8' });
@@ -955,6 +980,173 @@ function loadWorkflow(file) {
 }
 
 // ---------------------------------------------------------------------------
+// Naming the red — rule 3 of the header.
+//
+// A gate's log is read with EVERY format below, not the one its command
+// suggests: `npm test` may be vitest or `node --test`, and a gate that names
+// no test is reported as exactly that. The formats, each taken from a real
+// transcript (scripts/gates.test.mjs pins them):
+//
+//   cargo/libtest   `test path::to::name ... FAILED`, then `---- name stdout ----`
+//                   blocks carrying the panic line.
+//   vitest          ` FAIL  file > suite > name`, then the assertion message and a
+//                   `❯ file:line:col` frame.
+//   node --test     TAP when its output is a pipe (which it is here): `# Subtest:`
+//                   nesting, `not ok N - name` with a YAML block; a parent whose
+//                   `failureType` is `subtestsFailed` is not the failing test.
+//                   The spec reporter's `✖ name (ms)` is read too, for a step that
+//                   asks for it.
+// ---------------------------------------------------------------------------
+
+const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
+
+function failingTests(text) {
+  const lines = text.replace(ANSI, '').split(/\r?\n/);
+  const tests = new Map(); // name -> context lines
+  const add = (name, ctx) => {
+    if (!tests.has(name)) tests.set(name, ctx);
+  };
+
+  // cargo / libtest. Names first, then the panic block for each.
+  for (const l of lines) {
+    const m = l.match(/^test (\S+) \.\.\. FAILED$/);
+    if (m) add(m[1], []);
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^---- (\S+) stdout ----$/);
+    if (!m || !tests.has(m[1])) continue;
+    const ctx = [];
+    for (let j = i + 1; j < lines.length && ctx.length < 6; j++) {
+      const l = lines[j];
+      if (/^---- \S+ stdout ----$/.test(l) || l === 'failures:') break;
+      if (l.trim() === '' || /^note: run with `RUST_BACKTRACE/.test(l)) continue;
+      ctx.push(l.trim());
+    }
+    tests.set(m[1], ctx);
+  }
+
+  // vitest. `FAIL` followed by two spaces — never libtest's `FAILED`.
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*FAIL {2}(\S.*?)\s*$/);
+    if (!m) continue;
+    const ctx = [];
+    for (let j = i + 1; j < lines.length && j < i + 40; j++) {
+      const l = lines[j].trim();
+      if (/^⎯/.test(l) || /^FAIL {2}/.test(l)) break;
+      if (!ctx.length && l) ctx.push(l);
+      else if (/^❯ \S+:\d+:\d+$/.test(l)) {
+        ctx.push(l);
+        break;
+      }
+    }
+    add(m[1], ctx);
+  }
+
+  // node --test, TAP. Indent is four spaces per level of subtest.
+  const stack = [];
+  for (let i = 0; i < lines.length; i++) {
+    const sub = lines[i].match(/^( *)# Subtest: (.*)$/);
+    if (sub) {
+      const depth = sub[1].length / 4;
+      stack.length = depth;
+      stack[depth] = sub[2];
+      continue;
+    }
+    const nok = lines[i].match(/^( *)not ok \d+ - (.*?)(?: # (?:SKIP|TODO).*)?$/);
+    if (!nok) continue;
+    const depth = nok[1].length / 4;
+    const ctx = [];
+    let parent = false;
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = lines[j].trim();
+      if (l === '...') break;
+      if (l.startsWith("failureType: 'subtestsFailed'")) {
+        parent = true;
+        break;
+      }
+      if (/^(error|location):/.test(l)) ctx.push(l);
+    }
+    if (!parent) add([...stack.slice(0, depth), nok[2]].join(' > '), ctx);
+  }
+  // node --test, spec reporter.
+  for (const l of lines) {
+    const m = l.match(/^\s*✖ (.+?)(?: \(\d+(?:\.\d+)?ms\))?\s*$/);
+    if (m) add(m[1], []);
+  }
+
+  // Nothing above matched: the usual reasons are a compile error or a runner
+  // that died before any test ran. Surface the error lines instead.
+  const errors = [];
+  if (!tests.size) {
+    for (const l of lines) {
+      if (errors.length >= 10) break;
+      if (/^error(\[E\d+\])?: /.test(l) || /^\s*\w*Error: /.test(l) || /^npm ERR!/.test(l)) {
+        errors.push(l.trim());
+      }
+    }
+  }
+  return { tests: [...tests].map(([name, context]) => ({ name, context })), errors };
+}
+
+// The last lines of a log, for a red that named nothing.
+function logTail(logPath, n) {
+  const all = fs.readFileSync(logPath, 'utf8').replace(ANSI, '').split(/\r?\n/);
+  while (all.length && all[all.length - 1].trim() === '') all.pop();
+  return all.slice(-n);
+}
+
+// What a red gate leaves behind, as lines: the names, each with its context,
+// or the honest statement that the log names none.
+function describeRed(r) {
+  const out = [];
+  if (r.named.tests.length) {
+    out.push(`failing test(s), ${r.named.tests.length}:`);
+    for (const t of r.named.tests.slice(0, 50)) {
+      out.push(`  ${t.name}`);
+      for (const c of t.context) out.push(`      ${c}`);
+    }
+    if (r.named.tests.length > 50) out.push(`  … and ${r.named.tests.length - 50} more (see the log)`);
+  } else {
+    out.push(`NO TEST NAME could be read out of this gate's output — it is not a test failure, or a`);
+    out.push(`format this script does not read. The log's last lines:`);
+    const shown = r.named.errors.length ? r.named.errors : logTail(r.log, 20);
+    for (const l of shown) out.push(`  | ${l}`);
+  }
+  out.push(`log: ${r.log}`);
+  return out;
+}
+
+// Run one gate, streaming its output to the terminal AND to its log. The exit
+// code comes from the child's own close event — no shell pipe sits between the
+// gate and the verdict, which is what the header's "never pipe" rule is about.
+// 'close' fires only after both streams have drained, so the log is complete
+// when the code is known.
+function runStep(script, cwd, env, logPath) {
+  return new Promise((resolve) => {
+    const log = fs.openSync(logPath, 'w');
+    const child = spawn('bash', ['--noprofile', '--norc', '-e', script], {
+      cwd,
+      env,
+      stdio: ['inherit', 'pipe', 'pipe'],
+    });
+    const tee = (from, to) =>
+      from.on('data', (chunk) => {
+        to.write(chunk);
+        fs.writeSync(log, chunk);
+      });
+    tee(child.stdout, process.stdout);
+    tee(child.stderr, process.stderr);
+    child.on('error', (err) => {
+      fs.writeSync(log, `scripts/gates: could not start bash: ${err.message}\n`);
+    });
+    child.on('close', (code) => {
+      fs.closeSync(log);
+      resolve(code === null ? 1 : code);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Output.
 // ---------------------------------------------------------------------------
 
@@ -1050,9 +1242,11 @@ function printList(model, only, unrunnableOnly) {
   }
 }
 
-function runGates(model, only, allowPartial) {
+async function runGates(model, only, allowPartial) {
   const selected = model.insts.filter((j) => !only || only.has(j.id));
   fs.mkdirSync(RUNNER_TEMP, { recursive: true });
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+  console.log(`logs: ${LOG_DIR}`);
   const results = [];
 
   for (const job of selected) {
@@ -1074,22 +1268,32 @@ function runGates(model, only, allowPartial) {
       if (step.workdir) console.log(`    (working-directory: ${step.workdir})`);
       const script = path.join(RUNNER_TEMP, `step-${results.length}.sh`);
       fs.writeFileSync(script, step.command);
-      // `bash -e <file>` is GitHub's own default shell for `run:`. stdio is
-      // inherited: no pipe touches this, so the exit status below is the real one.
-      const r = spawnSync('bash', ['--noprofile', '--norc', '-e', script], {
-        cwd: step.workdir ? path.resolve(ROOT, step.workdir) : ROOT,
-        stdio: 'inherit',
-        env: {
+      const log = path.join(
+        LOG_DIR,
+        `${String(results.length).padStart(2, '0')}-${`${job.label}-${step.name}`.replace(/[^\w.-]+/g, '_')}.log`
+      );
+      // `bash -e <file>` is GitHub's own default shell for `run:`.
+      const code = await runStep(
+        script,
+        step.workdir ? path.resolve(ROOT, step.workdir) : ROOT,
+        {
           ...process.env,
           ...step.env,
           CI: 'true',
           RUNNER_TEMP,
           GITHUB_WORKSPACE: ROOT,
         },
-      });
-      const code = r.status === null ? 1 : r.status;
+        log
+      );
       console.log(`=== ${code === 0 ? 'PASS' : 'FAIL'}  exit ${code}  ${job.label} :: ${step.name}`);
-      results.push({ job: job.label, step: step.name, state: code === 0 ? 'PASS' : 'FAIL', code });
+      const r = { job: job.label, step: step.name, state: code === 0 ? 'PASS' : 'FAIL', code, log };
+      if (code !== 0) {
+        // Named HERE, right under the gate, as well as in the summary: a reader
+        // watching a long run should not have to wait for the end to learn which.
+        r.named = failingTests(fs.readFileSync(log, 'utf8'));
+        for (const l of describeRed(r)) console.log(`    ${l}`);
+      }
+      results.push(r);
     }
   }
 
@@ -1112,17 +1316,45 @@ function runGates(model, only, allowPartial) {
   const skip = results.filter((r) => r.state === 'SKIP');
   const unknown = results.filter((r) => r.state === 'UNKNOWN');
 
-  console.log('\n--------------------------------------------------------------');
-  console.log(`ran ${pass.length + fail.length}  passed ${pass.length}  failed ${fail.length}  skipped ${skip.length}`);
-  for (const r of fail) console.log(`  FAIL     ${r.job} :: ${r.step} (exit ${r.code})`);
-  for (const r of unknown) console.log(`  UNKNOWN  ${r.job} :: ${r.step} — ${r.why}`);
-  for (const r of skip) console.log(`  SKIPPED  ${r.job} :: ${r.step} — ${r.why}`);
-  for (const n of pkgNotes) console.log(`  UNCONFIRMED DEPENDENCY  ${n.job} — ${n.note}`);
+  // The summary goes to the terminal AND to summary.txt in the log directory,
+  // so a red run's names survive the scrollback that lost five of them.
+  const report = [];
+  const say = (s) => {
+    report.push(s);
+    console.log(s);
+  };
+  const summaryPath = path.join(LOG_DIR, 'summary.txt');
+  const finish = (code) => {
+    fs.writeFileSync(
+      summaryPath,
+      `scripts/gates — ${path.relative(ROOT, model.file)} in ${ROOT}\n` +
+        `${new Date().toISOString()}  exit ${code}\n` +
+        `${report.join('\n')}\n` +
+        `\nevery gate that ran:\n` +
+        results
+          .filter((r) => r.state === 'PASS' || r.state === 'FAIL')
+          .map((r) => `  ${r.state}  exit ${r.code}  ${r.job} :: ${r.step}  (${path.basename(r.log)})`)
+          .join('\n') +
+        '\n'
+    );
+    console.log(`\nsummary: ${summaryPath}`);
+    return code;
+  };
+
+  say('\n--------------------------------------------------------------');
+  say(`ran ${pass.length + fail.length}  passed ${pass.length}  failed ${fail.length}  skipped ${skip.length}`);
+  for (const r of fail) {
+    say(`  FAIL     ${r.job} :: ${r.step} (exit ${r.code})`);
+    for (const l of describeRed(r)) say(`           ${l}`);
+  }
+  for (const r of unknown) say(`  UNKNOWN  ${r.job} :: ${r.step} — ${r.why}`);
+  for (const r of skip) say(`  SKIPPED  ${r.job} :: ${r.step} — ${r.why}`);
+  for (const n of pkgNotes) say(`  UNCONFIRMED DEPENDENCY  ${n.job} — ${n.note}`);
 
   const traps = derivedTraps(model.insts);
   if (traps.length) {
-    console.log('\nTRAPS:');
-    for (const t of traps) console.log(`  - ${t}`);
+    say('\nTRAPS:');
+    for (const t of traps) say(`  - ${t}`);
   }
 
   // A scoped run must never read as full coverage — that is failure #1 from the
@@ -1136,11 +1368,11 @@ function runGates(model, only, allowPartial) {
       `here, so a gate that self-skips without it passed for the wrong reason.`
     : '';
   const wfWarning = workflowKeyWarning(model);
-  if (wfWarning) console.log(`\n${wfWarning}`);
+  if (wfWarning) say(`\n${wfWarning}`);
 
   if (fail.length) {
-    console.log(`\nGATES FAILED — ${fail.length} of ${pass.length + fail.length} run here went red.${scope}`);
-    return EXIT_RED;
+    say(`\nGATES FAILED — ${fail.length} of ${pass.length + fail.length} run here went red.${scope}`);
+    return finish(EXIT_RED);
   }
 
   // Rule 2 of the header. `scripts/gates && git push` is the real calling
@@ -1155,24 +1387,24 @@ function runGates(model, only, allowPartial) {
       `not read as if it were. Pass --allow-partial to accept that deliberately.`;
 
   if (short) {
-    console.log(
+    say(
       `\nPARTIAL — every gate that CAN run here passed, but ${short} could NOT run.\n` +
         `This is NOT full coverage. For those, pushing and reading the CI run IS the gate.${scope}${debit}` +
         verdict
     );
-    return allowPartial ? EXIT_OK : EXIT_PARTIAL;
+    return finish(allowPartial ? EXIT_OK : EXIT_PARTIAL);
   }
   if (incomplete) {
-    console.log(`\nSELECTED GATES PASSED — all ${pass.length} of them.${scope}${debit}${verdict}`);
-    return allowPartial ? EXIT_OK : EXIT_PARTIAL;
+    say(`\nSELECTED GATES PASSED — all ${pass.length} of them.${scope}${debit}${verdict}`);
+    return finish(allowPartial ? EXIT_OK : EXIT_PARTIAL);
   }
-  console.log('\nALL GATES PASSED (every gate in this workflow ran here).');
-  return EXIT_OK;
+  say('\nALL GATES PASSED (every gate in this workflow ran here).');
+  return finish(EXIT_OK);
 }
 
 // ---------------------------------------------------------------------------
 
-function main(argv) {
+async function main(argv) {
   const args = argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
     // The file's own header block, and only that — the section comments below it
@@ -1221,4 +1453,4 @@ function main(argv) {
   return runGates(model, only, args.includes('--allow-partial'));
 }
 
-process.exit(main(process.argv));
+main(process.argv).then((code) => process.exit(code));

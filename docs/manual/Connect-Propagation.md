@@ -201,7 +201,7 @@ Four feeds are merged into a single spot window before the advisor and opening d
 |---|---|---|
 | PSK Reporter MQTT firehose | `mqtt.pskreporter.info:1883` | Real-time own-call who-hears-me / who-I-hear; 20 000-spot ring buffer |
 | PSK Reporter HTTP | Rate-limited, 300 s nowcast TTL | Historical reception data |
-| DX cluster (human spots) | `ve7cc.net:23` (fallback `dxc.wa9pie.net:8000`) | Exact-frequency human-posted spots including SSB/phone; 200-spot buffer; host configurable |
+| DX cluster (human spots) | `ve7cc.net:23`, `dxc.wa9pie.net:8000`, `dx.w1nr.net:23`, `dxspots.com:7300` | Exact-frequency human-posted spots including SSB/phone; 200-spot buffer; host configurable |
 | RBN CW/digital skimmers | `reversebeacon.net:7000` / `:7001` (auto-wired, not configurable) | Skimmer CW and digital spots |
 
 On VHF bands (6 m / 4 m / 2 m), only cluster spots from skimmers within 250 km of your QTH are admitted. A Florida RBN skimmer hearing a 6 m Es opening does not light up the band ladder for a Wisconsin operator.
@@ -215,7 +215,7 @@ A near-region MQTT feed (10 m / 6 m / 4 m / 2 m per-band global streams, 60 000-
 | Setting | Default |
 |---|---|
 | PSK Reporter | Enabled (requires valid callsign 3–10 chars) |
-| Cluster/RBN | Enabled; cluster host `ve7cc.net:23` (fallback `dxc.wa9pie.net:8000`); RBN CW/digital feeds auto-wired |
+| Cluster/RBN | Enabled; cluster nodes `ve7cc.net:23`, `dxc.wa9pie.net:8000`, `dx.w1nr.net:23`, `dxspots.com:7300`; RBN CW/digital feeds auto-wired |
 | Near-region MQTT feed | Enabled |
 | Propagation nowcast TTL | 300 s (5 min) |
 | Aurora oval cache | 600 s (10 min) |

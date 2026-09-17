@@ -10,6 +10,7 @@ import {
   logChange,
   logChangeCapabilities,
   manualRecord,
+  operationEvent,
   operationId,
   operationRequest,
   operationResponse,
@@ -480,27 +481,7 @@ export class OperationClient {
     }
     if ('stop' in r.value) throw Error('invalidOperation')
     if ('phase' in r.value) {
-      this.heartbeatLeaseId = r.value.phase === 'controlling' ? r.value.leaseId : null
-      // Stop OUTLIVES the lease (operator ruling, 2026-09-15): an unnecessary unkey is a smaller
-      // harm than a keyed rig and a Stop button that reported a refusal. The STATION decides — it
-      // keeps issuing a current `transmitEpoch` to a browser that held station control after its
-      // lease runs out, and stops the moment the grant goes, another browser takes over or the
-      // station reboots. So the token is the whole permission here and the lease id it was first
-      // issued under is simply carried. Nothing this keeps alive can START anything: every command
-      // still requires `phase === 'controlling'` and a live command window.
-      if (r.value.phase === 'controlling' && r.value.leaseId) this.stopLeaseId = r.value.leaseId
-      this.stopTarget = this.operationVersion >= 4 && this.stopLeaseId && r.value.transmitEpoch
-        ? { stationBootId: r.value.stationBootId, leaseId: this.stopLeaseId, transmitEpoch: r.value.transmitEpoch } : null
-      this.stateUntil = p.started + Math.min(1200, r.value.leaseRemainingMs ?? 1200)
-      this.leaseUntil = r.value.phase === 'controlling' && r.value.leaseRemainingMs != null ? p.started + r.value.leaseRemainingMs : 0
-      this.update({
-        supported: true,
-        busy: false,
-        submitting: false,
-        state: r.value,
-        fresh: this.now() < this.stateUntil,
-        error: null
-      })
+      if (!this.installState(r.value, p.started)) this.update({ busy: false, submitting: false, error: null })
     } else if ('operation' in r.value && r.value.operation === 'logChange') {
       // A change has no editable copy to keep, so only an unknown outcome holds the receipt.
       this.update({
@@ -517,6 +498,17 @@ export class OperationClient {
       // An export reply returned above, so what reaches here is a station control outcome.
       const result = r.value as ControlOutcome
       if (p.request.type === 'logManual') throw Error('invalidOperation')
+      // Operation v5: the station's event can outrun this reply - the outcome it carried has
+      // settled this very control and the state it carried is already installed and fresh. This
+      // reply is then the OLDER word on both: it neither spends that state nor demotes the
+      // outcome to the `pending` it was built with.
+      const settledByEvent = p.request.type === 'stationControl' && this.view.controlResult?.operationId === result.operationId &&
+        this.view.controlResult.outcome !== 'pending'
+      if (settledByEvent) {
+        this.update({ busy: false, submitting: false, error: null })
+        p.resolve(this.view.controlResult!)
+        return
+      }
       const terminal = result.outcome === 'applied' || result.outcome === 'rejected'
       let cleared = false
       if (terminal) {
@@ -525,11 +517,28 @@ export class OperationClient {
       }
       const refreshing = result.outcome === 'applied' && (p.request.type === 'stationControl' || !this.view.state)
       if (refreshing) this.controlRefreshUntil = this.now() + 1200
+      // A command CONSUMES its window: the station clears every command window when it answers a
+      // control, so the held state's window, revision and sequence are spent. The state itself is
+      // kept — it still says this browser is controlling, so every held control stays lit while the
+      // re-read confirms (operator ruling 2026-09-16; nulling it greyed them all out for a second
+      // after every click). What refuses a second command from the spent window is `stateUntil`:
+      // zeroed here, so `fresh` is false and the 250 ms tick cannot revive it, and every command
+      // path checks that before anything leaves. A command made now is a lapse (`lapsed()`): it
+      // waits for the re-read's state and is sent once on that new window, or refused as not sent.
+      if (p.request.type === 'stationControl') this.stateUntil = 0
       this.update({ busy: false, submitting: false, controlResult: result, controlError: null,
         controlRefreshing: refreshing,
         ...(cleared ? { controlPending: null } : {}),
-        ...(p.request.type === 'stationControl' ? { state: null, fresh: false } : {}), error: null })
-      if (p.request.type === 'stationControl') this.polledAt = -Infinity
+        ...(p.request.type === 'stationControl' ? { fresh: false } : {}), error: null })
+      if (p.request.type === 'stationControl') {
+        // Operation v5: the station pushes the outcome AND the fresh state the moment the control
+        // settles (`receiveEvent`), so neither the immediate state re-read nor the result poll is
+        // started here. Both stay as the fallback, one second on: `controlPolledAt` makes the tick
+        // ask for the result then, and the heartbeat re-reads the state on its own cadence, so a
+        // lost event costs the old cadence and never the outcome. Below v5 the poll starts at once.
+        if (this.operationVersion >= 5) this.controlPolledAt = this.now()
+        else this.polledAt = -Infinity
+      }
     } else {
       if (p.request.type === 'stationControl' || p.request.type === 'logChange') throw Error('invalidOperation')
       this.finished = r.value
@@ -550,6 +559,61 @@ export class OperationClient {
       this.polledAt = -Infinity
     }
     p.resolve(r.value)
+  }
+  /** A state from the station: a reply's, or (operation v5) the one an event carries. One rule
+   * keeps the two lanes from ever disagreeing on this page - the station's revision only grows,
+   * so a state arriving with a LOWER revision than the one held for the same boot was computed
+   * earlier, whichever lane brought it, and is discarded; equal or higher is installed. Nothing
+   * here is the browser's own word: both are the station's, and this only keeps the newer. Returns
+   * whether it installed. `started` is when the state was asked for (a reply) or arrived (an event):
+   * freshness is measured from there. */
+  private installState(value: OperationState, started: number): boolean {
+    const held = this.view.state
+    if (held && held.stationBootId === value.stationBootId && value.revision < held.revision) return false
+    this.heartbeatLeaseId = value.phase === 'controlling' ? value.leaseId : null
+    // Stop OUTLIVES the lease (operator ruling, 2026-09-15): an unnecessary unkey is a smaller
+    // harm than a keyed rig and a Stop button that reported a refusal. The STATION decides — it
+    // keeps issuing a current `transmitEpoch` to a browser that held station control after its
+    // lease runs out, and stops the moment the grant goes, another browser takes over or the
+    // station reboots. So the token is the whole permission here and the lease id it was first
+    // issued under is simply carried. Nothing this keeps alive can START anything: every command
+    // still requires `phase === 'controlling'` and a live command window.
+    if (value.phase === 'controlling' && value.leaseId) this.stopLeaseId = value.leaseId
+    this.stopTarget = this.operationVersion >= 4 && this.stopLeaseId && value.transmitEpoch
+      ? { stationBootId: value.stationBootId, leaseId: this.stopLeaseId, transmitEpoch: value.transmitEpoch } : null
+    this.stateUntil = started + Math.min(1200, value.leaseRemainingMs ?? 1200)
+    this.leaseUntil = value.phase === 'controlling' && value.leaseRemainingMs != null ? started + value.leaseRemainingMs : 0
+    this.update({
+      supported: true,
+      busy: false,
+      submitting: false,
+      state: value,
+      fresh: this.now() < this.stateUntil,
+      error: null
+    })
+    return true
+  }
+  /** Operation v5. The station's unprompted word that a control settled: its outcome, applied
+   * exactly as a `result` reply for the pending control would be, and the state a `state` read
+   * would return now, installed as fresh from this moment. That is the whole lag: the browser no
+   * longer discovers either by asking. Never load-bearing - a lost event leaves the tick's own
+   * result poll and heartbeat to bring the same two things a second later. */
+  receiveEvent(raw: unknown, bytes = 0) {
+    if (bytes > OPERATION_RESPONSE_BYTES) throw Error('invalidOperation')
+    const e = operationEvent(raw)
+    // This page never asked at v5, so no station could have pushed for it: a protocol error.
+    if (this.operationVersion < 5) throw Error('invalidOperation')
+    if (!this.view.connected) return
+    if (this.view.controlPending?.operationId === e.operationId) {
+      // Terminal clears the receipt as a `result` reply does; an UNKNOWN outcome keeps it, for
+      // the operator to acknowledge after checking the station.
+      let cleared = false
+      if (e.value.outcome === 'applied' || e.value.outcome === 'rejected') {
+        try { this.controlStorage?.write(null); cleared = true } catch {}
+      }
+      this.update({ controlResult: e.value, controlError: null, ...(cleared ? { controlPending: null } : {}) })
+    }
+    this.installState(e.state, this.now())
   }
   async acquire() {
     const s = this.view.state
@@ -572,9 +636,13 @@ export class OperationClient {
     } catch {}
   }
   /** Control held (connected, the latest state shows this browser controlling) but past its freshness
-   * window: the brief lapse a command may wait out. Anything else keeps its own refusal. */
+   * window: the brief lapse a command may wait out. A command still confirming (its window spent,
+   * the re-read pending) is one; a command whose outcome is UNKNOWN is not — the state is held
+   * through that too now, and waiting out the window would only delay the operationUnknown refusal
+   * the operator needs at once. Anything else keeps its own refusal. */
   private lapsed(): boolean {
-    return !this.view.fresh && this.view.connected && this.view.state?.phase === 'controlling'
+    return !this.view.fresh && this.view.connected && this.view.state?.phase === 'controlling' &&
+      !this.view.controlPending && !this.view.unresolved
   }
   /** A gesture committed during a brief control lapse is sent only once control is current again.
    * Resolves at once while current. Otherwise waits, at most CONTROL_RESUME_MS, for a later state
