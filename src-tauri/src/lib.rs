@@ -13977,8 +13977,10 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
         .collect()
 }
 
-/// The log commands below take the ROW the UI showed, keyed exactly as a Remote browser keys
-/// it (call + time + a SHA-256 of the row), and never a position. They used to take
+/// The log commands below take the ROW the UI showed (`target`, as `get_log` handed it out),
+/// and never a position. The station keys that row exactly as a Remote browser keys its page
+/// row (call + time + a SHA-256 of the row) and finds the record whose own key matches — see
+/// `remote_service::operations::logging::{seen_target, locate}`. They used to take
 /// `index: usize` under the premise "indices shift after a delete — the UI reloads the log",
 /// which held while the desktop was the log's only writer. Remote made it a second writer:
 /// a browser's delete removed a row and shifted every later one, and the shack's next Delete
@@ -13986,7 +13988,10 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
 /// with another contact's fields and its confirmations stripped as a "callsign correction" —
 /// under a toast naming the row the operator meant. The key finds the row where it is today,
 /// or refuses when no row holds that content any more.
-type LogTarget = remote_service::operations::logging::Target;
+fn locate_seen(eng: &mut Engine, seen: &LoggedQso) -> Result<usize, String> {
+    use remote_service::operations::logging::{locate, seen_target};
+    locate(eng, &seen_target(seen)).ok_or_else(|| LOG_ROW_GONE.into())
+}
 
 /// The refusal every log command gives for a row it cannot find: the log changed under the
 /// view (a Remote delete, an edit, a connector stamp) and the operator must look again.
@@ -14008,12 +14013,11 @@ fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
 #[tauri::command(async)]
 fn edit_qso(
     state: State<'_, SharedEngine>,
-    target: LogTarget,
+    target: LoggedQso,
     record: LoggedQso,
 ) -> Result<LoggedQso, String> {
     let mut eng = engine_lock(&state);
-    let index =
-        remote_service::operations::logging::locate(&mut eng, &target).ok_or(LOG_ROW_GONE)?;
+    let index = locate_seen(&mut eng, &target)?;
     if !eng.update_qso(index, record.into()) {
         return Err(LOG_ROW_GONE.into());
     }
@@ -14066,13 +14070,12 @@ fn qsl_via_arg(via: Option<&str>) -> Result<Option<tempo_core::logbook::QslVia>,
 #[tauri::command(async)]
 fn mark_qsl_sent(
     state: State<'_, SharedEngine>,
-    target: LogTarget,
+    target: LoggedQso,
     via: Option<String>,
 ) -> Result<LoggedQso, String> {
     let via = qsl_via_arg(via.as_deref())?;
     let mut eng = engine_lock(&state);
-    let index =
-        remote_service::operations::logging::locate(&mut eng, &target).ok_or(LOG_ROW_GONE)?;
+    let index = locate_seen(&mut eng, &target)?;
     if !eng.mark_qsl_sent(index, via) {
         return Err(LOG_ROW_GONE.into());
     }
@@ -14089,12 +14092,11 @@ fn mark_qsl_sent(
 #[tauri::command(async)]
 fn mark_qsl_card(
     state: State<'_, SharedEngine>,
-    target: LogTarget,
+    target: LoggedQso,
     received: bool,
 ) -> Result<LoggedQso, String> {
     let mut eng = engine_lock(&state);
-    let index =
-        remote_service::operations::logging::locate(&mut eng, &target).ok_or(LOG_ROW_GONE)?;
+    let index = locate_seen(&mut eng, &target)?;
     if !eng.mark_qsl_card(index, received) {
         return Err(LOG_ROW_GONE.into());
     }
@@ -14103,10 +14105,9 @@ fn mark_qsl_card(
 
 /// Delete the logged contact `target`. Returns the refreshed snapshot.
 #[tauri::command(async)]
-fn delete_qso(state: State<'_, SharedEngine>, target: LogTarget) -> Result<AppSnapshot, String> {
+fn delete_qso(state: State<'_, SharedEngine>, target: LoggedQso) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    let index =
-        remote_service::operations::logging::locate(&mut eng, &target).ok_or(LOG_ROW_GONE)?;
+    let index = locate_seen(&mut eng, &target)?;
     if !eng.delete_qso(index) {
         return Err(LOG_ROW_GONE.into());
     }

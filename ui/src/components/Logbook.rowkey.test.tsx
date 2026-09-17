@@ -4,14 +4,14 @@
 // address a row by its position at load time, and loaded once; a browser's delete removed a
 // row and shifted every later one, and the shack's next Delete or Edit went to a DIFFERENT
 // contact under a toast naming the one the operator meant. Three things this pins: a row is
-// addressed by its key, the edit form stays on the row it opened with while the list changes
-// under it, and the list reloads when the engine says the log changed.
+// addressed by the row itself (the station keys it), the edit form stays on the row it opened
+// with while the list changes under it, and the list reloads when the engine says the log
+// changed.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, cleanup, act } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import { ConfirmHost } from '../confirm'
 import * as api from '../api'
-import { logTarget } from '../remote-web/operation-protocol'
 import { t } from '../i18n'
 
 beforeAll(() => {
@@ -71,13 +71,13 @@ afterEach(() => {
   localStorage.clear()
 })
 
-describe('the shack addresses a contact by its key, never its position', () => {
-  it('deletes by the key of the row the operator confirmed', async () => {
+describe('the shack addresses a contact by the row it saw, never its position', () => {
+  it('deletes the row the operator confirmed', async () => {
     const { container, findByRole } = await renderLog(three())
     fireEvent.click(container.querySelector('button[aria-label="Delete K1ABC"]') as HTMLButtonElement)
     fireEvent.click(await findByRole('button', { name: t('logbook.delete.confirm') }))
     await waitFor(() => expect(api.deleteQso).toHaveBeenCalled())
-    expect(api.deleteQso).toHaveBeenCalledWith(await logTarget(three()[1]))
+    expect(api.deleteQso).toHaveBeenCalledWith(three()[1])
   })
 
   it('edits the row the form opened with, after a delete above it has shifted the list', async () => {
@@ -100,7 +100,7 @@ describe('the shack addresses a contact by its key, never its position', () => {
     fireEvent.click(container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement)
     await waitFor(() => expect(api.editQso).toHaveBeenCalled())
     const [target, record] = (api.editQso as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(target).toEqual(await logTarget(three()[1]))
+    expect(target).toEqual(three()[1])
     expect(record.call).toBe('K1ABC')
   })
 })

@@ -797,9 +797,8 @@ export function Logbook({
       }
       return
     }
-    // By the key of the row on screen, never its position: see `deleteQso` in api.ts.
-    const target = await logTarget(q)
-    const row = await withErrorToast(() => markQslSent(target, via), t('logbook.qsl.markFailed'))
+    // The row on screen, never its position: see `deleteQso` in api.ts.
+    const row = await withErrorToast(() => markQslSent(q, via), t('logbook.qsl.markFailed'))
     if (row) {
       // Two literal keys, not one interpolated one — same reason as onMarkQslCard below.
       pushToast(
@@ -822,9 +821,8 @@ export function Logbook({
       }
       return
     }
-    const target = await logTarget(q)
     const row = await withErrorToast(
-      () => markQslCard(target, received),
+      () => markQslCard(q, received),
       t('logbook.qsl.markFailed'),
     )
     if (row) {
@@ -864,8 +862,7 @@ export function Logbook({
       }
       return
     }
-    const target = await logTarget(q)
-    const snap = await withErrorToast(() => deleteQso(target), t('logbook.delete.failed'))
+    const snap = await withErrorToast(() => deleteQso(q), t('logbook.delete.failed'))
     if (snap) {
       pushToast(t('logbook.delete.done', { call: q.call }), 'success')
       if (editIndex === i) cancelForm()
@@ -1086,22 +1083,21 @@ export function Logbook({
       myRig: draft.myRig.trim() || null,
     }
     if (existing) {
-      const target = await logTarget(existing)
-      let row = await withErrorToast(() => editQso(target, record), t('logbook.form.saveFailed'))
+      let row = await withErrorToast(() => editQso(existing, record), t('logbook.form.saveFailed'))
       if (row) {
         // #239: QSL sent / card received from the form — only what changed, through the row
         // menu's own commands, once the record itself has saved. Each command returns the row
-        // it wrote, and the next is keyed by THAT: every write changes the row's key.
+        // it wrote, and the next targets THAT: every write changes the row.
         const origVia = existing.qslSent?.sent ? (existing.qslSent.via ?? 'SENT') : ''
         if (draft.qslSentVia !== origVia && draft.qslSentVia !== 'SENT') {
           const via = draft.qslSentVia ? (draft.qslSentVia as 'B' | 'D' | 'E') : null
-          const sent = await logTarget(row)
-          row = (await withErrorToast(() => markQslSent(sent, via), t('logbook.qsl.markFailed'))) ?? row
+          const before = row
+          row = (await withErrorToast(() => markQslSent(before, via), t('logbook.qsl.markFailed'))) ?? row
         }
         if ((draft.qslCard === '1') !== !!existing.qslRcvd?.card) {
           const received = draft.qslCard === '1'
-          const card = await logTarget(row)
-          await withErrorToast(() => markQslCard(card, received), t('logbook.qsl.markFailed'))
+          const before = row
+          await withErrorToast(() => markQslCard(before, received), t('logbook.qsl.markFailed'))
         }
         pushToast(t('logbook.form.updated', { call: record.call }), 'success')
         cancelForm()

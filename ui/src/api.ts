@@ -7,7 +7,6 @@
 import type { RemoteStationAction, RemoteStationStatus } from './remote-native/types'
 import { remoteApplicationTransport } from './applicationTransport'
 import { t } from './i18n'
-import type { LogTarget } from './remote-web/operation-protocol'
 import type { SelfSpotReport } from './selfSpot'
 import type {
   AppSnapshot,
@@ -891,14 +890,15 @@ export async function resolveEntity(call: string): Promise<string | null> {
   return invoke<string | null>('resolve_entity', { call })
 }
 
-/** Edit a logged contact (a correction). `target` is the key of the row as `getLog()` showed
- *  it (`logTarget(row)`) — never a position: a Remote browser is a second writer, and its
- *  delete shifts every later row, so a position kept from an earlier load names a different
- *  contact. The backend finds the row by key today or refuses, telling the operator to reload.
- *  Confirmation/credit/upload state is preserved server-side. Returns the row as stored,
- *  which is the key any follow-up (a QSL mark from the same form) must use: the edit changed
- *  the row, so it changed the key. */
-export async function editQso(target: LogTarget, record: LoggedQso): Promise<LoggedQso> {
+/** Edit a logged contact (a correction). `target` is the row as `getLog()` showed it — never a
+ *  position: a Remote browser is a second writer, and its delete shifts every later row, so a
+ *  position kept from an earlier load names a different contact. The backend keys the row it
+ *  was shown (the same SHA-256 a Remote browser keys its page rows with), finds the record whose
+ *  own key matches, or refuses, telling the operator to reload. Nothing is hashed here.
+ *  Confirmation/credit/upload state is preserved server-side. Returns the row as stored, which
+ *  is the target any follow-up (a QSL mark from the same form) must use: the edit changed the
+ *  row. */
+export async function editQso(target: LoggedQso, record: LoggedQso): Promise<LoggedQso> {
   return invoke<LoggedQso>('edit_qso', { target, record })
 }
 
@@ -909,9 +909,9 @@ export async function editQso(target: LogTarget, record: LoggedQso): Promise<Log
  *  `via: null` CLEARS the mark instead (#180): the operator mis-clicked and nothing was
  *  ever sent. Sending is once-only, so without a clear the three send entries vanish with
  *  nothing to put the row back. Mirrors `markQslCard(target, false)` on the inbound side.
- *  Returns the row as stored (see `editQso` for the key). */
+ *  Returns the row as stored (see `editQso`). */
 export async function markQslSent(
-  target: LogTarget,
+  target: LoggedQso,
   via: 'B' | 'D' | 'E' | null,
 ): Promise<LoggedQso> {
   return invoke<LoggedQso>('mark_qsl_sent', { target, via })
@@ -920,13 +920,13 @@ export async function markQslSent(
 /** Record whether a PAPER QSL card arrived for the contact `target` (#152). The operator is
  *  the only authority — LoTW/eQSL/QRZ report their own confirmations, but nothing knows a card
  *  landed. Award-eligible, so this moves the awards view. Clearable, for a mis-tick.
- *  Returns the row as stored (see `editQso` for the key). */
-export async function markQslCard(target: LogTarget, received: boolean): Promise<LoggedQso> {
+ *  Returns the row as stored (see `editQso`). */
+export async function markQslCard(target: LoggedQso, received: boolean): Promise<LoggedQso> {
   return invoke<LoggedQso>('mark_qsl_card', { target, received })
 }
 
-/** Delete the contact `target` (the key of the row as `getLog()` showed it — see `editQso`). */
-export async function deleteQso(target: LogTarget): Promise<AppSnapshot> {
+/** Delete the contact `target` (the row as `getLog()` showed it — see `editQso`). */
+export async function deleteQso(target: LoggedQso): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('delete_qso', { target })
 }
 

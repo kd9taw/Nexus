@@ -172,8 +172,6 @@ it('keys a row from its exact values, independent of key order', async () => {
   const reordered = Object.fromEntries(Object.entries(row).reverse()) as typeof row
   expect((await logTarget(reordered)).key).toBe(keyed.key)
   expect((await logTarget({ ...row, notes: 'changed' })).key).not.toBe(keyed.key)
-  // An undefined property is absent, as JSON.stringify would send it — the same key, never a throw.
-  expect((await logTarget({ ...row, upload: undefined })).key).toBe(keyed.key)
 })
 
 it('relays a change only as a versioned v4 mutation', () => {

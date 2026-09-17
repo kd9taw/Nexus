@@ -9,7 +9,6 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, screen, cleanup, within } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
-import { logTarget } from '../remote-web/operation-protocol'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -109,12 +108,12 @@ describe('QSL status is editable in the edit form (#239)', () => {
     fireEvent.click(within(form).getByLabelText('Card received'))
     fireEvent.click(within(form).getByRole('button', { name: /save/i }))
 
-    // Each write is keyed by the row the PREVIOUS write returned: the edit changed the row,
-    // so the key the form opened with no longer names it; likewise after the sent mark.
+    // Each write targets the row the PREVIOUS write returned: the edit changed the row, so
+    // the row the form opened with no longer names it; likewise after the sent mark.
     await waitFor(() => expect(api.markQslCard).toHaveBeenCalled())
-    expect(api.editQso).toHaveBeenCalledWith(await logTarget(oneContact()[0]), expect.anything())
-    expect(api.markQslSent).toHaveBeenCalledWith(await logTarget(written.edited), 'D')
-    expect(api.markQslCard).toHaveBeenCalledWith(await logTarget(written.sent), true)
+    expect(api.editQso).toHaveBeenCalledWith(oneContact()[0], expect.anything())
+    expect(api.markQslSent).toHaveBeenCalledWith(written.edited, 'D')
+    expect(api.markQslCard).toHaveBeenCalledWith(written.sent, true)
   })
 
   it('touches neither when the QSL fields were left alone', async () => {

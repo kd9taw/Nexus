@@ -1289,12 +1289,12 @@ fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
         "<CALL:5>N2XYZ<BAND:3>15m<MODE:3>SSB<FREQ:6>21.300<QSO_DATE:8>20260909<TIME_ON:6>030000<EOR>\n",
     );
     acquire(&f);
-    // The shack loaded its list: K1ABC sits at position 1, and the view keeps that row's key.
-    let held: Vec<Value> = page_rows(&f);
-    assert_eq!(held[1]["call"], "K1ABC");
+    // The shack loaded its list: K1ABC sits at position 1, and the view keeps that ROW — it is
+    // what the desktop commands hand back as their target, and the station keys it.
     let stale_position = 1;
-    let held_target: super::super::logging::Target =
-        serde_json::from_value(target(&held[1])).unwrap();
+    let held_row = crate::log_row(&f.engine.lock().unwrap(), stale_position).unwrap();
+    assert_eq!(held_row.call, "K1ABC");
+    let held_target = super::super::logging::seen_target(&held_row);
 
     // The browser deletes the row ABOVE it.
     let result = run(
@@ -1444,4 +1444,50 @@ fn a_duplicate_call_and_time_pair_has_two_keys_and_each_finds_its_own_row() {
     assert_eq!(e.log_records()[0].band, "20m");
     assert_eq!(super::super::logging::locate(&mut e, &first), Some(0));
     assert_eq!(super::super::logging::locate(&mut e, &second), None);
+}
+
+/// The desktop hands a row back exactly as `get_log` gave it, and the station keys that echo.
+/// The key it derives must be the key it holds for the record — the same bytes a Remote page
+/// row keys to — or every shack action would be refused as stale. Pins the JSON round trip
+/// (`LoggedQso` → wire → `LoggedQso`) as key-preserving, so a serde attribute that drops or
+/// defaults a field on one side cannot creep in unnoticed.
+#[test]
+fn the_shacks_echoed_row_keys_to_the_stations_own_key() {
+    let f = Fixture::new();
+    seed(&f);
+    f.engine.lock().unwrap().import_adif(
+        "<CALL:6>DL1ABC<BAND:3>20m<MODE:3>SSB<FREQ:6>14.250<QSO_DATE:8>20260909<TIME_ON:6>040000\
+         <SIG:4>WWFF<SIG_INFO:9>DLFF-0001<NAME:9>José 日本<COMMENT:4>a\"b}<EOR>\n",
+    );
+    // The records and the rows handed out for them, read under one lock; the page read below
+    // takes the lock again.
+    let handed_out: Vec<(tempo_core::logbook::QsoRecord, tempo_app::dto::LoggedQso)> = {
+        let e = f.engine.lock().unwrap();
+        assert_eq!(e.log_records().len(), 3);
+        (0..3)
+            .map(|index| {
+                (
+                    e.log_records()[index].clone(),
+                    crate::log_row(&e, index).unwrap(),
+                )
+            })
+            .collect()
+    };
+    for (record, handed_out) in handed_out {
+        // Over the wire and back, as Tauri's IPC carries it.
+        let echoed: tempo_app::dto::LoggedQso =
+            serde_json::from_value(serde_json::to_value(&handed_out).unwrap()).unwrap();
+        let target = serde_json::to_value(super::super::logging::seen_target(&echoed)).unwrap();
+        assert_eq!(
+            target["key"],
+            super::super::logging::row_key(&record),
+            "{}",
+            record.call
+        );
+        // And it is the key the browser's page row carries for the same record.
+        assert_eq!(
+            target["key"],
+            super::super::logging::value_key(&row(&f, &record.call))
+        );
+    }
 }
