@@ -26,11 +26,13 @@ type Burst = WheelSource & {
    * not: nothing else knows where the radio is. */
   queued?: boolean
 }
-/** How long a value the operator can see may stand before the station's own reading has shown it.
- * Past this the digits go back to the station's dial and the operator is told — an unconfirmed one
- * as "not confirmed", so a provisional value is never left standing. A CONFIRMED one is dropped on
- * the same clock and silently: the station's sample (500 ms) has long carried it by then, so the
- * digits do not move. */
+/** THE BACKSTOP on how long a value the operator can see may stand without the station's own
+ * reading having shown it. An answer reverts it first — a rejected or unknown outcome puts the
+ * digits back at once, said by that failure — so what this clock catches is the case with no answer
+ * at all: a lost command, a station gone quiet. Then the digits go back to the station's dial and
+ * the operator is told it was not confirmed, because a provisional value is never left standing.
+ * A CONFIRMED one is dropped on the same clock and silently: the station's sample (500 ms) has long
+ * carried it by then, so the digits do not move. */
 const PROVISIONAL_MS = 2500
 /** The wheel's coalescing window, and with it the floor on how often a burst may put a CAT write on
  * the rig's port. Pipelining must not lift that floor: on a link whose round trip is shorter than
@@ -302,7 +304,11 @@ export class WheelTuning {
       this.confirmed = { hz: b.targetHz, at: performance.now() }
       if (this.provisional?.hz === b.targetHz) this.show(b.targetHz, true)
     } catch (error) {
-      if (generation === this.generation) this.confirmed = null
+      // REJECTED, UNKNOWN, OR REFUSED BEFORE IT LEFT: the digits go back to the station's dial NOW,
+      // not at the PROVISIONAL_MS deadline. Standing for another two seconds would show a dial the
+      // station has just said the radio is not on, and would say so twice — the failure below is
+      // the one message this gesture gets.
+      if (generation === this.generation) { this.confirmed = null; this.revert() }
       if (this.live && generation === this.generation)
         this.failed(error instanceof OperationFailure ? error : new OperationFailure(error instanceof Error ? error.message : 'operationUnconfirmed', submitted))
     }

@@ -183,6 +183,23 @@ describe('a provisional value is never left standing', () => {
     expect(station.failures, 'and said so').toEqual(['operationUnconfirmed'])
   })
 
+  it('goes back at once when the station rejects it, rather than standing out the deadline', async () => {
+    // The station answers, and the answer is not a readback. There is nothing to wait for: the
+    // digits must not keep showing a dial the station has just said the radio is not on.
+    const station = scriptedStation(100, 5, { eventOutcome: 'unknown' })
+    open.push(station)
+    await vi.advanceTimersByTimeAsync(1600)
+    await warm(station)
+    const context = station.operations.getSnapshot().state!.controls!.context
+    station.tuning.nudge(1000, { dialMhz: station.radio.dialMhz, sideband: 'USB', context })
+    expect(station.tuning.getProvisionalHz()).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(600)
+    expect(station.tuning.getProvisionalHz(), 'reverted on the answer, not on the clock').toBeNull()
+    expect(station.failures, 'and said once, not twice').toEqual(['operationUnconfirmed'])
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(station.failures).toEqual(['operationUnconfirmed'])
+  })
+
   it('a confirmed one goes quietly — the station\'s own reading carries the same number by then', async () => {
     const station = scriptedStation(100, 5)
     open.push(station)
