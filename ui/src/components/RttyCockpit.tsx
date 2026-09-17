@@ -42,6 +42,7 @@ import {
   setTune,
 } from '../api'
 import { bandLabelForMhz } from '../band'
+import { contestDomain } from '../features/contestDomains'
 import { grabAt } from '../features/rttyGrab'
 import {
   expandRttyMacro,
@@ -181,6 +182,19 @@ function seqLabel(s: string): string {
 }
 
 /**
+ * Does the build KNOW this value to be a member of that domain? The grab's enum test.
+ *
+ * ⚠️ Deliberately NOT `inDomain`, which the entry strip uses and which answers TRUE for a
+ * domain it carries no values for. That is the honest while-typing verdict — an absent value
+ * set is no evidence the operator typed something wrong — and it is the wrong polarity for a
+ * grab, where it would file the first word double-clicked, a CALLSIGN, as the exchange. A grab
+ * fills only what can be recognised; everything else stays the operator's to type.
+ */
+function knownCode(domain: string | undefined, value: string): boolean {
+  return contestDomain(domain)?.codes.has(value.trim().toUpperCase()) ?? false
+}
+
+/**
  * RTTY operating cockpit (Digital rail: FT · Tempo · RTTY · SSTV) — live RX
  * (arm the decoder; the tempo_core::rtty demod prints with per-character
  * confidence fading + the acquire-then-freeze AFC readout) and operator-keyed
@@ -276,9 +290,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const heardCq = rtty?.heardCq ?? null
   const toggleAuto = () => {
     if (!control) return
-    void rttySetAuto(!auto)
-      .then(setRtty)
-      .catch(() => pushToast(t('rtty.auto.failed'), 'error'))
+    // `withErrorToast`, not a bare catch: the engine REFUSES to arm in any contest but the two
+    // Field Day events, and it refuses with a sentence that says what to do instead (send the
+    // exchange with the macros, log each contact yourself). A catch that toasted only this
+    // file's fallback would leave the operator a button that does nothing and no reason why.
+    void withErrorToast(() => rttySetAuto(!auto), t('rtty.auto.failed')).then((s) => {
+      if (s) setRtty(s)
+    })
   }
   const autoCq = () => {
     if (!control) return
@@ -354,17 +372,30 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     setSettledHisCall(call)
   }
 
-  // THE GRAB — double-click a callsign in Decoded text. The offset is resolved at EVENT time
-  // against the text on screen at that instant (the ring is front-trimmed and re-rendered twice
-  // a second, so a stored offset is a different character by the next poll) and the word is
-  // derived from that string (`features/rttyGrab.ts`). Anything that is not a call is a no-op
-  // with no toast. A Remote observer's Call box is disabled, and so is this.
+  // THE GRAB — double-click a callsign in Decoded text, or (in a contest) a value of the
+  // exchange. The offset is resolved at EVENT time against the text on screen at that instant
+  // (the ring is front-trimmed and re-rendered twice a second, so a stored offset is a
+  // different character by the next poll) and the word is derived from that string
+  // (`features/rttyGrab.ts`). Anything the classifier does not recognise is a no-op with no
+  // toast. A Remote observer's Call box is disabled, and so is this.
+  //
+  // WHAT THE EXCHANGE LOOKS LIKE IS THE SESSION'S TO SAY, never this file's: the slots come off
+  // `snap.fieldDay.receives`, so a zone's bounds and a QTH's legal values are the running
+  // ruleset's own. A filled value reaches the strip through `fillExchange` — contest-rules' fill
+  // API — which refills one box on every new `ts`; `fillSeq` keeps that stamp strictly rising
+  // because two grabs CAN share a millisecond and the second must not read as "no change".
   //
   // ⚠️ THE CARET GOES BACK WHERE IT WAS. A press on plain text takes focus out of the field the
   // operator was typing in; with continuous TX latched that field is the compose bar, the only
   // one that feeds the air, and a grab that left it there would silently stop the transmission
   // taking their typing. So the element focused at the FIRST press of the double-click
   // (`detail` 1 — by the second press the browser has already moved focus) is focused again.
+  const [fillExchange, setFillExchange] = useState<{
+    key: string
+    value: string
+    ts: number
+  } | null>(null)
+  const fillSeq = useRef(0)
   const grabFocus = useRef<Element | null>(null)
   const onStreamMouseDown = (e: React.MouseEvent) => {
     if (e.detail <= 1) grabFocus.current = document.activeElement
@@ -373,10 +404,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     if (!control || !text_rx) return
     const box = e.currentTarget
     const offset = caretOffsetIn(box, e.clientX, e.clientY)
-    const hit = offset == null ? null : grabAt(box.textContent ?? '', offset)
-    // Contest exchange grabs (zone, QTH) are classified already and wired with the contest strip.
-    if (hit?.kind !== 'call') return
-    setCallNow(hit.value)
+    const hit =
+      offset == null
+        ? null
+        : grabAt(box.textContent ?? '', offset, {
+            slots: snapRef.current?.fieldDay?.receives,
+            knownCode,
+          })
+    if (!hit) return
+    if (hit.kind === 'call') setCallNow(hit.value)
+    else {
+      fillSeq.current = Math.max(Date.now(), fillSeq.current + 1)
+      setFillExchange({ key: hit.slot, value: hit.value, ts: fillSeq.current })
+    }
     const prior = grabFocus.current
     if (prior instanceof HTMLElement && prior !== document.body && prior.isConnected) {
       prior.focus({ preventScroll: true })
@@ -399,10 +439,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const send = (line: string, macro = false) => {
     if (!control) return
     if (!line.trim()) return
+    // {EXCH} IS THE RUNNING CONTEST'S SENT EXCHANGE, off the session itself — never Field Day's
+    // two Settings fields, which is what the CW expander read and which keyed last June's class
+    // and section at every station in a QSO party. The field is on every snapshot and EMPTY
+    // outside a contest, so an empty one is "there is none": refused like a missing {CALL},
+    // rather than sent as a message with a hole where the exchange goes.
+    const exch = snapRef.current?.fieldDay?.sentExchange?.trim()
     const expanded = expandRttyMacro(line, {
       mycall: snapRef.current?.mycall ?? '',
       call: hisCall,
-      exch: null,
+      exch: exch ? exch : null,
     })
     if ('unknown' in expanded) {
       pushToast(t('rtty.send.unknownToken', { token: expanded.unknown }), 'info', 3500)
@@ -962,6 +1008,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 : null
             }
             onCallChange={setCallNow}
+            // The grab's exchange half: one box, refilled on every new `ts`. See the grab.
+            fillExchange={fillExchange}
             fieldDay={snap.fieldDay ?? null}
             fdMode="DIG"
             fdSubmode={RTTY}

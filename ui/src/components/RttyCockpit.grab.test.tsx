@@ -14,7 +14,7 @@
 // mapping is what is exercised, not a shortcut around it. Which character is under a pixel is
 // the Windows tester build's to check.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { RttyCockpit } from './RttyCockpit'
 import { StationControlContext } from '../stationAccess'
 import * as toast from '../toast'
@@ -49,6 +49,7 @@ const state: { current: RttyState } = {
 }
 
 const logQso = vi.fn(async (rec: LoggedQso) => rec)
+const contestLog = vi.fn(async (..._a: unknown[]) => ({}))
 
 vi.mock('../api', () => ({
   getRttyState: vi.fn(async () => state.current),
@@ -71,7 +72,9 @@ vi.mock('../api', () => ({
   atuTune: vi.fn(async () => ({})),
   haltTx: vi.fn(async () => ({})),
   logQso: (rec: LoggedQso) => logQso(rec),
-  contestLogManual: vi.fn(async () => ({})),
+  contestLogManual: (...a: unknown[]) => contestLog(...a),
+  contestZoneHint: vi.fn(async () => null),
+  contestIMoved: vi.fn(async () => ({})),
   getLog: vi.fn(async () => [] as LoggedQso[]),
   qrzLookup: vi.fn(async () => null),
   resolveEntity: vi.fn(async () => null),
@@ -159,13 +162,17 @@ async function doubleClick() {
   })
 }
 
+const BASE_STATE = state.current
+
 beforeEach(() => {
   logQso.mockClear()
+  contestLog.mockClear()
   pushToast.mockClear()
 })
 afterEach(() => {
   Reflect.deleteProperty(document, 'caretRangeFromPoint')
   window.getSelection()?.removeAllRanges()
+  state.current = BASE_STATE
   cleanup()
 })
 
@@ -303,5 +310,118 @@ describe('the Call box and the log callsign are one field', () => {
       fireEvent.change(callBox(), { target: { value: '' } })
     })
     await waitFor(() => expect(logCall().value).toBe(''))
+  })
+})
+
+// ── INSIDE A CONTEST ──────────────────────────────────────────────────────────────────────
+//
+// The same double-click also fills the EXCHANGE, and nothing about the contest is written
+// into the cockpit: the session publishes the slots it receives (`snap.fieldDay.receives`),
+// and the zone's bounds and the QTH's domain come off those specs. CQ WW RTTY's shape is
+// RST + CQ zone (1–40) + an optional QTH that only W/VE stations send.
+const CQ_WW = [
+  { key: 'RST', kind: 'rst', required: true },
+  { key: 'ZN', kind: 'number', required: true, min: 1, max: 40, adif: 'CQZ' },
+  { key: 'QTH', kind: 'enum', required: false, domain: 'fd_sections' },
+]
+const CONTEST_TEXT = 'W1AW 599 14 WI\r\n'
+
+async function renderContest(receives: unknown[] = CQ_WW, text = CONTEST_TEXT) {
+  state.current = { ...state.current, text, charConf: Array.from(text, () => 95) } as RttyState
+  const contestSnap = {
+    ...snap,
+    fieldDay: {
+      running: true,
+      state: 'run',
+      event: 'cqwwrtty',
+      qsoCount: 0,
+      sections: 0,
+      points: 0,
+      log: [],
+      receives,
+      sentExchange: '04 WI',
+    },
+  } as unknown as AppSnapshot
+  const r = render(
+    <StationControlContext.Provider value={true}>
+      <RttyCockpit snap={contestSnap} />
+    </StationControlContext.Provider>,
+  )
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  await waitFor(() => expect(document.querySelector('.cw-decode-text')!.textContent).toBe(text))
+  return r
+}
+
+const fdCall = () => document.querySelector('.le-fd-input-call') as HTMLInputElement
+const box = (caption: string) => screen.getByLabelText(caption) as HTMLInputElement
+
+describe('grab an exchange value from Decoded text', () => {
+  it('fills the Zone from a number the slot’s own bounds accept, and the QTH from a code its domain knows', async () => {
+    await renderContest()
+    // ⚠️ THE FILL STAMP IS NOT THE WALL CLOCK, and this is the case that says why: the strip
+    // refills a box on every NEW `ts`, so two fills sharing a millisecond would be one fill.
+    // The clock is frozen to put both grabs inside one — no sleep, no flake, and the cockpit's
+    // own counter is what has to carry them apart.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_758_000_000_000)
+    caretAt(CONTEST_TEXT.indexOf('14'))
+    await doubleClick()
+    await waitFor(() => expect(box('Zone').value).toBe('14'))
+    caretAt(CONTEST_TEXT.indexOf('WI'))
+    await doubleClick()
+    await waitFor(() => expect(box('QTH').value).toBe('WI'))
+    clock.mockRestore()
+    // An exchange value is not a callsign, and must not have touched either call field.
+    expect(callBox().value).toBe('')
+    expect(fdCall().value).toBe('')
+    expect(pushToast).not.toHaveBeenCalled()
+  })
+
+  it('still grabs the callsign while the contest runs', async () => {
+    await renderContest()
+    caretAt(CONTEST_TEXT.indexOf('W1AW') + 1)
+    await doubleClick()
+    expect(callBox().value).toBe('W1AW')
+    await waitFor(() => expect(fdCall().value).toBe('W1AW'))
+    expect(box('Zone').value, 'a call is not a zone').toBe('')
+  })
+
+  it('fills nothing from a domain this build carries no values for — and the call is still a call', async () => {
+    // ⚠️ THE POLARITY TRAP. The strip's own `inDomain` answers TRUE for a domain with no
+    // value set (the honest while-typing verdict: an absent list is not evidence the operator
+    // is wrong). Read that way here it would make the first word double-clicked — a CALLSIGN —
+    // this contest's county.
+    await renderContest([
+      { key: 'RST', kind: 'rst', required: true },
+      { key: 'CO', kind: 'enum', required: false, domain: 'wi_counties' },
+    ])
+    caretAt(CONTEST_TEXT.indexOf('W1AW') + 1)
+    await doubleClick()
+    expect(callBox().value).toBe('W1AW')
+    expect(box('CO').value, 'a call was filed as a county').toBe('')
+  })
+
+  it('Enter in an exchange box logs the contact the grab filled', async () => {
+    await renderContest()
+    for (const word of ['W1AW', '14', 'WI']) {
+      caretAt(CONTEST_TEXT.indexOf(word) + 1)
+      await doubleClick()
+    }
+    await waitFor(() => expect(box('QTH').value).toBe('WI'))
+    await act(async () => {
+      fireEvent.keyDown(box('Zone'), { key: 'Enter' })
+    })
+    await waitFor(() => expect(contestLog).toHaveBeenCalledTimes(1))
+    expect(contestLog.mock.calls[0][0]).toBe('W1AW')
+    // The field vector, in the session's own receive order — the report defaulted, the other
+    // two grabbed off the screen.
+    expect(contestLog.mock.calls[0][1]).toEqual([
+      ['RST', '599'],
+      ['ZN', '14'],
+      ['QTH', 'WI'],
+    ])
+    expect(contestLog.mock.calls[0][2], 'the scoring class RTTY logs under').toBe('DIG')
   })
 })

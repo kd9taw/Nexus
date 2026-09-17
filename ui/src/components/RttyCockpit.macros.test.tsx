@@ -83,6 +83,15 @@ const snap = {
   radio: { dialMhz: 14.08, band: '20m', catOk: true, sideband: 'USB', transmitting: false, txEnabled: true, txAllowed: true },
 } as unknown as AppSnapshot
 
+/** The same station inside a running contest. `sentExchange` is what the SESSION composes,
+ *  without the signal report — `{RST}` is its own token (engine:
+ *  `exch_keys_the_running_contests_sent_exchange_and_field_day_is_unchanged`). */
+const contest = (sentExchange: string) =>
+  ({
+    ...snap,
+    fieldDay: { running: true, state: 'run', qsoCount: 0, sections: 0, points: 0, log: [], sentExchange },
+  }) as unknown as AppSnapshot
+
 type Macros = Settings['macros']
 const macrosWith = (over: Partial<Macros> = {}): Macros => ({ chat: [], qso: [], band: [], ...over })
 
@@ -219,6 +228,25 @@ describe('F-keys go through the same send() a click does', () => {
     // POSITIVE CONTROL: F5 is {CALL} alone, and goes.
     press('F5')
     await waitFor(() => expect(rttySend).toHaveBeenCalledWith(frameForAir('K1ABC')))
+  })
+
+  it('keys {EXCH} from the RUNNING contest — the session’s own sent exchange', async () => {
+    await renderCockpit({ macros: macrosWith({ activeRttyProfile: 'contest' }), snap: contest('04 WI') })
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    press('F2') // {CALL} 599 {EXCH} {EXCH}
+    await waitFor(() => expect(rttySend).toHaveBeenCalledWith(frameForAir('K1ABC 599 04 WI 04 WI')))
+    expect(pushToast, 'nothing to complain about').not.toHaveBeenCalled()
+  })
+
+  it('an EMPTY sent exchange is nothing to send — the same refusal as no contest at all', async () => {
+    // The field is present on every snapshot and empty outside a contest, so "" must read as
+    // "there is none", never as a message with a hole where the exchange goes.
+    await renderCockpit({ macros: macrosWith({ activeRttyProfile: 'contest' }), snap: contest('') })
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    press('F2')
+    await act(async () => {})
+    expect(rttySend).not.toHaveBeenCalled()
+    expect(pushToast).toHaveBeenCalledTimes(1)
   })
 })
 
