@@ -86,7 +86,9 @@ it.each(['JS8', 'MSK144'] as const)('%s uses the existing cockpit widget, one ex
   expect(request.action).toEqual(kind === 'JS8' ? { action: 'decoder.js8Speed', expectedSpeed: 1, speed: 3 }
     : { action: 'decoder.msk144Period', expectedPeriodSecs: 15, periodSecs: 5 })
   expect(request.context).toEqual(h.state.controls.context)
-  expect(h.widget().disabled).toBe(true)
+  // Lit while it confirms (operator ruling 2026-09-16, batch 1): the second gesture sends nothing,
+  // and the write count is the evidence — the button's disabled state no longer is.
+  expect(h.widget().disabled).toBe(false)
   h.gesture(); await tick(); expect(h.writes()).toHaveLength(1)
   act(() => h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'settingsSaved' }))
   await tick()

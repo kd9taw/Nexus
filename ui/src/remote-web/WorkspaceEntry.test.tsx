@@ -67,7 +67,9 @@ it.each([
   const request = h.writes()[0].request
   expect(request.action).toEqual({ action: 'radio.workspace', workspace })
   expect(request.context).toEqual({ radioId: 3, radioConnection: 7, ampConnection: null, ampReadSequence: null })
-  expect(button().disabled).toBe(true)
+  // Lit while it confirms (operator ruling 2026-09-16, batch 1): the second press sends nothing,
+  // and that — not a disabled button — is what says a spent window cannot pass a command.
+  expect(button().disabled).toBe(false)
   fireEvent.click(button()); await tick()
   expect(h.writes()).toHaveLength(1)
   act(() => h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' }))

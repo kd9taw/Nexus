@@ -576,6 +576,64 @@ it('keeps the state through a confirmed command, refuses a second command from i
   }
 })
 
+// THE EARLIER HALF OF THE SAME WINDOW, and the one batch 1 makes load-bearing. Above, the station
+// has already answered. Here it has not: the receipt is out, the window it was built on is already
+// spent at the station, and until this batch the control was GREY for exactly this stretch, so the
+// second press could not happen. Lit, it can, and the refusal is the only thing left holding the
+// invariant "no command from a consumed window" up — see steady-controls.test.tsx for the lit half.
+// Asserted in both directions: refused with nothing on the wire while the receipt is out, and the
+// same command accepted once the outcome and the re-read have landed.
+// ⚠️ TWO TERMS GUARD IT, and the mutation control says which does the work: removing
+// `this.view.controlPending` from that line alone changes nothing here, because on one page the
+// first command's own `controlIntent` is still set while it awaits its outcome. The receipt is the
+// term that survives a reload or a second tab, where there is no intent to fall back on, and the
+// last block below is the case that names it. Deleting the guard line entirely trips this test.
+it('refuses a second command made while the first is still confirming, unsent, and takes it after', async () => {
+  const h = setup(storage(), ['amplifier'], 4)
+  await h.advance(1000)
+  const heartbeat = h.sent[h.sent.length - 1].request
+  h.client.receive({ type: 'operationResponse', requestId: heartbeat.requestId, value: h.state })
+  const commands = () => h.sent.filter(w => w.request.type === 'stationControl')
+  const first = h.client.control(action)
+  await Promise.resolve(); await Promise.resolve()
+  expect(commands()).toHaveLength(1)
+  // The window really is open: a receipt is out and the station has not answered it.
+  expect(h.client.getSnapshot()).toMatchObject({ fresh: true, controlPending: { action } })
+  const second = await h.client.control(action).catch(e => e)
+  expect(second).toMatchObject({ message: 'operationUnknown', sent: false, busy: false })
+  expect(commands(), 'nothing left the browser for the second press').toHaveLength(1)
+  // It reaches the operator as the same visible refusal the rest of the control surface gives.
+  expect(controlFailureMessage(second)).toBe(t('remote.controlNotSent'))
+  // The station answers the first, the re-read lands, and the same command goes out on the new
+  // window — the refusal above was the window, not the command.
+  const request = commands()[0].request
+  h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'stationState' })
+  expect(await first).toMatchObject({ outcome: 'applied' })
+  const reread = await nextHeartbeat(h)
+  const next = { ...h.state, revision: 2, commandWindowId: crypto.randomUUID(), nextSequence: 2 }
+  h.client.receive({ type: 'operationResponse', requestId: reread.requestId, value: next })
+  const third = h.client.control(action)
+  await h.advance(10)
+  expect(commands()).toHaveLength(2)
+  expect(commands()[1].request).toMatchObject({ commandWindowId: next.commandWindowId, clientSequence: 2, expectedRevision: 2 })
+  h.reply({ operation: 'stationControl', operationId: commands()[1].request.requestId, outcome: 'applied', evidence: 'stationState' })
+  expect(await third).toMatchObject({ outcome: 'applied' })
+  h.client.disconnected()
+
+  // The receipt on its own, with no in-flight intent behind it: the page reloaded, or a second tab
+  // opened, while a command was still confirming. Nothing leaves there either.
+  const store = storage()
+  const a = setup(store, ['amplifier'], 4)
+  void a.client.control(action).catch(() => {})
+  await Promise.resolve(); await Promise.resolve()
+  expect(a.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(1)
+  const b = setup(store, ['amplifier'], 4)
+  expect(b.client.getSnapshot().controlPending, 'the reloaded page read the receipt').toMatchObject({ action })
+  await expect(b.client.control(action)).rejects.toMatchObject({ message: 'operationUnknown', sent: false })
+  expect(b.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  a.client.disconnected(); b.client.disconnected()
+})
+
 it('selects a configured radio with displayed context and waits for both new snapshot and Settings', async () => {
   const h = setup(storage(), ['radioSelection'], 3)
   let snapshotAge = Infinity, settingsAge = Infinity, active = 1

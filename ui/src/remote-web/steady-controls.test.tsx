@@ -159,10 +159,13 @@ it('no station control toggles disabled while control is held and the observatio
   expect(Object.values(flags()).every(Boolean)).toBe(true)
 })
 
-// The other way a held control went grey: after EVERY command the client dropped its state until the
-// station's re-read answered, so all of these went dead for about a second per click (operator
-// ruling 2026-09-16: a control stays lit while it confirms). The state is kept through the gap now;
-// control.test.ts proves the spent window still refuses a second command on its own.
+// The other way a held control went grey, in TWO halves and this test now covers both: while the
+// command is in flight the client holds a pending receipt, and after it lands the client used to
+// drop its state until the station's re-read answered — so all of these went dead from the click
+// until the re-read, about a second per click (operator ruling 2026-09-16: a control stays lit
+// while it confirms). The state is kept through the second half, and the receipt no longer darkens
+// anything in the first. control.test.ts proves that neither window can pass a command: the spent
+// one refuses and waits for the next, and one made while the receipt is out is refused unsent.
 it('no station control toggles disabled across a confirmed command and the station re-read', async () => {
   const h = station()
   const snap = snapshot()
@@ -188,6 +191,14 @@ it('no station control toggles disabled across a confirmed command and the stati
   await act(async () => { command = h.client.control({ action: 'amplifier.operate', expectedOperate: false, operate: true }); await Promise.resolve() })
   const request = h.sent[h.sent.length - 1]
   expect(request.type).toBe('stationControl')
+  // THE WINDOW THIS TEST USED TO SKIP. Sampling began after the outcome, so it only ever covered
+  // the second half — state kept, receipt cleared. The half the operator actually sees is this
+  // one: the receipt is written the moment the command leaves and holds until the station answers,
+  // a whole round trip, and it is the term the Responsiveness twin attributes 100% of the
+  // remaining controls-off events to. Measured on the twin before this was fixed: 8 events of
+  // 550 ms on a 100 ms polled link, 12 of 250-300 ms pushed, 8 of 550 ms on a 400 ms link.
+  let pending = 0
+  for (let elapsed = 0; elapsed < 260; elapsed += 20) { sample(); if (h.client.getSnapshot().controlPending) pending++; await step(20) }
   // The station applied it and spent the window; its re-read answers after the link's round trip.
   Object.assign(h.state, { revision: 2, commandWindowId: crypto.randomUUID(), nextSequence: 2 })
   await act(async () => {
@@ -195,7 +206,9 @@ it('no station control toggles disabled across a confirmed command and the stati
     await command
   })
   for (let elapsed = 0; elapsed < 2000; elapsed += 50) { sample(); await step(50) }
-  // Positive controls: the confirming gap really happened, and the re-read really landed.
+  // Positive controls: the command really was in flight while it was sampled, the confirming gap
+  // really happened, and the re-read really landed.
+  expect(pending).toBeGreaterThan(0)
   expect(refreshing).toBeGreaterThan(0)
   expect(h.client.getSnapshot()).toMatchObject({ fresh: true, controlRefreshing: false, state: { revision: 2 } })
   expect({ toggles, ampToggles }).toEqual({ toggles: {}, ampToggles: 0 })

@@ -83,12 +83,25 @@ async function measure(rttMs: number, version: 4 | 5 = 4, probe = new Responsive
  * exercises the existing one more often, and that is a thing the operator can see until batch 1
  * lands. There is no ratchet line for it here because the budget already demands zero.
  *
+ * ── THE FLICKER (batch 1, 2026-09-17) ─────────────────────────────────────────────────────────
+ * `flicker` and `dark` are the batch, and they are TWO lines because the count alone misreported
+ * this work to its own author. Taking the pending receipt out of `useStationHeld` turned eight
+ * 550 ms blanks into twenty 100 ms ones on a 100 ms polled link: the count read two and a half
+ * times WORSE while the darkness halved. Whatever the operator suffers is the time, so `darkMs`
+ * is the line that matters and the count rides beside it to catch a change that trades one for
+ * the other. Same twin run, old predicate against new: **8 events / 4.8 s dark → 1 / 0.4 s**
+ * (v4 100 ms), **6 / 8.7 s → 0 / 0** (v4 400 ms), **12 / 3.2 s → 4 / 0.2 s** (v5 100 ms),
+ * **8 / 4.4 s → 0 / 0** (v5 400 ms). On the slow link the controls had been dark for 64% of the
+ * run. What is LEFT is the four-per-second request budget with no command of ours out — the
+ * rate-limit entries outliving the command that filled them — and it only appears where the
+ * operator drives faster than the budget, which is why both 400 ms lines are zero.
+ *
  * Budget lines met, per link: 1 of 6 before, 3 of 6 after — screen and steps joined band. */
 const BASELINE = {
-  'v4/100': { screen: 50, tuneConfirmed: 1700, commandConfirmed: 650, bandConfirmed: 650, readout: 1650, stepsSent: 10 },
-  'v4/400': { screen: 50, tuneConfirmed: 3250, commandConfirmed: 1600, bandConfirmed: 1550, readout: 2750, stepsSent: 10 },
-  'v5/100': { screen: 50, tuneConfirmed: 900, commandConfirmed: 350, bandConfirmed: 350, readout: 1100, stepsSent: 10 },
-  'v5/400': { screen: 50, tuneConfirmed: 1700, commandConfirmed: 650, bandConfirmed: 650, readout: 2200, stepsSent: 10 }
+  'v4/100': { screen: 50, tuneConfirmed: 1700, commandConfirmed: 650, bandConfirmed: 650, readout: 1650, stepsSent: 10, flicker: 1, dark: 450 },
+  'v4/400': { screen: 50, tuneConfirmed: 3250, commandConfirmed: 1600, bandConfirmed: 1550, readout: 2750, stepsSent: 10, flicker: 0, dark: 0 },
+  'v5/100': { screen: 50, tuneConfirmed: 900, commandConfirmed: 350, bandConfirmed: 350, readout: 1100, stepsSent: 10, flicker: 4, dark: 250 },
+  'v5/400': { screen: 50, tuneConfirmed: 1700, commandConfirmed: 650, bandConfirmed: 650, readout: 2200, stepsSent: 10, flicker: 0, dark: 0 }
 } as const
 
 describe.each([
@@ -126,6 +139,14 @@ describe.each([
     expect(Math.max(...perCommand)).toBeLessThanOrEqual(line.commandConfirmed)
     expect(r.band.confirmed!.worst).toBeLessThanOrEqual(line.bandConfirmed)
     expect(r.tune.readout!.worst).toBeLessThanOrEqual(line.readout)
+    // BATCH 1'S OWN CLOCK. Every other line here is a duration; this one counts how many times the
+    // station controls went off under the operator while they were using them, and the ONLY number
+    // that can be right is zero (operator ruling 2026-09-16, "a knob on a radio does not stop
+    // existing after you turn it"). It reads as a ratchet like the rest so a later change that
+    // reintroduces a blanking term has to move this line to land.
+    console.info(`FLICKER v${version}/${rttMs}: ${r.flicker.run} events, ${r.flicker.darkMs} ms dark of ${r.durationMs} ms`)
+    expect({ during: r.flicker.run, idle: r.flicker.idle }).toEqual({ during: line.flicker, idle: 0 })
+    expect(r.flicker.darkMs).toBeLessThanOrEqual(line.dark)
   })
   it.fails('meets the programme budget (flip to `it` when it does)', async () => {
     const { report: r } = await measure(rttMs, version)

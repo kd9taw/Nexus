@@ -14,19 +14,49 @@ export const RemoteOperationsContext = createContext<OperationClient | null>(nul
 const idleSubscribe = () => () => {}
 const idleSnapshot = () => null
 /** STATION CONTROL HELD by this browser: connected, the latest station state showing this browser
- * controlling, with nothing unresolved and no command in flight. It is the part of
- * useStationCapability that names no capability, and it is THE ONE ANSWER a control's enabled
- * state follows (operator decision 2026-09-14) — so it is deliberately lapse-tolerant: a
- * heartbeat reply landing after the 1.2 s freshness window (most seconds on a real WAN) leaves
- * this true, and a control does not disable under the operator. The send never borrows it:
- * OperationClient waits for current control, at most CONTROL_RESUME_MS, and otherwise refuses as
- * not sent. Stale application readings (StationDataContext) still refuse here at once. */
+ * controlling, with nothing unresolved. It is the part of useStationCapability that names no
+ * capability, and it is THE ONE ANSWER a control's enabled state follows (operator decision
+ * 2026-09-14) — so it is deliberately lapse-tolerant: a heartbeat reply landing after the 1.2 s
+ * freshness window (most seconds on a real WAN) leaves this true, and a control does not disable
+ * under the operator. The send never borrows it: OperationClient waits for current control, at
+ * most CONTROL_RESUME_MS, and otherwise refuses as not sent. Stale application readings
+ * (StationDataContext) still refuse here at once.
+ *
+ * ⚠️ A COMMAND IN FLIGHT IS NOT A LOSS OF CONTROL (operator ruling 2026-09-16: "a knob on a radio
+ * does not stop existing after you turn it"). `controlPending` — the receipt held from the moment
+ * a command leaves until the station answers it — used to be read here, and it was the LAST
+ * remaining blanking term: the Responsiveness twin attributes 100% of its controls-off events to
+ * it, once per command, for 250-950 ms each depending on the link and whether the station pushes
+ * completions. The receipt is still the guard it always was; it is simply not this hook's
+ * business. `executeControl` refuses any command raised against a pending receipt before anything
+ * is built or sent (`operationUnknown`, `sent: false`), which reaches the operator as the ordinary
+ * "Not sent" refusal — so the correctness now rests entirely on that refusal, and its test
+ * (control.test.ts, "refuses a second command made while the first is still confirming") is
+ * load-bearing rather than a tidy-up. A disabled button is no longer evidence of anything.
+ *
+ * The request budget is read the same way and for the same reason, but ONLY while our own command
+ * is confirming. `requestReady` goes false when the four-per-second budget is full, and on a fast
+ * link that is the browser's own command holding the last slot while the reads that will END its
+ * confirming window take the rest — a command in flight wearing a second name. A budget exhausted
+ * with NO command of ours out is a different thing, nothing of ours is confirming and nothing
+ * excuses it, and it still refuses here: measured, that is the rate-limit entries outliving the
+ * command that filled them, and it is what the twin's remaining flicker is made of (one 400 ms
+ * event on a 100 ms polled link, four 50 ms ones pushed, none at all at 400 ms — against 8, 6, 12
+ * and 8 events and 4.8, 8.7, 3.2 and 4.4 SECONDS of dark before this). */
 export function useStationHeld(): boolean {
   const local = useStationControl(), available = useStationData()
   const client = useContext(RemoteOperationsContext)
   const view = useSyncExternalStore(client?.subscribe ?? idleSubscribe, client?.getSnapshot ?? idleSnapshot)
-  return local || !!(available && view?.connected && view.requestReady !== false && !view.unresolved &&
-    !view.controlPending && view.state?.phase === 'controlling')
+  // ⚠️ A RECEIPT IS NOT ALWAYS A CONFIRMING WINDOW. `controlPending` also holds a command whose
+  // outcome came back UNKNOWN, and that receipt stays until the operator checks the station — the
+  // browser cannot say whether the radio did it, so a control built on that belief must not be
+  // offered. The client draws the same line for itself: it keeps polling for the result while the
+  // outcome is anything but `unknown` (operation-client.ts, the tick's result poll). Confirming is
+  // the half it is still resolving; unknown is a question, and a question greys the controls.
+  const unknown = view?.controlResult?.outcome === 'unknown' && !!view.controlPending
+  return local || !!(available && view?.connected && !unknown &&
+    (view.requestReady !== false || view.controlPending) && !view.unresolved &&
+    view.state?.phase === 'controlling')
 }
 
 /** A permission for an explicit gesture. Never enables native-only TX controls
