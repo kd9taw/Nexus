@@ -104,6 +104,12 @@ export function controlTransport(reads: ApplicationTransport, client: Applicatio
             if (!qso) throw Error('staleContext')
             const state = operations.getSnapshot().state
             if (!state?.transmitEpoch) throw Error('localPermissionRequired')
+            // Resend, free text and Monitor are prepared gestures: they capture a command window, so
+            // the wait has to happen HERE, before that capture, exactly as the FT value edits above
+            // do. `holdTransmit` waits out a post-command lapse (operator approval 2026-09-17) and
+            // refuses if the operator stood the transmitter down while it waited; the epoch below is
+            // the one the gesture was made under, so a station that moved on refuses it at the send.
+            await operations.holdTransmit()
             captured = operations.prepareControl()
             const snapshot = await reads.invoke<import('../types').AppSnapshot>('get_snapshot')
             action = stationAction({ action: command === 'override_next_tx' ? 'ft.message' : 'ft.exchange', expectedTier: snapshot.link.tier,

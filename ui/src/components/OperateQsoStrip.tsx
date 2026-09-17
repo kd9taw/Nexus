@@ -43,6 +43,13 @@ interface Props {
   onFreetext: (text: string, expectedQso?: import('../types').QsoStatus | null) => void | Promise<boolean>
   /** Log the active QSO now (inline "Log QSO" button). */
   onLog: () => void
+  /** The station's key for the QSO this strip is showing (`AppSnapshot.currentQsoLogKey`). A
+   * BROWSER's Log gesture is built from it — it is the "log the QSO I am looking at" token the
+   * station checks — so the button waits for the sample that carries it. `dxcall` alone is not
+   * that signal: the sample before this QSO became loggable already had one, and a click on it
+   * built a gesture the page's own validator refused ("Could not log QSO"). The desktop needs no
+   * key: there the engine decides what is loggable. */
+  logKey?: string | null
   /** TX controls consolidated beside CQ/S&P (operator request: one cluster,
    * no mousing to the top bar). Present only in the digital cockpit. */
   radio?: RadioStatus
@@ -118,6 +125,7 @@ export function OperateQsoStrip({
   onResend,
   onFreetext,
   onLog,
+  logKey,
   radio,
   onSetTxEnabled,
   onSetTune,
@@ -382,7 +390,7 @@ export function OperateQsoStrip({
           type="button"
           className="cq-log"
           onClick={onLog}
-          disabled={!logging || (!dxcall)}
+          disabled={!logging || !dxcall || (!control && !logKey)}
           title={t('operate.strip.log.title')}
         >
           {t('operate.strip.log.label')}

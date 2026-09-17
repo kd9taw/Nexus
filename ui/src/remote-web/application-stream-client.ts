@@ -23,6 +23,8 @@ export class ApplicationStreamClient {
   constructor(private readonly send: (message: string) => void, private readonly fail: () => void) {}
   negotiate(version: StreamVersion): void { this.version = version }
   age(command: StreamTopic): number { const value = this.values.get(command); return value ? performance.now() - value.at : Infinity }
+  /** The sample `age` measures, as it stands: no read, no interest, nothing sent. Read-only to its reader. */
+  held(command: StreamTopic): unknown { return this.values.get(command)?.value }
   invoke<T>(command: StreamTopic): Promise<T> {
     this.interests.set(command, performance.now())
     if (!this.sweep) this.sweep = setInterval(() => this.flush(), 500)

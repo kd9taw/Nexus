@@ -162,7 +162,14 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // and the layout probe below asserts it stays still. The wait remains for the controls to be
     // enabled again: `data-station-state` is 'current' only once the client holds a re-read state.
     // The outcome text is the first half of the round trip; wait for both halves.
-    const stationStateRead=`document.querySelector('.remote-logging-authority')?.dataset.stationState==='current'`
+    // THE STATION'S OWN STATE IS BACK. `data-station-state` alone stopped meaning that: a control
+    // keeps its state now (a held control stays lit while its command confirms), so the row reads
+    // 'current' throughout the re-read it is supposed to wait for. The row says the re-read is
+    // outstanding in words — "Updating station controls…" — so wait for that to go as well.
+    const stationStateRead=`(()=>{const e=document.querySelector('.remote-logging-authority');return e?.dataset.stationState==='current'&&!e.textContent.includes('Updating station controls')})()`
+    // THE STATION'S OWN READING SHOWS THIS DIAL — not the browser's optimistic digits, which show
+    // what was asked for until the station catches up and carry `aria-busy` while they do.
+    const stationDial=(root,mhz)=>`(()=>{const v=document.querySelector('${root} .readout-val');return !!v&&!v.closest('.readout')?.hasAttribute('aria-busy')&&v.textContent.includes('${mhz}')})()`
     // Stale readings are retired in place (faded, unclickable), never blanked: a blanked workspace
     // was the black flash. Opacity is not inherited, so multiply it up the ancestor chain.
     const retiredReadings=selector=>`(()=>{const e=document.querySelector(${JSON.stringify(selector)});let opacity=1;for(let p=e;p;p=p.parentElement)opacity*=Number(getComputedStyle(p).opacity);return {opacity,pointer:getComputedStyle(e).pointerEvents,visibility:getComputedStyle(e).visibility}})()`
@@ -1111,7 +1118,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         for(const type of ['keyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2},session)
         await browser.call('Input.insertText',{text:String(mhz)},session)
         for(const type of ['keyDown','keyUp'])await browser.call('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13},session)
-        await until(`document.querySelector('.operate-cockpit .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
+        await until(stationDial('.operate-cockpit', mhz.toFixed(4)))
         await until(`${pill(1)}?.getAttribute('aria-pressed')==='true'`)
         await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
         assert.equal(stationRequests.length,before+1)
@@ -1196,7 +1203,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
       // another browser or replace its draft. Its captured log context survives.
       Object.assign(applicationData.get_snapshot,{workTick:(applicationData.get_snapshot.workTick??0)+1,workView:'cw',workCall:'N2FOREIGN'})
       Object.assign(applicationData.get_snapshot.radio,{dialMhz:7.25,band:'40m'});applicationRevision++
-      await until(`document.querySelector('.phone-cockpit .readout-val')?.textContent.includes('7.2500')`)
+      await until(stationDial('.phone-cockpit', '7.2500'))
       assert.equal(await evaluate(visible('phone')),true)
       assert.equal(await evaluate(`${input('phone')}.value`),'N2DXPH')
       assert.ok(await evaluate(`document.querySelector('.phone-cockpit .le-hint')?.textContent.includes('14.199')`))
@@ -1911,7 +1918,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         assert.equal(stationRequests.at(-1).action.action,'radio.frequency');assert.equal(stationRequests.at(-1).action.dialMhz,mhz)
         assert.equal(stationRequests.at(-1).action.band,mhz===10?'':'40m')
         await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
-        await until(`document.querySelector('${root} .ch-readout .readout-val')?.textContent.includes('${mhz.toFixed(4)}')`)
+        await until(stationDial(root+' .ch-readout', mhz.toFixed(4)))
         }
       }
       let modeGeometry=0,bandGeometry=0,wheelGeometry=0,filterGeometry=0,dspGeometry=0,phoneModeGeometry=0
@@ -1958,7 +1965,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             assert.deepEqual(stationRequests.at(-1).action,{action:'radio.band',band,mode})
             await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
             const dial=applicationData.get_snapshot.radio.dialMhz.toFixed(4)
-            await until(`document.querySelector('${root} .readout-val')?.textContent.includes('${dial}')`)
+            await until(stationDial(root, dial))
             assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
           }
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`band-picker-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
@@ -2102,7 +2109,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               const expected=Math.round(from*1e6+(kind==='digit'?1000:100))/1e6
               assert.equal(stationRequests.at(-1).action.action,'radio.frequency');assert.equal(stationRequests.at(-1).action.dialMhz,expected)
               await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
-              await until(`document.querySelector('${root} .readout-val')?.textContent.includes('${expected.toFixed(4)}')`)
+              await until(stationDial(root, expected.toFixed(4)))
               assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
             }
             if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`wheel-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
@@ -2148,7 +2155,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
               assert.equal(action.action,'radio.frequency');assert.equal(action.sideband,radio.sideband)
               assert.ok(Math.abs(action.dialMhz-radio.dialMhz)>0&&Math.abs(action.dialMhz-radio.dialMhz)<0.004,'native scope resolves a nearby receive target')
               await until(`document.querySelector('.remote-control-result')?.textContent.includes('confirmed')&&${stationStateRead}`)
-              await until(`document.querySelector('${root} .readout-val')?.textContent.includes('${action.dialMhz.toFixed(4)}')`)
+              await until(stationDial(root, action.dialMhz.toFixed(4)))
               assert.equal(applicationData.get_snapshot.radio.txEnabled,false)
               assert.equal(applicationData.get_snapshot.radio.operatingMode,radio.operatingMode)
               if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`scope-click-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}

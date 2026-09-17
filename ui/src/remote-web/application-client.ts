@@ -50,6 +50,12 @@ export class ApplicationClient implements ApplicationTransport {
     const value = applicationCommand(command) ? this.values.get(command) : null
     return value ? performance.now() - value.at : Infinity
   }
+  /** The newest sample of `command` this page holds - the one `age` measures - without asking the
+   * station for one. Read-only. A component's render of it can still be a poll behind. */
+  held(command: StreamTopic): unknown {
+    if (this.version >= 2) return this.stream.held(command)
+    return applicationCommand(command) ? this.values.get(command)?.value : undefined
+  }
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private setPhase(phase: ApplicationPhase): void { this.phase = phase; for (const listener of this.listeners) listener() }
   open(): void {

@@ -1391,6 +1391,7 @@ export function OperateCockpit({
           onResend={onResend}
           onFreetext={onFreetext}
           onLog={onLog}
+          logKey={snap.currentQsoLogKey ?? null}
           onSetTxEven={onSetTxEven}
           onSetTxCycleAuto={onSetTxCycleAuto}
           skipTx1={skipTx1}

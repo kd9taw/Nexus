@@ -138,6 +138,9 @@ export class OperationClient {
   private controlIntent = false
   private resultIntent: object | null = null
   private controlPolledAt = -Infinity
+  /** How many times the operator has stood the transmitter down (a Stop, or TX off). A transmit
+   * gesture held through a lapse is refused if this moved while it waited - see `holdTransmit`. */
+  private transmitStand = 0
   private requestBudget: { requestId: string; until: number }[] = []
   /** The responsiveness probe, attached only while its panel is open. Every use below is a null
    * check that stamps a clock and returns: it never updates the view, sends, or schedules. */
@@ -356,6 +359,7 @@ export class OperationClient {
     if (!this.view.connected) return Promise.reject(new Error('stationUnavailable'))
     if (this.pendingStop) return Promise.reject(new Error('remoteBusy'))
     if (!this.stopTarget) return Promise.reject(new Error('localPermissionRequired'))
+    this.transmitStand++
     const request: OperationRequest = { type: 'stopTransmit', requestId: crypto.randomUUID(), ...this.stopTarget }
     operationRequest(request)
     return new Promise((resolve, reject) => {
@@ -700,6 +704,27 @@ export class OperationClient {
       const unsubscribe = this.subscribe(() => { if (current() || !held()) finish() })
     })
   }
+  /** THE FT HOLD (operator approval 2026-09-17). An FT gesture made while the last command is still
+   * confirming waits that re-read out exactly as an ordinary command does, at most
+   * CONTROL_RESUME_MS, instead of being refused at once on a control that is still lit. What leaves
+   * the browser is unchanged: `executeControl` re-checks the epoch against the state that arrives
+   * (and against the stop token), so a station that moved on refuses it there.
+   *
+   * WHAT THIS ADDS is the cancel the wait needs. While a gesture waits, the operator can say "not
+   * now" — a Stop, or TX off — and a transmission armed after that would be one they had just
+   * stopped. Every stand-down bumps a counter; a gesture that finishes waiting on a different
+   * count is refused as `staleContext` with nothing sent. It is deliberately not the epoch: the
+   * epoch moves when the STATION says so, which is later and, for TX off, not at all. */
+  async holdTransmit(): Promise<void> {
+    const stand = this.transmitStand
+    await this.awaitCurrent()
+    if (stand !== this.transmitStand) throw new OperationFailure('staleContext', false)
+  }
+  /** The operator standing the transmitter down: TX off here, a Stop in `stopTransmit`. Counted when
+   * the gesture is MADE, not when it is sent, so it cancels anything already waiting behind it. */
+  private standDown(action: StationAction): void {
+    if (action.action === 'ft.txEnabled' && action.on === false) this.transmitStand++
+  }
   private waitForHeartbeat(until: number): Promise<void> {
     if (!this.pending) return Promise.resolve()
     if (this.pending.request.type !== 'heartbeat') return Promise.reject(new Error('remoteBusy'))
@@ -910,9 +935,12 @@ export class OperationClient {
     try {
       // A command made during a brief control lapse waits for current control and is sent once, or is
       // refused as not sent (operator decision 2026-09-14); executeControl still requires fresh state.
-      // Never a captured gesture (it keeps the window it was prepared with) and never a transmit action
-      // (it carries a transmit epoch): those are refused at once, exactly as before.
-      if (!captured && !('transmitEpoch' in action) && this.lapsed()) await this.awaitCurrent()
+      // An FT gesture waits the same way (operator approval 2026-09-17 - see `holdTransmit`); it was
+      // refused at once before, which an operator read as "Not sent" on a control that was still lit.
+      // Never a captured gesture: it keeps the window it was prepared with, so its own caller waits
+      // (`holdTransmit` in control-transport) before the window is captured.
+      this.standDown(action)
+      if (!captured && this.lapsed()) await ('transmitEpoch' in action ? this.holdTransmit() : this.awaitCurrent())
       return await this.executeControl(action, displayed, captured, attempt)
     }
     catch (error) {

@@ -219,7 +219,7 @@ function tuner() {
   h.link.applies = true
   let snap = { activeRadioId: 1, link: { tier: 'FT8' }, radio: { source: 'native', operatingMode: 'phone', dialMhz: 7.2, band: '40m',
     sideband: 'LSB', catOk: true, txEnabled: false, transmitting: false, rigKeyed: false, tuning: false, txAllowed: true } } as unknown as AppSnapshot
-  const application = { invoke: vi.fn(async () => structuredClone(snap)), age: () => 0 } as unknown as ApplicationClient
+  const application = { invoke: vi.fn(async () => structuredClone(snap)), age: () => 0, held: () => snap } as unknown as ApplicationClient
   // Exactly as BrowserApplication builds it, refusals included.
   const tuning = new WheelTuning(h.client, application, error => pushToast(controlFailureMessage(error), 'error'))
   tuning.activate()

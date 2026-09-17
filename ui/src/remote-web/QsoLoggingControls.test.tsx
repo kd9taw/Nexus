@@ -44,11 +44,44 @@ it('the existing confirmation dialog requires logging permission and retains edi
   expect(discard).not.toHaveBeenCalled()
 })
 
+// THE LOG BUTTON NEEDS THE KEY, NOT JUST THE PERMISSION. Measured in the compiled browser: the
+// button gates on `dxcall`, which the PREVIOUS sample already carried, so it lit while the page
+// still held a sample with no `currentQsoLogKey` for this QSO. `logCurrentQso` then built a gesture
+// out of that sample and the page's own validator refused it — "Could not log QSO:
+// invalidOperation" on the gesture that ends a contact. Two of three instrumented runs clicked with
+// the rendered key null while the station had one; the third had the key and passed.
+//
+// The fix is the button's readiness, not a wait: what is missing is the data the gesture is built
+// from, and `expectedKey` is a "log the QSO I am looking at" token — rebuilding it from a sample
+// the operator never saw would weaken the station's check rather than fix the race.
+it('the remote Log button waits for the sample that carries this QSO\'s log key', () => {
+  const client = fixture(true), log = vi.fn(), other = vi.fn()
+  const strip = (logKey: string | null, local = false) => <StationControlContext.Provider value={local}><RemoteOperationsContext.Provider value={client}>
+    <OperateQsoStrip qso={{ running: false, state: 'AwaitRoger', dxcall: 'W9XYZ', txNow: 'W9XYZ K2DEF R-07' } as QsoStatus}
+      radio={{ txEnabled: false, tuning: false, holdTxFreq: false, catOk: false } as RadioStatus}
+      logKey={logKey}
+      onCallCq={other} onSetTxEnabled={other} onHaltTx={other} onSetMode={other} onResend={other} onFreetext={other}
+      onLog={log} onSetTune={other} onSetHoldTxFreq={other} />
+  </RemoteOperationsContext.Provider></StationControlContext.Provider>
+  const ui = render(strip(null))
+  expect(button(/^log$/i).disabled, 'the page has no key for this QSO yet').toBe(true)
+  fireEvent.click(button(/^log$/i)); expect(log).not.toHaveBeenCalled()
+  ui.rerender(strip('0'.repeat(31) + '1'))
+  expect(button(/^log$/i).disabled).toBe(false)
+  fireEvent.click(button(/^log$/i)); expect(log).toHaveBeenCalledOnce()
+  // The desktop logs through the engine, which decides for itself what is loggable: no key, no gate.
+  ui.rerender(strip(null, true))
+  expect(button(/^log$/i).disabled).toBe(false)
+  fireEvent.click(button(/^log$/i)); expect(log).toHaveBeenCalledTimes(2)
+  expect(other).not.toHaveBeenCalled()
+})
+
 it('the existing Log QSO button uses logging permission without radio or transmit authority', () => {
   const client = fixture(true), log = vi.fn(), other = vi.fn()
   render(<StationControlContext.Provider value={false}><RemoteOperationsContext.Provider value={client}>
     <OperateQsoStrip qso={{ running: false, state: 'AwaitRoger', dxcall: 'W9XYZ', txNow: 'W9XYZ K2DEF R-07' } as QsoStatus}
       radio={{ txEnabled: false, tuning: false, holdTxFreq: false, catOk: false } as RadioStatus}
+      logKey={'0'.repeat(31) + '1'}
       onCallCq={other} onSetTxEnabled={other} onHaltTx={other} onSetMode={other} onResend={other} onFreetext={other}
       onLog={log} onSetTune={other} onSetHoldTxFreq={other} />
   </RemoteOperationsContext.Provider></StationControlContext.Provider>)

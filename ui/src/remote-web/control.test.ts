@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { OperationClient } from './operation-client'
+import { OperationClient, OperationFailure } from './operation-client'
 import { OperationRelay } from './operation-relay'
 import { pendingControlStorage } from './control-storage'
 import { pendingLogStorage, type ReceiptLock } from './operation-storage'
@@ -49,6 +49,138 @@ async function refusedWhileConfirming(h: ReturnType<typeof setup>, action: Param
   await h.advance(1600)
   expect(await later).toMatchObject({ message: 'notController', sent: false })
 }
+/** The epoch the station reports while these tests run, and one FT gesture that carries it. */
+const FT_EPOCH = '000000000000002a'
+const ftCall = { action: 'ft.call', expectedTier: 'FT8', transmitEpoch: FT_EPOCH,
+  selection: { call: 'W1AW', grid: null, message: null, snr: null, freq: null } } as const
+/** A browser one command later: the control stayed lit, its command window is spent, and the
+ * station's re-read is in flight. This is the moment an FT gesture lands in — measured at 400-670 ms
+ * in the compiled browser, because the re-read waits for a free slot in the request budget. */
+async function confirming() {
+  const h = setup(storage(), ['amplifier', 'ftOperate', 'ftCall', 'ftExchange'], 4)
+  await h.advance(1000)
+  const heartbeat = h.sent[h.sent.length - 1].request
+  expect(heartbeat.type).toBe('heartbeat')
+  h.client.receive({ type: 'operationResponse', requestId: heartbeat.requestId, value: { ...h.state, transmitEpoch: FT_EPOCH } })
+  const first = h.client.control(action)
+  await Promise.resolve(); await Promise.resolve()
+  h.reply({ operation: 'stationControl', operationId: h.sent[h.sent.length - 1].request.requestId, outcome: 'applied', evidence: 'stationState' })
+  expect(await first).toMatchObject({ outcome: 'applied' })
+  const reread = await nextHeartbeat(h)
+  const commands = () => h.sent.filter(w => w.request.type === 'stationControl')
+  expect(commands()).toHaveLength(1)
+  expect(h.client.getSnapshot()).toMatchObject({ fresh: false, state: { phase: 'controlling' } })
+  const fresh = { ...h.state, transmitEpoch: FT_EPOCH, revision: 2, commandWindowId: crypto.randomUUID(), nextSequence: 2 }
+  return { h, commands, fresh, land: (value: unknown = fresh) => h.client.receive({ type: 'operationResponse', requestId: reread.requestId, value }) }
+}
+
+// THE FT HOLD — operator approval 2026-09-17. An FT gesture made while the last command was still
+// confirming used to be refused at once ("a transmit action carries its epoch and never waits out a
+// lapse"), which an operator read as "Not sent" on a control that was still lit: every call, CQ,
+// TX on/off, Resend or free text that followed another command inside the station's re-read. It now
+// waits that re-read out, at most CONTROL_RESUME_MS, and is re-checked against the fresh state
+// before anything leaves. The client-side wait only: no station sequencing, slot or parity change.
+it('holds an FT gesture through the post-command lapse and sends it once, on the fresh window', async () => {
+  const { h, commands, fresh, land } = await confirming()
+  const call = h.client.control(ftCall)
+  await h.advance(100)
+  expect(commands(), 'nothing leaves on the spent window').toHaveLength(1)
+  land(); await h.advance(10)
+  expect(commands()).toHaveLength(2)
+  expect(commands()[1].request).toMatchObject({ commandWindowId: fresh.commandWindowId, clientSequence: 2, expectedRevision: 2 })
+  expect(commands()[1].request.action).toMatchObject({ action: 'ft.call', transmitEpoch: FT_EPOCH })
+  h.reply({ operation: 'stationControl', operationId: commands()[1].request.requestId, outcome: 'applied', evidence: 'stationState' })
+  expect(await call).toMatchObject({ outcome: 'applied' })
+  h.client.disconnected()
+})
+
+// A RESEND (and free text, and Monitor) is a PREPARED gesture: it captures the command window it
+// will go out on, so its wait has to happen before that capture — in the transport, where the FT
+// value edits already waited. Same hold, same single command, same epoch.
+it('holds a prepared FT gesture — Resend — the same way, and sends it on the fresh window', async () => {
+  const { h, commands, fresh, land } = await confirming()
+  const reads = { kind: 'remote', invoke: vi.fn(async () => ({ link: { tier: 'FT8' }, radio: { dialMhz: 7.074 } })) } as unknown as ApplicationTransport
+  const transport = controlTransport(reads, { age: () => 0 } as unknown as ApplicationClient, h.client)
+  const resend = transport.invoke('qso_resend', { expectedQso: { dxcall: 'W1AW', state: 'done', txNow: null, cqRunning: false } })
+  await h.advance(100)
+  expect(commands(), 'nothing leaves on the spent window').toHaveLength(1)
+  land(); await h.advance(10)
+  expect(commands()).toHaveLength(2)
+  expect(commands()[1].request).toMatchObject({ commandWindowId: fresh.commandWindowId, expectedRevision: 2 })
+  expect(commands()[1].request.action).toMatchObject({ action: 'ft.exchange', transmitEpoch: FT_EPOCH, change: { kind: 'resend' } })
+  h.reply({ operation: 'stationControl', operationId: commands()[1].request.requestId, outcome: 'applied', evidence: 'stationState' })
+  await h.advance(100)
+  expect(await resend).toMatchObject({ link: { tier: 'FT8' } })
+  h.client.disconnected()
+})
+
+// THE LOAD-BEARING HALF: a held gesture must never reach the wire after the operator has stood the
+// transmitter down, after the station's epoch moved under it, or after the wait ran out. Each case
+// asserts the refusal AND that nothing was sent — the hold is the only thing that changed.
+it('control: a held FT gesture is refused with nothing sent — on a Stop, a TX-off, a moved epoch, an over-long lapse, and never twice', async () => {
+  const txOff = { action: 'ft.txEnabled', expectedTier: 'FT8', transmitEpoch: FT_EPOCH, on: false } as const
+  {
+    // Stop, pressed while the gesture waits. Nothing of that gesture may follow it onto the wire.
+    const { h, commands, land } = await confirming()
+    const call = h.client.control(ftCall).catch(e => e)
+    await h.advance(10)
+    void h.client.stopTransmit().catch(() => {})
+    land(); await h.advance(10)
+    expect(await call).toMatchObject({ message: 'staleContext', sent: false })
+    expect(commands()).toHaveLength(1)
+    h.client.disconnected()
+  }
+  {
+    // TX off, pressed while the gesture waits: the stand-down goes out, the held call does not.
+    const { h, commands, land } = await confirming()
+    const call = h.client.control(ftCall).catch(e => e)
+    await h.advance(10)
+    const off = h.client.control(txOff)
+    land(); await h.advance(10)
+    expect(await call).toMatchObject({ message: 'staleContext', sent: false })
+    expect(commands()).toHaveLength(2)
+    expect(commands()[1].request.action).toMatchObject({ action: 'ft.txEnabled', on: false })
+    h.reply({ operation: 'stationControl', operationId: commands()[1].request.requestId, outcome: 'applied', evidence: 'stationState' })
+    expect(await off).toMatchObject({ outcome: 'applied' })
+    h.client.disconnected()
+  }
+  {
+    // The station's transmit epoch moved while the gesture waited: the checks at the send are
+    // untouched, and they are what refuses it.
+    const { h, commands, fresh, land } = await confirming()
+    const call = h.client.control(ftCall).catch(e => e)
+    await h.advance(10)
+    land({ ...fresh, transmitEpoch: '000000000000002b' }); await h.advance(10)
+    expect(await call).toMatchObject({ message: 'staleContext', sent: false })
+    expect(commands()).toHaveLength(1)
+    h.client.disconnected()
+  }
+  {
+    // The re-read never lands inside CONTROL_RESUME_MS: refused, and never sent late when it does.
+    const { h, commands, land } = await confirming()
+    const call = h.client.control(ftCall).catch(e => e)
+    await h.advance(1600)
+    expect(await call).toMatchObject({ message: 'notController', sent: false, busy: false })
+    expect(commands()).toHaveLength(1)
+    land(); await h.advance(300)
+    expect(commands(), 'a refused gesture is never replayed').toHaveLength(1)
+    h.client.disconnected()
+  }
+  {
+    // Two clicks inside one hold are one transmission: the second is refused, not queued.
+    const { h, commands, land } = await confirming()
+    const first = h.client.control(ftCall)
+    const second = h.client.control(ftCall).catch(e => e)
+    await h.advance(10)
+    land(); await h.advance(10)
+    expect(commands(), 'one gesture, one command').toHaveLength(2)
+    expect(await second).toMatchObject({ message: 'operationUnknown', sent: false })
+    h.reply({ operation: 'stationControl', operationId: commands()[1].request.requestId, outcome: 'applied', evidence: 'stationState' })
+    expect(await first).toMatchObject({ outcome: 'applied' })
+    h.client.disconnected()
+  }
+})
+
 /** The station's re-read after a command goes out on the next tick the request budget admits. */
 async function nextHeartbeat(h: ReturnType<typeof setup>) {
   for (let i = 0; i < 8 && h.sent[h.sent.length - 1].request.type !== 'heartbeat'; i++) await h.advance(250)
@@ -391,12 +523,24 @@ it('keeps the state through a confirmed command, refuses a second command from i
     return { h, prepared, reread, commands }
   }
   {
-    // A transmit action carries its epoch and never waits out a lapse: refused at once, not sent.
-    const { h, commands } = await confirmed()
-    const transmit = h.client.control({ action: 'ft.txEnabled', expectedTier: 'FT8', transmitEpoch, on: true }).catch(e => e)
+    // A transmit action carries its epoch and, since the operator's approval of 2026-09-17, waits
+    // this lapse out exactly as the ordinary command below does. The rule it replaces was "a
+    // transmit action never waits out a lapse: refused at once, not sent", and what an operator saw
+    // for it was "Not sent" on a control that was still lit. Nothing leaves on the spent window
+    // either way; the hold's own cancels — a Stop, TX off, a moved epoch, a lapse that outlasts the
+    // wait, and never twice — are the control beside "holds an FT gesture through the post-command
+    // lapse", which is where that half is asserted.
+    const { h, commands, reread } = await confirmed()
+    const transmit = h.client.control({ action: 'ft.txEnabled', expectedTier: 'FT8', transmitEpoch, on: true })
     await h.advance(10)
-    expect(await transmit).toMatchObject({ sent: false, busy: false })
-    expect(commands()).toHaveLength(1)
+    expect(commands(), 'nothing on the spent window').toHaveLength(1)
+    const next = { ...h.state, transmitEpoch, revision: 2, commandWindowId: crypto.randomUUID(), nextSequence: 2 }
+    h.client.receive({ type: 'operationResponse', requestId: reread.requestId, value: next })
+    await h.advance(10)
+    expect(commands()).toHaveLength(2)
+    expect(commands()[1].request).toMatchObject({ commandWindowId: next.commandWindowId, clientSequence: 2, expectedRevision: 2 })
+    h.reply({ operation: 'stationControl', operationId: commands()[1].request.requestId, outcome: 'applied', evidence: 'stationState' })
+    expect(await transmit).toMatchObject({ outcome: 'applied' })
     h.client.disconnected()
   }
   {
@@ -505,6 +649,25 @@ it('marks a Log QSO gesture refused before sending as not sent', async () => {
     expectedQso: { dxcall: 'W1AW', state: 'done', txNow: null, cqRunning: false } }).catch(e => e)
   await h.advance(250)
   expect(await dropped).toMatchObject({ message: 'windowExpired', sent: false })
+  expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
+  h.client.disconnected()
+})
+
+// THE REFUSAL BEHIND THE BUTTON. The Log button now waits for the sample that carries this QSO's
+// key (QsoLoggingControls.test.tsx), and that is where the race is fixed. The refusal under it has
+// to stay exactly as it was: a gesture that reaches the transport without a key is refused before
+// anything is sent, and it is refused OUT LOUD — an OperationFailure the caller says, never a
+// silent no-op.
+it('control: a Log QSO gesture with no key is still refused, unsent, and says so', async () => {
+  const h = setup(storage(), ['qsoLogging'], 4)
+  await h.advance(1000)
+  const reads = { kind: 'remote', invoke: vi.fn() } as unknown as ApplicationTransport
+  const transport = controlTransport(reads, { age: () => Infinity } as unknown as ApplicationClient, h.client)
+  const refused = await transport.invoke('log_current_qso', { expectedKey: null, expectedTier: 'FT8',
+    expectedQso: { dxcall: 'W1AW', state: 'done', txNow: null, cqRunning: false } }).catch(e => e)
+  expect(refused).toBeInstanceOf(OperationFailure)
+  expect(refused).toMatchObject({ message: 'invalidOperation', sent: false })
+  expect(controlFailureMessage(refused), 'the operator is told, not left guessing').toBe(t('remote.controlNotSent'))
   expect(h.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
   h.client.disconnected()
 })

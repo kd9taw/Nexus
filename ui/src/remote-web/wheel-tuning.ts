@@ -1,6 +1,6 @@
 import type { AppSnapshot } from '../types'
 import { bandLabelForMhz } from '../band'
-import { clampWheelTarget } from '../wheelTuningPolicy'
+import { clampWheelTarget, stepFrom } from '../wheelTuningPolicy'
 import type { ApplicationClient } from './application-client'
 import { OperationFailure, type OperationClient } from './operation-client'
 import type { StationAction, ControlOutcome, ControlContext } from './station-operation'
@@ -52,6 +52,10 @@ const BURST_MS = 120
  * CONTROL_RESUME_MS, or refused as a whole with "Not sent". Nothing is sent on stale control, the
  * dial is re-read before sending (a dial that moved refuses the burst; no old target is replayed),
  * and a scope press still needs current control from press to release.
+ *
+ * ONE WRITER ON ONE DIAL: the readout digits, the scope wheel and the tuning strip's ◄/► arrows
+ * all step the same burst (`nudge`, `nudgeSteps`, `captureTarget`), so two of them can never build
+ * on two different dials or put two commands on the wire for one gesture.
  *
  * ONE IN FLIGHT, ONE QUEUED. A step made while a command is in flight is no longer dropped: it
  * joins a burst built on the dial that command is ASKING for, and that burst is sent the moment the
@@ -189,7 +193,7 @@ export class WheelTuning {
   captureTarget(source: WheelSource): ((dialHz: number) => boolean) | null {
     if (!this.ready() || !this.matchesSource(source) || this.burst || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
       !['USB', 'LSB', 'AM', 'FM'].includes(source.sideband)) return null
-    const fromHz = Math.round(source.dialMhz * 1e6), context = this.context(), input = this.inputContext()
+    const fromHz = this.dialNow(source.dialMhz), context = this.context(), input = this.inputContext()
     const state = this.operations.getSnapshot().state!
     const b: Burst = { ...source, fromHz, targetHz: fromHz, authority: context, radioId: state.controls!.context.radioId,
       edgeSaid: false, owners: new Set(source.owner ? [source.owner] : []), send: this.operations.prepareControl(source.context!) }
@@ -209,11 +213,25 @@ export class WheelTuning {
     }
   }
   nudge(deltaHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
+    if (!Number.isFinite(deltaHz) || !deltaHz) return false
+    return this.measured(() => this.step(old => old + deltaHz, source, onEdge))
+  }
+  /** The tuning strip's ◄/► : `steps` whole steps of `stepHz`, rounding to the step grid first as a
+   * rig's VFO does (#273, `stepFrom`). It goes through the same burst as the wheel and the digits
+   * ON PURPOSE. The strip used to command an absolute dial of its own, read off the sample it
+   * draws: while a wheel command was in flight that dial was the one the radio had just left, so a
+   * press either landed a step behind or was refused as a second command — and the digits, already
+   * showing where the wheel was going, said neither. One writer, one dial. */
+  nudgeSteps(steps: number, stepHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
+    if (!Number.isSafeInteger(steps) || !steps || !Number.isSafeInteger(stepHz) || stepHz <= 0) return false
+    return this.measured(() => this.step(old => stepFrom(old, steps, stepHz), source, onEdge))
+  }
+  /** Measured: the step is a gesture; refused, or joined to the burst it will be sent with. */
+  private measured(apply: () => boolean): boolean {
     const probe = this.probe
-    if (!probe) return this.step(deltaHz, source, onEdge)
-    // Measured: the step is a gesture; refused, or joined to the burst it will be sent with.
+    if (!probe) return apply()
     const gesture = probe.gesture('tune'), before = this.getProvisionalHz()
-    const accepted = this.step(deltaHz, source, onEdge)
+    const accepted = apply()
     if (!gesture) return accepted
     if (accepted && this.burst) {
       (this.burst.probes ??= []).push(gesture)
@@ -224,8 +242,11 @@ export class WheelTuning {
     else probe.refused(gesture)
     return accepted
   }
-  private step(deltaHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
-    if (!this.inputReady() || !this.matchesSource(source) || !Number.isFinite(deltaHz) || !deltaHz || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
+  /** `move` takes the burst's current target to the next one: the wheel adds its delta, the strip's
+   * arrows step the grid. Everything else about a step — the dial it builds on, the burst it joins,
+   * the band-edge stop, the digits — is the same for both, which is the point. */
+  private step(move: (old: number) => number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
+    if (!this.inputReady() || !this.matchesSource(source) || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
       !['USB', 'LSB', 'AM', 'FM'].includes(source.sideband)) return false
     // A step made while a command is in flight builds on the dial THAT command is asking for, not
     // on the station's reading — which still shows where the radio was, and would send the whole
@@ -248,7 +269,7 @@ export class WheelTuning {
     const b = this.burst
     if (source.owner) b.owners.add(source.owner)
     if (b.owners.size > 32) { this.cancel(); return false }
-    const old = b.targetHz, next = clampWheelTarget(old + deltaHz, old, b.fromHz)
+    const old = b.targetHz, next = clampWheelTarget(move(old), old, b.fromHz)
     if (!Number.isSafeInteger(Math.round(next.hz)) || next.hz < 1 || next.hz > 250000e6) return false
     b.targetHz = Math.round(next.hz)
     if (next.hitEdge && b.targetHz !== old && !b.edgeSaid) { b.edgeSaid = true; onEdge?.(b.targetHz / 1e6) }
@@ -341,9 +362,21 @@ export class WheelTuning {
    * of ours had read back has simply not caught up — it is older news than that readback, not
    * evidence the dial moved under us. Refusing on it would drop every burst made while the previous
    * one was in flight, which is the whole of what this batch fixes; accepting a sample taken AFTER
-   * the readback is what still catches a dial that really did move. */
+   * the readback is what still catches a dial that really did move.
+   *
+   * A step's sample is the page's RENDER, and `age` does not time a render: it times the newest
+   * sample the stream holds, which the render trails by up to a poll. Taken after the readback by
+   * that clock, the render could still show the dial the command moved away from, and a step built
+   * on it was refused by the re-read as if the radio had moved — the notch after a readback lost
+   * whenever it landed in that poll. So the question is put to the newest sample itself: while it
+   * shows the readback, the radio is where the readback put it and a render that disagrees is older
+   * news; once it shows another dial, the radio moved, and the step keeps the render's dial for the
+   * re-read to refuse unless the page already shows that move. */
   private dialNow(sampleDialMhz: number): number {
-    const c = this.confirmed
-    return c && performance.now() - this.application.age('get_snapshot') < c.at ? c.hz : Math.round(sampleDialMhz * 1e6)
+    const c = this.confirmed, sample = Math.round(sampleDialMhz * 1e6)
+    if (!c) return sample
+    if (performance.now() - this.application.age('get_snapshot') < c.at) return c.hz
+    const held = (this.application.held('get_snapshot') as AppSnapshot | undefined)?.radio?.dialMhz
+    return held !== undefined && Math.round(held * 1e6) === c.hz ? c.hz : sample
   }
 }

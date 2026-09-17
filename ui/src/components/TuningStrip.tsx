@@ -5,7 +5,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 //
 // The units rule lands on the STEP: every step in Hz, the RIT/XIT offsets, the dial and the
 // VFO letters are invariant and stay in the code, as do the four button names below.
-import { useRef, useState } from 'react'
+import { useContext, useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
 import { setFrequency, setRit, setXit, setVfo } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
@@ -15,6 +15,8 @@ import { stepFrom } from '../wheelTuningPolicy'
 import { t } from '../i18n'
 import { pushToast } from '../toast'
 import { controlFailureMessage } from '../remote-web/control-failure'
+import { RemoteWheelTuningContext } from '../remote-web/wheel-tuning-context'
+import { useRemoteStation } from '../remote-web/amplifier-observation'
 
 /** The rig's own vocabulary on these buttons: the two clarifiers and the two VFOs. Named so
  *  the catalog guard reads them as the deliberate tokens they are. */
@@ -58,6 +60,7 @@ export function TuningStrip({
   showReadout?: boolean
 }) {
   const control = useStationControl(), frequency = useStationCapability('frequency')
+  const remoteTuning = useContext(RemoteWheelTuningContext), observation = useRemoteStation(snap.activeRadioId)
   const frequencyAllowed = control || (frequency && snap.radio.source === 'native' && !snap.radio.txEnabled &&
     !snap.radio.txBusyReason && !snap.radio.transmitting && !snap.radio.rigKeyed && !snap.radio.tuning)
   // A browser holds VFO + XIT under splitTuning (they move the transmitter) and RIT under ritTuning.
@@ -92,7 +95,19 @@ export function TuningStrip({
   }
   // #273: `steps` whole steps, the first rounding to the step (18.110.250 → 18.111.000 at 1 kHz),
   // in integer Hz so float drift never accumulates on repeated nudges.
-  const nudge = (steps: number) => void tuneTo(stepFrom(Math.round(dial * 1e6), steps, step) / 1e6)
+  //
+  // A BROWSER'S ARROWS STEP THE WHEEL'S OWN BURST, and the desktop's command the dial directly as
+  // they always have. `dial` is the sample this strip draws, a poll behind the stream and further
+  // behind a wheel command already in flight; an absolute dial built from it walked back what the
+  // wheel had just asked for, or was refused as a second command while the digits showed neither.
+  // `nudgeSteps` keeps the rounding above and hands the press to the one pipeline (wheel-tuning.ts).
+  const nudge = (steps: number) => {
+    if (!control && remoteTuning) {
+      remoteTuning.nudgeSteps(steps, step, { dialMhz: dial, sideband: snap.radio.sideband || 'USB', context: observation.context })
+      return
+    }
+    void tuneTo(stepFrom(Math.round(dial * 1e6), steps, step) / 1e6)
+  }
 
   // Mouse-wheel tuning over the big frequency read-out itself (operator request) — same coalesced
   // CAT path + selected step (Shift = ×10) as the scope wheel-tune, for hunting CW/phone signals
