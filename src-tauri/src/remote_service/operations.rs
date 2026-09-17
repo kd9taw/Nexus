@@ -271,18 +271,30 @@ struct Receipt {
     device: String,
     fingerprint: Vec<u8>,
     at: Instant,
-    value: Value,
+    /// `None` while the write is still in flight (a control receipt's answer is its completion
+    /// and never lives here). See `value`.
+    value: Option<Value>,
     control: Option<Completion>,
     // The result payload can require a newer decoder than the Result request.
     // Never send v4 QSO evidence to a browser which only understands v2/v3.
     result_version: u8,
 }
 impl Receipt {
-    fn value(&self) -> Value {
-        if let Some(control) = &self.control {
-            control_value(&self.id, control.outcome())
-        } else {
-            self.value.clone()
+    /// What a replay or a Result request is answered with. A receipt whose write has not come
+    /// back — its file sync or network post runs with Core released — answers `remoteBusy`,
+    /// exactly what the browser was told while that work held the lock, so it waits rather than
+    /// appending or posting twice.
+    fn value(&self) -> Result<Value, &'static str> {
+        match (&self.control, &self.value) {
+            (Some(control), _) => Ok(control_value(&self.id, control.outcome())),
+            (None, Some(value)) => Ok(value.clone()),
+            (None, None) => Err("remoteBusy"),
+        }
+    }
+    fn pending(&self) -> bool {
+        match &self.control {
+            Some(control) => control.outcome() == Outcome::Pending,
+            None => self.value.is_none(),
         }
     }
 }
@@ -306,6 +318,16 @@ struct Core {
     context: Option<Vec<u8>>,
     windows: VecDeque<Window>,
     receipts: VecDeque<Receipt>,
+}
+impl Core {
+    /// Record a receipt and spend the command window it was admitted under.
+    fn open(&mut self, receipt: Receipt) {
+        self.receipts.push_back(receipt);
+        while self.receipts.len() > 1024 {
+            self.receipts.pop_front();
+        }
+        self.windows.clear();
+    }
 }
 impl Default for Core {
     fn default() -> Self {
@@ -526,6 +548,15 @@ impl Authority {
             return Err("authorityUnavailable");
         }
         c.revision += 1;
+        Ok(())
+    }
+    /// Re-take Core to record what a write that ran with it released came back with. Waiting is
+    /// fine here: nothing else holds Core across anything slow, and this thread holds nothing.
+    fn record(&self, id: &str, value: Value) -> Result<(), &'static str> {
+        let mut c = self.core.lock().map_err(|_| "authorityUnavailable")?;
+        if let Some(receipt) = c.receipts.iter_mut().find(|r| r.id == id) {
+            receipt.value = Some(value);
+        }
         Ok(())
     }
     /// The epoch every local grant belongs to. Any local decision that clears permissions
@@ -1013,7 +1044,7 @@ impl Authority {
                         if version < receipt.result_version {
                             Err("stationUnsupported")
                         } else {
-                            Ok(receipt.value())
+                            receipt.value()
                         }
                     })
             }
@@ -1055,7 +1086,7 @@ impl Authority {
                         && r.device == device
                         && r.fingerprint == fingerprint
                     {
-                        Ok(r.value())
+                        r.value()
                     } else {
                         Err("requestConflict")
                     };
@@ -1093,11 +1124,7 @@ impl Authority {
                 {
                     return Err("windowExpired");
                 }
-                if c.receipts.iter().any(|r| {
-                    r.control
-                        .as_ref()
-                        .is_some_and(|r| r.outcome() == Outcome::Pending)
-                }) {
+                if c.receipts.iter().any(Receipt::pending) {
                     return Err("remoteBusy");
                 }
                 if let Request::LogChange { change, .. } = request {
@@ -1116,12 +1143,28 @@ impl Authority {
                     c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
                     let prepared = logging::prepare_change(&mut engine, change);
                     drop(engine);
+                    // Engine is released, and so is Core: the receipt goes in as in flight first,
+                    // so a replay meanwhile is told the station is busy rather than posting twice,
+                    // and a revoke, audio recheck or status read at the shack never waits behind
+                    // the network post or the file sync that follow. A self-spot's pota.app post
+                    // can take 15 s; while Core was held across it, a revoke silently did nothing.
+                    c.open(Receipt {
+                        id: request.id().into(),
+                        session: session.into(),
+                        device: device.into(),
+                        fingerprint,
+                        at: current,
+                        value: None,
+                        control: None,
+                        result_version: 4,
+                    });
+                    drop(c);
                     #[cfg(test)]
                     if let Some(probe) = &self.before_sync {
                         probe();
                     }
                     let outcome = match prepared {
-                        // Engine is released; a spot is posted only now, and only once per receipt.
+                        // Nothing is held; a spot is posted only now, and only once per receipt.
                         Ok(work) => work.finish(
                             |context| self.self_spot(context),
                             |freq_mhz, call, comment| self.cluster_spot(freq_mhz, call, comment),
@@ -1129,20 +1172,7 @@ impl Authority {
                         Err(reason) => logging::ChangeOutcome::Rejected { reason, spot: None },
                     };
                     let value = logging::change_value(request.id(), &outcome);
-                    c.receipts.push_back(Receipt {
-                        id: request.id().into(),
-                        session: session.into(),
-                        device: device.into(),
-                        fingerprint,
-                        at: current,
-                        value: value.clone(),
-                        control: None,
-                        result_version: 4,
-                    });
-                    while c.receipts.len() > 1024 {
-                        c.receipts.pop_front();
-                    }
-                    c.windows.clear();
+                    self.record(request.id(), value.clone())?;
                     return Ok(value);
                 }
                 if let Request::StationControl {
@@ -1154,6 +1184,20 @@ impl Authority {
                         c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
                         let prepared = logging::prepare(&mut engine, action);
                         drop(engine);
+                        // The hardware receipt's own shape: pending under Core, finished once
+                        // the file sync comes back with Core released (see the log change above).
+                        let completion = Completion::default();
+                        c.open(Receipt {
+                            id: request.id().into(),
+                            session: session.into(),
+                            device: device.into(),
+                            fingerprint,
+                            at: current,
+                            value: None,
+                            control: Some(completion.clone()),
+                            result_version: 4,
+                        });
+                        drop(c);
                         #[cfg(test)]
                         if let Some(probe) = &self.before_sync {
                             probe();
@@ -1162,24 +1206,8 @@ impl Authority {
                             Ok(work) => work.finish(shared_engine),
                             Err(reason) => Outcome::Rejected { reason },
                         };
-                        let completion = Completion::default();
                         completion.finish(outcome.clone());
-                        let value = control_value(request.id(), outcome);
-                        c.receipts.push_back(Receipt {
-                            id: request.id().into(),
-                            session: session.into(),
-                            device: device.into(),
-                            fingerprint,
-                            at: current,
-                            value: value.clone(),
-                            control: Some(completion),
-                            result_version: 4,
-                        });
-                        while c.receipts.len() > 1024 {
-                            c.receipts.pop_front();
-                        }
-                        c.windows.clear();
-                        return Ok(value);
+                        return Ok(control_value(request.id(), outcome));
                     }
                     let deadline = (current + Duration::from_secs(5)).min(l.until);
                     let transmit_permit = if let Some(epoch) = action.transmit_epoch() {
@@ -1230,20 +1258,16 @@ impl Authority {
                         }
                     };
                     let value = control_value(request.id(), completion.outcome());
-                    c.receipts.push_back(Receipt {
+                    c.open(Receipt {
                         id: request.id().into(),
                         session: session.into(),
                         device: device.into(),
                         fingerprint,
                         at: current,
-                        value: value.clone(),
+                        value: None,
                         control: Some(completion),
                         result_version: 2,
                     });
-                    while c.receipts.len() > 1024 {
-                        c.receipts.pop_front();
-                    }
-                    c.windows.clear();
                     return Ok(value);
                 }
                 let Request::LogManual { record, .. } = request else {
@@ -1265,6 +1289,18 @@ impl Authority {
                 c.lease.as_mut().ok_or("leaseExpired")?.sequence = *client_sequence;
                 let outcome = engine.log_qso_for_sync(rec.into());
                 drop(engine);
+                // The file sync runs with Core released too (see the log change above).
+                c.open(Receipt {
+                    id: request.id().into(),
+                    session: session.into(),
+                    device: device.into(),
+                    fingerprint,
+                    at: current,
+                    value: None,
+                    control: None,
+                    result_version: 1,
+                });
+                drop(c);
                 let value = match outcome {
                     tempo_app::engine::LogWriteOutcome::PendingSync(receipts) => {
                         #[cfg(test)]
@@ -1288,20 +1324,7 @@ impl Authority {
                         json!({"outcome":"rejected","reason":"alreadyPresent","operationId":request.id()})
                     }
                 };
-                c.receipts.push_back(Receipt {
-                    id: request.id().into(),
-                    session: session.into(),
-                    device: device.into(),
-                    fingerprint,
-                    at: current,
-                    value: value.clone(),
-                    control: None,
-                    result_version: 1,
-                });
-                while c.receipts.len() > 1024 {
-                    c.receipts.pop_front();
-                }
-                c.windows.clear();
+                self.record(request.id(), value.clone())?;
                 Ok(value)
             }
         }

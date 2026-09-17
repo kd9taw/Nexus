@@ -1276,6 +1276,75 @@ fn a_test_build_with_no_poster_refuses_a_spot_instead_of_posting_it() {
     assert_eq!(result["reason"], "invalidChange");
 }
 
+/// The class: something slow held Core. A self-spot's pota.app post has a 15-second client
+/// timeout, and it ran with the authority lock held — every local read and write of that lock
+/// uses `try_lock` and answers `remoteBusy` (or an empty list) when it is taken, so for the length
+/// of the post a revoke at the shack silently did nothing (#318), receive audio kept playing after
+/// one, and the Remote panel showed no devices. The post, and the log-file sync of the other
+/// write paths, now run with Core released; the receipt is recorded as in flight first, so a
+/// replay in that window is told the station is busy and nothing posts twice.
+#[test]
+fn a_self_spot_in_flight_holds_no_authority_lock_so_a_revoke_lands_at_once() {
+    let mut f = Fixture::new();
+    let posts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (entered, in_flight) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    let counted = posts.clone();
+    f.authority.spot_pota = Some(Box::new(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        entered.send(()).unwrap();
+        released.lock().unwrap().recv().unwrap();
+        Ok(propagation::live::pota::SpotAnswer::Posted)
+    }));
+    f.authority.spot_cluster = Some(Box::new(|_, _, _| Ok(())));
+    acquire(&f);
+    f.authority.permit_station(DEVICE, true).unwrap();
+    activating(&f);
+    let lease = control_state_version(&f, Instant::now(), 4)["leaseId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let request = spot(&f, "US-0001");
+    // Everything observed while the post is in flight is collected first and judged after the
+    // poster is released, so a failure reads as a failure and never as a hung test.
+    let (status, admitted, revoked, replay, result) = std::thread::scope(|s| {
+        let posting = s.spawn(|| run(&f, &request));
+        in_flight.recv().unwrap();
+        let status = f.authority.local_status();
+        let admitted = f
+            .authority
+            .audio_admitted(SESSION, DEVICE, &lease, Instant::now());
+        let revoked = f.authority.permit_station(DEVICE, false);
+        let replay = run(&f, &request);
+        release.send(()).unwrap();
+        (status, admitted, revoked, replay, posting.join().unwrap())
+    });
+    assert_eq!(
+        status["devices"],
+        json!([DEVICE]),
+        "the Remote panel still lists the browser while the post is in flight"
+    );
+    assert_eq!(admitted, Ok(()), "the audio lane's recheck is answered");
+    assert_eq!(revoked, Ok(()), "the revoke lands instead of no-op'ing");
+    assert_eq!(
+        replay,
+        Err("remoteBusy"),
+        "a replay in the window waits; it is not a second post"
+    );
+    let result = result.unwrap();
+    assert_eq!(result["outcome"], "applied");
+    assert_eq!(result["evidence"], "spotPosted");
+    assert_eq!(posts.load(Ordering::SeqCst), 1);
+    // The revoke stood: station control is gone, and with it the lease it held.
+    let after = f.authority.local_status();
+    assert_eq!(after["controlDevices"], json!([]));
+    assert_eq!(after["controller"], Value::Null);
+    // The receipt was recorded once the post came back: a dropped reply is answered from it.
+    assert_eq!(run(&f, &request).unwrap(), result);
+    assert_eq!(posts.load(Ordering::SeqCst), 1);
+}
+
 /// The shack's log view and a Remote browser are two writers of one log. The view used to
 /// address a row by its position at load time; a browser's delete above that row shifted
 /// every later one, and the shack's next Delete or Edit went to a DIFFERENT contact, with a
