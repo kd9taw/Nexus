@@ -981,6 +981,13 @@ const SENT_SLOT_DERIVATIONS: &[(&str, &[&str])] = &[
     // §3.4: "QTH (county / state / DX) → contest_qth_county, contest_qth_state —
     // this is `my_location` (§3)". One slot, two settings, chosen by role.
     ("my_location", &["contest_qth_county", "contest_qth_state"]),
+    // The same two settings for a contest whose DX entrants send their COUNTRY rather
+    // than the literal `DX` (ILQP: *"others give RS/T and state, province or
+    // country"*). Same inputs, one different role arm — see `session::sent_value`.
+    (
+        "my_location_or_typed",
+        &["contest_qth_county", "contest_qth_state"],
+    ),
     // §6.3's `PREC`: Sweepstakes' precedence letter is the entry's declared category
     // restated (SS-Rules v2.1 §4.2), so it is derived from the four `CATEGORY-*` axes
     // and never typed into the exchange. All four inputs are settings this build
@@ -4239,6 +4246,8 @@ mod tests {
             "setting:contest_check",
             "setting:mygrid",
             "derived:my_location",
+            // ILQP's variant of the same slot, whose DX entrants send their country.
+            "derived:my_location_or_typed",
         ] {
             assert!(
                 at(&|v| src(v, good)).is_ok(),
