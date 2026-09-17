@@ -223,9 +223,44 @@ it('a nudge pressed while the page still draws the sample from before a readback
   await tick()
   expect(h.tuning.nudge(1000, h.source())).toBe(true); await tick(120)
   act(() => h.finish()); await h.fresh(7.201)
-  fireEvent.click(ui.getByRole('button', { name: 'Tune up 100 Hz' })); await tick()
-  expect(setFrequency).toHaveBeenCalledOnce()
-  expect(setFrequency).toHaveBeenCalledWith(7.2011, '40m', 'LSB')
+  fireEvent.click(ui.getByRole('button', { name: 'Tune up 100 Hz' })); await tick(120)
+  expect(setFrequency, 'a browser nudge goes out through the one tuning pipeline').not.toHaveBeenCalled()
+  expect(h.writes()).toHaveLength(2)
+  expect(h.writes()[1].request.action.dialMhz).toBe(7.2011)
+  act(() => h.finish()); await tick()
+  expect(h.failed).not.toHaveBeenCalled()
+})
+
+// ONE WRITER ON ONE DIAL. The strip's arrows used to command an absolute dial of their own, built
+// from the sample the strip draws. While the wheel had a command out, that dial was a step old: the
+// press either walked back what the wheel had just asked for or was refused as a second command,
+// and the digits — already showing where the wheel was going — said neither. The arrows now step
+// the same burst, so they queue behind the command in flight exactly as a wheel notch does.
+// (Through the UI this is reachable only once a pending command stops disabling the strip —
+// `useStationHeld` still gates on `controlPending`, which is batch 1's blanking work — so the press
+// is made on the controller here, where the two writers actually met.)
+it('a nudge made while a wheel command is in flight joins it, and steps from the dial that command asked for', async () => {
+  const h = fixture()
+  expect(h.tuning.nudge(1000, h.source())).toBe(true); await tick(120)
+  expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.action.dialMhz).toBe(7.201)
+  expect(h.tuning.nudgeSteps(1, 100, h.source())).toBe(true)
+  expect(setFrequency, 'nothing of its own goes out while a command is in flight').not.toHaveBeenCalled()
+  expect(h.writes()).toHaveLength(1)
+  expect(h.tuning.getProvisionalHz(), 'the digits already show where the press is going').toBe(7_201_100)
+  act(() => h.finish()); await tick(); await h.fresh(7.201)
+  expect(h.writes()).toHaveLength(2)
+  expect(h.writes()[1].request.action.dialMhz).toBe(7.2011)
+  act(() => h.finish()); await tick()
+  expect(h.failed).not.toHaveBeenCalled()
+})
+
+// #273's rounding is the arrows' own rule and it survives the shared burst: a dial off the grid
+// lands ON the grid on the first press, from wherever the burst is going.
+it('a nudge rounds to the step grid first, from the burst\'s own dial', async () => {
+  const h = fixture(7.20025)
+  expect(h.tuning.nudgeSteps(1, 100, h.source())).toBe(true); await tick(120)
+  expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.action.dialMhz).toBe(7.2003)
+  act(() => h.finish()); await tick()
 })
 
 it('control: once the station moved the dial after that readback, a nudge steps from the dial the page draws', async () => {
@@ -237,9 +272,10 @@ it('control: once the station moved the dial after that readback, a nudge steps 
   act(() => h.finish()); await h.fresh(7.25)
   const ui = drawnBehind(h, snap => <TuningStrip snap={snap} step={100} showReadout={false}/>)
   await tick()
-  fireEvent.click(ui.getByRole('button', { name: 'Tune up 100 Hz' })); await tick()
-  expect(setFrequency).toHaveBeenCalledOnce()
-  expect(setFrequency).toHaveBeenCalledWith(7.2501, '40m', 'LSB')
+  fireEvent.click(ui.getByRole('button', { name: 'Tune up 100 Hz' })); await tick(120)
+  expect(h.writes()).toHaveLength(2)
+  expect(h.writes()[1].request.action.dialMhz).toBe(7.2501)
+  act(() => h.finish()); await tick()
 })
 
 it('refuses a queued burst whole when the LEASE it was made under is replaced, and says so', async () => {

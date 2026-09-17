@@ -1,6 +1,6 @@
 import type { AppSnapshot } from '../types'
 import { bandLabelForMhz } from '../band'
-import { clampWheelTarget } from '../wheelTuningPolicy'
+import { clampWheelTarget, stepFrom } from '../wheelTuningPolicy'
 import type { ApplicationClient } from './application-client'
 import { OperationFailure, type OperationClient } from './operation-client'
 import type { StationAction, ControlOutcome, ControlContext } from './station-operation'
@@ -53,6 +53,10 @@ const BURST_MS = 120
  * dial is re-read before sending (a dial that moved refuses the burst; no old target is replayed),
  * and a scope press still needs current control from press to release.
  *
+ * ONE WRITER ON ONE DIAL: the readout digits, the scope wheel and the tuning strip's ◄/► arrows
+ * all step the same burst (`nudge`, `nudgeSteps`, `captureTarget`), so two of them can never build
+ * on two different dials or put two commands on the wire for one gesture.
+ *
  * ONE IN FLIGHT, ONE QUEUED. A step made while a command is in flight is no longer dropped: it
  * joins a burst built on the dial that command is ASKING for, and that burst is sent the moment the
  * command confirms — so the wheel keeps its steps at any round trip, and the operator's correction
@@ -93,10 +97,6 @@ export class WheelTuning {
   /** DISPLAY ONLY — the dial this browser asked for, until the station's own reading shows it. See
    * the class comment for why it lives here and nowhere else. */
   getProvisionalHz = () => this.provisional?.hz ?? null
-  /** Where the radio IS, in Hz, for a control that commands an absolute dial from the sample the page
-   * draws (the tuning strip's nudges): the station's own word, readback or sample, whichever is newer
-   * than that drawing. Never the provisional dial. See `dialNow`. */
-  dialHz = (drawnDialMhz: number) => this.dialNow(drawnDialMhz)
   private notify() { for (const f of this.listeners) f(); this.probe?.responded('tuning') }
   activate() {
     this.live = true
@@ -213,11 +213,25 @@ export class WheelTuning {
     }
   }
   nudge(deltaHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
+    if (!Number.isFinite(deltaHz) || !deltaHz) return false
+    return this.measured(() => this.step(old => old + deltaHz, source, onEdge))
+  }
+  /** The tuning strip's ◄/► : `steps` whole steps of `stepHz`, rounding to the step grid first as a
+   * rig's VFO does (#273, `stepFrom`). It goes through the same burst as the wheel and the digits
+   * ON PURPOSE. The strip used to command an absolute dial of its own, read off the sample it
+   * draws: while a wheel command was in flight that dial was the one the radio had just left, so a
+   * press either landed a step behind or was refused as a second command — and the digits, already
+   * showing where the wheel was going, said neither. One writer, one dial. */
+  nudgeSteps(steps: number, stepHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
+    if (!Number.isSafeInteger(steps) || !steps || !Number.isSafeInteger(stepHz) || stepHz <= 0) return false
+    return this.measured(() => this.step(old => stepFrom(old, steps, stepHz), source, onEdge))
+  }
+  /** Measured: the step is a gesture; refused, or joined to the burst it will be sent with. */
+  private measured(apply: () => boolean): boolean {
     const probe = this.probe
-    if (!probe) return this.step(deltaHz, source, onEdge)
-    // Measured: the step is a gesture; refused, or joined to the burst it will be sent with.
+    if (!probe) return apply()
     const gesture = probe.gesture('tune'), before = this.getProvisionalHz()
-    const accepted = this.step(deltaHz, source, onEdge)
+    const accepted = apply()
     if (!gesture) return accepted
     if (accepted && this.burst) {
       (this.burst.probes ??= []).push(gesture)
@@ -228,8 +242,11 @@ export class WheelTuning {
     else probe.refused(gesture)
     return accepted
   }
-  private step(deltaHz: number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
-    if (!this.inputReady() || !this.matchesSource(source) || !Number.isFinite(deltaHz) || !deltaHz || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
+  /** `move` takes the burst's current target to the next one: the wheel adds its delta, the strip's
+   * arrows step the grid. Everything else about a step — the dial it builds on, the burst it joins,
+   * the band-edge stop, the digits — is the same for both, which is the point. */
+  private step(move: (old: number) => number, source: WheelSource, onEdge?: (mhz: number) => void): boolean {
+    if (!this.inputReady() || !this.matchesSource(source) || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
       !['USB', 'LSB', 'AM', 'FM'].includes(source.sideband)) return false
     // A step made while a command is in flight builds on the dial THAT command is asking for, not
     // on the station's reading — which still shows where the radio was, and would send the whole
@@ -252,7 +269,7 @@ export class WheelTuning {
     const b = this.burst
     if (source.owner) b.owners.add(source.owner)
     if (b.owners.size > 32) { this.cancel(); return false }
-    const old = b.targetHz, next = clampWheelTarget(old + deltaHz, old, b.fromHz)
+    const old = b.targetHz, next = clampWheelTarget(move(old), old, b.fromHz)
     if (!Number.isSafeInteger(Math.round(next.hz)) || next.hz < 1 || next.hz > 250000e6) return false
     b.targetHz = Math.round(next.hz)
     if (next.hitEdge && b.targetHz !== old && !b.edgeSaid) { b.edgeSaid = true; onEdge?.(b.targetHz / 1e6) }
