@@ -342,6 +342,14 @@ pub async fn connected(
         "x-nexus-operation-ft-version",
         "1".parse().map_err(|_| "invalidResponse")?,
     );
+    // Operation v5: this station tells a v5 browser a control's outcome the moment it settles
+    // (`operationEvent`), instead of leaving it to poll. A service without the header keeps the
+    // exact v4 contract and the browser keeps polling; nothing is pushed to a browser that did
+    // not negotiate it.
+    request.headers_mut().insert(
+        "x-nexus-operation-push-version",
+        "1".parse().map_err(|_| "invalidResponse")?,
+    );
     // Receive audio, advertised only when this station actually has a capture copy to
     // send. A service that does not see this header never routes an `audioListen` here,
     // which matters: the message parser above rejects unknown fields, so being handed
@@ -408,6 +416,16 @@ where
         .clone();
     let operation_connection = super::operations::Connection::new(authority);
     let mut operation_task: Option<tokio::task::JoinHandle<String>> = None;
+    // Settled controls, for operation v5 (`operationEvent`). Bounded, and the authority
+    // `try_send`s into it and drops on full: a notice is the poll arriving early, never the
+    // only way an outcome reaches a browser. The loop keeps a sender of its own so `recv`
+    // below cannot see the channel close while the loop runs.
+    let (completion_sink, mut completions) =
+        tokio::sync::mpsc::channel::<super::operations::CompletionNotice>(8);
+    operation_connection
+        .authority
+        .watch_completions(completion_sink.clone());
+    let mut event_task: Option<tokio::task::JoinHandle<Option<String>>> = None;
     status.set("connected", None);
     let mut tick = tokio::time::interval(Duration::from_millis(tempo_app::remote_monitor::POLL_MS));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -570,6 +588,24 @@ where
                 query_task = None;
                 let data = result.map_err(|_| "applicationUnavailable")?;
                 outbound.send(Message::Text(data.into()))?;
+            },
+            // A control settled (operation v5). The event is built on its own blocking task,
+            // never on this loop and never in the operation task's slot - so a browser request
+            // arriving meanwhile is not told `stationBusy` for it, and Stop above is read exactly
+            // as before. One at a time; the queue holds the rest.
+            notice = completions.recv(), if event_task.is_none() => {
+                if let Some(notice) = notice {
+                    let authority = operation_connection.authority.clone(); let engine = engine.clone();
+                    event_task = Some(tokio::task::spawn_blocking(move || authority.completion_event(&notice, &engine)));
+                }
+            },
+            event = async { event_task.as_mut().expect("guarded event task").await }, if event_task.is_some() => {
+                event_task = None;
+                // Nothing to say (the receipt or the connection is gone) is not an error: the
+                // browser still has its poll.
+                if let Ok(Some(data)) = event {
+                    outbound.send(Message::Text(data.into()))?;
+                }
             },
             _ = application_tick.tick(), if stream.active() => {
                 if let Some(data) = stream.next(&mut application, engine, Instant::now())? {

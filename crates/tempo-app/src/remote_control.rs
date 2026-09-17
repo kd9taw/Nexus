@@ -202,10 +202,16 @@ pub enum Reason {
 #[derive(Clone)]
 pub struct Completion(Arc<Mutex<Progress>>);
 
+/// Told once, when the outcome stops being pending. Never load-bearing: a reader that polls
+/// `outcome` learns the same thing, so a waker that is dropped or never installed costs a
+/// browser a poll, not an outcome.
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
 struct Progress {
     outcome: Outcome,
     permit: Option<Permit>,
     attempted: bool,
+    waker: Option<Waker>,
 }
 
 impl Progress {
@@ -232,6 +238,7 @@ impl Default for Completion {
             outcome: Outcome::Pending,
             permit: None,
             attempted: false,
+            waker: None,
         })))
     }
 }
@@ -242,59 +249,97 @@ impl Completion {
             outcome: Outcome::Pending,
             permit: Some(permit),
             attempted: false,
+            waker: None,
         })))
+    }
+
+    /// Every path that can settle the outcome goes through here, so the waker fires exactly once,
+    /// on the first transition out of `Pending` — whichever of finish, refuse or a lazy expiry
+    /// makes it — and after the lock is released, so a waker may take any lock it likes.
+    fn settle<T>(&self, now: Instant, f: impl FnOnce(&mut Progress) -> T, fallback: T) -> T {
+        let Ok(mut progress) = self.0.lock() else {
+            return fallback;
+        };
+        progress.expire(now);
+        let result = f(&mut progress);
+        let woken = if matches!(progress.outcome, Outcome::Pending) {
+            None
+        } else {
+            progress.waker.take()
+        };
+        drop(progress);
+        if let Some(wake) = woken {
+            wake();
+        }
+        result
+    }
+
+    /// Ask to be told when this settles. An outcome already terminal is told at once — the
+    /// caller registering late (its reply built before the worker finished) must not wait for
+    /// a second transition that will never come.
+    pub fn on_finish(&self, waker: Waker) {
+        // Installed unconditionally: `settle` fires it on the way out if the outcome is
+        // already terminal, and keeps it for the transition otherwise.
+        self.settle(Instant::now(), |progress| progress.waker = Some(waker), ())
     }
 
     /// Call at the write boundary, after validating the current hardware binding.
     /// Returning false forbids the write, including after an earlier terminal result.
     pub fn begin_write(&self, now: Instant) -> bool {
-        let Ok(mut progress) = self.0.lock() else {
-            return false;
-        };
-        progress.expire(now);
-        if !matches!(progress.outcome, Outcome::Pending) {
-            return false;
-        }
-        progress.attempted = true;
-        true
+        self.settle(
+            now,
+            |progress| {
+                if !matches!(progress.outcome, Outcome::Pending) {
+                    return false;
+                }
+                progress.attempted = true;
+                true
+            },
+            false,
+        )
     }
 
     pub fn outcome(&self) -> Outcome {
-        self.0.lock().map_or(
+        self.settle(
+            Instant::now(),
+            |value| value.outcome.clone(),
             Outcome::Unknown {
                 reason: Reason::HardwareUnconfirmed,
-            },
-            |mut value| {
-                value.expire(Instant::now());
-                value.outcome.clone()
             },
         )
     }
 
     pub fn finish(&self, outcome: Outcome) {
-        if let Ok(mut value) = self.0.lock() {
-            value.expire(Instant::now());
-            if matches!(value.outcome, Outcome::Pending) && !matches!(outcome, Outcome::Pending) {
-                value.outcome = outcome;
-            }
-        }
+        self.settle(
+            Instant::now(),
+            |value| {
+                if matches!(value.outcome, Outcome::Pending) && !matches!(outcome, Outcome::Pending)
+                {
+                    value.outcome = outcome;
+                }
+            },
+            (),
+        )
     }
 
     /// A failure after any attempted write is uncertain, even if a later write
     /// was refused before reaching the wire. Never erase that first attempt.
     pub fn refuse(&self, reason: Reason) {
-        if let Ok(mut value) = self.0.lock() {
-            value.expire(Instant::now());
-            if matches!(value.outcome, Outcome::Pending) {
-                value.outcome = if value.attempted {
-                    Outcome::Unknown {
-                        reason: Reason::HardwareUnconfirmed,
-                    }
-                } else {
-                    Outcome::Rejected { reason }
-                };
-            }
-        }
+        self.settle(
+            Instant::now(),
+            |value| {
+                if matches!(value.outcome, Outcome::Pending) {
+                    value.outcome = if value.attempted {
+                        Outcome::Unknown {
+                            reason: Reason::HardwareUnconfirmed,
+                        }
+                    } else {
+                        Outcome::Rejected { reason }
+                    };
+                }
+            },
+            (),
+        )
     }
 }
 
@@ -359,6 +404,52 @@ mod tests {
         let permit = Revocation::default().permit(deadline).unwrap();
         assert!(permit.valid(deadline - Duration::from_nanos(1)));
         assert!(!permit.valid(deadline));
+    }
+
+    #[test]
+    fn the_waker_fires_exactly_once_on_the_first_settlement_however_it_happens() {
+        use std::sync::atomic::AtomicUsize;
+        let counter = || Arc::new(AtomicUsize::new(0));
+        let waker = |count: &Arc<AtomicUsize>| -> Waker {
+            let count = count.clone();
+            Arc::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        // Finished after registration: told once, and a second finish tells nobody.
+        let finished = Completion::default();
+        let told = counter();
+        finished.on_finish(waker(&told));
+        assert_eq!(told.load(Ordering::SeqCst), 0, "pending: nothing to tell");
+        finished.finish(Outcome::Applied {
+            evidence: Evidence::RadioReadback,
+        });
+        finished.finish(Outcome::Rejected {
+            reason: Reason::StationBusy,
+        });
+        finished.refuse(Reason::StationBusy);
+        assert_eq!(told.load(Ordering::SeqCst), 1);
+        // Registered late, after the worker had already finished: told at once.
+        let early = Completion::default();
+        early.finish(Outcome::Applied {
+            evidence: Evidence::StationState,
+        });
+        let told = counter();
+        early.on_finish(waker(&told));
+        assert_eq!(told.load(Ordering::SeqCst), 1);
+        // Settled by a lazy expiry (nobody called finish): the read that notices it tells.
+        let authority = Revocation::default();
+        let now = Instant::now();
+        let expired =
+            Completion::guarded(authority.permit(now + Duration::from_millis(1)).unwrap());
+        let told = counter();
+        expired.on_finish(waker(&told));
+        assert_eq!(told.load(Ordering::SeqCst), 0);
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(matches!(expired.outcome(), Outcome::Rejected { .. }));
+        assert_eq!(told.load(Ordering::SeqCst), 1);
+        assert!(matches!(expired.outcome(), Outcome::Rejected { .. }));
+        assert_eq!(told.load(Ordering::SeqCst), 1, "a second read tells nobody");
     }
 
     #[test]
