@@ -645,9 +645,7 @@ pub fn run(
     outbox: &Mutex<VecDeque<String>>,
     mut on_reach_error: impl FnMut(&str),
 ) {
-    const BASE: Duration = Duration::from_secs(2);
-    const MAX: Duration = Duration::from_secs(60);
-    let mut backoff = BASE;
+    let mut backoff = BACKOFF_BASE;
     // The last failure reported, so an unchanged one isn't re-reported every backoff.
     // Cleared by a session that actually LOGGED IN — never by a bare TCP connect, which a
     // mute node succeeds at on every retry — so a node that breaks again after genuinely
@@ -655,6 +653,7 @@ pub fn run(
     let mut reported: Option<String> = None;
     while !stop.load(Ordering::Relaxed) {
         let started = Instant::now();
+        let mut outcome = Attempt::Unreachable;
         match connect(addr) {
             Ok(stream) => {
                 if let Ok(reader) = stream.try_clone() {
@@ -674,6 +673,11 @@ pub fn run(
                     // ever sets it and this is the only place it is cleared, so the swap
                     // both reads the outcome and does the clearing.
                     let logged_in = connected.swap(false, Ordering::Relaxed);
+                    outcome = if logged_in {
+                        Attempt::LoggedIn
+                    } else {
+                        Attempt::NoLogin
+                    };
                     if logged_in {
                         // A REAL session happened, so whatever goes wrong next is news
                         // again. Cleared here and not on a bare TCP connect: a node that
@@ -702,14 +706,7 @@ pub fn run(
                 }
             }
         }
-        // A real session (stayed up a while) resets backoff; a fast connect-fail /
-        // instant-drop (server down, or a rejected/unregistered call) backs off
-        // exponentially up to a minute, so we don't hammer the endpoint.
-        backoff = if started.elapsed() > Duration::from_secs(10) {
-            BASE
-        } else {
-            (backoff * 2).min(MAX)
-        };
+        backoff = next_backoff(backoff, started.elapsed(), outcome);
         if !sleep_interruptible(backoff, stop) {
             return;
         }
@@ -726,6 +723,45 @@ fn sleep_interruptible(dur: Duration, stop: &AtomicBool) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     true
+}
+
+/// What one pass through [`run`]'s loop came to — the input to [`next_backoff`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Attempt {
+    /// A login prompt was answered: a real session happened, however long it lasted.
+    LoggedIn,
+    /// TCP was accepted but no login prompt was ever answered — the node spent a session
+    /// on us and gave nothing back (a mute node, cut by [`GREETING_DEADLINE`]).
+    NoLogin,
+    /// No session at all: every address refused, was unreachable, or timed out.
+    Unreachable,
+}
+
+/// The first reconnect wait, and the wait after a session that proved the node works.
+const BACKOFF_BASE: Duration = Duration::from_secs(2);
+/// The ceiling for a node that refuses or can't be reached, or drops a login at once.
+const BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// The ceiling for a node that accepts the connection and never prompts for a login.
+const NO_LOGIN_BACKOFF_MAX: Duration = Duration::from_secs(600);
+
+/// The wait before the next attempt, given the last wait, how long the attempt took, and
+/// what it came to.
+///
+/// **Only a login that lasted resets the wait — never time alone.** The reset used to ask
+/// only "did the attempt take over ten seconds?", and two failures take that long without
+/// ever logging in: a mute node held to [`GREETING_DEADLINE`], and two silently-dropping
+/// addresses at [`CONNECT_TIMEOUT`] each. Both went straight back to a 2 s wait, so a mute
+/// node was dialled ~110 times an hour from every install.
+fn next_backoff(prev: Duration, took: Duration, outcome: Attempt) -> Duration {
+    match outcome {
+        Attempt::LoggedIn if took > Duration::from_secs(10) => BACKOFF_BASE,
+        // A login dropped at once (a rejected or unregistered call), or no session at all.
+        // A refusal costs the node nothing and the usual cause is our own network, so this
+        // keeps the one-minute ceiling and recovers quickly when the network returns.
+        Attempt::LoggedIn | Attempt::Unreachable => (prev * 2).min(BACKOFF_MAX),
+        // Every try spends one of the node's sessions for nothing, so wait far longer.
+        Attempt::NoLogin => (prev * 2).min(NO_LOGIN_BACKOFF_MAX),
+    }
 }
 
 /// How long ONE resolved address gets to answer.
@@ -1690,6 +1726,90 @@ mod tests {
         assert!(
             connected.load(Ordering::Relaxed),
             "an answered prompt is a connected session, however quiet the band goes"
+        );
+    }
+
+    /// Drives [`next_backoff`] the way [`run`] does — each attempt takes `took`, then the
+    /// loop sleeps the wait — and counts the attempts that START inside `from..to`.
+    fn attempts_between(from: Duration, to: Duration, took: Duration, outcome: Attempt) -> u32 {
+        let (mut clock, mut backoff, mut n) = (Duration::ZERO, BACKOFF_BASE, 0);
+        while clock < to {
+            if clock >= from {
+                n += 1;
+            }
+            clock += took;
+            backoff = next_backoff(backoff, took, outcome);
+            clock += backoff;
+        }
+        n
+    }
+
+    #[test]
+    fn a_node_that_accepts_and_never_prompts_is_not_redialled_every_half_minute() {
+        // THE BUG: the reset measured TIME, not a login. A mute node costs exactly the
+        // greeting deadline per try, which counted as "stayed up a while", so the wait went
+        // straight back to 2 s: a new connection every ~32 s, ~110 an hour from every
+        // install, where 1.13.0 held one idle socket per launch.
+        let hour = Duration::from_secs(3600);
+        let settled = attempts_between(hour, 2 * hour, GREETING_DEADLINE, Attempt::NoLogin);
+        assert!(
+            settled <= 6,
+            "a node that never prompts was dialled {settled} times in an hour once settled"
+        );
+    }
+
+    #[test]
+    fn a_long_attempt_that_never_logged_in_does_not_reset_the_wait() {
+        let prev = Duration::from_secs(8);
+        assert_eq!(
+            next_backoff(prev, GREETING_DEADLINE, Attempt::NoLogin),
+            Duration::from_secs(16),
+            "a mute node's 30 s is not a session"
+        );
+        // Two silently-dropping addresses at the connect timeout also run past ten seconds.
+        assert_eq!(
+            next_backoff(prev, 2 * CONNECT_TIMEOUT, Attempt::Unreachable),
+            Duration::from_secs(16),
+            "two timed-out addresses are not a session"
+        );
+    }
+
+    #[test]
+    fn a_session_that_logged_in_and_stayed_up_resets_the_wait() {
+        // POSITIVE CONTROL: the reset still exists, for the one outcome that proves the node
+        // works — without it a node that recovers would keep its long wait.
+        assert_eq!(
+            next_backoff(BACKOFF_MAX, Duration::from_secs(11), Attempt::LoggedIn),
+            BACKOFF_BASE
+        );
+    }
+
+    #[test]
+    fn a_login_that_drops_at_once_still_backs_off() {
+        // A rejected or unregistered call is answered and then closed straight away.
+        assert_eq!(
+            next_backoff(
+                Duration::from_secs(4),
+                Duration::from_secs(1),
+                Attempt::LoggedIn
+            ),
+            Duration::from_secs(8)
+        );
+    }
+
+    #[test]
+    fn a_refused_node_is_still_retried_within_a_minute() {
+        // A refusal costs the node nothing, and the usual cause is OUR network (a laptop
+        // waking up), so this keeps the one-minute ceiling and recovers fast when it returns —
+        // even straight after mute-node failures pushed the wait to its long ceiling.
+        let refused = Duration::from_millis(5);
+        assert_eq!(
+            next_backoff(BACKOFF_MAX, refused, Attempt::Unreachable),
+            BACKOFF_MAX
+        );
+        assert_eq!(
+            next_backoff(NO_LOGIN_BACKOFF_MAX, refused, Attempt::Unreachable),
+            BACKOFF_MAX
         );
     }
 

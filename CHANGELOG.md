@@ -54,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it
   forever: it never logged in, never gave up, and never retried, so that node stayed dead
   until you restarted the app, and nothing on screen said why. Nexus now gives a node 30
-  seconds to say anything at all, then disconnects and retries it on the usual backoff, and
+  seconds to say anything at all, then disconnects and tries again later, waiting longer after
+  each silent try, up to ten minutes, so a node that never answers is not called over and over.
   **Settings › Connections** records that the node accepted the connection but never
   prompted. A node that has greeted you is never dropped for being quiet afterwards — a
   cluster on a dead band can be silent for a long time and that is not a fault.
