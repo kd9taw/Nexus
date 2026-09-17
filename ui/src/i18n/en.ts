@@ -2543,6 +2543,21 @@ export const EN = {
     'Show only spots you may transmit to under your license class (Settings ▸ license). Open class sees everything either way.',
   'spots.filter.clear.label': 'Clear',
   'spots.filter.clear.title': 'Clear all filters',
+  // Hide worked (operator decisions, 2026-09-17). DEFAULT ON, with the count of what it hides
+  // ON the chip, for the reason the locality chip carries its own: a filter that drops rows
+  // silently is how "where did my spots go" becomes an unanswerable report. `{{count}}` is a row
+  // count; `{{age}}` below is a measurement the panel formats itself ("2h"), like the Age column.
+  'spots.filter.worked.label': 'Hide worked',
+  'spots.filter.worked.hidden': 'Hide worked · {{count}}',
+  'spots.filter.worked.title':
+    'Hides stations you logged within this window, on any band or mode. Anything you still need here always shows.',
+  'spots.filter.workedWindow.aria': 'Worked within',
+  'spots.filter.workedWindow.title': 'How far back “worked” reaches',
+  'spots.filter.workedWindow.utcDay': 'Until 0000Z',
+  'spots.filter.workedWindow.hour1': '1 h',
+  'spots.filter.workedWindow.hours4': '4 h',
+  'spots.filter.workedWindow.hours24': '24 h',
+  'spots.filter.workedWindow.days7': '7 days',
 
   // The grid. Column headings name a CONCEPT; every value under them is a token.
   'spots.column.age': 'Age',
@@ -2556,6 +2571,11 @@ export const EN = {
   'spots.column.comment': 'Comment',
   'spots.empty.filtered': 'No spots match the current filters — clear to see all.',
   'spots.empty': 'No spots yet — cluster/RBN spots appear here as they arrive.',
+  'spots.empty.worked': {
+    one: '1 spot is hidden because you worked that station — turn Hide worked off to see it.',
+    other:
+      '{{count}} spots are hidden because you worked those stations — turn Hide worked off to see them.',
+  },
   // ⚠️ `{{freq}}` is a dial frequency the call site has already formatted invariantly. Two
   // whole tooltips, not a stem plus a "Work …" head: a row you cannot QSY to says something
   // different, and where the callsign belongs in each is a decision for each language.
@@ -2563,6 +2583,8 @@ export const EN = {
   'spots.row.title': '{{call}} @ {{freq}} MHz (spotted by {{spotter}})',
   'spots.row.mode.title': '{{mode}} spot',
   'spots.row.mode.submode.title': '{{submode}} spot ({{mode}})',
+  'spots.row.worked': 'worked {{age}} ago',
+  'spots.row.worked.title': 'You logged {{call}} {{age}} ago, on some band',
 
   // Composing a spot for the cluster (opened from a log row or a cockpit).
   'spots.post.aria': 'Spot a callsign',
@@ -2986,6 +3008,21 @@ export const EN = {
   'ota.badge.bandOpen': 'BAND OPEN',
   'ota.badge.bandOpen.title':
     'Your signal is being received on this band right now — workable',
+  // Hide worked today (operator decisions, 2026-09-17) — the board's half. The tooltip says what
+  // counts, because the honest failure mode is a contact logged WITHOUT the park, which hides
+  // nothing and can read as the chip being broken.
+  'ota.filter.hideWorked.label': 'Hide worked today',
+  'ota.filter.hideWorked.hidden': 'Hide worked today · {{count}}',
+  'ota.filter.hideWorked.title':
+    'Hides activators you logged at this park since 0000Z. They come back at 0000Z or at a new park. Only contacts logged with the park count — HUNT adds it for you.',
+  'ota.badge.workedToday': 'WORKED TODAY',
+  'ota.badge.workedToday.title':
+    'You logged this activator at this park since 0000Z — the activation running now is hunted',
+  'ota.empty.worked': {
+    one: '1 activator is hidden: you worked that park today. Turn Hide worked today off to see it.',
+    other:
+      '{{count}} activators are hidden: you worked those parks today. Turn Hide worked today off to see them.',
+  },
   // `{{source}}` is the feed's own name (pota.app, SOTAwatch); HUNT is the button above.
   'ota.source.hint':
     'Live from {{source}}. Auto-refreshes every 60 s. Click HUNT to QSY and tag the next logged QSO.',

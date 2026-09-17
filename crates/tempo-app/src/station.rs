@@ -17,7 +17,7 @@
 //! Each is genuinely both-sided and needs a design ruling, not a default; they stay on
 //! [`Engine`](crate::engine::Engine) untouched.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use tempo_core::logbook::{Logbook, QsoRecord};
@@ -177,6 +177,11 @@ pub struct StationCore {
     /// POTA/SOTA references already in the log (hunter side, `ota.their_ref`)
     /// — drives the NEW PARK badge like worked_entities drives new-DXCC.
     pub(crate) worked_parks: HashSet<String>,
+    /// When the operator last worked each station, on any band or mode: base call
+    /// (`W6A/P` in the log answers for `W6A` on a spot) → unix seconds of the most recent
+    /// QSO. Drives the Spots panel's "worked within this window". Rebuilt with the rest of
+    /// this index, so an edit, a delete or another instance's append moves it too.
+    pub(crate) last_worked: HashMap<String, u64>,
     /// Park references the operator imported from their POTA "Hunted Parks.CSV"
     /// (uppercased). Unioned into `park_worked` so hunts made on CW — where the
     /// park ref is never in the exchange, so the log can't know it — still count
@@ -241,6 +246,7 @@ impl StationCore {
             confirmed_entities: HashSet::new(),
             worked_grids: HashSet::new(),
             worked_parks: HashSet::new(),
+            last_worked: HashMap::new(),
             hunted_parks_import: HashSet::new(),
             pending_hunt: None,
             session_salt: now_unix_secs() as u32,
@@ -458,6 +464,15 @@ impl StationCore {
         self.worked_parks.contains(&key) || self.hunted_parks_import.contains(&key)
     }
 
+    /// Unix seconds of the most recent QSO with this station, on any band or mode —
+    /// matched on the base call, so `W6A/P` and `W6A` are one station. `None` when the log
+    /// holds no contact with it.
+    pub fn last_worked_unix(&self, call: &str) -> Option<u64> {
+        self.last_worked
+            .get(&tempo_core::message::base_call(call))
+            .copied()
+    }
+
     /// Seed the imported hunted-parks set from a POTA "Hunted Parks.CSV" (the shell
     /// parses the reference column). Replaces the set wholesale (a re-import is the
     /// full current picture). References are uppercased to match `park_worked`.
@@ -483,13 +498,23 @@ impl StationCore {
         self.worked_entities.clear();
         self.confirmed_entities.clear();
         self.worked_parks.clear();
+        self.last_worked.clear();
         for r in self.logbook.records() {
+            // Any band, any mode: "worked recently" is about the station, not an award slot.
+            let base = tempo_core::message::base_call(&r.call);
+            if !base.is_empty() {
+                let at = self.last_worked.entry(base).or_insert(r.when_unix);
+                *at = (*at).max(r.when_unix);
+            }
             // Parks are NOT per band: a POTA/SOTA reference is hunted once, on any
-            // band, so this one stays a flat set.
-            if let Some(p) = &r.ota.their_ref {
-                let p = p.trim();
-                if !p.is_empty() {
-                    self.worked_parks.insert(p.to_uppercase());
+            // band, so this one stays a flat set. A two-fer ("US-0001,US-0002") is a contact
+            // with each park, split on the separators the activator export reads.
+            if let Some(refs) = &r.ota.their_ref {
+                for p in refs.split([',', ';']) {
+                    let p = p.trim();
+                    if !p.is_empty() {
+                        self.worked_parks.insert(p.to_uppercase());
+                    }
                 }
             }
             let band = band_key(&r.band);
@@ -1595,6 +1620,60 @@ mod grid_tests {
             !sc.grid_worked_on("FN31", "2m"),
             "worked on 20m only — still NEW on 2m"
         );
+    }
+
+    #[test]
+    fn a_two_fer_hunt_marks_both_parks_worked() {
+        // NEW PARK asks whether a reference is anywhere on the hunter side of the log. A two-fer
+        // record carries both parks in one field, and indexed whole it answered "never logged"
+        // for both — a NEW PARK badge on a park the operator had just worked.
+        let mut sc = StationCore::new();
+        let mut r = rec("K1ABC", "20m", "FN31");
+        r.ota.their_ref = Some("US-0001,US-0002".into());
+        sc.logbook.add(r);
+        sc.refresh_worked_index();
+        assert!(sc.park_worked("US-0001"), "the first park");
+        assert!(sc.park_worked("us-0002"), "…and the second");
+        assert!(
+            !sc.park_worked("US-0003"),
+            "control: a park outside the pair"
+        );
+    }
+
+    #[test]
+    fn the_last_qso_with_a_station_is_indexed_by_base_call() {
+        // The Spots panel asks the log one question per row: when did I last work this station,
+        // on any band or mode? The log writes the call as it was worked — W6A/P for a
+        // special-event portable — while the cluster spots W6A.
+        let mut sc = StationCore::new();
+        sc.refresh_worked_index();
+        assert_eq!(sc.last_worked_unix("W6A"), None, "control: an empty log");
+
+        let mut late = rec("W6A/P", "40m", "DM04");
+        late.when_unix = 5_000;
+        let mut early = rec("w6a", "20m", "DM04");
+        early.when_unix = 1_000;
+        // The later contact goes in FIRST, so "latest wins" cannot be "last row wins".
+        sc.logbook.add(late);
+        sc.logbook.add(early);
+        sc.refresh_worked_index();
+        assert_eq!(
+            sc.last_worked_unix("W6A"),
+            Some(5_000),
+            "the most recent of two QSOs, on any band"
+        );
+        assert_eq!(
+            sc.last_worked_unix("w6a/p"),
+            Some(5_000),
+            "the portable form names the same station"
+        );
+        assert_eq!(sc.last_worked_unix("K1ABC"), None, "a call never worked");
+
+        // Deleting the later contact falls back to the earlier one — the map is rebuilt,
+        // not accumulated.
+        sc.logbook.delete(0);
+        sc.refresh_worked_index();
+        assert_eq!(sc.last_worked_unix("W6A"), Some(1_000));
     }
 
     #[test]

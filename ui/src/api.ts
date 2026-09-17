@@ -2799,8 +2799,12 @@ export async function detectRigs(): Promise<DetectedRig[]> {
 }
 
 /** Activators on the air now for the program ("POTA" | "SOTA") — the hunter feed. */
-export async function getOtaSpots(program: string): Promise<OtaSpot[]> {
-  return invoke<OtaSpot[]>('get_ota_spots', { program })
+export async function getOtaSpots(program: string, cached = false): Promise<OtaSpot[]> {
+  // `cached`: re-derive what the LOG says over the rows the last fetch left in the shared cache,
+  // instead of fetching. The board asks for that when the log changes — which is several times
+  // per contact once the upload stamps land — so it must never reach pota.app or SOTAwatch.
+  // Rejects when nothing is cached for the programme yet; the caller keeps what it is showing.
+  return invoke<OtaSpot[]>('get_ota_spots', cached ? { program, cached } : { program })
 }
 
 /** The NOAA planetary-K outlook (three days ahead). Cached 15 min server-side; an

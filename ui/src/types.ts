@@ -883,6 +883,11 @@ export interface OtaSpot {
   newPark?: boolean
   /** Your own signal is being received on this band right now (live PSKR). */
   bandOpen?: boolean
+  /** You have logged this activator AT THIS REFERENCE since 0000Z on the station clock — the
+   *  activation running now is hunted. The board hides these by default and counts what it hid.
+   *  Absent on a station that does not send it (an observed Remote feed), and the board then
+   *  offers no Hide worked chip at all rather than hiding rows it cannot judge. */
+  huntedToday?: boolean
 }
 
 /** One activator placed for the Connect map's parks layer (`get_ota_map_spots`).
@@ -2168,6 +2173,11 @@ export interface NeedAlert {
   /** Geography-based rarity of the heard grid (when the source carried one) —
    * drives the gem + a NewGrid priority boost. */
   gridRarity?: GridRarity | null
+  /** The park or summit this row is an ACTIVATION of, when it is one. Working the row sets the
+   *  hunt target with it — the way HUNT and a map double-click do — so the contact it leads to is
+   *  logged with the reference. Absent/null on every other need: a row that names no activation
+   *  must never tag one. */
+  park?: { program: string; reference: string } | null
 }
 
 /** One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose).
@@ -2219,6 +2229,16 @@ export interface SpotRow {
    * but badged, and never painted with a need colour. Score suppression happens in the
    * backend (propagation::needalert::rank), so this is a display flag only. */
   beacon?: BeaconKind | null
+  /** Seconds since your most recent QSO with this station, on ANY band or mode, matched on the
+   *  base call (`W6A/P` in the log answers for `W6A` here). Null/absent = never worked.
+   *
+   *  OPTIONAL for the reason `spotterLocal` is: a row from an older station carries no flag and
+   *  must be SHOWN, never hidden — the panel tests for a value, not for falsiness. */
+  workedAgoSecs?: number | null
+  /** That QSO fell on today's UTC day, since 0000Z on the STATION's clock — the default window.
+   *  Decided there rather than in the browser so every window, and a Remote browser in another
+   *  time zone, agree on when the day turns. */
+  workedTodayUtc?: boolean
 }
 
 /** Kind of one-way transmission a spot's frequency identified — mirrors

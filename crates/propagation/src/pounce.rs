@@ -196,6 +196,7 @@ mod tests {
             admitted_at: None,
             evidence: None,
             grid_rarity: None,
+            park: None,
         }
     }
 

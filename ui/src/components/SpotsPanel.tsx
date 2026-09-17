@@ -9,11 +9,12 @@ import { useStationControl } from '../stationAccess'
 // value a row prints (callsign, spotter, entity, US state, band, mode/submode, frequency,
 // comment) and the age column below — all data and measurement, invariant in every locale.
 import { useEffect, useMemo, useState } from 'react'
-import type { BandChannel, SpotRow } from '../types'
+import type { BandChannel, NeedAlert, SpotRow } from '../types'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
+import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs'
 import { compileTerm, searchTerms } from '../searchQuery'
 import { t } from '../i18n'
 
@@ -35,6 +36,53 @@ function ageLabel(secs: number): string {
   return `${Math.round(secs / 3600)}h`
 }
 
+/** How long ago the operator worked a station, for the row badge. `ageLabel`'s vocabulary, with
+ * DAYS added: the worked windows reach a week, and "168h" is not a thing anyone reads. */
+function workedAgeLabel(secs: number): string {
+  return secs < 86_400 ? ageLabel(secs) : `${Math.round(secs / 86_400)}d`
+}
+
+/**
+ * How far back "worked" reaches for Hide worked. `'utcDay'` is since 0000Z on the STATION's
+ * clock — the row's own `workedTodayUtc`, never a browser's idea of the date — and a number is
+ * plain seconds. The ladder is the operator's (2026-09-17): the UTC day by default, because that
+ * is the day POTA credits and the day a spotted station is "already in the log today", and the
+ * hour/day/week rungs for events like 13 Colonies and Route 66 where one callsign is on the air
+ * all week and a UTC day is far too coarse.
+ */
+export type WorkedWindow = 'utcDay' | 3600 | 14400 | 86400 | 604800
+export const WORKED_WINDOWS: readonly WorkedWindow[] = ['utcDay', 3600, 14400, 86400, 604800]
+export function isWorkedWindow(v: unknown): v is WorkedWindow {
+  return (WORKED_WINDOWS as readonly unknown[]).includes(v)
+}
+
+/**
+ * Was this spot's station worked within `window`?
+ *
+ * A row carrying NO flags — an older station, or one that never answered — is worked in no
+ * window at all. The panel must never hide a row it cannot judge, which is the same fail-open
+ * posture `spotterLocal === false` takes one filter along.
+ */
+export function workedWithin(
+  s: Pick<SpotRow, 'workedAgoSecs' | 'workedTodayUtc'>,
+  window: WorkedWindow,
+): boolean {
+  if (window === 'utcDay') return s.workedTodayUtc === true
+  return s.workedAgoSecs != null && s.workedAgoSecs < window
+}
+
+/**
+ * Does a need the Needed board admitted still apply HERE — on the band and mode this spot is on?
+ *
+ * The rescue that makes Hide worked safe, and it is the roster's own rule rather than one of this
+ * panel's: gate the call's alerts to the surface (`alertsForSurface` — a 40 m new-band slot says
+ * nothing about a 20 m spot), then keep the row if anything that survives is a real NEED. An
+ * activity label (POTA/SOTA/DXpedition) is not: being a DXpedition is not something you can need.
+ */
+export function neededHere(alerts: NeedAlert[] | undefined, band: string, mode: string): boolean {
+  return alertsForSurface(alerts, band, mode).some((a) => a.tags.some((tag) => !isActivityTag(tag)))
+}
+
 interface Props {
   spots: SpotRow[]
   bandPlan: BandChannel[]
@@ -48,6 +96,10 @@ interface Props {
   /** The operator's own square — origin for the beam heading beside each entity. A
    * cluster/RBN spot carries no grid, so that heading is always the entity centre. */
   myGrid?: string
+  /** The Needed board's alerts, for the ONE thing Hide worked asks of them: a station still
+   * needed on the band and mode it is spotted on is never hidden as worked (`neededHere`).
+   * Absent = no rescue, which only ever shows fewer rows, never more. */
+  needAlerts?: NeedAlert[]
 }
 
 /** View-session state: the Spots panel unmounts on every view switch, which wiped all
@@ -74,7 +126,7 @@ function useSessionState<T>(key: string, init: T): [T, React.Dispatch<React.SetS
   return [v, setV]
 }
 
-export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '' }: Props) {
+export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, canWork, onPopOut, myGrid = '', needAlerts }: Props) {
   const control = useStationControl()
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
@@ -105,6 +157,14 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
   // DEFAULT ON, and the count of what it hides is printed beside it — a filter that removes
   // rows silently is how "my spots disappeared" becomes an unanswerable report.
   const [localOnly, setLocalOnly] = useSessionState('nexus.spots.localOnly', true)
+  // Hide worked (operator decision 2026-09-17): a station already in the log is not what an
+  // operator is scanning this board for. DEFAULT ON, like the locality chip, and for the same
+  // reason it prints its count: what it hides has to be visible and one click away.
+  const [hideWorked, setHideWorked] = useSessionState('nexus.spots.hideWorked', true)
+  // How far back "worked" reaches. Session-scoped like every other filter here, and validated on
+  // read — a stale or hand-edited value falls back to the UTC day rather than hiding nothing.
+  const [storedWindow, setWorkedWindow] = useSessionState<WorkedWindow>('nexus.spots.workedWindow', 'utcDay')
+  const workedWindow = isWorkedWindow(storedWindow) ? storedWindow : 'utcDay'
   // US-state (WAS) filter, from the roster-resolved state on each spot. Empty = all.
   const [states, setStates] = useSessionState<string[]>('nexus.spots.states', [])
   // #174 — where a spot was REPORTED from: the continents and DXCC countries of every voice for
@@ -170,17 +230,24 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
     hiddenModes.length > 0 ||
     licensedOnly ||
     localOnly ||
+    hideWorked ||
     states.length > 0 ||
     spotterConts.length > 0 ||
     spotterEntities.length > 0
 
-  const rows = useMemo(() => {
+  // The Needed board's alerts by call, for the rescue in `neededHere`.
+  const needsByCall = useMemo(() => alertsByCall(needAlerts ?? []), [needAlerts])
+
+  const { rows, workedHidden } = useMemo(() => {
     // Terms still narrow (AND), which is right here: a spot row is call + entity + spotter
     // + mode + band + frequency flattened together, so "20m ft8" means both. What changed is
     // that a term may now carry `*`/`?` and be matched as a whole-word pattern — `PA*` finds
     // the PA prefix here exactly as it does in the Stations list. A term without a wildcard
     // behaves as it always has, so nobody's saved habits move.
     const terms = searchTerms(query).map(compileTerm)
+    // How many rows Hide worked is holding back RIGHT NOW — counted LAST, after everything else
+    // the operator asked for, so the number on the chip is exactly what one click brings back.
+    let worked = 0
     const filtered = spots.filter((s) => {
       if (licensedOnly && !s.licensed) return false
       if (localOnly && s.spotterLocal === false) return false
@@ -195,6 +262,16 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
       if (terms.length > 0) {
         const hay = `${s.call} ${s.entity} ${s.spotter} ${s.mode} ${s.submode ?? ''} ${s.band} ${s.freqMhz.toFixed(4)}`.toUpperCase()
         for (const t of terms) if (!t(hay)) return false
+      }
+      // Worked LAST, and the rescue rides with it: a station you still need on THIS band and
+      // mode stays whatever the log says, which is what makes hiding by callsign safe.
+      if (
+        hideWorked &&
+        workedWithin(s, workedWindow) &&
+        !neededHere(needsByCall.get(s.call.toUpperCase()), s.band, s.submode ?? s.mode)
+      ) {
+        worked++
+        return false
       }
       return true
     })
@@ -228,8 +305,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
       if (c === 0) c = a.ageSecs - b.ageSecs // tiebreak: newest first
       return c * dir
     })
-    return filtered
-  }, [spots, hiddenModes, bands, states, spotterConts, spotterEntities, sort, query, licensedOnly, localOnly])
+    return { rows: filtered, workedHidden: worked }
+  }, [spots, hiddenModes, bands, states, spotterConts, spotterEntities, sort, query, licensedOnly, localOnly, hideWorked, workedWindow, needsByCall])
 
   // How many rows the locality filter is holding back RIGHT NOW — the honest half of a filter
   // that is on by default. Counted against everything else the operator has chosen, so it says
@@ -419,6 +496,35 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
               ? t('spots.filter.local.hidden', { count: farHidden })
               : t('spots.filter.local.label')}
           </button>
+          {/* Hide worked + how far back it reaches. Same bargain as the chip above: on by
+              default, and the count of what it is hiding is ON it, one click from coming back. */}
+          <button
+            type="button"
+            className={`np-chip${hideWorked ? ' active' : ''}`}
+            aria-pressed={hideWorked}
+            onClick={() => setHideWorked((v) => !v)}
+            title={t('spots.filter.worked.title')}
+          >
+            {hideWorked && workedHidden > 0
+              ? t('spots.filter.worked.hidden', { count: workedHidden })
+              : t('spots.filter.worked.label')}
+          </button>
+          <select
+            className="sp-worked-window"
+            value={String(workedWindow)}
+            onChange={(e) =>
+              setWorkedWindow(e.target.value === 'utcDay' ? 'utcDay' : (Number(e.target.value) as WorkedWindow))
+            }
+            aria-label={t('spots.filter.workedWindow.aria')}
+            title={t('spots.filter.workedWindow.title')}
+          >
+            {/* The <option> VALUES are the persisted window; only the labels are prose. */}
+            <option value="utcDay">{t('spots.filter.workedWindow.utcDay')}</option>
+            <option value="3600">{t('spots.filter.workedWindow.hour1')}</option>
+            <option value="14400">{t('spots.filter.workedWindow.hours4')}</option>
+            <option value="86400">{t('spots.filter.workedWindow.hours24')}</option>
+            <option value="604800">{t('spots.filter.workedWindow.days7')}</option>
+          </select>
           {hasActiveFilters && (
             <button
               type="button"
@@ -431,6 +537,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                 setSpotterEntities([])
                 setLicensedOnly(false)
                 setLocalOnly(false)
+                setHideWorked(false)
               }}
               title={t('spots.filter.clear.title')}
             >
@@ -454,12 +561,25 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
         </div>
         {rows.length === 0 ? (
           <div className="np-empty">
-            {hasActiveFilters ? t('spots.empty.filtered') : t('spots.empty')}
+            {/* When Hide worked is what emptied the board, say so and name the way back — a
+                default-on filter that leaves a blank panel is the report this feature must not
+                generate. */}
+            {workedHidden > 0
+              ? t('spots.empty.worked', { count: workedHidden })
+              : hasActiveFilters
+                ? t('spots.empty.filtered')
+                : t('spots.empty')}
           </div>
         ) : (
           rows.map((s) => {
             const workable = control || !!canWork?.(s)
             const canQsy = workable && knownBands.has(s.band)
+            // Worked inside the window the chip is set to — so the badge below answers for the
+            // rows Hide worked would drop, and says nothing about a contact from last month.
+            const workedAge =
+              s.workedAgoSecs != null && workedWithin(s, workedWindow)
+                ? workedAgeLabel(s.workedAgoSecs)
+                : null
             return (
               <div
                 key={`${s.call}|${s.freqMhz}|${s.spotter}`}
@@ -525,7 +645,20 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                   {s.submode ?? s.mode}
                 </span>
                 <span className="sp-spotter">{s.spotter}</span>
-                <span className="np-why">{s.comment || '—'}</span>
+                <span className="np-why">
+                  {/* What Hide worked would drop, said on the row itself — so turning the chip
+                      off answers "which of these have I worked, and when" without a tooltip.
+                      In the widest column, because the age is the part worth reading. */}
+                  {workedAge && (
+                    <span
+                      className="sp-worked"
+                      title={t('spots.row.worked.title', { call: s.call, age: workedAge })}
+                    >
+                      {t('spots.row.worked', { age: workedAge })}
+                    </span>
+                  )}
+                  {s.comment || (workedAge ? '' : '—')}
+                </span>
               </div>
             )
           })

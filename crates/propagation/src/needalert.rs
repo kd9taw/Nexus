@@ -145,6 +145,19 @@ pub struct Heard {
     pub us_state: Option<String>,
 }
 
+/// The park or summit a need row is an ACTIVATION of. Carried so a Work from the board can set
+/// the hunt the way HUNT and a map double-click already do — the contact it leads to is then
+/// logged with the reference, which is the only contact POTA credits as a hunt (and the only one
+/// [`HuntedActivations`] can see).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParkRef {
+    /// "POTA" | "SOTA" — the programme, as the hunt target is set with it.
+    pub program: String,
+    /// The reference itself: "US-0001", "W7A/MN-001".
+    pub reference: String,
+}
+
 /// A scored need opportunity for a heard station.
 // No `Eq`: `freq_mhz` is an f64. `PartialEq` is enough for tests/assertions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,6 +187,10 @@ pub struct NeedAlert {
     /// carried one — drives the board's gem + a NewGrid priority boost.
     #[serde(default)]
     pub grid_rarity: Option<crate::gridrarity::GridRarity>,
+    /// The activation this row IS, when it is one — see [`ParkRef`]. `None` for every other
+    /// need, so a row that names no activation can never tag one onto a contact.
+    #[serde(default)]
+    pub park: Option<ParkRef>,
 }
 
 /// Build a [`Heard`] from a spot frequency (MHz) — maps the frequency to a band
@@ -485,6 +502,7 @@ pub fn score_slots(
         },
         freq_mhz: None,
         grid_rarity: rarity,
+        park: None, // set by activation_alert; a scored award row names no activation
     })
 }
 
@@ -593,15 +611,26 @@ pub struct HuntedActivations {
 impl HuntedActivations {
     /// Index the hunter side of the log. Each row is `(reference, activator base call,
     /// QSO time as unix seconds)`; rows with an empty reference or call are dropped.
+    ///
+    /// A reference field naming several parks — a two-fer, `US-0001,US-0002` — indexes EACH of
+    /// them: POTA credits that one contact to every park in it. Split on comma and semicolon,
+    /// the same separators the activator export reads (`tempo_core::logbook`), which no real
+    /// reference ever contains.
     pub fn from_log(rows: impl IntoIterator<Item = (String, String, u64)>) -> Self {
-        let seen = rows
-            .into_iter()
-            .filter_map(|(reference, call, when_unix)| {
-                let r = reference.trim().to_ascii_uppercase();
-                let c = call.trim().to_ascii_uppercase();
-                (!r.is_empty() && !c.is_empty()).then_some((r, c, when_unix - when_unix % UTC_DAY))
-            })
-            .collect();
+        let mut seen = HashSet::new();
+        for (reference, call, when_unix) in rows {
+            let c = call.trim().to_ascii_uppercase();
+            if c.is_empty() {
+                continue;
+            }
+            let day = when_unix - when_unix % UTC_DAY;
+            for r in reference.split([',', ';']) {
+                let r = r.trim().to_ascii_uppercase();
+                if !r.is_empty() {
+                    seen.insert((r, c.clone(), day));
+                }
+            }
+        }
         Self { seen }
     }
 
@@ -704,6 +733,7 @@ pub fn activation_alert(
             .grid
             .as_deref()
             .and_then(crate::gridrarity::grid_rarity),
+        park: None, // filled in below, on the merged row as well as this one
     });
     // The NEED first, then the LABEL. Order matters: `tags[0]` picks the row's colour and its
     // chip everywhere downstream, and a park still to be worked is a reason, not a decoration.
@@ -731,6 +761,14 @@ pub fn activation_alert(
     if reference_needed {
         alert.priority = alert.priority.max(OTA_ACTIVATION_PRIORITY);
     }
+    // WHICH ACTIVATION this row is, for a Work that has to tag the hunt. Set even when the
+    // reference is already hunted today: the row is still that park, and a second contact there
+    // is still a contact at it. `prog` rather than the feed's spelling, because this is what the
+    // hunt target is set with.
+    alert.park = Some(ParkRef {
+        program: prog.to_string(),
+        reference: spot.reference.clone(),
+    });
     alert.freq_mhz = Some(freq_mhz);
     alert.admitted_at = spot.spot_time_unix;
     alert.evidence = Some(format!(
@@ -843,6 +881,7 @@ pub fn wanted_alert(
         admitted_at: None,
         evidence: None,
         grid_rarity: grid.and_then(crate::gridrarity::grid_rarity),
+        park: None,
     });
     // Wanted is the loudest reason: it leads the tag list (drives the row color/headline)
     // and floors the priority at its tier, so a watch-list hit tops the board above a
@@ -2860,6 +2899,89 @@ mod tests {
     }
 
     #[test]
+    fn an_activation_row_names_the_park_it_is_an_activation_of() {
+        // Work on the Needed board has to be able to tag the hunt, and the board's row is all it
+        // has: nothing downstream of here knows which park a callsign is at.
+        let n = LogNeeds::new();
+        let no_states = HashSet::new();
+        let slots = slots(n.worked_zones(), n.worked_grids(), &no_states);
+        let park = activation_alert(
+            &ota("POTA", "K-1234", "W1ABC", 14_250.0, "SSB"),
+            &n,
+            &slots,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            park.park,
+            Some(ParkRef {
+                program: "POTA".into(),
+                reference: "K-1234".into()
+            })
+        );
+        // A summit names its own programme, because the hunt target is set with it.
+        let summit = activation_alert(
+            &ota("SOTA", "VK3/VN-012", "VK3KR", 7_033.0, "CW"),
+            &n,
+            &slots,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            summit.park.as_ref().map(|p| p.program.as_str()),
+            Some("SOTA")
+        );
+        assert_eq!(
+            summit.park.as_ref().map(|p| p.reference.as_str()),
+            Some("VK3/VN-012")
+        );
+        // An activation ALREADY hunted today still names its park: the row is still a row, and
+        // working it again is still a contact at that park.
+        let worked = activation_alert(
+            &ota("POTA", "K-1234", "W1ABC", 14_250.0, "SSB"),
+            &n,
+            &slots,
+            false,
+        )
+        .unwrap();
+        assert!(worked.park.is_some());
+        // CONTROL: an ordinary award row names no activation, so Work tags nothing.
+        let dx = score(
+            "W1ABC",
+            "20m",
+            "SSB",
+            None,
+            None,
+            &n,
+            n.worked_zones(),
+            n.worked_grids(),
+            &no_states,
+        )
+        .unwrap();
+        assert_eq!(dx.park, None);
+    }
+
+    #[test]
+    fn a_two_fer_reference_hunts_both_parks() {
+        // A two-fer is one QSO at a site where two park boundaries overlap, and POTA credits it
+        // to EACH park. The log carries both references in the one field ("US-0001,US-0002" —
+        // the shape the activator export already splits), so indexed whole the pair matched
+        // neither park and both activations stayed on offer after the contact was logged.
+        let h = hunted(&[("US-0001,US-0002", "K1ABC", DAY1)]);
+        assert!(!h.needed("US-0001", "K1ABC", DAY1 as i64), "the first park");
+        assert!(
+            !h.needed("US-0002", "K1ABC", DAY1 as i64),
+            "…and the second"
+        );
+        // CONTROL: a park outside the pair is still needed, so this is a split, not a wildcard.
+        assert!(h.needed("US-0003", "K1ABC", DAY1 as i64));
+        // Semicolons and stray space read the same way the activator side reads them.
+        let h = hunted(&[(" us-0001 ; US-0002 ,", "K1ABC", DAY1)]);
+        assert!(!h.needed("US-0001", "K1ABC", DAY1 as i64));
+        assert!(!h.needed("US-0002", "K1ABC", DAY1 as i64));
+    }
+
+    #[test]
     fn a_park_need_never_outranks_a_dx_award_and_always_outranks_a_confirmation() {
         assert_eq!(NeedTag::NewPark.tier(), OTA_ACTIVATION_PRIORITY);
         assert!(NeedTag::NewPark.tier() > NeedTag::Confirm.tier());
@@ -3302,6 +3424,7 @@ mod tests {
                 admitted_at: None,
                 evidence: None,
                 grid_rarity: None,
+                park: None,
             }
         }
         let mut alerts = vec![
