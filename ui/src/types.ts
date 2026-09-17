@@ -2863,6 +2863,10 @@ export interface Settings {
    * (or another cluster client) on the same call does not knock this one off. 1-99, digits
    * only; empty = log in with the bare call. */
   clusterSsid?: string
+  /** Let Nexus choose the human DX-cluster nodes (true: two kept connected from the list built
+   * into the release, moving off one that stops working), or connect to exactly `clusterHosts`
+   * (false: never switched). New installs and installs still on a shipped list start true. */
+  clusterNodesAuto?: boolean
   /** Connect to APRS-IS and plot internet-reported stations beside the ones your antenna hears.
    * Independent of the APRS RF decoder's arm state: the feed costs no RF resource and can key
    * nothing, and internet stations arriving while the RF side stays silent is the diagnostic

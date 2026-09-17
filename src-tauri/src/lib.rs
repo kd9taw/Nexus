@@ -9739,6 +9739,23 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
     serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())
 }
 
+/// The settings a backup bundle carries, as a restore applies them.
+///
+/// A backup from before the cluster node choice chooses by its node list, exactly as an upgraded
+/// settings file does. A restore runs none of `Settings::load`'s migrations, and the field's
+/// default would otherwise switch a restored list of the operator's own to automatic.
+fn settings_from_bundle(
+    settings_json: serde_json::Value,
+) -> Result<tempo_app::settings::Settings, String> {
+    let predates_node_choice = settings_json.get("clusterNodesAuto").is_none();
+    let mut settings: tempo_app::settings::Settings = serde_json::from_value(settings_json)
+        .map_err(|e| format!("The settings in that backup could not be read: {e}"))?;
+    if predates_node_choice {
+        settings.choose_cluster_nodes_for_old_settings();
+    }
+    Ok(settings)
+}
+
 /// Restore a bundle written by [`export_settings_bundle`] (#28 item 4).
 ///
 /// Refuses anything that is not one of ours, by name and by schema, rather than trying its best
@@ -9780,9 +9797,7 @@ fn import_settings_bundle(
         }
         None => return Err("That backup is missing its format version.".to_string()),
     }
-    let settings: tempo_app::settings::Settings =
-        serde_json::from_value(v.get("settings").cloned().unwrap_or_default())
-            .map_err(|e| format!("The settings in that backup could not be read: {e}"))?;
+    let settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
     // UI state is best-effort: a bundle whose settings are good but whose ui-state is not should
     // still restore the radios. The half that failed is named rather than swallowed.
     if let Some(ui) = v.get("uiState").cloned() {
@@ -30706,6 +30721,43 @@ mod tests {
         });
         assert_eq!(v["kind"], "nexus-settings-backup");
         assert_eq!(v["schema"], 1);
+    }
+
+    /// A backup from before the cluster node choice restores the way an upgraded settings file
+    /// loads: a list the operator wrote stays theirs, a list Nexus shipped goes automatic, and a
+    /// backup that carries the choice keeps it. A restore runs none of `Settings::load`'s
+    /// migrations, so without this the field's default would switch every old backup to automatic.
+    #[test]
+    fn a_restored_backup_from_before_the_node_choice_chooses_by_its_list() {
+        let restored = |hosts: &[&str], choice: Option<bool>| {
+            let s = tempo_app::settings::Settings {
+                cluster_hosts: hosts.iter().map(|h| h.to_string()).collect(),
+                ..Default::default()
+            };
+            let mut v = serde_json::to_value(&s).unwrap();
+            let fields = v.as_object_mut().unwrap();
+            match choice {
+                Some(c) => {
+                    fields.insert("clusterNodesAuto".into(), c.into());
+                }
+                None => assert!(fields.remove("clusterNodesAuto").is_some()),
+            }
+            super::settings_from_bundle(v).unwrap().cluster_nodes_auto
+        };
+        let shipped = tempo_app::settings::DEFAULT_CLUSTER_HOSTS;
+        assert!(
+            !restored(&["dx.example.net:7300"], None),
+            "an old backup with a list of the operator's own"
+        );
+        assert!(
+            restored(&shipped, None),
+            "an old backup still on the shipped list"
+        );
+        assert!(
+            restored(&["dx.example.net:7300"], Some(true)),
+            "a saved choice is kept"
+        );
+        assert!(!restored(&shipped, Some(false)), "…either way");
     }
 
     /// The bundle must not carry secrets: it is written to Downloads and operators mail these

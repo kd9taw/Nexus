@@ -102,6 +102,7 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "clusterEnabled",
     "clusterHost",
     "clusterHosts",
+    "clusterNodesAuto",
     "clusterSsid",
     "companionAddr",
     "connectWeb",
@@ -650,6 +651,7 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
     "clusterEnabled",
     "clusterHost",
     "clusterHosts",
+    "clusterNodesAuto",
     "clusterSsid",
     "aprsIsEnabled",
     "aprsIsHost",
@@ -883,6 +885,7 @@ impl Serialize for SettingsView<'_> {
         out.serialize_field("clusterEnabled", &self.0.cluster_enabled)?;
         out.serialize_field("clusterHost", &self.0.cluster_host)?;
         out.serialize_field("clusterHosts", &self.0.cluster_hosts)?;
+        out.serialize_field("clusterNodesAuto", &self.0.cluster_nodes_auto)?;
         out.serialize_field("clusterSsid", &self.0.cluster_ssid)?;
         out.serialize_field("aprsIsEnabled", &self.0.aprs_is_enabled)?;
         out.serialize_field("aprsIsHost", &self.0.aprs_is_host)?;
