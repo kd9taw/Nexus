@@ -47,6 +47,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outcome. A desktop or site on the previous version keeps polling exactly as before; the push
   needs both updated.
 
+- **Remote: the station controls stop blinking off after every command, and a call pressed in that
+  moment is held instead of refused.** Every held control used to go grey for about a second after
+  each command while the browser re-read the station, and anything pressed in that gap came back
+  "Not sent. Nothing reached the station" — most often a call, a Resend or an exchange pressed
+  right after turning TX on. The controls now stay lit while the command confirms, and a gesture
+  made in that moment waits for the station's own answer and goes out once it lands, a second and a
+  half at the outside. It is never sent late or behind your back: if the answer does not come, or
+  you press Stop or turn TX off while it waits, or the station's transmit permission moves under
+  it, the gesture is refused and says so, with nothing reaching the radio.
+
 ### Fixed
 
 - **A cluster node that accepts a connection and then goes silent no longer kills that feed
