@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Listen button in the Remote browser did nothing.** Opening the workspace replaced the
+  connecting page with the operating one, and that swap permanently closed the audio channel
+  before the button you could see was ever wired to it — so it looked enabled and sent nothing,
+  every session. It now hands the channel back instead of closing it, and Listen works. If you
+  were already listening while the page was still connecting, audio stops once at that moment
+  and you press Listen again.
+- **One slow read no longer ends a Remote session.** A background read that took longer than
+  three seconds — the needed board, a rare-DX lookup, a parks fetch — tore down the whole
+  connection. Every control then greyed out, commands were refused, and audio dropped. Those
+  reads now fail on their own and the session carries on.
+- **A busy station no longer costs you control.** A momentary refusal while the radio was busy
+  read as "control was lost", dropping audio with it. A busy answer to a routine check now
+  keeps your control and your audio.
+- **Remote no longer turns itself off permanently after a hiccup.** A single message the station
+  could not read switched Remote off and remembered it off, so the only fix was to walk to the
+  radio and turn it back on — which is the one thing you cannot do from somewhere else. The
+  station now reconnects and retries; only a genuine refusal of access turns Remote off.
+- **A slow moment at the station no longer stops the instrument feed for good.** A late credit
+  on the live feed dropped the station's whole connection, taking every browser with it. The
+  feed now waits for the credit and picks up where it left off.
 - **A delete or edit from a Remote browser could make the shack's Logbook delete or overwrite
   the wrong contact.** The shack's list loaded once and remembered each row by its position;
   when the browser deleted a contact above it, every later row moved up one, and the next
