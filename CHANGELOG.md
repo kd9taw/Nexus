@@ -22,8 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and message; it is saved straight away, and you can put one key or a whole set back to the
   built-in messages. Every macro now goes out on a line of its own and ends with a space, the
   way RTTY contest messages are written, so your call starts a line on the other station's
-  screen. The Contest set's exchange keys send your contest exchange; with no contest running
-  they tell you so instead of sending.
+  screen. The Contest set's exchange keys send the exchange of the contest you are running —
+  the zone and QTH, state or section you are sending this weekend, not last June's Field Day
+  class — and with no contest running they tell you so instead of sending. **In a contest the
+  double-click also fills the exchange**: a zone lands in the zone box, a section or state in
+  the QTH box, by that contest's own rules rather than a fixed list, and **Enter** in one of
+  those boxes logs the contact. A word that could be two things, or one Nexus has no list of
+  values for, is left for you to type.
 
 - **Cluster login SSID — stop two stations on one callsign knocking each other off.** A cluster
   node allows one session per callsign and disconnects the older one, so running a second Nexus,

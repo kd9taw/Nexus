@@ -129,6 +129,16 @@ dock's **Their call…** field are one field shown twice: type in either, or
 double-click a call in the transcript, and both follow; logging the contact clears
 both.
 
+**In a contest the same double-click fills the exchange.** With a contest running,
+the pane becomes that contest's entry strip — Call and one box per value it asks
+you to copy — and double-clicking a word in the transcript puts it in the box it
+belongs to: a zone in the zone box, a section or state in the QTH box. What fits
+where is the contest's own rules, not a fixed list, so this works for the next
+contest without an update. Nexus only fills what it can recognise: a word that
+could be two things, or a value Nexus has no list for, is left for you to type, and
+a callsign is always a callsign. **Enter** in any of those boxes logs the contact,
+exactly as the **Log** button does.
+
 **The TX dock** — macros, compose, and the sequencer row when Auto is on — is
 pinned below the pane and cannot be scrolled out of reach or hidden. It holds the
 eight F-key macros, **F1** to **F8**, in keyboard order, and — beside them on a wide

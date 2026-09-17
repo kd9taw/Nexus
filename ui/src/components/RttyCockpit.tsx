@@ -989,7 +989,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           The strip needs 296 px of pane height to put its Log button on screen; an even 1:1
           split gives 292 px at 1920×1080 and misses it by four pixels, and `fit="content"`
           (488 px with a recall card open) drives the SHELL onto its deficit valve in the
-          ordinary case. See PskCockpit.tsx for the full table of sizes. */}
+          ordinary case. See PskCockpit.tsx for the full table of sizes.
+
+          ⭐ THE CONTEST STRIP IS THE EASY CASE, measured in a CQ WW RTTY session (Call + RST +
+          Zone + QTH and the missing-QTH warning line) in headless Chrome, so this weight is
+          RIGHT for a contest weekend and needed no change: at 1024×768 / 85 % every box, the
+          warning line AND the Log button are inside the pane's 118 px with 2 px to spare (the
+          6 px that overflow are the strip's bottom padding); at 1024×768 pinned to 100 %, at
+          1366×768 and at 1920×1080 all of it is in view with room over. The EVERYDAY strip is
+          the tall one — name, QTH, state, country, park, notes — and it is the one whose Log
+          button needs a pane scroll at 1024×768. Only 175 % pinned puts the contest boxes
+          behind a scroll, and the everyday strip is no better there: that is the zoom's, not
+          the contest's. Esc/Stop and Stop TX are on screen at every size measured, and the
+          page body never scrolls. */}
       {snap && (
         <CockpitPaneFrame title={t('rtty.pane.log.title')} paneId="log" weight={1.5}>
           {!control ? <RemoteRecallEntry snap={snap} mode={RTTY} onOpenLog={onOpenLogbook} /> : (
