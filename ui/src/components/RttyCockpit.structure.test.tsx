@@ -184,7 +184,7 @@ describe('RttyCockpit pane shell', () => {
     const dock = document.querySelector('.cockpit-txdock')
     expect(dock, 'no .cockpit-txdock').not.toBeNull()
     for (const sel of [
-      '.rtty-macros', // F-key macros + their-call + Stop
+      '.rtty-macros', // F1–F8 (their-call, TX and Stop sit in .rtty-dock-row beside or below)
       '.rtty-auto-row', // auto-sequencer CQ / Answer / Abort
       '.rtty-stop', // the abort button specifically
       '.cw-send', // compose bar

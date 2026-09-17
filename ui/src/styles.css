@@ -21051,7 +21051,7 @@ button.sat-chip:disabled {
   position: absolute;
   top: 1px;
   right: 1px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   font-size: var(--fs-label);
   line-height: 1.4;
   color: var(--text-dim);
