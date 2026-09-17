@@ -12,6 +12,7 @@ import { ApplicationClient } from '../application-client'
 import { pendingControlStorage } from '../control-storage'
 import { applicationCommands } from '../application-capabilities'
 import type { OperationState } from '../operation-protocol'
+import { ifAvailableLock } from './receipt-lock'
 
 /** The first application version whose stream carries the satellite state a Stop is checked against. */
 export const SCRIPTED_APPLICATION_VERSION = 13
@@ -25,9 +26,30 @@ const BOOT = '11111111-1111-4111-8111-111111111111', LEASE = '22222222-2222-4222
  * return, the moment its radio loop lands the target. `push` turns that event off at v5 and
  * `pollSettles: false` makes every `result` read answer pending forever: between them a test can
  * hold each confirmation path on its own. */
-export type ScriptedOptions = { push?: boolean; pollSettles?: boolean }
+export type ScriptedOptions = {
+  push?: boolean
+  pollSettles?: boolean
+  /** Whether the station NAMES `outcomePush` in its capabilities, as a real v5 station does the
+   * moment the relay agrees v5 (684bfb70): the page trusts that word, never its own version, to
+   * defer the post-command polls. Defaults to `push`; a pushing station that stays silent is not
+   * a station that ships, and it makes the page poll and push at once. */
+  outcomePush?: boolean
+  /** The radio's own time from CAT command to readback. */
+  catMs?: number
+  /** What the pushed event says: `unknown` is a station that lost the readback (the receipt is
+   * kept for the operator to acknowledge). */
+  eventOutcome?: 'applied' | 'unknown'
+  /** Extra delay on the control's OWN reply, beyond the link — long enough and the pushed event
+   * outruns it, the crossing where the reply, not the event, holds the receipt lock. */
+  replyDelayMs?: number
+  /** Answer every `result` read with a GENUINELY crossed reply — a manual-log outcome for a
+   * control's id — which the browser must refuse, whatever else it now absorbs. */
+  crossPoll?: boolean
+}
 export function scriptedStation(rttMs: number, version: 4 | 5 = 4, options: ScriptedOptions = {}) {
   const push = options.push ?? version >= 5, pollSettles = options.pollSettles ?? true
+  const outcomePush = options.outcomePush ?? push, catMs = options.catMs ?? SCRIPTED_CAT_MS
+  const eventOutcome = options.eventOutcome ?? 'applied', replyDelayMs = options.replyDelayMs ?? 0, crossPoll = options.crossPoll ?? false
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date', 'requestAnimationFrame', 'cancelAnimationFrame'] })
   const half = rttMs / 2
   const wire: { at: number; type: string }[] = []
@@ -37,7 +59,8 @@ export function scriptedStation(rttMs: number, version: 4 | 5 = 4, options: Scri
   let revision = 1, sequence = 1, windowId = crypto.randomUUID()
   const state = (): OperationState => ({ stationBootId: BOOT, allowed: true, phase: 'controlling', leaseId: LEASE, revision, commandWindowId: windowId,
     nextSequence: sequence, leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: '000000000000002a',
-    controls: { context: { radioId: 1, radioConnection: 7, ampConnection: null, ampReadSequence: null }, capabilities: ['frequency', 'bandSelection'] } })
+    controls: { context: { radioId: 1, radioConnection: 7, ampConnection: null, ampReadSequence: null },
+      capabilities: ['frequency', 'bandSelection', ...(outcomePush ? ['outcomePush' as const] : [])] } })
   const completions = new Map<string, { done: boolean }>()
   const values = new Map<string, string>()
   const storage = { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => { values.set(k, v) }, removeItem: (k: string) => { values.delete(k) } }
@@ -45,7 +68,7 @@ export function scriptedStation(rttMs: number, version: 4 | 5 = 4, options: Scri
     const { request } = JSON.parse(raw)
     wire.push({ at: performance.now(), type: request.type })
     setTimeout(() => { // arrives at the station
-      const reply = (value: unknown) => setTimeout(() => operations.receive({ type: 'operationResponse', requestId: request.requestId, value }), half)
+      const reply = (value: unknown, delayMs = 0) => setTimeout(() => operations.receive({ type: 'operationResponse', requestId: request.requestId, value }), half + delayMs)
       switch (request.type) {
         case 'state': case 'heartbeat': reply(state()); break
         case 'stationControl': {
@@ -58,20 +81,22 @@ export function scriptedStation(rttMs: number, version: 4 | 5 = 4, options: Scri
             else if (action.action === 'radio.band') { radio.band = action.band; radio.dialMhz = DIAL[action.band] }
             completion.done = true
             if (push) setTimeout(() => operations.receiveEvent({ type: 'operationEvent', operationId: request.requestId,
-              value: { operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' }, state: state() }), half)
-          }, SCRIPTED_CAT_MS)
-          reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'pending' })
+              value: { operation: 'stationControl', operationId: request.requestId, ...(eventOutcome === 'applied' ? { outcome: 'applied', evidence: 'radioReadback' } : { outcome: 'unknown', reason: 'hardwareUnconfirmed' }) },
+              state: state() }), half)
+          }, catMs)
+          reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'pending' }, replyDelayMs)
           break
         }
         case 'result': {
           const completion = completions.get(request.operationId)
+          if (crossPoll) { reply({ operationId: request.operationId, outcome: 'applied', evidence: 'fileSynced', uploads: 'stationPipeline' }); break }
           reply({ operation: 'stationControl', operationId: request.operationId, ...(completion?.done && pollSettles ? { outcome: 'applied', evidence: 'radioReadback' } : { outcome: 'pending' }) })
           break
         }
         case 'stopTransmit': reply({ stop: 'accepted' }); break
       }
     }, half)
-  }, true, () => performance.now(), undefined, version, pendingControlStorage(() => storage, 'scripted-station', async (_key, run) => run()))
+  }, true, () => performance.now(), undefined, version, pendingControlStorage(() => storage, 'scripted-station', ifAvailableLock()))
   operations.subscribe(() => { notifications.operations++ })
   // The instrument stream: one sample per 500 ms on the station's clock, sent on the credit it holds.
   let topics: string[] = [], credit: string | null = null, frameRevision = 0

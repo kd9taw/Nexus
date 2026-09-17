@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { OperationClient } from './operation-client'
 import { OperationRelay } from './operation-relay'
 import type { OperationState } from './operation-protocol'
-import type { PendingControl } from './control-storage'
+import { pendingControlStorage } from './control-storage'
+import { ifAvailableLock } from './__fixtures__/receipt-lock'
 
 // Operation v5: the station PUSHES a control's outcome (`operationEvent`) with the fresh state,
 // where v4 left the browser to discover both by polling - a `state` read, then a `result` read,
@@ -31,12 +32,18 @@ function connected({ page, station, push }: Options) {
     controls: { context: { radioId: 1, radioConnection: 1, ampConnection: 1, ampReadSequence: 1 },
       capabilities: ['frequency', ...(negotiated >= 5 ? ['outcomePush' as const] : [])] }
   }
-  let stored: PendingControl | null = null
+  // THE SHIPPED RECEIPT STORE, on the browser's own lock discipline (`receipt-lock.ts`). A stub
+  // that merely remembered the receipt (`write: v => { stored = v }`, `exclusive: run => run()`)
+  // hid that the real store refuses a write outside its lock — which a pushed outcome's clear was,
+  // so on a real page the receipt outlived every pushed event by a second.
+  const memory = new Map<string, string>()
+  const receipts = pendingControlStorage(() => ({ getItem: k => memory.get(k) ?? null, setItem: (k, v) => { memory.set(k, v) }, removeItem: k => { memory.delete(k) } }),
+    'push-completion', ifAvailableLock())
   let leaseUntil = 0
   // The station's receipts: what a `result` read answers, and what the event carries.
   const settled = new Map<string, boolean>()
   const client = new OperationClient(wire => relay.receiveBrowser(sessionId, JSON.parse(wire), Date.now()), true,
-    Date.now, undefined, page, { read: () => stored, write: value => { stored = value }, exclusive: async run => run() })
+    Date.now, undefined, page, receipts)
   const outcome = (operationId: string) => settled.get(operationId)
     ? { operation: 'stationControl', operationId, outcome: 'applied', evidence: 'radioReadback' }
     : { operation: 'stationControl', operationId, outcome: 'pending' }
@@ -79,7 +86,7 @@ function connected({ page, station, push }: Options) {
       else client.receive(message)
     }
   } }], Date.now())
-  return { client, forwarded, errors, state, stored: () => stored }
+  return { client, forwarded, errors, state, stored: () => receipts.read() }
 }
 
 async function controlling(h: ReturnType<typeof connected>) {
