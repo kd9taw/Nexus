@@ -1099,6 +1099,45 @@ test('FT Stop crosses the real relay alongside pending operations and survives h
   live.browser.close(); live.station.close()
 })
 
+test('a pushed control outcome (operation v5) crosses the real relay, and only from a station that advertised it', async () => {
+  const config = await (await fetch(`${app.origin}/api/remote/config`)).json()
+  assert.equal(config.operationPushVersion, 1)
+  const context = { radioId: 1, radioConnection: 1, ampConnection: null, ampReadSequence: null }
+  const command = () => ({ type: 'stationControl', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),
+    expectedRevision: 1, commandWindowId: crypto.randomUUID(), clientSequence: 1, context, action: { action: 'decoder.clear', receiver: 'cw' } })
+  const settled = (operationId, boot, lease) => ({
+    value: { operation: 'stationControl', operationId, outcome: 'applied', evidence: 'radioReadback' },
+    state: { stationBootId: boot, allowed: true, phase: 'controlling', leaseId: lease, revision: 3, commandWindowId: crypto.randomUUID(),
+      nextSequence: 2, leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: '000000000000002a' } })
+  const pair = await app.paired(), live = await admitted(pair, 1, {
+    'x-nexus-operation-version': '2', 'x-nexus-operation-max-version': '3', 'x-nexus-operation-ft-version': '1', 'x-nexus-operation-push-version': '1'
+  })
+  const sessionId = live.session.sessionId, control = command()
+  live.browser.send({ type: 'operationRequest', operationVersion: 5, request: control })
+  assert.equal((await live.station.take(type('operationRequest'))).operationVersion, 5, 'both peers at v5 negotiate v5')
+  live.station.send({ type: 'operationResponse', sessionId, requestId: control.requestId, value: { operation: 'stationControl', operationId: control.requestId, outcome: 'pending' } })
+  assert.equal((await live.browser.take(type('operationResponse'))).value.outcome, 'pending')
+  // The station settles it and says so. The browser sent nothing more.
+  const event = settled(control.requestId, control.stationBootId, control.leaseId)
+  live.station.send({ type: 'operationEvent', sessionId, operationId: control.requestId, ...event })
+  assert.deepEqual(await live.browser.take(type('operationEvent')), { type: 'operationEvent', operationId: control.requestId, ...event })
+  assert.equal(live.station.closed, false)
+  live.browser.close(); live.station.close()
+  // A station that did not advertise the push negotiates v4 with a v5 page, and may not push:
+  // the event closes its socket and reaches no browser.
+  const old = await app.paired(), legacy = await admitted(old, 1, {
+    'x-nexus-operation-version': '2', 'x-nexus-operation-max-version': '3', 'x-nexus-operation-ft-version': '1'
+  })
+  const stale = command()
+  legacy.browser.send({ type: 'operationRequest', operationVersion: 5, request: stale })
+  assert.equal((await legacy.station.take(type('operationRequest'))).operationVersion, 4)
+  legacy.station.send({ type: 'operationEvent', sessionId: legacy.session.sessionId, operationId: stale.requestId, ...settled(stale.requestId, stale.stationBootId, stale.leaseId) })
+  await legacy.station.take(type('closed'))
+  assert.equal(legacy.station.closeCode, 1008)
+  await assert.rejects(legacy.browser.take(type('operationEvent'), 100), /timeout/)
+  legacy.browser.close()
+})
+
 test('a log change crosses the real relay only at v4, survives hibernation, and old stations never see one', async () => {
   const target = { call: 'W1AW', whenUnix: 1788940800, key: 'a'.repeat(64) }
   const change = () => ({ type: 'logChange', requestId: crypto.randomUUID(), stationBootId: crypto.randomUUID(), leaseId: crypto.randomUUID(),

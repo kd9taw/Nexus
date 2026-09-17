@@ -2,7 +2,7 @@
 // permission, leases, command windows, deduplication and durable outcomes.
 import type { Peer } from '../remote-monitor/relay'
 import { object } from './display-validation'
-import { operationId, operationRequest, operationResponse } from './operation-protocol'
+import { operationEvent, operationId, operationRequest, operationResponse } from './operation-protocol'
 import { controlVersion, parseOperationVersion, type OperationVersion } from './operation-version'
 import { OPERATION_RATE_LIMIT, OPERATION_RATE_WINDOW_MS } from './operation-limits'
 // `commandUntil` is how long this browser's account may still command the station: the adapter
@@ -181,6 +181,19 @@ export class OperationRelay {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error()
       const { sessionId, ...value } = raw as Record<string, unknown>
       if (!operationId(sessionId)) throw Error()
+      // Operation v5: a settled control, pushed. The relay holds nothing for it - no pending
+      // entry, no rate, nothing to checkpoint - so it is validated and handed on, and the room
+      // returns without its per-message checkpoint (the audio lane's path). Only a station that
+      // advertised v5 may push at all; the station itself pushes only for a control the browser
+      // sent at v5, which is what keeps an older page - whose socket would close on the unknown
+      // type - from ever seeing one.
+      if (value.type === 'operationEvent') {
+        if ((parseOperationVersion(this.station.operationVersion) ?? 1) < 5) throw Error()
+        const event = operationEvent(value)
+        const peer = this.browsers.get(sessionId)?.peer
+        if (peer) deliver(peer, JSON.stringify(event))
+        return
+      }
       const response = operationResponse(value),
         p = this.pending.get(response.requestId)
       // A closed observer or expired request may leave a legitimate late reply.

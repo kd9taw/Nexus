@@ -618,6 +618,23 @@ export const OPERATION_ERRORS = [
   'stationUnavailable',
   'operationUnknown'
 ] as const
+/** Operation v5. The station's unprompted word that a control settled: the outcome a `result`
+ * read would return, and the state a `state` read would return now - one object, computed
+ * together at the station. Nothing here is a claim the browser could not poll for; it is the
+ * poll, arriving early. */
+export type OperationEvent = { type: 'operationEvent'; operationId: string; value: ControlOutcome; state: OperationState }
+export function operationEvent(raw: unknown): OperationEvent {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
+  const r = raw as Record<string, unknown>
+  object(r, ['type', 'operationId', 'value', 'state'])
+  if (r.type !== 'operationEvent' || !operationId(r.operationId)) invalid()
+  const value = controlOutcome(r.value)
+  // Settled means settled: a pending event is a station saying nothing, and is refused.
+  if (value.operationId !== r.operationId || value.outcome === 'pending') invalid()
+  const state = operationValue(r.state)
+  if (!('phase' in state)) invalid()
+  return { type: 'operationEvent', operationId: r.operationId as string, value, state: state as OperationState }
+}
 export function operationResponse(raw: unknown): OperationResponse {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid()
   const r = raw as Record<string, unknown>
