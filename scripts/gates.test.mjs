@@ -31,9 +31,26 @@ const scratch = (name, text) => {
   return p;
 };
 
+// Every run writes its logs and summary.txt; the scratch runs here keep theirs
+// out of the tree's target/gates, and each test reads its own back from `logs`.
+const logs = path.join(tmp, 'logs');
+// NODE_TEST_CONTEXT is how this file's own runner marks its children; a
+// `node --test` planted in a gate below must not inherit it, or it reports to a
+// parent it does not have and exits 0 with its failures unspoken.
+const env = { ...process.env, GATES_LOG_DIR: logs };
+delete env.NODE_TEST_CONTEXT;
 function gates(args) {
-  const r = spawnSync(GATES, args, { encoding: 'utf8', cwd: ROOT });
+  const r = spawnSync(GATES, args, { encoding: 'utf8', cwd: ROOT, env });
   return { code: r.status, out: `${r.stdout}${r.stderr}` };
+}
+
+// The summary.txt a run just wrote — named in its own output, so this reads the
+// file the run claims to have left, not a guess at its path.
+function summaryOf(out) {
+  const m = out.match(/^summary: (\/\S+)$/m);
+  assert.ok(m, `the run did not say where its summary is:\n${out}`);
+  assert.ok(fs.existsSync(m[1]), `the summary the run named does not exist: ${m[1]}`);
+  return fs.readFileSync(m[1], 'utf8');
 }
 
 // The summary line, not the per-job banners — they use the same words.
@@ -425,6 +442,181 @@ test('a multi-line gate stops at its first failure (GitHub `bash -e` semantics)'
   const r = gates(['--workflow', file]);
   assert.equal(r.code, 1);
   assert.ok(!fs.existsSync(marker), 'the step continued past a failing line');
+});
+
+// ---------------------------------------------------------------------------
+// A RED NAMES ITS TEST — rule 3 of the script's header. Five red runs in one
+// day left no test name behind. Each test here plants a failure and asserts
+// the NAME comes out — under the FAIL line, and in the summary.txt the run
+// leaves on disk — and each has its control: the same run green names nothing.
+// ---------------------------------------------------------------------------
+
+// A step that prints a transcript verbatim and exits red. A heredoc, so the
+// scanner reads none of the transcript's punctuation as shell.
+const transcript = (text, exit) =>
+  `        run: |\n          cat <<'TRANSCRIPT'\n${text.split('\n').map((l) => `          ${l}`).join('\n')}\n          TRANSCRIPT\n          exit ${exit}\n`;
+
+test('a real `node --test` failure is named, with its nesting and its error', () => {
+  // The real tool, end to end: node's own runner, TAP on a pipe (its default
+  // off a TTY, and a pipe is what the gate runner hands it).
+  const suite = scratch(
+    'named.test.mjs',
+    `import test from 'node:test';\n` +
+      `test('outer group', async (t) => { await t.test('the inner one that fails', () => { throw new Error('planted-boom'); }); });\n` +
+      `test('a flat one that fails', () => { throw new Error('planted-nope'); });\n` +
+      `test('one that passes', () => {});\n`
+  );
+  const red = gates(['--workflow', scratch('node-red.yml', MINIMAL.replace('        run: echo alpha-ran\n', `        run: node --test ${suite}\n`))]);
+  assert.equal(red.code, 1);
+  assert.ok(red.out.includes('failing test(s), 2:'), `the count was not stated:\n${red.out}`);
+  assert.ok(red.out.includes('outer group > the inner one that fails'), 'the nested failure was not named with its path');
+  assert.ok(red.out.includes('a flat one that fails'), 'the flat failure was not named');
+  assert.ok(red.out.includes("error: 'planted-boom'"), 'the error message was not carried as context');
+  // Negatives are asserted on summary.txt: the terminal output also carries the
+  // raw TAP stream, where every name appears whatever the verdict.
+  const summary = summaryOf(red.out);
+  assert.ok(summary.includes('outer group > the inner one that fails'), 'the name did not reach summary.txt');
+  assert.ok(summary.includes('a flat one that fails'));
+  assert.ok(!/^\s+outer group$/m.test(summary), 'the PARENT of a failing subtest was reported as if it were the failing test');
+  assert.ok(!summary.includes('one that passes'), 'a passing test was named as failing');
+
+  // CONTROL: the same suite with the failures removed names nothing, and the
+  // summary says so by having no failing-test block at all.
+  const green = gates(['--workflow', scratch('node-green.yml', MINIMAL.replace('        run: echo alpha-ran\n', `        run: node --test ${scratch('green.test.mjs', "import test from 'node:test';\ntest('one that passes', () => {});\n")}\n`))]);
+  assert.equal(green.code, 0, green.out);
+  assert.ok(!green.out.includes('failing test(s)'), 'a green run reported failing tests');
+  assert.ok(!summaryOf(green.out).includes('failing test(s)'));
+});
+
+test("cargo's transcript is read: the test name and its panic line", () => {
+  // The exact shape libtest prints. Pinned here so a change in the reader is
+  // caught against a known-good transcript.
+  const cargo = [
+    'running 3 tests',
+    'test engine::tests::a_good_one ... ok',
+    'test engine::tests::planted_cargo_failure ... FAILED',
+    'test engine::tests::another_planted_failure ... FAILED',
+    '',
+    'failures:',
+    '',
+    '---- engine::tests::planted_cargo_failure stdout ----',
+    "thread 'engine::tests::planted_cargo_failure' panicked at crates/x/src/engine.rs:42:9:",
+    'assertion `left == right` failed: the planted message',
+    '  left: 1',
+    ' right: 2',
+    'note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace',
+    '',
+    '---- engine::tests::another_planted_failure stdout ----',
+    "thread 'engine::tests::another_planted_failure' panicked at crates/x/src/engine.rs:50:9:",
+    'second planted message',
+    '',
+    '',
+    'failures:',
+    '    engine::tests::another_planted_failure',
+    '    engine::tests::planted_cargo_failure',
+    '',
+    'test result: FAILED. 1 passed. 2 failed. 0 ignored. 0 measured. 0 filtered out. finished in 0.01s',
+  ].join('\n');
+  const r = gates(['--workflow', scratch('cargo-red.yml', MINIMAL.replace('        run: echo alpha-ran\n', transcript(cargo, 101)))]);
+  assert.equal(r.code, 1);
+  assert.ok(r.out.includes('exit 101'));
+  assert.ok(r.out.includes('failing test(s), 2:'), `the count was wrong:\n${r.out}`);
+  assert.ok(/^\s+engine::tests::planted_cargo_failure$/m.test(r.out), 'the failing test was not named on its own line');
+  assert.ok(/^\s+engine::tests::another_planted_failure$/m.test(r.out));
+  assert.ok(r.out.includes('assertion `left == right` failed: the planted message'), 'the panic message was not carried as context');
+  assert.ok(r.out.includes("panicked at crates/x/src/engine.rs:42:9"), 'the panic location was not carried');
+  // Negatives on summary.txt — the terminal output also carries the transcript itself.
+  const summary = summaryOf(r.out);
+  assert.ok(summary.includes('engine::tests::planted_cargo_failure'));
+  assert.ok(summary.includes('the planted message'));
+  assert.ok(!summary.includes('a_good_one'), 'a passing test was named');
+  assert.ok(!summary.includes('RUST_BACKTRACE'), 'the backtrace hint is noise, not context');
+
+  // CONTROL: the same transcript with the failures made green, exit 0, names nothing.
+  const green = cargo
+    .replace(/ \.\.\. FAILED/g, ' ... ok')
+    .replace(/\n---- [\s\S]*$/, '\ntest result: ok. 3 passed');
+  const g = gates(['--workflow', scratch('cargo-green.yml', MINIMAL.replace('        run: echo alpha-ran\n', transcript(green, 0)))]);
+  assert.equal(g.code, 0, g.out);
+  assert.ok(!g.out.includes('failing test(s)'));
+});
+
+test("vitest's transcript is read: file > suite > name, the assertion and the frame", () => {
+  // From a real `CI=true npx vitest run` (vitest 4.1.8) with ANSI colour left in,
+  // as vite's own logger writes it even to a pipe.
+  const vitest = [
+    '\x1b[2m10:58:52 PM\x1b[22m \x1b[33m[vite]\x1b[39m warning: something about esbuild',
+    '',
+    ' RUN  v4.1.8 /somewhere/ui',
+    '',
+    ' ❯ src/planted.test.ts (3 tests | 2 failed) 5ms',
+    '     × fails on purpose 4ms',
+    '   × top-level fails too 0ms',
+    '',
+    '⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯',
+    '',
+    ' FAIL  src/planted.test.ts > probe suite > fails on purpose',
+    'AssertionError: expected 1 to be 2 // Object.is equality',
+    '',
+    '- Expected',
+    '+ Received',
+    '',
+    '- 2',
+    '+ 1',
+    '',
+    ' ❯ src/planted.test.ts:3:44',
+    '      1| import { describe, it, expect } from "vitest";',
+    '',
+    '⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯',
+    '',
+    ' FAIL  src/planted.test.ts > top-level fails too',
+    'Error: boom',
+    ' ❯ src/planted.test.ts:6:41',
+    '',
+    '⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯',
+    '',
+    ' Test Files  1 failed (1)',
+    '      Tests  2 failed | 1 passed (3)',
+  ].join('\n');
+  const r = gates(['--workflow', scratch('vitest-red.yml', MINIMAL.replace('        run: echo alpha-ran\n', transcript(vitest, 1)))]);
+  assert.equal(r.code, 1);
+  assert.ok(r.out.includes('failing test(s), 2:'), `the count was wrong:\n${r.out}`);
+  assert.ok(r.out.includes('src/planted.test.ts > probe suite > fails on purpose'), 'the suite path was not named');
+  assert.ok(r.out.includes('src/planted.test.ts > top-level fails too'));
+  assert.ok(r.out.includes('AssertionError: expected 1 to be 2'), 'the assertion was not carried as context');
+  assert.ok(r.out.includes('❯ src/planted.test.ts:3:44'), 'the frame was not carried as context');
+  const summary = summaryOf(r.out);
+  assert.ok(summary.includes('probe suite > fails on purpose'));
+  assert.ok(!summary.includes('- Expected'), 'the diff body is noise, not context');
+});
+
+test('a red that names no test says so and shows the log, never a bare "1 failed"', () => {
+  const r = gates(['--workflow', scratch('nameless.yml', MINIMAL.replace('        run: echo alpha-ran\n', '        run: |\n          echo the-nameless-explosion\n          exit 1\n'))]);
+  assert.equal(r.code, 1);
+  assert.ok(r.out.includes('NO TEST NAME could be read'), 'a nameless red was not called out');
+  assert.ok(r.out.includes('| the-nameless-explosion'), "the log's tail was not shown");
+  const m = r.out.match(/^\s+log: (\/\S+\.log)$/m);
+  assert.ok(m, 'the log path was not printed');
+  assert.ok(fs.readFileSync(m[1], 'utf8').includes('the-nameless-explosion'), 'the log does not hold the output');
+
+  // A compile error is the common nameless red: its `error:` lines are what is shown.
+  const compile = gates(['--workflow', scratch('compile.yml', MINIMAL.replace('        run: echo alpha-ran\n', transcript(
+    'Compiling x v0.1.0\nerror[E0425]: cannot find value `planted` in this scope\n --> src/lib.rs:3:5\nerror: could not compile `x` (lib test) due to 1 previous error', 101)))]);
+  assert.equal(compile.code, 1);
+  assert.ok(compile.out.includes('error[E0425]: cannot find value `planted`'), 'the compile error was not surfaced');
+});
+
+test('every gate that ran, green or red, is listed in summary.txt with its exit code', () => {
+  const file = scratch(
+    'ledger.yml',
+    `${MINIMAL}      - name: bravo gate
+        run: exit 3
+`
+  );
+  const summary = summaryOf(gates(['--workflow', file]).out);
+  assert.ok(/PASS {2}exit 0 {2}alpha :: alpha gate/.test(summary), `the green gate is missing from the ledger:\n${summary}`);
+  assert.ok(/FAIL {2}exit 3 {2}alpha :: bravo gate/.test(summary), `the red gate is missing from the ledger:\n${summary}`);
+  assert.ok(/^scripts\/gates — /.test(summary), 'the summary does not say what it is');
 });
 
 // ---------------------------------------------------------------------------

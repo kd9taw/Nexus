@@ -118,8 +118,13 @@ jobs:
       - name: cargo fmt --check src-tauri
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
 
+      # `--no-fail-fast` on every multi-binary `cargo test`: without it cargo stops
+      # at the first test BINARY that fails, so a red run names the failures in
+      # one crate and says nothing about the others — the next push finds those.
+      # A red run must leave every failing test's name behind, once (scripts/gates
+      # reads them out of the log; CI's log is what a human reads).
       - name: cargo test --workspace
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
       # The fd-rules publish gate, run here on the file it exists to guard.
       # `.github/workflows/fd-rules.yml` runs this exact command before pushing
@@ -158,7 +163,7 @@ jobs:
         run: cargo clippy -p tempo-audio --features device,serial --all-targets -- -D warnings
 
       - name: cargo test tempo-audio --features device,serial
-        run: cargo test -p tempo-audio --features device,serial
+        run: cargo test -p tempo-audio --features device,serial --no-fail-fast
 
       # `--workspace` uses DEFAULT features, so the propagation `live` tests —
       # including the seven that assert QRZ/ClubLog/LoTW credentials are never
@@ -169,7 +174,7 @@ jobs:
         run: cargo clippy -p propagation --features live --all-targets -- -D warnings
 
       - name: cargo test propagation --features live
-        run: cargo test -p propagation --features live
+        run: cargo test -p propagation --features live --no-fail-fast
 
       # The DeepCW inference bridge: compiled by no other Linux job (the model
       # file is gitignored, so only compile coverage is possible here — see the
