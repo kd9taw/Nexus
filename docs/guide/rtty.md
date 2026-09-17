@@ -3,9 +3,10 @@
 The RTTY cockpit is a Baudot/ITA2 teleprinter station — 45.45 baud and a 170 Hz
 shift out of the box, the HF standard. It gives you a live decoder with
 per-character confidence, a mark/space waterfall you click to net onto a signal,
-four F-key macros and a type-and-send bar, two keying back-ends (soundcard AFSK
-or true FSK on a serial line), an optional QSO auto-sequencer that never
-transmits until you start it, and a log strip for the contacts you work by hand.
+eight F-key macros in two sets you can edit where they are (Everyday and Contest),
+a type-and-send bar, two keying back-ends (soundcard AFSK or true FSK on a serial
+line), an optional QSO auto-sequencer that never transmits until you start it, and
+a log strip that fills when you double-click a callsign in the transcript.
 It is deliberately not a contest station: no serials and no dupe check outside
 Field Day.
 
@@ -88,6 +89,14 @@ head carries, in order:
 - **Clear** wipes the transcript and re-pins it to the bottom, so an emptied pane
   follows new copy even if you had scrolled up.
 
+**Double-click a callsign** in the transcript and it lands in the dock's **Their
+call…** field and in the log strip's callsign at once. A compound call such as
+`VE3/K1ABC` comes across whole, and a call garbled by a lost figures shift (`W1AW` printed as
+`WQAW`) is filled as printed, for you to correct. Double-clicking anything that is
+not a call — `599`, `5NN`, `CQ`, `TEST`, `TU`, `73`, a grid square — does nothing.
+The caret stays where it was: if you were typing into a latched transmission, you
+still are.
+
 The transcript itself prints every character the demodulator produced, and fades
 the ones it was unsure about. Confidence is the ATC slicer's own margin, carried
 out per character: above 75 prints solid, then progressively fainter at 50 and
@@ -115,13 +124,20 @@ the first tick after you come back catches the display up.
 
 **The LOG pane** sits under the transcript: call, sent and received report, name,
 QTH, state, country, a POTA reference and private notes, with a **Log** button.
-It is where a contact you work by hand is written down — see the limits below for
-what does and does not fill it in.
+It is where a contact you work by hand is written down. Its callsign and the
+dock's **Their call…** field are one field shown twice: type in either, or
+double-click a call in the transcript, and both follow; logging the contact clears
+both.
 
 **The TX dock** — macros, compose, and the sequencer row when Auto is on — is
-pinned below the pane and cannot be scrolled out of reach or hidden. The macro
-row holds a **Their call…** field feeding the `{CALL}` token, four macros, the
-**TX** continuous-transmit button and **Esc / Stop**:
+pinned below the pane and cannot be scrolled out of reach or hidden. It holds the
+eight F-key macros, **F1** to **F8**, in keyboard order, and — beside them on a wide
+window, under them on a narrower one — the **Their call…** field feeding the `{CALL}`
+token, the **Everyday / Contest** switch with **Reset set**, and at the right the
+**TX** continuous-transmit button and **Esc / Stop**.
+
+Two sets are built in. **Everyday** is the set this cockpit has always had, with
+four empty keys for your own:
 
 | Key | Label | Sends |
 |---|---|---|
@@ -129,11 +145,54 @@ row holds a **Their call…** field feeding the `{CALL}` token, four macros, the
 | `F2` | Answer | `{CALL} DE {MYCALL} {MYCALL} K` |
 | `F3` | Exchange | `{CALL} DE {MYCALL} UR 599 599 K` |
 | `F4` | 73 | `{CALL} DE {MYCALL} TU 73 SK` |
+| `F5`–`F8` | — | empty |
 
-Hovering a macro shows it fully expanded with your call and theirs, so you can
-read what will key before you click it. `{MYCALL}` comes from
-[Settings ▸ Station](settings-reference.md#station); `{CALL}` from the Their-call
-field. Both tokens also expand in the compose bar, where **Enter** sends.
+**Contest** follows the run and search-and-pounce convention RTTY contest loggers
+use — a CQ that starts and ends with CQ, the exchange sent twice, a TU that asks for
+the next caller:
+
+| Key | Label | Sends |
+|---|---|---|
+| `F1` | CQ | `CQ TEST {MYCALL} {MYCALL} CQ` |
+| `F2` | Exch | `{CALL} 599 {EXCH} {EXCH}` |
+| `F3` | TU | `TU {MYCALL} CQ` |
+| `F4` | My call | `{MYCALL} {MYCALL}` |
+| `F5` | His call | `{CALL}` |
+| `F6` | S&P exch | `TU 599 {EXCH} {EXCH}` |
+| `F7` | AGN | `AGN? AGN?` |
+| `F8` | B4 | `{CALL} QSO B4 TU {MYCALL}` |
+
+Click a macro, or press its F-key. The keys work whenever the RTTY cockpit is on
+screen, including while you are typing in Their call…, the compose bar or the
+log strip; holding one down sends it once. On a Mac keyboard, hold **fn**.
+Every macro goes out on a line of its own and ends with a space, the way RTTY
+contest messages are written: your call starts a line on the other station's
+screen, and the last word of the message is complete for their logger. What you
+type in the compose bar goes out exactly as typed.
+
+The tokens: `{MYCALL}` is your callsign from
+[Settings ▸ Station](settings-reference.md#station); `{CALL}` is the Their-call field;
+`{RST}` is the report, always `599`; `{EXCH}` is your exchange for the contest you
+are running, without the report. A message that needs a value it does not have —
+`{CALL}` with Their call… empty, `{EXCH}` with no contest running — is not sent,
+and a toast says which. Hovering a macro shows it with your call and theirs filled
+in, so you can read what will key before you click it. The tokens also expand in the
+compose bar, where **Enter** sends.
+
+**To change a macro**, hover it (or tab to it) and click **✎**, or click an empty
+key. The editor opens over the dock with **Title**, **Message**, the tokens (click
+one to insert it), **Save**, **Cancel** and **Reset this button**. Save takes effect
+at once and is kept with that set — there is no separate Settings save. Titles and
+messages you write are shown as you wrote them, in any language; the built-in
+titles follow the app's language. A token Nexus does not know is flagged and cannot
+be saved (RTTY has no braces, so it would go out as a bare word), and a macro may
+not be titled **Stop** or **Esc** — those name the controls that stop a
+transmission, and a macro only ever transmits. **Esc** closes the editor when
+nothing is on the air; while an over is going out, continuous TX is up or an auto
+sequence is running, Esc stops as it always does, editor open or not.
+
+**Reset set** asks first, then puts every key of the set on screen back to its
+built-in message. The other set is untouched.
 
 Every send is checked by the engine before anything is queued, and a refusal tells
 you why: not in the RTTY section, TX not armed, the frequency outside your license
@@ -156,10 +215,10 @@ none. The decoder prints one running transcript instead of a decode list, a band
 activity table and a call roster, because a teleprinter signal is text and there
 is nothing to tabulate. One tone pair decodes at a time: whatever the M and S
 cursors sit on, not the whole passband. And you start every transmission,
-directly or by starting a sequencer run — there is no double-click-a-decode-to-call
-path. RTTY and FT8/FT4 are mutually exclusive by construction: the transmit gate
-demands the RTTY section owns the rig, so the two sequencers can never key
-together.
+directly or by starting a sequencer run — double-clicking a call fills Their call…
+and the log, and never transmits. RTTY and FT8/FT4 are mutually exclusive by
+construction: the transmit gate demands the RTTY section owns the rig, so the two
+sequencers can never key together.
 
 ## Core workflows
 
@@ -202,8 +261,8 @@ the characters to ask **AGN** about rather than the ones to write in the log.*
 ### Send an over by hand
 
 1. Arm transmit with the header's **TX Off** latch, so it reads **TX On**.
-2. Type the other station's call into **Their call…** — it feeds `{CALL}` and
-   nothing else.
+2. Double-click the other station's call in the transcript, or type it into
+   **Their call…**. It feeds `{CALL}`, and the log strip's callsign follows it.
 3. Click a macro, or type in the compose bar and press Enter. Text is uppercased
    and filtered to the ITA2 character set before it is queued, so what is queued
    is exactly what keys — a line with nothing encodable in it is refused with
@@ -223,8 +282,8 @@ it sends the rest of what you typed and unkeys.
 
 While the latch is up, **Enter** puts a new line on the air instead of sending,
 and the F-key macros type into the transmission already in progress rather than
-queueing an over behind it. Enter-per-line works exactly as before with the
-latch down. Continuous TX and the auto-sequencer will not run at the same time,
+queueing an over behind it, each on a line of its own. Enter-per-line works
+exactly as before with the latch down. Continuous TX and the auto-sequencer will not run at the same time,
 and each says so if you try.
 
 This is the one transmission in Nexus with no fixed end, so it carries more
@@ -322,22 +381,19 @@ Either way the bit stream is identical — the same framed Baudot, 1 start bit,
 
 Click an RTTY row on the [Needed board](needed-dx.md) and Nexus QSYs to the
 spot's exact frequency and opens this cockpit. Unlike CW and Phone it does not
-pre-fill a callsign — type it into **Their call…** yourself. If the RTTY section
-is switched off, the click still QSYs the rig to the spot so you can work it from
-wherever you are.
+pre-fill a callsign — double-click it in the transcript, or type it into **Their
+call…**. If the RTTY section is switched off, the click still QSYs the rig to the
+spot so you can work it from wherever you are.
 
 ## Honest limits
 
-- **The F-key labels are labels.** `F1`–`F4` name the macro buttons and you
-  click them; none of them is bound to the keyboard. (The CW cockpit does bind
-  its keys; this one does not.) The two real bindings are **Enter** in the
-  compose bar and **Esc**, which stops RTTY from anywhere in the cockpit.
+- **F1–F8 are bound only while this cockpit is on screen**, and not while the
+  macro editor is open. Alt, Ctrl and Cmd with an F-key are left to your system.
 - **A contact you work by hand you also log by hand.** The **LOG** pane under the
   transcript is the strip for it — call, sent and received report, name, QTH,
-  state, country, POTA reference and notes, with a **Log** button. Nothing
-  reaches it from the transcript or from the dock's **Their call…** field — type
-  what you copied. (The PSK cockpit's strip does carry its dock's call across;
-  this one does not.) The
+  state, country, POTA reference and notes, with a **Log** button. A double-click
+  or the Their-call field fills the callsign; the rest you type, and **Log** is always
+  your click. The
   auto-sequencer is the only path that writes a QSO on its own, and only when
   **Auto-log QSOs** is on in
   [Settings ▸ Digital](settings-reference.md#digital-ft8ft4) — with auto-log off,
@@ -355,12 +411,13 @@ wherever you are.
   [Settings ▸ Digital](settings-reference.md#digital-ft8ft4) (6 minutes
   by default) is the backstop that eventually disarms TX. Abort and Stop TX are
   the immediate ones.
-- **The report is always 599.** The `F3` macro sends it literally and the
-  sequencer substitutes it; there is no field to change it and no signal-report
-  control anywhere in the cockpit.
-- **The sequencer's messages are not editable.** The CQ, answer, exchange, AGN
-  and sign-off templates ship as fixed text — there is no Settings surface and no
-  in-cockpit editor for them. No shipped exchange sends a contest serial either;
+- **The report is always 599.** The built-in macros send it literally, the `{RST}`
+  token is always 599, and the sequencer substitutes it; there is no field to
+  change it and no signal-report control anywhere in the cockpit.
+- **The sequencer's messages are not editable.** The F-key macros are; the
+  auto-sequencer's own CQ, answer, exchange, AGN and sign-off templates ship as
+  fixed text — there is no Settings surface and no in-cockpit editor for them.
+  No shipped exchange sends a contest serial either;
   casual and Field Day are the two schemas.
 - **Netting the waterfall moves the receiver only.** Your transmitted tones are
   fixed — AFSK always keys 2125 Hz mark with space at mark plus your shift — so

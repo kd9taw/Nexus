@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **RTTY: double-click a callsign to grab it, and F1–F8 you can edit.** Double-click a call in
+  RTTY's Decoded text and it fills the Their call box and the log strip's callsign together —
+  a portable or compound call such as VE3/K1ABC comes across whole, and a call garbled by a
+  lost figures shift is filled as printed for you to correct. Anything that is not a call (599,
+  CQ, TEST, a grid square) is ignored, and the caret stays where you were typing. The two call
+  fields are now one: type in either and the other follows, and logging the contact clears
+  both. The dock now has eight macro keys, and **F1–F8 work from the keyboard** while the RTTY
+  cockpit is on screen. Two sets are built in and switched from the dock: **Everyday**, the
+  four you had plus four empty keys, and **Contest** — CQ, exchange, TU, my call, his call,
+  S&P exchange, AGN and B4. Hover a key and click ✎, or click an empty key, to change its title
+  and message; it is saved straight away, and you can put one key or a whole set back to the
+  built-in messages. Every macro now goes out on a line of its own and ends with a space, the
+  way RTTY contest messages are written, so your call starts a line on the other station's
+  screen. The Contest set's exchange keys send your contest exchange; with no contest running
+  they tell you so instead of sending.
+
 - **Cluster login SSID — stop two stations on one callsign knocking each other off.** A cluster
   node allows one session per callsign and disconnects the older one, so running a second Nexus,
   or Nexus beside another cluster program on the same call, made the two bump each other

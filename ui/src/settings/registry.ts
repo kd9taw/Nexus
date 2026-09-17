@@ -306,7 +306,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'RTTY',
     tab: 'digital',
     keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
-      'mark', 'space', 'auto arm', 'start receiving', 'not decoding'],
+      'mark', 'space', 'auto arm', 'start receiving', 'not decoding', 'macro'],
   },
   {
     id: 'psk',
