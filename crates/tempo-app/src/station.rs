@@ -485,11 +485,14 @@ impl StationCore {
         self.worked_parks.clear();
         for r in self.logbook.records() {
             // Parks are NOT per band: a POTA/SOTA reference is hunted once, on any
-            // band, so this one stays a flat set.
-            if let Some(p) = &r.ota.their_ref {
-                let p = p.trim();
-                if !p.is_empty() {
-                    self.worked_parks.insert(p.to_uppercase());
+            // band, so this one stays a flat set. A two-fer ("US-0001,US-0002") is a contact
+            // with each park, split on the separators the activator export reads.
+            if let Some(refs) = &r.ota.their_ref {
+                for p in refs.split([',', ';']) {
+                    let p = p.trim();
+                    if !p.is_empty() {
+                        self.worked_parks.insert(p.to_uppercase());
+                    }
                 }
             }
             let band = band_key(&r.band);
@@ -1594,6 +1597,24 @@ mod grid_tests {
         assert!(
             !sc.grid_worked_on("FN31", "2m"),
             "worked on 20m only — still NEW on 2m"
+        );
+    }
+
+    #[test]
+    fn a_two_fer_hunt_marks_both_parks_worked() {
+        // NEW PARK asks whether a reference is anywhere on the hunter side of the log. A two-fer
+        // record carries both parks in one field, and indexed whole it answered "never logged"
+        // for both — a NEW PARK badge on a park the operator had just worked.
+        let mut sc = StationCore::new();
+        let mut r = rec("K1ABC", "20m", "FN31");
+        r.ota.their_ref = Some("US-0001,US-0002".into());
+        sc.logbook.add(r);
+        sc.refresh_worked_index();
+        assert!(sc.park_worked("US-0001"), "the first park");
+        assert!(sc.park_worked("us-0002"), "…and the second");
+        assert!(
+            !sc.park_worked("US-0003"),
+            "control: a park outside the pair"
         );
     }
 

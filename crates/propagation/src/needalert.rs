@@ -593,15 +593,26 @@ pub struct HuntedActivations {
 impl HuntedActivations {
     /// Index the hunter side of the log. Each row is `(reference, activator base call,
     /// QSO time as unix seconds)`; rows with an empty reference or call are dropped.
+    ///
+    /// A reference field naming several parks — a two-fer, `US-0001,US-0002` — indexes EACH of
+    /// them: POTA credits that one contact to every park in it. Split on comma and semicolon,
+    /// the same separators the activator export reads (`tempo_core::logbook`), which no real
+    /// reference ever contains.
     pub fn from_log(rows: impl IntoIterator<Item = (String, String, u64)>) -> Self {
-        let seen = rows
-            .into_iter()
-            .filter_map(|(reference, call, when_unix)| {
-                let r = reference.trim().to_ascii_uppercase();
-                let c = call.trim().to_ascii_uppercase();
-                (!r.is_empty() && !c.is_empty()).then_some((r, c, when_unix - when_unix % UTC_DAY))
-            })
-            .collect();
+        let mut seen = HashSet::new();
+        for (reference, call, when_unix) in rows {
+            let c = call.trim().to_ascii_uppercase();
+            if c.is_empty() {
+                continue;
+            }
+            let day = when_unix - when_unix % UTC_DAY;
+            for r in reference.split([',', ';']) {
+                let r = r.trim().to_ascii_uppercase();
+                if !r.is_empty() {
+                    seen.insert((r, c.clone(), day));
+                }
+            }
+        }
         Self { seen }
     }
 
@@ -2857,6 +2868,26 @@ mod tests {
         .unwrap();
         assert!(a.tags.contains(&NeedTag::NewPark), "{:?}", a.tags);
         assert!(a.tags.contains(&NeedTag::Sota), "{:?}", a.tags);
+    }
+
+    #[test]
+    fn a_two_fer_reference_hunts_both_parks() {
+        // A two-fer is one QSO at a site where two park boundaries overlap, and POTA credits it
+        // to EACH park. The log carries both references in the one field ("US-0001,US-0002" —
+        // the shape the activator export already splits), so indexed whole the pair matched
+        // neither park and both activations stayed on offer after the contact was logged.
+        let h = hunted(&[("US-0001,US-0002", "K1ABC", DAY1)]);
+        assert!(!h.needed("US-0001", "K1ABC", DAY1 as i64), "the first park");
+        assert!(
+            !h.needed("US-0002", "K1ABC", DAY1 as i64),
+            "…and the second"
+        );
+        // CONTROL: a park outside the pair is still needed, so this is a split, not a wildcard.
+        assert!(h.needed("US-0003", "K1ABC", DAY1 as i64));
+        // Semicolons and stray space read the same way the activator side reads them.
+        let h = hunted(&[(" us-0001 ; US-0002 ,", "K1ABC", DAY1)]);
+        assert!(!h.needed("US-0001", "K1ABC", DAY1 as i64));
+        assert!(!h.needed("US-0002", "K1ABC", DAY1 as i64));
     }
 
     #[test]
