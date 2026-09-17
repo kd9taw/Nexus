@@ -30,10 +30,24 @@ export type AccountSession = {
 }
 /** The audio lane's own send budget. Small on purpose - see where it is used. */
 const AUDIO_BUDGET_BYTES = 512
-/** How long a connection has to LAST before its next failure is forgiven the reconnect ladder.
- *  Ten seconds: twenty of the relay's observation intervals, so an ordinary working connection is
- *  always credited, and far enough above the ladder's 1 s floor that a socket which cannot hold
- *  itself up for ten seconds is flapping and should be backed off like anything else. */
+/** How long a connection granted a session has to LAST before its next failure is forgiven the
+ *  reconnect ladder. Ten seconds: twenty of the relay's observation intervals, so an ordinary
+ *  working connection is always credited, and far enough above the ladder's 1 s floor that a
+ *  socket which cannot hold itself up for ten seconds is flapping and should be backed off like
+ *  anything else.
+ *
+ *  ⚠️ DURATION ALONE CANNOT BE THE WHOLE RULE, and this is why `retry` credits a delivered frame
+ *  separately. This constant sits above EVERY deadline that can close this socket - not one of
+ *  them, all of them:
+ *    `APPLICATION_TIMEOUT_MS`  the browser's own application credit  application-stream-client
+ *    `APPLICATION_TIMEOUT_MS`  the relay's application expiry        application-stream-relay
+ *    `ACK_TIMEOUT_MS`          the relay's observation ACK timeout   remote-monitor/relay
+ *  A socket closed by any of those dies structurally below this window, so a duration-only rule can
+ *  never forgive that whole class however healthy the station was - which is exactly what happened:
+ *  a station answering the whole time bought 1, 2, 4, 8, 16, 30 s of "Station data unavailable".
+ *  Raising this, or adding a deadline, does not reintroduce that on its own; deleting the delivery
+ *  credit does. The values are deliberately not written here - `client.test.ts` imports those two
+ *  constants and exercises the credit at each, so this list cannot quietly disagree with them. */
 export const RECONNECT_CREDIT_MS = 10_000
 /** What this browser is doing with the feed, for the one row that can say so. */
 export type FeedView = {
@@ -182,9 +196,14 @@ export class HostedConnection {
   private latest: { frame: MonitorFrame; at: number } | null = null
   private disposed = false
   private attempt = 0
-  /** When the live connection first proved itself useful - a session grant or a fresh frame,
-   *  whichever came first - or null for one that never did. Read once, by `retry`. */
+  /** When the live connection was granted its session - or null for one that never was. A grant
+   *  only proves the SERVICE is reachable, so it starts a clock rather than crediting anything;
+   *  `retry` pays the credit once that clock reaches RECONNECT_CREDIT_MS. */
   private liveSince: number | null = null
+  /** Whether the live connection ever carried an observation frame this page accepted. Unlike a
+   *  grant this is progress in itself - the relay reached the station and the station answered -
+   *  so `retry` credits it however briefly the socket that carried it survived. */
+  private delivered = false
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
   private renewal: ReturnType<typeof setInterval> | undefined
   private abort = new AbortController()
@@ -323,25 +342,35 @@ export class HostedConnection {
     void this.connect()
   }
   /** This connection has proved itself useful: it may now earn back the reconnect ladder, and a
-   *  feed that was asleep has visibly come back. */
-  private proved(): void {
+   *  feed that was asleep has visibly come back. `delivered` marks the stronger of the two proofs -
+   *  an observation frame this page accepted, which `retry` credits outright - as against a session
+   *  grant, which only starts the clock the credit is paid against. */
+  private proved(delivered = false): void {
     this.liveSince ??= performance.now()
+    if (delivered) this.delivered = true
     if (this.sleepState.resumed) this.publishFeed({ resumed: false })
   }
   private retry(): void {
     this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected()
     this.latest = null; clearInterval(this.renewal)
     if (this.disposed || this.sleepState.asleep || this.reconnectTimer) return
-    // What forgives the ladder is a connection that LASTED, read here and cleared as it is read.
-    // It used to be the session message itself, and that made the backoff unreachable for every
-    // failure that happens AFTER the relay accepts the ticket - a station offline behind a
+    // What forgives the ladder is a connection that made PROGRESS, read here and cleared as it is
+    // read. It used to be the session message itself, and that made the backoff unreachable for
+    // every failure that happens AFTER the relay accepts the ticket - a station offline behind a
     // reachable relay, a frame this socket rejects, a station-side close - because each round was
     // granted its own session and re-credited itself. Measured: 1000 ms, every round, no ceiling.
-    // The reason the credit exists is unchanged (a station that is up but briefly quiet must not
-    // wait out a ceiling it did not earn); it is now paid to a connection that held itself up,
-    // which is that same intent said in terms of the thing rather than a proxy for it.
-    if (this.liveSince !== null && performance.now() - this.liveSince >= RECONNECT_CREDIT_MS) this.attempt = 0
-    this.liveSince = null
+    // Progress has two forms and they are not the same evidence. A DELIVERED frame is progress in
+    // itself: the relay reached the station and the station answered, so it is credited however
+    // briefly the socket that carried it survived. A session GRANT proves only that the service is
+    // reachable, so it earns nothing on its own and must hold the connection up for
+    // RECONNECT_CREDIT_MS to be forgiven - that is the case above, and the one the ladder is for.
+    // Requiring the connection to have LASTED in both cases was too strong: this page can close its
+    // own socket (an application read missing its 3 s credit closes the shared socket - see the
+    // ApplicationClient construction above), and that happens structurally below the ten-second
+    // window, so a station that was answering the whole time escalated to 1, 2, 4, 8, 16, 30 s of
+    // "Station data unavailable" it had done nothing to earn.
+    if (this.delivered || (this.liveSince !== null && performance.now() - this.liveSince >= RECONNECT_CREDIT_MS)) this.attempt = 0
+    this.liveSince = null; this.delivered = false
     const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempt++, 5))
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.connect() }, delay)
   }
@@ -430,7 +459,7 @@ export class HostedConnection {
             // the stale display handles, and still ACK the valid receipt so the relay keeps delivering.
             if(transit>=STALE_MS)this.latest=null
             else if(transit<0){this.latest=null;if(this.sessionId)void this.renew(socket,true);else socket.close(1000,'clockUnavailable')}
-            else {this.latest={frame:ageFrame(parsed,transit),at:received};this.proved();this.clockFailures=0}
+            else {this.latest={frame:ageFrame(parsed,transit),at:received};this.proved(true);this.clockFailures=0}
             const frame=parsed
             const ack = JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence })
             // The full workspace shares this socket with its bounded reads and

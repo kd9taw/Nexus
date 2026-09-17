@@ -174,6 +174,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every second, forever — a station that was off, or a shack PC mid-reboot, was called a
   thousand times an hour for nothing. It now waits longer between tries the longer the trouble
   lasts, up to half a minute, and goes straight back to trying the moment you look at the tab.
+  That wait only builds up while the station has really gone quiet: one that is still sending you
+  data reconnects straight away. This matters because the browser itself sometimes drops the link
+  after a slow reply, and a station that was answering the whole time should not be the one made
+  to wait for it.
 
 ## [1.13.0] — 2026-09-16
 

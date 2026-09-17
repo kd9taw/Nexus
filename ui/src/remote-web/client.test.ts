@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
 import { BrowserClient, HostedConnection, RECONNECT_CREDIT_MS, RemoteError } from './client'
+import { APPLICATION_TIMEOUT_MS } from './application-protocol'
+import { ACK_TIMEOUT_MS } from '../remote-monitor/relay'
 import type { Auth0Client } from '@auth0/auth0-spa-js'
 import fixtures from '../remote-monitor/fixtures.v2.json'
 import { POLL_MS } from '../remote-monitor/protocol'
@@ -195,6 +197,37 @@ it('restarts the ladder for a connection that lasted, session or observation', a
     live = await expectNextAttemptAfter(live, 1000)
     remote.stop()
   }
+})
+
+// A connection can be killed by THIS page rather than by the station: an application read that
+// misses its 3 s credit closes the shared socket (`application-stream-client.ts` -> the close
+// callback at the ApplicationClient construction here in `client.ts`). That socket also carries
+// the monitor feed and the operation lane, and it dies at three seconds - structurally below the
+// ten-second credit window, so a connection that had been DELIVERING frames could never be
+// forgiven the ladder and every such round escalated it: 1, 2, 4, 8, 16, 30 s of "Station data
+// unavailable" for a station that was answering the whole time. Delivery is what separates this
+// from the case above: a session grant only proves the service is reachable, but an accepted
+// observation frame proves the relay reached the station AND the station answered, which is
+// progress no matter how briefly the socket that carried it survived.
+// Parametrised over EVERY deadline that can close this socket, because all of them fire below
+// RECONNECT_CREDIT_MS and so all of them had this defect - the credit is not paired with one
+// timeout, it sits above the lot. Three deadlines, two timescales:
+//   APPLICATION_TIMEOUT_MS  the browser's own application credit  application-stream-client.ts
+//   APPLICATION_TIMEOUT_MS  the relay's application expiry        application-stream-relay.ts
+//   ACK_TIMEOUT_MS          the relay's observation ACK timeout   remote-monitor/relay.ts
+// IMPORTED, never transcribed: a literal 5000 here would keep passing on the day ACK_TIMEOUT_MS
+// moves, while the deadline it was standing for had gone somewhere this test no longer covers.
+// A newly ADDED deadline still has to be added to this list by hand - nothing short of a registry
+// closes that - but an existing one moving out from under the test cannot happen silently.
+it.each([APPLICATION_TIMEOUT_MS, ACK_TIMEOUT_MS])('credits a connection that delivered a frame, though it died at %d ms', async lifetime => {
+  const { remote, socket } = await connection()
+  let live = socket
+  for (const expected of [1000, 2000, 4000]) live = await expectNextAttemptAfter(live, expected)
+  live.receive({ type: 'session', sessionId: crypto.randomUUID() })
+  live.receive(publication())
+  await vi.advanceTimersByTimeAsync(lifetime)
+  live = await expectNextAttemptAfter(live, 1000)
+  remote.stop()
 })
 
 it.each(['deadline', 'disconnect'])('cancels an HTTP body stalled after headers on %s', async reason => {
