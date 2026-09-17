@@ -59,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exchange, or nothing at all. It now sends that contest's exchange without the signal report —
   your zone in CQ WW CW, for example. Field Day sends exactly what it did before. `{CLASS}` and
   `{SECTION}` are empty outside Field Day.
+- **RTTY Auto no longer sends a Field Day exchange in other contests.** The auto-sequencer only
+  knows the Field Day exchange, yet it turned on in any contest and would have sent your Field
+  Day class and section to every station it worked. In any contest other than ARRL Field Day or
+  Winter Field Day it now refuses to turn on and says why: send your exchange with the macros and
+  log each contact yourself. Outside a contest, and in both Field Days, Auto works as before.
 - **A cluster node that accepts a connection and then goes silent no longer kills that feed
   slot for the rest of the session.** Some nodes accept the connection and never send a login
   prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it

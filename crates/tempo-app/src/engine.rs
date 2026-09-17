@@ -15857,8 +15857,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// FD master switch is on, else casual RST/name/QTH (mirroring `set_mode`'s
     /// exchange selection). Off aborts any live session and stops TX. NEVER
     /// transmits: a session only ever starts from `rtty_auto_cq` / `rtty_auto_answer`.
-    pub fn set_rtty_auto(&mut self, on: bool) {
+    ///
+    /// ⚠️ **On is REFUSED in any contest that is not Field Day** — see
+    /// [`Self::rtty_auto_contest_gate`]. Off is never refused: it is a stop.
+    pub fn set_rtty_auto(&mut self, on: bool) -> Result<(), String> {
         if on {
+            self.rtty_auto_contest_gate()?;
             let mycall = self.settings.mycall.clone();
             let seq = if self.settings.fd_active {
                 let exch = [
@@ -15891,6 +15895,27 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.rtty_seq = None;
             self.rtty_auto_over = false;
         }
+        Ok(())
+    }
+
+    /// ⭐ **The contests the RTTY auto-sequencer can work: Field Day's two, and none.**
+    ///
+    /// It has exactly two exchanges — `contest::field_day()` while the contest switch is
+    /// on and `contest::casual()` while it is off — so in any other contest it would send
+    /// a Field Day class and section to every station it worked and copy theirs against a
+    /// Field Day grammar. Refused with a sentence rather than armed wrong. Checked where
+    /// Auto is ARMED and again at both human-initiate doors, because the picker can move
+    /// to another contest under a sequencer armed in Field Day.
+    fn rtty_auto_contest_gate(&self) -> Result<(), String> {
+        if self.settings.fd_active && !self.contest_is_field_day() {
+            return Err(
+                "RTTY Auto works the Field Day exchange only (ARRL Field Day and \
+Winter Field Day). For this contest, send your exchange with the macros and log each \
+contact yourself."
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 
     /// Operator starts an auto CQ run (a human-initiate gate). Errors if Auto is
@@ -15899,6 +15924,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.rtty_seq.is_none() {
             return Err("Turn on Auto first".to_string());
         }
+        self.rtty_auto_contest_gate()?;
         self.rtty_no_latch_gate()?;
         self.rtty_tx_gate()?;
         self.rtty_drive(RttyOp::StartCq);
@@ -15911,6 +15937,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.rtty_seq.is_none() {
             return Err("Turn on Auto first".to_string());
         }
+        self.rtty_auto_contest_gate()?;
         self.rtty_no_latch_gate()?;
         self.rtty_tx_gate()?;
         self.rtty_drive(RttyOp::Answer(call.to_string()));
@@ -22317,7 +22344,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_operating_mode("rtty", false); // arms TX (a manual mode, like CW)
         assert!(e.tx_enabled() && e.tx_allowed(), "gate open for the tests");
-        e.set_rtty_auto(true);
+        e.set_rtty_auto(true).expect("Auto arms outside a contest");
         e
     }
 
@@ -22411,8 +22438,54 @@ mod tests {
         s.fd_section = "WI".into();
         e.apply_settings(s); // master on + class/section → enters Mode::FieldDay
         e.set_operating_mode("rtty", false);
-        e.set_rtty_auto(true);
+        e.set_rtty_auto(true).expect("Auto arms in ARRL Field Day");
         e
+    }
+
+    /// ⭐ **RTTY Auto works Field Day's exchange and nothing else, so it refuses in every
+    /// other contest.** It built `contest::field_day()` whenever the contest switch was
+    /// on, whatever the picker named — armed in the Ohio QSO Party (or CQ WW RTTY) it would
+    /// have sent a Field Day class and section to every station it worked, and copied
+    /// theirs against a Field Day grammar.
+    #[test]
+    fn rtty_auto_refuses_a_contest_that_is_not_field_day() {
+        let mut e = Engine::new("W8ABC", "EN82", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "MI".into();
+        // Field Day's exchange, left from June — exactly what Auto would have sent.
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s);
+        e.set_operating_mode("rtty", false);
+        let err = e.set_rtty_auto(true).unwrap_err();
+        assert!(err.contains("Field Day"), "names what Auto can work: {err}");
+        assert!(!e.rtty_state().auto, "a refused arm arms nothing");
+        assert!(e.rtty_auto_cq().is_err(), "and no CQ can start without it");
+
+        // …and a sequencer armed in Field Day cannot START once the picker has moved to
+        // another contest: the human-initiate doors ask the same question.
+        let mut e = rtty_auto_fd_engine();
+        assert!(e.rtty_state().auto, "armed in Field Day");
+        let mut s = e.settings().clone();
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "MI".into();
+        e.apply_settings(s);
+        assert!(e.rtty_auto_cq().unwrap_err().contains("Field Day"));
+        assert!(e
+            .rtty_auto_answer("W1AW")
+            .unwrap_err()
+            .contains("Field Day"));
+        assert_eq!(e.poll_rtty_one(), None, "nothing was queued to key");
+
+        // POSITIVE CONTROLS: Auto still arms in ARRL Field Day and outside any contest.
+        let mut e = rtty_auto_fd_engine();
+        assert!(e.rtty_state().auto, "ARRL Field Day arms");
+        e.rtty_auto_cq().expect("and starts a CQ");
+        let mut e = rtty_auto_engine();
+        assert!(e.rtty_state().auto, "no contest arms");
+        e.rtty_auto_cq().expect("and starts a CQ");
     }
 
     /// FIELD DAY IS ALL-MODE, AND RTTY IS ITS DIGITAL CLASS. The auto-sequencer

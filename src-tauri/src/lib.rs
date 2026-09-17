@@ -11540,13 +11540,14 @@ fn psk_set_mode(
 }
 
 /// Turn the RTTY auto-sequencer on/off. On builds the sequencer from the operator's
-/// identity + active exchange (Field Day class/section vs casual RST/name/QTH); off
+/// identity + active exchange (Field Day class/section vs casual RST/name/QTH), and is
+/// refused with the engine's sentence in any contest that is not Field Day; off
 /// aborts any live session and stops TX. NEVER transmits — a session only ever
 /// starts from an explicit CQ/Answer (the human-initiate gate).
 #[tauri::command(async)]
 fn rtty_set_auto(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
-    eng.set_rtty_auto(on);
+    eng.set_rtty_auto(on)?;
     Ok(rtty_state_dto(&eng))
 }
 
