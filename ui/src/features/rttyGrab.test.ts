@@ -90,30 +90,65 @@ describe('classifyGrab — what is never a call (no-op, no toast)', () => {
   })
 })
 
-describe('classifyGrab — a contest exchange (built now, wired when the contest strip lands)', () => {
+describe('classifyGrab — a contest exchange, from the session\'s own received slots', () => {
+  // The shape the session publishes (`snap.fieldDay.receives`): CQ WW RTTY's W/VE exchange is
+  // the report, a CQ zone and a QTH. Nothing about the contest is written in the classifier —
+  // the bounds and the domain come from here, so the same grab serves the next ruleset.
   const QTH = new Set(['IL', 'WI', 'ON'])
-  const contest = { contest: { zone: true, qth: (code: string) => QTH.has(code) } }
+  const receives = [
+    { key: 'RST', kind: 'rst', required: true },
+    { key: 'ZN', kind: 'number', required: true, min: 1, max: 40, adif: 'CQZ' },
+    { key: 'QTH', kind: 'enum', required: false, domain: 'cqww_w_ve' },
+  ]
+  const contest = {
+    slots: receives,
+    knownCode: (domain: string | undefined, v: string) => domain === 'cqww_w_ve' && QTH.has(v),
+  }
 
-  it('reads a CQ zone 1–40, with or without its leading zero', () => {
-    expect(classifyGrab('5', contest)).toEqual({ kind: 'zone', value: '5' })
-    expect(classifyGrab('05', contest)).toEqual({ kind: 'zone', value: '5' })
-    expect(classifyGrab('40', contest)).toEqual({ kind: 'zone', value: '40' })
+  it('reads a zone into the ZONE slot, by the slot\'s own bounds', () => {
+    expect(classifyGrab('5', contest)).toEqual({ kind: 'exchange', slot: 'ZN', value: '5' })
+    expect(classifyGrab('05', contest)).toEqual({ kind: 'exchange', slot: 'ZN', value: '5' })
+    expect(classifyGrab('40', contest)).toEqual({ kind: 'exchange', slot: 'ZN', value: '40' })
+    // Out of the slot's bounds is not this slot's value, and nothing else claims it.
     for (const bad of ['0', '00', '41', '599']) expect(classifyGrab(bad, contest)).toBeNull()
   })
 
   it('reads a zone that arrived on the letters plane (unshift-on-space garble)', () => {
     // "599 05 05" from a sender without USOS prints "599 PT PT" here: the space unshifts.
-    expect(classifyGrab('PT', contest)).toEqual({ kind: 'zone', value: '5' })
-    expect(classifyGrab('QR', contest)).toEqual({ kind: 'zone', value: '14' })
-    expect(classifyGrab('RP', contest)).toEqual({ kind: 'zone', value: '40' })
-    expect(classifyGrab('TP', contest), '50 is no CQ zone').toBeNull()
+    expect(classifyGrab('PT', contest)).toEqual({ kind: 'exchange', slot: 'ZN', value: '5' })
+    expect(classifyGrab('QR', contest)).toEqual({ kind: 'exchange', slot: 'ZN', value: '14' })
+    expect(classifyGrab('RP', contest)).toEqual({ kind: 'exchange', slot: 'ZN', value: '40' })
+    expect(classifyGrab('TP', contest), '50 is outside the slot').toBeNull()
   })
 
-  it('reads a QTH code from the active domain — before the letters-plane zone it could also be', () => {
-    expect(classifyGrab('IL', contest)).toEqual({ kind: 'qth', value: 'IL' })
-    expect(classifyGrab('on', contest)).toEqual({ kind: 'qth', value: 'ON' })
-    // WI is also zone 28 on the letters plane; the domain answers first.
-    expect(classifyGrab('WI', contest)).toEqual({ kind: 'qth', value: 'WI' })
+  it('reads a QTH the domain knows — before the letters-plane number it could also be', () => {
+    expect(classifyGrab('IL', contest)).toEqual({ kind: 'exchange', slot: 'QTH', value: 'IL' })
+    expect(classifyGrab('on', contest)).toEqual({ kind: 'exchange', slot: 'QTH', value: 'ON' })
+    // WI is also 28 on the letters plane; the domain answers first.
+    expect(classifyGrab('WI', contest)).toEqual({ kind: 'exchange', slot: 'QTH', value: 'WI' })
+  })
+
+  it('fills nothing from a domain this build carries no values for', () => {
+    // The strip's own `inDomain` answers TRUE for an unknown domain, which is right for a
+    // while-typing verdict and would make EVERY word a QTH here — callsigns included.
+    const unknown = { slots: receives, knownCode: () => false }
+    expect(classifyGrab('IL', unknown)).toBeNull()
+    expect(classifyGrab('W1AW', unknown)).toEqual({ kind: 'call', value: 'W1AW' })
+    // …and a caller that passes no predicate at all recognises no code either.
+    expect(classifyGrab('IL', { slots: receives })).toBeNull()
+    expect(classifyGrab('W1AW', { slots: receives })).toEqual({ kind: 'call', value: 'W1AW' })
+  })
+
+  it('refuses to guess between two slots that would both take the number', () => {
+    const two = {
+      slots: [
+        { key: 'SERIAL', kind: 'serial', required: true, min: 1, max: 9999 },
+        { key: 'ZN', kind: 'number', required: true, min: 1, max: 40 },
+      ],
+    }
+    expect(classifyGrab('5', two), 'both slots accept 5 — a guess would file it wrong').toBeNull()
+    // …and a number only one of them takes still lands.
+    expect(classifyGrab('600', two)).toEqual({ kind: 'exchange', slot: 'SERIAL', value: '600' })
   })
 
   it('still grabs calls, and still refuses the report', () => {
@@ -123,9 +158,9 @@ describe('classifyGrab — a contest exchange (built now, wired when the contest
   })
 
   it('POSITIVE CONTROL: outside a contest the same tokens are not exchange values', () => {
-    // Without this, a classifier that always answered zone/QTH would pass the block above.
+    // Without this, a classifier that always answered would pass the block above.
     for (const token of ['5', '05', 'PT', 'IL', 'ON']) expect(classifyGrab(token)).toBeNull()
-    // …and WI outside a contest is neither a state nor a zone nor a two-letter call.
+    // …and WI outside a contest is neither a state nor a number nor a two-letter call.
     expect(classifyGrab('WI')).toBeNull()
   })
 })

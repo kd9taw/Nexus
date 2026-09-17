@@ -109,34 +109,50 @@ function isCall(t: string): boolean {
   )
 }
 
-/** A CQ zone, 1–40, read through the letters-plane garble (`05` sent by a station with
- *  unshift-on-space off prints `PT` here — the space unshifts our decoder). */
-function zoneOf(t: string): string | null {
-  if (t.length < 1 || t.length > 2) return null
+/** A number read through the letters-plane garble: `05` sent by a station with unshift-on-space
+ *  off prints `PT` here, because the space unshifts our decoder. Up to four digits, so a serial
+ *  is readable too; what makes a number an EXCHANGE value is a slot whose bounds accept it. */
+function numberOf(t: string): number | null {
+  if (t.length < 1 || t.length > 4) return null
   let digits = ''
   for (const c of t) {
     const d = c >= '0' && c <= '9' ? c : GARBLE_DIGIT[c]
     if (!d) return null
     digits += d
   }
-  const n = Number(digits)
-  return n >= 1 && n <= 40 ? String(n) : null
+  return Number(digits)
 }
 
 export type GrabResult =
   | { kind: 'call'; value: string }
-  | { kind: 'zone'; value: string }
-  | { kind: 'qth'; value: string }
+  /** A value for one RECEIVED exchange slot, named by its slot id (`ZN`, `QTH`, …). */
+  | { kind: 'exchange'; slot: string; value: string }
 
-/** What the grab knows about the session. `contest` is absent outside a contest, and then
- *  only calls are grabbed. */
+/** One received exchange slot, as the session publishes it — `snap.fieldDay.receives`, the
+ *  ruleset's own shape (`ContestFieldSpec`). Nothing about a contest is written here: the
+ *  bounds of a zone and the values of a QTH domain are the RULESET's, so the same grab works
+ *  for the next contest without a line changing. */
+export interface GrabSlot {
+  key: string
+  kind: string
+  min?: number
+  max?: number
+  domain?: string
+}
+
+/** What the grab knows about the session. Without `slots` there is no contest, and only calls
+ *  are grabbed. */
 export interface GrabContext {
-  contest?: {
-    /** The session receives a CQ zone. */
-    zone?: boolean
-    /** Membership in the session's received-QTH domain (uppercase codes). */
-    qth?: (code: string) => boolean
-  }
+  slots?: GrabSlot[]
+  /**
+   * Is `value` a KNOWN member of `domain`?
+   *
+   * ⚠️ NOT the strip's `inDomain`, which answers TRUE for a domain this build carries no values
+   * for. That is right for a while-typing verdict — an absent value set is not evidence that
+   * what the operator typed is wrong — and wrong here: it would make every word the operator
+   * double-clicked, callsigns included, a QTH. A grab fills only what can be recognised.
+   */
+  knownCode?: (domain: string | undefined, value: string) => boolean
 }
 
 /** Classify one token. `null` is "not something the grab fills" — the caller does nothing and
@@ -144,14 +160,31 @@ export interface GrabContext {
 export function classifyGrab(raw: string, ctx: GrabContext = {}): GrabResult | null {
   const t = clean(raw)
   if (!t || KEYWORDS.has(t) || isRst(t)) return null
-  const contest = ctx.contest
-  if (contest) {
-    const zone = contest.zone ? zoneOf(t) : null
-    // Plain digits first: nothing else an exchange carries is a bare 1–40.
-    if (zone && /^[0-9]+$/.test(t)) return { kind: 'zone', value: zone }
+  const slots = ctx.slots ?? []
+  if (slots.length > 0) {
+    const n = numberOf(t)
+    const digits = /^[0-9]+$/.test(t)
+    // A number fills a numeric slot only when EXACTLY ONE of them accepts it: two slots that
+    // both could take it is an ambiguity, and a grab guessing between them would file the
+    // operator's zone as a serial. A garbled number needs the slot to carry bounds — without
+    // them any word off the letters plane would be a number.
+    const numeric = (s: GrabSlot) =>
+      (s.kind === 'number' || s.kind === 'serial') &&
+      (digits || s.min !== undefined || s.max !== undefined) &&
+      (s.min === undefined || (n ?? -1) >= s.min) &&
+      (s.max === undefined || (n ?? -1) <= s.max)
+    // Plain digits first: nothing else an exchange carries is a bare number.
+    if (n !== null && digits) {
+      const fits = slots.filter(numeric)
+      if (fits.length === 1) return { kind: 'exchange', slot: fits[0].key, value: String(n) }
+    }
     // The domain before the garble: WI is Wisconsin before it is zone 28 on the letters plane.
-    if (contest.qth?.(t)) return { kind: 'qth', value: t }
-    if (zone) return { kind: 'zone', value: zone }
+    const codes = slots.filter((s) => s.kind === 'enum' && (ctx.knownCode?.(s.domain, t) ?? false))
+    if (codes.length === 1) return { kind: 'exchange', slot: codes[0].key, value: t }
+    if (n !== null && !digits) {
+      const fits = slots.filter(numeric)
+      if (fits.length === 1) return { kind: 'exchange', slot: fits[0].key, value: String(n) }
+    }
   }
   return isCall(t) ? { kind: 'call', value: t } : null
 }
