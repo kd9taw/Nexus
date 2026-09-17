@@ -1403,3 +1403,45 @@ fn a_remote_edit_keeps_a_wwff_park_as_wwff() {
     assert_eq!(refused, Err("invalidRecord"));
     assert_eq!(stored(&f).0.as_deref(), Some("WWFF"));
 }
+
+/// The whole design rests on a row's key naming ONE contact. Call + time alone does not: a
+/// contest station works the same call on two bands in the same minute, and both rows share
+/// them. The key is a SHA-256 over the entire row, so it tells the pair apart, and `locate`
+/// acts on the one the operator saw. Two rows can share a key only by being identical in every
+/// field, and then either is the same contact to delete.
+#[test]
+fn a_duplicate_call_and_time_pair_has_two_keys_and_each_finds_its_own_row() {
+    let f = Fixture::new();
+    f.engine.lock().unwrap().import_adif(
+        "<CALL:4>W1AW<BAND:3>20m<MODE:2>CW<FREQ:6>14.030<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>\n\
+         <CALL:4>W1AW<BAND:3>40m<MODE:2>CW<FREQ:5>7.030<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>\n",
+    );
+    let mut e = f.engine.lock().unwrap();
+    let records = e.log_records();
+    assert_eq!(records.len(), 2, "the pair is two contacts, not one dupe");
+    assert_eq!(
+        (&records[0].call, records[0].when_unix),
+        (&records[1].call, records[1].when_unix),
+        "call + time alone cannot tell them apart"
+    );
+    let key = |r: &tempo_core::logbook::QsoRecord| -> super::super::logging::Target {
+        serde_json::from_value(json!({"call":r.call,"whenUnix":r.when_unix,
+            "key":super::super::logging::row_key(r)}))
+        .unwrap()
+    };
+    let (first, second) = (key(&records[0]), key(&records[1]));
+    assert_ne!(
+        super::super::logging::row_key(&records[0]),
+        super::super::logging::row_key(&records[1]),
+        "the row key does"
+    );
+    assert_eq!(super::super::logging::locate(&mut e, &first), Some(0));
+    assert_eq!(super::super::logging::locate(&mut e, &second), Some(1));
+    // Delete the 40 m contact by its key: the 20 m one, same call and time, survives.
+    let index = super::super::logging::locate(&mut e, &second).unwrap();
+    assert!(e.delete_qso(index));
+    assert_eq!(e.log_records().len(), 1);
+    assert_eq!(e.log_records()[0].band, "20m");
+    assert_eq!(super::super::logging::locate(&mut e, &first), Some(0));
+    assert_eq!(super::super::logging::locate(&mut e, &second), None);
+}
