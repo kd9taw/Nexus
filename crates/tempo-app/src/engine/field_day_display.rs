@@ -351,7 +351,10 @@ mod tests {
         assert!(e.contest_log_manual("W8XYZ", &ex, "CW", None).unwrap());
         let fd = e.snapshot().field_day.expect("in the party");
         assert_eq!(
-            fd.receives.iter().map(|f| f.key.as_str()).collect::<Vec<_>>(),
+            fd.receives
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>(),
             vec!["RST", "QTH"]
         );
         assert_eq!(fd.log[0].rcvd, vec!["579".to_string(), "CUYA".to_string()]);
