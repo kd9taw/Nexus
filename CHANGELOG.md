@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Cluster login SSID — stop two stations on one callsign knocking each other off.** A cluster
+  node allows one session per callsign and disconnects the older one, so running a second Nexus,
+  or Nexus beside another cluster program on the same call, made the two bump each other
+  indefinitely: a cluster connection that flapped with no explanation on screen. Under
+  **Settings › Connections › Cluster login SSID** you can now give each one its own SSID (`2`
+  logs in as `W9XYZ-2`), which the node treats as a separate user, and both stay connected.
+  **Nexus does not choose one for you** — it is empty by default and logs in exactly as before,
+  because a node that requires registration treats the suffixed call as a different, unregistered
+  user and will not let it post spots, and because an SSID picked for you could collide with the
+  one you already use in the other program. Your spots still reach the network under your plain
+  callsign either way; nodes relaying them strip the suffix.
+
 ### Fixed
 
 - **A cluster node that was working could be reported as dead.** Nexus asked the system for the

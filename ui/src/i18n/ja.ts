@@ -3851,6 +3851,8 @@ export const JA: PartialCatalog = {
   "settings.integrations.pskreporter.hint": "スポットを世界地図にアップロードします",
   "settings.integrations.clusterSpots.label": "DXクラスター / RBNスポット",
   "settings.integrations.clusterSpots.hint": "Reverse Beacon Networkからの「ニュー」を未交信ボードとコネクトに表示します。再起動後に有効になります。",
+  "settings.integrations.clusterSsid.label": "クラスターログインSSID",
+  "settings.integrations.clusterSsid.hint": "ログイン時にコールサインへ付加します（2 なら W9XYZ-2）。ノードはコールサインごとに1セッションしか許さず古い方を切断するため、同じコールサインの2台目のNexus — または別のクラスターソフト — がこの接続を切ってしまいます。それぞれ別のSSIDを使えば回避できます。1-99、空欄ならコールサインのままログインします。スポットは通常のコールサインでネットワークに届きます。登録が必要なノードでは、サフィックス付きのコールサインもそこで登録しないとスポットを送信できません。次回の保存で有効になります。",
   "settings.integrations.clusterNodes.label": "Phone/SSBクラスターノード",
   "settings.integrations.clusterNodes.empty": "ノードがありません — SSB/フォーンのニーズを得るには下で追加してください（RBNはCWとデジタルのみです）。",
   "settings.integrations.clusterNodes.remove.title": "このクラスターノードを削除",

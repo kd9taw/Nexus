@@ -218,6 +218,57 @@ pub fn format_dx_spot(freq_khz: f64, call: &str, comment: &str) -> String {
     }
 }
 
+/// The callsign to log into a cluster node with: `call`, plus `ssid` as a `-NN`
+/// suffix when the operator has set one.
+///
+/// A node identifies a session BY THIS STRING and allows one per callsign. DXSpider's
+/// default is `$bumpexisting = 1` — the NEW login disconnects the existing one — so two
+/// clients on one bare call bump each other indefinitely, which from the operator's chair
+/// is a cluster connection that flaps for no visible reason. DXSpider treats `W9XYZ` and
+/// `W9XYZ-2` as different users (its session lookup is a plain lookup on the string the
+/// operator typed; the SSID is not stripped for it) and its own user manual recommends
+/// exactly this, so a distinct SSID is what lets the two sessions coexist.
+///
+/// The accepted range is the NODE's, not ours: DXSpider's `is_callsign` accepts `-1`…`-99`,
+/// DIGITS ONLY, and normalises `-0`/`-00` away to the bare call. Anything outside that is
+/// dropped here rather than sent — a login the node rejects as an invalid callsign costs
+/// the whole session, which is worse than the flapping being fixed. A `/` is never admitted
+/// either: it means something else entirely and most nodes refuse it outright.
+///
+/// **Empty `ssid` yields the bare call — byte-for-byte what every install does today.**
+/// Nexus does not pick a value; see `Settings::cluster_ssid` for why that is the operator's
+/// to choose and what it costs them if it is chosen wrongly.
+///
+/// Spots are unaffected either way: the node a spot is posted to keeps the SSID on its own
+/// display, and every node that relays it onward strips the `-NN` back off, so the network
+/// sees the bare call and duplicate detection (which compares bare calls) still collapses
+/// the same spot from the same operator.
+pub fn login_call(call: &str, ssid: &str) -> String {
+    let call = call.trim().to_ascii_uppercase();
+    // No callsign, no login. Returning a bare "-2" here would be a string that reads as
+    // an identity to every caller that only checks for emptiness.
+    if call.is_empty() {
+        return call;
+    }
+    match node_legal_ssid(ssid) {
+        Some(n) => format!("{call}-{n}"),
+        None => call,
+    }
+}
+
+/// The node-legal SSID in `s`, or `None` if there isn't one. Accepts the number with or
+/// without its leading `-`, since the operator will type it either way.
+fn node_legal_ssid(s: &str) -> Option<u8> {
+    let s = s.trim();
+    let s = s.strip_prefix('-').unwrap_or(s);
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // `-0`/`-00` are accepted by the node and then normalised straight back to the bare
+    // call, so they are not a second session and are rejected here as the no-op they are.
+    s.parse::<u8>().ok().filter(|n| (1..=99).contains(n))
+}
+
 /// What the session wants the transport to do in response to received bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -1379,6 +1430,67 @@ mod tests {
             outbox.lock().unwrap().len(),
             1,
             "the unsent command stays buffered"
+        );
+    }
+
+    #[test]
+    fn an_operator_set_ssid_reaches_the_login_line() {
+        // THE BUG: Nexus logged in with the bare callsign. A node allows one session
+        // per callsign and DXSpider's default is to let the NEW login disconnect the
+        // old one, so a second Nexus (or Nexus beside another cluster client) on the
+        // same call bumped the first off, each reconnect bumping back — a cluster
+        // connection that flaps with no explanation. DXSpider treats W9XYZ and
+        // W9XYZ-2 as different users, which is what makes the two sessions coexist.
+        assert_eq!(login_call("W9XYZ", "2"), "W9XYZ-2");
+        // The operator will type it either way round.
+        assert_eq!(login_call("w9xyz", "-2"), "W9XYZ-2");
+        assert_eq!(login_call(" W9XYZ ", " 7 "), "W9XYZ-7");
+    }
+
+    #[test]
+    fn an_unset_or_node_illegal_ssid_logs_in_bare() {
+        // POSITIVE CONTROL for the test above: the suffix must appear ONLY when the
+        // operator set a usable one. Unset is every existing install, and must be
+        // byte-for-byte what it is today.
+        assert_eq!(login_call("W9XYZ", ""), "W9XYZ");
+        assert_eq!(login_call("W9XYZ", "   "), "W9XYZ");
+        // DXSpider's `is_callsign` accepts -1..-99, DIGITS ONLY. Anything outside
+        // that is dropped rather than sent: a login the node rejects as an invalid
+        // callsign costs the whole session, which is worse than the flapping.
+        assert_eq!(
+            login_call("W9XYZ", "0"),
+            "W9XYZ",
+            "-0 normalises away anyway"
+        );
+        assert_eq!(
+            login_call("W9XYZ", "100"),
+            "W9XYZ",
+            "above the node's range"
+        );
+        assert_eq!(login_call("W9XYZ", "999"), "W9XYZ");
+        assert_eq!(login_call("W9XYZ", "A"), "W9XYZ", "letters are not an SSID");
+        assert_eq!(login_call("W9XYZ", "2A"), "W9XYZ");
+        assert_eq!(login_call("W9XYZ", "1.5"), "W9XYZ");
+        // A slash is a different thing entirely and most nodes refuse it, so it must
+        // never be smuggled in through the SSID field.
+        assert_eq!(login_call("W9XYZ", "/P"), "W9XYZ");
+        // Boundaries of the node's accepted range.
+        assert_eq!(login_call("W9XYZ", "1"), "W9XYZ-1");
+        assert_eq!(login_call("W9XYZ", "99"), "W9XYZ-99");
+        // No callsign is no login — never a bare suffix, which callers that test for
+        // an empty identity would read as a real one.
+        assert_eq!(login_call("", "2"), "");
+        assert_eq!(login_call("   ", "2"), "");
+    }
+
+    #[test]
+    fn the_suffixed_call_is_what_reaches_the_wire() {
+        // End to end: whatever `login_call` builds is what the node is answered with.
+        let mut sess = ClusterSession::new(&login_call("W9XYZ", "2"));
+        let acts = sess.feed("login: ");
+        assert!(
+            matches!(&acts[..], [Action::Send(s)] if s == "W9XYZ-2\r\n"),
+            "the SSID'd call must be what is sent, got {acts:?}"
         );
     }
 

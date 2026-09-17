@@ -6199,6 +6199,9 @@ export const EN = {
   'settings.integrations.clusterNodes.addCustom.action': '+ Custom',
   'settings.integrations.clusterNodes.hint':
     'We connect to ALL listed nodes and union their human SSB/phone spots — more nodes = wider phone coverage (RBN CW + digital connect automatically; RBN endpoints are ignored here). An added node connects on the next Save; removing one takes effect on restart.',
+  'settings.integrations.clusterSsid.label': 'Cluster login SSID',
+  'settings.integrations.clusterSsid.hint':
+    'Added to your callsign at login (2 = W9XYZ-2). A node allows one session per callsign and drops the older one, so a second Nexus — or another cluster program on the same call — knocks this one off unless each uses a different SSID. 1-99, or leave it empty to log in with your bare call. Your spots still reach the network under your plain callsign. On a node that requires registration, register the suffixed call there too or it will not let you post spots. Takes effect on the next Save.',
   'settings.integrations.propagation.title': 'Propagation',
   'settings.integrations.openingWatch.label': 'Near-region opening watch',
   'settings.integrations.openingWatch.hint':

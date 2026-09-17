@@ -589,13 +589,22 @@ fn start_cluster_feeds(
     spots: &SharedSpots,
     cluster_hosts: &[String],
     mycall: &str,
+    cluster_ssid: &str,
     health: &SharedHealth,
 ) {
-    start_cluster_feed(spots, RBN_CW_HOST, mycall, health, &RBN_CW_STARTED);
+    start_cluster_feed(
+        spots,
+        RBN_CW_HOST,
+        mycall,
+        cluster_ssid,
+        health,
+        &RBN_CW_STARTED,
+    );
     start_cluster_feed(
         spots,
         RBN_DIGITAL_HOST,
         mycall,
+        cluster_ssid,
         health,
         &RBN_DIGITAL_STARTED,
     );
@@ -604,7 +613,7 @@ fn start_cluster_feeds(
         if h.is_empty() || h.contains("reversebeacon.net") {
             continue; // blank, or an RBN endpoint already wired above
         }
-        start_human_cluster_feed(spots, h, mycall, health);
+        start_human_cluster_feed(spots, h, mycall, cluster_ssid, health);
     }
 }
 
@@ -614,26 +623,26 @@ fn start_cluster_feed(
     spots: &SharedSpots,
     cluster_host: &str,
     mycall: &str,
+    cluster_ssid: &str,
     health: &SharedHealth,
     started: &std::sync::atomic::AtomicBool,
 ) {
+    // The gate reads the BARE call: `is_real_call` admits no '-', so testing the
+    // login call here would silently switch every feed off the moment an operator
+    // set an SSID.
     if !is_real_call(mycall) || started.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    let call = tempo_net::cluster::login_call(mycall, cluster_ssid);
     conn_log(
         "RBN",
         "info",
-        format!(
-            "connecting to {} as {}",
-            cluster_host,
-            mycall.trim().to_uppercase()
-        ),
+        format!("connecting to {cluster_host} as {call}"),
     );
     let buf = spots.clone();
     let hp = health.clone();
     let hp_conn = health.clone();
     let host = cluster_host.to_string();
-    let call = mycall.trim().to_string();
     std::thread::spawn(move || {
         tempo_net::cluster::run(
             &host,
@@ -886,7 +895,14 @@ fn aprs_is_bridge(
 /// Each parsed spot stamps BOTH the aggregate `cluster_last` AND `phone_cluster_last`, and the
 /// session toggles this node's own connected flag (registered in [`PHONE_NODE_CONNS`]) so the
 /// phone-source pill reflects "any node up" — readable independently of the busy RBN feeds.
-fn start_human_cluster_feed(spots: &SharedSpots, host: &str, mycall: &str, health: &SharedHealth) {
+fn start_human_cluster_feed(
+    spots: &SharedSpots,
+    host: &str,
+    mycall: &str,
+    cluster_ssid: &str,
+    health: &SharedHealth,
+) {
+    // The BARE call, for `start_cluster_feed`'s reason.
     if !is_real_call(mycall) {
         return;
     }
@@ -900,10 +916,11 @@ fn start_human_cluster_feed(spots: &SharedSpots, host: &str, mycall: &str, healt
         }
         started.push(host.to_string());
     }
+    let call = tempo_net::cluster::login_call(mycall, cluster_ssid);
     conn_log(
         "DX Cluster",
         "info",
-        format!("connecting to {} as {}", host, mycall.trim().to_uppercase()),
+        format!("connecting to {host} as {call}"),
     );
     let conn = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Ok(mut v) = PHONE_NODE_CONNS.lock() {
@@ -912,7 +929,6 @@ fn start_human_cluster_feed(spots: &SharedSpots, host: &str, mycall: &str, healt
     let buf = spots.clone();
     let hp = health.clone();
     let host = host.to_string();
-    let call = mycall.trim().to_string();
     std::thread::spawn(move || {
         tempo_net::cluster::run(
             &host,
@@ -9349,6 +9365,7 @@ fn apply_and_persist(
     );
     journal_assistance(&settings, "settings saved", false);
     let cluster_hosts = settings.cluster_hosts.clone();
+    let cluster_ssid = settings.cluster_ssid.clone();
     let mycall = settings.mycall.clone();
     let mygrid = settings.mygrid.clone();
     let opening_regional = settings.opening_regional;
@@ -9427,10 +9444,16 @@ fn apply_and_persist(
     // is single-flight (a second change during a drain doesn't spawn a second
     // drain — the in-flight one re-reads the LATEST settings at its end), and an
     // emptied callsign also tears down (the restart then no-ops via is_real_call).
+    // The cluster LOGIN identity, not the bare callsign: the SSID is part of what the node
+    // is told at login, so changing it has to tear the sessions down and log in again —
+    // otherwise setting it appears to do nothing at all until the next launch. PSKR is
+    // restarted with them, which costs the same ~3 s blackout an operator already accepts
+    // for a callsign edit they just made deliberately.
+    let feed_identity = tempo_net::cluster::login_call(&mycall, &cluster_ssid);
     let call_changed = {
         let mut prev = PREV_FEED_CALL.lock().unwrap_or_else(|e| e.into_inner());
-        let changed = !prev.is_empty() && prev.to_uppercase() != mycall.trim().to_uppercase();
-        *prev = mycall.trim().to_string();
+        let changed = !prev.is_empty() && *prev != feed_identity;
+        *prev = feed_identity;
         changed
     };
     if call_changed {
@@ -9458,7 +9481,13 @@ fn apply_and_persist(
     }
 
     if cluster_active {
-        start_cluster_feeds(spots.inner(), &cluster_hosts, &mycall, health.inner());
+        start_cluster_feeds(
+            spots.inner(),
+            &cluster_hosts,
+            &mycall,
+            &cluster_ssid,
+            health.inner(),
+        );
     }
     // Reconnects only when the server, filter, callsign or uplink actually changed — the login
     // line carries all of them, so any edit to one needs a fresh session.
@@ -9539,7 +9568,7 @@ fn restart_live_feeds(
         }
         PSKR_STARTED.store(false, SeqCst);
         PSKR_REGION_STARTED.store(false, SeqCst);
-        let (cluster_active, cluster_hosts, mycall, mygrid, opening_regional) = {
+        let (cluster_active, cluster_hosts, cluster_ssid, mycall, mygrid, opening_regional) = {
             let eng = engine_lock(&engine);
             let st = eng.settings();
             (
@@ -9547,13 +9576,14 @@ fn restart_live_feeds(
                 // unassisted entry must not bring the cluster back up.
                 st.cluster_active(),
                 st.cluster_hosts.clone(),
+                st.cluster_ssid.clone(),
                 st.mycall.clone(),
                 st.mygrid.clone(),
                 st.opening_regional,
             )
         };
         if cluster_active {
-            start_cluster_feeds(&spots, &cluster_hosts, &mycall, &health);
+            start_cluster_feeds(&spots, &cluster_hosts, &mycall, &cluster_ssid, &health);
         }
         start_pskr_feed(&live_paths, &mycall, &health);
         start_wspr_feed(&live_paths, &mycall);
@@ -22495,6 +22525,7 @@ pub fn run() {
         std::sync::atomic::Ordering::Relaxed,
     );
     let cluster_hosts = settings.cluster_hosts.clone();
+    let cluster_ssid = settings.cluster_ssid.clone();
     let cluster_call = settings.mycall.clone();
     let region_grid = settings.mygrid.clone();
     let region_enabled = settings.opening_regional;
@@ -22554,7 +22585,13 @@ pub fn run() {
     ))));
     let health: SharedHealth = Arc::new(FeedHealthState::default());
     if cluster_active {
-        start_cluster_feeds(&spots, &cluster_hosts, &cluster_call, &health);
+        start_cluster_feeds(
+            &spots,
+            &cluster_hosts,
+            &cluster_call,
+            &cluster_ssid,
+            &health,
+        );
     }
     start_pskr_feed(&live_paths, &cluster_call, &health);
     start_wspr_feed(&live_paths, &cluster_call);
@@ -22566,10 +22603,12 @@ pub fn run() {
     if region_enabled {
         start_pskr_region_feed(&region_paths, &cluster_call, &region_grid);
     }
-    // Record the call the feeds were started under, so a later Settings rename
-    // knows to tear them down and reconnect (topics/login are call-bound).
+    // Record the LOGIN IDENTITY the feeds were started under, so a later Settings rename
+    // knows to tear them down and reconnect (topics/login are call-bound). Built the same
+    // way the comparison in `apply_and_persist` is: a seed in any other shape reads as a
+    // rename on the very first save and restarts every feed for nothing.
     if let Ok(mut c) = PREV_FEED_CALL.lock() {
-        *c = cluster_call.trim().to_string();
+        *c = tempo_net::cluster::login_call(&cluster_call, &cluster_ssid);
     }
     // Feed the live DXpedition layer the ClubLog key (most-wanted ranks). Pushed,
     // not pulled — keeps the propagation crate decoupled from settings IO.

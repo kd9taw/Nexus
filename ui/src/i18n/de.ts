@@ -682,6 +682,8 @@ export const DE: PartialCatalog = {
   "settings.integrations.pskreporter.hint": "Spots an die weltweite Karte senden",
   "settings.integrations.clusterSpots.label": "DX-Cluster-/RBN-Spots",
   "settings.integrations.clusterSpots.hint": "Zeigt „new ones“ aus dem Reverse Beacon Network auf der Bedarfstafel und in Connect. Wirkt nach einem Neustart.",
+  "settings.integrations.clusterSsid.label": "Cluster-Login-SSID",
+  "settings.integrations.clusterSsid.hint": "Wird beim Login an dein Rufzeichen angehängt (2 = W9XYZ-2). Ein Knoten erlaubt nur eine Sitzung pro Rufzeichen und trennt die ältere, also wirft ein zweites Nexus — oder ein anderes Cluster-Programm mit demselben Rufzeichen — dieses hier hinaus, sofern nicht jedes eine eigene SSID nutzt. 1-99, oder leer lassen, um mit dem blanken Rufzeichen einzuloggen. Deine Spots erreichen das Netz weiterhin unter deinem normalen Rufzeichen. Auf einem Knoten mit Registrierungspflicht musst du das Rufzeichen mit Suffix dort ebenfalls registrieren, sonst kannst du keine Spots absetzen. Wirkt beim nächsten Speichern.",
   "settings.integrations.clusterNodes.label": "Cluster-Knoten für Phone/SSB",
   "settings.integrations.clusterNodes.empty": "Keine Knoten — unten einen hinzufügen, um SSB-/Phone-Bedarf zu sehen (das RBN führt nur CW + Digimodes).",
   "settings.integrations.clusterNodes.remove.title": "Diesen Cluster-Knoten entfernen",
