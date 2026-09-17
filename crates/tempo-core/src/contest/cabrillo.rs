@@ -543,10 +543,10 @@ mod tests {
         );
     }
 
-    /// ⭐ **The optional headers, in the order cabrillo.htm lists them, and only when they
-    /// hold a value** (CQ WW RTTY's page, read 2026-09-17, lists CATEGORY-ASSISTED,
-    /// -BAND, -MODE, -POWER, CLAIMED-SCORE, EMAIL and NAME; the last three are marked
-    /// optional or are contact details).
+    /// ⭐ **The optional headers, only when they hold a value** (CQ WW RTTY's cabrillo.htm,
+    /// read 2026-09-17, lists CATEGORY-ASSISTED, -BAND, -MODE, -POWER, CLAIMED-SCORE, EMAIL
+    /// and NAME). Cabrillo does not fix the order of header lines; the order here is this
+    /// writer's own, and pinned so it does not wander.
     #[test]
     fn the_optional_headers_render_only_when_they_hold_a_value() {
         let full = CabrilloHeaders {
