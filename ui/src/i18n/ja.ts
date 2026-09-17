@@ -264,6 +264,7 @@ export const JA: PartialCatalog = {
   "remote.responsiveness.report.confirmed": "  無線機の確認: 通常 {{typical}}、最悪 {{worst}}（目標 {{target}}）",
   "remote.responsiveness.report.readout": "  表示の追従: 通常 {{typical}}、最悪 {{worst}}（目標 {{target}}）",
   "remote.responsiveness.report.none": "  未測定",
+  "remote.responsiveness.report.via": "  確認の経路: 局からの通知 {{pushed}} 回、ポーリング {{polled}} 回",
   "remote.responsiveness.report.unconfirmed": { "other": "  {{count}} 回の操作は送信されましたが確認されませんでした" },
   "remote.responsiveness.report.band": "バンド変更: {{made}} 回送信",
   "remote.responsiveness.report.bandSkipped": "バンド変更: スキップ — {{reason}}",

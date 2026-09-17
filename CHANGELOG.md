@@ -76,8 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Remote: a responsiveness check you can run on your own link.** In the browser's Awards view,
   *Responsiveness → Run check* makes ten small dial steps, changes band and back, and sends one Stop
   while the radio is idle, then reports how long the screen took to respond, how long the radio took
-  to confirm, how far the readout trailed, and how often controls went off by themselves — with a
-  copy-as-text button so a result can be pasted into a report. It changes nothing while it is not
+  to confirm, how far the readout trailed, and how often controls went off by themselves — and
+  whether each confirmation came by the station's own push or by polling — with a copy-as-text
+  button so a result can be pasted into a report. It changes nothing while it is not
   running. It is the yardstick every later Remote responsiveness change is measured against; the
   same check runs in CI against a scripted station on 100 ms and 400 ms links.
 - **Nexus Remote grew from watching the station to operating it.** Over this release the hosted

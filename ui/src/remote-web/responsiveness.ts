@@ -45,6 +45,9 @@ export type Interaction = {
   /** The terminal outcome landed (applied / rejected / an error reply), or the Stop was accepted. */
   confirmed?: number
   outcome?: string
+  /** How the confirmation reached the browser: the station's own push (operation v5) or the
+   * browser's poll. Kept apart because "did it get faster" is a question about the push. */
+  via?: ConfirmationPath
   /** The first station reading after `sent` that shows the change. */
   readout?: number
   /** Refused at the gesture: nothing was queued, nothing can follow. */
@@ -52,6 +55,7 @@ export type Interaction = {
   target?: { dialHz?: number; band?: string }
   requestId?: string
 }
+export type ConfirmationPath = 'pushed' | 'polled'
 type FlickerKind = 'controlsOff' | 'readingRefused' | 'readingStale'
 type Lane = 'tuning' | 'operations'
 const LANE: Record<InteractionKind, Lane> = { tune: 'tuning', band: 'operations', stop: 'operations' }
@@ -164,11 +168,14 @@ export class ResponsivenessProbe {
     const at = this.now()
     for (const i of mine) if (i.replied === undefined) i.replied = at
   }
-  confirmed(requestId: string, outcome: string) {
+  /** A terminal outcome for `requestId`. `via` says which path carried it: the station's pushed
+   * event, or a reply to something the browser asked (the control's own reply, or a result poll).
+   * Only the first to arrive counts — a pushed outcome and its fallback poll are one confirmation. */
+  confirmed(requestId: string, outcome: string, via: ConfirmationPath = 'polled') {
     const mine = this.byRequest.get(requestId)
     if (!mine) return
     const at = this.now()
-    for (const i of mine) if (i.confirmed === undefined) { i.confirmed = at; i.outcome = outcome }
+    for (const i of mine) if (i.confirmed === undefined) { i.confirmed = at; i.outcome = outcome; i.via = via }
   }
   /** A station snapshot arrived. Every sent interaction still waiting for its readout is checked
    * against it; a gap since the previous reading long enough to grey the workspace is a flicker. */
@@ -206,6 +213,8 @@ export class ResponsivenessProbe {
       sent: list.filter(i => i.sent !== undefined).length,
       refused: list.filter(i => i.refused).length,
       unconfirmed: list.filter(i => i.sent !== undefined && i.confirmed === undefined).length,
+      pushed: list.filter(i => i.confirmed !== undefined && i.via === 'pushed').length,
+      polled: list.filter(i => i.confirmed !== undefined && i.via === 'polled').length,
       screen: clock(list.filter(i => i.perceived !== undefined).map(i => i.perceived! - i.made)),
       confirmed: clock(list.filter(i => i.confirmed !== undefined).map(i => i.confirmed! - i.made)),
       // From the gesture, like the others: it is what the operator sees. Today the readout lands
@@ -235,7 +244,7 @@ function clock(xs: number[]): Clock {
   const s = [...xs].sort((a, b) => a - b), at = (p: number) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(p * s.length) - 1))]
   return { typical: at(0.5), worst: at(0.95), count: s.length }
 }
-type Summary = { made: number; sent: number; refused: number; unconfirmed: number; screen: Clock; confirmed: Clock; readout: Clock }
+type Summary = { made: number; sent: number; refused: number; unconfirmed: number; pushed: number; polled: number; screen: Clock; confirmed: Clock; readout: Clock }
 export type Measured = {
   rtt: Clock
   tune: Summary
@@ -390,6 +399,7 @@ export function reportText(r: CheckReport): string {
     lines.push(t('remote.responsiveness.report.tuning', { made: r.tune.made, sent: r.tune.sent, refused: r.tune.made - r.tune.sent }))
     lines.push(clockLine('screen', r.tune.screen, BUDGET.screenMs), clockLine('confirmed', r.tune.confirmed, rtt === null ? null : rtt + BUDGET.tuneAfterRttMs),
       clockLine('readout', r.tune.readout, rtt === null ? null : rtt + BUDGET.tuneAfterRttMs + BUDGET.readoutMs))
+    if (r.tune.confirmed) lines.push(t('remote.responsiveness.report.via', { pushed: r.tune.pushed, polled: r.tune.polled }))
     if (r.tune.unconfirmed) lines.push(t('remote.responsiveness.report.unconfirmed', { count: r.tune.unconfirmed }))
   }
   if (r.skipped.band) lines.push(t('remote.responsiveness.report.bandSkipped', { reason: skipText(r.skipped.band) }))
@@ -397,6 +407,7 @@ export function reportText(r: CheckReport): string {
     lines.push(t('remote.responsiveness.report.band', { made: r.band.made }))
     lines.push(clockLine('screen', r.band.screen, BUDGET.screenMs), clockLine('confirmed', r.band.confirmed, rtt === null ? null : rtt + BUDGET.bandAfterRttMs),
       clockLine('readout', r.band.readout, rtt === null ? null : rtt + BUDGET.bandAfterRttMs + BUDGET.readoutMs))
+    if (r.band.confirmed) lines.push(t('remote.responsiveness.report.via', { pushed: r.band.pushed, polled: r.band.polled }))
   }
   if (r.skipped.stop || !r.stop) lines.push(t('remote.responsiveness.report.stopSkipped', { reason: skipText(r.skipped.stop ?? 'stopUnavailable') }))
   else lines.push(t('remote.responsiveness.report.stop', { screen: duration(r.stop.screen), sent: duration(r.stop.sent), accepted: duration(r.stop.accepted), readout: duration(r.stop.readout) }))

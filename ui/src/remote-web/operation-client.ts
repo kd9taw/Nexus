@@ -609,7 +609,9 @@ export class OperationClient {
       // the operator to acknowledge after checking the station.
       let cleared = false
       if (e.value.outcome === 'applied' || e.value.outcome === 'rejected') {
-        this.probe?.confirmed(e.operationId, e.value.outcome)
+        // The pushed path, stamped as such: without this the instrument is blind to the one path
+        // it was built to show working (responsiveness.test.ts holds it).
+        this.probe?.confirmed(e.operationId, e.value.outcome, 'pushed')
         try { this.controlStorage?.write(null); cleared = true } catch {}
       }
       this.update({ controlResult: e.value, controlError: null, ...(cleared ? { controlPending: null } : {}) })

@@ -274,6 +274,7 @@ export const FR: PartialCatalog = {
   "remote.responsiveness.report.confirmed": "  La radio a confirmé : {{typical}} typique, {{worst}} au pire (cible {{target}})",
   "remote.responsiveness.report.readout": "  L'affichage a rattrapé : {{typical}} typique, {{worst}} au pire (cible {{target}})",
   "remote.responsiveness.report.none": "  Non mesuré",
+  "remote.responsiveness.report.via": "  Confirmé par l'annonce de la station : {{pushed}}, par interrogation : {{polled}}",
   "remote.responsiveness.report.unconfirmed": { "one": "  {{count}} pas envoyé et jamais confirmé", "other": "  {{count}} pas envoyés et jamais confirmés" },
   "remote.responsiveness.report.band": "Changement de bande : {{made}} envoyés",
   "remote.responsiveness.report.bandSkipped": "Changement de bande : ignoré — {{reason}}",

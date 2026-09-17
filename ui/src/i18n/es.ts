@@ -274,6 +274,7 @@ export const ES: PartialCatalog = {
   "remote.responsiveness.report.confirmed": "  La radio confirmó: {{typical}} típico, {{worst}} peor caso (objetivo {{target}})",
   "remote.responsiveness.report.readout": "  La lectura se actualizó: {{typical}} típico, {{worst}} peor caso (objetivo {{target}})",
   "remote.responsiveness.report.none": "  No medido",
+  "remote.responsiveness.report.via": "  Confirmado por aviso de la estación: {{pushed}}, por sondeo: {{polled}}",
   "remote.responsiveness.report.unconfirmed": { "one": "  {{count}} paso se envió y nunca se confirmó", "other": "  {{count}} pasos se enviaron y nunca se confirmaron" },
   "remote.responsiveness.report.band": "Cambio de banda: {{made}} enviados",
   "remote.responsiveness.report.bandSkipped": "Cambio de banda: omitido — {{reason}}",

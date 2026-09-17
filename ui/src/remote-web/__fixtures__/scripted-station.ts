@@ -22,8 +22,12 @@ const BOOT = '11111111-1111-4111-8111-111111111111', LEASE = '22222222-2222-4222
 
 /** `version` 4 leaves the browser to discover a control's outcome by its `result` poll; 5 is
  * push-completion — the station sends the settled outcome, with the state a `state` read would
- * return, the moment its radio loop lands the target. */
-export function scriptedStation(rttMs: number, version: 4 | 5 = 4) {
+ * return, the moment its radio loop lands the target. `push` turns that event off at v5 and
+ * `pollSettles: false` makes every `result` read answer pending forever: between them a test can
+ * hold each confirmation path on its own. */
+export type ScriptedOptions = { push?: boolean; pollSettles?: boolean }
+export function scriptedStation(rttMs: number, version: 4 | 5 = 4, options: ScriptedOptions = {}) {
+  const push = options.push ?? version >= 5, pollSettles = options.pollSettles ?? true
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date', 'requestAnimationFrame', 'cancelAnimationFrame'] })
   const half = rttMs / 2
   const wire: { at: number; type: string }[] = []
@@ -53,7 +57,7 @@ export function scriptedStation(rttMs: number, version: 4 | 5 = 4) {
             if (action.action === 'radio.frequency') radio.dialMhz = action.dialMhz
             else if (action.action === 'radio.band') { radio.band = action.band; radio.dialMhz = DIAL[action.band] }
             completion.done = true
-            if (version >= 5) setTimeout(() => operations.receiveEvent({ type: 'operationEvent', operationId: request.requestId,
+            if (push) setTimeout(() => operations.receiveEvent({ type: 'operationEvent', operationId: request.requestId,
               value: { operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' }, state: state() }), half)
           }, SCRIPTED_CAT_MS)
           reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'pending' })
@@ -61,7 +65,7 @@ export function scriptedStation(rttMs: number, version: 4 | 5 = 4) {
         }
         case 'result': {
           const completion = completions.get(request.operationId)
-          reply({ operation: 'stationControl', operationId: request.operationId, ...(completion?.done ? { outcome: 'applied', evidence: 'radioReadback' } : { outcome: 'pending' }) })
+          reply({ operation: 'stationControl', operationId: request.operationId, ...(completion?.done && pollSettles ? { outcome: 'applied', evidence: 'radioReadback' } : { outcome: 'pending' }) })
           break
         }
         case 'stopTransmit': reply({ stop: 'accepted' }); break

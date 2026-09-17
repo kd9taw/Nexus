@@ -259,6 +259,7 @@ export const DE: PartialCatalog = {
   "remote.responsiveness.report.confirmed": "  Funkgerät bestätigt: {{typical}} typisch, {{worst}} schlechtester Wert (Ziel {{target}})",
   "remote.responsiveness.report.readout": "  Anzeige nachgezogen: {{typical}} typisch, {{worst}} schlechtester Wert (Ziel {{target}})",
   "remote.responsiveness.report.none": "  Nicht gemessen",
+  "remote.responsiveness.report.via": "  Bestätigt durch Meldung der Station: {{pushed}}, durch Abfrage: {{polled}}",
   "remote.responsiveness.report.unconfirmed": { "one": "  {{count}} Schritt wurde gesendet und nie bestätigt", "other": "  {{count}} Schritte wurden gesendet und nie bestätigt" },
   "remote.responsiveness.report.band": "Bandwechsel: {{made}} gesendet",
   "remote.responsiveness.report.bandSkipped": "Bandwechsel: übersprungen — {{reason}}",

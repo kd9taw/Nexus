@@ -13,7 +13,7 @@
 // a probe that DOES touch the wire is caught), and it costs nothing while its panel is closed.
 import { afterEach, describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
-import { scriptedStation } from './__fixtures__/scripted-station'
+import { SCRIPTED_CAT_MS, scriptedStation } from './__fixtures__/scripted-station'
 import { BUDGET, CHECK_STEPS, ResponsivenessProbe, reportText, runResponsivenessCheck, type CheckReport } from './responsiveness'
 
 type Station = ReturnType<typeof scriptedStation>
@@ -67,6 +67,14 @@ describe.each([
     expect(r.band.made).toBe(2); expect(r.band.sent).toBe(2); expect(r.band.confirmed!.count).toBe(2)
     expect(r.stop!.accepted).toBe(rttMs)
     expect(r.stop!.readout).not.toBeNull()
+    // Every confirmation names its path, and a station's version decides it: a v4 station's are
+    // all polled, a v5 station's all pushed. A run that mixed the two would answer "did it get
+    // faster" badly, so the report keeps them apart.
+    for (const part of [r.tune, r.band]) {
+      expect(part.pushed + part.polled).toBe(part.confirmed!.count)
+      expect(version === 5 ? part.polled : part.pushed).toBe(0)
+    }
+    expect(reportText(r)).toContain(version === 5 ? 'by polling: 0' : "by the station's push: 0")
     const line = BASELINE[`v${version}/${rttMs}`]
     expect(r.tune.sent).toBeGreaterThanOrEqual(line.stepsSent)
     expect(r.tune.screen!.worst).toBeLessThanOrEqual(line.screen)
@@ -110,6 +118,48 @@ it('the probe does not change what it measures: attached or not, the wire and th
   void runResponsivenessCheck({ ...perturbed, probe: touching, wait }).catch(() => {})
   await vi.advanceTimersByTimeAsync(45_000)
   expect(behaviour(perturbed)).not.toEqual(behaviour(measured.station))
+})
+
+// THE PUSHED PATH IS NOT BLIND. Push-completion (operation v5) delivers a control's outcome as an
+// operationEvent, a different code path from the polled reply; a probe that stamped only the polled
+// path would report nothing for the one path it was built to show working, and the operator would
+// read the polled numbers as "the fix did nothing". So the event path is held to a stamp of its
+// own, isolated: the station's result poll is scripted never to settle, leaving the event as the
+// only possible source of a confirmation.
+describe('a pushed confirmation is stamped by the event path itself', () => {
+  async function bandChange(version: 4 | 5, options: { push?: boolean; pollSettles?: boolean }) {
+    const station = scriptedStation(100, version, options)
+    open.push(station)
+    const probe = new ResponsivenessProbe()
+    probe.attach(station)
+    await vi.advanceTimersByTimeAsync(1600)
+    probe.beginRun()
+    const gesture = probe.gesture('band', { band: '17m' })!
+    probe.dispatch([gesture])
+    void station.operations.control({ action: 'radio.band', band: '17m', mode: 'phone' }).catch(() => {})
+    await vi.advanceTimersByTimeAsync(3000)
+    return { station, gesture }
+  }
+  it('stamps CONFIRMED from the pushed event alone, a round trip plus the CAT time after the send', async () => {
+    const { gesture } = await bandChange(5, { push: true, pollSettles: false })
+    expect(gesture.sent).toBeDefined()
+    expect(gesture.confirmed).toBeDefined()
+    expect(gesture.via).toBe('pushed')
+    expect(gesture.outcome).toBe('applied')
+    expect(gesture.confirmed! - gesture.sent!).toBe(100 + SCRIPTED_CAT_MS)
+  })
+  it('control: with no event and a poll that never settles, nothing stamps — so the assertion above is live against the stamp being removed from the event path', async () => {
+    const { gesture, station } = await bandChange(5, { push: false, pollSettles: false })
+    expect(gesture.sent).toBeDefined()
+    expect(station.wire.filter(w => w.type === 'result').length, 'the poll did run, and answered pending').toBeGreaterThan(0)
+    expect(gesture.confirmed).toBeUndefined()
+    expect(gesture.via).toBeUndefined()
+  })
+  it('control: the polled path stamps its own way, and says so', async () => {
+    const { gesture } = await bandChange(4, {})
+    expect(gesture.confirmed).toBeDefined()
+    expect(gesture.via).toBe('polled')
+  })
 })
 
 it('costs nothing while its panel is closed: no hook target, no listener, no timer', async () => {

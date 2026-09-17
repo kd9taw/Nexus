@@ -285,6 +285,7 @@ export const EN = {
   "remote.responsiveness.report.confirmed": "  Radio confirmed: {{typical}} typical, {{worst}} worst (target {{target}})",
   "remote.responsiveness.report.readout": "  Readout caught up: {{typical}} typical, {{worst}} worst (target {{target}})",
   "remote.responsiveness.report.none": "  Not measured",
+  "remote.responsiveness.report.via": "  Confirmed by the station's push: {{pushed}}, by polling: {{polled}}",
   "remote.responsiveness.report.unconfirmed": { "one": "  {{count}} step was sent and never confirmed", "other": "  {{count}} steps were sent and never confirmed" },
   "remote.responsiveness.report.band": "Band change: {{made}} sent",
   "remote.responsiveness.report.bandSkipped": "Band change: skipped — {{reason}}",
