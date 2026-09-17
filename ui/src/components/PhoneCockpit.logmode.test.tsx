@@ -86,7 +86,9 @@ vi.mock('./VoiceKeyer', () => ({ VoiceKeyer: () => <div data-testid="vk-stub" />
 
 const mockedLogQso = vi.mocked(logQso)
 
-beforeEach(() => mockedLogQso.mockClear())
+// Braces are load-bearing: a concise arrow RETURNS the mock, and vitest calls a hook's
+// return value as its teardown — an unhandled rejection the moment it rejects.
+beforeEach(() => { mockedLogQso.mockClear() })
 afterEach(cleanup)
 
 /** A Phone snapshot on the 20 m AM calling frequency — the operator's own case. */

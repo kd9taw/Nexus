@@ -50,7 +50,9 @@ function fireImport(content: string) {
 }
 
 describe('SetupWizard ADIF import step', () => {
-  beforeEach(() => importAdif.mockReset())
+  // Braces are load-bearing: a concise arrow RETURNS the mock, and vitest calls a
+  // hook's return value as its teardown — an unhandled rejection the moment it rejects.
+  beforeEach(() => { importAdif.mockReset() })
 
   it('renders the optional log step and imports an ADIF file, reporting the count', async () => {
     importAdif.mockResolvedValue({ added: 5, skipped: 1, total: 6 })

@@ -85,7 +85,9 @@ const show = async (fd: FieldDayStatus = FD()) => {
   await settle()
 }
 
-beforeEach(() => fdMergeToGeneral.mockReset())
+// Braces are load-bearing: a concise arrow RETURNS the mock, and vitest calls a hook's
+// return value as its teardown — an unhandled rejection the moment it rejects.
+beforeEach(() => { fdMergeToGeneral.mockReset() })
 afterEach(cleanup)
 
 describe('the end-of-contest merge is reachable, and says what it will do', () => {

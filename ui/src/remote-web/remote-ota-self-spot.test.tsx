@@ -19,7 +19,9 @@ vi.mock('../toast', async (original) => ({ ...(await original<typeof import('../
 const snap = { hunt: null, mycall: 'W9XYZ', radio: { dialMhz: 14.285 } } as unknown as AppSnapshot
 const page = (): QueryPage => ({ type: 'applicationPage', requestId: crypto.randomUUID(), snapshotId: crypto.randomUUID(),
   collection: 'ota', offset: 0, total: 0, retained: 0, nextCursor: null, ageMs: 0, rows: [], meta: { capturedAgeMs: 0, source: structuredClone(fixture) } })
-beforeEach(() => toast.pushToast.mockReset())
+// Braces are load-bearing: a concise arrow RETURNS the mock, and vitest calls a hook's
+// return value as its teardown — an unhandled rejection the moment it rejects.
+beforeEach(() => { toast.pushToast.mockReset() })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 function station(capabilities: string[]) {
