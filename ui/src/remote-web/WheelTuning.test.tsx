@@ -8,6 +8,7 @@ import { OperationClient } from './operation-client'
 import { pendingControlStorage } from './control-storage'
 import { RemoteOperationsContext, StationControlContext, StationDataContext } from '../stationAccess'
 import { CockpitHeader } from '../components/CockpitHeader'
+import { TuningStrip } from '../components/TuningStrip'
 import { useWheelTune } from '../useWheelTune'
 import type { AppSnapshot } from '../types'
 import type { ApplicationClient } from './application-client'
@@ -214,6 +215,31 @@ it('a keyboard notch made while the page still draws the sample from before a re
   expect(h.failed).not.toHaveBeenCalled()
   expect(h.writes()).toHaveLength(2); expect(h.writes()[1].request.action.dialMhz).toBe(7.2011)
   act(() => h.finish()); await tick()
+})
+
+it('a nudge pressed while the page still draws the sample from before a readback steps from the readback', async () => {
+  const h = fixture()
+  const ui = drawnBehind(h, snap => <TuningStrip snap={snap} step={100} showReadout={false}/>)
+  await tick()
+  expect(h.tuning.nudge(1000, h.source())).toBe(true); await tick(120)
+  act(() => h.finish()); await h.fresh(7.201)
+  fireEvent.click(ui.getByRole('button', { name: 'Tune up 100 Hz' })); await tick()
+  expect(setFrequency).toHaveBeenCalledOnce()
+  expect(setFrequency).toHaveBeenCalledWith(7.2011, '40m', 'LSB')
+})
+
+it('control: once the station moved the dial after that readback, a nudge steps from the dial the page draws', async () => {
+  // The readback is only newer news while the station's newest sample still agrees with it. Here the
+  // radio moved on (the knob at the station) and the page draws that move: the press steps from it,
+  // never from the readback it replaced.
+  const h = fixture()
+  expect(h.tuning.nudge(1000, h.source())).toBe(true); await tick(120)
+  act(() => h.finish()); await h.fresh(7.25)
+  const ui = drawnBehind(h, snap => <TuningStrip snap={snap} step={100} showReadout={false}/>)
+  await tick()
+  fireEvent.click(ui.getByRole('button', { name: 'Tune up 100 Hz' })); await tick()
+  expect(setFrequency).toHaveBeenCalledOnce()
+  expect(setFrequency).toHaveBeenCalledWith(7.2501, '40m', 'LSB')
 })
 
 it('refuses a queued burst whole when the LEASE it was made under is replaced, and says so', async () => {

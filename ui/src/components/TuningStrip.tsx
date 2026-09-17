@@ -5,7 +5,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 //
 // The units rule lands on the STEP: every step in Hz, the RIT/XIT offsets, the dial and the
 // VFO letters are invariant and stay in the code, as do the four button names below.
-import { useRef, useState } from 'react'
+import { useContext, useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
 import { setFrequency, setRit, setXit, setVfo } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
@@ -15,6 +15,7 @@ import { stepFrom } from '../wheelTuningPolicy'
 import { t } from '../i18n'
 import { pushToast } from '../toast'
 import { controlFailureMessage } from '../remote-web/control-failure'
+import { RemoteWheelTuningContext } from '../remote-web/wheel-tuning-context'
 
 /** The rig's own vocabulary on these buttons: the two clarifiers and the two VFOs. Named so
  *  the catalog guard reads them as the deliberate tokens they are. */
@@ -57,7 +58,7 @@ export function TuningStrip({
    * CockpitHeader) already owns the readout and this strip only supplies nudges/step/VFO/RIT/XIT. */
   showReadout?: boolean
 }) {
-  const control = useStationControl(), frequency = useStationCapability('frequency')
+  const control = useStationControl(), frequency = useStationCapability('frequency'), remoteTuning = useContext(RemoteWheelTuningContext)
   const frequencyAllowed = control || (frequency && snap.radio.source === 'native' && !snap.radio.txEnabled &&
     !snap.radio.txBusyReason && !snap.radio.transmitting && !snap.radio.rigKeyed && !snap.radio.tuning)
   // A browser holds VFO + XIT under splitTuning (they move the transmitter) and RIT under ritTuning.
@@ -91,8 +92,14 @@ export function TuningStrip({
     if (s) onSnap?.(s)
   }
   // #273: `steps` whole steps, the first rounding to the step (18.110.250 → 18.111.000 at 1 kHz),
-  // in integer Hz so float drift never accumulates on repeated nudges.
-  const nudge = (steps: number) => void tuneTo(stepFrom(Math.round(dial * 1e6), steps, step) / 1e6)
+  // in integer Hz so float drift never accumulates on repeated nudges. A browser steps from where the
+  // STATION last put the dial: `dial` is the sample this strip draws, a poll behind the stream, and
+  // right after a wheel or scope tune the station's readback is newer than it — stepping from `dial`
+  // then built the press on the dial the radio had just left.
+  const nudge = (steps: number) => {
+    const from = !control && remoteTuning ? remoteTuning.dialHz(dial) : Math.round(dial * 1e6)
+    void tuneTo(stepFrom(from, steps, step) / 1e6)
+  }
 
   // Mouse-wheel tuning over the big frequency read-out itself (operator request) — same coalesced
   // CAT path + selected step (Shift = ×10) as the scope wheel-tune, for hunting CW/phone signals

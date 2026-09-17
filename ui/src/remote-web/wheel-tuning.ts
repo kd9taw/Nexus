@@ -93,6 +93,10 @@ export class WheelTuning {
   /** DISPLAY ONLY — the dial this browser asked for, until the station's own reading shows it. See
    * the class comment for why it lives here and nowhere else. */
   getProvisionalHz = () => this.provisional?.hz ?? null
+  /** Where the radio IS, in Hz, for a control that commands an absolute dial from the sample the page
+   * draws (the tuning strip's nudges): the station's own word, readback or sample, whichever is newer
+   * than that drawing. Never the provisional dial. See `dialNow`. */
+  dialHz = (drawnDialMhz: number) => this.dialNow(drawnDialMhz)
   private notify() { for (const f of this.listeners) f(); this.probe?.responded('tuning') }
   activate() {
     this.live = true
