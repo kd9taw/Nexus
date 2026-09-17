@@ -1275,3 +1275,67 @@ fn a_test_build_with_no_poster_refuses_a_spot_instead_of_posting_it() {
     assert_eq!(result["outcome"], "rejected");
     assert_eq!(result["reason"], "invalidChange");
 }
+
+/// The shack's log view and a Remote browser are two writers of one log. The view used to
+/// address a row by its position at load time; a browser's delete above that row shifted
+/// every later one, and the shack's next Delete or Edit went to a DIFFERENT contact, with a
+/// toast naming the one the operator meant. The shack now carries the row's key exactly as the
+/// browser does, and `locate` turns it into today's position — or refuses.
+#[test]
+fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
+    let f = Fixture::new();
+    seed(&f);
+    f.engine.lock().unwrap().import_adif(
+        "<CALL:5>N2XYZ<BAND:3>15m<MODE:3>SSB<FREQ:6>21.300<QSO_DATE:8>20260909<TIME_ON:6>030000<EOR>\n",
+    );
+    acquire(&f);
+    // The shack loaded its list: K1ABC sits at position 1, and the view keeps that row's key.
+    let held: Vec<Value> = page_rows(&f);
+    assert_eq!(held[1]["call"], "K1ABC");
+    let stale_position = 1;
+    let held_target: super::super::logging::Target =
+        serde_json::from_value(target(&held[1])).unwrap();
+
+    // The browser deletes the row ABOVE it.
+    let result = run(
+        &f,
+        &change(
+            &f,
+            json!({"kind":"delete","target":target(&row(&f, "W1AW"))}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(result["outcome"], "applied");
+
+    let mut e = f.engine.lock().unwrap();
+    // The defect, made visible: the position the shack held now names another contact.
+    assert_eq!(e.log_records()[stale_position].call, "N2XYZ");
+    // The key finds the contact the operator can see, where it is TODAY.
+    let found = super::super::logging::locate(&mut e, &held_target)
+        .expect("the row the shack holds is still in the log");
+    assert_eq!(found, 0);
+    assert_eq!(e.log_records()[found].call, "K1ABC");
+    assert!(e.delete_qso(found));
+    let left: Vec<&str> = e.log_records().iter().map(|r| r.call.as_str()).collect();
+    assert_eq!(left, ["N2XYZ"], "K1ABC went and the bystander survived");
+
+    // A key the log no longer holds is refused, not approximated: the deleted row's own key,
+    // and a row that was edited since the view loaded (its key changed with its content).
+    assert_eq!(super::super::logging::locate(&mut e, &held_target), None);
+    let survivor_key: super::super::logging::Target = serde_json::from_value(
+        json!({"call":"N2XYZ","whenUnix":e.log_records()[0].when_unix,
+            "key":super::super::logging::row_key(&e.log_records()[0])}),
+    )
+    .unwrap();
+    let mut changed = e.log_records()[0].clone();
+    changed.comment = Some("changed at the browser".into());
+    assert!(e.update_qso(0, changed));
+    assert_eq!(super::super::logging::locate(&mut e, &survivor_key), None);
+    // Positive control: the key of the row as it is now is found.
+    let fresh: super::super::logging::Target = serde_json::from_value(
+        json!({"call":"N2XYZ","whenUnix":e.log_records()[0].when_unix,
+            "key":super::super::logging::row_key(&e.log_records()[0])}),
+    )
+    .unwrap();
+    assert_eq!(super::super::logging::locate(&mut e, &fresh), Some(0));
+}

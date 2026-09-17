@@ -17888,6 +17888,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         s.upload_note = self.station.upload_note.clone();
         s.upload_ok = self.station.upload_ok;
         s.upload_tick = self.station.upload_tick;
+        s.log_tick = self.station.log_tick;
         s.pending_log = self.pending_log.clone().map(Into::into);
         s
     }
@@ -30266,6 +30267,44 @@ mod tests {
             e.snapshot().logged_tick,
             before.wrapping_add(2),
             "each contact advances it — a second log is a second clear signal"
+        );
+    }
+
+    /// The desktop log view reloads on `log_tick`, so it must move on EVERY kind of change —
+    /// an append and each of the rewrites a Remote browser can make — or the shack's list
+    /// keeps addressing rows that a browser's delete has shifted.
+    #[test]
+    fn log_tick_advances_on_every_log_mutation() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut last = e.snapshot().log_tick;
+        let mut moved = |e: &Engine, what: &str| {
+            let now = e.snapshot().log_tick;
+            assert_ne!(now, last, "{what} must advance log_tick");
+            last = now;
+        };
+
+        e.log_qso(e.qso_record("W9XYZ".into(), None, None));
+        moved(&e, "a logged contact");
+        e.log_qso(e.qso_record("K7ABC".into(), None, None));
+        moved(&e, "a second logged contact");
+
+        let mut edited = e.log_records()[0].clone();
+        edited.comment = Some("fixed".into());
+        assert!(e.update_qso(0, edited));
+        moved(&e, "an edit");
+        assert!(e.mark_qsl_sent(0, Some(tempo_core::logbook::QslVia::Bureau)));
+        moved(&e, "a QSL-sent mark");
+        assert!(e.mark_qsl_card(0, true));
+        moved(&e, "a QSL-card mark");
+        assert!(e.delete_qso(0));
+        moved(&e, "a delete");
+
+        // Refused changes are not changes: nothing moved, so the view has nothing to reload.
+        assert!(!e.delete_qso(99));
+        assert_eq!(
+            e.snapshot().log_tick,
+            last,
+            "an out-of-range delete changes nothing"
         );
     }
 

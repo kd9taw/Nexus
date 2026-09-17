@@ -490,6 +490,19 @@ pub(super) fn row_key(record: &QsoRecord) -> String {
         .unwrap_or_default()
 }
 
+/// The position TODAY of the row a writer saw — the browser's log page or the shack's log
+/// view — or `None` when no row holds exactly that content any more. This is the one way
+/// either writer turns a row into an index: a position kept from an earlier read is stale the
+/// moment the OTHER writer deletes above it, and acting on it deleted or rewrote a different
+/// contact. Another instance's appends are folded in first so the index cannot shift under
+/// the caller.
+pub(crate) fn locate(engine: &mut Engine, target: &Target) -> Option<usize> {
+    engine.sync_shared_log_if_changed();
+    engine.log_records().iter().position(|r| {
+        r.call == target.call && r.when_unix == target.when_unix && row_key(r) == target.key
+    })
+}
+
 pub(super) enum ChangeWork {
     /// A proven rewrite: the file must hold exactly `count` copies of `expected` afterwards.
     Rewrite {
@@ -584,14 +597,8 @@ pub(super) fn prepare_change(
         }
         _ => {}
     }
-    // Fold in another instance's appends first, so the index found below cannot shift under it.
-    engine.sync_shared_log_if_changed();
     let t = change.target().ok_or(ChangeReason::ContextChanged)?;
-    let index = engine
-        .log_records()
-        .iter()
-        .position(|r| r.call == t.call && r.when_unix == t.when_unix && row_key(r) == t.key)
-        .ok_or(ChangeReason::ContextChanged)?;
+    let index = locate(engine, t).ok_or(ChangeReason::ContextChanged)?;
     let stored = engine.log_records()[index].clone();
     let copies = |records: &[QsoRecord], of: &QsoRecord, text: &str| {
         records

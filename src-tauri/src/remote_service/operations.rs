@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 use tempo_app::remote_control::{transmit::TransmitAuthority, Completion, Outcome, Revocation};
 
 mod export;
-mod logging;
+/// `pub(crate)` for the row key: the desktop's log commands find a row by the same
+/// [`logging::Target`] the browser sends, so the two writers cannot disagree about identity.
+pub(crate) mod logging;
 mod program_edit;
 mod program_export;
 mod settings;

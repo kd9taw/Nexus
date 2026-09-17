@@ -3764,6 +3764,9 @@ export interface AppSnapshot {
   /** Bumped every time a QSO is logged, by any path (backend auto-log included).
    * App fires the "clear DX call after logging" wipe on change. */
   loggedTick?: number
+  /** Bumped on every change to the log by ANY writer — the shack, a Remote browser, another
+   * instance, a connector stamp. The Logbook reloads its list on change. */
+  logTick?: number
   /** Bumped each time a spot is worked — App navigates to `workView`'s cockpit
    * on change (lets a pop-out window's click land the main window there). */
   workTick?: number

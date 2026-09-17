@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, waitFor, fireEvent } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
+import { logTarget } from '../remote-web/operation-protocol'
 
 // Same jsdom shims the sibling Logbook suite needs: react-virtual measures the scroll
 // element and rows via offsetHeight + a ResizeObserver, neither of which jsdom implements.
@@ -86,8 +87,10 @@ describe('QSL sent — undoing a mis-click (#180)', () => {
   it('clears the sent mark when that entry is chosen', async () => {
     const { select } = await renderWithSentQsl()
     fireEvent.change(select, { target: { value: 's' } })
+    // Keyed by the row on screen, never its position (a Remote delete shifts positions).
+    const target = await logTarget(sentLog()[0])
     await waitFor(() =>
-      expect(api.markQslSent as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(0, null),
+      expect(api.markQslSent as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(target, null),
     )
   })
 

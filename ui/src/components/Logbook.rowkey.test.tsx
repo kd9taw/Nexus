@@ -1,0 +1,131 @@
+// @vitest-environment jsdom
+//
+// The shack's log view and a Remote browser are two writers of one log. This view used to
+// address a row by its position at load time, and loaded once; a browser's delete removed a
+// row and shifted every later one, and the shack's next Delete or Edit went to a DIFFERENT
+// contact under a toast naming the one the operator meant. Three things this pins: a row is
+// addressed by its key, the edit form stays on the row it opened with while the list changes
+// under it, and the list reloads when the engine says the log changed.
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
+import { render, waitFor, fireEvent, cleanup, act } from '@testing-library/react'
+import { Logbook } from './Logbook'
+import { ConfirmHost } from '../confirm'
+import * as api from '../api'
+import { logTarget } from '../remote-web/operation-protocol'
+import { t } from '../i18n'
+
+beforeAll(() => {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 900 })
+})
+
+vi.mock('../api', () => {
+  const noop = () => vi.fn()
+  return {
+    getLog: vi.fn(),
+    deleteQso: vi.fn(() => Promise.resolve({})),
+    editQso: vi.fn(() => Promise.resolve({ call: 'K1ABC', whenUnix: 1_700_000_100 })),
+    exportGeneralLog: noop(), importAdif: noop(),
+    logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
+    logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
+    logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
+    markQslSent: noop(), markQslCard: noop(),
+    syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
+    clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
+  }
+})
+vi.mock('../toast', () => ({
+  pushToast: vi.fn(),
+  withErrorToast: vi.fn((run: () => Promise<unknown>) => run()),
+}))
+
+const contact = (call: string, whenUnix: number) => ({
+  call, grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
+  rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,
+  country: 'United States', whenUnix, confirmed: false, awardConfirmed: false,
+  qslRcvd: null, qslSent: null, ota: null,
+})
+// Oldest first, as get_log returns them: W1AW at 0, K1ABC at 1, N2XYZ at 2.
+const three = () => [contact('W1AW', 1_700_000_000), contact('K1ABC', 1_700_000_100), contact('N2XYZ', 1_700_000_200)]
+
+async function renderLog(rows: ReturnType<typeof three>, logTick = 1) {
+  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(rows)
+  const utils = render(
+    <>
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" logTick={logTick} />
+      <ConfirmHost />
+    </>,
+  )
+  await waitFor(() => expect(utils.container.querySelector('.log-scroll > div')).not.toBeNull())
+  return utils
+}
+
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+  localStorage.clear()
+})
+
+describe('the shack addresses a contact by its key, never its position', () => {
+  it('deletes by the key of the row the operator confirmed', async () => {
+    const { container, findByRole } = await renderLog(three())
+    fireEvent.click(container.querySelector('button[aria-label="Delete K1ABC"]') as HTMLButtonElement)
+    fireEvent.click(await findByRole('button', { name: t('logbook.delete.confirm') }))
+    await waitFor(() => expect(api.deleteQso).toHaveBeenCalled())
+    expect(api.deleteQso).toHaveBeenCalledWith(await logTarget(three()[1]))
+  })
+
+  it('edits the row the form opened with, after a delete above it has shifted the list', async () => {
+    const { container, rerender } = await renderLog(three())
+    fireEvent.click(container.querySelector('button[aria-label="Edit K1ABC"]') as HTMLButtonElement)
+    await waitFor(() => expect(container.querySelector('.logbook-form')).not.toBeNull())
+
+    // A Remote browser deletes W1AW; the engine's tick moves and the list reloads. Position 1
+    // — the one the form opened at — now names N2XYZ.
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(three().slice(1))
+    rerender(
+      <>
+        <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" logTick={2} />
+        <ConfirmHost />
+      </>,
+    )
+    await waitFor(() => expect(api.getLog).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(container.querySelector('button[aria-label="Edit W1AW"]')).toBeNull())
+
+    fireEvent.click(container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement)
+    await waitFor(() => expect(api.editQso).toHaveBeenCalled())
+    const [target, record] = (api.editQso as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(target).toEqual(await logTarget(three()[1]))
+    expect(record.call).toBe('K1ABC')
+  })
+})
+
+describe('the list follows the engine', () => {
+  it('reloads when logTick moves, once per burst, and not for the value it mounted with', async () => {
+    const { rerender } = await renderLog(three(), 5)
+    expect(api.getLog).toHaveBeenCalledTimes(1)
+    const at = (tick: number) =>
+      rerender(
+        <>
+          <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" logTick={tick} />
+          <ConfirmHost />
+        </>,
+      )
+    // The same tick again is not a change.
+    at(5)
+    await act(() => new Promise((r) => setTimeout(r, 400)))
+    expect(api.getLog).toHaveBeenCalledTimes(1)
+    // Three stamps in quick succession — one fetch.
+    at(6)
+    at(7)
+    at(8)
+    await waitFor(() => expect(api.getLog).toHaveBeenCalledTimes(2))
+    await act(() => new Promise((r) => setTimeout(r, 400)))
+    expect(api.getLog).toHaveBeenCalledTimes(2)
+  })
+})

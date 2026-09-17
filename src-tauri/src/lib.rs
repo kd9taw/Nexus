@@ -13977,20 +13977,47 @@ fn dxcc_entity_continents() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Edit logbook entry `index` (oldest-first, as returned by `get_log`) — a
-/// correction. Confirmation/credit/upload state is preserved by the engine.
-/// Returns the refreshed snapshot.
+/// The log commands below take the ROW the UI showed, keyed exactly as a Remote browser keys
+/// it (call + time + a SHA-256 of the row), and never a position. They used to take
+/// `index: usize` under the premise "indices shift after a delete — the UI reloads the log",
+/// which held while the desktop was the log's only writer. Remote made it a second writer:
+/// a browser's delete removed a row and shifted every later one, and the shack's next Delete
+/// or Edit on the row it could still see went to a DIFFERENT contact — deleted, or rewritten
+/// with another contact's fields and its confirmations stripped as a "callsign correction" —
+/// under a toast naming the row the operator meant. The key finds the row where it is today,
+/// or refuses when no row holds that content any more.
+type LogTarget = remote_service::operations::logging::Target;
+
+/// The refusal every log command gives for a row it cannot find: the log changed under the
+/// view (a Remote delete, an edit, a connector stamp) and the operator must look again.
+const LOG_ROW_GONE: &str =
+    "That contact changed or was removed since the log was loaded — reload the log and try again.";
+
+/// The row at `index` as `get_log` would show it — what a log command hands back so a
+/// follow-up (a QSL mark from the same edit form) can key the row it just changed.
+fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
+    let r = eng.log_records().get(index).cloned().ok_or(LOG_ROW_GONE)?;
+    let mut q = LoggedQso::from(r);
+    q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+    Ok(q)
+}
+
+/// Edit the logged contact `target` — a correction. Confirmation/credit/upload state is
+/// preserved by the engine. Returns the row as stored; its key is the one any follow-up
+/// must use, since the edit changed the row and so its key.
 #[tauri::command(async)]
 fn edit_qso(
     state: State<'_, SharedEngine>,
-    index: usize,
+    target: LogTarget,
     record: LoggedQso,
-) -> Result<AppSnapshot, String> {
+) -> Result<LoggedQso, String> {
     let mut eng = engine_lock(&state);
+    let index =
+        remote_service::operations::logging::locate(&mut eng, &target).ok_or(LOG_ROW_GONE)?;
     if !eng.update_qso(index, record.into()) {
-        return Err("That contact no longer exists — reload the log and try again.".into());
+        return Err(LOG_ROW_GONE.into());
     }
-    Ok(eng.snapshot())
+    log_row(&eng, index)
 }
 
 /// What a `via` argument MEANS on [`mark_qsl_sent`] — the one decision the command layer owns
@@ -14022,11 +14049,10 @@ fn qsl_via_arg(via: Option<&str>) -> Result<Option<tempo_core::logbook::QslVia>,
         .ok_or_else(|| format!("Unknown QSL-sent method '{code}' — use B, D, or E."))
 }
 
-/// Mark logbook entry `index` (oldest-first, as returned by `get_log`) as
-/// QSL-sent — operator-declared truth that a card/request was sent `via`
-/// "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT a
-/// confirmation: this never flips `confirmed`/`awardConfirmed`. Returns the
-/// refreshed snapshot.
+/// Mark the logged contact `target` as QSL-sent — operator-declared truth that a
+/// card/request was sent `via` "B"(ureau) / "D"(irect) / "E"(lectronic), dated
+/// now. A request is NOT a confirmation: this never flips
+/// `confirmed`/`awardConfirmed`. Returns the row as stored (see [`edit_qso`]).
 ///
 /// `via: null` — and ONLY null — WITHDRAWS the mark instead (#180). Sending is once-only, so
 /// before this a mis-click made the three send entries vanish with nothing to put the row back,
@@ -14040,43 +14066,49 @@ fn qsl_via_arg(via: Option<&str>) -> Result<Option<tempo_core::logbook::QslVia>,
 #[tauri::command(async)]
 fn mark_qsl_sent(
     state: State<'_, SharedEngine>,
-    index: usize,
+    target: LogTarget,
     via: Option<String>,
-) -> Result<AppSnapshot, String> {
+) -> Result<LoggedQso, String> {
     let via = qsl_via_arg(via.as_deref())?;
     let mut eng = engine_lock(&state);
+    let index =
+        remote_service::operations::logging::locate(&mut eng, &target).ok_or(LOG_ROW_GONE)?;
     if !eng.mark_qsl_sent(index, via) {
-        return Err("That contact no longer exists — reload the log and try again.".into());
+        return Err(LOG_ROW_GONE.into());
     }
-    Ok(eng.snapshot())
+    log_row(&eng, index)
 }
 
-/// Record whether a PAPER QSL card arrived for logbook entry `index` (#152).
+/// Record whether a PAPER QSL card arrived for the logged contact `target` (#152).
 ///
 /// The operator is the only authority for this: LoTW, eQSL and QRZ report their own
 /// confirmations and Nexus syncs those, but nothing knows a card reached a letterbox. It is
 /// award-eligible — `QslRcvd::award` is card OR LoTW — so leaving it unrecordable left the
-/// awards view understating what the operator can actually claim.
+/// awards view understating what the operator can actually claim. Returns the row as stored
+/// (see [`edit_qso`]).
 #[tauri::command(async)]
 fn mark_qsl_card(
     state: State<'_, SharedEngine>,
-    index: usize,
+    target: LogTarget,
     received: bool,
-) -> Result<AppSnapshot, String> {
+) -> Result<LoggedQso, String> {
     let mut eng = engine_lock(&state);
+    let index =
+        remote_service::operations::logging::locate(&mut eng, &target).ok_or(LOG_ROW_GONE)?;
     if !eng.mark_qsl_card(index, received) {
-        return Err("That contact no longer exists — reload the log and try again.".into());
+        return Err(LOG_ROW_GONE.into());
     }
-    Ok(eng.snapshot())
+    log_row(&eng, index)
 }
 
-/// Delete logbook entry `index` (oldest-first, as returned by `get_log`). Returns
-/// the refreshed snapshot. Indices shift after a delete — the UI reloads the log.
+/// Delete the logged contact `target`. Returns the refreshed snapshot.
 #[tauri::command(async)]
-fn delete_qso(state: State<'_, SharedEngine>, index: usize) -> Result<AppSnapshot, String> {
+fn delete_qso(state: State<'_, SharedEngine>, target: LogTarget) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
+    let index =
+        remote_service::operations::logging::locate(&mut eng, &target).ok_or(LOG_ROW_GONE)?;
     if !eng.delete_qso(index) {
-        return Err("That contact no longer exists — reload the log and try again.".into());
+        return Err(LOG_ROW_GONE.into());
     }
     Ok(eng.snapshot())
 }

@@ -57,6 +57,9 @@ interface Props {
   /** Called once the handoff has been applied, so the parent can clear it — otherwise a later
    *  trip to the Logbook through the nav would re-apply a filter nobody asked for. */
   onConsumeFocusCall?: () => void
+  /** The engine's `logTick` (desktop only): the list reloads when it moves, so a Remote
+   *  browser's delete or edit reaches this view instead of leaving it on rows that have moved. */
+  logTick?: number
 }
 
 interface DraftQso {
@@ -297,6 +300,7 @@ export function Logbook({
   defaultMode,
   focusCall,
   onConsumeFocusCall,
+  logTick,
 }: Props) {
   const control = useStationControl()
   // Remote: the station offers edit/delete as a capability; each change is found again by row key.
@@ -413,7 +417,12 @@ export function Logbook({
     result: QrzCorrectResult | null
   } | null>(null)
   // Index (in the loaded `log` array) being edited; null = the form logs a NEW QSO.
-  const [editIndex, setEditIndex] = useState<number | null>(null)
+  // The row being edited, AS THE OPERATOR OPENED IT — not `log[index]` read back at save time.
+  // The list reloads under an open form (a Remote delete, a connector stamp), and after a
+  // delete above it the same index names a different contact; the target of the edit, and the
+  // fields the form did not carry, come from this row. `index` only marks the row in the list.
+  const [editing, setEditing] = useState<{ index: number; row: LoggedQso } | null>(null)
+  const editIndex = editing?.index ?? null
   // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
   // edit/delete/mark still hit the right record. Default newest-first (the get_log order is
   // oldest-first, which the test user disliked).
@@ -459,6 +468,19 @@ export function Logbook({
   useEffect(() => {
     load()
   }, [load])
+
+  // Reload when the log changes under this view — a Remote browser's delete or edit, another
+  // instance's contact, a connector stamp. The rows are addressed by key, so a stale list is
+  // refused rather than acted on; this is what keeps that refusal rare. The mount value is
+  // adopted, not acted on (the load above already ran), and a burst of stamps after one logged
+  // contact coalesces into a single fetch.
+  const seenLogTick = useRef(logTick)
+  useEffect(() => {
+    if (logTick === seenLogTick.current) return
+    seenLogTick.current = logTick
+    const timer = setTimeout(load, 300)
+    return () => clearTimeout(timer)
+  }, [logTick, load])
 
   // Import an external ADIF logbook → real "needs" + B4. Read the file in the
   // browser/WebView (no fs plugin), hand the text to the engine.
@@ -586,7 +608,7 @@ export function Logbook({
   // Open the form pre-filled to correct an existing entry (busted call, wrong band…).
   const startEdit = (q: LoggedQso, i: number) => {
     setErr(null)
-    setEditIndex(i)
+    setEditing({ index: i, row: q })
     setDraft({
       call: q.call,
       grid: q.grid ?? '',
@@ -614,7 +636,7 @@ export function Logbook({
 
   const cancelForm = () => {
     setShowForm(false)
-    setEditIndex(null)
+    setEditing(null)
     setErr(null)
   }
 
@@ -765,7 +787,7 @@ export function Logbook({
   // on Bureau/Direct/Electronic used to be permanent from the operator's chair: the three
   // send entries vanish and nothing put them back. Same reversal the inbound card has had
   // since #152 — a declaration the operator made by hand, they can unmake by hand.
-  const onMarkQslSent = async (q: LoggedQso, i: number, via: 'B' | 'D' | 'E' | null) => {
+  const onMarkQslSent = async (q: LoggedQso, via: 'B' | 'D' | 'E' | null) => {
     if (remoteLog) {
       const at = performance.now()
       const outcome = await remoteChange({ kind: 'qslSent', target: await logTarget(q), via })
@@ -775,8 +797,10 @@ export function Logbook({
       }
       return
     }
-    const snap = await withErrorToast(() => markQslSent(i, via), t('logbook.qsl.markFailed'))
-    if (snap) {
+    // By the key of the row on screen, never its position: see `deleteQso` in api.ts.
+    const target = await logTarget(q)
+    const row = await withErrorToast(() => markQslSent(target, via), t('logbook.qsl.markFailed'))
+    if (row) {
       // Two literal keys, not one interpolated one — same reason as onMarkQslCard below.
       pushToast(
         via
@@ -788,7 +812,7 @@ export function Logbook({
     }
   }
 
-  const onMarkQslCard = async (q: LoggedQso, i: number, received: boolean) => {
+  const onMarkQslCard = async (q: LoggedQso, received: boolean) => {
     if (remoteLog) {
       const at = performance.now()
       const outcome = await remoteChange({ kind: 'qslCard', target: await logTarget(q), received })
@@ -798,11 +822,12 @@ export function Logbook({
       }
       return
     }
-    const snap = await withErrorToast(
-      () => markQslCard(i, received),
+    const target = await logTarget(q)
+    const row = await withErrorToast(
+      () => markQslCard(target, received),
       t('logbook.qsl.markFailed'),
     )
-    if (snap) {
+    if (row) {
       // Two literal keys, not one interpolated one: the i18n orphan guard scans for literal
       // `t('key')` references and a ternary inside the call is invisible to it — it flagged
       // both of these as unused catalog entries, which is exactly its job.
@@ -839,7 +864,8 @@ export function Logbook({
       }
       return
     }
-    const snap = await withErrorToast(() => deleteQso(i), t('logbook.delete.failed'))
+    const target = await logTarget(q)
+    const snap = await withErrorToast(() => deleteQso(target), t('logbook.delete.failed'))
     if (snap) {
       pushToast(t('logbook.delete.done', { call: q.call }), 'success')
       if (editIndex === i) cancelForm()
@@ -960,7 +986,7 @@ export function Logbook({
       return
     }
     const freq = Number(draft.freq)
-    const existing = editIndex !== null ? log[editIndex] : undefined
+    const existing = editing?.row
     const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
     const parkMyRef = draft.parkMyRef.trim().toUpperCase() || null
     if (remoteLog) {
@@ -1057,20 +1083,23 @@ export function Logbook({
       myGrid: draft.myGrid.trim().toUpperCase() || null,
       myRig: draft.myRig.trim() || null,
     }
-    if (editIndex !== null) {
-      const idx = editIndex
-      const snap = await withErrorToast(() => editQso(idx, record), t('logbook.form.saveFailed'))
-      if (snap) {
+    if (existing) {
+      const target = await logTarget(existing)
+      let row = await withErrorToast(() => editQso(target, record), t('logbook.form.saveFailed'))
+      if (row) {
         // #239: QSL sent / card received from the form — only what changed, through the row
-        // menu's own commands, once the record itself has saved.
-        const origVia = existing?.qslSent?.sent ? (existing.qslSent.via ?? 'SENT') : ''
+        // menu's own commands, once the record itself has saved. Each command returns the row
+        // it wrote, and the next is keyed by THAT: every write changes the row's key.
+        const origVia = existing.qslSent?.sent ? (existing.qslSent.via ?? 'SENT') : ''
         if (draft.qslSentVia !== origVia && draft.qslSentVia !== 'SENT') {
           const via = draft.qslSentVia ? (draft.qslSentVia as 'B' | 'D' | 'E') : null
-          await withErrorToast(() => markQslSent(idx, via), t('logbook.qsl.markFailed'))
+          const sent = await logTarget(row)
+          row = (await withErrorToast(() => markQslSent(sent, via), t('logbook.qsl.markFailed'))) ?? row
         }
-        if ((draft.qslCard === '1') !== !!existing?.qslRcvd?.card) {
+        if ((draft.qslCard === '1') !== !!existing.qslRcvd?.card) {
           const received = draft.qslCard === '1'
-          await withErrorToast(() => markQslCard(idx, received), t('logbook.qsl.markFailed'))
+          const card = await logTarget(row)
+          await withErrorToast(() => markQslCard(card, received), t('logbook.qsl.markFailed'))
         }
         pushToast(t('logbook.form.updated', { call: record.call }), 'success')
         cancelForm()
@@ -2018,10 +2047,10 @@ export function Logbook({
                         // is not a send at all, and for CLEARING the send (#180). Kept in the
                         // same menu because an operator handling a card thinks about one row,
                         // not two controls.
-                        if (v === 'R') void onMarkQslCard(q, i, true)
-                        else if (v === 'r') void onMarkQslCard(q, i, false)
-                        else if (v === 's') void onMarkQslSent(q, i, null)
-                        else if (v) void onMarkQslSent(q, i, v as 'B' | 'D' | 'E')
+                        if (v === 'R') void onMarkQslCard(q, true)
+                        else if (v === 'r') void onMarkQslCard(q, false)
+                        else if (v === 's') void onMarkQslSent(q, null)
+                        else if (v) void onMarkQslSent(q, v as 'B' | 'D' | 'E')
                       }}
                       title={t('logbook.row.qslSent.title', { call: q.call })}
                       aria-label={t('logbook.row.qslSent.aria', { call: q.call })}

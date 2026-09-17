@@ -2686,6 +2686,11 @@ pub struct AppSnapshot {
     pub upload_ok: bool,
     #[serde(default)]
     pub upload_tick: u32,
+    /// Bumped on every change to the log by ANY writer — the shack, a Remote browser, another
+    /// instance sharing the file, a connector stamp. The log view reloads on change, so a
+    /// browser's delete cannot leave the shack's list pointing at rows that have moved.
+    #[serde(default)]
+    pub log_tick: u32,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────

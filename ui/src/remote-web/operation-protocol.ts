@@ -294,7 +294,10 @@ export function logRowCanonical(v: unknown): string {
   if (typeof v === 'string') return `s${new TextEncoder().encode(v).length}:${v}`
   if (Array.isArray(v)) return `a${v.length}[${v.map(logRowCanonical).join('')}]`
   if (typeof v === 'object') {
-    const keys = Object.keys(v).sort()
+    // An undefined property is absent, as JSON.stringify sends it and as the station keys the
+    // row: the shack's own view passes rows straight from the wire, but a fixture or a caller
+    // spelling an optional field as `undefined` must key the same bytes, not throw.
+    const keys = Object.keys(v).filter(k => (v as Record<string, unknown>)[k] !== undefined).sort()
     return `o${keys.length}{${keys.map(k => logRowCanonical(k) + logRowCanonical((v as Record<string, unknown>)[k])).join('')}}`
   }
   return invalid()

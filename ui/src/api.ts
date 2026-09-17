@@ -7,6 +7,7 @@
 import type { RemoteStationAction, RemoteStationStatus } from './remote-native/types'
 import { remoteApplicationTransport } from './applicationTransport'
 import { t } from './i18n'
+import type { LogTarget } from './remote-web/operation-protocol'
 import type { SelfSpotReport } from './selfSpot'
 import type {
   AppSnapshot,
@@ -890,36 +891,43 @@ export async function resolveEntity(call: string): Promise<string | null> {
   return invoke<string | null>('resolve_entity', { call })
 }
 
-/** Edit logbook entry `index` (a correction). `index` is the position in the
- *  `getLog()` array. Confirmation/credit/upload state is preserved server-side. */
-export async function editQso(index: number, record: LoggedQso): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('edit_qso', { index, record })
+/** Edit a logged contact (a correction). `target` is the key of the row as `getLog()` showed
+ *  it (`logTarget(row)`) — never a position: a Remote browser is a second writer, and its
+ *  delete shifts every later row, so a position kept from an earlier load names a different
+ *  contact. The backend finds the row by key today or refuses, telling the operator to reload.
+ *  Confirmation/credit/upload state is preserved server-side. Returns the row as stored,
+ *  which is the key any follow-up (a QSL mark from the same form) must use: the edit changed
+ *  the row, so it changed the key. */
+export async function editQso(target: LogTarget, record: LoggedQso): Promise<LoggedQso> {
+  return invoke<LoggedQso>('edit_qso', { target, record })
 }
 
-/** Mark logbook entry `index` as QSL-sent (operator-declared): a card/request was
+/** Mark the contact `target` as QSL-sent (operator-declared): a card/request was
  *  sent `via` "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT
  *  a confirmation — this never flips `confirmed`/`awardConfirmed`.
  *
  *  `via: null` CLEARS the mark instead (#180): the operator mis-clicked and nothing was
  *  ever sent. Sending is once-only, so without a clear the three send entries vanish with
- *  nothing to put the row back. Mirrors `markQslCard(index, false)` on the inbound side. */
+ *  nothing to put the row back. Mirrors `markQslCard(target, false)` on the inbound side.
+ *  Returns the row as stored (see `editQso` for the key). */
 export async function markQslSent(
-  index: number,
+  target: LogTarget,
   via: 'B' | 'D' | 'E' | null,
-): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('mark_qsl_sent', { index, via })
+): Promise<LoggedQso> {
+  return invoke<LoggedQso>('mark_qsl_sent', { target, via })
 }
 
-/** Record whether a PAPER QSL card arrived for entry `index` (#152). The operator is the only
- *  authority — LoTW/eQSL/QRZ report their own confirmations, but nothing knows a card landed.
- *  Award-eligible, so this moves the awards view. Clearable, for a mis-tick. */
-export async function markQslCard(index: number, received: boolean): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('mark_qsl_card', { index, received })
+/** Record whether a PAPER QSL card arrived for the contact `target` (#152). The operator is
+ *  the only authority — LoTW/eQSL/QRZ report their own confirmations, but nothing knows a card
+ *  landed. Award-eligible, so this moves the awards view. Clearable, for a mis-tick.
+ *  Returns the row as stored (see `editQso` for the key). */
+export async function markQslCard(target: LogTarget, received: boolean): Promise<LoggedQso> {
+  return invoke<LoggedQso>('mark_qsl_card', { target, received })
 }
 
-/** Delete logbook entry `index` (the position in the `getLog()` array). */
-export async function deleteQso(index: number): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('delete_qso', { index })
+/** Delete the contact `target` (the key of the row as `getLog()` showed it — see `editQso`). */
+export async function deleteQso(target: LogTarget): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('delete_qso', { target })
 }
 
 /** Purge the ENTIRE logbook — delete every contact and truncate the ADIF file.
