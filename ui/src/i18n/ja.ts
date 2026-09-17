@@ -153,6 +153,10 @@ export const JA: PartialCatalog = {
   "remote.audio.inUse": "別のブラウザがこの局の受信音を聞いています。",
   "remote.audio.notController": "局の操作権を失ったため音声を止めました。",
   "remote.audio.stopped": "音声を止めました。",
+  "remote.feed.keep": "監視を続ける",
+  "remote.feed.keepOff.title": "このタブが背面にある間はデータが一時停止し、戻ると再開します。別の画面で周波数を見張り続けるときはこれをオンにしてください。",
+  "remote.feed.keepOn.title": "このタブが背面にある間もデータを受け取り続けます。目を離したときに一時停止させるにはオフにしてください。",
+  "remote.feed.resumed": "データを再開しました — このタブが背面にある間は一時停止していました。",
   "remote.stop.sending": "停止を送信中…",
   "remote.stop.sent": "停止を送信しました",
   "remote.stop.sent.title":

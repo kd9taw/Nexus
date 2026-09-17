@@ -163,6 +163,10 @@ export const ES: PartialCatalog = {
   "remote.audio.inUse": "Otro navegador está escuchando esta estación.",
   "remote.audio.notController": "El audio se detuvo porque se perdió el control de la estación.",
   "remote.audio.stopped": "Audio detenido.",
+  "remote.feed.keep": "Seguir observando",
+  "remote.feed.keepOff.title": "Los datos se pausan mientras esta pestaña está en segundo plano y vuelven cuando regresas. Activa esto para seguir observando una frecuencia en una segunda pantalla.",
+  "remote.feed.keepOn.title": "Los datos siguen llegando mientras esta pestaña está en segundo plano. Desactiva esto para que se pausen cuando apartes la vista.",
+  "remote.feed.resumed": "Datos reanudados: se pausaron mientras esta pestaña estaba en segundo plano.",
   "remote.stop.sending": "Enviando parada…",
   "remote.stop.sent": "Parada enviada",
   "remote.stop.sent.title":

@@ -163,6 +163,10 @@ export const FR: PartialCatalog = {
   "remote.audio.inUse": "Un autre navigateur écoute déjà cette station.",
   "remote.audio.notController": "Audio arrêté : le contrôle de la station a été perdu.",
   "remote.audio.stopped": "Audio arrêté.",
+  "remote.feed.keep": "Continuer à suivre",
+  "remote.feed.keepOff.title": "Le flux se met en pause quand cet onglet passe en arrière-plan et revient à votre retour. Activez ceci pour continuer à suivre une fréquence sur un second écran.",
+  "remote.feed.keepOn.title": "Le flux reste actif quand cet onglet passe en arrière-plan. Désactivez ceci pour qu’il se mette en pause quand vous regardez ailleurs.",
+  "remote.feed.resumed": "Flux repris — il était en pause pendant que cet onglet était en arrière-plan.",
   "remote.stop.sending": "Envoi de l'arrêt…",
   "remote.stop.sent": "Arrêt envoyé",
   "remote.stop.sent.title":
