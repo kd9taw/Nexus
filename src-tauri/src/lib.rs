@@ -14403,6 +14403,29 @@ struct SpotRow {
     /// The matching score suppression lives in `propagation::needalert::rank`, so this field
     /// is a DISPLAY concern only. `None` for an ordinary spot.
     beacon: Option<propagation::beacons::BeaconKind>,
+    /// Seconds since the operator's most recent QSO with this station, on ANY band or mode,
+    /// matched on the base call (`W6A/P` in the log answers for `W6A` on a spot). `None` when the
+    /// log holds no contact with it. A FLAG, NOT A FILTER, for the reason `spotter_local` gives:
+    /// the panel decides what "worked recently" hides, and counts what it hides.
+    worked_ago_secs: Option<i64>,
+    /// That contact fell on today's UTC day — since 0000Z on the STATION clock, the panel's
+    /// default window. Decided here from unix seconds rather than by a browser, so a Remote
+    /// browser in another time zone and every window at the shack agree on when the day turns.
+    worked_today_utc: bool,
+}
+
+/// When the operator last worked a spotted station, as [`SpotRow`] carries it: seconds ago, and
+/// whether that was since 0000Z today — both from unix seconds on this clock
+/// (`now - now % 86_400`), never local time. A contact stamped a moment AHEAD of this clock
+/// (another instance whose clock runs fast) reads as just now rather than as negative.
+fn spot_worked(last_unix: Option<u64>, now: i64) -> (Option<i64>, bool) {
+    let Some(last) = last_unix.and_then(|t| i64::try_from(t).ok()) else {
+        return (None, false);
+    };
+    (
+        Some(now.saturating_sub(last).max(0)),
+        last >= now - now.rem_euclid(86_400),
+    )
 }
 
 /// Raw spot firehose for the Spots panel — every recent spot (CW/Phone/Digital, all
@@ -14470,7 +14493,7 @@ fn read_all_spots(
     //
     // Poison recovers (engine_lock), so the gate always sees real state; the Option
     // shape is kept for the chains below.
-    let (class, my_call, roster_grids) = {
+    let (class, my_call, roster_grids, last_worked) = {
         let eng = Some(if nonblocking {
             state.try_lock().map_err(|_| "applicationBusy")?
         } else {
@@ -14499,7 +14522,21 @@ fn read_all_spots(
                     .collect()
             })
             .unwrap_or_default();
-        (class, my_call, grids)
+        // When each spotted station was last worked — an O(1) lookup per spot into the index
+        // `refresh_worked_index` keeps, so the firehose never scans the log.
+        let last_worked: std::collections::HashMap<String, u64> = eng
+            .as_ref()
+            .map(|e| {
+                recent
+                    .iter()
+                    .filter_map(|cs| {
+                        e.last_worked_unix(&cs.dx_call)
+                            .map(|t| (cs.dx_call.clone(), t))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        (class, my_call, grids, last_worked)
     };
     let mut rows: Vec<SpotRow> = recent
         .into_iter()
@@ -14538,6 +14575,8 @@ fn read_all_spots(
             );
             let (spotter_conts, spotter_entities) =
                 spot_voice_origins(&cs.spotter, &cs.corroborators);
+            let (worked_ago_secs, worked_today_utc) =
+                spot_worked(last_worked.get(&cs.dx_call).copied(), now);
             SpotRow {
                 call: cs.dx_call.clone(),
                 entity,
@@ -14565,6 +14604,8 @@ fn read_all_spots(
                 spotter_conts,
                 spotter_entities,
                 beacon: propagation::beacons::classify(&cs.dx_call, freq),
+                worked_ago_secs,
+                worked_today_utc,
             }
         })
         .collect();
@@ -14764,6 +14805,38 @@ async fn get_need_alerts(
     read_need_alerts(eng, &live_paths, &region_paths, &spots, &ota_cache)
 }
 
+/// The hunter side of the log as TODAY's activations: which park/summit reference has been
+/// worked, from which activator, since 0000Z. The one builder behind both boards that ask —
+/// the Needed board's park need and the POTA/SOTA board's "worked today" — so the two cannot
+/// disagree about the same activation. `HuntedActivations` owns what counts as an activation
+/// (and splits a two-fer); this owns what the log hands it:
+///
+/// * the activator's BASE call, because propagation has no callsign parser in the default build
+///   and the log writes `K1ABC/P` where the spot says `K1ABC`;
+/// * only contacts since 0000Z on the station clock (`now - now % 86_400`). An earlier one can
+///   never match a question asked now or later, and on a big log this keeps the index to the
+///   few contacts that can.
+fn hunted_activations(
+    records: &[tempo_core::logbook::QsoRecord],
+    now: i64,
+) -> propagation::HuntedActivations {
+    // A clock before 1970 keeps every row; `needed` answers "not hunted" for it regardless.
+    let today = u64::try_from(now).map_or(0, |n| n - n % 86_400);
+    propagation::HuntedActivations::from_log(records.iter().filter_map(|q| {
+        if q.when_unix < today {
+            return None;
+        }
+        let r = q.ota.their_ref.as_deref()?.trim();
+        (!r.is_empty()).then(|| {
+            (
+                r.to_string(),
+                tempo_core::message::base_call(&q.call),
+                q.when_unix,
+            )
+        })
+    }))
+}
+
 // Shared calculation, with an immutable engine guard. Remote never invokes the
 // native command's shared-log reconciliation or any logbook write/recovery path.
 fn read_need_alerts(
@@ -14791,25 +14864,13 @@ fn read_need_alerts(
         })
         .collect();
     // The hunter side of the log, indexed by ACTIVATION — which park/summit reference has
-    // already been worked, from which activator, on which UTC day. Copied out under the same
-    // lock as `contacts` above; `HuntedActivations` owns the "what counts as this activation"
-    // rule and its reasoning. Base-called here because propagation has no callsign parser in
-    // the default build, and because the log writes `K1ABC/P` where the spot says `K1ABC`.
+    // already been worked, from which activator, today. Built under the same lock as `contacts`
+    // above, by the builder the POTA/SOTA board uses too (`hunted_activations`).
     //
     // ONE index, built ONCE, feeding both the program-chip pass and `activation_alert` below —
     // which is why the roster and the Needed board can no longer give opposite answers about
     // the same station: they read the same alerts, and those alerts read this.
-    let hunted =
-        propagation::HuntedActivations::from_log(eng.log_records().iter().filter_map(|q| {
-            let r = q.ota.their_ref.as_deref()?.trim();
-            (!r.is_empty()).then(|| {
-                (
-                    r.to_ascii_uppercase(),
-                    tempo_core::message::base_call(&q.call),
-                    q.when_unix,
-                )
-            })
-        }));
+    let hunted = hunted_activations(eng.log_records(), now_unix());
     let snap = eng.snapshot();
     // Operator "wanted" watch list (W1.5) — captured before the lock drops.
     let wanted_calls = eng.settings().wanted_calls.clone();
@@ -19629,43 +19690,98 @@ struct OtaSpotDto {
     spot: propagation::OtaSpot,
     /// This reference has never been logged (hunter side) — a NEW PARK.
     new_park: bool,
+    /// The log already holds a contact with this activator at this reference since 0000Z on the
+    /// station clock: the activation running now is hunted. The board hides these by default,
+    /// and they come back at 0000Z or when the activator is spotted at another park.
+    hunted_today: bool,
     /// The operator's own signal is being received on this band right now.
     band_open: bool,
 }
 
+/// What the LOG decides about one hunter-feed row. See [`ota_log_flags`].
+struct OtaLogFlags {
+    new_park: bool,
+    hunted_today: bool,
+}
+
+/// What the log decides about each hunter-feed row, in order: whether its reference is a NEW
+/// PARK (never on the hunter side of the log, nor in the imported Hunted Parks), and whether the
+/// activation is already hunted today. Split from the command because the command fetches, and
+/// this is the part with a rule in it.
+fn ota_log_flags(
+    eng: &tempo_app::engine::Engine,
+    spots: &[propagation::OtaSpot],
+    now: i64,
+) -> Vec<OtaLogFlags> {
+    let hunted = hunted_activations(eng.log_records(), now);
+    spots
+        .iter()
+        .map(|sp| OtaLogFlags {
+            new_park: !eng.park_worked(&sp.reference),
+            hunted_today: !hunted.needed(
+                &sp.reference,
+                &tempo_core::message::base_call(&sp.activator),
+                now,
+            ),
+        })
+        .collect()
+}
+
+/// The hunter feed for `program` as the last fetch left it in the shared cache — the board's own
+/// poll or the background poller, whichever wrote last. `Err` when nothing is cached for it yet.
+///
+/// This is the whole of a RE-READ, and it can reach no network by construction: the board asks
+/// for one when the LOG changes (`logTick`), and the log moves on every upload stamp as well as
+/// every contact — a handful of times per QSO — so a re-read that fetched would put that on
+/// pota.app and SOTAwatch.
+fn cached_ota_spots(
+    cache: &SharedOtaSpots,
+    program: &str,
+) -> Result<Vec<propagation::OtaSpot>, String> {
+    cache
+        .lock()
+        .ok()
+        .and_then(|c| c.get(program).map(|(_, v)| v.clone()))
+        .ok_or_else(|| format!("No {program} spots cached yet."))
+}
+
+/// `cached`: re-derive the log's flags over the cached rows instead of fetching — see
+/// [`cached_ota_spots`]. Absent or false is the poll and the Refresh button, which fetch.
 #[tauri::command(async)]
 fn get_ota_spots(
     program: String,
+    cached: Option<bool>,
     state: State<'_, SharedEngine>,
     live_paths: State<'_, SharedLivePaths>,
     ota_cache: State<'_, SharedOtaSpots>,
 ) -> Result<Vec<OtaSpotDto>, String> {
-    let spots = match program.to_ascii_uppercase().as_str() {
-        "POTA" => propagation::live::pota::fetch_pota_spots()?,
-        "SOTA" => propagation::live::pota::fetch_sota_spots(30)?,
-        other => return Err(format!("Unknown program '{other}' — use POTA or SOTA.")),
+    let program = program.to_ascii_uppercase();
+    let spots = if cached == Some(true) {
+        cached_ota_spots(&ota_cache, &program)?
+    } else {
+        let spots = match program.as_str() {
+            "POTA" => propagation::live::pota::fetch_pota_spots()?,
+            "SOTA" => propagation::live::pota::fetch_sota_spots(30)?,
+            other => return Err(format!("Unknown program '{other}' — use POTA or SOTA.")),
+        };
+        // Refresh the lock-only cache the Needed scorer reads for POTA/SOTA tags —
+        // keyed PER PROGRAM ("Both" mode fetches POTA and SOTA concurrently; a
+        // single slot let the last writer evict the other program's activators).
+        if let Ok(mut c) = ota_cache.lock() {
+            c.insert(program.clone(), (now_unix(), spots.clone()));
+        }
+        spots
     };
-    // Refresh the lock-only cache the Needed scorer reads for POTA/SOTA tags —
-    // keyed PER PROGRAM ("Both" mode fetches POTA and SOTA concurrently; a
-    // single slot let the last writer evict the other program's activators).
-    if let Ok(mut c) = ota_cache.lock() {
-        c.insert(program.to_ascii_uppercase(), (now_unix(), spots.clone()));
-    }
-    // Bands where MY signal is getting out right now (live PSKR receptions of
-    // my call inside the last 15 min) — the "workable now" differentiator.
-    type ParkWorkedFn = Box<dyn Fn(&str) -> bool>;
-    let (mycall, park_worked): (String, ParkWorkedFn) = {
+    let now = now_unix();
+    let (mycall, flags) = {
         let eng = engine_lock(&state);
-        let worked: std::collections::HashSet<String> = spots
-            .iter()
-            .filter(|sp| eng.park_worked(&sp.reference))
-            .map(|sp| sp.reference.to_uppercase())
-            .collect();
         (
             eng.settings().mycall.clone(),
-            Box::new(move |r: &str| worked.contains(&r.to_uppercase())),
+            ota_log_flags(&eng, &spots, now),
         )
     };
+    // Bands where MY signal is getting out right now (live PSKR receptions of
+    // my call inside the last 15 min) — the "workable now" differentiator.
     let open_bands: std::collections::HashSet<String> = live_paths
         .lock()
         .map(|b| b.recent(now_unix(), 900))
@@ -19676,14 +19792,15 @@ fn get_ota_spots(
         .collect();
     Ok(spots
         .into_iter()
-        .map(|sp| {
+        .zip(flags)
+        .map(|(sp, flags)| {
             let band_open = propagation::Band::from_mhz(sp.freq_khz / 1000.0)
                 .map(|b| open_bands.contains(b.label()))
                 .unwrap_or(false);
-            let new_park = !park_worked(&sp.reference);
             OtaSpotDto {
                 spot: sp,
-                new_park,
+                new_park: flags.new_park,
+                hunted_today: flags.hunted_today,
                 band_open,
             }
         })
@@ -30792,6 +30909,223 @@ mod tests {
             ..base
         };
         assert!(crate::place_ota(&junk).is_none());
+    }
+
+    // ── Hide worked: what the log decides about a spot ────────────────────────────────────
+    //
+    // Both boards hide by DERIVING from the log on every read — no stored hide list — so these
+    // drive the real log through the engine and ask the same functions the commands ask.
+
+    /// 2026-09-17 12:00:00 UTC — noon, so a day boundary is never a rounding artefact.
+    const HIDE_NOON: i64 = 1_789_646_400;
+
+    fn ota_spot(activator: &str, reference: &str) -> propagation::OtaSpot {
+        propagation::OtaSpot {
+            program: "POTA".into(),
+            reference: reference.into(),
+            name: String::new(),
+            activator: activator.into(),
+            freq_khz: 14_285.0,
+            mode: "SSB".into(),
+            spotter: None,
+            comment: None,
+            grid: None,
+            lat: None,
+            lon: None,
+            spot_time_unix: None,
+        }
+    }
+
+    /// An engine whose log holds one phone contact with `call` at `when`, carrying `park` as the
+    /// hunter-side reference.
+    fn logged_with(call: &str, park: Option<&str>, when: i64) -> tempo_app::engine::Engine {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.log_qso(park_rec(call, park, when));
+        e
+    }
+
+    fn park_rec(call: &str, park: Option<&str>, when: i64) -> tempo_core::logbook::QsoRecord {
+        let mut r = pass_qso(call, "FN31", "20m", 14.285);
+        r.mode = "SSB".into();
+        r.when_unix = when as u64;
+        r.ota.their_program = park.map(|_| "POTA".into());
+        r.ota.their_ref = park.map(str::to_string);
+        r
+    }
+
+    fn hunted_today(e: &tempo_app::engine::Engine, spot: &propagation::OtaSpot, now: i64) -> bool {
+        crate::ota_log_flags(e, std::slice::from_ref(spot), now)[0].hunted_today
+    }
+
+    #[test]
+    fn an_activation_logged_today_is_hunted_and_an_empty_log_hunts_nothing() {
+        let spot = ota_spot("K1ABC", "US-0001");
+        let empty = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            !hunted_today(&empty, &spot, HIDE_NOON),
+            "control: nothing logged"
+        );
+        // Logged under the portable form an hour ago; the spot names the plain call.
+        let e = logged_with("K1ABC/P", Some("US-0001"), HIDE_NOON - 3_600);
+        assert!(hunted_today(&e, &spot, HIDE_NOON));
+        assert!(
+            !crate::ota_log_flags(&e, &[spot], HIDE_NOON)[0].new_park,
+            "and the park is no longer new"
+        );
+    }
+
+    #[test]
+    fn the_same_activator_at_another_park_today_is_not_hunted() {
+        let e = logged_with("K1ABC", Some("US-0001"), HIDE_NOON - 3_600);
+        assert!(hunted_today(&e, &ota_spot("K1ABC", "US-0001"), HIDE_NOON));
+        assert!(
+            !hunted_today(&e, &ota_spot("K1ABC", "US-0002"), HIDE_NOON),
+            "a new park is a new activation, worked or not"
+        );
+    }
+
+    #[test]
+    fn a_hunt_comes_back_at_0000z() {
+        let midnight = HIDE_NOON + 43_200;
+        let e = logged_with("K1ABC", Some("US-0001"), midnight - 120); // 23:58Z
+        let spot = ota_spot("K1ABC", "US-0001");
+        assert!(
+            hunted_today(&e, &spot, midnight - 1),
+            "23:59:59Z is the same day"
+        );
+        assert!(
+            !hunted_today(&e, &spot, midnight),
+            "00:00:00Z starts a new activation"
+        );
+    }
+
+    #[test]
+    fn hunt_alone_hides_nothing_until_the_contact_is_logged_and_a_delete_brings_it_back() {
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        let spot = ota_spot("K1ABC", "US-0001");
+        e.set_hunt_target("K1ABC", "POTA", "US-0001").unwrap();
+        assert!(
+            !hunted_today(&e, &spot, HIDE_NOON),
+            "HUNT is intent, not a contact"
+        );
+        // Logged with NO park of its own: the pending hunt is what tags it.
+        e.log_qso(park_rec("K1ABC/P", None, HIDE_NOON - 60));
+        assert!(
+            hunted_today(&e, &spot, HIDE_NOON),
+            "the hunt tagged the contact"
+        );
+        let at = e
+            .get_log()
+            .iter()
+            .position(|r| r.call == "K1ABC/P")
+            .expect("the contact is in the log");
+        assert!(e.delete_qso(at));
+        assert!(
+            !hunted_today(&e, &spot, HIDE_NOON),
+            "deleting the contact brings the activation back"
+        );
+    }
+
+    #[test]
+    fn a_contact_logged_without_the_park_hides_nothing() {
+        // THE GAP, pinned so it is a decision rather than a surprise: only a contact carrying
+        // the park counts, because only that one is a hunt POTA will credit. HUNT, the map
+        // and the Needed board's Work tag it; a contact logged any other way does not.
+        let e = logged_with("K1ABC", None, HIDE_NOON - 60);
+        assert!(!hunted_today(&e, &ota_spot("K1ABC", "US-0001"), HIDE_NOON));
+    }
+
+    #[test]
+    fn a_two_fer_contact_hides_both_parks_on_the_board() {
+        let e = logged_with("K1ABC", Some("US-0001,US-0002"), HIDE_NOON - 60);
+        let spots = [ota_spot("K1ABC", "US-0001"), ota_spot("K1ABC", "US-0002")];
+        let flags = crate::ota_log_flags(&e, &spots, HIDE_NOON);
+        assert!(flags[0].hunted_today && flags[1].hunted_today);
+        assert!(!flags[0].new_park && !flags[1].new_park);
+    }
+
+    #[test]
+    fn a_re_read_answers_from_the_cache_and_never_invents_rows() {
+        let cache: crate::SharedOtaSpots =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        assert!(
+            crate::cached_ota_spots(&cache, "POTA").is_err(),
+            "nothing fetched yet: an error the board ignores, not an empty board"
+        );
+        cache.lock().unwrap().insert(
+            "SOTA".into(),
+            (HIDE_NOON, vec![ota_spot("VK3KR", "VK3/VN-012")]),
+        );
+        assert!(
+            crate::cached_ota_spots(&cache, "POTA").is_err(),
+            "another programme's rows are not this one's"
+        );
+        let rows = crate::cached_ota_spots(&cache, "SOTA").expect("the cached programme");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].activator, "VK3KR");
+    }
+
+    #[test]
+    fn a_spot_carries_when_its_station_was_last_worked_on_the_station_clock() {
+        let midnight = HIDE_NOON + 43_200;
+        assert_eq!(
+            crate::spot_worked(None, HIDE_NOON),
+            (None, false),
+            "never worked"
+        );
+        assert_eq!(
+            crate::spot_worked(Some((HIDE_NOON - 7_200) as u64), HIDE_NOON),
+            (Some(7_200), true),
+            "two hours ago, same UTC day"
+        );
+        // The day turns at 0000Z and not a second earlier.
+        assert_eq!(
+            crate::spot_worked(Some((midnight - 120) as u64), midnight - 1),
+            (Some(119), true)
+        );
+        assert_eq!(
+            crate::spot_worked(Some((midnight - 120) as u64), midnight),
+            (Some(120), false)
+        );
+        // A contact stamped ahead of this clock is "just now", never negative.
+        assert_eq!(
+            crate::spot_worked(Some((HIDE_NOON + 30) as u64), HIDE_NOON),
+            (Some(0), true)
+        );
+    }
+
+    #[test]
+    fn the_spots_rows_carry_the_worked_flags_by_base_call() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let now = crate::now_unix();
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.log_qso(park_rec("W6A/P", None, now - 9_000));
+        e.log_qso(park_rec("W6A", None, now - 7_200)); // the later of two wins
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(e));
+        let mk = |call: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz: 14_025.0,
+            comment: String::new(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let mut buf = SpotBuffer::new(100);
+        buf.push(mk("W6A"));
+        buf.push(mk("K1ABC"));
+        let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(buf));
+        let rows = crate::read_all_spots(&spots, &engine, false).expect("rows");
+        let w6a = rows.iter().find(|r| r.call == "W6A").expect("W6A row");
+        let ago = w6a.worked_ago_secs.expect("W6A was worked");
+        assert!(
+            (7_200..7_260).contains(&ago),
+            "seconds since the LATER contact, not the earlier: {ago}"
+        );
+        let k1abc = rows.iter().find(|r| r.call == "K1ABC").expect("K1ABC row");
+        assert_eq!(k1abc.worked_ago_secs, None, "control: never worked");
+        assert!(!k1abc.worked_today_utc);
     }
 
     /// #184 (akhepcat): "just because I'm not licensed to transmit in the US, there are no

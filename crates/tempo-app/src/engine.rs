@@ -20436,6 +20436,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.station.park_worked(reference)
     }
 
+    /// See [`StationCore::last_worked_unix`].
+    pub fn last_worked_unix(&self, call: &str) -> Option<u64> {
+        self.station.last_worked_unix(call)
+    }
+
     /// See [`StationCore::set_hunted_parks_import`].
     pub fn set_hunted_parks_import(&mut self, refs: impl IntoIterator<Item = String>) {
         self.station.set_hunted_parks_import(refs)
