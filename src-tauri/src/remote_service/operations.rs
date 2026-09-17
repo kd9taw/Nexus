@@ -936,6 +936,15 @@ impl Authority {
                     // CONTROL grant, not the logging one — see `audio_admitted`.
                     #[cfg(feature = "radio")]
                     capabilities.push("audioListen");
+                    // Operation v5: this station tells the browser a control's outcome the
+                    // moment it settles (`operationEvent`), so the page may stop re-reading
+                    // after each command. NEGOTIATED, never assumed from the page's own
+                    // version: `version` is the one the relay agreed for this request, so a
+                    // v5 page on an older station never sees the hint and keeps its immediate
+                    // re-read. A hint like `audioListen` - it names no action.
+                    if version >= 5 {
+                        capabilities.push("outcomePush");
+                    }
                 }
                 value["txArmed"] = json!(owned && tx_owned);
                 if ft_available

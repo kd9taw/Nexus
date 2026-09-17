@@ -138,7 +138,12 @@ export const CONTROL_CAPABILITIES = ['ftRuntime', 'ftSettings', 'qsoLogging', 'f
   // is answered on the audio lane, not by a station control, so it appears in no action
   // map. It rides this list because it is given under the same station-control grant, and
   // because a station that does not name it must never be offered the control.
-  'audioListen'] as const
+  'audioListen',
+  // Operation v5: the station pushes a control's outcome and fresh state the moment it settles
+  // (`operationEvent`). Names no action either. A station says it only when the relay agreed v5
+  // for the request, so a v5 page on an older station never sees it and keeps re-reading after
+  // each command exactly as before; the page trusts this, never its own version.
+  'outcomePush'] as const
 /** The hints added after operation v3 froze — batch 1 and the parity leftovers after it. An older
  * page does not know these names and drops them as hints. */
 export const TUNE_CAPABILITIES = ['aiCw', 'redecode', 'rigScope', 'workDigitalSpot', 'splitTuning', 'ritTuning', 'repeaterTuning', 'memoryRecall', 'aprsTuning', 'rotator', 'workRttySpot', 'sstvGallery', 'satellite'] as const satisfies readonly ControlCapability[]
