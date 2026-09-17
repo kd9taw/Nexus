@@ -77,7 +77,7 @@ export class BrowserClient {
   constructor(private readonly auth: Auth0Client, readonly applicationVersion = 1, readonly operationVersion = 0,
     readonly signInRefusal: SignInRefusal | null = null) {}
   static async load(): Promise<BrowserClient | null> {
-    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number; operationFtVersion?: number }>(
+    const config = await boundedJson<{ issuer: string; audience: string; clientId: string; ready: boolean; applicationVersion?: number; operationVersion?: number; operationMaxVersion?: number; operationFtVersion?: number; operationPushVersion?: number }>(
       '/api/remote/config', { cache: 'no-store', credentials: 'omit' })
     if (!config.ready) return null
     const issuer = new URL(config.issuer)
@@ -102,7 +102,7 @@ export class BrowserClient {
     } else {
       try { await auth.checkSession() } catch { /* interactive login stays available */ }
     }
-    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion, config.operationFtVersion), signInRefusal)
+    return new BrowserClient(auth, APPLICATION_VERSIONS.find(version=>version===config.applicationVersion)??1, advertisedOperationVersion(config.operationVersion, config.operationMaxVersion, config.operationFtVersion, config.operationPushVersion), signInRefusal)
   }
   authenticated(): Promise<boolean> { return this.auth.isAuthenticated() }
   // `createAccount` sends Auth0 straight to its sign-up screen. Without it a first-time operator
@@ -247,6 +247,8 @@ export class HostedConnection {
             this.audio.receive(message); return
           }
           if(this.applicationMode&&message.type==='operationResponse'){reason='invalidOperation';const bytes=new TextEncoder().encode(event.data).length;if(bytes>OPERATION_EXPORT_RESPONSE_BYTES)throw new RemoteError(403);this.operations.receive(message,bytes);return}
+          // Operation v5: a settled control, pushed by the station. Same lane, same strictness.
+          if (this.applicationMode && message.type === 'operationEvent') { reason = 'invalidOperation'; this.operations.receiveEvent(message, new TextEncoder().encode(event.data).length); return }
           if (this.applicationMode && typeof message.type === 'string' && message.type.startsWith('application')) {
             reason = 'invalidApplication'; this.application.receive(message); return
           }
