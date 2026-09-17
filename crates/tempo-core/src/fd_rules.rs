@@ -221,6 +221,21 @@ pub struct FdRuleset {
     /// the column, which is why a single-position entry writes `0` rather than omitting
     /// it — see [`ContestSession::transmitter_id`](crate::contest::ContestSession::transmitter_id).
     pub transmitter_column: bool,
+    /// ⭐ **The sponsor's own Cabrillo exchange columns**, when its QSO template is not the
+    /// structural one — empty for every contest whose template is (all of them before
+    /// CQ WW RTTY). See [`CabrilloColumn`](crate::contest::CabrilloColumn).
+    pub cabrillo_columns: &'static [crate::contest::CabrilloColumn],
+    /// The OPTIONAL Cabrillo headers the sponsor's page lists and this build can source
+    /// (`"CATEGORY-POWER"`, `"NAME"`…). Empty writes none — the header block every contest
+    /// wrote before this existed.
+    pub cabrillo_headers: &'static [&'static str],
+    /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
+    /// CQ WW RTTY's exchange sends `PEI` and its LOCATION list spells the same place `PE`.
+    pub cabrillo_location: &'static [(&'static str, &'static str)],
+    /// ⭐ **The bands this contest runs on, as ADVISORY data** (`"20m"`), or empty when the
+    /// ruleset names none. Nothing scores or dupes off it: a contact on another band is
+    /// logged, and the entry strip says the contest does not use that band.
+    pub bands: &'static [&'static str],
 }
 
 impl FdRuleset {
@@ -746,7 +761,63 @@ struct RulesetSpec {
     score_note_key: String,
     #[serde(default)]
     objectives: Vec<BonusSpec>,
+    /// ⭐ **The sponsor's own Cabrillo template, where it asks for more than the
+    /// structural one** — CQ WW RTTY's fixed exchange columns, its optional headers and
+    /// its LOCATION spellings.
+    ///
+    /// ⚠️ **`#[serde(default)]`, and absent is a decision, not a hole.** An absent block
+    /// is the structural QSO line and the header block every contest shipped before this
+    /// key already writes — the `score_note_key` case (absent means what the existing
+    /// contests mean), not the `exchange`/`scoring` case §8(c) rules on, where a default
+    /// would load a file with a whole behaviour missing. A block that IS present is
+    /// validated in full, and one that forgot a slot is refused by name.
+    #[serde(default)]
+    cabrillo: CabrilloSpec,
+    /// Advisory band labels (`["80m", "40m"]`); `[]` = the ruleset names no band list.
+    /// `#[serde(default)]` for the same reason as `score_note_key`: absent is what every
+    /// contest before it means, and nothing scores off it.
+    #[serde(default)]
+    bands: Vec<String>,
 }
+
+/// A ruleset's Cabrillo template in the rules file. Every part defaults to "what the
+/// structural writer already does".
+#[derive(Debug, Default, serde::Deserialize)]
+struct CabrilloSpec {
+    /// The fixed exchange columns, in order; `[]` = the structural QSO line.
+    #[serde(default)]
+    columns: Vec<CabrilloColumnSpec>,
+    /// The optional headers to write (each only when it holds a value).
+    #[serde(default)]
+    headers: Vec<String>,
+    /// Sent QTH → `LOCATION` spelling, where the two lists differ.
+    #[serde(default)]
+    location: std::collections::BTreeMap<String, String>,
+}
+
+/// One column of [`CabrilloSpec`].
+#[derive(Debug, serde::Deserialize)]
+struct CabrilloColumnSpec {
+    /// The exchange slot it writes.
+    key: String,
+    /// Zero-pad an all-digit value to this width; `0` = as copied.
+    width: u8,
+    /// Written for an empty value; `""` = nothing.
+    blank: String,
+}
+
+/// The optional Cabrillo headers a ruleset may ask for — the ones this build has a
+/// source for (see `contest::cabrillo`'s module header). Anything else in a rules file
+/// is refused rather than silently not written.
+const CABRILLO_OPTIONAL_HEADERS: &[&str] = &[
+    "CATEGORY-ASSISTED",
+    "CATEGORY-BAND",
+    "CATEGORY-MODE",
+    "CATEGORY-POWER",
+    "CLAIMED-SCORE",
+    "EMAIL",
+    "NAME",
+];
 
 /// One ADIF tag pair in the rules FILE, one tag per direction.
 ///
@@ -1656,6 +1727,84 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 ));
             }
         }
+        // ⭐ A SPONSOR'S CABRILLO TEMPLATE writes every exchange slot once, and nothing that
+        // would split a whitespace-delimited column. Each refusal is a QSO line a log robot
+        // would misread, caught at load instead of in a submitted file.
+        {
+            let cols = &r.cabrillo.columns;
+            let mut seen: Vec<&str> = Vec::new();
+            let is_call = |key: &str| {
+                matches!(
+                    x.fields.iter().find(|f| f.key == key).map(|f| &f.kind),
+                    Some(KindSpec::Call)
+                )
+            };
+            for c in cols {
+                if !x.fields.iter().any(|f| f.key == c.key) {
+                    return Err(format!(
+                        "{tag}: cabrillo column {:?} is not a slot this exchange declares",
+                        c.key
+                    ));
+                }
+                if is_call(&c.key) {
+                    return Err(format!(
+                        "{tag}: cabrillo column {:?} is a callsign slot (the QSO line's call \
+                         columns are its own)",
+                        c.key
+                    ));
+                }
+                if seen.contains(&c.key.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo column {:?} is listed twice",
+                        c.key
+                    ));
+                }
+                seen.push(&c.key);
+                if !c
+                    .blank
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                {
+                    return Err(format!(
+                        "{tag}: cabrillo column {:?} placeholder {:?} is not uppercase letters \
+                         and digits (a space would split the column)",
+                        c.key, c.blank
+                    ));
+                }
+            }
+            if !cols.is_empty() {
+                for role in &x.roles {
+                    for key in role.sends.iter().chain(&role.receives) {
+                        if !is_call(key) && !seen.contains(&key.as_str()) {
+                            return Err(format!(
+                                "{tag}: role {:?} exchanges slot {key:?}, which the cabrillo \
+                                 columns never write",
+                                role.id
+                            ));
+                        }
+                    }
+                }
+            }
+            for h in &r.cabrillo.headers {
+                if !CABRILLO_OPTIONAL_HEADERS.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo header {h:?} is not one this build can write"
+                    ));
+                }
+            }
+            let token = |v: &str| {
+                !v.is_empty()
+                    && v.bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            };
+            for (from, to) in &r.cabrillo.location {
+                if !token(from) || !token(to) {
+                    return Err(format!(
+                        "{tag}: cabrillo location {from:?} -> {to:?} is not two uppercase codes"
+                    ));
+                }
+            }
+        }
         let mut mult_ids: Vec<&str> = Vec::new();
         for m in &r.scoring.multipliers {
             if m.id.is_empty() {
@@ -2142,6 +2291,28 @@ fn build(spec: FileSpec) -> RulesTable {
                 enforcement: leak_str(r.enforcement),
                 score_note_key: leak_str(r.score_note_key),
                 transmitter_column: r.transmitter_column,
+                cabrillo_columns: Box::leak(
+                    r.cabrillo
+                        .columns
+                        .into_iter()
+                        .map(|c| crate::contest::CabrilloColumn {
+                            key: leak_str(c.key),
+                            width: c.width,
+                            blank: leak_str(c.blank),
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+                cabrillo_headers: leak_keys(r.cabrillo.headers),
+                cabrillo_location: Box::leak(
+                    r.cabrillo
+                        .location
+                        .into_iter()
+                        .map(|(from, to)| (leak_str(from), leak_str(to)))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+                bands: leak_keys(r.bands),
                 window: WindowRule {
                     month: r.window.month,
                     weekend: match r.window.weekend.as_str() {
@@ -3184,6 +3355,56 @@ mod tests {
         }
     }
 
+    /// ⭐ A Cabrillo template may not write a CALLSIGN slot into its exchange columns: the
+    /// QSO line's two call columns are its own, so the call would be on the line twice
+    /// (Sweepstakes sends the call inside its exchange, and the structural line leaves it
+    /// out for exactly that reason). The corpus seed has no callsign slot, so this refusal
+    /// cannot be a corpus fixture one mutation off it; it is pinned here on the shipped
+    /// Sweepstakes ruleset instead.
+    #[test]
+    fn a_cabrillo_template_may_not_write_a_callsign_slot() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        let ss = v["rulesets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|r| r["event"] == "arrlss_cw")
+            .expect("Sweepstakes is seeded");
+        let fields = v["rulesets"][ss]["exchange"]["fields"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let call = fields
+            .iter()
+            .find(|f| f["kind"]["type"] == "call")
+            .expect("Sweepstakes carries a callsign slot")["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let column =
+            |f: &serde_json::Value| serde_json::json!({"key": f["key"], "width": 0, "blank": ""});
+        v["rulesets"][ss]["cabrillo"] =
+            serde_json::json!({ "columns": fields.iter().map(column).collect::<Vec<_>>() });
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(
+            e.contains(&format!("cabrillo column {call:?} is a callsign slot")),
+            "{e}"
+        );
+        // POSITIVE CONTROL: the same template without the callsign slot loads.
+        v["rulesets"][ss]["cabrillo"] = serde_json::json!({
+            "columns": fields
+                .iter()
+                .filter(|f| f["key"] != call.as_str())
+                .map(column)
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            parse_spec(&v.to_string()).is_ok(),
+            "control: {:?}",
+            parse_spec(&v.to_string()).err()
+        );
+    }
+
     /// A dupe rule that does not key on the callsign is not a dupe rule — every
     /// contest in the researched set keys on it, and a file saying otherwise is
     /// far more likely to be a mistake than a new contest shape. Refused by
@@ -4091,6 +4312,22 @@ mod tests {
             // (ids, selectors, send/receive order). `ExchangeSpec` is `PartialEq` all
             // the way down, so this compares the recursive `one_of` arms too.
             assert_eq!(x.exchange, y.exchange, "{}: exchange", x.event);
+            assert_eq!(
+                x.cabrillo_columns, y.cabrillo_columns,
+                "{}: cabrillo",
+                x.event
+            );
+            assert_eq!(
+                x.cabrillo_headers, y.cabrillo_headers,
+                "{}: headers",
+                x.event
+            );
+            assert_eq!(
+                x.cabrillo_location, y.cabrillo_location,
+                "{}: location",
+                x.event
+            );
+            assert_eq!(x.bands, y.bands, "{}: bands", x.event);
             assert_eq!(
                 x.domains.len(),
                 y.domains.len(),

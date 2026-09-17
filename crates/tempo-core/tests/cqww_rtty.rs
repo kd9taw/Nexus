@@ -6,13 +6,16 @@
 //! sponsor's own words attached rather than a silent rescore.
 //!
 //! What it has that CQ WW CW/SSB (`tests/cqww.rs`) does not: a SECOND ROLE (W/VE stations
-//! send a QTH, everyone else does not), a THIRD multiplier (the W/VE QTH), and a point
-//! table with no North American exception.
+//! send a QTH, everyone else does not), a THIRD multiplier (the W/VE QTH), a point table
+//! with no North American exception, and a Cabrillo template with fixed columns — a
+//! two-digit zone and a `DX` placeholder where a station has no QTH.
 //!
 //! ⚠️ **The country file here is a STUB**, for the reason `tests/cqww.rs` gives: the real
 //! resolver lives in a crate that depends on this one. src-tauri pins the real entity
 //! spellings. Every callsign is an example call.
-use tempo_core::contest::{install_call_resolver, CallLocation, ContestSession, StationData};
+use tempo_core::contest::{
+    install_call_resolver, CabrilloEntrant, CallLocation, ContestSession, StationData,
+};
 use tempo_core::fd_rules::{ruleset_by_id, CURRENT_RULES_YEAR};
 use tempo_core::fieldday::FieldDayLog;
 
@@ -316,5 +319,263 @@ fn a_wae_entity_counts_and_a_blank_or_dx_qth_does_not() {
     assert_eq!(
         log.ruleset().scoring.score(log.score_rows(), 1).0,
         2 + 2 + 2 + 3
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Cabrillo log
+// ---------------------------------------------------------------------------
+
+fn qso_lines(cab: &str) -> Vec<&str> {
+    cab.lines().filter(|l| l.starts_with("QSO:")).collect()
+}
+
+/// Log one contact on a dial (kHz; `0` = not known), which the QSO line writes.
+fn work_on(
+    log: &mut FieldDayLog,
+    band: &str,
+    khz: u32,
+    call: &str,
+    ex: &[(&str, &str)],
+    min: u64,
+) -> bool {
+    log.dial_khz = khz;
+    work(log, band, call, ex, min)
+}
+
+/// The sponsor's own sample QSO line (cabrillo.htm), used for its SHAPE only.
+const SPONSOR_SAMPLE: &str = "QSO: 14073 RY 2008-09-27 0006 HC8N 599 10 DX VA3PC 599 04 ON 0";
+
+/// ⭐ **The QSO lines, byte for byte, for a W/VE log.**
+///
+/// cabrillo.htm: *"QSO: freq mo date time call rst Zn exch call rst Zn exch t"* over *"QSO:
+/// ***** ** yyyy-mm-dd nnnn ************* nnn ** **** ************* nnn ** **** n"*, and
+/// *"CQ WW RTTY requires RST plus two exchange fields. One is for the CQ zone and the second
+/// is for the location. USA and Canada stations will have state or province. All others use
+/// 'DX' as a placeholder."* The zone is two characters (`**`; every sample writes `04`), a
+/// station that sent no QTH gets `DX` rather than a missing column, and X.1 asks for
+/// *"accurate frequencies for all contacts"* — the dial, where the row knows it.
+#[test]
+fn a_w_ve_log_writes_the_sponsors_qso_lines_exactly() {
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
+    let ve3 = [("RST", "599"), ("ZN", "4"), ("QTH", "ON")];
+    assert!(work_on(&mut log, "20m", 14_080, "VE3XYZ", &ve3, 1));
+    assert!(work_on(
+        &mut log,
+        "20m",
+        14_082,
+        "JA1ABC",
+        &[("RST", "599"), ("ZN", "25")],
+        3
+    ));
+    // A contact whose dial is not known — and one whose recorded dial is not inside its own
+    // band — falls back to the band edge, as every contest's Cabrillo always has.
+    assert!(work_on(
+        &mut log,
+        "40m",
+        0,
+        "DL1ABC",
+        &[("RST", "599"), ("ZN", "14")],
+        6
+    ));
+    assert!(work_on(
+        &mut log,
+        "15m",
+        14_090,
+        "G3ABC",
+        &[("RST", "599"), ("ZN", "14")],
+        7
+    ));
+    let cab = log.cabrillo(14_080).expect("one entry");
+    assert_eq!(
+        qso_lines(&cab),
+        vec![
+            "QSO: 14080 RY 2026-09-26 0001 W9XYZ 599 04 IL VE3XYZ 599 04 ON 0",
+            "QSO: 14082 RY 2026-09-26 0003 W9XYZ 599 04 IL JA1ABC 599 25 DX 0",
+            "QSO: 7000 RY 2026-09-26 0006 W9XYZ 599 04 IL DL1ABC 599 14 DX 0",
+            "QSO: 21000 RY 2026-09-26 0007 W9XYZ 599 04 IL G3ABC 599 14 DX 0",
+        ]
+    );
+    // The sponsor's line and ours have the same thirteen columns, and the report and zone
+    // columns are the template's widths.
+    let widths = |l: &str| l.split_whitespace().map(str::len).collect::<Vec<_>>();
+    let ours = qso_lines(&cab)[0];
+    assert_eq!(
+        ours.split_whitespace().count(),
+        SPONSOR_SAMPLE.split_whitespace().count()
+    );
+    assert_eq!(widths(ours)[6..8], widths(SPONSOR_SAMPLE)[6..8], "rst + Zn");
+    assert_eq!(
+        widths(ours)[10..12],
+        widths(SPONSOR_SAMPLE)[10..12],
+        "rst + Zn"
+    );
+    // X.3: "USA and Canada stations must indicate the operating location in the CABRILLO
+    // header (e.g., LOCATION: OH)".
+    assert!(cab.lines().any(|l| l == "LOCATION: IL"), "{cab}");
+}
+
+/// ⭐ **…and for a DX log**, whose own exchange column is the placeholder on every line —
+/// the dx role sends no QTH on the air, and the template still has the column (every sample
+/// line from HC8N reads `599 10 DX`).
+#[test]
+fn a_dx_log_writes_dx_in_its_own_exchange_column() {
+    let mut log = FieldDayLog::new("DL9XYZ", select(&station("DL9XYZ", "14", "")), "20m");
+    let w9 = [("RST", "599"), ("ZN", "4"), ("QTH", "IL")];
+    assert!(work_on(&mut log, "20m", 14_080, "W9ABC", &w9, 1));
+    assert!(work_on(
+        &mut log,
+        "20m",
+        14_081,
+        "G3ABC",
+        &[("RST", "599"), ("ZN", "14")],
+        2
+    ));
+    let cab = log.cabrillo(14_080).expect("one entry");
+    assert_eq!(
+        qso_lines(&cab),
+        vec![
+            "QSO: 14080 RY 2026-09-26 0001 DL9XYZ 599 14 DX W9ABC 599 04 IL 0",
+            "QSO: 14081 RY 2026-09-26 0002 DL9XYZ 599 14 DX G3ABC 599 14 DX 0",
+        ]
+    );
+    // X.3: "other stations indicate 'DX' (e.g., LOCATION: DX)".
+    assert!(cab.lines().any(|l| l == "LOCATION: DX"), "{cab}");
+}
+
+/// ⭐ **LOCATION is the sponsor's LOCATION list, which is not the exchange's QTH list.**
+/// locations.htm spells five places differently from the exchange: `MDC` "Maryland District
+/// of Columbia" (no DC), `NL` "Newfoundland and Labrador" (the exchange's NF and LB), `NT`
+/// "Northwest Territories" (NWT) and `PE` "Prince Edward Island" (PEI).
+#[test]
+fn location_uses_the_sponsors_location_list() {
+    for (call, zone, qth, location) in [
+        ("W3XYZ", "5", "DC", "MDC"),
+        ("VO1XYZ", "5", "NF", "NL"),
+        ("VO2XYZ", "2", "LB", "NL"),
+        ("VE8XYZ", "1", "NWT", "NT"),
+        ("VY2XYZ", "5", "PEI", "PE"),
+        // CONTROL: a code both lists share is written as it is.
+        ("VE3XYZ", "4", "ON", "ON"),
+        ("K1XYZ", "5", "MA", "MA"),
+    ] {
+        let mut log = FieldDayLog::new(call, select(&station(call, zone, qth)), "20m");
+        assert!(work_on(
+            &mut log,
+            "20m",
+            14_080,
+            "JA1ABC",
+            &[("RST", "599"), ("ZN", "25")],
+            1
+        ));
+        let cab = log.cabrillo(14_080).expect("one entry");
+        let want = format!("LOCATION: {location}");
+        assert!(
+            cab.lines().any(|l| l == want),
+            "{qth}: want {want:?} in\n{cab}"
+        );
+        // The exchange itself still sends the sponsor's QTH code.
+        let line = qso_lines(&cab)[0];
+        assert!(
+            line.contains(&format!("599 {:0>2} {qth} JA1ABC", zone)),
+            "{line}"
+        );
+    }
+}
+
+/// ⭐ **The header block.** cabrillo.htm lists CATEGORY-ASSISTED, -BAND, -MODE, -POWER and the
+/// optional CLAIMED-SCORE, EMAIL and NAME. The declarations come from the entry (Settings,
+/// read when the session started), NAME and EMAIL from the operator's settings at export,
+/// the band and mode from what the log holds, and the claimed score from the same
+/// computation the screen shows.
+#[test]
+fn the_headers_declare_the_entry() {
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
+    let ve3 = [("RST", "599"), ("ZN", "4"), ("QTH", "ON")];
+    assert!(work_on(&mut log, "20m", 14_080, "VE3XYZ", &ve3, 1));
+    assert!(work_on(
+        &mut log,
+        "20m",
+        14_082,
+        "JA1ABC",
+        &[("RST", "599"), ("ZN", "25")],
+        3
+    ));
+    let me = CabrilloEntrant {
+        name: "EXAMPLE OPERATOR".into(),
+        email: "op@example.com".into(),
+    };
+    let cab = log.cabrillo_with(14_080, &me).expect("one entry");
+    // Points 2 + 3; zones {4, 25}, countries {Canada, Japan}, QTH {ON} → 5 × 5.
+    for line in [
+        "START-OF-LOG: 3.0",
+        "CONTEST: CQ-WW-RTTY",
+        "CALLSIGN: W9XYZ",
+        "CATEGORY-OPERATOR: SINGLE-OP",
+        "CATEGORY-ASSISTED: NON-ASSISTED",
+        "CATEGORY-BAND: 20M",
+        "CATEGORY-MODE: RTTY",
+        "CATEGORY-POWER: LOW",
+        "LOCATION: IL",
+        "CLAIMED-SCORE: 25",
+        "CREATED-BY: Nexus",
+        "EMAIL: op@example.com",
+        "NAME: EXAMPLE OPERATOR",
+    ] {
+        assert!(
+            cab.lines().any(|l| l == line),
+            "missing {line:?} in:\n{cab}"
+        );
+    }
+    // VI: "A log containing more than one band will be judged as an all-band entry".
+    let k2 = [("RST", "599"), ("ZN", "5"), ("QTH", "NY")];
+    assert!(work_on(&mut log, "40m", 7_080, "K2DEF", &k2, 5));
+    let cab = log.cabrillo_with(14_080, &me).expect("one entry");
+    assert!(cab.lines().any(|l| l == "CATEGORY-BAND: ALL"), "{cab}");
+    // CONTROL: nothing declared, nothing written — an empty NAME is not a header, and an
+    // undeclared power or assistance is not a claim.
+    let bare = StationData {
+        contest_category_power: String::new(),
+        contest_category_assisted: String::new(),
+        ..station("W9XYZ", "4", "IL")
+    };
+    let mut log = FieldDayLog::new("W9XYZ", select(&bare), "20m");
+    assert!(work_on(&mut log, "20m", 14_080, "VE3XYZ", &ve3, 1));
+    let cab = log.cabrillo(14_080).expect("one entry");
+    for absent in ["NAME:", "EMAIL:", "CATEGORY-POWER:", "CATEGORY-ASSISTED:"] {
+        assert!(!cab.contains(absent), "{absent} in:\n{cab}");
+    }
+}
+
+/// ⭐ **All three registries name it CQ-WW-RTTY**, so the Cabrillo token needs no mapping —
+/// and the advisory band list is II's: *"Five bands only: 3.5, 7, 14, 21 and 28 MHz."*
+#[test]
+fn the_token_and_the_bands_are_the_sponsors() {
+    let rs = ruleset_by_id("cqww_rtty", CURRENT_RULES_YEAR).expect("shipped");
+    assert_eq!(rs.contest_id, "CQ-WW-RTTY");
+    assert_eq!(
+        tempo_core::contest::cabrillo_contest_token(rs.contest_id),
+        "CQ-WW-RTTY"
+    );
+    assert!(rs.transmitter_column);
+    assert_eq!(rs.bands, &["80m", "40m", "20m", "15m", "10m"]);
+}
+
+/// ⭐ **The ADIF export carries the dial**, and a journal restore brings it back — a crash
+/// mid-contest must not turn every frequency on the QSO lines back into a band edge.
+#[test]
+fn the_dial_survives_the_journal() {
+    let mut log = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
+    let ve3 = [("RST", "599"), ("ZN", "4"), ("QTH", "ON")];
+    assert!(work_on(&mut log, "20m", 14_083, "VE3XYZ", &ve3, 1));
+    let adif = log.adif();
+    assert!(adif.contains("<FREQ:6>14.083"), "{adif}");
+    let mut restored = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
+    restored.merge_adif(&adif, 0);
+    assert_eq!(restored.qsos()[0].freq_khz, 14_083);
+    let cab = restored.cabrillo(14_000).expect("one entry");
+    assert_eq!(
+        qso_lines(&cab),
+        vec!["QSO: 14083 RY 2026-09-26 0001 W9XYZ 599 04 IL VE3XYZ 599 04 ON 0"]
     );
 }

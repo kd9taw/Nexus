@@ -73,8 +73,8 @@ pub use exchanges::{casual, field_day};
 pub use adif::directed_columns;
 
 pub use cabrillo::{
-    cabrillo_contest_token, is_call_slot, resolve_contest_id, side_declares_call, CabrilloHeaders,
-    OperatorCategory,
+    cabrillo_contest_token, is_call_slot, resolve_contest_id, side_declares_call, CabrilloColumn,
+    CabrilloEntrant, CabrilloHeaders, OperatorCategory,
 };
 
 pub use callsign::{

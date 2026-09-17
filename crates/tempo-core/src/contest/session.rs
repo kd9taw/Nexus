@@ -268,6 +268,16 @@ pub struct ContestSession {
     /// Where this session's merged contacts go — **default OFF** (§18.1). See
     /// [`UploadPolicy`].
     pub upload: UploadPolicy,
+    /// ⭐ **The entry's declared power** — Cabrillo `CATEGORY-POWER` (`HIGH`/`LOW`/`QRP`) —
+    /// read once, when the session starts, exactly as [`entry_category`](Self::entry_category)
+    /// is: Sweepstakes' precedence letter is derived from the same axis at the same moment,
+    /// and the headers of an entry must not disagree with what it sent. `""` = undeclared (or
+    /// a token Cabrillo does not define), which writes no header rather than a claim.
+    pub category_power: String,
+    /// The entry's declared assistance — Cabrillo `CATEGORY-ASSISTED`
+    /// (`ASSISTED`/`NON-ASSISTED`) — read at the same moment, for the same reason, as
+    /// [`category_power`](Self::category_power).
+    pub category_assisted: String,
 }
 
 impl ContestSession {
@@ -321,6 +331,9 @@ impl ContestSession {
             // §18.1: OFF, on every new session, without exception. It is not read from
             // a setting — a global default is the thing this control replaces.
             upload: UploadPolicy::default(),
+            // Field Day's Cabrillo writes neither header (its power is a scoring TIER).
+            category_power: String::new(),
+            category_assisted: String::new(),
         }
     }
 
@@ -399,6 +412,14 @@ impl ContestSession {
             transmitter_id: rs.transmitter_column.then_some(0),
             my_call_location: super::resolve_call(&station.mycall),
             upload: UploadPolicy::default(),
+            category_power: cabrillo_token(
+                &station.contest_category_power,
+                &["HIGH", "LOW", "QRP"],
+            ),
+            category_assisted: cabrillo_token(
+                &station.contest_category_assisted,
+                &["ASSISTED", "NON-ASSISTED"],
+            ),
         };
         // ⭐ **A contest priced by the RELATION between two stations cannot run without a
         // country file**, and it must say so on the way in rather than scoring 48 hours of
@@ -731,6 +752,18 @@ Fill it in on the Contesting tab in Settings."
         self.my_exchange = next;
         self.my_location = where_now;
         Ok(())
+    }
+}
+
+/// A declared Cabrillo category token, trimmed and upper-cased — or `""` when it is not one of
+/// the tokens Cabrillo defines for that axis. A value this build does not recognise is not a
+/// claim to repeat in a header.
+fn cabrillo_token(raw: &str, tokens: &[&str]) -> String {
+    let up = raw.trim().to_ascii_uppercase();
+    if tokens.contains(&up.as_str()) {
+        up
+    } else {
+        String::new()
     }
 }
 

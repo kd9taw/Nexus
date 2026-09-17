@@ -132,6 +132,12 @@ pub struct LoggedQso {
     /// cannot be read as one.
     pub prefix: Option<String>,
     pub band: String,
+    /// The dial the contact was logged on, in kHz — `0` when not known (a row logged
+    /// before this existed, a path with no dial). A contest's Cabrillo writes it in
+    /// place of the band edge when it lies inside the row's own band: CQ WW RTTY X.1,
+    /// *"Stations competing for World and Continent awards must provide accurate
+    /// frequencies for all contacts in the log."*
+    pub freq_khz: u32,
     /// Mode class for scoring + per-band-mode dupes: "DIG" | "CW" | "PH".
     pub mode: String,
     /// The ACTUAL on-air mode behind a "DIG" class (ADIF name, uppercase:
@@ -226,6 +232,9 @@ pub struct FieldDayLog {
     /// downstream reads this to describe a past contact.
     pub session: crate::contest::ContestSession,
     pub band: String,
+    /// The dial right now, in kHz (`0` = unknown) — kept beside [`band`](Self::band) by
+    /// the engine and stamped onto each row as it is logged, exactly as the band is.
+    pub dial_khz: u32,
     pub event: FdEvent,
     /// The ACTUAL on-air digital mode currently keyed (ADIF-style name, e.g.
     /// "FT8", "FT4"), stamped by the engine at FD entry and on every tier
@@ -269,6 +278,7 @@ impl FieldDayLog {
             mycall: mycall.to_string(),
             session,
             band: band.to_string(),
+            dial_khz: 0,
             event,
             current_submode: String::new(),
             qsos: Vec::new(),
@@ -531,6 +541,7 @@ impl FieldDayLog {
             continent: placed.map(|p| p.continent.to_string()),
             prefix: crate::contest::wpx_prefix(call),
             band,
+            freq_khz: self.dial_khz,
             mode,
             submode: submode.trim().to_ascii_uppercase(),
             slot,
@@ -723,6 +734,16 @@ impl FieldDayLog {
                 None => s.push_str(&adif_field("MODE", recorded)),
             }
             s.push_str(&adif_field("BAND", &q.band));
+            // The dial, when this row knows it — in MHz, as ADIF's FREQ is. A row that does
+            // not writes nothing rather than a zero an importer would refuse the record
+            // over. Never for Field Day: its journal and export are pinned byte for byte by
+            // the §8(a) goldens.
+            if q.freq_khz > 0 && self.session.exchange.name != "fieldday" {
+                s.push_str(&adif_field(
+                    "FREQ",
+                    &format!("{:.3}", f64::from(q.freq_khz) / 1000.0),
+                ));
+            }
             // A real date/time so [`merge_adif`](Self::merge_adif) can restore
             // `when_unix` (and Cabrillo keeps its ARRL-required timestamps
             // across a restart). Legacy rows without a stamp omit both fields
@@ -914,6 +935,13 @@ impl FieldDayLog {
         // row restored with no entity would drop a country multiplier the operator
         // already worked.
         let placed = crate::contest::resolve_call(call);
+        // The journaled dial (MHz), if the row carried one. Anything unparseable is simply
+        // unknown — never a guessed frequency.
+        let freq_khz = f
+            .get("FREQ")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|mhz| mhz.is_finite() && *mhz > 0.0 && *mhz < 1_000_000.0)
+            .map_or(0, |mhz| (mhz * 1000.0).round() as u32);
         self.qsos.push(LoggedQso {
             call: call.clone(),
             rx,
@@ -923,6 +951,7 @@ impl FieldDayLog {
             continent: placed.map(|p| p.continent.to_string()),
             prefix: crate::contest::wpx_prefix(call),
             band,
+            freq_khz,
             mode: mode.to_string(),
             submode,
             slot: 0,
@@ -941,7 +970,34 @@ impl FieldDayLog {
     /// best-effort because the alternative is writing a file that looks right and is
     /// scored under the wrong id.
     pub fn cabrillo(&self, freq_khz: u32) -> Result<String, String> {
+        self.cabrillo_with(freq_khz, &crate::contest::CabrilloEntrant::default())
+    }
+
+    /// [`cabrillo`](Self::cabrillo) with the entrant's `NAME` and `EMAIL`, which come from
+    /// the operator's own settings at export time (the caller reads them; this crate holds
+    /// none). Each is written only where the ruleset lists it and it holds a value.
+    ///
+    /// ⭐ **Field Day's file is exactly what it has always been.** The optional headers are
+    /// written only for a ruleset whose `cabrillo.headers` names them (neither Field Day
+    /// event does), and the dial frequency on a QSO line is never used for Field Day: both
+    /// files are pinned byte for byte by the §8(a) goldens.
+    pub fn cabrillo_with(
+        &self,
+        freq_khz: u32,
+        entrant: &crate::contest::CabrilloEntrant,
+    ) -> Result<String, String> {
         let spec = self.session.exchange;
+        let rs = self.ruleset();
+        let field_day = spec.name == "fieldday";
+        // An optional header is written only when the sponsor's template lists it (the
+        // rules file's `cabrillo.headers`); a value the ruleset does not ask for is "".
+        let declared = |tag: &str, value: String| {
+            if rs.cabrillo_headers.contains(&tag) {
+                value
+            } else {
+                String::new()
+            }
+        };
         // ⭐ The `CONTEST` token, resolved against the mode classes this log actually
         // holds. A mode-split contest submits a separate entry per mode, so one file
         // holding both is refused BY NAME rather than filed under whichever id came
@@ -988,7 +1044,21 @@ impl FieldDayLog {
             // LOCATION is a per-ENTRY value, so it reads the session's declared
             // location and not a row: Cabrillo puts it in a header, once, for exactly
             // that reason. The per-contact truth is on the QSO lines below.
-            location: self.session.my_location.state.clone(),
+            //
+            // A `dx`-role entry is `DX` whatever its state field holds — §2.3's role word
+            // for it, and what CQ WW RTTY X.3 asks for: "other stations indicate 'DX'". A
+            // sponsor whose LOCATION list spells a place differently from its exchange
+            // (CQ WW RTTY's `PEI` is `PE` there) maps it through `cabrillo.location`.
+            location: if self.session.role().id == "dx" {
+                "DX".to_string()
+            } else {
+                let state = self.session.my_location.state.as_str();
+                rs.cabrillo_location
+                    .iter()
+                    .find(|(from, _)| from.eq_ignore_ascii_case(state))
+                    .map_or(state, |(_, to)| to)
+                    .to_string()
+            },
             created_by: "Nexus".to_string(),
             // Which rules data scored this log (X- headers are Cabrillo-legal and
             // ignored by robots) — a fetched rules file with different parameters
@@ -997,6 +1067,26 @@ impl FieldDayLog {
                 "X-NEXUS-RULES-YEAR".to_string(),
                 self.ruleset().rules_year.to_string(),
             )],
+            // ⭐ The optional headers. The two declarations were read when the session
+            // started, like CATEGORY-OPERATOR; the band and mode are what the log holds;
+            // NAME and EMAIL are the entrant's settings, read by the caller at export.
+            category_assisted: declared(
+                "CATEGORY-ASSISTED",
+                self.session.category_assisted.clone(),
+            ),
+            category_power: declared("CATEGORY-POWER", self.session.category_power.clone()),
+            category_band: declared("CATEGORY-BAND", cabrillo_category_band(&self.qsos)),
+            category_mode: declared("CATEGORY-MODE", cabrillo_category_mode(&self.qsos)),
+            // The claimed score is the one the screen shows, and only when that score is
+            // the whole score: no power tier or ticked bonus after it, and no note saying
+            // it leaves something out.
+            claimed_score: (rs.cabrillo_headers.contains(&"CLAIMED-SCORE")
+                && !self.qsos.is_empty()
+                && rs.scoring.post.is_empty()
+                && rs.score_note_key.is_empty())
+            .then(|| rs.scoring.score(self.score_rows(), 1).3),
+            email: declared("EMAIL", entrant.email.trim().to_string()),
+            name: declared("NAME", entrant.name.trim().to_string()),
         };
         let mut s = headers.render();
         for q in &self.qsos {
@@ -1028,6 +1118,12 @@ impl FieldDayLog {
             let mapped = band_to_cabrillo_freq(&q.band);
             let raw = q.band.trim();
             let freq: String = match (mapped, raw.is_empty()) {
+                // ⭐ The dial the contact was logged on, when the row knows it and it lies
+                // inside the row's own band (CQ WW RTTY X.1 asks award contenders for
+                // "accurate frequencies for all contacts"). Never for Field Day (see
+                // `cabrillo_with`), and never a dial outside the band, which would be a
+                // confident lie about where the contact was made.
+                _ if !field_day && khz_in_band(q.freq_khz, &q.band) => q.freq_khz.to_string(),
                 (Some(f), _) => f.to_string(),
                 (None, false) => raw.to_string(),
                 (None, true) => freq_khz.to_string(),
@@ -1052,23 +1148,47 @@ impl FieldDayLog {
             let role = crate::contest::role_for(q, spec);
             let mut cols: Vec<String> = vec![freq, mo.to_string(), date, time];
             let is_call = |k: &str| crate::contest::is_call_slot(spec, k);
+            // ⭐ A SPONSOR'S OWN TEMPLATE, when the ruleset declares one: the same fixed
+            // columns on both sides of every line, whichever role sent the row, padded and
+            // with a placeholder for a blank (CQ WW RTTY: a two-digit zone, and `DX` where a
+            // station has no QTH — on its own side too, although a DX station sends none
+            // on the air). Without one, the structural line, unchanged.
+            let template = rs.cabrillo_columns;
             cols.push(self.mycall.clone());
-            cols.extend(
-                crate::contest::sent_exchange(q, spec)
-                    .into_iter()
-                    .filter(|v| !is_call(v.key))
-                    .map(|v| v.raw)
-                    .filter(|r| !r.is_empty()),
-            );
+            if template.is_empty() {
+                cols.extend(
+                    crate::contest::sent_exchange(q, spec)
+                        .into_iter()
+                        .filter(|v| !is_call(v.key))
+                        .map(|v| v.raw)
+                        .filter(|r| !r.is_empty()),
+                );
+            } else {
+                cols.extend(
+                    template
+                        .iter()
+                        .map(|c| c.cell(q.sent(c.key)))
+                        .filter(|c| !c.is_empty()),
+                );
+            }
             cols.push(q.call.clone());
-            cols.extend(
-                role.receives
-                    .iter()
-                    .filter(|k| !is_call(k))
-                    .map(|k| q.rcvd(k))
-                    .filter(|v| !v.is_empty())
-                    .map(str::to_string),
-            );
+            if template.is_empty() {
+                cols.extend(
+                    role.receives
+                        .iter()
+                        .filter(|k| !is_call(k))
+                        .map(|k| q.rcvd(k))
+                        .filter(|v| !v.is_empty())
+                        .map(str::to_string),
+                );
+            } else {
+                cols.extend(
+                    template
+                        .iter()
+                        .map(|c| c.cell(q.rcvd(c.key)))
+                        .filter(|c| !c.is_empty()),
+                );
+            }
             // The trailing transmitter-id column, present only where the sponsor's own
             // template has one — never for either Field Day event.
             if let Some(t) = self.session.transmitter_id {
@@ -1155,6 +1275,78 @@ fn band_to_cabrillo_freq(band: &str) -> Option<&'static str> {
         "3cm" => "10G",
         _ => return None,
     })
+}
+
+/// Is `khz` inside the amateur allocation `band` names? HF only: at 50 MHz and up the
+/// Cabrillo field is a band TOKEN (`50`, `144`), never kilohertz, so no dial is written
+/// there whatever it says.
+fn khz_in_band(khz: u32, band: &str) -> bool {
+    let (lo, hi) = match band.trim().to_ascii_lowercase().as_str() {
+        "160m" => (1_800, 2_000),
+        "80m" => (3_500, 4_000),
+        "60m" => (5_250, 5_450),
+        "40m" => (7_000, 7_300),
+        "30m" => (10_100, 10_150),
+        "20m" => (14_000, 14_350),
+        "17m" => (18_068, 18_168),
+        "15m" => (21_000, 21_450),
+        "12m" => (24_890, 24_990),
+        "10m" => (28_000, 29_700),
+        _ => return false,
+    };
+    (lo..=hi).contains(&khz)
+}
+
+/// Cabrillo `CATEGORY-BAND` for a log: `ALL` when it holds more than one band, the one
+/// band's token when it holds one (`20M`), and `""` — no header — for an empty log or a
+/// band Cabrillo has no token for. It is only ever written for a ruleset that lists the
+/// header, and CQ WW RTTY classifies logs exactly this way (X.2: "Logs with contacts only
+/// on one band will be classified as single band entries").
+fn cabrillo_category_band(qsos: &[LoggedQso]) -> String {
+    let mut bands = qsos.iter().map(|q| q.band.trim().to_ascii_lowercase());
+    let Some(first) = bands.next() else {
+        return String::new();
+    };
+    if bands.any(|b| b != first) {
+        return "ALL".to_string();
+    }
+    match first.as_str() {
+        "160m" => "160M",
+        "80m" => "80M",
+        "40m" => "40M",
+        "20m" => "20M",
+        "15m" => "15M",
+        "10m" => "10M",
+        "6m" => "6M",
+        "4m" => "4M",
+        "2m" => "2M",
+        "1.25m" => "222",
+        "70cm" => "432",
+        "33cm" => "902",
+        "23cm" => "1.2G",
+        _ => "",
+    }
+    .to_string()
+}
+
+/// Cabrillo `CATEGORY-MODE` for a log, from the modes its rows were worked in: one mode
+/// names itself (`CW`, `SSB`, `RTTY`, `DIGI` for any other digital mode), more than one is
+/// `MIXED`, and an empty log writes no header.
+fn cabrillo_category_mode(qsos: &[LoggedQso]) -> String {
+    let mut kinds = qsos.iter().map(|q| match q.mode.as_str() {
+        "CW" => "CW",
+        "PH" => "SSB",
+        _ if q.submode == "RTTY" => "RTTY",
+        _ => "DIGI",
+    });
+    let Some(first) = kinds.next() else {
+        return String::new();
+    };
+    if kinds.all(|k| k == first) {
+        first.to_string()
+    } else {
+        "MIXED".to_string()
+    }
 }
 
 /// Unix seconds → ("yyyy-mm-dd", "hhmm") in UTC for two Cabrillo fields.
