@@ -1502,6 +1502,12 @@ pub struct FieldDayStatus {
     /// ruleset names none, which is every contest before CQ WW RTTY.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bands: Vec<String>,
+    /// ⭐ **This station's call is in the USA or Canada, and it is about to send the DX
+    /// exchange** (no QTH) because the contest state it was given is blank or not listed —
+    /// a WARNING the strip shows, never a refusal. `None` for every other session. Data,
+    /// not prose: the UI words it. See `ContestSession::location_warning`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_warning: Option<LocationWarningDto>,
     /// The session's current role id — `""` for a symmetric contest, which is both
     /// Field Day events. The strip shows it beside the exchange only when it names
     /// something, so an operator can see which role they are in before they cross a
@@ -1556,6 +1562,25 @@ pub fn mult_scope_tag(s: tempo_core::contest::MultScope) -> &'static str {
 ///
 /// ⚠️ `key` is a SLOT ID and an invariant token — never translated, never shown as
 /// prose when the catalog has a caption for it.
+/// [`tempo_core::contest::LocationWarning`] on the wire: what the operator typed as their
+/// state (`""` = nothing) and the listed codes it most likely means (several = ambiguous,
+/// and the operator picks).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LocationWarningDto {
+    pub typed: String,
+    pub hints: Vec<String>,
+}
+
+impl From<&tempo_core::contest::LocationWarning> for LocationWarningDto {
+    fn from(w: &tempo_core::contest::LocationWarning) -> Self {
+        Self {
+            typed: w.typed.clone(),
+            hints: w.hints.iter().map(|h| h.to_string()).collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FdFieldDto {

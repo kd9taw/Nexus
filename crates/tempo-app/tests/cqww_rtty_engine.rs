@@ -1,13 +1,13 @@
-//! A contest's Cabrillo EXPORT through the engine — the wiring half of what
-//! `tempo-core/tests/cqww_rtty.rs` pins on the log itself: the dial the rig was on when
-//! each contact was logged reaches its QSO line, and the entrant's NAME and EMAIL come
-//! from their own settings at export time. Also the snapshot's advisory band list, which
-//! needs the same relation-priced session to exist.
+//! ⭐ **CQ WW RTTY through the ENGINE** — the wiring half of what
+//! `tempo-core/tests/cqww_rtty.rs` pins on the session and the log itself: the dial the rig
+//! was on reaches each QSO line, the entrant's NAME and EMAIL come from their own settings at
+//! export time, and the snapshot carries what the entry strip shows (the contest's advisory
+//! bands, and the warning a W/VE call gets before it sends the DX exchange).
 //!
-//! Own process: CQ WW RTTY prices every contact by the relation between two stations, so
-//! a session needs a country file, and `install_call_resolver` is process-wide. The stub
-//! below knows the example calls used here and nothing else; src-tauri installs the real
-//! cty.dat resolver.
+//! Own process: CQ WW RTTY prices every contact by the relation between two stations, so a
+//! session needs a country file, and `install_call_resolver` is process-wide. The stub below
+//! knows the example calls used here and nothing else; src-tauri installs the real cty.dat
+//! resolver and pins its entity spellings.
 
 use tempo_app::engine::Engine;
 use tempo_core::contest::{install_call_resolver, CallLocation};
@@ -145,4 +145,49 @@ fn the_snapshot_carries_the_contests_advisory_bands() {
         .expect("in Field Day")
         .bands
         .is_empty());
+}
+
+/// ⭐ **The strip's W/VE warning rides the snapshot.** A US call with no contest state set
+/// is about to send the DX exchange (no QTH); the session says so, and the snapshot carries
+/// it — what was typed, and the listed codes it most likely means — for the strip to word.
+#[test]
+fn the_snapshot_carries_the_location_warning_and_only_when_it_applies() {
+    let mut e = cqww_rtty_engine();
+    assert!(
+        e.snapshot()
+            .field_day
+            .expect("in the contest")
+            .location_warning
+            .is_none(),
+        "IL is a listed QTH"
+    );
+    // A running session keeps the location it started with (it is what is on the air), so
+    // a changed state takes effect when the contest is entered again.
+    let mut s = e.settings().clone();
+    s.contest_qth_state = String::new();
+    e.apply_settings(s);
+    e.set_mode("chat").expect("leave the contest");
+    e.set_mode("fieldday-sp")
+        .expect("a warning is not a refusal: the contest still starts");
+    let w = e
+        .snapshot()
+        .field_day
+        .expect("in the contest")
+        .location_warning
+        .expect("a US call with no state is warned");
+    assert_eq!(w.typed, "");
+    assert!(w.hints.is_empty());
+    // An ARRL section gets the state it is in as a hint.
+    let mut s = e.settings().clone();
+    s.contest_qth_state = "EMA".into();
+    e.apply_settings(s);
+    e.set_mode("chat").expect("leave the contest");
+    e.set_mode("fieldday-sp").expect("still starts");
+    let w = e
+        .snapshot()
+        .field_day
+        .expect("in the contest")
+        .location_warning
+        .expect("a section is warned");
+    assert_eq!((w.typed.as_str(), w.hints), ("EMA", vec!["MA".to_string()]));
 }

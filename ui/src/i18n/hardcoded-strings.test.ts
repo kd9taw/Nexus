@@ -201,6 +201,7 @@ const MIGRATED = [
   // The contest slot captions (2026-09-17): born migrated — the entry strip and the contest
   // log table read one table of catalog keys; a slot id it has no caption for is a token.
   'features/contestSlots.ts',
+  'features/contestLocation.ts',
   // The warn-only FD advisories (2026-08-29): born migrated — its two banner/header
   // chips are catalog keys from birth; the mode names, event names and assistance-source
   // labels it interpolates are invariant tokens.

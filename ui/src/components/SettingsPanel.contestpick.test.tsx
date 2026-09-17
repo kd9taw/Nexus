@@ -214,6 +214,33 @@ describe('the role / category block', () => {
     expect((await groupFor('Your role')).querySelector('button, input, select')).toBeNull()
   })
 
+  it('shows the W/VE warning the saved settings would start the contest with', async () => {
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({
+        event: 'cqww_rtty',
+        rulesYear: 2026,
+        bannedModes: [],
+        spottingAllowed: true,
+        clusterAllowed: true,
+        enforcement: 'warn',
+        role: 'dx',
+        exchange: ['599', '4'],
+        problem: '',
+        locationWarning: { typed: '', hints: [] },
+      } as never),
+    )
+    renderPanel()
+    await openContesting()
+    const w = await screen.findByText(/^Your call is in the US or Canada/)
+    expect(sectionOf(w)).toBe('Contest')
+    // …and the LIVE session's warning once the contest is running.
+    cleanup()
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve(null))
+    renderPanel({ role: 'dx', locationWarning: { typed: 'NL', hints: ['NF', 'LB'] } })
+    await openContesting()
+    expect(await screen.findByText(/^NL is not a state or province this contest lists.*Did you mean NF \/ LB\?$/)).not.toBeNull()
+  })
+
   it('declares SINGLE-OP by default and writes the token the operator picks', async () => {
     renderPanel()
     await openContesting()

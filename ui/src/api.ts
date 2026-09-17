@@ -446,6 +446,8 @@ export interface FdRulesetDto {
   /** Why no session could be built from the saved settings — the sentence mode entry
    *  would refuse with. `''` when the configuration is good. */
   problem?: string
+  /** The W/VE warning (never a refusal) these settings would start the contest with. */
+  locationWarning?: import('./types').ContestLocationWarning
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of

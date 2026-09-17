@@ -2636,6 +2636,13 @@ export interface FieldDayQso {
 }
 
 /** Field Day operating + scoring status. */
+/** What a W/VE location warning says: the state the operator typed (`''` = none) and the listed
+ *  codes it most likely means (several = ambiguous; the operator picks). */
+export interface ContestLocationWarning {
+  typed: string
+  hints: string[]
+}
+
 export interface FieldDayStatus {
   /* ⛔ NO SESSION-LEVEL SENT EXCHANGE LIVES HERE. The `myClass`/`mySection` pair that
      used to head this interface was DELETED, not renamed: two interop emitters read it
@@ -2711,6 +2718,10 @@ export interface FieldDayStatus {
   /** The bands this contest runs on (`'20m'`) — advisory: the strip warns when the rig is on
    *  another band and never refuses the contact. Absent when the ruleset names none. */
   bands?: string[]
+  /** ⭐ This station's call is in the USA or Canada, and the contest state it was given would
+   *  send the DX exchange (no QTH) — a WARNING the strip shows, never a refusal. Absent when it
+   *  does not apply. Worded by `features/contestLocation.ts`. */
+  locationWarning?: ContestLocationWarning
   /** The session's role id — `''` for a symmetric contest (both Field Day events).
    *  Shown beside the exchange only when it names something. */
   role?: string

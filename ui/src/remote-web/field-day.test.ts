@@ -105,3 +105,20 @@ it('accepts the ruleset facts of every shipped contest, not only Field Day\'s',(
   expect(()=>parseFieldDay(page),String(bad)).toThrow('invalidFieldDay')
  }
 })
+
+// A station whose call is in the USA or Canada and whose contest state would send the DX exchange
+// carries a location warning (what was typed, and the listed codes it likely means). The validator
+// refuses unknown keys, so it must be taught this one — and still bounds it.
+it('accepts the W/VE location warning, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const fd=(page.meta as {source:{fieldDay:Record<string,unknown>}}).source.fieldDay
+ fd.locationWarning={typed:'NL',hints:['NF','LB']}
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ fd.locationWarning={typed:'',hints:[]}
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ // Negative controls: a hint that is not text, too many hints, an extra key, a missing key.
+ for(const bad of [{typed:'NL',hints:[1]},{typed:'NL',hints:Array(9).fill('NF')},{typed:'NL',hints:[],extra:1},{hints:[]}]){
+  fd.locationWarning=bad
+  expect(()=>parseFieldDay(page),JSON.stringify(bad)).toThrow('invalidFieldDay')
+ }
+})

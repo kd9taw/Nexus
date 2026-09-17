@@ -19,6 +19,7 @@ import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../feat
 import { inDomain } from '../features/contestDomains'
 import { composingSlot } from '../features/contestExchange'
 import { slotCaption, slotTitle } from '../features/contestSlots'
+import { locationWarningText } from '../features/contestLocation'
 import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
@@ -1371,6 +1372,16 @@ export function LogEntry({
             </div>
           )}
         </div>
+        {/* ⭐ THIS STATION IS ABOUT TO SEND THE DX EXCHANGE, and its call is in the USA or
+            Canada — a blank or unlisted contest state. Prominent, and never a refusal: a US
+            call operating from abroad really is DX, so the Log button is untouched. It is a
+            persistent condition rather than a per-keystroke verdict, so its own line here
+            rather than the fixed-height verdict slot. */}
+        {fieldDay?.locationWarning ? (
+          <div className="fd-section-warn le-fd-location-warn" role="alert">
+            {locationWarningText(fieldDay.locationWarning)}
+          </div>
+        ) : null}
 
         <div className="le-fd-big">
           <label className="le-fd-field le-fd-field-call">

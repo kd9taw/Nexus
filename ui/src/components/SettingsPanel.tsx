@@ -151,6 +151,7 @@ import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api
 import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
 import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
 import { getFdRuleset, type FdRulesetDto } from '../api'
+import { locationWarningText } from '../features/contestLocation'
 import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
@@ -10751,6 +10752,17 @@ export function SettingsPanel({
                     {rulesetPreview.problem}
                   </span>
                 ) : null}
+                {/* ⭐ A US or Canadian call about to send the DX exchange: a WARNING, never a
+                    refusal (a US call abroad really is DX). The live session's once the
+                    contest runs, else what these settings would start it with. */}
+                {(() => {
+                  const w = fieldDay ? fieldDay.locationWarning : rulesetPreview?.locationWarning
+                  return w ? (
+                    <span className="fd-section-warn" role="status">
+                      {locationWarningText(w)}
+                    </span>
+                  ) : null
+                })()}
               </div>
 
               <div className="settings-field">

@@ -346,3 +346,21 @@ describe('7 — a band the contest does not use is flagged, never refused', () =
     expect(hint()).toBe('30m · contacts go to the contest log')
   })
 })
+
+describe('8 — a US or Canadian call about to send the DX exchange is warned in the strip', () => {
+  const warn = () => document.querySelector('.le-fd-location-warn')
+  it('shows the warning, with its hint, and says nothing when there is none', () => {
+    const view = render(strip(cqwwRtty({ role: 'dx', locationWarning: { typed: '', hints: [] } } as Partial<FieldDayStatus>)))
+    expect(warn()!.textContent).toMatch(/^Your call is in the US or Canada, but no contest state or province is set/)
+    expect(warn()!.getAttribute('role')).toBe('alert')
+    view.rerender(strip(cqwwRtty({ role: 'dx', locationWarning: { typed: 'EMA', hints: ['MA'] } } as Partial<FieldDayStatus>)))
+    expect(warn()!.textContent).toMatch(/^EMA is not a state or province this contest lists.* Did you mean MA\?$/)
+    // A warning, not a refusal: the strip still logs.
+    fireEvent.change(callBox(), { target: { value: 'JA1ABC' } })
+    fireEvent.change(box('Zone'), { target: { value: '25' } })
+    expect((screen.getByRole('button', { name: 'Log' }) as HTMLButtonElement).disabled).toBe(false)
+    // CONTROL: no warning, no line.
+    view.rerender(strip(cqwwRtty()))
+    expect(warn()).toBeNull()
+  })
+})
