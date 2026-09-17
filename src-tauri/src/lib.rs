@@ -5089,7 +5089,7 @@ async fn fetch_fd_rules() -> Result<FdRulesStatus, String> {
 #[serde(rename_all = "camelCase")]
 struct FdRulesetDto {
     /// The rules-file event id — `"arrlfd"`, `"wfd"`, `"tnqp"`, `"ohqp"`, `"cqp"`,
-    /// `"txqp"`.
+    /// `"txqp"`, `"ilqp"`, and every other ruleset the seed carries.
     event: String,
     rules_year: u16,
     /// On-air modes this event's rules ban outright (uppercase ADIF-style).
