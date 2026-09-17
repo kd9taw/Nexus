@@ -26,3 +26,14 @@
 .remote-feed-state { font-size: .85em; color: var(--text-dim); }
 [data-viewport='xs'] .remote-feed-toggle { width: 48px; padding-inline: 0; justify-content: center; }
 [data-viewport='xs'] .remote-feed-toggle > span { display: none; }
+/* Two homes, one shown. The workspace renders this control in the session row AND in the settings
+   panel; these three rules pick which. Above xs it is in the row, where the operator it is for can
+   see it without opening anything. At xs the row has nothing left to give: the authority label and
+   its Release button already wrap to three lines at 390 px and zoom 1.75, and the strip may not
+   take more than a quarter of the screen (measured: a fourth control in that row put it at 239 px
+   against a 200 px ceiling). So below that width it moves into the panel, beside the other
+   browser-local choices. The observer-only monitor header renders neither container, so it keeps
+   its one copy at every width. */
+.remote-session-info .remote-feed { display: none; }
+[data-viewport='xs'] .remote-session-row .remote-feed { display: none; }
+[data-viewport='xs'] .remote-session-info .remote-feed { display: flex; }

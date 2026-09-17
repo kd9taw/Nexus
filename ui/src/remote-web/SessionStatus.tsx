@@ -18,9 +18,15 @@ export function SessionStatus({ client, stale, disconnect, signOut, display, ale
    *  able to stop the sound in one movement, and a control they have to expand a panel to
    *  reach is not that. It renders nothing at all on a station that cannot do audio. */
   audio?: ReactNode
-  /** This tab's feed. Also in the row, for the same kind of reason: the operator it exists
-   *  for is watching a frequency on a screen they are NOT looking at, so they have to be able
-   *  to find it before they look away, not after the feed has already paused on them. */
+  /** This tab's feed. In the row, for the same kind of reason as the listen control: the operator
+   *  it exists for is watching a frequency on a screen they are NOT looking at, so they have to be
+   *  able to find it before they look away, not after the feed has already paused on them.
+   *
+   *  Rendered TWICE, and only one is ever shown (`remote.css`). At xs the row has no width left to
+   *  give — the authority label and its Release button already wrap to three lines there, and this
+   *  strip may not take more than a quarter of the screen — so below that width the choice moves
+   *  into the settings panel beside the other browser-local ones. It is one node or the other, both
+   *  reading the same store, so the two can never disagree. */
   feed?: FeedControl
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -54,6 +60,8 @@ export function SessionStatus({ client, stale, disconnect, signOut, display, ale
         display.change(display.presentation === 'quick' ? 'full' : 'quick')
         setExpanded(false)
       }}>{display.presentation === 'quick' ? t('remote.quick.full') : t('remote.quick.name')}</button>}
+      {/* The narrow-screen home for the feed choice — see the `feed` prop. */}
+      {feed && <FeedWatch feed={feed} />}
       {/* Browser-local and notify-only. Lives in this folded panel so turning it on moves no cockpit.
           Notification permission is one per site, so a refusal is said once and hides every toggle. */}
       {alerts && <div className="remote-need-alerts">
