@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one you already use in the other program. Your spots still reach the network under your plain
   callsign either way; nodes relaying them strip the suffix.
 
+- **CQ World-Wide RTTY DX Contest.** Pick it under **Settings › Contesting › Contest** and the log
+  strip takes its exchange: RST, your CQ zone and, for stations in the continental USA and Canada,
+  a state or Canadian call area, using the sponsor's own codes (NWT, NF, LB and PEI among them).
+  Contacts score the way the sponsor counts them: 3 points between continents, 2 within a
+  continent, 1 within your own country, with zones, countries and W/VE QTHs each counted once per
+  band. The strip tells you when the rig is on a band the contest does not use (it runs on 80, 40,
+  20, 15 and 10 m) and still logs the contact. The Cabrillo export follows the sponsor's template:
+  a two-digit zone, DX where a station sent no QTH, the LOCATION spelling the sponsor's list uses,
+  and the category, claimed-score, name and email headers. The email comes from a new optional
+  **Email for contest logs** setting; leave it blank and the line is left out.
+
 - **The contest strip suggests a CQ zone and flags a missing QTH.** Type a call in a contest that
   exchanges CQ zones and the zone box shows the zone the country file gives that call as a faint
   hint — it never fills the box, because a station outside its prefix's zone sends its own. And
@@ -28,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one, the strip says so; you can still log it.
 
 ### Changed
+
+- **Contest Cabrillo logs record the frequency you were on.** Outside Field Day, each QSO line now
+  carries the dial the contact was logged on instead of the band's lower edge, which sponsors
+  such as CQ WW ask award entrants for. Contacts logged before this update keep the band edge.
+  Field Day logs are unchanged.
 
 - **Remote: the dial follows the wheel, and it stops swallowing your corrections.** Spinning the
   readout digits over a remote link used to ignore every notch made while a command was still out
@@ -55,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Remote shows the contest screen for every contest.** Through Remote, the contest screen was
+  blank for any contest except ARRL Field Day and Winter Field Day, because the browser refused
+  the contest's rules as unknown. It now shows for all of them, CQ WW RTTY included.
 - **A contest other than Field Day comes back after a restart.** If you left a QSO party or
   another contest running and restarted Nexus, it came back in Chat unless a Field Day class and
   section happened to be filled in, and the contacts you had logged stayed out of view. Nexus now

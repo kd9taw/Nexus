@@ -6,7 +6,7 @@ Nexus has a dedicated Field Day workspace that covers ARRL Field Day (June) and 
 
 ## Event Switch and Date Rules
 
-In **Settings → Contesting ▸ Field Day Setup**, choose between:
+In **Settings → Contesting ▸ Contest**, choose between:
 
 | Setting value | Event | Window |
 |---|---|---|
@@ -212,7 +212,7 @@ All four exports are available at any time during or after the event from the Fi
   from the WA7BNM Master List of Cabrillo Names that the Cabrillo V3 specification points to;
   they are not always the same string as the ADIF `CONTEST_ID` below (ARRL Field Day's ADIF id
   is `ARRL-FIELD-DAY`).
-- `CATEGORY-OPERATOR: MULTI-OP` is hardcoded; single-op categories are not selectable in this version.
+- `CATEGORY-OPERATOR` is the **Entry category** you pick in Settings → Contesting ▸ Contest (`SINGLE-OP` by default).
 - Legacy contacts without a timestamp fall back to the `----------` placeholder rather than inventing a time.
 
 ### ADIF
@@ -239,10 +239,23 @@ Submit the Cabrillo file to the ARRL online submission system. ADIF can be impor
 - **Bonus checklist is ARRL FD only**: WFD has a different bonus structure that is not modeled.
 - **N3FJP errors are not surfaced in the UI** beyond the initial Test button; monitor N3FJP's own display to confirm pushes are landing.
 - **N1MM is emit-only**: Nexus does not receive inbound `<contactinfo>` from other network stations.
-- **CATEGORY-OPERATOR is hardcoded to MULTI-OP** in Cabrillo; single-op selection is not yet in the UI.
 - **Legacy digital rows export as FT8**: contacts journaled before the actual on-air mode was recorded have no mode on file, so ADIF and the interop push fall back to `FT8` for them. New digital contacts carry the mode actually worked.
 - **TempoFast auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.
 - **Desktop-only** (Tauri v2); no mobile companion.
+
+---
+
+## Other Contests, and CQ WW RTTY
+
+The same workspace runs every contest on the **Settings → Contesting ▸ Contest** picker, not just the two Field Days: Sweepstakes, the ARRL VHF contests, CQ World-Wide DX and WPX, the CQ World-Wide RTTY DX Contest and four state QSO parties. Pick one, then turn on **Field Day mode** in Field Day Setup, which is the switch for every contest. The log strip, the contest screen and the exports then follow that contest's rules. Class, section, the power tiers and the bonus checklist belong to Field Day and stay out of the way.
+
+**CQ WW RTTY** (last full weekend of September, 0000Z Saturday for 48 hours):
+
+- **Before the weekend**, set your **CQ zone** and your **State or province** under Settings → Contesting ▸ Your station data. Stations in the continental USA and Canada send `599`, their zone and their state or Canadian call area, using the sponsor's own codes (`NF`, `LB`, `NWT` and `PEI` among them); everyone else sends `599` and their zone. The Contest section shows the exchange you are about to send. Set **Power category** and **Spotting assistance** under Contest too, because the Cabrillo header declares them.
+- **The log strip** asks for RST (599 by default), the zone and the QTH. The QTH can stay blank for a DX station. Type a call and the zone box shows that call's usual CQ zone from the country file as a faint hint; it never fills the box for you. A USA or Canada station logged without a QTH gets a warning, not a refusal. If the rig is on a band the contest does not use (it runs on 80, 40, 20, 15 and 10 m), the strip says so and still logs the contact.
+- **Scoring** follows the sponsor: 3 points between continents, 2 between countries on the same continent, 1 within your own country. Zones, countries and W/VE QTHs each count once per band, and the USA and Canada count as countries. Each station can be worked once per band.
+- **RTTY Auto** does not run in this contest. Send your exchange with the macros and log each contact in the strip.
+- **The Cabrillo export** follows the sponsor's template: `CONTEST: CQ-WW-RTTY`, the dial you were on when you logged each contact, a two-digit zone, and `DX` in the QTH column where a station sent none. The headers carry CATEGORY-ASSISTED, -BAND, -MODE and -POWER, CLAIMED-SCORE, your operator name as NAME, and the **Email for contest logs** setting as EMAIL (left out when blank). LOCATION is your state or province in the sponsor's LOCATION spelling (`PEI` becomes `PE`, for example), or `DX`. A log with contacts on one band is declared single band, as the sponsor classifies it. If you entered one band but also logged others, change CATEGORY-BAND by hand before you upload.
 
 ---
 

@@ -6,8 +6,11 @@ per-character confidence, a mark/space waterfall you click to net onto a signal,
 four F-key macros and a type-and-send bar, two keying back-ends (soundcard AFSK
 or true FSK on a serial line), an optional QSO auto-sequencer that never
 transmits until you start it, and a log strip for the contacts you work by hand.
-It is deliberately not a contest station: no serials and no dupe check outside
-Field Day.
+It is not a full contest station: it issues no serial numbers, and the
+auto-sequencer knows only the casual and Field Day exchanges. In any contest you
+pick on [Settings ▸ Contesting](settings-reference.md#contest), CQ WW RTTY
+included, the log strip takes that contest's exchange and flags dupes, and the
+contest log exports to Cabrillo.
 
 RTTY ships enabled — the wizard turns everything on; there is no mode picker to
 miss it in. No goal profile enables it, though, so if you pick one in
