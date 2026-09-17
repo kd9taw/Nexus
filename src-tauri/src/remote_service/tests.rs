@@ -1010,6 +1010,97 @@ fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
     });
 }
 
+/// The class: something slow held something shared. Every send used to be awaited inline on the
+/// socket loop, so while one drained, nothing was read — including Stop. A first application
+/// batch can be 768 KB; on a slow shack uplink that outlasts the send's 2 s cutoff, the session
+/// is torn down, the browser reconnects, and the same batch goes again. Here the pipe from the
+/// station holds 4 KB and the relay reads none of it: the legacy reads the station answers
+/// outgrow the pipe together (asserted below, the positive control), so the station's writer is
+/// stuck by the time the Stop goes in. That Stop must still be admitted, and the engine must show
+/// it, before the relay reads a byte.
+#[test]
+fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+    const PIPE: usize = 4096;
+    const READS: usize = 8;
+    const DEVICE: &str = "10000000-0000-4000-8000-00000000000d";
+    const SESSION: &str = "20000000-0000-4000-8000-00000000000e";
+    async fn text(
+        socket: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+    ) -> serde_json::Value {
+        loop {
+            let next = tokio::time::timeout(Duration::from_secs(3), socket.next())
+                .await
+                .expect("the station answered")
+                .unwrap()
+                .unwrap();
+            if let Message::Text(text) = next {
+                return serde_json::from_str(&text).unwrap();
+            }
+        }
+    }
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let (station_io, relay_io) = tokio::io::duplex(PIPE);
+        let engine = Arc::new(Mutex::new(Engine::with_settings(Settings::default())));
+        let status = SessionStatus { status: Arc::new(Mutex::new(Status::default())),
+            control: Arc::new(Mutex::new(Control { enabled: true, ..Default::default() })), generation: 0 };
+        let authority = status.control.lock().unwrap().operations.clone();
+        authority.permit_station(DEVICE, true).unwrap();
+        let (cancel, cancellation) = watch::channel(false);
+        let relay_engine = engine.clone();
+        let relay = tokio::spawn(async move {
+            let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
+            let operation = |request: serde_json::Value| Message::Text(json!({"type":"operationRequest","sessionId":SESSION,"deviceId":DEVICE,"operationVersion":4,"request":request}).to_string().into());
+            let id = |n: u32| format!("00000000-0000-4000-8000-0000000000{n:02x}");
+            // A controlling v4 browser with the stop token, and the FT latch armed at the shack.
+            socket.send(operation(json!({"type":"state","requestId":id(1)}))).await.unwrap();
+            let state = text(&mut socket).await;
+            let boot = state["value"]["stationBootId"].as_str().unwrap().to_owned();
+            socket.send(operation(json!({"type":"acquire","requestId":id(2),"stationBootId":boot}))).await.unwrap();
+            let lease = text(&mut socket).await["value"]["leaseId"].as_str().unwrap().to_owned();
+            socket.send(operation(json!({"type":"state","requestId":id(3)}))).await.unwrap();
+            let epoch = text(&mut socket).await["value"]["transmitEpoch"].as_str().expect("the controller holds the stop token").to_owned();
+            relay_engine.lock().unwrap().set_tx_enabled(true);
+            // Fill the pipe: legacy reads the station answers inline, none of them read here.
+            for n in 0..READS as u32 {
+                socket.send(Message::Text(json!({"type":"applicationRead","requestId":id(0x10 + n),"command":"get_snapshot","revision":null}).to_string().into())).await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            // The station's writer is stuck. Stop must still get through.
+            socket.send(operation(json!({"type":"stopTransmit","requestId":id(0x20),"stationBootId":boot,"leaseId":lease,"transmitEpoch":epoch}))).await.unwrap();
+            let mut stopped = false;
+            for _ in 0..300 {
+                if !relay_engine.lock().unwrap().tx_enabled() { stopped = true; break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(stopped, "the Stop was admitted while the station's sends were stuck");
+            // Only now does the relay read: every read answer, then the Stop's acceptance behind
+            // them. Nothing was dropped.
+            let mut answers = Vec::new();
+            loop {
+                let answer = text(&mut socket).await;
+                if answer["type"] == "operationResponse" { answers.push(answer); break; }
+                assert_eq!(answer["type"], "applicationResult");
+                answers.push(answer);
+            }
+            assert_eq!(answers.len(), READS + 1);
+            let queued: usize = answers[..READS].iter().map(|a| a.to_string().len()).sum();
+            assert!(queued > PIPE, "positive control: {queued} bytes of read answers outgrow the {PIPE}-byte pipe nobody was draining, so the writer was stuck when the Stop went in");
+            assert_eq!(answers[READS]["requestId"], id(0x20));
+            assert_eq!(answers[READS]["value"], json!({"stop":"accepted"}));
+            cancel.send(true).unwrap();
+        });
+        let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
+        let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
+        let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, #[cfg(feature = "radio")] audio: None };
+        let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+        relay.await.unwrap();
+        assert_eq!(served, Ok(()), "the session ended because Remote stopped, not because a send timed out");
+    });
+}
+
 // ---- Remote across a Nexus restart (operator decision 2026-09-13) --------------------------------
 //
 // A restart is simulated the way the probe's `restart` does it: drop the Service and start a new

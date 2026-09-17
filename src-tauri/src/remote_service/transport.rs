@@ -353,13 +353,9 @@ pub async fn connected(
             "1".parse().map_err(|_| "invalidResponse")?,
         );
     }
-    let config = WebSocketConfig::default()
-        .max_message_size(Some(8192))
-        .max_frame_size(Some(8192))
-        .write_buffer_size(0)
-        .max_write_buffer_size(super::application::MAX_BYTES + 1024);
-    let connect = tokio_tungstenite::connect_async_with_config(request, Some(config), false);
-    let (mut socket, _) = tokio::select! {
+    let connect =
+        tokio_tungstenite::connect_async_with_config(request, Some(socket_config()), false);
+    let (socket, _) = tokio::select! {
         biased;
         _ = stop.changed() => return Ok(()),
         result = tokio::time::timeout(Duration::from_secs(10), connect) => {
@@ -373,6 +369,37 @@ pub async fn connected(
     if *stop.borrow() {
         return Ok(());
     }
+    serve(socket, stop, engine, feeds, status).await
+}
+
+/// The station socket configuration, one definition for the real connection and the tests: the
+/// relay's messages are small, and the write buffer holds one full application batch.
+pub(super) fn socket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(8192))
+        .max_frame_size(Some(8192))
+        .write_buffer_size(0)
+        .max_write_buffer_size(super::application::MAX_BYTES + 1024)
+}
+
+/// The station's side of an open socket, until the service ends it or Remote stops. Generic over
+/// the transport so a test can drive it over an in-memory pipe of a chosen size.
+pub(super) async fn serve<S>(
+    socket: tokio_tungstenite::WebSocketStream<S>,
+    mut stop: watch::Receiver<bool>,
+    engine: &crate::SharedEngine,
+    feeds: &Feeds,
+    status: &super::SessionStatus,
+) -> Result<(), &'static str>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    // Reading and writing are decoupled: the loop below only ever reads the socket, and
+    // everything it sends goes through `outbound`, whose own task writes. A send that is slow
+    // to drain (a full application batch on a slow shack uplink) therefore never stops the
+    // loop reading — and Stop is read, and admitted, inline, exactly as before.
+    let (sink, mut socket) = socket.split();
+    let (outbound, mut writer) = Outbound::spawn(sink);
     let authority = status
         .control
         .lock()
@@ -420,14 +447,16 @@ pub async fn connected(
     let mut audio_listening = false;
     let mut audio_tick = tokio::time::interval(Duration::from_millis(AUDIO_TICK_MS));
     audio_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
+    let result: Result<(), &'static str> = async { loop {
         tokio::select! {
             biased;
-            _ = stop.changed() => { let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await; return Ok(()); }
+            _ = stop.changed() => return Ok(()),
+            // The writer gave up on a send (see `send_deadline`) or the socket failed under it.
+            ended = &mut writer => return Err(match ended { Ok(Err(reason)) => reason, _ => "serviceUnavailable" }),
             response = async { operation_task.as_mut().expect("guarded operation task").await }, if operation_task.is_some() => {
                 operation_task=None;
                 let data=response.map_err(|_|"serviceUnavailable")?;
-                tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(data.into()))).await.map_err(|_|"serviceUnavailable")?.map_err(|_|"serviceUnavailable")?;
+                outbound.send(Message::Text(data.into()))?;
             }
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
@@ -470,20 +499,16 @@ pub async fn connected(
                                     Err(reason) => super::audio::audio_state(&session_id, false, Some(super::audio::shared_reason(reason))),
                                 };
                                 audio_listening = audio_lane.listening();
-                                tokio::select! {
-                                    biased;
-                                    _ = stop.changed() => return Ok(()),
-                                    result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
-                                        result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
-                                    }
-                                }
+                                outbound.send(Message::Text(data.into()))?;
                             }
                         },
                         ServerMessage::OperationRequest{session_id,device_id,operation_version,request}=>{
                             if !identifier(&session_id)||!identifier(&device_id)||!identifier(request.id()){return Err("invalidResponse")}
                             if matches!(request.as_ref(), super::operations::Request::StopTransmit { .. }) {
-                                // Stop must not queue behind a disk append or another Engine
-                                // operation. Its authority path uses neither of those locks.
+                                // Stop must not queue behind a disk append, another Engine
+                                // operation or a send in flight. Its authority path uses neither
+                                // of those locks, and it is admitted here, on the reading task,
+                                // before its acceptance is even handed to the writer.
                                 let result = operation_connection.authority.handle_version(
                                     (operation_connection.id, operation_version.unwrap_or(1)),
                                     &session_id, &device_id, &request, engine, Instant::now());
@@ -491,10 +516,10 @@ pub async fn connected(
                                     Ok(value) => json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"value":value}),
                                     Err(error) => json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":error}),
                                 }.to_string();
-                                tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(data.into()))).await.map_err(|_|"serviceUnavailable")?.map_err(|_|"serviceUnavailable")?;
+                                outbound.send(Message::Text(data.into()))?;
                             } else if operation_task.is_some(){
                                 let data=json!({"type":"operationResponse","sessionId":session_id,"requestId":request.id(),"error":"stationBusy"}).to_string();
-                                tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(data.into()))).await.map_err(|_|"serviceUnavailable")?.map_err(|_|"serviceUnavailable")?;
+                                outbound.send(Message::Text(data.into()))?;
                             }else{
                                 let authority=operation_connection.authority.clone();let connection=operation_connection.id;let engine=engine.clone();
                                 operation_task=Some(tokio::task::spawn_blocking(move||{
@@ -510,7 +535,7 @@ pub async fn connected(
                             if !request.valid() { return Err("invalidResponse"); }
                             if query_task.is_some() {
                                 let data = json!({ "type": "applicationQueryError", "requestId": request.request_id, "error": "applicationBusy" }).to_string();
-                                tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))).await.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
+                                outbound.send(Message::Text(data.into()))?;
                             } else {
                                 let engine = engine.clone(); let queries = queries.clone(); let sources = feeds.sources.clone();
                                 query_task = Some(tokio::task::spawn_blocking(move || {
@@ -526,13 +551,7 @@ pub async fn connected(
                             if !identifier(&request_id) || !command.legacy() { return Err("invalidResponse"); }
                             let data = application.read(engine, command, &request_id, revision, Instant::now())
                                 .unwrap_or_else(|error| json!({ "type": "applicationError", "requestId": request_id, "error": error }).to_string());
-                            tokio::select! {
-                                biased;
-                                _ = stop.changed() => return Ok(()),
-                                result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
-                                    result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
-                                }
-                            }
+                            outbound.send(Message::Text(data.into()))?;
                         }
                         ServerMessage::Watch { enabled, request_id } => {
                             if enabled && !request_id.as_deref().is_some_and(identifier) { return Err("invalidResponse"); }
@@ -542,33 +561,19 @@ pub async fn connected(
                     }
                 },
                 Some(Ok(Message::Pong(_))) => pong_at = Instant::now(),
-                Some(Ok(Message::Ping(_))) => {
-                    tokio::time::timeout(Duration::from_secs(2), socket.flush()).await
-                        .map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
-                },
+                // tungstenite has already queued the pong; the next read poll writes it.
+                Some(Ok(Message::Ping(_))) => {},
                 Some(Ok(Message::Close(_))) | None => return Err("serviceUnavailable"),
                 _ => return Err("invalidResponse"),
             },
             result = async { match query_task.as_mut() { Some(task) => task.await, None => std::future::pending().await } }, if query_task.is_some() => {
                 query_task = None;
                 let data = result.map_err(|_| "applicationUnavailable")?;
-                tokio::select! {
-                    biased;
-                    _ = stop.changed() => return Ok(()),
-                    result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
-                        result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
-                    }
-                }
+                outbound.send(Message::Text(data.into()))?;
             },
             _ = application_tick.tick(), if stream.active() => {
                 if let Some(data) = stream.next(&mut application, engine, Instant::now())? {
-                    tokio::select! {
-                        biased;
-                        _ = stop.changed() => return Ok(()),
-                        result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
-                            result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
-                        }
-                    }
+                    outbound.send(Message::Text(data.into()))?;
                 }
             },
             _ = tick.tick(), if pending.is_some() => {
@@ -577,29 +582,22 @@ pub async fn connected(
                     let data = serde_json::to_string(&Publication { r#type: "publication", request_id: pending.take().unwrap(), frame })
                         .map_err(|_| "invalidResponse")?;
                     if data.len() > tempo_app::remote_monitor::MAX_FRAME_BYTES + 256 { return Err("invalidResponse"); }
-                    tokio::select! {
-                        biased;
-                        _ = stop.changed() => return Ok(()),
-                        result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
-                            result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
-                        }
-                    }
+                    outbound.send(Message::Text(data.into()))?;
                 }
             },
             _ = heartbeat.tick() => {
                 if pong_at.elapsed() > Duration::from_secs(65) { return Err("serviceUnavailable"); }
-                tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Ping(Vec::new().into())))
-                    .await.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
+                outbound.send(Message::Ping(Vec::new().into()))?;
             }
             // LAST, deliberately. Every branch above shares one writer, so audio has to
             // be the thing that yields: it sits after the stop signal, every operation
             // response, the observation publication and the application batch, and it is
             // guarded on somebody actually listening so an idle station never polls it.
             //
-            // It also never queues. `writer_ready` asks whether the socket can take a
-            // message without waiting, and a "no" discards the bundle rather than holding
-            // it - the listener hears a 60 ms gap and the control channel is untouched.
-            // The alternative, waiting, would put band noise in front of Stop TX.
+            // It also never queues. `Outbound::idle` asks whether anything is still on its
+            // way out, and a "yes" discards the bundle rather than holding it - the
+            // listener hears a 60 ms gap and the control channel is untouched. The
+            // alternative, queueing, would put band noise in front of Stop TX.
             _ = audio_tick.tick(), if audio_listening => {
                 if *stop.borrow() { return Ok(()); }
                 #[cfg(feature = "radio")]
@@ -613,7 +611,7 @@ pub async fn connected(
                 let data = if let Some(reason) = lost {
                     Some(super::audio::audio_state(&session, false, Some(super::audio::shared_reason(reason))))
                 } else {
-                    let writable = writer_ready(&mut socket);
+                    let writable = outbound.idle();
                     let pump = audio_lane.poll(now, writable);
                     match pump.ended {
                         Some(reason) => Some(super::audio::audio_state(&session, false, Some(super::audio::shared_reason(reason)))),
@@ -622,34 +620,96 @@ pub async fn connected(
                 };
                 audio_listening = audio_lane.listening();
                 if let Some(data) = data {
-                    tokio::select! {
-                        biased;
-                        _ = stop.changed() => return Ok(()),
-                        result = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Text(data.into()))) => {
-                            result.map_err(|_| "serviceUnavailable")?.map_err(|_| "serviceUnavailable")?;
-                        }
-                    }
+                    outbound.send(Message::Text(data.into()))?;
                 }
                 }
             }
         }
+    } }.await;
+    // The loop is over. Remote stopping closes the socket as it always did - a second for the
+    // writer to drain and send the close frame; anything else just lets the socket go.
+    if result.is_ok() {
+        drop(outbound);
+        let _ = tokio::time::timeout(Duration::from_secs(1), &mut writer).await;
+    }
+    writer.abort();
+    result
+}
+
+/// The station's outbound lane: one bounded queue, drained onto the socket by its own task, so a
+/// send that is slow to reach the relay never stops the loop reading.
+///
+/// BACKPRESSURE. Every lane that can produce more than one message is already flow-controlled
+/// upstream of this queue: an application batch spends a relay credit and the next waits for it
+/// (`application::Stream`), a monitor publication spends its watch request, at most one operation
+/// and one query task run at a time, a ping goes every 30 s, and the audio lane sends only into
+/// an idle queue and DISCARDS otherwise (`idle`). So the queue holds a handful of messages in
+/// normal use, and a full one means the relay has fallen `CAPACITY` whole messages behind - not
+/// a slow link, a stalled one - and the session ends (`serviceUnavailable`) to be rebuilt, as a
+/// 2 s stall ended it before. Nothing is ever dropped here: every message queued is one the
+/// relay or a browser is waiting for.
+struct Outbound {
+    queue: tokio::sync::mpsc::Sender<Message>,
+    /// Messages handed over and not yet on the wire, the one being written included.
+    outstanding: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+impl Outbound {
+    const CAPACITY: usize = 64;
+    fn spawn<S>(
+        mut sink: futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, Message>,
+    ) -> (Self, tokio::task::JoinHandle<Result<(), &'static str>>)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let (queue, mut messages) = tokio::sync::mpsc::channel::<Message>(Self::CAPACITY);
+        let outstanding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let written = outstanding.clone();
+        let writer = tokio::spawn(async move {
+            while let Some(message) = messages.recv().await {
+                let deadline = send_deadline(message.len());
+                if !matches!(
+                    tokio::time::timeout(deadline, sink.send(message)).await,
+                    Ok(Ok(()))
+                ) {
+                    return Err("serviceUnavailable");
+                }
+                written.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            // The loop has let go of its end: Remote is stopping. Close as the loop used to.
+            let _ = sink.send(Message::Close(None)).await;
+            Ok(())
+        });
+        (Self { queue, outstanding }, writer)
+    }
+    /// Hand a message to the writer without waiting. A full queue is the stalled relay
+    /// described above, and the caller's `?` ends the session.
+    fn send(&self, message: Message) -> Result<(), &'static str> {
+        self.outstanding
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.queue.try_send(message).map_err(|_| {
+            self.outstanding
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            "serviceUnavailable"
+        })
+    }
+    /// Is nothing on its way out? The audio lane's question, asked every 20 ms: a "no" means
+    /// the write path is behind a relay that is not keeping up, and the lane's answer to that
+    /// is to DROP the bundle. Queueing instead would let receive audio delay an operation
+    /// response on the same writer, which is the one thing that lane must never do.
+    #[cfg(feature = "radio")]
+    fn idle(&self) -> bool {
+        self.outstanding.load(std::sync::atomic::Ordering::SeqCst) == 0
     }
 }
 
-/// Can the socket take a message right now without waiting?
-///
-/// One poll with a no-op waker, which is exactly right here: nothing needs to be woken,
-/// because the audio tick asks again in 20 ms. A "no" means the write path is backed up
-/// behind a browser that is not reading, and the caller's answer to that is to DROP the
-/// bundle. Awaiting instead would make receive audio able to delay an operation response
-/// on the same writer, which is the one thing this lane must never do.
-#[cfg(feature = "radio")]
-fn writer_ready<S: futures_util::Sink<Message> + Unpin>(sink: &mut S) -> bool {
-    let mut cx = std::task::Context::from_waker(futures_util::task::noop_waker_ref());
-    matches!(
-        std::pin::Pin::new(sink).poll_ready(&mut cx),
-        std::task::Poll::Ready(Ok(()))
-    )
+/// How long one message may take to reach the wire before the relay is judged gone: the 2 s
+/// every send used to get, plus a second per 32 KiB, so an 8 KB publication still has about 2 s
+/// and a full 768 KB application batch has 26 s - a 256 kbit/s floor - where 2 s flat tore the
+/// session down on any uplink under 3 Mbit/s and sent the same batch again on reconnect. Each
+/// message is timed on its own, so a small one is never charged for the large one ahead of it. A
+/// relay that has stopped reading altogether is also caught by the 65 s pong deadline above.
+fn send_deadline(bytes: usize) -> Duration {
+    Duration::from_secs(2) + Duration::from_millis((bytes / 32) as u64)
 }
 
 pub async fn supervise(
