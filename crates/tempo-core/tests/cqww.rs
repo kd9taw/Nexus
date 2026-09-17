@@ -83,7 +83,13 @@ fn place(call: &str) -> Option<CallLocation> {
             best = Some((p.len(), entity, cont));
         }
     }
-    best.map(|(_, entity, continent)| CallLocation { entity, continent })
+    // No zone: nothing in these tests reads one, and a stub zone would prove nothing about
+    // the country file's (src-tauri pins the real zones).
+    best.map(|(_, entity, continent)| CallLocation {
+        entity,
+        continent,
+        cq_zone: None,
+    })
 }
 
 /// Install the stub once per test binary. Integration tests share one process, so this is

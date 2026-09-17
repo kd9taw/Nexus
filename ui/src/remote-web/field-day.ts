@@ -29,9 +29,11 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
+    // What {EXCH} keys next (the macros read it). A string, bounded like every other.
+    (f.sentExchange !== undefined && !text(f.sentExchange)) ||
     (f.scoreNoteKey !== undefined && !text(f.scoreNoteKey)) || (f.role !== undefined && !text(f.role)) ||
     (f.multCount !== undefined && f.multCount !== null && !integer(f.multCount)) ||
     // `composing` is a VECTOR by design, never a preformatted exchange string - a row's own sent
@@ -47,8 +49,11 @@ function status(v: unknown): void {
     // `mex` is the row's OWN sent exchange, which is where a per-QSO exchange belongs now that
     // the session-level class/section pair is gone from the status struct. Optional so a log
     // written by an older station still validates.
-    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex'])
-    if (![q.call,q.class,q.section,q.band,q.submode].every(text) || !['CW','PH','DIG'].includes(String(q.mode)) || !integer(q.whenUnix)) throw new Error('invalidFieldDay')
+    // `rcvd` is what a contest that is not Field Day received on the row, one value per
+    // received slot (the rules validator caps a role at five).
+    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd'])
+    if (![q.call,q.class,q.section,q.band,q.submode].every(text) || !['CW','PH','DIG'].includes(String(q.mode)) || !integer(q.whenUnix) ||
+      (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
   }
   if (f.club !== undefined && f.club !== null) {
     const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError'])

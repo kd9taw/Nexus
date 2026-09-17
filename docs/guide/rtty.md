@@ -348,7 +348,9 @@ alive, so that resend does not count against the three.
 The exchange is table-driven: casual RST/name/QTH, taking name and QTH from your
 [Settings ▸ Station](settings-reference.md#station) operator name and state, or
 Field Day class and section when the [Field Day](contesting-pota.md) master
-switch is on. Once both exchanges validate, the contact is logged — if
+switch is on. Those are the only two exchanges it knows, so in any other contest
+(CQ WW RTTY, a QSO party) **Auto** refuses to turn on and says so — send your
+exchange with the macros and log each contact in the strip. Once both exchanges validate, the contact is logged — if
 **Auto-log QSOs** is on — with mode RTTY, 599 sent, their copied report received,
 and any class/section riding the comment field so nothing you copied is lost.
 

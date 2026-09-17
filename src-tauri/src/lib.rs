@@ -4899,7 +4899,19 @@ fn contest_place_call(call: &str) -> Option<tempo_core::contest::CallLocation> {
     Some(tempo_core::contest::CallLocation {
         entity: info.entity,
         continent: info.cont,
+        // The prefix's own zone where cty.dat gives one, else the entity's — the strip's
+        // hint. 0 is the file's "no zone".
+        cq_zone: (info.cq_zone != 0).then_some(info.cq_zone),
     })
+}
+
+/// The CQ zone the country file gives a callsign — the contest strip's zone HINT (the
+/// box's placeholder, never its value). Read through [`contest_place_call`], the adapter
+/// the scorer places a call with, so the hint and the scorer cannot disagree about where a
+/// station is.
+#[tauri::command]
+fn contest_zone_hint(call: String) -> Option<u8> {
+    contest_place_call(&call).and_then(|l| l.cq_zone)
 }
 
 /// Install [`contest_place_call`] once, at startup. Logged either way; a second install is
@@ -11540,13 +11552,14 @@ fn psk_set_mode(
 }
 
 /// Turn the RTTY auto-sequencer on/off. On builds the sequencer from the operator's
-/// identity + active exchange (Field Day class/section vs casual RST/name/QTH); off
+/// identity + active exchange (Field Day class/section vs casual RST/name/QTH), and is
+/// refused with the engine's sentence in any contest that is not Field Day; off
 /// aborts any live session and stops TX. NEVER transmits — a session only ever
 /// starts from an explicit CQ/Answer (the human-initiate gate).
 #[tauri::command(async)]
 fn rtty_set_auto(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
-    eng.set_rtty_auto(on);
+    eng.set_rtty_auto(on)?;
     Ok(rtty_state_dto(&eng))
 }
 
@@ -24268,6 +24281,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             log_qso,
             get_log,
             resolve_entity,
+            contest_zone_hint,
             edit_qso,
             mark_qsl_sent,
             mark_qsl_card,
@@ -25294,6 +25308,36 @@ mod tests {
         // answers above are the country file and not a resolver that always answers.
         assert!(super::contest_place_call("").is_none());
         assert!(super::contest_place_call("...").is_none());
+    }
+
+    /// ⭐ **The CQ zone the contest strip offers as a hint is the country file's own**,
+    /// carried through the same adapter the scorer places a call with — which dropped it.
+    ///
+    /// The United States and Canada are the cases that make it worth having: one entity,
+    /// several zones, and cty.dat's per-prefix `(cq)` overrides are what say W6 is zone 3
+    /// and W0 is zone 4. A zone derived from the entity alone would hint 5 for all of them.
+    #[test]
+    fn the_contest_zone_hint_is_the_country_files_cq_zone() {
+        for (call, zone) in [
+            ("W1XYZ", 5),
+            ("W6ABC", 3),
+            ("W0ABC", 4),
+            ("VE3XYZ", 4),
+            ("VE7ABC", 3),
+            ("DL1ABC", 14),
+            ("JA1ABC", 25),
+            ("KH6ABC", 31),
+        ] {
+            assert_eq!(
+                super::contest_place_call(call).and_then(|l| l.cq_zone),
+                Some(zone),
+                "{call} places in zone {zone}"
+            );
+            assert_eq!(super::contest_zone_hint(call.into()), Some(zone), "{call}");
+        }
+        // NEGATIVE CONTROL: nothing to place, nothing to hint — never a made-up zone.
+        assert_eq!(super::contest_zone_hint(String::new()), None);
+        assert_eq!(super::contest_zone_hint("...".into()), None);
     }
 
     #[cfg(feature = "radio")]

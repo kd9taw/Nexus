@@ -1372,6 +1372,16 @@ pub struct FieldDayQso {
     /// is deleted; this is what replaced it.
     #[serde(default)]
     pub mex: String,
+    /// ⭐ **What THIS contact received** — one value per slot of the session's
+    /// [`FieldDayStatus::receives`], in that order (blank where the row has none): the
+    /// contest log table's columns.
+    ///
+    /// **Empty for Field Day's exchange**, whose two slots already ride
+    /// [`class`](Self::class) and [`section`](Self::section) — carrying them twice would
+    /// spend bytes of every Remote capture of a large Field Day log, which is close to
+    /// its bound already.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rcvd: Vec<String>,
 }
 
 /// Field Day mode status: my exchange, the log, score and multipliers.
@@ -1476,6 +1486,17 @@ pub struct FieldDayStatus {
     /// side, never the record of one: a row already logged carries its own.
     #[serde(default)]
     pub composing: Vec<FdFieldValueDto>,
+    /// ⭐ **What `{EXCH}` keys right now** — this session's sent exchange WITHOUT the
+    /// signal report, as the text a macro puts on the air (`"5"` in CQ WW CW, `"5 MA"`
+    /// for a W/VE station in CQ WW RTTY, `"3A WI"` in Field Day). The RTTY macros read it
+    /// here so they key exactly what the CW keyer's `{EXCH}` keys.
+    ///
+    /// ⚠️ **It describes the NEXT transmission and nothing else.** The rule above is not
+    /// suspended: a string rendered from the session must never label a contact already
+    /// logged, because a mobile's session moves and its rows must not. An emitter that
+    /// describes a row reads that row's own `mex`.
+    #[serde(default)]
+    pub sent_exchange: String,
     /// The session's current role id — `""` for a symmetric contest, which is both
     /// Field Day events. The strip shows it beside the exchange only when it names
     /// something, so an operator can see which role they are in before they cross a
@@ -1550,6 +1571,43 @@ pub struct FdFieldDto {
     /// buyer. The UI keeps the value sets, keyed by this id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// For a `number` slot, its inclusive bounds (a CQ zone: 1 and 40) — what lets the
+    /// strip refuse `41` while it is typed. `None` for every other kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u32>,
+    /// The ADIF tag a RECEIVED value of this slot exports under (`CQZ`, `RST_RCVD`), when
+    /// the rules file declares one. It is what the slot MEANS, in a vocabulary somebody
+    /// else defined, so the strip finds the CQ-zone box by `CQZ` rather than by guessing
+    /// from a slot id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adif: Option<String>,
+}
+
+impl FdFieldDto {
+    /// The strip's view of one received slot, read straight off its [`FieldSpec`].
+    ///
+    /// [`FieldSpec`]: tempo_core::contest::FieldSpec
+    pub fn from_spec(f: &tempo_core::contest::FieldSpec) -> Self {
+        use tempo_core::contest::FieldKind;
+        let (min, max) = match f.kind {
+            FieldKind::Number { min, max } => (Some(min), Some(max)),
+            _ => (None, None),
+        };
+        Self {
+            key: f.key.to_string(),
+            kind: field_kind_tag(&f.kind).to_string(),
+            required: f.required,
+            domain: match f.kind {
+                FieldKind::Enum { domain } => Some(domain.id.to_string()),
+                _ => None,
+            },
+            min,
+            max,
+            adif: f.adif.rcvd.map(str::to_string),
+        }
+    }
 }
 
 /// One copied exchange value, as the read-only sent display shows it.
@@ -2800,6 +2858,56 @@ pub const WINLINK_OUTCOMES: [&str; 4] = ["complete", "stopped", "peerClosed", "i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⭐ **A received slot tells the strip its bounds and what it MEANS.** A CQ zone box
+    /// had no way to refuse 41, and the country file's zone hint had no way to find the
+    /// zone box except by guessing from a slot id. The bounds come off the slot's
+    /// `Number` kind and the meaning off its received ADIF tag (`CQZ`, the ADIF field for
+    /// the contacted station's CQ zone), both already declared by the rules file.
+    #[test]
+    fn a_received_slot_carries_its_bounds_and_its_adif_meaning() {
+        use tempo_core::contest::{AdifTags, FieldKind, FieldSpec};
+        static ZN: FieldSpec = FieldSpec {
+            key: "ZN",
+            adif: AdifTags {
+                rcvd: Some("CQZ"),
+                sent: Some("MY_CQ_ZONE"),
+            },
+            label: None,
+            required: true,
+            source: "setting:contest_cq_zone",
+            kind: FieldKind::Number { min: 1, max: 40 },
+        };
+        let d = FdFieldDto::from_spec(&ZN);
+        assert_eq!(
+            (d.key.as_str(), d.kind.as_str(), d.required),
+            ("ZN", "number", true)
+        );
+        assert_eq!((d.min, d.max), (Some(1), Some(40)));
+        assert_eq!(d.adif.as_deref(), Some("CQZ"));
+        assert_eq!(d.domain, None);
+        let wire = serde_json::to_value(&d).unwrap();
+        assert_eq!(wire["min"], 1);
+        assert_eq!(wire["max"], 40);
+        assert_eq!(wire["adif"], "CQZ");
+        // CONTROL: a slot with no bounds and no received tag says neither — no `min`/`max`
+        // keys at all, rather than a 0 a strip would read as a real bound.
+        static NR: FieldSpec = FieldSpec {
+            key: "QTH",
+            adif: AdifTags {
+                rcvd: None,
+                sent: None,
+            },
+            label: None,
+            required: false,
+            source: "",
+            kind: FieldKind::Text { max_len: 8 },
+        };
+        let wire = serde_json::to_value(FdFieldDto::from_spec(&NR)).unwrap();
+        assert!(wire.get("min").is_none() && wire.get("max").is_none());
+        assert!(wire.get("adif").is_none());
+        assert_eq!(wire["required"], false);
+    }
 
     /// ⭐ THE WIRE KEYS THE PANE READS, spelled out one at a time.
     ///

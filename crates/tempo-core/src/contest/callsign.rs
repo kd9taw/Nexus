@@ -49,6 +49,14 @@ pub struct CallLocation {
     /// continent was 6.5 % wrong, because CQ zone 20 spans Europe and Asia. CQ WW's own
     /// rule names *"continental boundaries"* as a standard in its own right.
     pub continent: &'static str,
+    /// The CQ zone the country file gives this callsign — the prefix's own `(cq)` override
+    /// where the file has one (W6 is 3, W0 is 4, VE7 is 3), else the entity's zone. `None`
+    /// when the file gives no zone.
+    ///
+    /// ⚠️ **A hint for the entry strip, never an exchange value.** CQ WW's zone is what the
+    /// station SENDS, and a portable or a station outside its prefix's zone sends its own;
+    /// nothing scores or dupes off this.
+    pub cq_zone: Option<u8>,
 }
 
 impl CallLocation {

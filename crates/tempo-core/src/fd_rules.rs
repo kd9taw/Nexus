@@ -2495,6 +2495,47 @@ mod tests {
         );
     }
 
+    /// ⭐ **Every contest the bundled rules table carries is on the picker's menu.**
+    ///
+    /// The picker (`CONTESTS` in ui/src/fdEvent.ts) is a hand-written list, because a ruleset
+    /// has no display name — so a contest added to the seed and not to the menu ships
+    /// scored, tested and unreachable, and nothing says so. One direction only: a menu entry
+    /// the data does not carry is the documented degradation (a downloaded file that dropped
+    /// a contest), while a seeded contest nobody can pick is simply a missed line.
+    #[test]
+    fn every_seeded_ruleset_is_on_the_contest_picker() {
+        let ts_src = include_str!("../../../ui/src/fdEvent.ts");
+        let menu: Vec<&str> = ts_src
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+            .filter_map(|l| ts_str_field(l, "id"))
+            .collect();
+        // A parser that found nothing would pass the comparison below it.
+        assert!(
+            menu.len() >= 15,
+            "parsed only {} contest ids out of fdEvent.ts — the parser is broken, not the menu",
+            menu.len()
+        );
+        let unpicked = |menu: &[&str]| -> Vec<&'static str> {
+            table()
+                .rulesets
+                .iter()
+                .map(|r| r.event)
+                .filter(|e| !menu.contains(e))
+                .collect()
+        };
+        assert!(
+            unpicked(&menu).is_empty(),
+            "ruleset(s) {:?} are in the rules seed but not in CONTESTS in ui/src/fdEvent.ts — \
+             no operator can pick them",
+            unpicked(&menu)
+        );
+        // POSITIVE CONTROL: the same comparison against a menu missing one entry names it.
+        let short: Vec<&str> = menu.iter().copied().filter(|id| *id != "ohqp").collect();
+        assert_eq!(unpicked(&short), vec!["ohqp"]);
+    }
+
     /// SAME GUARD for the RETIRED list: [`RETIRED_SECTIONS`] vs `RETIRED_SECTIONS`
     /// in ui/src/features/arrlSections.ts.
     ///

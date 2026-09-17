@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one you already use in the other program. Your spots still reach the network under your plain
   callsign either way; nodes relaying them strip the suffix.
 
+- **The contest strip suggests a CQ zone and flags a missing QTH.** Type a call in a contest that
+  exchanges CQ zones and the zone box shows the zone the country file gives that call as a faint
+  hint — it never fills the box, because a station outside its prefix's zone sends its own. And
+  when a USA or Canada station is about to be logged without a QTH in a contest where they send
+  one, the strip says so; you can still log it.
+
 ### Changed
 
 - **Remote: the dial follows the wheel, and it stops swallowing your corrections.** Spinning the
@@ -65,6 +71,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A contest other than Field Day comes back after a restart.** If you left a QSO party or
+  another contest running and restarted Nexus, it came back in Chat unless a Field Day class and
+  section happened to be filled in, and the contacts you had logged stayed out of view. Nexus now
+  reopens the contest you left running. A contest whose own exchange is incomplete still stays
+  closed, and entering it tells you what to fill in.
+- **`{EXCH}` in a CW macro sends the exchange of the contest you are running.** It always sent your
+  Field Day class and section, so in any other contest a macro with `{EXCH}` sent the wrong
+  exchange, or nothing at all. It now sends that contest's exchange without the signal report —
+  your zone in CQ WW CW, for example. Field Day sends exactly what it did before. `{CLASS}` and
+  `{SECTION}` are empty outside Field Day.
+- **RTTY Auto no longer sends a Field Day exchange in other contests.** The auto-sequencer only
+  knows the Field Day exchange, yet it turned on in any contest and would have sent your Field
+  Day class and section to every station it worked. In any contest other than ARRL Field Day or
+  Winter Field Day it now refuses to turn on and says why: send your exchange with the macros and
+  log each contact yourself. Outside a contest, and in both Field Days, Auto works as before.
+- **The contest log strip works for contests other than Field Day.** In a contest whose exchange
+  includes a signal report, the report box came back blank after every contact; it now goes back
+  to 599 (59 on phone). A CQ zone has to be a number from 1 to 40, and the strip says so while
+  you type. A box the contest does not require — the QTH a DX station never sends in CQ WW RTTY —
+  can be left blank. The strip's label, hint and button now say "contest log" instead of Field
+  Day, and the zone box is captioned Zone. Field Day's strip is unchanged.
+- **The contest screen names the contest you are running.** Outside Field Day the banner still
+  read "ARRL Field Day", the header showed an empty class and section, the log table's columns were
+  Class and Section (blank on every row), the Score Summary printed a station class, a power
+  multiplier and a bonus list, and the Field Day bonus checklist sat under the score. The banner
+  and header now name the contest and show what you are sending, the log table has one column
+  per field that contest exchanges, the Score Summary shows QSO points × multipliers, and the
+  bonus checklist appears only in Field Day. Field Day's screen is unchanged.
 - **A cluster node that accepts a connection and then goes silent no longer kills that feed
   slot for the rest of the session.** Some nodes accept the connection and never send a login
   prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it

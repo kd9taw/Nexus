@@ -891,6 +891,13 @@ export async function resolveEntity(call: string): Promise<string | null> {
   return invoke<string | null>('resolve_entity', { call })
 }
 
+/** The CQ zone the country file gives a callsign, or null — through the same adapter the
+ *  contest scorer places a call with. A HINT for the contest strip's zone box (its
+ *  placeholder), never a logged value: a station outside its prefix's zone sends its own. */
+export async function contestZoneHint(call: string): Promise<number | null> {
+  return invoke<number | null>('contest_zone_hint', { call })
+}
+
 /** Edit a logged contact (a correction). `target` is the row as `getLog()` showed it — never a
  *  position: a Remote browser is a second writer, and its delete shifts every later row, so a
  *  position kept from an earlier load names a different contact. The backend keys the row it

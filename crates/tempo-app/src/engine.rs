@@ -5164,14 +5164,26 @@ impl Engine {
     /// A no-op leaves the operating mode EXACTLY as it was — load-bearing since
     /// #100: `apply_settings` calls this on every save with the master on, so a
     /// master left on with a blank exchange must not disturb a contact in flight.
+    ///
+    /// ⚠️ **The class + section test is Field Day's alone.** Every other contest sends
+    /// neither, and its session constructor (`ContestSession::for_ruleset`, reached
+    /// through `set_mode`) refuses its own blank or out-of-domain exchange by name —
+    /// before the mode changes, so a refused restore is the same no-op.
     pub fn restore_field_day_if_enabled(&mut self) {
-        if self.settings.fd_active
-            && !self.settings.fd_class.trim().is_empty()
-            && !self.settings.fd_section.trim().is_empty()
-            && !matches!(self.mode, Mode::FieldDay { .. })
-        {
+        let exchange_set = !self.contest_is_field_day()
+            || (!self.settings.fd_class.trim().is_empty()
+                && !self.settings.fd_section.trim().is_empty());
+        if self.settings.fd_active && exchange_set && !matches!(self.mode, Mode::FieldDay { .. }) {
             let _ = self.set_mode("fieldday-sp");
         }
+    }
+
+    /// Is the contest the picker names one of the two Field Day events (or the blank
+    /// default, which is ARRL Field Day)? The same test `set_mode` applies before it
+    /// asks for a class and section, so the two cannot disagree about which contests
+    /// need them.
+    fn contest_is_field_day(&self) -> bool {
+        matches!(self.settings.fd_event.trim(), "" | "arrlfd" | "wfd")
     }
 
     /// Advance the persisted LoTW incremental-sync cursor (`lotw_last_qsl`) WITHOUT
@@ -7584,12 +7596,21 @@ impl Engine {
         } else {
             ("", "")
         };
-        // Field Day exchange tokens ({CLASS}/{SECTION}/{EXCH}) are live only while the FD
-        // master switch is on; outside FD they're empty so a stray token collapses cleanly.
-        let (class, section): (&str, &str) = if self.settings.fd_active {
+        // Field Day exchange tokens ({CLASS}/{SECTION}, and {EXCH} built from them) are live
+        // only while the contest switch is on AND the contest is one of the two Field Day
+        // events; outside FD they're empty so a stray token collapses cleanly. Every other
+        // contest keys its own running exchange through {EXCH} — Field Day's settings sent
+        // in the Ohio QSO Party were a wrong exchange at every station worked.
+        let field_day = self.settings.fd_active && self.contest_is_field_day();
+        let (class, section): (&str, &str) = if field_day {
             (&self.settings.fd_class, &self.settings.fd_section)
         } else {
             ("", "")
+        };
+        let exch = if self.settings.fd_active && !field_day {
+            self.contest_sent_exchange().unwrap_or_default()
+        } else {
+            String::new()
         };
         let ctx = tempo_core::cw::CwContext {
             mycall: &self.settings.mycall,
@@ -7602,8 +7623,46 @@ impl Engine {
             rst: "599",
             class,
             section,
+            exch: &exch,
         };
         tempo_core::cw::expand(text, &ctx)
+    }
+
+    /// ⭐ **The exchange this station is about to SEND, without the signal report** — what
+    /// `{EXCH}` keys in a contest that is not Field Day, and what the RTTY macros read off
+    /// the snapshot as `sentExchange`. `None` outside a contest session.
+    ///
+    /// The running session's composing slots, in its role's send order. Two kinds are left
+    /// out, each because it has its own answer: an RST, which `{RST}` keys (and which a
+    /// phone contact sends as 59, not the session's 599); and a SERIAL, whose session
+    /// value is a placeholder — a number is issued to a contact, not to a session, and
+    /// keying the placeholder would put a serial nobody was given on the air.
+    ///
+    /// ⚠️ **It describes the NEXT transmission, never a contact already logged.** A row
+    /// carries its own sent exchange (`LoggedQso::tx`, rendered by
+    /// `contest::sent_exchange`), and a mobile's session moves under rows that must not —
+    /// the defect `contest::render` exists to make unrepresentable. This reads forward in
+    /// time, exactly as `ContestSession::field` does.
+    pub fn contest_sent_exchange(&self) -> Option<String> {
+        use tempo_core::contest::FieldKind;
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return None;
+        };
+        let session = &station.log.session;
+        let words: Vec<&str> = session
+            .role()
+            .sends
+            .iter()
+            .filter(|key| {
+                matches!(
+                    session.exchange.field(key).map(|f| f.kind),
+                    Some(kind) if !matches!(kind, FieldKind::Rst { .. } | FieldKind::Serial { .. })
+                )
+            })
+            .map(|key| session.field(key))
+            .filter(|v| !v.is_empty())
+            .collect();
+        Some(words.join(" "))
     }
 
     /// Record the worked station's QRZ name + US state for the `{HISNAME}`/`{HISSTATE}` CW
@@ -10319,7 +10378,7 @@ impl Engine {
         // value it could not accept — a more useful message than this one, but not one
         // worth changing a shipped refusal for.
         if spec.starts_with("fieldday")
-            && matches!(self.settings.fd_event.trim(), "" | "arrlfd" | "wfd")
+            && self.contest_is_field_day()
             && (self.settings.fd_class.trim().is_empty()
                 || self.settings.fd_section.trim().is_empty())
         {
@@ -15833,8 +15892,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// FD master switch is on, else casual RST/name/QTH (mirroring `set_mode`'s
     /// exchange selection). Off aborts any live session and stops TX. NEVER
     /// transmits: a session only ever starts from `rtty_auto_cq` / `rtty_auto_answer`.
-    pub fn set_rtty_auto(&mut self, on: bool) {
+    ///
+    /// ⚠️ **On is REFUSED in any contest that is not Field Day** — see
+    /// [`Self::rtty_auto_contest_gate`]. Off is never refused: it is a stop.
+    pub fn set_rtty_auto(&mut self, on: bool) -> Result<(), String> {
         if on {
+            self.rtty_auto_contest_gate()?;
             let mycall = self.settings.mycall.clone();
             let seq = if self.settings.fd_active {
                 let exch = [
@@ -15867,6 +15930,27 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.rtty_seq = None;
             self.rtty_auto_over = false;
         }
+        Ok(())
+    }
+
+    /// ⭐ **The contests the RTTY auto-sequencer can work: Field Day's two, and none.**
+    ///
+    /// It has exactly two exchanges — `contest::field_day()` while the contest switch is
+    /// on and `contest::casual()` while it is off — so in any other contest it would send
+    /// a Field Day class and section to every station it worked and copy theirs against a
+    /// Field Day grammar. Refused with a sentence rather than armed wrong. Checked where
+    /// Auto is ARMED and again at both human-initiate doors, because the picker can move
+    /// to another contest under a sequencer armed in Field Day.
+    fn rtty_auto_contest_gate(&self) -> Result<(), String> {
+        if self.settings.fd_active && !self.contest_is_field_day() {
+            return Err(
+                "RTTY Auto works the Field Day exchange only (ARRL Field Day and \
+Winter Field Day). For this contest, send your exchange with the macros and log each \
+contact yourself."
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 
     /// Operator starts an auto CQ run (a human-initiate gate). Errors if Auto is
@@ -15875,6 +15959,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.rtty_seq.is_none() {
             return Err("Turn on Auto first".to_string());
         }
+        self.rtty_auto_contest_gate()?;
         self.rtty_no_latch_gate()?;
         self.rtty_tx_gate()?;
         self.rtty_drive(RttyOp::StartCq);
@@ -15887,6 +15972,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.rtty_seq.is_none() {
             return Err("Turn on Auto first".to_string());
         }
+        self.rtty_auto_contest_gate()?;
         self.rtty_no_latch_gate()?;
         self.rtty_tx_gate()?;
         self.rtty_drive(RttyOp::Answer(call.to_string()));
@@ -22327,7 +22413,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_operating_mode("rtty", false); // arms TX (a manual mode, like CW)
         assert!(e.tx_enabled() && e.tx_allowed(), "gate open for the tests");
-        e.set_rtty_auto(true);
+        e.set_rtty_auto(true).expect("Auto arms outside a contest");
         e
     }
 
@@ -22421,8 +22507,54 @@ mod tests {
         s.fd_section = "WI".into();
         e.apply_settings(s); // master on + class/section → enters Mode::FieldDay
         e.set_operating_mode("rtty", false);
-        e.set_rtty_auto(true);
+        e.set_rtty_auto(true).expect("Auto arms in ARRL Field Day");
         e
+    }
+
+    /// ⭐ **RTTY Auto works Field Day's exchange and nothing else, so it refuses in every
+    /// other contest.** It built `contest::field_day()` whenever the contest switch was
+    /// on, whatever the picker named — armed in the Ohio QSO Party (or CQ WW RTTY) it would
+    /// have sent a Field Day class and section to every station it worked, and copied
+    /// theirs against a Field Day grammar.
+    #[test]
+    fn rtty_auto_refuses_a_contest_that_is_not_field_day() {
+        let mut e = Engine::new("W8ABC", "EN82", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "MI".into();
+        // Field Day's exchange, left from June — exactly what Auto would have sent.
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s);
+        e.set_operating_mode("rtty", false);
+        let err = e.set_rtty_auto(true).unwrap_err();
+        assert!(err.contains("Field Day"), "names what Auto can work: {err}");
+        assert!(!e.rtty_state().auto, "a refused arm arms nothing");
+        assert!(e.rtty_auto_cq().is_err(), "and no CQ can start without it");
+
+        // …and a sequencer armed in Field Day cannot START once the picker has moved to
+        // another contest: the human-initiate doors ask the same question.
+        let mut e = rtty_auto_fd_engine();
+        assert!(e.rtty_state().auto, "armed in Field Day");
+        let mut s = e.settings().clone();
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "MI".into();
+        e.apply_settings(s);
+        assert!(e.rtty_auto_cq().unwrap_err().contains("Field Day"));
+        assert!(e
+            .rtty_auto_answer("W1AW")
+            .unwrap_err()
+            .contains("Field Day"));
+        assert_eq!(e.poll_rtty_one(), None, "nothing was queued to key");
+
+        // POSITIVE CONTROLS: Auto still arms in ARRL Field Day and outside any contest.
+        let mut e = rtty_auto_fd_engine();
+        assert!(e.rtty_state().auto, "ARRL Field Day arms");
+        e.rtty_auto_cq().expect("and starts a CQ");
+        let mut e = rtty_auto_engine();
+        assert!(e.rtty_state().auto, "no contest arms");
+        e.rtty_auto_cq().expect("and starts a CQ");
     }
 
     /// FIELD DAY IS ALL-MODE, AND RTTY IS ITS DIGITAL CLASS. The auto-sequencer
@@ -33469,6 +33601,140 @@ mod tests {
             1,
             "restore is a no-op once already in FD (never rebuilds the log)"
         );
+    }
+
+    /// ⭐ **A contest that is not Field Day restores on relaunch without a Field Day class
+    /// or section.** The restore gate asked for the two values only Field Day transmits,
+    /// so an Ohio QSO Party left running came back from a restart in Chat, with its log
+    /// sitting unread in the journal, for as long as `fd_class`/`fd_section` were blank —
+    /// which, for an operator who has never entered Field Day, is always.
+    #[test]
+    fn a_non_field_day_contest_restores_without_a_field_day_class_or_section() {
+        let mut s = Engine::new("W8ABC", "EN80", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "OH".into();
+        s.contest_qth_county = "FRAN".into();
+        assert!(
+            s.fd_class.trim().is_empty() && s.fd_section.trim().is_empty(),
+            "harness: no Field Day exchange at all"
+        );
+        let mut e = Engine::with_settings(s);
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "harness: boots out of the contest"
+        );
+        e.restore_field_day_if_enabled();
+        assert_eq!(
+            e.snapshot().field_day.map(|fd| fd.event).as_deref(),
+            Some("ohqp"),
+            "the party the operator left running comes back"
+        );
+
+        // POSITIVE CONTROL: Field Day itself still needs its class and section. The gate
+        // moved for the contests that do not send them, not for the one that does.
+        let mut s = Engine::new("W9XYZ", "EN61", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "arrlfd".into();
+        let mut e = Engine::with_settings(s);
+        e.restore_field_day_if_enabled();
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "Field Day with no class or section still stays out"
+        );
+
+        // …and a contest whose OWN exchange cannot be built is refused by its session and
+        // leaves the operator exactly where they were (#100): a restore runs on every save.
+        let mut s = Engine::new("W8ABC", "EN80", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "OH".into(); // in state, but no county to send
+        let mut e = Engine::with_settings(s);
+        e.call_station("K1ABC");
+        assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
+        e.restore_field_day_if_enabled();
+        assert!(e.snapshot().field_day.is_none(), "no county, no party");
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("K1ABC"),
+            "a declined restore must not disturb the contact in flight (#100)"
+        );
+    }
+
+    /// ⭐ **`{EXCH}` keys the exchange of the contest that is running**, not Field Day's.
+    ///
+    /// The CW expander read `fd_class`/`fd_section` whenever the contest switch was on,
+    /// so an operator in the Ohio QSO Party with last June's `3A WI` still in Settings
+    /// keyed `3A WI` at every station — and with no class set, keyed nothing at all.
+    /// `{EXCH}` is now the running session's SENT exchange without the signal report
+    /// (the report has its own token), and the two Field Day tokens are empty outside
+    /// the two Field Day events.
+    #[test]
+    fn exch_keys_the_running_contests_sent_exchange_and_field_day_is_unchanged() {
+        // A Michigan station in the Ohio QSO Party sends RST + its state.
+        let mut s = Engine::new("W8ABC", "EN82", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "MI".into();
+        // Field Day's exchange, left over from June — it must not reach the air here.
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        let mut e = Engine::with_settings(s);
+        e.set_mode("fieldday-sp")
+            .expect("a Michigan OhQP session builds");
+        assert_eq!(
+            e.preview_cw("{EXCH}"),
+            "MI",
+            "the party's exchange, without RST"
+        );
+        assert_eq!(
+            e.preview_cw("{CLASS}"),
+            "",
+            "no Field Day class in this contest"
+        );
+        assert_eq!(e.preview_cw("{SECTION}"), "", "no Field Day section either");
+        assert_eq!(
+            e.preview_cw("TU {RST} {EXCH} DE {MYCALL}"),
+            "TU 5NN MI DE W8ABC"
+        );
+        // The same string the RTTY macros read off the snapshot.
+        assert_eq!(
+            e.snapshot().field_day.map(|fd| fd.sent_exchange).as_deref(),
+            Some("MI")
+        );
+
+        // POSITIVE CONTROL — Field Day keys exactly what it always has, from Settings,
+        // in the mode and before it.
+        for event in ["", "arrlfd"] {
+            let mut s = Engine::new("W9XYZ", "EN61", 0).settings().clone();
+            s.fd_active = true;
+            s.fd_event = event.into();
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            let mut e = Engine::with_settings(s.clone());
+            // `with_settings` does not enter the mode — the tokens are live on the switch.
+            assert_eq!(
+                e.preview_cw("{EXCH}"),
+                "3A WI",
+                "event {event:?}, out of the mode"
+            );
+            e.set_mode("fieldday-run").expect("Field Day builds");
+            assert_eq!(
+                e.preview_cw("{EXCH}"),
+                "3A WI",
+                "event {event:?}, in the mode"
+            );
+            assert_eq!(e.preview_cw("{CLASS}"), "3A");
+            assert_eq!(e.preview_cw("{SECTION}"), "WI");
+            assert_eq!(
+                e.snapshot().field_day.map(|fd| fd.sent_exchange).as_deref(),
+                Some("3A WI")
+            );
+        }
+
+        // …and outside any contest every exchange token is empty, as it always was.
+        let e = Engine::new("W9XYZ", "EN61", 0);
+        assert_eq!(e.preview_cw("! {EXCH} {CLASS} {SECTION} K"), "K");
     }
 
     /// M15: the Field Day contest log is memory-only, so the shell needs a way to
