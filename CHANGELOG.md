@@ -30,7 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   20, 15 and 10 m) and still logs the contact. The Cabrillo export follows the sponsor's template:
   a two-digit zone, DX where a station sent no QTH, the LOCATION spelling the sponsor's list uses,
   and the category, claimed-score, name and email headers. The email comes from a new optional
-  **Email for contest logs** setting; leave it blank and the line is left out.
+  **Email for contest logs** setting; leave it blank and the line is left out. If your callsign is
+  in the US or Canada but your contest state is blank or not on the sponsor's list, you would send
+  the DX exchange with no QTH, so Nexus warns you in Settings, on the log strip and when the
+  contest starts, and suggests the code a section means (EMA is MA). It never stops you, because
+  operating from outside the US and Canada really is DX. Typing NT or PE is read as NWT or PEI.
 
 - **The contest strip suggests a CQ zone and flags a missing QTH.** Type a call in a contest that
   exchanges CQ zones and the zone box shows the zone the country file gives that call as a faint
@@ -71,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A mistyped QTH or section no longer counts as a multiplier.** In a contest with a list of
+  QTHs or sections (CQ WW RTTY's states and provinces, Sweepstakes' sections), a received value
+  that is not on the list, such as an ARRL section typed where a state belongs, counted as a
+  multiplier of its own. The contact is still logged; the value just counts for nothing.
 - **Remote shows the contest screen for every contest.** Through Remote, the contest screen was
   blank for any contest except ARRL Field Day and Winter Field Day, because the browser refused
   the contest's rules as unknown. It now shows for all of them, CQ WW RTTY included.
