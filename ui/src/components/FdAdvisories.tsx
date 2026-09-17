@@ -20,7 +20,7 @@
 // It is a passive status line — no handlers, no controls, no panel-vocabulary
 // id — so it has no stop-line implications on any surface that hosts it.
 import type { FdRulesetDto } from '../api'
-import { FD_EVENT_NAMES, type FdKind } from '../fdEvent'
+import { contestName } from '../fdEvent'
 import { t } from '../i18n'
 
 /**
@@ -57,7 +57,12 @@ export function FdAdvisories({
   showAssistance?: boolean
 }) {
   if (!fdActive || !ruleset) return null
-  const eventName = FD_EVENT_NAMES[(ruleset.event === 'wfd' ? 'wfd' : 'arrlfd') as FdKind]
+  // ⭐ THE CONTEST THAT IS RUNNING, by its own name. This read every id that was not `wfd` as
+  // ARRL Field Day, so the first ruleset outside Field Day to ban a mode — the Illinois QSO
+  // Party bans FT8 and FT4 — would have cited Field Day's rules at its operator. `contestName`
+  // answers for every contest on the picker and gives back the id itself for one it does not
+  // list, which is a token rather than another contest's name.
+  const eventName = contestName(ruleset.event)
   const year = ruleset.rulesYear
   const mode = (activeMode ?? '').trim().toUpperCase()
 

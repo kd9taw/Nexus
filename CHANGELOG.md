@@ -75,6 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CW macros no longer call "CQ FD" in another contest.** The cockpit had two built-in macro
+  sets, casual and Field Day, and used the Field Day one in every contest — so `F1` in the
+  Illinois QSO Party or CQ WW CW called `CQ FD DE …`, Field Day's own call, on the air. There is
+  now a contest set with the same cadence and `CQ TEST`; Field Day keeps `CQ FD`, and a macro
+  profile of your own still wins over both.
+- **A banned-mode warning names the contest you are in.** It read every contest except Winter
+  Field Day as ARRL Field Day, so a contest that bans a mode would have blamed Field Day's rules.
 - **A mistyped QTH or section no longer counts as a multiplier.** In a contest with a list of
   QTHs or sections (CQ WW RTTY's states and provinces, Sweepstakes' sections), a received value
   that is not on the list, such as an ARRL section typed where a state belongs, counted as a
