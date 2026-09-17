@@ -1,0 +1,1 @@
+ruleset arrlfd/2026: dupe.mode_class_groups is set but by_mode_class is false (a rule that does not key on the mode cannot group modes)

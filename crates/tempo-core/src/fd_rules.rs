@@ -1079,7 +1079,26 @@ struct DupeSpec {
     /// unchanged, so a key built from the received side alone refuses my own
     /// legal contact.
     by_sent_fields: Vec<String>,
+    /// ⭐ **Mode classes that count as ONE mode** — ILQP's *"once per band and mode
+    /// (phone and CW/digital)"*, written `[["CW", "DIG"]]`.
+    ///
+    /// ⚠️ `#[serde(default)]`, and absent is a decision rather than a hole: `[]` is
+    /// three separate classes, which is what every contest written before this key
+    /// existed means and what it already does. That is the `score_note_key` case, not
+    /// the `exchange`/`scoring` case §8(c) rules on. A list that IS present is
+    /// validated in full — an unknown class, a class in two groups, a group of one and
+    /// a grouping on a rule that does not key on the mode are each refused by name,
+    /// because each of them is a dupe rule that silently does something else.
+    #[serde(default)]
+    mode_class_groups: Vec<Vec<String>>,
 }
+
+/// The mode classes a dupe rule may group — the vocabulary
+/// [`LoggedQso::mode`](crate::fieldday::LoggedQso::mode) holds, and the same three
+/// `scoring.points_by_mode_class` prices. A file naming anything else is refused: a
+/// `"DIGI"` that grouped nothing would be a dupe rule that quietly counts three modes
+/// where the sponsor counts two.
+const MODE_CLASSES: [&str; 3] = ["PH", "CW", "DIG"];
 
 /// The whole scoring model for one ruleset, as one block.
 ///
@@ -1752,6 +1771,39 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 ));
             }
         }
+        // ⭐ MODE-CLASS GROUPS (ILQP's "phone and CW/digital"). Each refusal is a rule
+        // that would silently count a different number of modes than the sponsor does.
+        if !r.dupe.mode_class_groups.is_empty() && !r.dupe.by_mode_class {
+            return Err(format!(
+                "{tag}: dupe.mode_class_groups is set but by_mode_class is false \
+(a rule that does not key on the mode cannot group modes)"
+            ));
+        }
+        let mut grouped: Vec<&str> = Vec::new();
+        for g in &r.dupe.mode_class_groups {
+            if g.len() < 2 {
+                return Err(format!(
+                    "{tag}: dupe.mode_class_groups has a group of {} \
+(a group names the two or more classes that count as one mode)",
+                    g.len()
+                ));
+            }
+            for class in g {
+                if !MODE_CLASSES.contains(&class.as_str()) {
+                    return Err(format!(
+                        "{tag}: dupe.mode_class_groups names {class:?}, which is not a \
+mode class ({})",
+                        MODE_CLASSES.join(", ")
+                    ));
+                }
+                if grouped.contains(&class.as_str()) {
+                    return Err(format!(
+                        "{tag}: dupe.mode_class_groups names {class:?} in two groups"
+                    ));
+                }
+                grouped.push(class);
+            }
+        }
         // ⭐ A SPONSOR'S CABRILLO TEMPLATE writes every exchange slot once, and nothing that
         // would split a whitespace-delimited column. Each refusal is a QSO line a log robot
         // would misread, caught at load instead of in a submitted file.
@@ -2339,6 +2391,14 @@ fn build(spec: FileSpec) -> RulesTable {
                     by_mode_class: r.dupe.by_mode_class,
                     by_fields: leak_keys(r.dupe.by_fields),
                     by_sent_fields: leak_keys(r.dupe.by_sent_fields),
+                    mode_class_groups: Box::leak(
+                        r.dupe
+                            .mode_class_groups
+                            .into_iter()
+                            .map(leak_keys)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    ),
                 },
                 tempo_fd: r.tempo_fd,
                 banned_modes: Box::leak(
@@ -3493,6 +3553,38 @@ mod tests {
             parse_spec(&v.to_string()).is_ok(),
             "control: by_call true loads"
         );
+    }
+
+    /// ⭐ **The four ways a mode-class grouping can lie, each refused by name.**
+    ///
+    /// ILQP is the first contest in the researched set to count two of this build's
+    /// three classes as one mode (*"once per band and mode (phone and CW/digital)"*),
+    /// and every one of these mutations produces a rule that loads and then counts a
+    /// different number of modes than the sponsor does — the failure a dupe rule
+    /// cannot afford, because over-grouping refuses a legal contact and under-grouping
+    /// accepts a duplicate that scores zero.
+    #[test]
+    fn a_mode_class_grouping_that_could_not_mean_what_it_says_is_refused() {
+        let with = |groups: serde_json::Value, by_mode_class: bool| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["dupe"]["mode_class_groups"] = groups;
+            v["rulesets"][0]["dupe"]["by_mode_class"] = by_mode_class.into();
+            parse_spec(&v.to_string())
+        };
+        let e = with(serde_json::json!([["CW", "DIGI"]]), true).unwrap_err();
+        assert!(e.contains("\"DIGI\"") && e.contains("PH, CW, DIG"), "{e}");
+        let e = with(serde_json::json!([["CW"]]), true).unwrap_err();
+        assert!(e.contains("group of 1"), "{e}");
+        let e = with(serde_json::json!([["CW", "DIG"], ["DIG", "PH"]]), true).unwrap_err();
+        assert!(e.contains("\"DIG\" in two groups"), "{e}");
+        let e = with(serde_json::json!([["CW", "DIG"]]), false).unwrap_err();
+        assert!(e.contains("by_mode_class is false"), "{e}");
+        // POSITIVE CONTROLS: the grouping ILQP declares loads, and so does the absent
+        // key every shipped ruleset relies on — without this pair the four refusals
+        // above would also pass against a validator that refused everything.
+        assert!(with(serde_json::json!([["CW", "DIG"]]), true).is_ok());
+        assert!(with(serde_json::json!([]), true).is_ok());
+        assert!(parse_spec(SEED).is_ok(), "the file that actually ships");
     }
 
     /// §8(c) again, on this block: absent is loud, never a silent default.

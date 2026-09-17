@@ -6838,6 +6838,7 @@ mod tests {
             by_mode_class: true,
             by_fields: &["QTH"],
             by_sent_fields: &[],
+            mode_class_groups: &[],
         };
         let mut lb = Logbook::new();
         // Last year's contact — outside the window.
@@ -6906,6 +6907,7 @@ mod tests {
             by_mode_class: true,
             by_fields: &[],
             by_sent_fields: &[],
+            mode_class_groups: &[],
         };
         let mut lb = Logbook::new();
         for i in 0..50 {

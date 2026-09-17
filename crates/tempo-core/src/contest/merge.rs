@@ -217,6 +217,7 @@ mod tests {
         by_mode_class: true,
         by_fields: &[],
         by_sent_fields: &[],
+        mode_class_groups: &[],
     };
 
     /// A unique scratch path under the OS temp dir — the shape `logbook.rs`'s own

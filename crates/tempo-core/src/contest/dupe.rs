@@ -27,6 +27,9 @@
 //!   them, received before sent;
 //! * every component is trimmed and uppercased, as the shipped `(call, band, mode)`
 //!   tuple already did;
+//! * the MODE CLASS component is the class itself unless the ruleset groups it
+//!   ([`DupeRule::mode_class_groups`] — ILQP counts CW and digital as one mode), in
+//!   which case it is the group's first member. The position never changes;
 //! * a slot the row does not carry contributes the empty string **in position** — a
 //!   missing value is not the same as an absent component, and it must not shift what
 //!   follows it.
@@ -50,6 +53,19 @@ pub struct DupeRule {
     pub by_fields: &'static [&'static str],
     /// SENT slot ids — being the mobile.
     pub by_sent_fields: &'static [&'static str],
+    /// ⭐ **Mode classes that count as ONE mode.** Empty — every contest before the
+    /// Illinois QSO Party — is three separate classes, the shipped behaviour.
+    ///
+    /// ILQP's own 2025 rules (w9awe.org, read 2026-09-17): *"Stations may be worked
+    /// once per band and mode (phone and CW/digital)"*. The parenthesis names two
+    /// modes where this build counts three, so `[["CW", "DIG"]]` says it: a class in a
+    /// group contributes the group's FIRST member to the key, and a class in no group
+    /// contributes itself.
+    ///
+    /// It lives on the rule rather than in a caller because four sites in two
+    /// languages build this key (this module's header), and a fold applied by one of
+    /// them is exactly how they come to disagree.
+    pub mode_class_groups: &'static [&'static [&'static str]],
 }
 
 impl DupeRule {
@@ -121,7 +137,7 @@ impl DupeRule {
             k.push(norm(band));
         }
         if self.by_mode_class {
-            k.push(norm(mode_class));
+            k.push(self.mode_key(&norm(mode_class)));
         }
         for key in self.by_fields {
             k.push(norm(&rx(key)?));
@@ -135,6 +151,24 @@ impl DupeRule {
     /// The key as one string, for a wire or a DTO that cannot carry a vector.
     pub fn joined(&self, row: &crate::fieldday::LoggedQso) -> String {
         join(&self.key(row))
+    }
+
+    /// ⭐ **What one mode class contributes to the key**, which is the class itself
+    /// unless this ruleset groups it ([`mode_class_groups`](Self::mode_class_groups)).
+    ///
+    /// The group's FIRST member is the representative rather than a synthesised label
+    /// (`"CW+DIG"`): a key component that is not a class this build recognises would be
+    /// a new token for every reader of a key — the club wire and the UI included — to
+    /// learn, and the representative needs only to be stable, which a declared list's
+    /// first entry is.
+    ///
+    /// `class` is already normalised by the caller.
+    pub fn mode_key(&self, class: &str) -> String {
+        self.mode_class_groups
+            .iter()
+            .find(|g| g.iter().any(|m| m.eq_ignore_ascii_case(class)))
+            .and_then(|g| g.first())
+            .map_or_else(|| class.to_string(), |m| norm(m))
     }
 }
 
@@ -175,6 +209,7 @@ mod tests {
         by_mode_class: true,
         by_fields: &[],
         by_sent_fields: &[],
+        mode_class_groups: &[],
     };
 
     /// The QSO-party rule: a mobile in a new county is a new station, in BOTH
@@ -185,6 +220,7 @@ mod tests {
         by_mode_class: true,
         by_fields: &["QTH"],
         by_sent_fields: &["QTH"],
+        mode_class_groups: &[],
     };
 
     fn fv(key: &'static str, raw: &str) -> FieldValue {
@@ -203,6 +239,63 @@ mod tests {
         );
     }
 
+    /// ⭐ **Two mode classes that count as ONE mode** — the Illinois QSO Party's own
+    /// 2025 rules (w9awe.org, read 2026-09-17): *"Stations may be worked once per band
+    /// and mode (phone and CW/digital)"*. The parenthesis is the whole rule: there are
+    /// two modes there, not three, so a station worked on CW and then on RTTY on the
+    /// same band is a DUPE — and every contest before it counts them separately.
+    ///
+    /// The grouping is on the RULE rather than in the caller because four sites in two
+    /// languages build this key (this module's header), and a fold applied by one of
+    /// them is how they come to disagree.
+    #[test]
+    fn a_grouped_mode_class_keys_as_its_group_and_an_ungrouped_one_as_itself() {
+        const ILQP: DupeRule = DupeRule {
+            by_call: true,
+            by_band: true,
+            by_mode_class: true,
+            by_fields: &["QTH"],
+            by_sent_fields: &["QTH"],
+            mode_class_groups: &[&["CW", "DIG"]],
+        };
+        let rx = [fv("QTH", "COOK")];
+        let tx = [fv("QTH", "COOK")];
+        let key = |r: &DupeRule, m: &str| join(&r.key_of("W9AWE", "40m", m, &rx, &tx));
+        assert_eq!(
+            key(&ILQP, "CW"),
+            key(&ILQP, "DIG"),
+            "CW then digital, same band, same station — one contact"
+        );
+        assert_ne!(
+            key(&ILQP, "PH"),
+            key(&ILQP, "CW"),
+            "…and phone is still its own mode"
+        );
+        // POSITIVE CONTROL: the same three contacts under a rule with no grouping —
+        // every shipped ruleset — are three keys, not two.
+        const UNGROUPED: DupeRule = DupeRule {
+            mode_class_groups: &[],
+            ..ILQP
+        };
+        let plain: Vec<String> = ["PH", "CW", "DIG"]
+            .iter()
+            .map(|m| key(&UNGROUPED, m))
+            .collect();
+        assert_eq!(
+            plain.iter().collect::<std::collections::HashSet<_>>().len(),
+            3,
+            "without the grouping the three classes are three keys"
+        );
+        // A grouped class keys as the group's FIRST member, whichever member the row
+        // carries — the mode component, in its own position, and nothing else moves.
+        assert_eq!(
+            ILQP.key_of("W9AWE", "40m", "DIG", &rx, &tx),
+            vec!["W9AWE", "40M", "CW", "COOK", "COOK"]
+        );
+        // And the fold is case- and whitespace-insensitive like every other component.
+        assert_eq!(key(&ILQP, " dig "), key(&ILQP, "CW"));
+    }
+
     /// A false flag omits its component; it never contributes an empty string, or two
     /// different rules collapse onto one key.
     #[test]
@@ -213,6 +306,7 @@ mod tests {
             by_mode_class: false,
             by_fields: &["QTH"],
             by_sent_fields: &[],
+            mode_class_groups: &[],
         };
         assert_eq!(
             ss.key_of("W1AW", "20m", "CW", &[fv("QTH", "CT")], &[]),
@@ -240,6 +334,7 @@ mod tests {
             by_mode_class: false,
             by_fields: &["A", "B"],
             by_sent_fields: &["C"],
+            mode_class_groups: &[],
         };
         assert_eq!(
             r.key_of("W1AW", "", "", &[fv("B", "bee")], &[fv("C", "see")]),
@@ -315,6 +410,7 @@ mod tests {
         // indistinguishable, which is the defect this list exists to remove.
         let received_only = DupeRule {
             by_sent_fields: &[],
+            mode_class_groups: &[],
             ..QSO_PARTY
         };
         assert_eq!(
