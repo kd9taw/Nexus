@@ -1174,6 +1174,9 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
                 socket.send(operation(json!({"type":"state","requestId":id(3)}))).await.unwrap();
                 let state = text(&mut socket, reply).await.unwrap()["value"].clone();
                 assert_eq!(state["phase"], "controlling");
+                // The hint the page trusts instead of its own version: named at v5, and only there.
+                let hinted = state["controls"]["capabilities"].as_array().unwrap().contains(&json!("outcomePush"));
+                assert_eq!(hinted, version == 5, "outcomePush is negotiated, not assumed: v{version}");
                 let before = state["revision"].as_u64().unwrap();
                 socket.send(operation(json!({"type":"stationControl","requestId":id(4),"stationBootId":boot,
                     "leaseId":state["leaseId"],"expectedRevision":before,"commandWindowId":state["commandWindowId"],
@@ -1205,6 +1208,7 @@ fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
                     assert_ne!(fresh["commandWindowId"], state["commandWindowId"]);
                     assert!(fresh["revision"].as_u64().unwrap() > before, "the revision moved with the dial");
                     assert_eq!(fresh["nextSequence"].as_u64().unwrap(), state["nextSequence"].as_u64().unwrap() + 1);
+                    assert!(fresh["controls"]["capabilities"].as_array().unwrap().contains(&json!("outcomePush")));
                     assert_eq!(event.as_object().unwrap().len(), 5, "exactly type, sessionId, operationId, value, state");
                 } else {
                     // Positive control: a v4 browser is told nothing it did not ask for...

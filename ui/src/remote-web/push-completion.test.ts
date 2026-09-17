@@ -14,31 +14,37 @@ afterEach(() => vi.useRealTimers())
 
 const CAT_MS = 80
 
-type Options = { version: 4 | 5; push: boolean }
-function connected({ version, push }: Options) {
+/** `page` is what the compiled browser asks at (from the Worker's /config), `station` what the
+ * station advertised at admission; the relay negotiates their minimum, and the station names
+ * `outcomePush` only when that minimum is 5 - so the page learns whether THIS station pushes from
+ * the state it holds, never from its own version. */
+type Options = { page: 4 | 5; station: 4 | 5; push: boolean }
+function connected({ page, station, push }: Options) {
   vi.useFakeTimers({ now: 1000 })
   const relay = new OperationRelay(), sessionId = crypto.randomUUID()
-  const errors: string[] = [], forwarded: { at: number; type: string }[] = []
+  const errors: string[] = [], forwarded: { at: number; type: string; version?: number }[] = []
+  const negotiated = Math.min(page, station)
   const state: OperationState = {
     stationBootId: crypto.randomUUID(), allowed: true, phase: 'available', leaseId: null,
     revision: 1, commandWindowId: null, nextSequence: null, leaseRemainingMs: null,
     actions: [], txArmed: false,
-    controls: { context: { radioId: 1, radioConnection: 1, ampConnection: 1, ampReadSequence: 1 }, capabilities: ['frequency'] }
+    controls: { context: { radioId: 1, radioConnection: 1, ampConnection: 1, ampReadSequence: 1 },
+      capabilities: ['frequency', ...(negotiated >= 5 ? ['outcomePush' as const] : [])] }
   }
   let stored: PendingControl | null = null
   let leaseUntil = 0
   // The station's receipts: what a `result` read answers, and what the event carries.
   const settled = new Map<string, boolean>()
   const client = new OperationClient(wire => relay.receiveBrowser(sessionId, JSON.parse(wire), Date.now()), true,
-    Date.now, undefined, version, { read: () => stored, write: value => { stored = value }, exclusive: async run => run() })
+    Date.now, undefined, page, { read: () => stored, write: value => { stored = value }, exclusive: async run => run() })
   const outcome = (operationId: string) => settled.get(operationId)
     ? { operation: 'stationControl', operationId, outcome: 'applied', evidence: 'radioReadback' }
     : { operation: 'stationControl', operationId, outcome: 'pending' }
-  relay.sync({ supported: true, operationVersion: version, peer: {
+  relay.sync({ supported: true, operationVersion: station, peer: {
     close: () => { throw Error('station closed') },
     send: raw => {
-      const { request } = JSON.parse(raw)
-      forwarded.push({ at: Date.now(), type: request.type })
+      const { request, operationVersion } = JSON.parse(raw)
+      forwarded.push({ at: Date.now(), type: request.type, version: operationVersion })
       if (state.leaseId && Date.now() >= leaseUntil) Object.assign(state, { phase: 'available', leaseId: null,
         commandWindowId: null, nextSequence: null, leaseRemainingMs: null })
       if (request.type === 'acquire') Object.assign(state, { phase: 'controlling', leaseId: crypto.randomUUID(),
@@ -57,7 +63,7 @@ function connected({ version, push }: Options) {
           settled.set(request.requestId, true)
           state.revision++
           state.commandWindowId = crypto.randomUUID()
-          if (version === 5 && push) relay.receiveStation({ type: 'operationEvent', sessionId, operationId: request.requestId,
+          if (negotiated >= 5 && push) relay.receiveStation({ type: 'operationEvent', sessionId, operationId: request.requestId,
             value: outcome(request.requestId), state: structuredClone(state) })
         }, CAT_MS)
       }
@@ -86,7 +92,7 @@ async function controlling(h: ReturnType<typeof connected>) {
 const tune = { action: 'radio.frequency' as const, dialMhz: 7.074, band: '40m', sideband: 'USB' as const }
 
 it('v5: the outcome reaches the browser when the radio lands it, with no state or result round trip', async () => {
-  const h = connected({ version: 5, push: true })
+  const h = connected({ page: 5, station: 5, push: true })
   await controlling(h)
   const sentAt = Date.now(), mark = h.forwarded.length
   const action = h.client.control(tune)
@@ -114,7 +120,7 @@ it('v5: the outcome reaches the browser when the radio lands it, with no state o
 })
 
 it('positive control - v4: the same control needs a state read and a result read, and waits for the tick', async () => {
-  const h = connected({ version: 4, push: true })
+  const h = connected({ page: 4, station: 4, push: true })
   await controlling(h)
   const sentAt = Date.now(), mark = h.forwarded.length
   const action = h.client.control(tune)
@@ -134,8 +140,34 @@ it('positive control - v4: the same control needs a state read and a result read
   expect(h.errors).toEqual([])
 })
 
+it('a v5 page on a v4 station keeps the old path exactly: the relay negotiates 4, the page re-reads at once', async () => {
+  // The rollout pair - the site updated, the desktop not yet. The station never names `outcomePush`,
+  // so the page must not wait for a push that will never come: the state re-read goes out on the
+  // very next tick after the control's reply, as it always did, and the outcome comes by `result`.
+  const h = connected({ page: 5, station: 4, push: true })
+  await controlling(h)
+  expect(h.forwarded.every(f => f.version === 4)).toBe(true)
+  expect(h.client.getSnapshot().state?.controls?.capabilities).not.toContain('outcomePush')
+  const sentAt = Date.now(), mark = h.forwarded.length
+  const action = h.client.control(tune)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(h.forwarded.slice(mark).map(f => f.type)).toEqual(['stationControl'])
+  // The reply (pending) has landed. Within one tick the page asks for the state again - the old,
+  // immediate re-read - not a second later.
+  await vi.advanceTimersByTimeAsync(250)
+  expect(h.forwarded.slice(mark).map(f => f.type)).toEqual(['stationControl', 'heartbeat'])
+  let resolved = false
+  void action.then(() => { resolved = true })
+  for (let ticks = 0; ticks < 20 && !resolved; ticks++) await vi.advanceTimersByTimeAsync(250)
+  expect(await action).toMatchObject({ outcome: 'applied' })
+  expect(h.forwarded.slice(mark).map(f => f.type)).toContain('result')
+  expect(Date.now() - sentAt).toBeLessThanOrEqual(1500)
+  expect(h.client.getSnapshot()).toMatchObject({ fresh: true, controlPending: null })
+  expect(h.errors).toEqual([])
+})
+
 it('v5: a lost event strands nothing - the outcome and a fresh state still arrive by the old polls', async () => {
-  const h = connected({ version: 5, push: false })
+  const h = connected({ page: 5, station: 5, push: false })
   await controlling(h)
   const sentAt = Date.now(), mark = h.forwarded.length
   const action = h.client.control(tune)
@@ -154,7 +186,7 @@ it('v5: a lost event strands nothing - the outcome and a fresh state still arriv
 })
 
 it('v5: an event and a poll never disagree - the newer station revision wins whichever lane brought it', async () => {
-  const h = connected({ version: 5, push: true })
+  const h = connected({ page: 5, station: 5, push: true })
   await controlling(h)
   const held = h.client.getSnapshot().state!
   const event = (revision: number, commandWindowId: string) => {

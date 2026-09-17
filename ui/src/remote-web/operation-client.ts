@@ -519,12 +519,13 @@ export class OperationClient {
         ...(cleared ? { controlPending: null } : {}),
         ...(p.request.type === 'stationControl' ? { fresh: false } : {}), error: null })
       if (p.request.type === 'stationControl') {
-        // Operation v5: the station pushes the outcome AND the fresh state the moment the control
-        // settles (`receiveEvent`), so neither the immediate state re-read nor the result poll is
-        // started here. Both stay as the fallback, one second on: `controlPolledAt` makes the tick
-        // ask for the result then, and the heartbeat re-reads the state on its own cadence, so a
-        // lost event costs the old cadence and never the outcome. Below v5 the poll starts at once.
-        if (this.operationVersion >= 5) this.controlPolledAt = this.now()
+        // Operation v5: a station that pushes (`pushed`) sends the outcome AND the fresh state the
+        // moment the control settles (`receiveEvent`), so neither the immediate state re-read nor
+        // the result poll is started here. Both stay as the fallback, one second on:
+        // `controlPolledAt` makes the tick ask for the result then, and the heartbeat re-reads the
+        // state on its own cadence, so a lost event costs the old cadence and never the outcome.
+        // Any other station - older, or this page below v5 - gets the immediate re-read as before.
+        if (this.pushed()) this.controlPolledAt = this.now()
         else this.polledAt = -Infinity
       }
     } else {
@@ -547,6 +548,14 @@ export class OperationClient {
       this.polledAt = -Infinity
     }
     p.resolve(r.value)
+  }
+  /** Will THIS station push a control's outcome? Negotiated, never assumed from this page's own
+   * version: the station names `outcomePush` in the state it sends only when the relay agreed v5
+   * for the request, so a v5 page on an older station keeps the immediate re-read - and during a
+   * rollout the page and the desktop are updated at different times, so that pair is the common
+   * one. Read from the state held at the moment of the reply, which a control does not clear. */
+  private pushed(): boolean {
+    return this.operationVersion >= 5 && !!this.view.state?.controls?.capabilities.includes('outcomePush')
   }
   /** A state from the station: a reply's, or (operation v5) the one an event carries. One rule
    * keeps the two lanes from ever disagreeing on this page - the station's revision only grows,
