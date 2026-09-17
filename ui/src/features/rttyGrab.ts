@@ -14,8 +14,10 @@
 // auto-sequencer never disagree about what a word is: the same edge punctuation, the same
 // keyword list, the same RST normalization (5NN and the letters-plane TOO are both 599). Two
 // places part company with it, deliberately:
-//   · A call must END in a letter here (see `BASE_CALL`). `plausible_call` only asks for a
-//     digit and two letters, so it would take RR73; nobody double-clicks RR73 meaning a call.
+//   · A call's BASE part must end in a letter here (see `BASE_CALL`) — the segment carrying
+//     prefix, digit and suffix, so a portable `W1AW/7` or `K1ABC/QRP` is a call while `TU73`
+//     and `NR001` are not. `plausible_call` only asks for a digit and two letters, so it would
+//     take RR73; nobody double-clicks RR73 meaning a call.
 //   · A FIGS-damaged call is ACCEPTED. `plausible_call` requires a digit, and a call whose
 //     figures shift was lost has none: W1AW prints WQAW. The sequencer can afford to wait for
 //     clean copy; an operator pointing at the one garbled call they need cannot, so the grab
@@ -85,8 +87,10 @@ function isRst(t: string): boolean {
 /** A 4- or 6-character Maidenhead square. */
 const GRID = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/
 
-/** The shape of a callsign's base part: a letter somewhere before a digit, and a letter last.
- *  That is what separates K1ABC from 100W, 20M, RR73 and every number in an exchange. */
+/** The shape of a callsign's BASE part: a letter somewhere before a digit, and a letter last.
+ *  That is what separates K1ABC from 100W, 20M, RR73 and every number in an exchange. It is
+ *  asked of each `/` segment, never of the whole token: the other segments are a prefix (`VE3`)
+ *  or a designator (`7`, `P`, `MM`, `QRP`), and a US call worked outside its area ends `/7`. */
 const BASE_CALL = /^[A-Z0-9]*[A-Z][A-Z0-9]*[0-9][A-Z0-9]*[A-Z]$/
 
 function isCall(t: string): boolean {

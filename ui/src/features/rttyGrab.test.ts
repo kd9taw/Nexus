@@ -48,6 +48,14 @@ describe('classifyGrab — calls', () => {
     ['VE3/K1ABC', 'VE3/K1ABC'],
     ['W9XYZ/7', 'W9XYZ/7'],
     ['KH6/W9XYZ/P', 'KH6/W9XYZ/P'],
+    // PORTABLE: a US station outside its call area sends its call with the area's digit — the
+    // "ends in a letter" rule belongs to the BASE call, never to the whole token.
+    ['W1AW/7', 'W1AW/7'],
+    ['K1ABC/9', 'K1ABC/9'],
+    ['VE3/K1ABC/4', 'VE3/K1ABC/4'],
+    ['K1ABC/M', 'K1ABC/M'],
+    ['W9XYZ/MM', 'W9XYZ/MM'],
+    ['N0CALL/QRP', 'N0CALL/QRP'],
     // Edge punctuation is stripped exactly as the sequencer's tokenizer strips it.
     ['W1AW?', 'W1AW'],
     ['(K1ABC),', 'K1ABC'],
