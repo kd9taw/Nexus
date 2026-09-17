@@ -1101,6 +1101,133 @@ fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
     });
 }
 
+/// Operation v5: the station SAYS when a rig-touching control settles. Before it, every such
+/// control answered `pending` by construction and the browser learned the outcome by polling -
+/// a `state` read, a `result` read, each a relay round trip, with a 1 s back-off between them.
+/// The station knew the answer the whole time: the radio loop finishes the `Completion` the
+/// receipt holds. Here a v5 browser gets an `operationEvent` with the outcome and a fresh state
+/// (new command window, advanced revision) the moment the readback lands, having sent NOTHING
+/// after the control. The positive control is the same exchange at v4: nothing arrives until
+/// the browser asks with a `result` read - the old path, kept exactly for a browser that never
+/// negotiated the push, and the proof that the event is version-gated rather than broadcast.
+#[test]
+#[cfg(feature = "radio")]
+fn a_settled_control_is_pushed_to_a_v5_browser_and_polled_by_a_v4_one() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+    const DEVICE: &str = "10000000-0000-4000-8000-00000000001d";
+    const SESSION: &str = "20000000-0000-4000-8000-00000000001e";
+    async fn text(
+        socket: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+        within: Duration,
+    ) -> Option<serde_json::Value> {
+        loop {
+            let next = tokio::time::timeout(within, socket.next()).await.ok()??;
+            if let Message::Text(text) = next.unwrap() {
+                return Some(serde_json::from_str(&text).unwrap());
+            }
+        }
+    }
+    fn sample(
+        engine: &crate::SharedEngine,
+        radio: &tempo_app::remote_monitor::provenance::Connection,
+        hz: u64,
+    ) {
+        let mut e = engine.lock().unwrap();
+        let read = e.remote_radio_read(radio, Instant::now()).unwrap();
+        e.remote_observe_cat(Some(&read), Some(true));
+        e.remote_observe_dial(Some(&read), Some(hz));
+        e.remote_observe_mode(Some(&read), Some("PKTUSB"));
+        e.remote_observe_ptt(Some(&read), Some(false));
+    }
+    for version in [5_u8, 4] {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let (station_io, relay_io) = tokio::io::duplex(65536);
+            let dir = std::env::temp_dir().join(format!("nexus-push-completion-{version}-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN52", 0)));
+            let radio = {
+                let mut e = engine.lock().unwrap();
+                e.configure_remote_settings_store(dir.join("settings.json"));
+                e.set_tx_enabled(false);
+                e.set_frequency(14.074, "20m", "USB");
+                e.take_immediate_retune();
+                e.remote_open_radio().unwrap()
+            };
+            sample(&engine, &radio, 14_074_000);
+            let status = SessionStatus { status: Arc::new(Mutex::new(Status::default())),
+                control: Arc::new(Mutex::new(Control { enabled: true, ..Default::default() })), generation: 0 };
+            let authority = status.control.lock().unwrap().operations.clone();
+            authority.permit_station(DEVICE, true).unwrap();
+            let (cancel, cancellation) = watch::channel(false);
+            let relay_engine = engine.clone();
+            let relay = tokio::spawn(async move {
+                let mut socket = tokio_tungstenite::accept_async(relay_io).await.unwrap();
+                let operation = |request: serde_json::Value| Message::Text(json!({"type":"operationRequest","sessionId":SESSION,"deviceId":DEVICE,"operationVersion":version,"request":request}).to_string().into());
+                let id = |n: u32| format!("00000000-0000-4000-8000-0000000000{n:02x}");
+                let reply = Duration::from_secs(3);
+                socket.send(operation(json!({"type":"state","requestId":id(1)}))).await.unwrap();
+                let boot = text(&mut socket, reply).await.unwrap()["value"]["stationBootId"].as_str().unwrap().to_owned();
+                socket.send(operation(json!({"type":"acquire","requestId":id(2),"stationBootId":boot}))).await.unwrap();
+                text(&mut socket, reply).await.unwrap();
+                socket.send(operation(json!({"type":"state","requestId":id(3)}))).await.unwrap();
+                let state = text(&mut socket, reply).await.unwrap()["value"].clone();
+                assert_eq!(state["phase"], "controlling");
+                let before = state["revision"].as_u64().unwrap();
+                socket.send(operation(json!({"type":"stationControl","requestId":id(4),"stationBootId":boot,
+                    "leaseId":state["leaseId"],"expectedRevision":before,"commandWindowId":state["commandWindowId"],
+                    "clientSequence":state["nextSequence"],"context":state["controls"]["context"],
+                    "action":{"action":"radio.frequency","dialMhz":7.074,"band":"40m","sideband":"USB"}}))).await.unwrap();
+                let answer = text(&mut socket, reply).await.unwrap();
+                assert_eq!(answer["requestId"], id(4));
+                assert_eq!(answer["value"]["outcome"], "pending", "a rig-touching control is pending by construction");
+                // The radio loop: take the target, write it, read it back.
+                let work = relay_engine.lock().unwrap().take_remote_radio().unwrap();
+                assert_eq!(work.target(), (7_074_000, "PKTUSB"));
+                work.permission().begin_write(Instant::now()).unwrap();
+                sample(&relay_engine, &radio, 7_074_000);
+                let power = work.power_limit();
+                assert!(work.commit_tuning_readback(&mut relay_engine.lock().unwrap(), power, None));
+                if version == 5 {
+                    // Unprompted: the browser sent nothing after the control.
+                    let event = text(&mut socket, reply).await.expect("the station pushed the outcome");
+                    assert_eq!(event["type"], "operationEvent");
+                    assert_eq!(event["sessionId"], SESSION);
+                    assert_eq!(event["operationId"], id(4));
+                    assert_eq!(event["value"]["operation"], "stationControl");
+                    assert_eq!(event["value"]["operationId"], id(4));
+                    assert_eq!(event["value"]["outcome"], "applied");
+                    assert_eq!(event["value"]["evidence"], "radioReadback");
+                    let fresh = &event["state"];
+                    assert_eq!(fresh["phase"], "controlling");
+                    assert!(fresh["commandWindowId"].is_string(), "a new window, the control having spent the old one");
+                    assert_ne!(fresh["commandWindowId"], state["commandWindowId"]);
+                    assert!(fresh["revision"].as_u64().unwrap() > before, "the revision moved with the dial");
+                    assert_eq!(fresh["nextSequence"].as_u64().unwrap(), state["nextSequence"].as_u64().unwrap() + 1);
+                    assert_eq!(event.as_object().unwrap().len(), 5, "exactly type, sessionId, operationId, value, state");
+                } else {
+                    // Positive control: a v4 browser is told nothing it did not ask for...
+                    assert_eq!(text(&mut socket, Duration::from_millis(500)).await, None, "no push to a v4 browser");
+                    // ...and learns the outcome the old way, by asking.
+                    socket.send(operation(json!({"type":"result","requestId":id(5),"operationId":id(4)}))).await.unwrap();
+                    let polled = text(&mut socket, reply).await.unwrap();
+                    assert_eq!(polled["requestId"], id(5));
+                    assert_eq!(polled["value"]["outcome"], "applied");
+                }
+                cancel.send(true).unwrap();
+            });
+            let request = "ws://localhost/api/remote/stations/x/connect".into_client_request().unwrap();
+            let (socket, _) = tokio_tungstenite::client_async_with_config(request, station_io, Some(transport::socket_config())).await.unwrap();
+            let feeds = transport::Feeds { monitor: crate::remote_monitor::Publisher::default(), spectrum: None, meters: Default::default(), sources: None, audio: None };
+            let served = transport::serve(socket, cancellation, &engine, &feeds, &status).await;
+            relay.await.unwrap();
+            assert_eq!(served, Ok(()));
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+}
+
 // ---- Remote across a Nexus restart (operator decision 2026-09-13) --------------------------------
 //
 // A restart is simulated the way the probe's `restart` does it: drop the Service and start a new

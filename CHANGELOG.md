@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Remote: a tune, band or mode change confirms the moment the radio does it.** Until now every
+  rig-touching control was answered "pending" and the browser found out it had landed by asking —
+  a state read, then a result read, each a round trip through the relay, with a one-second wait
+  between them — so a control felt half a second to two seconds slow, and the tuning wheel ignored
+  input for all of it. The station now tells the browser the outcome itself (operation protocol
+  v5), together with the fresh control state, the instant its radio loop reads the new dial back;
+  the browser installs both and is ready for the next gesture with nothing in between. Polling
+  stays as the safety net, so a pushed message that is lost costs the old delay and never the
+  outcome. A desktop or site on the previous version keeps polling exactly as before; the push
+  needs both updated.
+
 ### Fixed
 
 - **SSB/phone spots stopped arriving, and the Spots panel showed no Phone chip.** Both of the

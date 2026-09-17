@@ -42,6 +42,9 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
     operationVersion: 2,
     operationMaxVersion: 3,
     operationFtVersion: 1,
+    // Operation v5: the station pushes a settled control's outcome. A page that cannot see this
+    // number negotiates v4 and polls exactly as before.
+    operationPushVersion: 1,
     // A service rolled back past the audio lane reports nothing here, and a browser
     // that cannot see this number never offers listening at all.
     audioVersion: 1,
@@ -61,6 +64,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
           ['1','2'].includes(request.headers.get('x-nexus-operation-version')??'') ? Number(request.headers.get('x-nexus-operation-version')) : 0,
           request.headers.get('x-nexus-operation-max-version') === '3' ? 3 : 0,
           request.headers.get('x-nexus-operation-ft-version') === '1' ? 1 : 0,
+          request.headers.get('x-nexus-operation-push-version') === '1' ? 1 : 0,
         ),
         // Receive audio. Its own advertisement, independent of every other version:
         // a station that does not send this header never gets handed an `audioListen`,
