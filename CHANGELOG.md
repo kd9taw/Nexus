@@ -67,6 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has, in turn, and only reports it unreachable once they have all failed. When one does fail,
   **Settings › Connections** now says so and names what was tried, so "this node is down" can
   be told from "this connection cannot reach it over IPv6".
+- **Remote: the Awards list no longer gets squeezed off a phone screen.** In the hosted browser
+  the Awards view carries a status line above the summary and, since the responsiveness check was
+  added, a strip below it. On a phone-sized window with the text enlarged there was no height left
+  for the summary between the two: it collapsed to nothing, and the strip drew over the award
+  cards, so a tap landed on the strip instead of the card under it. The summary now keeps a
+  minimum height of its own whatever the window does — a card scroller worth using — and anything
+  that will not fit scrolls with the column instead of being cut off at the bottom. Windows at
+  1024×768 and above look exactly as they did.
 - **SSB/phone spots stopped arriving, and the Spots panel showed no Phone chip.** Both of the
   human DX-cluster nodes Nexus shipped with, `ve7cc.net:23` and `dxc.wa9pie.net:8000`, went
   down on the same day, and every install that still had the default list had no phone source

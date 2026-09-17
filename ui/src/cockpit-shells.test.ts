@@ -359,6 +359,62 @@ describe('cockpit shells are the deficit valve (winning overflow-y is auto)', ()
   }
 })
 
+/** Final min-height a block computes (in-block declaration order; nothing sets it by
+ *  shorthand). Declaration-split, so a `max-height` never answers a `min-height` probe. */
+function blockMinHeight(body: string): string | null {
+  let v: string | null = null
+  for (const decl of body.split(';')) {
+    const m = /^\s*min-height\s*:\s*(\S[^]*?)\s*$/.exec(decl)
+    if (m) v = m[1].replace(/\s+/g, ' ')
+  }
+  return v
+}
+
+describe('the hosted summary column carries its own deficit', () => {
+  // 2026-09-17. The hosted Awards view grew a second content-height strip (Responsiveness)
+  // BELOW the summary. Neither strip shrinks and `.awards-journey` is `flex: 1` — sized from
+  // ZERO — so at 390x844 x1.75 the summary computed to height 0, its tab bar and card scroller
+  // spilled out of that zero-height box, and `elementFromPoint` over an award card returned the
+  // strip painted on top of it: the cards were unreachable, not merely small.
+  //
+  // Two declarations hold it up, and both are COMPUTED here rather than grepped, because a
+  // later or more specific rule quietly taking one back is this sheet's oldest failure mode.
+  // What this cannot see is whether the floor is BIG ENOUGH — that is geometry, and its gate
+  // is `summary content remains reachable` in remote/test/browser.test.mjs, which is where
+  // this regression was caught and where the fix was watched go green.
+  const view = [
+    new Set(['app', 'remote-workspace']),
+    new Set(['shell']),
+    new Set(['remote-insights-view']),
+  ]
+  const journey = [...view, new Set(['awards-journey'])]
+
+  it('.remote-insights-view scrolls its vertical deficit instead of clipping it', () => {
+    const win = winningOverflowY(view, null)
+    expect(win, '.remote-insights-view: no rule declares overflow at all').not.toBeNull()
+    expect(
+      win!.value,
+      `the cascade winner is \`${win!.selector} { overflow-y: ${win!.value} }\` — whatever sits ` +
+        'at the bottom of the column is clipped out of reach on a short window.',
+    ).toBe('auto')
+  })
+
+  it('the summary keeps a floor under those strips, and the floor yields with the window', () => {
+    const win = winningValue(journey, blockMinHeight)
+    expect(win, '.awards-journey in the hosted column declares no min-height').not.toBeNull()
+    expect(
+      win!.value,
+      `the cascade winner is \`${win!.selector} { min-height: ${win!.value} }\` — a zero floor ` +
+        'lets `flex: 1` collapse the summary to nothing between the two content-height strips.',
+    ).not.toMatch(/^0[a-z%]*$/)
+    expect(
+      win!.value,
+      `min-height is \`${win!.value}\` — a floor under a bounded parent is written to yield, ` +
+        'min(Xem, share of var(--vh-eff)). A fixed floor just moves the clip to a taller window.',
+    ).toContain('var(--vh-eff')
+  })
+})
+
 describe('the bespoke lower regions are gone, not just de-floored', () => {
   // This block used to allow `.ph-lower` / `.cw-lower` to exist and merely policed their
   // 18em floors (= 252px at the 14px body font) — the floors that guaranteed a band of
