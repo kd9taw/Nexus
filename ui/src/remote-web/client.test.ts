@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { BrowserClient, HostedConnection, RemoteError } from './client'
+import { BrowserClient, HostedConnection, RECONNECT_CREDIT_MS, RemoteError } from './client'
 import type { Auth0Client } from '@auth0/auth0-spa-js'
 import fixtures from '../remote-monitor/fixtures.v2.json'
 import { POLL_MS } from '../remote-monitor/protocol'
@@ -143,6 +143,46 @@ it('backs off reconnects and stops retries when account/device authority is refu
   await vi.advanceTimersByTimeAsync(120000)
   expect(post).toHaveBeenCalledTimes(2)
   remote.stop()
+})
+
+/** Kill the live socket and assert the connection waits exactly `expected` ms before the next one. */
+async function expectNextAttemptAfter(socket: Socket, expected: number) {
+  const before = sockets.length
+  socket.end()
+  await vi.advanceTimersByTimeAsync(expected - 1)
+  expect(sockets).toHaveLength(before)
+  await vi.advanceTimersByTimeAsync(1)
+  expect(sockets).toHaveLength(before + 1)
+  return sockets[sockets.length - 1]
+}
+
+// The measured shape of the bug this pins: a socket that was GRANTED a session and died at once
+// used to re-credit the ladder every round, so the delays were 1000 ms eight times over with no
+// ceiling — a 1 Hz reconnect against a dead station, indefinitely. Every failure that happens after
+// the relay accepts the ticket lands here, which is most of them.
+it('escalates the reconnect ladder when a granted session dies at once', async () => {
+  const { remote, socket } = await connection()
+  let live = socket
+  for (const expected of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+    live.receive({ type: 'session', sessionId: crypto.randomUUID() })
+    live = await expectNextAttemptAfter(live, expected)
+  }
+  remote.stop()
+})
+
+// The other half, and it is why the reset existed at all: a station that is up but briefly quiet
+// must not be made to wait out a ceiling it did nothing to earn.
+it('restarts the ladder for a connection that lasted, session or observation', async () => {
+  for (const progress of ['session', 'observation'] as const) {
+    const { remote, socket } = await connection()
+    let live = socket
+    for (const expected of [1000, 2000, 4000]) live = await expectNextAttemptAfter(live, expected)
+    if (progress === 'session') live.receive({ type: 'session', sessionId: crypto.randomUUID() })
+    else live.receive(publication())
+    await vi.advanceTimersByTimeAsync(RECONNECT_CREDIT_MS)
+    live = await expectNextAttemptAfter(live, 1000)
+    remote.stop()
+  }
 })
 
 it.each(['deadline', 'disconnect'])('cancels an HTTP body stalled after headers on %s', async reason => {

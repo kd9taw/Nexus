@@ -30,6 +30,11 @@ export type AccountSession = {
 }
 /** The audio lane's own send budget. Small on purpose - see where it is used. */
 const AUDIO_BUDGET_BYTES = 512
+/** How long a connection has to LAST before its next failure is forgiven the reconnect ladder.
+ *  Ten seconds: twenty of the relay's observation intervals, so an ordinary working connection is
+ *  always credited, and far enough above the ladder's 1 s floor that a socket which cannot hold
+ *  itself up for ten seconds is flapping and should be backed off like anything else. */
+export const RECONNECT_CREDIT_MS = 10_000
 export class RemoteError extends Error {
   // `code` is the service's own word for what it refused - trialEnded, trialDisabled,
   // stationLimit, pairingExpired. Without it every refusal arrives as a bare status number and
@@ -149,6 +154,9 @@ export class HostedConnection {
   private latest: { frame: MonitorFrame; at: number } | null = null
   private disposed = false
   private attempt = 0
+  /** When the live connection first proved itself useful - a session grant or a fresh frame,
+   *  whichever came first - or null for one that never did. Read once, by `retry`. */
+  private liveSince: number | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
   private renewal: ReturnType<typeof setInterval> | undefined
   private abort = new AbortController()
@@ -196,6 +204,16 @@ export class HostedConnection {
     this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected()
     this.latest = null; clearInterval(this.renewal)
     if (this.disposed || this.reconnectTimer) return
+    // What forgives the ladder is a connection that LASTED, read here and cleared as it is read.
+    // It used to be the session message itself, and that made the backoff unreachable for every
+    // failure that happens AFTER the relay accepts the ticket - a station offline behind a
+    // reachable relay, a frame this socket rejects, a station-side close - because each round was
+    // granted its own session and re-credited itself. Measured: 1000 ms, every round, no ceiling.
+    // The reason the credit exists is unchanged (a station that is up but briefly quiet must not
+    // wait out a ceiling it did not earn); it is now paid to a connection that held itself up,
+    // which is that same intent said in terms of the thing rather than a proxy for it.
+    if (this.liveSince !== null && performance.now() - this.liveSince >= RECONNECT_CREDIT_MS) this.attempt = 0
+    this.liveSince = null
     const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempt++, 5))
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.connect() }, delay)
   }
@@ -256,15 +274,16 @@ export class HostedConnection {
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
             if (this.applicationMode) { this.application.open(); this.operations.open() }
             this.sessionId = message.sessionId
-            // A session proves the SERVICE is reachable, so the reconnect backoff starts over
-            // here rather than only when a data frame lands. Those are different failures and
-            // deserve different patience: a station that is up but briefly quiet - a busy Nexus,
-            // a WAN blip - used to escalate exactly like an unreachable one, because every
-            // reconnect during the quiet period incremented `attempt` and none of them carried
-            // data to reset it. After a short outage the next retry was already 16 to 30 seconds
-            // away, and the workspace sat on "Station data unavailable" for all of it. Genuine
-            // connect failures never reach this line, so they still back off as before.
-            this.attempt = 0
+            // A session proves the SERVICE is reachable, so this connection starts counting
+            // towards its reconnect credit here rather than only when a data frame lands. Those
+            // are different failures and deserve different patience: a station that is up but
+            // briefly quiet - a busy Nexus, a WAN blip - used to escalate exactly like an
+            // unreachable one, because every reconnect during the quiet period incremented
+            // `attempt` and none of them carried data to reset it. After a short outage the next
+            // retry was already 16 to 30 seconds away, and the workspace sat on "Station data
+            // unavailable" for all of it. What this must NOT do is forgive the ladder on the
+            // strength of the grant alone - see `retry`.
+            this.liveSince ??= performance.now()
             clearInterval(this.renewal)
             this.renewal = setInterval(() => {void this.renew(socket)},30000)
           } else if (message.type === 'observation' && Object.keys(message).length === 3 && Number.isSafeInteger(message.sentAtMs) && this.anchor) {
@@ -283,7 +302,7 @@ export class HostedConnection {
             // the stale display handles, and still ACK the valid receipt so the relay keeps delivering.
             if(transit>=STALE_MS)this.latest=null
             else if(transit<0){this.latest=null;if(this.sessionId)void this.renew(socket,true);else socket.close(1000,'clockUnavailable')}
-            else {this.latest={frame:ageFrame(parsed,transit),at:received};this.attempt=0;this.clockFailures=0}
+            else {this.latest={frame:ageFrame(parsed,transit),at:received};this.liveSince??=performance.now();this.clockFailures=0}
             const frame=parsed
             const ack = JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence })
             // The full workspace shares this socket with its bounded reads and
