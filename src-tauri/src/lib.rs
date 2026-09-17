@@ -13583,6 +13583,24 @@ fn set_blocked_calls(
     Ok(eng.snapshot())
 }
 
+/// The RTTY cockpit's macro editor and its Everyday/Contest switch: one atomic write of
+/// `macros.rttyProfiles` + `macros.activeRttyProfile` through `Engine::save_rtty_macros`, NEVER
+/// the settings form — `set_settings` advances the TX gate generation (an over the operator had
+/// just queued would not key) and revokes Remote actuation. The payload is taken as JSON so the
+/// engine's exact round-trip check sees what the UI sent: a malformed macro is refused here, not
+/// quietly dropped the way a LOAD forgives one. Returns the saved `macros` for the UI's mirror.
+#[tauri::command(async)]
+fn set_rtty_macros(
+    state: State<'_, SharedEngine>,
+    profiles: serde_json::Value,
+    active: serde_json::Value,
+) -> Result<tempo_app::settings::Macros, String> {
+    let mut eng = engine_lock(&state);
+    eng.save_rtty_macros(profiles, active)
+        .map_err(|reason| format!("RTTY macros were not saved ({reason:?})"))?;
+    Ok(eng.settings().macros.clone())
+}
+
 /// Default inner size (CSS px) a pop-out OPENS at, per panel slug — "give this panel
 /// plenty of room", not a content minimum. The Operate cockpit (waterfall + Band
 /// Activity + roster) needs more room than the narrower insight panels; the band map is
@@ -24232,6 +24250,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             n3fjp_test_connection,
             set_hold_tx_freq,
             set_blocked_calls,
+            set_rtty_macros,
             set_beta_updates,
             set_launch_at_login,
             answer_remote_autostart_offer,
@@ -25561,6 +25580,39 @@ mod tests {
                 "{name} is not registered — invoking it from the UI would fail at runtime"
             );
         }
+    }
+
+    /// The RTTY cockpit's macro editor saves through `set_rtty_macros` — defined, registered, and
+    /// routed through `Engine::save_rtty_macros` rather than any form save (`set_settings`
+    /// advances the TX gate generation, so a queued over would not key). Source-scanned for the
+    /// same reason as the auto-arm test above: registration is what is under test.
+    #[test]
+    fn the_rtty_macro_save_command_is_registered_and_never_a_form_save() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split_once("\nfn set_rtty_macros(")
+            .expect("the command the RTTY cockpit invokes must exist")
+            .1;
+        let body = body.split_once("\n}\n").expect("the end of the command").0;
+        assert!(
+            body.contains("save_rtty_macros("),
+            "it saves through the atomic verb"
+        );
+        assert!(
+            !body.contains("apply_settings") && !body.contains("apply_and_persist"),
+            "the macro save must never run the form-save path"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "set_rtty_macros,"),
+            "set_rtty_macros is not registered — the cockpit's save would fail at runtime"
+        );
     }
 
     /// The advisory DTO carries the ruleset's facts verbatim — and pins the 2026

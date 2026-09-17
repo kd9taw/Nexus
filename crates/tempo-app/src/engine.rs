@@ -4848,6 +4848,12 @@ impl Engine {
         // way no other setting's is: the operator is quietly moved back to the stable channel,
         // the betas stop arriving, and there is no error, no toast and no log line to notice.
         let live_beta_updates = self.settings.beta_updates;
+        // The RTTY macro sets: the same ONE-WRITER shape (`save_rtty_macros`, from the cockpit's
+        // editor). The Settings panel holds a whole-struct snapshot from whenever it loaded, so
+        // without this an unrelated Save reverts a macro the operator edited in the cockpit since.
+        let live_rtty_profiles = std::mem::take(&mut self.settings.macros.rtty_profiles);
+        let live_active_rtty_profile =
+            std::mem::take(&mut self.settings.macros.active_rtty_profile);
         // Start at sign-in and Remote's one-time offer to switch it on: the same ONE-WRITER shape
         // as the beta channel. `launch_at_login` mirrors the operating system's login entry, which
         // only `set_launch_at_login` changes, so a payload's copy would make the switch disagree
@@ -4936,6 +4942,8 @@ impl Engine {
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
             self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
+            self.settings.macros.rtty_profiles = live_rtty_profiles;
+            self.settings.macros.active_rtty_profile = live_active_rtty_profile;
         }
         // Start at sign-in is kept on EVERY path, restore and factory reset included: it mirrors
         // the operating system's login entry, which neither of them changes, so taking the
@@ -5291,6 +5299,33 @@ impl Engine {
     pub fn set_beta_updates(&mut self, on: bool) -> &Settings {
         self.settings.beta_updates = on;
         &self.settings
+    }
+
+    /// ⛔ **THE ONE WRITER of the RTTY cockpit's macro sets** — `macros.rttyProfiles` and
+    /// `macros.activeRttyProfile`, from the dock's editor and its Everyday/Contest switch.
+    ///
+    /// NEVER a form save, for two transmit-path reasons: `apply_settings` advances `tx_gate_gen`,
+    /// so an over the operator had just queued would not key, and it revokes Remote actuation.
+    /// This is the atomic preference save instead ([`Self::save_remote_preferences`], the path
+    /// the satellite Doppler switch reuses): the two fields replaced on a copy of the live
+    /// `macros`, the copy required to round-trip EXACTLY — so a malformed entry, which a LOAD
+    /// forgives entry by entry, is refused here rather than silently dropped — then persisted and
+    /// adopted. A refused or failed save changes nothing. `apply_settings_inner` keeps both
+    /// fields on a form save, which is what makes this the one writer.
+    pub fn save_rtty_macros(
+        &mut self,
+        profiles: serde_json::Value,
+        active: serde_json::Value,
+    ) -> Result<(), crate::remote_control::Reason> {
+        use crate::remote_control::Reason;
+        let mut macros =
+            serde_json::to_value(&self.settings.macros).map_err(|_| Reason::InvalidAction)?;
+        let fields = macros.as_object_mut().ok_or(Reason::InvalidAction)?;
+        fields.insert("rttyProfiles".into(), profiles);
+        fields.insert("activeRttyProfile".into(), active);
+        let mut values = serde_json::Map::new();
+        values.insert("macros".into(), macros);
+        self.save_remote_preferences(&values, &["macros"])
     }
 
     /// ⛔ **THE ONE WRITER of `launch_at_login`** (Settings ▸ Start at sign-in). The caller has
@@ -25701,6 +25736,105 @@ mod tests {
             !e.settings().beta_updates,
             "and back off — the switch is two-way"
         );
+    }
+
+    /// An engine whose atomic preference store is a scratch file — the store the RTTY macro verb
+    /// persists through.
+    fn rtty_macro_engine(tag: &str) -> (Engine, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("nexus-rtty-macros-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.configure_remote_settings_store(path.clone());
+        (e, path)
+    }
+
+    fn contest_f1_edit() -> serde_json::Value {
+        serde_json::json!([{"name": "contest", "macros": [
+            {"key": "F1", "label": "Run", "text": "CQ TEST {MYCALL} {MYCALL} CQ"}
+        ]}])
+    }
+
+    /// ⛔ **A Settings-panel save cannot revert an RTTY macro edit made in the cockpit.**
+    ///
+    /// The panel posts the WHOLE struct from whenever it read the settings, so without this a
+    /// macro edited in the cockpit while the panel was open — or since it last loaded — is
+    /// silently put back by an unrelated Save. The cockpit edit has one writer,
+    /// `save_rtty_macros`, and the form path keeps the live value, the `beta_updates` shape.
+    #[test]
+    fn a_settings_panel_save_cannot_revert_an_rtty_macro_edit() {
+        let (mut e, path) = rtty_macro_engine("form");
+        let mut panel = e.settings().clone(); // read BEFORE the cockpit edit
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .expect("the cockpit edit saves");
+
+        panel.op_name = "Edited in the panel".into();
+        e.apply_settings(panel);
+        assert_eq!(
+            e.settings().op_name,
+            "Edited in the panel",
+            "control: the panel's own edit landed, so the save really ran"
+        );
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            macros["rttyProfiles"],
+            contest_f1_edit(),
+            "a stale Settings-panel save reverted the operator's RTTY macro edit"
+        );
+        assert_eq!(macros["activeRttyProfile"], serde_json::json!("contest"));
+
+        // POSITIVE CONTROL: a restore or factory reset is the opposite contract — the incoming
+        // settings are the whole truth — so the same fields DO move there, and the preservation
+        // above is scoped to the form path rather than making the sets immovable.
+        e.apply_restored_settings(Settings::default());
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(macros["rttyProfiles"], serde_json::json!([]));
+        assert_eq!(macros["activeRttyProfile"], serde_json::json!(""));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The cockpit's macro save is two fields in one atomic write and NOTHING a form save does:
+    /// the TX gate generation does not move (an over the operator had just queued still keys),
+    /// every other setting is byte-identical, the file on disk agrees, and a payload that would
+    /// not round-trip exactly — one LOAD would forgive — is refused and changes nothing.
+    #[test]
+    fn saving_rtty_macros_writes_two_fields_and_no_transmit_state() {
+        let (mut e, path) = rtty_macro_engine("atomic");
+        let generation = e.tx_gate_gen;
+        let mut expected = serde_json::to_value(e.settings()).unwrap();
+        expected["macros"]["rttyProfiles"] = contest_f1_edit();
+        expected["macros"]["activeRttyProfile"] = serde_json::json!("contest");
+
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .unwrap();
+        assert_eq!(
+            e.tx_gate_gen, generation,
+            "a macro save advanced the TX gate generation — a queued over would not key"
+        );
+        assert_eq!(serde_json::to_value(e.settings()).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_value(Settings::load(&path)).unwrap()["macros"]["rttyProfiles"],
+            contest_f1_edit(),
+            "persisted"
+        );
+
+        let bad = serde_json::json!([{"name": "contest", "macros": [{"key": "F1", "label": 5}]}]);
+        assert!(e
+            .save_rtty_macros(bad, serde_json::json!("contest"))
+            .is_err());
+        assert_eq!(
+            serde_json::to_value(e.settings()).unwrap(),
+            expected,
+            "a refused save changed something"
+        );
+
+        // POSITIVE CONTROL for the generation check: a form save does advance it.
+        let s = e.settings().clone();
+        e.apply_settings(s);
+        assert_ne!(e.tx_gate_gen, generation);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     /// ⛔ **No settings payload moves Start at sign-in, on ANY path.** `set_launch_at_login` is

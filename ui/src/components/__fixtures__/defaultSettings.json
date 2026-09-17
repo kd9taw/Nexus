@@ -268,7 +268,9 @@
     ],
     "cw": [],
     "cwProfiles": [],
-    "activeCwProfile": 0
+    "activeCwProfile": 0,
+    "rttyProfiles": [],
+    "activeRttyProfile": ""
   },
   "voiceMessages": [
     {

@@ -2845,6 +2845,19 @@ export interface UpdateInfo {
   downloadUrl: string
 }
 
+/** One RTTY F-key macro as the operator saved it (Rust `RttyMacro`). */
+export interface RttyMacro {
+  key: string
+  label: string
+  text: string
+}
+
+/** One RTTY macro set's saved overrides (Rust `RttyMacroProfile`). */
+export interface RttyMacroProfile {
+  name: string
+  macros: RttyMacro[]
+}
+
 /** Persistent operator + radio settings. */
 export interface Settings {
   mycall: string
@@ -3603,6 +3616,12 @@ export interface Settings {
     cwProfiles?: { name: string; macros: { key: string; label: string; text: string }[] }[]
     /** Index into `cwProfiles` of the active set. */
     activeCwProfile?: number
+    /** The RTTY cockpit's F1–F8 sets by name (`everyday`, `contest`), each holding ONLY the keys
+     * the operator changed — a key with no entry is the built-in, and an empty list is the whole
+     * built-in set. Written only by `setRttyMacros`; a Settings save keeps the live value. */
+    rttyProfiles?: RttyMacroProfile[]
+    /** The RTTY set the cockpit shows: `contest`, or Everyday for anything else. */
+    activeRttyProfile?: string
   }
   // --- dual-radio ---
   /** Configured radios (dual-radio). Migrated to a single profile for a one-radio station; the flat

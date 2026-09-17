@@ -20,6 +20,7 @@ import type {
   MeterReadout,
   SkimHit,
   PskState,
+  RttyMacroProfile,
   RttyState,
   SstvState,
   ClubLogPushResult,
@@ -2662,6 +2663,19 @@ export async function answerRemoteAutostartOffer(): Promise<AppSnapshot> {
  * effects are reason enough.) The engine trims + uppercases. */
 export async function setFdOperator(call: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_fd_operator', { call })
+}
+
+/** Save the RTTY cockpit's macro sets and which one it shows — the ONE write path for
+ * `macros.rttyProfiles` + `macros.activeRttyProfile`, from the dock's editor and its
+ * Everyday/Contest switch. Narrow and atomic, NEVER the settings form: `set_settings` advances
+ * the TX gate generation (an over just queued would not key) and revokes Remote actuation. The
+ * payload must round-trip exactly or the save is refused, and a Settings-panel save keeps the
+ * live value. Resolves with the saved `macros`, for the caller's settings mirror. */
+export async function setRttyMacros(
+  profiles: RttyMacroProfile[],
+  active: string,
+): Promise<Settings['macros']> {
+  return invoke<Settings['macros']>('set_rtty_macros', { profiles, active })
 }
 
 /** Load persisted operator + radio settings. */
