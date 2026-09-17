@@ -20973,12 +20973,161 @@ button.sat-chip:disabled {
   color: var(--tx);
 }
 
-/* Their-call field in the macro row — feeds the {CALL} macro token. */
+/* Their-call field in the dock's fixed row — feeds the {CALL} macro token. */
 .rtty-hiscall {
   width: 9em;
   flex: 0 0 auto;
   font-family: var(--font-mono);
   text-transform: uppercase;
+}
+
+/* RTTY DOCK — F1–F8 AS ONE ROW OF EIGHT, and the fixed row (Call box, set switch, TX, Esc/Stop).
+   Eight keys and the fixed row do not fit one auto-fill grid at the 1024 floor, and a grid that
+   wraps wherever it runs out of room puts Esc/Stop somewhere different at every width. So the keys
+   are a fixed eight-track grid — an F-key keeps its place, the way it does on the keyboard — and
+   `.rtty-dock-keys` lays the keys and the fixed row side by side where the dock can hold both
+   (the keys want ~64em for eight readable captions) and folds the fixed row under the keys where
+   it cannot. A WRAP, so it follows the dock's own width at any zoom, never a viewport guess.
+
+   WHY THE FOLD IS WIDTH-DRIVEN RATHER THAN ALWAYS TWO ROWS — MEASURED (headless Chrome, the real
+   App on #rtty with the log strip rendered, 2026-09-17). A second row costs the panes above it:
+   the dock goes 113 → 155 px at 100 % and 96 → 133 px at the 85 % auto zoom. At 1920×1080 the log
+   strip's Log button already sat 4 px below its pane's fold with the old four-key row; two rows
+   there left it 29 px below. Sharing the line gives that back — 4 px, as before — with each key
+   150 px wide; at 1680×1050 the keys are 120 px and the button 18 px below; from 64em down the
+   fixed row folds under the keys. At the 1024×768 floor (85 %) the dock is two rows (keys 111 px),
+   the log pane is 138 px instead of 175, and the Log button is reached by the log pane's own
+   scroll, as it already was; Esc/Stop and Stop TX stay in view at every size measured, 175 %
+   pinned included. An operator's own long caption ellipsizes inside its key (its tooltip keeps the
+   message); every built-in caption fits, in all five catalogs, down to the 111 px keys at the
+   floor — German's S&P key was shortened to fit. On a narrow window the keys fold to two rows of
+   four, still in keyboard order. */
+.rtty-dock-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  /* A row that keys the rig: never a shrink victim in the dock's column (cockpit-shells.test.ts
+     ROWS), like `.cw-macros` and `.cw-send`. */
+  flex: 0 0 auto;
+}
+.rtty-macros {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+.rtty-dock-keys > .rtty-macros {
+  flex: 999 1 64em;
+  min-width: 0;
+}
+.rtty-dock-keys > .rtty-dock-row {
+  flex: 1 1 auto;
+}
+[data-viewport='xs'] .rtty-macros {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+/* One key: the macro button, and its ✎ in the corner. `min-width: 0` so a long caption ellipsizes
+   inside its track instead of widening the grid. */
+.rtty-macro-slot {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+.rtty-macro-slot > .cw-macro {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rtty-macro-slot .cw-macro-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rtty-macro-empty .cw-macro-label {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+/* ✎ shows on hover or keyboard focus anywhere in the key. Always in the DOM, so it stays in the
+   tab order and a screen reader finds it. */
+.rtty-macro-edit {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  padding: 0 4px;
+  font-size: var(--fs-label);
+  line-height: 1.4;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+}
+.rtty-macro-slot:hover .rtty-macro-edit,
+.rtty-macro-slot:focus-within .rtty-macro-edit {
+  opacity: 1;
+}
+/* The fixed row: Call box and set switch at the left, TX and Esc/Stop together at the right. */
+.rtty-dock-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rtty-dock-row .rtty-tx-latch {
+  margin-left: auto;
+}
+.rtty-macro-set {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+/* THE EDITOR — out of flow, sitting on the dock's top edge over the key it edits, so opening it
+   moves no control and covers none of the dock: the Esc/Stop macro, TX and the sequencer row stay
+   exactly where they were and uncovered. Its containing block is the dock itself (a positioned
+   element), and `left` is the key's offset in it, clamped by the component. Opaque, because it
+   sits over the transcript and the log. */
+.rtty-macro-editor {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  z-index: 3;
+  box-sizing: border-box;
+  width: min(30em, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.rtty-macro-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rtty-macro-editor-cap {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
+.rtty-macro-editor-tokens,
+.rtty-macro-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+.rtty-macro-token {
+  padding: 1px var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.rtty-macro-editor-error {
+  margin: 0;
+  font-size: var(--fs-label);
+  color: var(--state-weak);
 }
 /* =========================================================================
    JS8 cockpit — CONTENT styling only. Structure (the region, columns, the dock) is in

@@ -78,6 +78,11 @@ const MIGRATED = [
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',
+  // The RTTY F-key surface (2026-09-17): the macro buttons, their editor and the set switch,
+  // and the set model's caption keys. Migrated as they were written. RttyCockpit.tsx stays on
+  // PARTIAL for its stop controls; nothing here stops a transmission.
+  'components/RttyMacroEditor.tsx',
+  'features/rttyMacros.ts',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
   'components/RevealNudge.tsx',
