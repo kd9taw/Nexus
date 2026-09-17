@@ -2065,6 +2065,7 @@ export const DE: PartialCatalog = {
   "logEntry.fd.zone.title": "CQ-Zone der Gegenstation, 1–40",
   "logEntry.contest.chip": "CONTEST-LOG",
   "logEntry.contest.hint": "{{band}} · QSOs gehen ins Contest-Log",
+  "logEntry.contest.offBand": "{{band}} ist kein Band dieses Contests · QSOs gehen trotzdem ins Contest-Log",
   "logEntry.contest.qthMissing": "Kein QTH für {{call}}. Stationen in den USA und Kanada senden ihren Bundesstaat oder ihre Provinz — eintragen, falls mitgeschrieben. Loggen geht auch ohne.",
   "logEntry.sent.aria": "Was du sendest",
   "logEntry.sent.label": "Sendest",

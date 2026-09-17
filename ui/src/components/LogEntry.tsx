@@ -1257,6 +1257,15 @@ export function LogEntry({
   // other contest's contacts go to the same contest log under that contest's rules, and
   // telling a CQ WW operator their contacts go "to the Field Day log" is simply wrong.
   const fdEventIsFieldDay = isFieldDay(fieldDay?.event)
+  // THE CONTEST'S OWN BANDS, as advice. A ruleset that names its bands (CQ WW RTTY: 80, 40,
+  // 20, 15 and 10 m) makes the hint say so when the rig is somewhere else. It is never a
+  // refusal — the contact still logs and nothing in the score reads the list — because the
+  // sponsor's log checker, not this strip, decides what a contact on another band is worth.
+  const contestBands = fdEventIsFieldDay ? [] : (fieldDay?.bands ?? [])
+  const offContestBand =
+    contestBands.length > 0 &&
+    snap.radio.band !== '' &&
+    !contestBands.some((b) => b.toLowerCase() === snap.radio.band.toLowerCase())
   // A USA or Canada station logged with no QTH, in a contest where a QTH is part of what
   // such a station sends (an OPTIONAL received QTH slot — DX stations send none). A
   // WARNING, never a refusal: the operator may not have copied it, and a contact is still
@@ -1280,7 +1289,9 @@ export function LogEntry({
           <span className="le-fd-hint">
             {fdEventIsFieldDay
               ? t('logEntry.fd.hint', { band: snap.radio.band })
-              : t('logEntry.contest.hint', { band: snap.radio.band })}
+              : offContestBand
+                ? t('logEntry.contest.offBand', { band: snap.radio.band })
+                : t('logEntry.contest.hint', { band: snap.radio.band })}
           </span>
 
           {/* ⭐ THE SENT SIDE, READ-ONLY (§9) — what is going on the air right now.

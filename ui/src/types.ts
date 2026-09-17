@@ -2708,6 +2708,9 @@ export interface FieldDayStatus {
    *  ⚠️ It describes the NEXT transmission only. A logged row's own sent exchange is its
    *  `mex`; never label a row with this. Absent on a build older than the field. */
   sentExchange?: string
+  /** The bands this contest runs on (`'20m'`) — advisory: the strip warns when the rig is on
+   *  another band and never refuses the contact. Absent when the ruleset names none. */
+  bands?: string[]
   /** The session's role id — `''` for a symmetric contest (both Field Day events).
    *  Shown beside the exchange only when it names something. */
   role?: string

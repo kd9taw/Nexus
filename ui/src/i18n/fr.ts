@@ -1779,6 +1779,7 @@ export const FR: PartialCatalog = {
   "logEntry.fd.zone.title": "Leur zone CQ, 1–40",
   "logEntry.contest.chip": "LOG CONCOURS",
   "logEntry.contest.hint": "{{band}} · les contacts vont dans le journal du concours",
+  "logEntry.contest.offBand": "{{band}} n'est pas une bande de ce concours · les contacts vont quand même dans le journal du concours",
   "logEntry.contest.qthMissing": "Pas de QTH pour {{call}}. Les stations des États-Unis et du Canada envoient leur État ou province — ajoute-le si tu l'as copié. L'enregistrement reste possible sans.",
   "logEntry.sent.aria": "Ce que tu envoies",
   "logEntry.sent.label": "Tu envoies",

@@ -53,6 +53,20 @@ it('accepts a row\'s received values, and still bounds them',()=>{
  expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
 })
 
+// A contest that names its bands (CQ WW RTTY) sends them as advice for the entry strip. Same
+// refusal hazard as the keys above for a key the validator does not know, and still bounded.
+it('accepts the contest\'s advisory band list, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const fd=(page.meta as {source:{fieldDay:Record<string,unknown>}}).source.fieldDay
+ fd.bands=['80m','40m','20m','15m','10m']
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ // Negative controls: not a list of text, and a list past any contest's band count.
+ fd.bands=[20]
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+ fd.bands=Array(33).fill('20m')
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+})
+
 // Every contest in the rules file has to survive the browser's validator. This pins the defect
 // where it only accepted arrlfd and wfd: thirteen of the fifteen events then in the rules table
 // had their ENTIRE Field Day payload rejected, so a station running a QSO party or a VHF contest

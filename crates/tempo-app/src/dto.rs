@@ -1497,6 +1497,11 @@ pub struct FieldDayStatus {
     /// describes a row reads that row's own `mex`.
     #[serde(default)]
     pub sent_exchange: String,
+    /// The bands this contest runs on (`"20m"`), from the ruleset, as ADVISORY data — the strip
+    /// says so when the rig is elsewhere, and nothing refuses a contact over it. Empty when the
+    /// ruleset names none, which is every contest before CQ WW RTTY.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bands: Vec<String>,
     /// The session's current role id — `""` for a symmetric contest, which is both
     /// Field Day events. The strip shows it beside the exchange only when it names
     /// something, so an operator can see which role they are in before they cross a

@@ -926,6 +926,7 @@ export const JA: PartialCatalog = {
   "logEntry.fd.zone.title": "相手局のCQゾーン（1–40）",
   "logEntry.contest.chip": "コンテストログ",
   "logEntry.contest.hint": "{{band}}・交信はコンテストログに記録されます",
+  "logEntry.contest.offBand": "{{band}} はこのコンテストのバンドではありません・交信はそれでもコンテストログに記録されます",
   "logEntry.contest.qthMissing": "{{call}} のQTHがありません。米国とカナダの局は州・準州を送ります — 受信していれば入力してください。QTHなしでも記録できます。",
   "logEntry.sent.aria": "送信中の内容",
   "logEntry.sent.label": "送信中",

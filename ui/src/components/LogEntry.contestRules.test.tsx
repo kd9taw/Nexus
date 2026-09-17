@@ -304,3 +304,45 @@ describe('6 — the country file’s zone is a hint, and a W/VE contact with no 
     api.resolveEntity.mockImplementation(() => Promise.resolve(null))
   })
 })
+
+describe('7 — a band the contest does not use is flagged, never refused', () => {
+  it('says so on 30 m, not on 20 m, and still offers Log', () => {
+    const bands = ['80m', '40m', '20m', '15m', '10m']
+    const view = render(strip(cqwwRtty({ bands } as Partial<FieldDayStatus>)))
+    const hint = () => document.querySelector('.le-fd-header .le-fd-hint')!.textContent
+    expect(hint()).toBe('20m · contacts go to the contest log')
+    const offBand = { ...snap, radio: { band: '30m', dialMhz: 10.142 } } as unknown as AppSnapshot
+    view.rerender(
+      <LogEntry
+        onOpenLogbook={() => {}}
+        snap={offBand}
+        mode="RTTY"
+        defaultRst="599"
+        exchange="terrestrial"
+        titled={false}
+        fieldDay={cqwwRtty({ bands } as Partial<FieldDayStatus>)}
+        fdMode="DIG"
+        fdSubmode="RTTY"
+      />,
+    )
+    expect(hint()).toBe('30m is not a band this contest uses · contacts still go to the contest log')
+    fireEvent.change(callBox(), { target: { value: 'JA1ABC' } })
+    fireEvent.change(box('Zone'), { target: { value: '25' } })
+    expect((screen.getByRole('button', { name: 'Log' }) as HTMLButtonElement).disabled).toBe(false)
+    // CONTROL: a contest that names no bands never says it.
+    view.rerender(
+      <LogEntry
+        onOpenLogbook={() => {}}
+        snap={offBand}
+        mode="RTTY"
+        defaultRst="599"
+        exchange="terrestrial"
+        titled={false}
+        fieldDay={cqwwRtty()}
+        fdMode="DIG"
+        fdSubmode="RTTY"
+      />,
+    )
+    expect(hint()).toBe('30m · contacts go to the contest log')
+  })
+})

@@ -129,6 +129,7 @@ impl Engine {
             // What `{EXCH}` keys next — the RTTY macros read it here. It describes the
             // next transmission, never a logged row (those carry `mex`).
             sent_exchange: self.contest_sent_exchange().unwrap_or_default(),
+            bands: rs.bands.iter().map(|b| b.to_string()).collect(),
             role: role.id.to_string(),
             boards: tempo_core::contest::boards(&rs.scoring, spec, role)
                 .into_iter()
@@ -179,6 +180,10 @@ impl Engine {
         // …and the one string rendered from them, which is bounded by the browser's own
         // per-string rule and must be refused here first rather than there.
         check(&self.contest_sent_exchange().unwrap_or_default())?;
+        // The advisory band list comes out of a rules file, which bounds nothing about it.
+        for b in log.ruleset().bands {
+            check(b)?;
+        }
         if let Some(s) = &station.dxcall {
             check(s)?;
         }
