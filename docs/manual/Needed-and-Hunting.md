@@ -81,7 +81,7 @@ The board is rebuilt from three independent sources:
 
 - **Own-radio decodes** — highest confidence, zero latency; your FT8/FT4 decoder is already copying the station.
 - **PSK Reporter** — the near-region feed retains spots where at least one endpoint is within 800 km of your grid (`REGION_RADIUS_KM`). Both the live-paths and region-paths feeds use a 900-second (15-minute) recency window.
-- **Cluster/RBN** — on by default: four human nodes (`ve7cc.net:23`, `dxc.wa9pie.net:8000`, `dx.w1nr.net:23`, `dxspots.com:7300`) are pre-configured, and RBN CW/digital feeds are auto-wired separately, so CW and Phone rows appear without any setup. Spot recency window for board admission is 900 seconds. The `SpotBuffer` retains spots for 20 minutes on an age-based policy under an 8,000-entry memory ceiling, so the 15-minute admission window is never starved by buffer churn.
+- **Cluster/RBN** — on by default: Nexus keeps two human nodes connected, chosen from eight built into the release, and RBN CW/digital feeds are auto-wired separately, so CW and Phone rows appear without any setup. Spot recency window for board admission is 900 seconds. The `SpotBuffer` retains spots for 20 minutes on an age-based policy under an 8,000-entry memory ceiling, so the 15-minute admission window is never starved by buffer churn.
 
 The board refreshes every 30 seconds in the main window and every 15 seconds in a popped-out second-monitor window.
 
@@ -153,7 +153,7 @@ The Needed board can be detached into a standalone second-monitor window. The po
 ## Limits / Not Yet
 
 - **PSK Reporter and RBN require internet.** Offline, only own-radio decodes appear as evidence; the board will be mostly empty.
-- **CW and Phone rows come from cluster/RBN.** These feeds are on by default (VE7CC node pre-configured, RBN auto-wired), so CW and Phone rows appear without setup — but they require internet, since PSK Reporter does not carry CW or Phone spots.
+- **CW and Phone rows come from cluster/RBN.** These feeds are on by default (cluster nodes chosen automatically, RBN auto-wired), so CW and Phone rows appear without setup — but they require internet, since PSK Reporter does not carry CW or Phone spots.
 - **VHF gates require a correct grid in Settings.** Without a grid set, haversine distance is undefined and no VHF near-me filtering is applied.
 - **POTA/SOTA chips require a fresh activator cache.** If the cache is older than 10 minutes, the chips do not appear on board rows.
 - **Pop-out window one-click work is partial.** The popped-out window QSYs band only; it does not navigate to the cockpit or prefill the callsign.

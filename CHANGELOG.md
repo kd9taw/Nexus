@@ -13,13 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node allows one session per callsign and disconnects the older one, so running a second Nexus,
   or Nexus beside another cluster program on the same call, made the two bump each other
   indefinitely: a cluster connection that flapped with no explanation on screen. Under
-  **Settings › Connections › Cluster login SSID** you can now give each one its own SSID (`2`
-  logs in as `W9XYZ-2`), which the node treats as a separate user, and both stay connected.
+  **Settings › Logging & Connectors › Integrations & Feeds › Spot Sources › Cluster login SSID**
+  you can now give each one its own SSID (`2` logs in as `W9XYZ-2`), which the node treats as a
+  separate user, and both stay connected.
   **Nexus does not choose one for you** — it is empty by default and logs in exactly as before,
   because a node that requires registration treats the suffixed call as a different, unregistered
   user and will not let it post spots, and because an SSID picked for you could collide with the
   one you already use in the other program. Your spots still reach the network under your plain
   callsign either way; nodes relaying them strip the suffix.
+- **Nexus now picks working DX-cluster nodes for you, and shows how each node is doing.** Phone
+  spots on the Needed board and in the Spots panel come from human-run DX-cluster nodes, and a
+  node can stop working without warning: both nodes Nexus 1.13.0 shipped with did, on the same
+  day. Nexus now keeps two nodes connected, chosen from eight nodes built into this release, each
+  checked before it went in. A node that stops answering for five minutes while your other spot
+  feeds keep working is skipped for a day and another node takes its place, and the connection
+  log says which node and why. A quiet band never counts against a node: once a node has logged
+  you in, it stays in use however long the band is silent. Operators are spread across the nodes
+  by callsign, so everyone does not end up on the same two. **Settings › Logging & Connectors ›
+  Integrations & Feeds › Spot Sources** shows each node as In use, Standby, or Not answering and
+  why. If your install still had the node list Nexus shipped, it switches to this by itself. If
+  you edited the list yourself, it stays exactly as you left it and nothing is switched for you:
+  Spot Sources shows how each of your nodes is doing, and **Pick working nodes automatically** is
+  there when you want it. A node you remove from your own list now disconnects when you save,
+  instead of at the next restart.
 
 ### Changed
 
@@ -68,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has, in turn, and only reports it unreachable once they have all failed. When one does fail,
   **Settings › Connections** now says so and names what was tried, so "this node is down" can
   be told from "this connection cannot reach it over IPv6".
+- **The Phone source could name a cluster node that was down.** The Now-Bar's Phone pill and the
+  Phone source line on the Needed board named the first node Nexus had started, whether or not
+  it was connected, so "live" could sit beside the name of a dead node. They now name only the
+  nodes you are logged in to, or, while none is, the nodes being tried.
 - **Remote: the Awards list no longer gets squeezed off a phone screen.** In the hosted browser
   the Awards view carries a status line above the summary and, since the responsiveness check was
   added, a strip below it. On a phone-sized window with the text enlarged there was no height left
@@ -84,8 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the default list — `dx.w1nr.net:23` (DXSpider) and `dxspots.com:7300` (CC Cluster, on a
   high port for networks that block telnet port 23) — and an install still on the original
   pair gains both on the next launch; a list you edited yourself is left alone. Until you
-  upgrade, add either one under **Settings › Connections › DX cluster nodes** (both are in
-  the **Add a known node** presets) and phone spots return at once.
+  upgrade, add either one under **Settings › Logging & Connectors › Integrations & Feeds ›
+  Spot Sources**: `dx.w1nr.net:23` is in the **+ Add a known node…** presets, and
+  `dxspots.com:7300` goes in with **+ Custom**. Phone spots return at once.
 - **The Listen button in the Remote browser did nothing.** Opening the workspace replaced the
   connecting page with the operating one, and that swap permanently closed the audio channel
   before the button you could see was ever wired to it — so it looked enabled and sent nothing,
