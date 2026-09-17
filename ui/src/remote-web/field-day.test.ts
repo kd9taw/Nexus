@@ -86,3 +86,22 @@ it('accepts every event id the shipped rules file can produce',()=>{
   expect(()=>parseFieldDay(page),String(bad)).toThrow('invalidFieldDay')
  }
 })
+
+// The same defect, one object over: the station sends the ruleset facts of the contest it is
+// running (`fd_ruleset_dto` puts the rules-file id in `ruleset.event`), and the browser still
+// accepted only arrlfd and wfd there, so a station running CQ WW RTTY or a QSO party showed
+// nothing through Remote. Same list as above, same shape rule.
+it('accepts the ruleset facts of every shipped contest, not only Field Day\'s',()=>{
+ const shipped=["arrlfd", "arrlss_cw", "arrlss_ssb", "arrlvhf_jan", "arrlvhf_jun", "arrlvhf_sep", "cqp", "cqwpx_cw", "cqwpx_ssb", "cqww_cw", "cqww_rtty", "cqww_ssb", "ohqp", "tnqp", "txqp", "wfd"]
+ for(const event of shipped){
+  const page=fieldDayPage()
+  ;(page.meta as {source:{ruleset:{event:string}}}).source.ruleset.event=event
+  expect(()=>parseFieldDay(page),event).not.toThrow()
+ }
+ // Negative control: the shape check still refuses something that is not an event id.
+ for(const bad of ['','ARRLFD','arrl fd','x'.repeat(33),1 as unknown as string]){
+  const page=fieldDayPage()
+  ;(page.meta as {source:{ruleset:{event:string}}}).source.ruleset.event=bad
+  expect(()=>parseFieldDay(page),String(bad)).toThrow('invalidFieldDay')
+ }
+})

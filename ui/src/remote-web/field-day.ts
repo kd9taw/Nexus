@@ -82,7 +82,9 @@ export function parseFieldDay(page: QueryPage): FieldDayObservation & { captured
   // class/section pair), a `problem` and a `role`. Optional for both-direction compatibility.
   const r = object(value.ruleset,['event','rulesYear','bannedModes','spottingAllowed','clusterAllowed','enforcement'],
     ['exchange','problem','role'])
-  if (!['arrlfd','wfd'].includes(String(r.event)) || !integer(r.rulesYear) || !texts(r.bannedModes,64) || typeof r.spottingAllowed !== 'boolean' ||
+  // The ruleset of whichever contest is running — the same id, so the same shape rule as the
+  // status's `event` above (a hardcoded arrlfd/wfd pair here blanked every other contest).
+  if (!eventId(r.event) || !integer(r.rulesYear) || !texts(r.bannedModes,64) || typeof r.spottingAllowed !== 'boolean' ||
     typeof r.clusterAllowed !== 'boolean' || !text(r.enforcement) ||
     (r.role !== undefined && !text(r.role)) ||
     (r.problem !== undefined && r.problem !== null && !text(r.problem)) ||
