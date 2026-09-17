@@ -25,9 +25,20 @@ const BOOT = '11111111-1111-4111-8111-111111111111', LEASE = '22222222-2222-4222
  * return, the moment its radio loop lands the target. `push` turns that event off at v5 and
  * `pollSettles: false` makes every `result` read answer pending forever: between them a test can
  * hold each confirmation path on its own. */
-export type ScriptedOptions = { push?: boolean; pollSettles?: boolean }
+export type ScriptedOptions = {
+  push?: boolean
+  pollSettles?: boolean
+  /** Whether the station NAMES `outcomePush` in its capabilities, as a real v5 station does the
+   * moment the relay agrees v5 (684bfb70): the page trusts that word, never its own version, to
+   * defer the post-command polls. Defaults to `push`; a pushing station that stays silent is not
+   * a station that ships, and it makes the page poll and push at once. */
+  outcomePush?: boolean
+  /** The radio's own time from CAT command to readback. */
+  catMs?: number
+}
 export function scriptedStation(rttMs: number, version: 4 | 5 = 4, options: ScriptedOptions = {}) {
   const push = options.push ?? version >= 5, pollSettles = options.pollSettles ?? true
+  const outcomePush = options.outcomePush ?? push, catMs = options.catMs ?? SCRIPTED_CAT_MS
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date', 'requestAnimationFrame', 'cancelAnimationFrame'] })
   const half = rttMs / 2
   const wire: { at: number; type: string }[] = []
@@ -37,7 +48,8 @@ export function scriptedStation(rttMs: number, version: 4 | 5 = 4, options: Scri
   let revision = 1, sequence = 1, windowId = crypto.randomUUID()
   const state = (): OperationState => ({ stationBootId: BOOT, allowed: true, phase: 'controlling', leaseId: LEASE, revision, commandWindowId: windowId,
     nextSequence: sequence, leaseRemainingMs: 5000, actions: [], txArmed: false, transmitEpoch: '000000000000002a',
-    controls: { context: { radioId: 1, radioConnection: 7, ampConnection: null, ampReadSequence: null }, capabilities: ['frequency', 'bandSelection'] } })
+    controls: { context: { radioId: 1, radioConnection: 7, ampConnection: null, ampReadSequence: null },
+      capabilities: ['frequency', 'bandSelection', ...(outcomePush ? ['outcomePush' as const] : [])] } })
   const completions = new Map<string, { done: boolean }>()
   const values = new Map<string, string>()
   const storage = { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => { values.set(k, v) }, removeItem: (k: string) => { values.delete(k) } }
@@ -59,7 +71,7 @@ export function scriptedStation(rttMs: number, version: 4 | 5 = 4, options: Scri
             completion.done = true
             if (push) setTimeout(() => operations.receiveEvent({ type: 'operationEvent', operationId: request.requestId,
               value: { operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'radioReadback' }, state: state() }), half)
-          }, SCRIPTED_CAT_MS)
+          }, catMs)
           reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'pending' })
           break
         }

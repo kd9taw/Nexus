@@ -35,20 +35,28 @@ async function measure(rttMs: number, version: 4 | 5 = 4, probe = new Responsive
   return { station, report: report! }
 }
 
-/** Today's numbers (2026-09-16) plus a tenth for cadence slack, in ms, for the link each describes.
- * The ratchet: a run may come in under these, never over. Measured: at 100 ms — screen 120, tune
- * confirmed 1100, band confirmed 550, readout 1000, 4 of 10 steps sent; at 400 ms — screen 200
- * (a flush that waited on a snapshot read), tune confirmed 1900, band confirmed 1400, readout 1500,
- * 3 of 10 sent. The polled result read is what makes a confirmation seconds instead of a round
- * trip, and refusing steps while one is in flight is what loses most of the ten. */
+/** Today's numbers plus a tenth for cadence slack, in ms, for the link each describes. The
+ * ratchet: a run may come in under these, never over. Lower a line when a batch lands; never raise
+ * one to make a red run green — a red here is the instrument doing its job.
+ *
+ * PRE-PUSH-COMPLETION (a v4 station, or a v5 page on one — 2026-09-16): at 100 ms — screen 120,
+ * tune confirmed 1100, band confirmed 550, readout 1000, 4 of 10 steps sent; at 400 ms — screen
+ * 200 (a flush that waited on a snapshot read), tune confirmed 1900, band confirmed 1400, readout
+ * 1500, 3 of 10 sent. The polled result read is what makes a confirmation seconds instead of a
+ * round trip, and refusing steps while one is in flight is what loses most of the ten.
+ *
+ * PUSH-COMPLETION (a v5 station naming `outcomePush` — 2026-09-17, int-all at 684bfb70): the
+ * confirmation is the station's own word, so a band change confirms in a round trip plus the CAT
+ * time: at 100 ms — tune confirmed 750, band confirmed 300, 3 of 10 steps sent; at 400 ms — tune
+ * confirmed 1100, band confirmed 550, 2 of 10 sent. The screen and readout clocks do not move
+ * with it (the wheel's debounce and the 500 ms snapshot cadence are batches 1 and 3), and STEPS
+ * SENT WENT DOWN, 4→3 and 3→2: the pushed outcome resolves the control but does not clear its
+ * receipt on a real page (the receipt's write needs the storage lock, which only the polled path
+ * holds), so the controls stay refused until the fallback poll a second on — longer than the v4
+ * re-read took. The cases under "push-completion against polling" hold that finding. */
 const BASELINE = {
   'v4/100': { screen: 130, tuneConfirmed: 1200, bandConfirmed: 650, readout: 1100, stepsSent: 4 },
   'v4/400': { screen: 220, tuneConfirmed: 2050, bandConfirmed: 1550, readout: 1650, stepsSent: 3 },
-  // Operation v5 (push-completion): the confirmation is the station's own word, so a band change
-  // confirms in a round trip plus the CAT time. Measured: at 100 ms — tune confirmed 750, band
-  // confirmed 300, 3 of 10 steps sent; at 400 ms — tune confirmed 1100, band confirmed 550, 2 of
-  // 10 sent. The screen and readout clocks do not move with it: they are the wheel's debounce
-  // and the 500 ms snapshot cadence, which are batches 1 and 3.
   'v5/100': { screen: 130, tuneConfirmed: 850, bandConfirmed: 350, readout: 1100, stepsSent: 3 },
   'v5/400': { screen: 220, tuneConfirmed: 1250, bandConfirmed: 650, readout: 1650, stepsSent: 2 }
 } as const
@@ -89,6 +97,63 @@ describe.each([
     expect(r.tune.confirmed!.worst).toBeLessThanOrEqual(rttMs + BUDGET.tuneAfterRttMs)
     expect(r.tune.sent).toBe(CHECK_STEPS)
     expect(r.flicker.run).toBe(0)
+  })
+})
+
+// BEFORE AND AFTER, side by side: the same script on the same link against a station that polls
+// (v4) and one that pushes (v5), so the improvement push-completion buys is a printed, asserted
+// number and not a belief — and so is what it has not bought yet.
+describe.each([100, 400] as const)('push-completion against polling on a %i ms link', rttMs => {
+  it('confirms every control sooner, by the station\'s push instead of a poll', async () => {
+    const before = (await measure(rttMs, 4)).report, after = (await measure(rttMs, 5)).report
+    console.info(`${rttMs} ms link, polled (v4) → pushed (v5): tune confirmed ${before.tune.confirmed!.worst} → ${after.tune.confirmed!.worst} ms, ` +
+      `band confirmed ${before.band.confirmed!.worst} → ${after.band.confirmed!.worst} ms, steps sent ${before.tune.sent} → ${after.tune.sent} of ${CHECK_STEPS}, ` +
+      `controls went off ${before.flicker.run} → ${after.flicker.run} times`)
+    expect(after.tune.confirmed!.worst).toBeLessThan(before.tune.confirmed!.worst)
+    expect(after.band.confirmed!.worst).toBeLessThan(before.band.confirmed!.worst)
+    expect(before.tune.pushed + before.band.pushed).toBe(0)
+    expect(after.tune.polled + after.band.polled).toBe(0)
+  })
+  it.fails('loses no wheel step to the confirmation, and needs no fallback poll (flip to `it` when a pushed outcome clears the receipt)', async () => {
+    // Today a v5 page accepts FEWER steps than a v4 page: the event resolves the control but its
+    // receipt survives it, so the wheel is refused until the fallback poll clears it a second on.
+    const before = (await measure(rttMs, 4)).report, after = (await measure(rttMs, 5)).report
+    expect(after.tune.sent).toBeGreaterThanOrEqual(before.tune.sent)
+    expect(after.flicker.run).toBeLessThan(before.flicker.run)
+  })
+})
+
+// THE RECEIPT AND THE PUSHED OUTCOME. `pendingControlStorage.write` refuses outside `exclusive()`;
+// the polled path always clears the receipt inside it, the event path never holds it. Two cases
+// hold the consequence, both expected to fail until `receiveEvent` clears the receipt under the
+// lock; the day it does, both go red and are flipped to `it`.
+describe('a pushed outcome and the pending-control receipt', () => {
+  it.fails('clears the receipt at once, so nothing is pending a round trip and a CAT time after the send (flip to `it` when fixed)', async () => {
+    const station = scriptedStation(100, 5)
+    open.push(station)
+    await vi.advanceTimersByTimeAsync(1600)
+    let settled = false
+    void station.operations.control({ action: 'radio.band', band: '17m', mode: 'phone' }).then(() => { settled = true }, () => {})
+    await vi.advanceTimersByTimeAsync(100 + SCRIPTED_CAT_MS + 60)
+    expect(settled, 'the pushed outcome resolved the control').toBe(true)
+    expect(station.operations.getSnapshot().controlPending, 'and cleared its receipt with it').toBeNull()
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(station.wire.filter(w => w.type === 'result'), 'so no fallback poll was needed').toHaveLength(0)
+  })
+  it.fails('landing while the fallback poll is in flight, it does not make the poll\'s reply a crossed one (flip to `it` when fixed: today `invalidOperation`, which closes the socket)', async () => {
+    // A radio slow enough that the event lands during the poll's round trip: a band change with a
+    // mode-before-dial window. The poll holds the lock, so THIS time the event's clear succeeds —
+    // and the poll's own reply then fails the crossed-reply check.
+    const station = scriptedStation(100, 5, { catMs: 1050 })
+    open.push(station)
+    const thrown: string[] = []
+    const receive = station.operations.receive.bind(station.operations)
+    station.operations.receive = (raw: unknown, bytes?: number) => { try { receive(raw, bytes) } catch (error) { thrown.push((error as Error).message) } }
+    await vi.advanceTimersByTimeAsync(1600)
+    void station.operations.control({ action: 'radio.band', band: '17m', mode: 'phone' }).catch(() => {})
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(station.wire.filter(w => w.type === 'result').length, 'the fallback poll went out').toBeGreaterThan(0)
+    expect(thrown).toEqual([])
   })
 })
 
