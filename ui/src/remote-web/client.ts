@@ -30,6 +30,39 @@ export type AccountSession = {
 }
 /** The audio lane's own send budget. Small on purpose - see where it is used. */
 const AUDIO_BUDGET_BYTES = 512
+/** How long a connection has to LAST before its next failure is forgiven the reconnect ladder.
+ *  Ten seconds: twenty of the relay's observation intervals, so an ordinary working connection is
+ *  always credited, and far enough above the ladder's 1 s floor that a socket which cannot hold
+ *  itself up for ten seconds is flapping and should be backed off like anything else. */
+export const RECONNECT_CREDIT_MS = 10_000
+/** What this browser is doing with the feed, for the one row that can say so. */
+export type FeedView = {
+  /** Asleep because this tab is in the background. */
+  asleep: boolean
+  /** It was asleep and is on its way back - the reason for the gap, said at the one moment the
+   *  operator is there to read it. */
+  resumed: boolean
+  /** The operator asked for the feed to stay live in the background. */
+  keepWatching: boolean
+}
+export type FeedControl = {
+  subscribe: (f: () => void) => () => void
+  getSnapshot: () => FeedView
+  keepWatching: (value: boolean) => void
+}
+/** The "keep watching" choice: browser-local, per station, beside this browser's other per-station
+ *  memory. Storage that throws - a private window, blocked site data - means "not chosen", which is
+ *  the safe answer both ways: the feed sleeps, and the operator can still turn it on for the
+ *  session. */
+function keepWatchingStorage(stationId: string) {
+  const key = `nexus.remote.keep-watching.${stationId}`
+  return {
+    read(): boolean { try { return globalThis.localStorage?.getItem(key) === '1' } catch { return false } },
+    write(value: boolean): void {
+      try { if (value) globalThis.localStorage?.setItem(key, '1'); else globalThis.localStorage?.removeItem(key) } catch { /* the choice still holds for this session */ }
+    },
+  }
+}
 export class RemoteError extends Error {
   // `code` is the service's own word for what it refused - trialEnded, trialDisabled,
   // stationLimit, pairingExpired. Without it every refusal arrives as a bare status number and
@@ -149,6 +182,9 @@ export class HostedConnection {
   private latest: { frame: MonitorFrame; at: number } | null = null
   private disposed = false
   private attempt = 0
+  /** When the live connection first proved itself useful - a session grant or a fresh frame,
+   *  whichever came first - or null for one that never did. Read once, by `retry`. */
+  private liveSince: number | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
   private renewal: ReturnType<typeof setInterval> | undefined
   private abort = new AbortController()
@@ -157,6 +193,15 @@ export class HostedConnection {
   private lastClockRenewal = -Infinity
   private clockFailures = 0
   private anchor: { server: number; start: number } | null = null
+  private sleepState: FeedView
+  private feedListeners = new Set<() => void>()
+  /** Removes the visibilitychange listener; set for the life of the connection. */
+  private watching: (() => void) | undefined
+  /** Removes the operation subscription that is waiting for a live Stop to go away. */
+  private deferred: (() => void) | undefined
+  private readonly keep: ReturnType<typeof keepWatchingStorage>
+  /** This tab's feed: whether it is asleep, and the operator's one control over that. */
+  readonly feed: FeedControl
   /** Called once when the service refuses a new ticket (401/403): the trial ended, the station or
    *  browser was revoked, or the sign-in expired. The connection has already stopped retrying, and
    *  without this the page kept showing a workspace that could never come back. */
@@ -184,18 +229,119 @@ export class HostedConnection {
       if (signal.aborted || this.disposed || this.socket?.readyState !== WebSocket.OPEN || !this.latest) throw new RemoteError(503)
       return ageFrame(this.latest.frame, performance.now() - this.latest.at)
     } }
+    this.keep = keepWatchingStorage(stationId)
+    this.sleepState = { asleep: false, resumed: false, keepWatching: this.keep.read() }
+    this.feed = {
+      subscribe: f => { this.feedListeners.add(f); return () => { this.feedListeners.delete(f) } },
+      getSnapshot: () => this.sleepState,
+      keepWatching: value => this.setKeepWatching(value),
+    }
   }
-  start(): void { void this.connect() }
+  start(): void {
+    // A backgrounded tab is the one thing that keeps a room fully awake with nobody looking at
+    // it, and the room bills for the wall-clock it is kept awake. Control and listening already
+    // let go when the tab hides; this is the same release for the feed itself.
+    const doc = typeof document === 'undefined' ? null : document
+    if (doc) {
+      const changed = () => { if (doc.hidden) this.considerSleep(); else this.shown() }
+      doc.addEventListener('visibilitychange', changed)
+      this.watching = () => doc.removeEventListener('visibilitychange', changed)
+    }
+    void this.connect()
+  }
   stop(): void {
     this.application.disconnected(); this.operations.disconnected(); this.audio.close()
     this.disposed = true; this.abort.abort(); this.latest = null
+    this.watching?.(); this.watching = undefined
+    this.deferred?.(); this.deferred = undefined
     clearTimeout(this.reconnectTimer); clearInterval(this.renewal)
     this.socket?.close(1000, 'disconnected'); this.socket = null
+  }
+  private publishFeed(value: Partial<FeedView>): void {
+    this.sleepState = { ...this.sleepState, ...value }
+    for (const f of this.feedListeners) f()
+  }
+  private setKeepWatching(value: boolean): void {
+    this.keep.write(value)
+    this.publishFeed({ keepWatching: value })
+    if (value) { if (this.sleepState.asleep) this.shown() }
+    else if (typeof document !== 'undefined' && document.hidden) this.considerSleep()
+  }
+  /** Hidden, and deciding whether to let the room go back to sleep.
+   *
+   *  ⚠️ NEVER WHILE THIS BROWSER CAN STILL STOP A TRANSMISSION. Stop deliberately outlives the
+   *  control lease (operator ruling, 2026-09-15), and closing the socket is what takes it away:
+   *  `OperationClient.disconnected` drops the stop token, and a reconnect cannot get it back
+   *  without acquiring control again. So a tab that hides with a live stop token stays awake and
+   *  billing until that token goes. It goes on its own, within a poll: hiding already releases the
+   *  lease, and an explicit release clears the station's stop owner, after which the state replies
+   *  carry a null `transmitEpoch`. That is why this waits on the operation client's own updates
+   *  rather than a clock - there is nothing to time, only something to be told. */
+  private considerSleep(): void {
+    if (this.disposed || this.sleepState.keepWatching || (typeof document !== 'undefined' && !document.hidden)) {
+      this.deferred?.(); this.deferred = undefined
+      return
+    }
+    if (this.operations.getSnapshot().stopAvailable) {
+      this.deferred ??= this.operations.subscribe(() => this.considerSleep())
+      return
+    }
+    this.deferred?.(); this.deferred = undefined
+    this.sleep()
+  }
+  /** Let the room go back to sleep. Every line here already runs when the connection is lost -
+   *  this is that same release, asked for, with no reconnect scheduled behind it. The workspace
+   *  therefore goes stale exactly as it does for any other loss, which is what stops a slept tab
+   *  from showing readings that look live. */
+  private sleep(): void {
+    if (this.sleepState.asleep) return
+    this.audio.release(); this.application.disconnected(); this.operations.disconnected()
+    this.latest = null
+    clearInterval(this.renewal); clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined
+    // The in-flight ticket request goes with it; the next connect needs a fresh controller.
+    this.abort.abort(); this.abort = new AbortController()
+    const socket = this.socket
+    this.socket = null
+    this.publishFeed({ asleep: true, resumed: false })
+    // Nulled and marked asleep first, so this close is not read as a drop worth reconnecting from.
+    socket?.close(1000, 'backgrounded')
+  }
+  /** Back on screen. */
+  private shown(): void {
+    this.deferred?.(); this.deferred = undefined
+    if (this.disposed) return
+    // Someone is looking now, which is the strongest "try now" there is: a tab returning to a
+    // station that recovered while nobody was watching must not sit out the rest of a 30 s step
+    // it earned in the meantime.
+    this.attempt = 0
+    if (!this.sleepState.asleep) {
+      // Awake all along - keep-watching, or a live Stop held it up. Still cut a pending retry short.
+      if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined; void this.connect() }
+      return
+    }
+    this.publishFeed({ asleep: false, resumed: true })
+    void this.connect()
+  }
+  /** This connection has proved itself useful: it may now earn back the reconnect ladder, and a
+   *  feed that was asleep has visibly come back. */
+  private proved(): void {
+    this.liveSince ??= performance.now()
+    if (this.sleepState.resumed) this.publishFeed({ resumed: false })
   }
   private retry(): void {
     this.application.disconnected(); this.operations.disconnected(); this.audio.disconnected()
     this.latest = null; clearInterval(this.renewal)
-    if (this.disposed || this.reconnectTimer) return
+    if (this.disposed || this.sleepState.asleep || this.reconnectTimer) return
+    // What forgives the ladder is a connection that LASTED, read here and cleared as it is read.
+    // It used to be the session message itself, and that made the backoff unreachable for every
+    // failure that happens AFTER the relay accepts the ticket - a station offline behind a
+    // reachable relay, a frame this socket rejects, a station-side close - because each round was
+    // granted its own session and re-credited itself. Measured: 1000 ms, every round, no ceiling.
+    // The reason the credit exists is unchanged (a station that is up but briefly quiet must not
+    // wait out a ceiling it did not earn); it is now paid to a connection that held itself up,
+    // which is that same intent said in terms of the thing rather than a proxy for it.
+    if (this.liveSince !== null && performance.now() - this.liveSince >= RECONNECT_CREDIT_MS) this.attempt = 0
+    this.liveSince = null
     const delay = Math.min(30000, 1000 * 2 ** Math.min(this.attempt++, 5))
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.connect() }, delay)
   }
@@ -221,10 +367,10 @@ export class HostedConnection {
     finally{this.renewing=false}
   }
   private async connect(): Promise<void> {
-    if (this.disposed) return
+    if (this.disposed || this.sleepState.asleep) return
     try {
       const { body: ticket, startedAt: start } = await this.client.observationTicket(this.stationId, this.abort.signal)
-      if (this.disposed) return
+      if (this.disposed || this.sleepState.asleep) return
       if (!/^[0-9a-f]{64}$/.test(ticket.ticket) || !Number.isSafeInteger(ticket.serverNow)) throw new RemoteError(403)
       this.anchor = { server: ticket.serverNow, start };this.sessionId=null;this.clockFailures=0;this.lastClockRenewal=-Infinity
       const url = new URL(`/api/remote/stations/${this.stationId}/observe`, window.location.origin)
@@ -256,15 +402,16 @@ export class HostedConnection {
           if (message.type === 'session' && Object.keys(message).length === 2 && typeof message.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(message.sessionId)) {
             if (this.applicationMode) { this.application.open(); this.operations.open() }
             this.sessionId = message.sessionId
-            // A session proves the SERVICE is reachable, so the reconnect backoff starts over
-            // here rather than only when a data frame lands. Those are different failures and
-            // deserve different patience: a station that is up but briefly quiet - a busy Nexus,
-            // a WAN blip - used to escalate exactly like an unreachable one, because every
-            // reconnect during the quiet period incremented `attempt` and none of them carried
-            // data to reset it. After a short outage the next retry was already 16 to 30 seconds
-            // away, and the workspace sat on "Station data unavailable" for all of it. Genuine
-            // connect failures never reach this line, so they still back off as before.
-            this.attempt = 0
+            // A session proves the SERVICE is reachable, so this connection starts counting
+            // towards its reconnect credit here rather than only when a data frame lands. Those
+            // are different failures and deserve different patience: a station that is up but
+            // briefly quiet - a busy Nexus, a WAN blip - used to escalate exactly like an
+            // unreachable one, because every reconnect during the quiet period incremented
+            // `attempt` and none of them carried data to reset it. After a short outage the next
+            // retry was already 16 to 30 seconds away, and the workspace sat on "Station data
+            // unavailable" for all of it. What this must NOT do is forgive the ladder on the
+            // strength of the grant alone - see `retry`.
+            this.proved()
             clearInterval(this.renewal)
             this.renewal = setInterval(() => {void this.renew(socket)},30000)
           } else if (message.type === 'observation' && Object.keys(message).length === 3 && Number.isSafeInteger(message.sentAtMs) && this.anchor) {
@@ -283,7 +430,7 @@ export class HostedConnection {
             // the stale display handles, and still ACK the valid receipt so the relay keeps delivering.
             if(transit>=STALE_MS)this.latest=null
             else if(transit<0){this.latest=null;if(this.sessionId)void this.renew(socket,true);else socket.close(1000,'clockUnavailable')}
-            else {this.latest={frame:ageFrame(parsed,transit),at:received};this.attempt=0;this.clockFailures=0}
+            else {this.latest={frame:ageFrame(parsed,transit),at:received};this.proved();this.clockFailures=0}
             const frame=parsed
             const ack = JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence })
             // The full workspace shares this socket with its bounded reads and

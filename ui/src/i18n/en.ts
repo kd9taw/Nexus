@@ -363,6 +363,14 @@ export const EN = {
   "remote.audio.inUse": "Another browser is listening to this station.",
   "remote.audio.notController": "Audio stopped because station control was lost.",
   "remote.audio.stopped": "Audio stopped.",
+  // The feed's own control, beside the listen control because they are the same question asked of
+  // two things: what is this tab doing while you are not looking at it. The station's feed pauses
+  // with the tab by default, which costs nothing to run; an operator watching a frequency on a
+  // second screen turns this on and it stays on for that station.
+  "remote.feed.keep": "Keep watching",
+  "remote.feed.keepOff.title": "The feed pauses while this tab is in the background and comes back when you return. Turn this on to keep watching a frequency on a second screen.",
+  "remote.feed.keepOn.title": "The feed stays live while this tab is in the background. Turn this off to let it pause when you look away.",
+  "remote.feed.resumed": "Feed resumed — it was paused while this tab was in the background.",
   // ⚠️ REMOTE STOP: ACCEPTANCE IS NOT RF. The station answers an accepted Stop at once, and when
   // its Engine is held the halt runs afterwards on its own thread — so "stopped" here would tell the
   // operator the rig is unkeyed while it is still on the air. It says SENT until the station's own

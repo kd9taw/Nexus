@@ -113,6 +113,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and Card received were shown in the hosted form, took your entry, and dropped it under an
   "updated" message. They are shack-only for now; QSL sent and Card received are still on the
   hosted row menu, where they do save.
+- **A Remote tab left in the background now lets the station rest, and there is a switch for when
+  you don't want that.** A Remote browser tab sitting behind your other windows kept the whole
+  station session running, hour after hour, with nobody looking at it. Sending the tab to the
+  background now pauses the feed the same way it already stops the audio and hands back station
+  control, and bringing the tab back to the front picks it up again straight away. If you are
+  watching a frequency on a second screen, **Keep watching** — next to Listen in the Remote
+  header — keeps it running; the choice is remembered for that station. The feed never pauses
+  while your browser can still stop a transmission, and coming back from a pause says so.
+- **A Remote browser that lost its station stopped hammering at it once a second.** When the
+  connection dropped after the service had already answered, the browser retried exactly once
+  every second, forever — a station that was off, or a shack PC mid-reboot, was called a
+  thousand times an hour for nothing. It now waits longer between tries the longer the trouble
+  lasts, up to half a minute, and goes straight back to trying the moment you look at the tab.
 
 ## [1.13.0] — 2026-09-16
 

@@ -1,7 +1,8 @@
-import { useId, useState } from 'react'
+import { useId, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { Info } from 'lucide-react'
+import { Eye, EyeOff, Info } from 'lucide-react'
 import { t } from '../i18n'
+import type { FeedControl } from './client'
 import type { OperationClient } from './operation-client'
 import { LoggingAuthority } from './operations'
 import type { PresentationState } from './presentation'
@@ -9,13 +10,17 @@ import type { AlertToggle, StationAlertControl } from './browser-alerts'
 
 // Presentation belongs to this browser. Expanding help cannot acquire, release
 // or replace station authority, and never remounts the underlying Nexus app.
-export function SessionStatus({ client, stale, disconnect, signOut, display, alerts, rareAlerts, potaAlerts, audio }: {
+export function SessionStatus({ client, stale, disconnect, signOut, display, alerts, rareAlerts, potaAlerts, audio, feed }: {
   client?: OperationClient | null; stale: boolean; disconnect: () => void; signOut?: () => void; display?: PresentationState
   alerts?: AlertToggle; rareAlerts?: StationAlertControl; potaAlerts?: StationAlertControl
   /** The listen control. In the row itself, not behind the fold: an operator has to be
    *  able to stop the sound in one movement, and a control they have to expand a panel to
    *  reach is not that. It renders nothing at all on a station that cannot do audio. */
   audio?: ReactNode
+  /** This tab's feed. Also in the row, for the same kind of reason: the operator it exists
+   *  for is watching a frequency on a screen they are NOT looking at, so they have to be able
+   *  to find it before they look away, not after the feed has already paused on them. */
+  feed?: FeedControl
 }) {
   const [expanded, setExpanded] = useState(false)
   const id = useId()
@@ -29,6 +34,7 @@ export function SessionStatus({ client, stale, disconnect, signOut, display, ale
         <span role="status">{t('monitor.observer')}</span>
       </span>}
       {audio}
+      {feed && <FeedWatch feed={feed} />}
       <button type="button" className="remote-button remote-session-toggle"
         aria-label={t('remote.settingsLegend')} title={t('remote.settingsLegend')}
         aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(value => !value)}>
@@ -60,6 +66,26 @@ export function SessionStatus({ client, stale, disconnect, signOut, display, ale
       </div>}
     </div>
   </div>
+}
+
+/** The feed's own control: whether this tab keeps watching while it is in the background, and -
+ *  once, on return - why the feed has a gap in it. The label does not change with the state; the
+ *  pressed state does, which is what a toggle is. A button whose word flips between "keep" and
+ *  "pause" reads as an instruction and leaves nobody sure which one is current. */
+function FeedWatch({ feed }: { feed: FeedControl }) {
+  const view = useSyncExternalStore(feed.subscribe, feed.getSnapshot)
+  return <span className="remote-feed">
+    <button type="button" className="remote-button remote-feed-toggle"
+      aria-pressed={view.keepWatching} aria-label={t('remote.feed.keep')}
+      title={view.keepWatching ? t('remote.feed.keepOn.title') : t('remote.feed.keepOff.title')}
+      onClick={() => feed.keepWatching(!view.keepWatching)}>
+      {view.keepWatching ? <Eye size={18} aria-hidden="true" /> : <EyeOff size={18} aria-hidden="true" />}
+      <span>{t('remote.feed.keep')}</span>
+    </button>
+    {/* The gap is explained at the one moment the operator is there to read it: on the way back.
+        It clears itself when the feed is actually live again, not when it was merely asked for. */}
+    {view.resumed && <span className="remote-feed-state" role="status">{t('remote.feed.resumed')}</span>}
+  </span>
 }
 
 /** One alert fed by a station read: its toggle, or why the station cannot feed it. */

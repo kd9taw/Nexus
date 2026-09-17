@@ -5,6 +5,7 @@ import { SessionStatus } from './SessionStatus'
 import { OperationClient } from './operation-client'
 import { pendingControlStorage } from './control-storage'
 import type { OperationState } from './operation-protocol'
+import type { FeedView } from './client'
 
 const clients: OperationClient[] = []
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.disconnected()); vi.useRealTimers() })
@@ -116,4 +117,37 @@ it('offers sign-out beside disconnect only when the page passes one', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
   expect(signOut).toHaveBeenCalledTimes(1)
   expect(h.disconnect).not.toHaveBeenCalled()
+})
+
+/** A store shaped like the connection's, so the control is exercised through
+ *  `useSyncExternalStore` exactly as it is in the workspace. */
+function feedControl(initial: Partial<FeedView> = {}) {
+  let view: FeedView = { asleep: false, resumed: false, keepWatching: false, ...initial }
+  const listeners = new Set<() => void>()
+  const set = (value: Partial<FeedView>) => { view = { ...view, ...value }; listeners.forEach(f => f()) }
+  const keepWatching = vi.fn((value: boolean) => set({ keepWatching: value }))
+  return { set, keepWatching, control: {
+    subscribe: (f: () => void) => { listeners.add(f); return () => { listeners.delete(f) } },
+    getSnapshot: () => view, keepWatching,
+  } }
+}
+
+// The operator this exists for is watching a frequency on a screen they are NOT looking at. A
+// control they can only find after the feed has already paused on them is no use to that person.
+it('offers keeping the feed alive in the background from the row itself, before anything is lost', () => {
+  const feed = feedControl()
+  render(<SessionStatus stale={false} disconnect={() => {}} feed={feed.control} />)
+  const keep = screen.getByRole('button', { name: 'Keep watching' })
+  expect(keep.closest('.remote-session-info')).toBeNull()
+  expect(keep.getAttribute('aria-pressed')).toBe('false')
+  expect(screen.queryByText(/Feed resumed/)).toBeNull()
+  fireEvent.click(keep)
+  expect(feed.keepWatching).toHaveBeenCalledWith(true)
+  // The label does not flip with the state; the pressed state carries it.
+  expect(screen.getByRole('button', { name: 'Keep watching' }).getAttribute('aria-pressed')).toBe('true')
+  // The gap is explained on the way back, and clears when the feed is actually live again.
+  act(() => feed.set({ resumed: true }))
+  expect(screen.getByText(/Feed resumed/)).toBeTruthy()
+  act(() => feed.set({ resumed: false }))
+  expect(screen.queryByText(/Feed resumed/)).toBeNull()
 })

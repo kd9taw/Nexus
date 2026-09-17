@@ -148,6 +148,10 @@ export const DE: PartialCatalog = {
   "remote.audio.inUse": "Ein anderer Browser hört bereits an dieser Station mit.",
   "remote.audio.notController": "Audio beendet, weil die Stationskontrolle verloren ging.",
   "remote.audio.stopped": "Audio beendet.",
+  "remote.feed.keep": "Weiter mitlesen",
+  "remote.feed.keepOff.title": "Der Datenstrom pausiert, solange dieser Tab im Hintergrund ist, und kommt bei Ihrer Rückkehr zurück. Schalten Sie das ein, um eine Frequenz auf einem zweiten Bildschirm weiter zu beobachten.",
+  "remote.feed.keepOn.title": "Der Datenstrom bleibt aktiv, solange dieser Tab im Hintergrund ist. Schalten Sie das aus, damit er pausiert, wenn Sie wegsehen.",
+  "remote.feed.resumed": "Datenstrom wieder da — er pausierte, solange dieser Tab im Hintergrund war.",
   "remote.stop.sending": "Stopp wird gesendet…",
   "remote.stop.sent": "Stopp gesendet",
   "remote.stop.sent.title":
