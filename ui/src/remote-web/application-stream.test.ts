@@ -160,6 +160,37 @@ it('includes the browser credit round trip in freshness and falls back to the ol
   client.disconnected()
 })
 
+// One busy station sample must not blank the panel. The station's radio loop holds its Engine
+// across blocking CAT, so a busy miss is routine; the browser used to answer it by deleting the
+// snapshot it was showing, which made age() Infinity, disabled every station control at once and
+// cancelled a wheel tune in flight. The read that was waiting still fails; the value stays.
+it('keeps a known-good value through a station error, aged, and applies the next delta to it', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
+  const sent: Record<string, unknown>[] = [], client = new ApplicationClient(m => sent.push(JSON.parse(m)), vi.fn(), 2)
+  client.open(); client.receive({ type: 'applicationCapabilities', version: 2, commands: STREAM_TOPICS })
+  const first = client.invoke('get_snapshot')
+  await vi.advanceTimersByTimeAsync(1)
+  const requestId = sent[1].requestId as string
+  client.receive({ type: 'applicationFrame', requestId, updates: [sample(requestId)] })
+  expect(await first).toHaveProperty('mycall', 'TEST')
+  // Past the topic's interval a read waits for the stream; the station answers it busy.
+  await vi.advanceTimersByTimeAsync(600)
+  const busy = client.invoke('get_snapshot').catch(e => (e as Error).message)
+  const second = sent[sent.length - 1].nextRequestId as string
+  client.receive({ type: 'applicationFrame', requestId: second, updates: [{ type: 'applicationError', requestId: second, command: 'get_snapshot', error: 'applicationBusy' }] })
+  expect(await busy).toBe('applicationBusy')
+  expect(client.age('get_snapshot')).toBeGreaterThanOrEqual(600)
+  expect(client.age('get_snapshot'), 'the held value is aged, never gone').toBeLessThan(APPLICATION_TIMEOUT_MS)
+  // The kept value is still the delta base the station believes the browser holds.
+  const third = sent[sent.length - 1].nextRequestId as string
+  const delta = { ...sample(third, 'get_snapshot', 2, 1), data: { radio: { dialMhz: 14.074 } } }
+  const read = client.invoke('get_snapshot')
+  client.receive({ type: 'applicationFrame', requestId: third, updates: [delta] })
+  expect(await read).toEqual({ mycall: 'TEST', radio: { dialMhz: 14.074 } })
+  expect(client.age('get_snapshot')).toBeLessThan(100)
+  client.disconnected()
+})
+
 // A station can stop answering WITHOUT the socket dropping — a stalled shack PC, a WAN blip, a
 // Nexus that is briefly too busy to serve. The browser must not go permanently silent when that
 // happens. Measured against the real browser before this test existed: served-request counters

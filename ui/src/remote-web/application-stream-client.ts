@@ -53,12 +53,16 @@ export class ApplicationStreamClient {
       if (age >= APPLICATION_TIMEOUT_MS) late = true
       return { update, value: { ...applyApplicationReply(this.values.get(update.command) ?? null, update), at: now - age } }
     })
+    // An error fails the READ that was waiting, never the value already held: that stays on show,
+    // aged, until a later sample replaces it or it lapses past the freshness window. Deleting it
+    // here turned one busy station sample into age() = Infinity, which disabled every station
+    // control at once and cancelled a wheel tune in flight.
     for (const { update, value } of next) {
       const waiting = this.waiting.get(update.command)
       if (value && late) { this.values.set(update.command, value); continue }
       this.waiting.delete(update.command)
       if (value) { this.values.set(update.command, value); waiting?.resolve(value.value) }
-      else { this.values.delete(update.command); waiting?.reject(new Error(update.type === 'applicationError' ? update.error : 'applicationUnavailable')) }
+      else waiting?.reject(new Error(update.type === 'applicationError' ? update.error : 'applicationUnavailable'))
     }
     const previous = this.credit.id
     this.newCredit()

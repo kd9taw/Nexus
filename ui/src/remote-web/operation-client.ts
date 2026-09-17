@@ -513,10 +513,19 @@ export class OperationClient {
       }
       const refreshing = result.outcome === 'applied' && (p.request.type === 'stationControl' || !this.view.state)
       if (refreshing) this.controlRefreshUntil = this.now() + 1200
+      // A command CONSUMES its window: the station clears every command window when it answers a
+      // control, so the held state's window, revision and sequence are spent. The state itself is
+      // kept — it still says this browser is controlling, so every held control stays lit while the
+      // re-read confirms (operator ruling 2026-09-16; nulling it greyed them all out for a second
+      // after every click). What refuses a second command from the spent window is `stateUntil`:
+      // zeroed here, so `fresh` is false and the 250 ms tick cannot revive it, and every command
+      // path checks that before anything leaves. A command made now is a lapse (`lapsed()`): it
+      // waits for the re-read's state and is sent once on that new window, or refused as not sent.
+      if (p.request.type === 'stationControl') this.stateUntil = 0
       this.update({ busy: false, submitting: false, controlResult: result, controlError: null,
         controlRefreshing: refreshing,
         ...(cleared ? { controlPending: null } : {}),
-        ...(p.request.type === 'stationControl' ? { state: null, fresh: false } : {}), error: null })
+        ...(p.request.type === 'stationControl' ? { fresh: false } : {}), error: null })
       if (p.request.type === 'stationControl') this.polledAt = -Infinity
     } else {
       if (p.request.type === 'stationControl' || p.request.type === 'logChange') throw Error('invalidOperation')
@@ -560,9 +569,13 @@ export class OperationClient {
     } catch {}
   }
   /** Control held (connected, the latest state shows this browser controlling) but past its freshness
-   * window: the brief lapse a command may wait out. Anything else keeps its own refusal. */
+   * window: the brief lapse a command may wait out. A command still confirming (its window spent,
+   * the re-read pending) is one; a command whose outcome is UNKNOWN is not — the state is held
+   * through that too now, and waiting out the window would only delay the operationUnknown refusal
+   * the operator needs at once. Anything else keeps its own refusal. */
   private lapsed(): boolean {
-    return !this.view.fresh && this.view.connected && this.view.state?.phase === 'controlling'
+    return !this.view.fresh && this.view.connected && this.view.state?.phase === 'controlling' &&
+      !this.view.controlPending && !this.view.unresolved
   }
   /** A gesture committed during a brief control lapse is sent only once control is current again.
    * Resolves at once while current. Otherwise waits, at most CONTROL_RESUME_MS, for a later state
