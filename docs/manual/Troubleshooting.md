@@ -158,8 +158,8 @@ The Now-Bar shows two feed-liveness pills — **Cluster** and **PSKR** — with 
 
 "Connected but no data" is normal during a quiet band period — it is **not** a sign the feed is broken. A stuck **reconnecting** pill means the cluster host is unreachable:
 
-- Confirm the cluster host (default `ve7cc.net:23`, fallback `dxc.wa9pie.net:8000`) is reachable from your network. Do not enter a `reversebeacon.net` host here — RBN CW/digital feeds are auto-wired separately and carry no SSB spots; the app migrates that value away.
-- Firewalls that block outbound TCP on port 23 (Telnet) are common on corporate or hotel Wi-Fi. Switch to the fallback host `dxc.wa9pie.net:8000`, which uses a high port.
+- Confirm at least one cluster host (defaults `ve7cc.net:23`, `dxc.wa9pie.net:8000`, `dx.w1nr.net:23` and `dxspots.com:7300`) is reachable from your network — the Needed board's "Phone source" line says whether any node is up. Do not enter a `reversebeacon.net` host here — RBN CW/digital feeds are auto-wired separately and carry no SSB spots; the app migrates that value away.
+- Firewalls that block outbound TCP on port 23 (Telnet) are common on corporate or hotel Wi-Fi. The high-port defaults `dxc.wa9pie.net:8000` and `dxspots.com:7300` cover that; keep at least one of them in the list.
 - PSK Reporter MQTT (`mqtt.pskreporter.info:1883`) is blocked by some ISPs. Without MQTT, the app falls back to HTTP queries (rate-limited to every 5 minutes minimum).
 - Your callsign must be set (3–10 characters, at least one letter and one digit) for the PSK Reporter MQTT subscription to start.
 
