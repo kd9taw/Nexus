@@ -644,6 +644,7 @@ fn start_cluster_feed(
     let hp_conn = health.clone();
     let host = cluster_host.to_string();
     std::thread::spawn(move || {
+        let mut log = tempo_net::cluster::LogFilter::default();
         tempo_net::cluster::run(
             &host,
             &call,
@@ -674,7 +675,11 @@ fn start_cluster_feed(
             &CLUSTER_STOP,
             &hp_conn.cluster_connected,
             &RBN_DEAD_OUTBOX, // RBN is receive-only — never post to a skimmer
-            |why| conn_log("RBN", "error", why.to_string()),
+            |outcome| {
+                if let Some(line) = log.line(&host, outcome) {
+                    conn_log("RBN", "error", line);
+                }
+            },
         );
     });
 }
@@ -930,6 +935,7 @@ fn start_human_cluster_feed(
     let hp = health.clone();
     let host = host.to_string();
     std::thread::spawn(move || {
+        let mut log = tempo_net::cluster::LogFilter::default();
         tempo_net::cluster::run(
             &host,
             &call,
@@ -963,7 +969,11 @@ fn start_human_cluster_feed(
             &CLUSTER_STOP,
             &conn,
             &CLUSTER_OUTBOX, // the post target — `post_spot` pushes DX lines here
-            |why| conn_log("DX Cluster", "error", why.to_string()),
+            |outcome| {
+                if let Some(line) = log.line(&host, outcome) {
+                    conn_log("DX Cluster", "error", line);
+                }
+            },
         );
     });
 }
