@@ -5114,6 +5114,11 @@ struct FdRulesetDto {
     /// mode entry would refuse with, shown before the operator gets there. `""` when
     /// the configuration is good.
     problem: String,
+    /// ⭐ **The station's call is in the USA or Canada, and these settings would send the
+    /// DX exchange** (no QTH) — the warning, never a refusal, the same session carries once
+    /// the contest starts. Absent when it does not apply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location_warning: Option<tempo_app::dto::LocationWarningDto>,
 }
 
 fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
@@ -5139,6 +5144,7 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         role: String::new(),
         exchange: Vec::new(),
         problem: String::new(),
+        location_warning: None,
     }
 }
 
@@ -5148,6 +5154,12 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
 #[tauri::command(async)]
 fn get_fd_ruleset(state: State<'_, SharedEngine>) -> Result<FdRulesetDto, String> {
     let eng = engine_lock(&state);
+    Ok(fd_ruleset_preview(&eng))
+}
+
+/// [`get_fd_ruleset`]'s answer for one engine: the ruleset facts plus the role, exchange,
+/// refusal or warning the saved settings would start the contest with.
+fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
     let mut dto = fd_ruleset_dto(&eng.settings().fd_event);
     // ⭐ THE ROLE PREVIEW. It is built by the SAME constructor mode entry uses, on the
     // same station data, so what Settings shows is what will go on the air — a second
@@ -5161,11 +5173,15 @@ fn get_fd_ruleset(state: State<'_, SharedEngine>) -> Result<FdRulesetDto, String
             Ok(s) => {
                 dto.role = s.role().id.to_string();
                 dto.exchange = s.my_exchange.iter().map(|v| v.raw.clone()).collect();
+                dto.location_warning = s
+                    .location_warning
+                    .as_ref()
+                    .map(tempo_app::dto::LocationWarningDto::from);
             }
             Err(e) => dto.problem = e,
         }
     }
-    Ok(dto)
+    dto
 }
 
 /// The LEGACY per-profile TLE cache (a bare `Vec<Tle>` array, pre-snapshot
@@ -25338,6 +25354,53 @@ mod tests {
         // NEGATIVE CONTROL: nothing to place, nothing to hint — never a made-up zone.
         assert_eq!(super::contest_zone_hint(String::new()), None);
         assert_eq!(super::contest_zone_hint("...".into()), None);
+    }
+
+    /// ⭐ **The entity spellings the W/VE warning keys on are this country file's own.**
+    /// `ContestSession::location_warning` compares the station's resolved entity with
+    /// "United States" and "Canada"; a file that spelled either differently would switch the
+    /// warning off without a sound. Alaska and Hawaii are entities of their own, and a US call
+    /// signing portable from another entity resolves to that entity.
+    #[test]
+    fn the_w_ve_warning_entities_are_the_country_files_own_spellings() {
+        let entity = |call: &str| super::contest_place_call(call).map(|l| l.entity);
+        assert_eq!(entity("W1XYZ"), Some("United States"));
+        assert_eq!(entity("K9XYZ"), Some("United States"));
+        assert_eq!(entity("VE3XYZ"), Some("Canada"));
+        assert_eq!(entity("VO1XYZ"), Some("Canada"));
+        assert_eq!(entity("KH6XYZ"), Some("Hawaii"));
+        assert_eq!(entity("KL7XYZ"), Some("Alaska"));
+        assert_ne!(entity("W1XYZ/VP2V"), Some("United States"));
+    }
+
+    /// ⭐ **Settings shows the W/VE warning before the contest starts** — the preview is the
+    /// same session constructor the mode entry uses, so it carries the same warning.
+    #[test]
+    fn the_settings_preview_carries_the_location_warning() {
+        // The real country file, installed exactly as startup installs it (a second install
+        // in this test binary is refused, which is fine: it is the same resolver).
+        let _ = tempo_core::contest::install_call_resolver(super::contest_place_call);
+        let preview = |state: &str| {
+            let s = tempo_app::settings::Settings {
+                mycall: "W9XYZ".into(),
+                fd_event: "cqww_rtty".into(),
+                contest_cq_zone: 4,
+                contest_qth_state: state.into(),
+                ..Default::default()
+            };
+            super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s))
+        };
+        let blank = preview("");
+        assert_eq!(blank.problem, "", "a warning is not a refusal");
+        assert_eq!(blank.role, "dx");
+        let w = blank
+            .location_warning
+            .expect("a US call with no state is warned");
+        assert_eq!((w.typed.as_str(), w.hints.len()), ("", 0));
+        // CONTROL: a listed state is not warned, and sends its QTH.
+        let il = preview("IL");
+        assert_eq!(il.location_warning, None);
+        assert_eq!(il.exchange, vec!["599", "4", "IL"]);
     }
 
     #[cfg(feature = "radio")]

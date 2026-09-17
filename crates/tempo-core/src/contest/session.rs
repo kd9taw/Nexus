@@ -38,6 +38,27 @@ pub struct MyLocation {
     pub dxcc: bool,
 }
 
+/// ⭐ **Why a station that is probably in the USA or Canada is about to send the DX
+/// exchange** — see [`ContestSession::location_warning`].
+///
+/// Data, not a sentence: the surfaces that show it (the contest strip, Settings, the
+/// contest-start notice) word it in the operator's language.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocationWarning {
+    /// What the operator's state field holds, trimmed and upper-cased — `""` when
+    /// nothing is set.
+    pub typed: String,
+    /// The W/VE QTH codes `typed` most likely means, in the exchange's own order —
+    /// empty when there is nothing to suggest. Several means the value is ambiguous
+    /// (`NL` is both `NF` and `LB`) and the operator picks; nothing here guesses.
+    pub hints: Vec<&'static str>,
+}
+
+/// The DXCC entities whose stations send a W/VE QTH: cty.dat's own spellings, which
+/// src-tauri pins against the real country file. Alaska and Hawaii are entities of
+/// their own there, and CQ WW RTTY counts them as countries only.
+const W_VE_ENTITIES: [&str; 2] = ["United States", "Canada"];
+
 /// The contact being worked right now, and the exchange ISSUED to it.
 ///
 /// This is where a serial lives between being composed and being logged. Without it
@@ -268,6 +289,25 @@ pub struct ContestSession {
     /// Where this session's merged contacts go — **default OFF** (§18.1). See
     /// [`UploadPolicy`].
     pub upload: UploadPolicy,
+    /// ⭐ **The entry's declared power** — Cabrillo `CATEGORY-POWER` (`HIGH`/`LOW`/`QRP`) —
+    /// read once, when the session starts, exactly as [`entry_category`](Self::entry_category)
+    /// is: Sweepstakes' precedence letter is derived from the same axis at the same moment,
+    /// and the headers of an entry must not disagree with what it sent. `""` = undeclared (or
+    /// a token Cabrillo does not define), which writes no header rather than a claim.
+    pub category_power: String,
+    /// The entry's declared assistance — Cabrillo `CATEGORY-ASSISTED`
+    /// (`ASSISTED`/`NON-ASSISTED`) — read at the same moment, for the same reason, as
+    /// [`category_power`](Self::category_power).
+    pub category_assisted: String,
+    /// ⭐ **A WARNING, never a refusal: this station's own call is in the USA or Canada,
+    /// the contest has a W/VE role, and the location it was given puts it in the dx role
+    /// anyway** — so it will send the DX exchange (no QTH). Computed when the session is
+    /// built, which is also when the role is. `None` for every other session.
+    ///
+    /// Not a refusal because the call is not proof of location: a US call operating from
+    /// abroad, or maritime mobile, is legitimately DX. The operator's location decides;
+    /// this only makes sure they chose it.
+    pub location_warning: Option<LocationWarning>,
 }
 
 impl ContestSession {
@@ -321,6 +361,11 @@ impl ContestSession {
             // §18.1: OFF, on every new session, without exception. It is not read from
             // a setting — a global default is the thing this control replaces.
             upload: UploadPolicy::default(),
+            // Field Day's Cabrillo writes neither header (its power is a scoring TIER).
+            category_power: String::new(),
+            category_assisted: String::new(),
+            // Field Day has no W/VE role.
+            location_warning: None,
         }
     }
 
@@ -358,10 +403,18 @@ impl ContestSession {
         rs: &'static crate::fd_rules::FdRuleset,
         station: &StationData,
     ) -> Result<Self, String> {
+        // The state as typed, read through the ruleset's own spellings of its listed
+        // locations first: CQ WW RTTY's exchange writes `PEI` where Canada Post writes `PE`.
+        let typed_state = station.contest_qth_state.trim().to_ascii_uppercase();
+        let state = rs
+            .location_aliases
+            .iter()
+            .find(|(from, _)| *from == typed_state)
+            .map_or(typed_state.clone(), |(_, to)| to.to_string());
         let my_location = MyLocation {
             county: Some(station.contest_qth_county.trim().to_ascii_uppercase())
                 .filter(|c| !c.is_empty()),
-            state: station.contest_qth_state.trim().to_ascii_uppercase(),
+            state,
             dxcc: station.dxcc,
         };
         // The role is evaluated by asking a session, not by re-implementing the
@@ -399,6 +452,15 @@ impl ContestSession {
             transmitter_id: rs.transmitter_column.then_some(0),
             my_call_location: super::resolve_call(&station.mycall),
             upload: UploadPolicy::default(),
+            category_power: cabrillo_token(
+                &station.contest_category_power,
+                &["HIGH", "LOW", "QRP"],
+            ),
+            category_assisted: cabrillo_token(
+                &station.contest_category_assisted,
+                &["ASSISTED", "NON-ASSISTED"],
+            ),
+            location_warning: None,
         };
         // ⭐ **A contest priced by the RELATION between two stations cannot run without a
         // country file**, and it must say so on the way in rather than scoring 48 hours of
@@ -489,6 +551,7 @@ Fill it in on the Contesting tab in Settings."
                 .clone()
                 .unwrap_or_else(|| s.my_location.state.clone())
         );
+        s.location_warning = location_warning(&s);
         Ok(s)
     }
 
@@ -731,6 +794,81 @@ Fill it in on the Contesting tab in Settings."
         self.my_exchange = next;
         self.my_location = where_now;
         Ok(())
+    }
+}
+
+/// [`ContestSession::location_warning`] for a freshly built session.
+///
+/// The trigger is exactly three facts: the exchange has a `w_ve` role, the station's
+/// own call places it in [`W_VE_ENTITIES`], and the role came out `dx` without the
+/// operator declaring DX. The call alone is not enough to warn on (a Hawaii call is
+/// DX in CQ WW RTTY), and the role alone is not either (a DX entrant is DX).
+fn location_warning(s: &ContestSession) -> Option<LocationWarning> {
+    let w_ve = s.exchange.roles.iter().find(|r| r.id == "w_ve")?;
+    let RoleSelector::MyLocationIn(listed) = w_ve.selector else {
+        return None;
+    };
+    if s.role().id != "dx" || s.my_location.dxcc {
+        return None;
+    }
+    let mine = s.my_call_location?;
+    if !W_VE_ENTITIES.contains(&mine.entity) {
+        return None;
+    }
+    let typed = s.my_location.state.clone();
+    let hints = if typed.is_empty() {
+        Vec::new()
+    } else {
+        location_hints(s.exchange, listed, &typed)
+    };
+    Some(LocationWarning { typed, hints })
+}
+
+/// The listed W/VE codes an unlisted value most likely means — read off the ARRL/RAC
+/// section table, because the likely mistake is typing a SECTION where the contest
+/// wants a state or province: `EMA` is "Eastern Massachusetts", so `MA`; `NL` is
+/// "Newfoundland/Labrador", so `NF` or `LB`. A code is suggested when the section's name
+/// contains the code's own place name, or the code itself (`MDC` is "Maryland-DC").
+/// A value that is not a section, or whose name names no listed place (`SV`, Sacramento
+/// Valley), gets no suggestion rather than a guess.
+fn location_hints(
+    exchange: &'static super::ExchangeSpec,
+    listed: &'static [&'static str],
+    typed: &str,
+) -> Vec<&'static str> {
+    let Some(section) = crate::fd_rules::sections().iter().find(|x| x.code == typed) else {
+        return Vec::new();
+    };
+    let words: Vec<&str> = section
+        .name
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .collect();
+    let mut out: Vec<&'static str> = Vec::new();
+    for f in exchange.fields {
+        let super::FieldKind::Enum { domain } = f.kind else {
+            continue;
+        };
+        for (code, name) in domain.values {
+            // A place name, without the call area the sponsor appends: "Ontario (VE3)".
+            let place = name.split(" (").next().unwrap_or(name);
+            let named = section.name.contains(place) || words.contains(code);
+            if named && listed.contains(code) && !out.contains(code) {
+                out.push(code);
+            }
+        }
+    }
+    out
+}
+
+/// A declared Cabrillo category token, trimmed and upper-cased — or `""` when it is not one of
+/// the tokens Cabrillo defines for that axis. A value this build does not recognise is not a
+/// claim to repeat in a header.
+fn cabrillo_token(raw: &str, tokens: &[&str]) -> String {
+    let up = raw.trim().to_ascii_uppercase();
+    if tokens.contains(&up.as_str()) {
+        up
+    } else {
+        String::new()
     }
 }
 

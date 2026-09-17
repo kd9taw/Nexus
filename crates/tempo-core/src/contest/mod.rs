@@ -73,8 +73,8 @@ pub use exchanges::{casual, field_day};
 pub use adif::directed_columns;
 
 pub use cabrillo::{
-    cabrillo_contest_token, is_call_slot, resolve_contest_id, side_declares_call, CabrilloHeaders,
-    OperatorCategory,
+    cabrillo_contest_token, is_call_slot, resolve_contest_id, side_declares_call, CabrilloColumn,
+    CabrilloEntrant, CabrilloHeaders, OperatorCategory,
 };
 
 pub use callsign::{
@@ -91,8 +91,8 @@ pub use render::{role_for, sent_exchange, sent_exchange_string};
 pub use merge::{merge_into_general, MergeReport};
 
 pub use session::{
-    ContestSession, InFlightQso, MyLocation, StationData, UploadPolicy, MOVE_CHANGES_ROLE,
-    UPLOAD_CLUBLOG_SWEEP_HINT,
+    ContestSession, InFlightQso, LocationWarning, MyLocation, StationData, UploadPolicy,
+    MOVE_CHANGES_ROLE, UPLOAD_CLUBLOG_SWEEP_HINT,
 };
 
 pub use scoring::{

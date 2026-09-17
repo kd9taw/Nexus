@@ -24,6 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from './arrlSections'
+import { CQWW_RTTY_US_QTH, CQWW_RTTY_VE_QTH } from './cqwwRttyQth'
 
 /** One cell of a board / one legal value of a slot. */
 export interface DomainValue {
@@ -66,10 +67,22 @@ const FD_SECTIONS: ContestDomain = {
   total: ARRL_SECTION_TOTAL,
 }
 
+/** CQ WW RTTY's W/VE QTHs — its QTH multiplier's universe, grouped by call prefix (a token,
+ *  never translated). The list is a guarded mirror of the seed (see `cqwwRttyQth.ts`). */
+const CQWW_RTTY_QTH: ContestDomain = {
+  codes: new Set([...CQWW_RTTY_US_QTH, ...CQWW_RTTY_VE_QTH].map((q) => q.code)),
+  groups: [
+    { label: 'W', values: CQWW_RTTY_US_QTH },
+    { label: 'VE', values: CQWW_RTTY_VE_QTH },
+  ],
+  total: CQWW_RTTY_US_QTH.length + CQWW_RTTY_VE_QTH.length,
+}
+
 const DOMAINS: Record<string, ContestDomain> = {
   fd_sections: FD_SECTIONS,
   // The plain 85-section universe under its own Rust id, same table.
   arrl_sections: FD_SECTIONS,
+  cqww_rtty_qth: CQWW_RTTY_QTH,
 }
 
 /** The domain behind an id, or `undefined` when this build carries no value set for it. */

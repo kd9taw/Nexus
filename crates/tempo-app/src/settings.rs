@@ -846,6 +846,18 @@ pub struct Settings {
     /// empty for the ordinary entry. The only arm anything in this build reads.
     #[serde(default)]
     pub contest_category_station: String,
+    /// Cabrillo `EMAIL` — where a sponsor can reach the entrant about a log, written into
+    /// the header of a contest whose rules list it, and left out when this is empty (the
+    /// header is optional). Read at EXPORT, not when a session starts: nothing sent on the
+    /// air depends on it, and a corrected typo must reach the next file.
+    ///
+    /// ⚠️ **Not [`Self::clublog_email`]**, which is a connector's LOGIN. Writing an
+    /// account identifier into a file the operator sends to a sponsor would be a surprise
+    /// nobody asked for, so the two are separate fields.
+    ///
+    /// Withheld from Remote (`query/configuration.rs`): a browser has no use for it.
+    #[serde(default)]
+    pub contest_email: String,
     // ---- The station data a SENT exchange needs (spec §3.4) -----------------
     //
     // ⭐ **These land BESIDE the frozen `fd_*` names, never replacing them**
@@ -3827,6 +3839,7 @@ impl Default for Settings {
             contest_category_power: String::new(),
             contest_category_assisted: String::new(),
             contest_category_station: String::new(),
+            contest_email: String::new(), // "" = no EMAIL header
             // §3.4's station-data block. Every one of these is empty/0 on a fresh
             // install: none of them can be guessed, and a guessed exchange goes on
             // the air. The Contesting tab asks for the ones the picked contest sends.

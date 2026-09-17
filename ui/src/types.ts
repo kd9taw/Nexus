@@ -2636,6 +2636,13 @@ export interface FieldDayQso {
 }
 
 /** Field Day operating + scoring status. */
+/** What a W/VE location warning says: the state the operator typed (`''` = none) and the listed
+ *  codes it most likely means (several = ambiguous; the operator picks). */
+export interface ContestLocationWarning {
+  typed: string
+  hints: string[]
+}
+
 export interface FieldDayStatus {
   /* ⛔ NO SESSION-LEVEL SENT EXCHANGE LIVES HERE. The `myClass`/`mySection` pair that
      used to head this interface was DELETED, not renamed: two interop emitters read it
@@ -2708,6 +2715,13 @@ export interface FieldDayStatus {
    *  ⚠️ It describes the NEXT transmission only. A logged row's own sent exchange is its
    *  `mex`; never label a row with this. Absent on a build older than the field. */
   sentExchange?: string
+  /** The bands this contest runs on (`'20m'`) — advisory: the strip warns when the rig is on
+   *  another band and never refuses the contact. Absent when the ruleset names none. */
+  bands?: string[]
+  /** ⭐ This station's call is in the USA or Canada, and the contest state it was given would
+   *  send the DX exchange (no QTH) — a WARNING the strip shows, never a refusal. Absent when it
+   *  does not apply. Worded by `features/contestLocation.ts`. */
+  locationWarning?: ContestLocationWarning
   /** The session's role id — `''` for a symmetric contest (both Field Day events).
    *  Shown beside the exchange only when it names something. */
   role?: string
@@ -3351,6 +3365,9 @@ export interface Settings {
   contestCategoryAssisted?: string
   /** Cabrillo `CATEGORY-STATION` — 'SCHOOL', '' = the ordinary entry. */
   contestCategoryStation?: string
+  /** Cabrillo `EMAIL` for a contest log, '' = the header is left out. Not the ClubLog login.
+   *  Withheld from Remote. */
+  contestEmail?: string
   /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
    *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
    *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else

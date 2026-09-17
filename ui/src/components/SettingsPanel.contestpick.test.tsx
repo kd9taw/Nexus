@@ -128,12 +128,13 @@ describe('the contest picker', () => {
     renderPanel()
     await openContesting()
     const group = await groupFor('Contest')
-    // ⭐ FIFTEEN contests: the two Field Day events, the four state QSO parties batch 8
+    // ⭐ SIXTEEN contests: the two Field Day events, the four state QSO parties batch 8
     // shipped as rulesets and nobody could select, Sweepstakes' TWO weekends, ARRL VHF's
-    // THREE runnings, and CQ WW's and CQ WPX's two each — ARRL and CQ both run the CW and
+    // THREE runnings, CQ WW's and CQ WPX's two each — ARRL and CQ both run the CW and
     // Phone runnings as separate contests on separate weekends, with separate scores and
     // separate Cabrillo tokens, and ARRL VHF's three differ in their point table as well
-    // as their weekend. The names are the sponsors' own.
+    // as their weekend — and CQ WW RTTY, a different sponsor's contest with its own
+    // exchange. The names are the sponsors' own.
     expect([...group.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
       'ARRL Field Day',
       'Winter Field Day',
@@ -144,6 +145,7 @@ describe('the contest picker', () => {
       'ARRL September VHF Contest',
       'CQ World-Wide DX Contest (CW)',
       'CQ World-Wide DX Contest (SSB)',
+      'CQ World-Wide RTTY DX Contest',
       'CQ World-Wide WPX Contest (CW)',
       'CQ World-Wide WPX Contest (SSB)',
       'California QSO Party',
@@ -210,6 +212,33 @@ describe('the role / category block', () => {
     expect(await screen.findByText(/Running as in_state/)).not.toBeNull()
     // READ-ONLY: nothing in the role field is a control.
     expect((await groupFor('Your role')).querySelector('button, input, select')).toBeNull()
+  })
+
+  it('shows the W/VE warning the saved settings would start the contest with', async () => {
+    api.get('getFdRuleset').mockImplementation(() =>
+      Promise.resolve({
+        event: 'cqww_rtty',
+        rulesYear: 2026,
+        bannedModes: [],
+        spottingAllowed: true,
+        clusterAllowed: true,
+        enforcement: 'warn',
+        role: 'dx',
+        exchange: ['599', '4'],
+        problem: '',
+        locationWarning: { typed: '', hints: [] },
+      } as never),
+    )
+    renderPanel()
+    await openContesting()
+    const w = await screen.findByText(/^Your call is in the US or Canada/)
+    expect(sectionOf(w)).toBe('Contest')
+    // …and the LIVE session's warning once the contest is running.
+    cleanup()
+    api.get('getFdRuleset').mockImplementation(() => Promise.resolve(null))
+    renderPanel({ role: 'dx', locationWarning: { typed: 'NL', hints: ['NF', 'LB'] } })
+    await openContesting()
+    expect(await screen.findByText(/^NL is not a state or province this contest lists.*Did you mean NF \/ LB\?$/)).not.toBeNull()
   })
 
   it('declares SINGLE-OP by default and writes the token the operator picks', async () => {

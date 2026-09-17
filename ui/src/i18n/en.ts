@@ -1354,7 +1354,11 @@ export const EN = {
   'logEntry.fd.zone.title': 'Their CQ zone, 1–40',
   'logEntry.contest.chip': 'CONTEST LOG',
   'logEntry.contest.hint': '{{band}} · contacts go to the contest log',
+  'logEntry.contest.offBand': '{{band}} is not a band this contest uses · contacts still go to the contest log',
   'logEntry.contest.qthMissing': 'No QTH for {{call}}. Stations in the USA and Canada send their state or province — add it if you copied one. You can log without it.',
+  'logEntry.contest.location.blank': 'Your call is in the US or Canada, but no contest state or province is set, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
+  'logEntry.contest.location.unlisted': '{{typed}} is not a state or province this contest lists, so Nexus will send the DX exchange with no QTH. Set yours in Settings › Contesting, or ignore this if you are operating from outside the US and Canada.',
+  'logEntry.contest.location.hint': 'Did you mean {{codes}}?',
   'logEntry.sent.aria': 'What you are sending',
   'logEntry.sent.label': 'Sending',
   'logEntry.sent.title':
@@ -3238,6 +3242,9 @@ export const EN = {
   'settings.contestPick.entryAxes.unset': 'Not set',
   'settings.contestPick.entryAxes.hint':
     'The rest of what your Cabrillo log declares about the entry. Sweepstakes also sends these on the air, as the precedence letter, so it will not start until you have picked one of each: ARRL counts 5 watts or less as QRP, 100 watts or less as low power, and anything above that as high power, and an entry using spots, a skimmer or a cluster is Single Operator Unlimited.',
+  'settings.contestPick.email.label': 'Email for contest logs',
+  'settings.contestPick.email.hint':
+    'Goes on the EMAIL line of the Cabrillo log you export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you about your entry. The NAME line is your operator name from the Station tab. Leave it blank to leave the line out.',
   'settings.contestStation.legend': 'Your station data',
   'settings.contestStation.note': 'What your station sends when a contest asks for it. Fill in the ones your contest uses — a QSO party wants your county or your state, Sweepstakes wants your check. Nothing here is guessed: an exchange that goes on the air has to be one you typed.',
   'settings.contestStation.county.label': 'County',

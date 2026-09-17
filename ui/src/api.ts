@@ -428,7 +428,7 @@ export interface FdRulesetDto {
   /**
    * The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp' |
    * 'arrlss_cw' | 'arrlss_ssb' | 'arrlvhf_jan' | 'arrlvhf_jun' | 'arrlvhf_sep' |
-   * 'cqww_cw' | 'cqww_ssb' | 'cqwpx_cw' | 'cqwpx_ssb'.
+   * 'cqww_cw' | 'cqww_ssb' | 'cqww_rtty' | 'cqwpx_cw' | 'cqwpx_ssb'.
    */
   event: string
   rulesYear: number
@@ -447,6 +447,8 @@ export interface FdRulesetDto {
   /** Why no session could be built from the saved settings — the sentence mode entry
    *  would refuse with. `''` when the configuration is good. */
   problem?: string
+  /** The W/VE warning (never a refusal) these settings would start the contest with. */
+  locationWarning?: import('./types').ContestLocationWarning
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of

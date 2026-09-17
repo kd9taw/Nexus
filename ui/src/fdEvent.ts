@@ -65,6 +65,8 @@ export const CONTESTS: { id: string; name: string; short: string }[] = [
   // Journal) and have their own rules, so they are not arms of these rows.
   { id: 'cqww_cw', name: 'CQ World-Wide DX Contest (CW)', short: 'CQ WW CW' },
   { id: 'cqww_ssb', name: 'CQ World-Wide DX Contest (SSB)', short: 'CQ WW SSB' },
+  // CQ WW RTTY, therefore, is a row of its own (the sponsor's name, from cqwwrtty.com).
+  { id: 'cqww_rtty', name: 'CQ World-Wide RTTY DX Contest', short: 'CQ WW RTTY' },
   { id: 'cqwpx_cw', name: 'CQ World-Wide WPX Contest (CW)', short: 'CQ WPX CW' },
   { id: 'cqwpx_ssb', name: 'CQ World-Wide WPX Contest (SSB)', short: 'CQ WPX SSB' },
   { id: 'cqp', name: 'California QSO Party', short: 'CQP' },

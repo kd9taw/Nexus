@@ -294,12 +294,14 @@ export const WITHHELD_SETTINGS_KEYS = [
   'voiceMessages',
 ] as const
 /** Withheld by the station too, but station-local facts rather than credentials: how that computer
- *  starts, and its answer to a one-time prompt. Kept apart from WITHHELD_SETTINGS_KEYS because the
- *  station must declare every key on THAT list, and a station older than these fields cannot - putting
- *  them there would refuse every older station's settings document. CI pins the union to the Rust list. */
+ *  starts, its answer to a one-time prompt, and the email a contest log's header carries. Kept apart
+ *  from WITHHELD_SETTINGS_KEYS because the station must declare every key on THAT list, and a station
+ *  older than these fields cannot - putting them there would refuse every older station's settings
+ *  document. CI pins the union to the Rust list. */
 export const STATION_LOCAL_SETTINGS_KEYS = [
   'launchAtLogin',
   'remoteAutostartOfferAnswered',
+  'contestEmail',
 ] as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the

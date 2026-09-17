@@ -18,11 +18,13 @@
 //! wrong about today, and a club that runs a multi-operator entry is already
 //! configuring positions.
 //!
-//! ⚠️ **Only the headers with a SOURCE in this batch are modelled.** §6.1 lists
-//! `CATEGORY-POWER`, `CLUB`, `OPERATORS` and `CLAIMED-SCORE` too; each of those is
-//! fed by a picker or a score the batch that opens the Settings ▸ Contesting surface
-//! supplies. A field nothing fills is a field that ships empty, and an emitted header
-//! nobody set is the defect above written a second time.
+//! ⚠️ **Only headers with a SOURCE are modelled, and an optional one is written only
+//! when a ruleset asks for it and it holds a value.** `CATEGORY-ASSISTED` and
+//! `CATEGORY-POWER` are the entry's own declarations (Settings ▸ Contesting),
+//! `CATEGORY-BAND` / `CATEGORY-MODE` and `CLAIMED-SCORE` are read off the log, and
+//! `NAME` / `EMAIL` are the entrant's own settings ([`CabrilloEntrant`]). `CLUB` and
+//! `OPERATORS` still have no source. A field nothing fills is a field that ships empty,
+//! and an emitted header nobody set is the defect above written a second time.
 
 /// Cabrillo's `CATEGORY-OPERATOR` — who operated the entry.
 ///
@@ -65,9 +67,15 @@ impl OperatorCategory {
 /// The header block of one Cabrillo entry.
 ///
 /// Every value is supplied by the caller; nothing here reads a setting or a clock.
-/// [`render`](Self::render) emits the lines in Cabrillo's own order and omits nothing
-/// — a header modelled here is a header this build can source.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// [`render`](Self::render) emits the lines in Cabrillo's own order — a header modelled
+/// here is a header this build can source.
+///
+/// ⚠️ **An empty OPTIONAL header is not written.** `CATEGORY-POWER:` with nothing after
+/// it is still a header a robot parses, and a declaration nobody made is the
+/// `MULTI-OP` defect above written again. The optional fields render only when they
+/// hold a value, so a caller that leaves them at their default gets exactly the
+/// header block every contest wrote before they existed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CabrilloHeaders {
     /// `CONTEST` — the sponsor's token, already resolved through
     /// [`resolve_contest_id`] for a mode-split contest and translated out of ADIF's
@@ -77,11 +85,30 @@ pub struct CabrilloHeaders {
     pub callsign: String,
     /// `CATEGORY-OPERATOR` — the entry declaration, no longer a literal.
     pub category_operator: OperatorCategory,
+    /// `CATEGORY-ASSISTED` — `ASSISTED` / `NON-ASSISTED`, as the entry declared it.
+    /// Optional: `""` writes no line.
+    pub category_assisted: String,
+    /// `CATEGORY-BAND` — `ALL`, or the one band a single-band log holds (`20M`).
+    /// Optional: `""` writes no line.
+    pub category_band: String,
+    /// `CATEGORY-MODE` — `CW` / `SSB` / `RTTY` / `DIGI` / `MIXED`, from the log's rows.
+    /// Optional: `""` writes no line.
+    pub category_mode: String,
+    /// `CATEGORY-POWER` — `HIGH` / `LOW` / `QRP`, as the entry declared it. Optional:
+    /// `""` writes no line.
+    pub category_power: String,
     /// `LOCATION` — the ENTRY's declared location, once. A mobile's per-contact
     /// truth is on the QSO lines and is not this value.
     pub location: String,
+    /// `CLAIMED-SCORE` — the score the log computes, when it is the whole score.
+    /// Optional: `None` writes no line.
+    pub claimed_score: Option<u32>,
     /// `CREATED-BY` — the program that wrote the file.
     pub created_by: String,
+    /// `EMAIL` — where the sponsor can reach the entrant. Optional: `""` writes no line.
+    pub email: String,
+    /// `NAME` — the entrant's name. Optional: `""` writes no line.
+    pub name: String,
     /// `X-` headers, emitted last in the order given. Cabrillo-legal and ignored by
     /// robots; `X-NEXUS-RULES-YEAR` says which rules data scored the entry.
     pub x_headers: Vec<(String, String)>,
@@ -98,12 +125,72 @@ impl CabrilloHeaders {
             "CATEGORY-OPERATOR: {}\n",
             self.category_operator.token()
         ));
+        let optional = |s: &mut String, tag: &str, val: &str| {
+            if !val.trim().is_empty() {
+                s.push_str(&format!("{tag}: {}\n", val.trim()));
+            }
+        };
+        optional(&mut s, "CATEGORY-ASSISTED", &self.category_assisted);
+        optional(&mut s, "CATEGORY-BAND", &self.category_band);
+        optional(&mut s, "CATEGORY-MODE", &self.category_mode);
+        optional(&mut s, "CATEGORY-POWER", &self.category_power);
         s.push_str(&format!("LOCATION: {}\n", self.location));
+        if let Some(score) = self.claimed_score {
+            s.push_str(&format!("CLAIMED-SCORE: {score}\n"));
+        }
         s.push_str(&format!("CREATED-BY: {}\n", self.created_by));
+        optional(&mut s, "EMAIL", &self.email);
+        optional(&mut s, "NAME", &self.name);
         for (tag, val) in &self.x_headers {
             s.push_str(&format!("{tag}: {val}\n"));
         }
         s
+    }
+}
+
+/// ⭐ **Who is submitting the entry** — `NAME` and `EMAIL`, read from the entrant's own
+/// settings at EXPORT time rather than from the session: neither is part of anything sent
+/// on the air, and a corrected typo must reach the next file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CabrilloEntrant {
+    /// `NAME`.
+    pub name: String,
+    /// `EMAIL`.
+    pub email: String,
+}
+
+/// ⭐ **One column of a sponsor's own Cabrillo exchange template**, where its QSO line is
+/// not the structural one (each side's role slots in order, blanks left out).
+///
+/// CQ WW RTTY is the case: *"QSO: freq mo date time call rst Zn exch call rst Zn exch t"*,
+/// the zone two characters wide, and *"All others use 'DX' as a placeholder"* — the same
+/// fixed columns on both sides of every line, whichever role sent the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CabrilloColumn {
+    /// The exchange slot this column writes.
+    pub key: &'static str,
+    /// Zero-pad an all-digit value to this many characters (`4` → `04`); `0` writes it
+    /// as copied. Never truncates.
+    pub width: u8,
+    /// What an EMPTY value writes (`DX`); `""` writes nothing.
+    pub blank: &'static str,
+}
+
+impl CabrilloColumn {
+    /// This column's cell for one copied value.
+    ///
+    /// Only an all-digit value is padded: the width is a template's column for a number,
+    /// and a value that is not one is written as it was copied rather than rewritten.
+    pub fn cell(&self, raw: &str) -> String {
+        let v = raw.trim();
+        if v.is_empty() {
+            return self.blank.to_string();
+        }
+        let width = usize::from(self.width);
+        if v.len() < width && v.bytes().all(|b| b.is_ascii_digit()) {
+            return format!("{v:0>width$}");
+        }
+        v.to_string()
     }
 }
 
@@ -442,6 +529,7 @@ mod tests {
             location: "WI".into(),
             created_by: "Nexus".into(),
             x_headers: vec![("X-NEXUS-RULES-YEAR".into(), "2026".into())],
+            ..Default::default()
         };
         assert_eq!(
             h.render(),
@@ -453,6 +541,92 @@ mod tests {
              CREATED-BY: Nexus\n\
              X-NEXUS-RULES-YEAR: 2026\n"
         );
+    }
+
+    /// ⭐ **The optional headers, only when they hold a value** (CQ WW RTTY's cabrillo.htm,
+    /// read 2026-09-17, lists CATEGORY-ASSISTED, -BAND, -MODE, -POWER, CLAIMED-SCORE, EMAIL
+    /// and NAME). Cabrillo does not fix the order of header lines; the order here is this
+    /// writer's own, and pinned so it does not wander.
+    #[test]
+    fn the_optional_headers_render_only_when_they_hold_a_value() {
+        let full = CabrilloHeaders {
+            contest: "CQ-WW-RTTY".into(),
+            callsign: "W9XYZ".into(),
+            category_assisted: "NON-ASSISTED".into(),
+            category_band: "ALL".into(),
+            category_mode: "RTTY".into(),
+            category_power: "LOW".into(),
+            location: "IL".into(),
+            claimed_score: Some(25),
+            created_by: "Nexus".into(),
+            email: "op@example.com".into(),
+            name: "EXAMPLE OPERATOR".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            full.render(),
+            "START-OF-LOG: 3.0\n\
+             CONTEST: CQ-WW-RTTY\n\
+             CALLSIGN: W9XYZ\n\
+             CATEGORY-OPERATOR: SINGLE-OP\n\
+             CATEGORY-ASSISTED: NON-ASSISTED\n\
+             CATEGORY-BAND: ALL\n\
+             CATEGORY-MODE: RTTY\n\
+             CATEGORY-POWER: LOW\n\
+             LOCATION: IL\n\
+             CLAIMED-SCORE: 25\n\
+             CREATED-BY: Nexus\n\
+             EMAIL: op@example.com\n\
+             NAME: EXAMPLE OPERATOR\n"
+        );
+        // CONTROL: the same entry with nothing optional declared — a blank that is only
+        // whitespace included — is the header block every contest wrote before.
+        let bare = CabrilloHeaders {
+            category_assisted: " ".into(),
+            category_band: String::new(),
+            category_mode: String::new(),
+            category_power: String::new(),
+            claimed_score: None,
+            email: String::new(),
+            name: String::new(),
+            ..full
+        };
+        assert_eq!(
+            bare.render(),
+            "START-OF-LOG: 3.0\n\
+             CONTEST: CQ-WW-RTTY\n\
+             CALLSIGN: W9XYZ\n\
+             CATEGORY-OPERATOR: SINGLE-OP\n\
+             LOCATION: IL\n\
+             CREATED-BY: Nexus\n"
+        );
+    }
+
+    /// ⭐ A template column: the zone two wide, a placeholder for a blank, and nothing
+    /// else rewritten (cabrillo.htm's `**` zone column and `'DX' as a placeholder`).
+    #[test]
+    fn a_template_column_pads_a_number_and_fills_a_blank() {
+        let zn = CabrilloColumn {
+            key: "ZN",
+            width: 2,
+            blank: "",
+        };
+        assert_eq!(zn.cell("4"), "04");
+        assert_eq!(zn.cell(" 4 "), "04");
+        assert_eq!(zn.cell("14"), "14");
+        assert_eq!(zn.cell("05"), "05");
+        assert_eq!(zn.cell("123"), "123", "never truncates");
+        assert_eq!(zn.cell("X"), "X", "only a number is padded");
+        assert_eq!(zn.cell(""), "", "no placeholder declared");
+        let qth = CabrilloColumn {
+            key: "QTH",
+            width: 0,
+            blank: "DX",
+        };
+        assert_eq!(qth.cell(""), "DX");
+        assert_eq!(qth.cell("  "), "DX");
+        assert_eq!(qth.cell("MA"), "MA");
+        assert_eq!(qth.cell("7"), "7", "width 0 pads nothing");
     }
 
     /// A contest with one id answers with it for every log, including one that spans

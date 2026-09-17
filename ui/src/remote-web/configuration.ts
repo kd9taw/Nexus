@@ -77,5 +77,5 @@ export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):Se
  * values: their account/backup sections are replaced by a station-managed note,
  * and all station writes are disabled. Never submit this adapter's output. */
 export function settingsForm(doc:SettingsConfiguration):Settings {
-  return {...doc.settings,...Object.fromEntries(WITHHELD_SETTINGS_KEYS.map(k=>[k,k==='voiceMessages'?[]:''])),...Object.fromEntries(STATION_LOCAL_SETTINGS_KEYS.map(k=>[k,false]))} as unknown as Settings
+  return {...doc.settings,...Object.fromEntries(WITHHELD_SETTINGS_KEYS.map(k=>[k,k==='voiceMessages'?[]:''])),...Object.fromEntries(STATION_LOCAL_SETTINGS_KEYS.map(k=>[k,k==='contestEmail'?'':false]))} as unknown as Settings
 }

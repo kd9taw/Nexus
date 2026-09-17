@@ -194,3 +194,23 @@ describe('the station-data block', () => {
     await waitFor(() => expect(lastSaved()!.contestCqZone).toBe(5))
   })
 })
+
+// The address a contest log's Cabrillo EMAIL line carries. Optional (an empty one writes no
+// line), read by the engine at export, and a plain text setting like the rest of this tab — so
+// what this proves is the same round trip: typed, saved, and back after a reload.
+describe('the contest log email', () => {
+  it('is on the Contest section, empty by default, and survives a save and a reload', async () => {
+    const view = renderPanel()
+    await openContesting()
+    const email = await inputFor('Email for contest logs')
+    expect(email.closest('fieldset')!.querySelector('legend')!.textContent).toBe('Contest')
+    expect(email.value).toBe('')
+    fireEvent.change(email, { target: { value: 'op@example.com' } })
+    await save()
+    await waitFor(() => expect(lastSaved()?.contestEmail).toBe('op@example.com'))
+    view.unmount()
+    renderPanel()
+    await openContesting()
+    expect((await inputFor('Email for contest logs')).value).toBe('op@example.com')
+  })
+})

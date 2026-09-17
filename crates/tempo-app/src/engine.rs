@@ -5365,8 +5365,16 @@ impl Engine {
     /// under the ENTRY band (wrong Cabrillo/N3FJP band, corrupted dupe keys).
     fn sync_fd_band(&mut self) {
         let band = self.settings.band.clone();
+        // …and the dial beside it, which a contest's Cabrillo writes in place of the band
+        // edge (`FieldDayLog::dial_khz`). Rounded to the kHz the QSO line is written in.
+        let dial_khz = if self.settings.dial_mhz.is_finite() && self.settings.dial_mhz > 0.0 {
+            (self.settings.dial_mhz * 1000.0).round() as u32
+        } else {
+            0
+        };
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
+            station.log.dial_khz = dial_khz;
         }
     }
 
@@ -20378,7 +20386,16 @@ contact yourself."
                 let freq_khz = (self.settings.dial_mhz * 1000.0).round() as u32;
                 match format.to_ascii_lowercase().as_str() {
                     "adif" => Ok(station.log.adif()),
-                    _ => station.log.cabrillo(freq_khz),
+                    // NAME and EMAIL are the entrant's own settings, read at export so a
+                    // corrected typo reaches the next file; the log writes them only where
+                    // the contest's rules list those headers (never for Field Day).
+                    _ => station.log.cabrillo_with(
+                        freq_khz,
+                        &tempo_core::contest::CabrilloEntrant {
+                            name: self.settings.op_name.trim().to_string(),
+                            email: self.settings.contest_email.trim().to_string(),
+                        },
+                    ),
                 }
             }
             _ => Err("nothing to export (enter Field Day mode first)".to_string()),

@@ -17,6 +17,14 @@ function object(v: unknown, keys: string[], optional: string[] = []): Record<str
     Object.keys(v).some(k => !keys.includes(k) && !optional.includes(k))) throw new Error('invalidFieldDay')
   return v as Record<string, unknown>
 }
+function locationWarning(v: unknown): boolean {
+  try {
+    const w = object(v, ['typed','hints'])
+    return text(w.typed) && texts(w.hints,8)
+  } catch {
+    return false
+  }
+}
 function status(v: unknown): void {
   // The station sends its whole FieldDayStatus, so this list has to track that struct. It drifted
   // badly: `myClass`/`mySection` were DELETED from the DTO on purpose (two interop emitters were
@@ -29,11 +37,15 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','bands','locationWarning'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
     // What {EXCH} keys next (the macros read it). A string, bounded like every other.
     (f.sentExchange !== undefined && !text(f.sentExchange)) ||
+    // The contest's advisory band list.
+    (f.bands !== undefined && !texts(f.bands,32)) ||
+    // A W/VE call about to send the DX exchange: what was typed, and the codes it likely means.
+    (f.locationWarning !== undefined && !locationWarning(f.locationWarning)) ||
     (f.scoreNoteKey !== undefined && !text(f.scoreNoteKey)) || (f.role !== undefined && !text(f.role)) ||
     (f.multCount !== undefined && f.multCount !== null && !integer(f.multCount)) ||
     // `composing` is a VECTOR by design, never a preformatted exchange string - a row's own sent
@@ -80,7 +92,9 @@ export function parseFieldDay(page: QueryPage): FieldDayObservation & { captured
   // class/section pair), a `problem` and a `role`. Optional for both-direction compatibility.
   const r = object(value.ruleset,['event','rulesYear','bannedModes','spottingAllowed','clusterAllowed','enforcement'],
     ['exchange','problem','role'])
-  if (!['arrlfd','wfd'].includes(String(r.event)) || !integer(r.rulesYear) || !texts(r.bannedModes,64) || typeof r.spottingAllowed !== 'boolean' ||
+  // The ruleset of whichever contest is running — the same id, so the same shape rule as the
+  // status's `event` above (a hardcoded arrlfd/wfd pair here blanked every other contest).
+  if (!eventId(r.event) || !integer(r.rulesYear) || !texts(r.bannedModes,64) || typeof r.spottingAllowed !== 'boolean' ||
     typeof r.clusterAllowed !== 'boolean' || !text(r.enforcement) ||
     (r.role !== undefined && !text(r.role)) ||
     (r.problem !== undefined && r.problem !== null && !text(r.problem)) ||
