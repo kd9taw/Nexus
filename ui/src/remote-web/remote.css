@@ -14,3 +14,15 @@
 .remote-section details p { margin: 12px 0; }
 .remote-native { padding: 0; }
 .remote-native .remote-actions { margin-top: 8px; }
+
+/* The feed control (FeedWatch). Here rather than in application.css because BOTH remote surfaces
+   render it — the full workspace's session row and the observer-only monitor header — and this
+   file is the one they share. `flex: 0 0 auto` so its status line wraps inside the control rather
+   than squeezing the label beside it in the session row. At xs the word goes and the icon carries
+   it, as the session's own settings toggle does; the button keeps its aria-label, so what is
+   hidden is decoration and never the accessible name. */
+.remote-feed { display: flex; align-items: center; gap: .4em; flex: 0 0 auto; flex-wrap: wrap; }
+.remote-feed-toggle { display: inline-flex; align-items: center; gap: .35em; }
+.remote-feed-state { font-size: .85em; color: var(--text-dim); }
+[data-viewport='xs'] .remote-feed-toggle { width: 48px; padding-inline: 0; justify-content: center; }
+[data-viewport='xs'] .remote-feed-toggle > span { display: none; }

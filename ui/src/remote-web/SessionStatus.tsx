@@ -1,8 +1,9 @@
-import { useId, useState, useSyncExternalStore } from 'react'
+import { useId, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Eye, EyeOff, Info } from 'lucide-react'
+import { Info } from 'lucide-react'
 import { t } from '../i18n'
 import type { FeedControl } from './client'
+import { FeedWatch } from './FeedWatch'
 import type { OperationClient } from './operation-client'
 import { LoggingAuthority } from './operations'
 import type { PresentationState } from './presentation'
@@ -66,26 +67,6 @@ export function SessionStatus({ client, stale, disconnect, signOut, display, ale
       </div>}
     </div>
   </div>
-}
-
-/** The feed's own control: whether this tab keeps watching while it is in the background, and -
- *  once, on return - why the feed has a gap in it. The label does not change with the state; the
- *  pressed state does, which is what a toggle is. A button whose word flips between "keep" and
- *  "pause" reads as an instruction and leaves nobody sure which one is current. */
-function FeedWatch({ feed }: { feed: FeedControl }) {
-  const view = useSyncExternalStore(feed.subscribe, feed.getSnapshot)
-  return <span className="remote-feed">
-    <button type="button" className="remote-button remote-feed-toggle"
-      aria-pressed={view.keepWatching} aria-label={t('remote.feed.keep')}
-      title={view.keepWatching ? t('remote.feed.keepOn.title') : t('remote.feed.keepOff.title')}
-      onClick={() => feed.keepWatching(!view.keepWatching)}>
-      {view.keepWatching ? <Eye size={18} aria-hidden="true" /> : <EyeOff size={18} aria-hidden="true" />}
-      <span>{t('remote.feed.keep')}</span>
-    </button>
-    {/* The gap is explained at the one moment the operator is there to read it: on the way back.
-        It clears itself when the feed is actually live again, not when it was merely asked for. */}
-    {view.resumed && <span className="remote-feed-state" role="status">{t('remote.feed.resumed')}</span>}
-  </span>
 }
 
 /** One alert fed by a station read: its toggle, or why the station cannot feed it. */

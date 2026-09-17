@@ -28,15 +28,6 @@
 .remote-audio-state--gap, .remote-audio-state--stalled { color: var(--alert-warning); }
 .remote-audio-state--ended { color: var(--alert-critical); }
 .remote-audio--off { font-size: .85em; color: var(--text-dim); }
-/* The feed control, beside the listen control and shaped like it: same row, same `flex: 0 0 auto`
-   so its status line wraps inside the control rather than squeezing the authority label. At xs the
-   label goes and the icon carries it, exactly as the settings toggle below does — the button keeps
-   an aria-label, so what is hidden is decoration and never the accessible name. */
-.remote-feed { display: flex; align-items: center; gap: .4em; flex: 0 0 auto; flex-wrap: wrap; }
-.remote-feed-toggle { display: inline-flex; align-items: center; gap: .35em; }
-.remote-feed-state { font-size: .85em; color: var(--text-dim); }
-[data-viewport='xs'] .remote-feed-toggle > span { display: none; }
-[data-viewport='xs'] .remote-feed-toggle { width: 48px; padding-inline: 0; justify-content: center; }
 .remote-session-toggle { display: flex; align-items: center; justify-content: center; gap: .5em; flex: 0 0 auto; }
 .remote-session-toggle svg { flex: 0 0 auto; }
 .remote-session-info { padding-top: .5em; min-width: 0; }
