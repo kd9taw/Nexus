@@ -1,8 +1,9 @@
-import { useId, useState, useSyncExternalStore } from 'react'
+import { useId, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Eye, EyeOff, Info } from 'lucide-react'
+import { Info } from 'lucide-react'
 import { t } from '../i18n'
 import type { FeedControl } from './client'
+import { FeedWatch } from './FeedWatch'
 import type { OperationClient } from './operation-client'
 import { LoggingAuthority } from './operations'
 import type { PresentationState } from './presentation'
@@ -17,9 +18,15 @@ export function SessionStatus({ client, stale, disconnect, signOut, display, ale
    *  able to stop the sound in one movement, and a control they have to expand a panel to
    *  reach is not that. It renders nothing at all on a station that cannot do audio. */
   audio?: ReactNode
-  /** This tab's feed. Also in the row, for the same kind of reason: the operator it exists
-   *  for is watching a frequency on a screen they are NOT looking at, so they have to be able
-   *  to find it before they look away, not after the feed has already paused on them. */
+  /** This tab's feed. In the row, for the same kind of reason as the listen control: the operator
+   *  it exists for is watching a frequency on a screen they are NOT looking at, so they have to be
+   *  able to find it before they look away, not after the feed has already paused on them.
+   *
+   *  Rendered TWICE, and only one is ever shown (`remote.css`). At xs the row has no width left to
+   *  give — the authority label and its Release button already wrap to three lines there, and this
+   *  strip may not take more than a quarter of the screen — so below that width the choice moves
+   *  into the settings panel beside the other browser-local ones. It is one node or the other, both
+   *  reading the same store, so the two can never disagree. */
   feed?: FeedControl
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -53,6 +60,8 @@ export function SessionStatus({ client, stale, disconnect, signOut, display, ale
         display.change(display.presentation === 'quick' ? 'full' : 'quick')
         setExpanded(false)
       }}>{display.presentation === 'quick' ? t('remote.quick.full') : t('remote.quick.name')}</button>}
+      {/* The narrow-screen home for the feed choice — see the `feed` prop. */}
+      {feed && <FeedWatch feed={feed} />}
       {/* Browser-local and notify-only. Lives in this folded panel so turning it on moves no cockpit.
           Notification permission is one per site, so a refusal is said once and hides every toggle. */}
       {alerts && <div className="remote-need-alerts">
@@ -66,26 +75,6 @@ export function SessionStatus({ client, stale, disconnect, signOut, display, ale
       </div>}
     </div>
   </div>
-}
-
-/** The feed's own control: whether this tab keeps watching while it is in the background, and -
- *  once, on return - why the feed has a gap in it. The label does not change with the state; the
- *  pressed state does, which is what a toggle is. A button whose word flips between "keep" and
- *  "pause" reads as an instruction and leaves nobody sure which one is current. */
-function FeedWatch({ feed }: { feed: FeedControl }) {
-  const view = useSyncExternalStore(feed.subscribe, feed.getSnapshot)
-  return <span className="remote-feed">
-    <button type="button" className="remote-button remote-feed-toggle"
-      aria-pressed={view.keepWatching} aria-label={t('remote.feed.keep')}
-      title={view.keepWatching ? t('remote.feed.keepOn.title') : t('remote.feed.keepOff.title')}
-      onClick={() => feed.keepWatching(!view.keepWatching)}>
-      {view.keepWatching ? <Eye size={18} aria-hidden="true" /> : <EyeOff size={18} aria-hidden="true" />}
-      <span>{t('remote.feed.keep')}</span>
-    </button>
-    {/* The gap is explained at the one moment the operator is there to read it: on the way back.
-        It clears itself when the feed is actually live again, not when it was merely asked for. */}
-    {view.resumed && <span className="remote-feed-state" role="status">{t('remote.feed.resumed')}</span>}
-  </span>
 }
 
 /** One alert fed by a station read: its toggle, or why the station cannot feed it. */

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { SessionStatus } from './SessionStatus'
 import { OperationClient } from './operation-client'
 import { pendingControlStorage } from './control-storage'
@@ -136,18 +136,27 @@ function feedControl(initial: Partial<FeedView> = {}) {
 // control they can only find after the feed has already paused on them is no use to that person.
 it('offers keeping the feed alive in the background from the row itself, before anything is lost', () => {
   const feed = feedControl()
-  render(<SessionStatus stale={false} disconnect={() => {}} feed={feed.control} />)
-  const keep = screen.getByRole('button', { name: 'Keep watching' })
-  expect(keep.closest('.remote-session-info')).toBeNull()
+  const { container } = render(<SessionStatus stale={false} disconnect={() => {}} feed={feed.control} />)
+  const row = within(container.querySelector('.remote-session-row') as HTMLElement)
+  const fold = within(container.querySelector('.remote-session-info') as HTMLElement)
+  const keep = row.getByRole('button', { name: 'Keep watching' })
   expect(keep.getAttribute('aria-pressed')).toBe('false')
-  expect(screen.queryByText(/Feed resumed/)).toBeNull()
+  expect(row.queryByText(/Feed resumed/)).toBeNull()
   fireEvent.click(keep)
   expect(feed.keepWatching).toHaveBeenCalledWith(true)
   // The label does not flip with the state; the pressed state carries it.
-  expect(screen.getByRole('button', { name: 'Keep watching' }).getAttribute('aria-pressed')).toBe('true')
+  expect(row.getByRole('button', { name: 'Keep watching' }).getAttribute('aria-pressed')).toBe('true')
   // The gap is explained on the way back, and clears when the feed is actually live again.
   act(() => feed.set({ resumed: true }))
-  expect(screen.getByText(/Feed resumed/)).toBeTruthy()
+  expect(row.getByText(/Feed resumed/)).toBeTruthy()
   act(() => feed.set({ resumed: false }))
-  expect(screen.queryByText(/Feed resumed/)).toBeNull()
+  expect(row.queryByText(/Feed resumed/)).toBeNull()
+  // A second home in the settings panel, which is the only one shown at xs where the row has no
+  // width left (see remote.css). Both read one store, so the two can never disagree — including
+  // the reason for the gap, which must survive at the width where the row copy is not shown.
+  fireEvent.click(toggle())
+  const held = fold.getByRole('button', { name: 'Keep watching' })
+  expect(held.getAttribute('aria-pressed')).toBe('true')
+  act(() => feed.set({ resumed: true }))
+  expect(fold.getByText(/Feed resumed/)).toBeTruthy()
 })

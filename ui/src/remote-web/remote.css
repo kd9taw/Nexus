@@ -14,3 +14,26 @@
 .remote-section details p { margin: 12px 0; }
 .remote-native { padding: 0; }
 .remote-native .remote-actions { margin-top: 8px; }
+
+/* The feed control (FeedWatch). Here rather than in application.css because BOTH remote surfaces
+   render it — the full workspace's session row and the observer-only monitor header — and this
+   file is the one they share. `flex: 0 0 auto` so its status line wraps inside the control rather
+   than squeezing the label beside it in the session row. At xs the word goes and the icon carries
+   it, as the session's own settings toggle does; the button keeps its aria-label, so what is
+   hidden is decoration and never the accessible name. */
+.remote-feed { display: flex; align-items: center; gap: .4em; flex: 0 0 auto; flex-wrap: wrap; }
+.remote-feed-toggle { display: inline-flex; align-items: center; gap: .35em; }
+.remote-feed-state { font-size: .85em; color: var(--text-dim); }
+[data-viewport='xs'] .remote-feed-toggle { width: 48px; padding-inline: 0; justify-content: center; }
+[data-viewport='xs'] .remote-feed-toggle > span { display: none; }
+/* Two homes, one shown. The workspace renders this control in the session row AND in the settings
+   panel; these three rules pick which. Above xs it is in the row, where the operator it is for can
+   see it without opening anything. At xs the row has nothing left to give: the authority label and
+   its Release button already wrap to three lines at 390 px and zoom 1.75, and the strip may not
+   take more than a quarter of the screen (measured: a fourth control in that row put it at 239 px
+   against a 200 px ceiling). So below that width it moves into the panel, beside the other
+   browser-local choices. The observer-only monitor header renders neither container, so it keeps
+   its one copy at every width. */
+.remote-session-info .remote-feed { display: none; }
+[data-viewport='xs'] .remote-session-row .remote-feed { display: none; }
+[data-viewport='xs'] .remote-session-info .remote-feed { display: flex; }

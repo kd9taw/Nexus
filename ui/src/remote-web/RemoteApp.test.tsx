@@ -502,3 +502,18 @@ it('signs out from inside an open session, not only from the stations page', asy
   await waitFor(() => expect(h.service.signOut).toHaveBeenCalledTimes(1))
   expect(h.stop).toHaveBeenCalled()
 })
+
+// The observer-only browser has no session row to hold this, and it is the browser the control is
+// most for: watching a frequency and nothing else is exactly what a backgrounded tab would
+// otherwise quietly stop doing.
+it('offers Keep watching to an observer-only browser, not only to the full workspace', async () => {
+  localStorage.clear() // the choice is remembered per station; start from the default
+  openableStation()
+  render(<RemoteApp />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Observe station' }))
+  const keep = await screen.findByRole('button', { name: 'Keep watching' })
+  // Off by default: the feed sleeps with the tab unless this operator says otherwise.
+  expect(keep.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(keep)
+  expect(screen.getByRole('button', { name: 'Keep watching' }).getAttribute('aria-pressed')).toBe('true')
+})

@@ -3,6 +3,7 @@ import { t } from '../i18n'
 import { useViewport } from '../useViewport'
 import { MonitorApp } from '../remote-monitor/MonitorApp'
 import { BrowserClient, HostedConnection, RemoteError } from './client'
+import { FeedWatch } from './FeedWatch'
 import type { AccountSession } from './client'
 import '../remote-monitor/monitor.css'
 import './remote.css'
@@ -107,7 +108,10 @@ export function RemoteApp() {
   if (connection && workspace) return <Suspense fallback={<p role="status">{t('monitor.connecting')}</p>}>
     <BrowserApplication connection={connection} disconnect={leave} signOut={signOutOfSession} />
   </Suspense>
+  // The observer-only browser is the one this control is most for: watching a frequency and
+  // nothing else is exactly the thing a background tab would otherwise quietly stop doing.
   if (connection) return <MonitorApp source={connection.source} navigation={<>
+    <FeedWatch feed={connection.feed} />
     <button className="remote-button" onClick={leave}>{t('remote.disconnect')}</button>
     <button className="remote-button" onClick={signOutOfSession}>{t('remote.signOut')}</button>
   </>} />
