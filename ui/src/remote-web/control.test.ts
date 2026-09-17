@@ -632,6 +632,22 @@ it('refuses a second command made while the first is still confirming, unsent, a
   await expect(b.client.control(action)).rejects.toMatchObject({ message: 'operationUnknown', sent: false })
   expect(b.sent.filter(w => w.request.type === 'stationControl')).toHaveLength(0)
   a.client.disconnected(); b.client.disconnected()
+
+  // A TRANSMIT control is lit in this window too now, where it used to be dead, so it is worth
+  // saying which guard stops it: the receipt is read before the epoch, the lease or the window, so
+  // an FT gesture raised here never reaches the transmit path at all and nothing leaves.
+  const ft = setup(storage(), ['amplifier', 'ftOperate'], 4)
+  await ft.advance(1000)
+  const beat = ft.sent[ft.sent.length - 1].request
+  ft.client.receive({ type: 'operationResponse', requestId: beat.requestId, value: { ...ft.state, transmitEpoch: FT_EPOCH } })
+  const commandsOut = () => ft.sent.filter(w => w.request.type === 'stationControl')
+  void ft.client.control(action).catch(() => {})
+  await Promise.resolve(); await Promise.resolve()
+  expect(commandsOut(), 'the ordinary command is out and confirming').toHaveLength(1)
+  await expect(ft.client.control({ action: 'ft.txEnabled', expectedTier: 'FT8', transmitEpoch: FT_EPOCH, on: true }))
+    .rejects.toMatchObject({ message: 'operationUnknown', sent: false })
+  expect(commandsOut(), 'no transmit action on the wire').toHaveLength(1)
+  ft.client.disconnected()
 })
 
 it('selects a configured radio with displayed context and waits for both new snapshot and Settings', async () => {
