@@ -210,6 +210,10 @@
 }
 
 .ui-toast-viewport {
+  /* The column itself is a 340 px fixed box over the cockpit: it must not eat clicks meant for
+     what is underneath, or the toast body's click-through (below) buys nothing. Each toast's own
+     buttons turn pointer events back on. */
+  pointer-events: none;
   position: fixed;
   bottom: var(--space-4);
   right: var(--space-4);
@@ -234,7 +238,15 @@
 .app:has(.update-banner) .ui-toast-viewport {
   bottom: calc(var(--space-4) + 72px);
 }
+/* CLICK-THROUGH (D#19). An error toast stays 12 s, and for those 12 s it sits over whatever is
+   beneath it — on a 390 px screen that is a control the operator cannot reach (the Remote
+   browser hit-test caught a decoder control behind "Could not set offset"). The toast BODY
+   therefore takes no pointer events, so a click lands on the control and `elementFromPoint`
+   answers the control; everything interactive inside it turns them back on below. This is what
+   replaces swipe-to-dismiss (Radix swipes the body), so the × close button is now the only
+   pointer dismissal and must always render. */
 .ui-toast {
+  pointer-events: none;
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
@@ -260,6 +272,8 @@
   flex: 1;
 }
 .ui-toast-close {
+  /* The body is click-through (see .ui-toast); its controls are not. */
+  pointer-events: auto;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -273,6 +287,7 @@
 }
 /* One-click action on an alert toast (e.g. "Work →" / "Answer →" the station it's about). */
 .ui-toast-action {
+  pointer-events: auto;
   flex-shrink: 0;
   align-self: center;
   background: var(--accent);
@@ -1408,17 +1423,24 @@ button.nb-chip:hover {
    over it as a translucent card (HamClock/Geochron model — everything around the
    world), instead of a co-equal side column. */
 /* Wrap-the-globe assignable pane grid (B1): the globe is the center cell; reassignable
-   panes frame it (2 left, 2 right, a 3-up bottom strip). The map keeps a definite size —
-   center column minmax(0,1fr) (never bare 1fr, or the 100%-width canvas runs away) over
-   TWO 1fr rows (definite height for .map-view{height:100%}); the min-*:0 chain stays. */
-.connect {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  grid-template-columns: var(--cn-rail, 300px) minmax(0, 1fr) var(--cn-rail, 300px);
-  /* Strip row: CONTENT-sized, with the 30%-of-effective-viewport ceiling on the PANES
+   panes frame it (a left rail, a right rail, a bottom strip). The map keeps a definite size —
+   center column minmax(0,1fr) (never bare 1fr, or the 100%-width canvas runs away) over ONE
+   minmax(0,1fr) row (definite height for .map-view{height:100%}); the min-*:0 chain stays.
+
+   CLOSE + RESIZE (2026-09-13). Every pane can be closed from its frame and restored from
+   ⊞ Panels, and each rail is drag/keyboard resizable, so this template may never assume what
+   is mounted — connect-layout.test.ts computes each of these against the rendered states:
+   · COLUMNS follow [data-rails] (both|left|right|none, stamped by ConnectView from the rails
+     it actually renders). A rail track with no rail in it is a dead band beside the map. The
+     state rules sit in :where() so they stay (0,1,0) — the xs stack (0,2,0) and map-full
+     (0,3,0) below must keep winning whatever the rails say.
+   · Each rail track reads its OWN width (--cn-rail-l / --cn-rail-r), written inline only once
+     the operator sizes that rail and clamped against this box on load, on every resize and on
+     every step (useRailWidths). Unsized, it falls back to the tier default --cn-rail, i.e. the
+     exact pre-feature template.
+   · ROWS: the map row is the only explicit one. The strip spans the grid in an IMPLICIT row
+     sized by grid-auto-rows, so a closed strip leaves no track and no gap. That row is
+     CONTENT-sized, with the 30%-of-effective-viewport ceiling on the PANES
      (`.connect-strip > .pane-frame` below), NOT on the track. Two dead spellings of a
      track cap shipped here — `minmax(0, X)` and then `minmax(auto, X)`: grid
      maximize-tracks (css-grid §11.6) grows ANY fixed-max track to its growth limit
@@ -1427,21 +1449,89 @@ button.nb-chip:hover {
      from the globe's 1fr rows on every tall window (review 2026-07-31, verified in
      Chrome: minmax(0,300px) and minmax(auto,300px) both render 300px). An `auto` track
      is exactly as tall as its tallest (max-height-capped) pane; a tall pane reassigned
-     into the strip scrolls inside its own .pane-body. */
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
-  grid-template-areas:
-    'left1  center right1'
-    'left2  center right2'
-    'strip  strip  strip';
+     into the strip scrolls inside its own .pane-body.
+   · A rail is a flex column of its visible frames (`.connect-rail`), so a closed pane's
+     sibling takes the whole rail — two equal 1fr rows with a gap and a 1:1 flex column with
+     the same gap are the same rectangles, which is why the default geometry did not move. */
+.connect {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
+  grid-template-rows: minmax(0, 1fr);
+  grid-auto-rows: auto;
+  grid-template-areas: 'left center right';
+}
+.connect:where([data-rails='left']) {
+  grid-template-columns: var(--cn-rail-l, var(--cn-rail, 300px)) minmax(0, 1fr);
+  grid-template-areas: 'left center';
+}
+.connect:where([data-rails='right']) {
+  grid-template-columns: minmax(0, 1fr) var(--cn-rail-r, var(--cn-rail, 300px));
+  grid-template-areas: 'center right';
+}
+.connect:where([data-rails='none']) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'center';
+}
+/* One rail: its visible frames split the height by share (the frame's inline
+   `flex: var(--connect-pane-flex, var(--connect-share) 1 0)`). Positioned only so its two
+   handles can sit in the gaps beside and inside it without taking a track or a flex slot. */
+.connect-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+}
+.connect-rail:where([data-side='left']) {
+  grid-area: left;
+}
+.connect-rail:where([data-side='right']) {
+  grid-area: right;
 }
 .connect-map {
   grid-area: center;
   display: flex;
+  /* A column: the map picker's bar on top, then whichever renderer is mounted filling the rest. */
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   /* Clip the 3-D globe's WebGL canvas to the center cell so it can never paint over
      the side rails / bottom strip (react-globe.gl briefly wants the whole window). */
   overflow: hidden;
+}
+/* THE MAP PICKER'S BAR (ConnectView): one content-sized strip at the top of the map cell, above the
+   2-D map and the 3-D globe alike, so the picker sits in the same place whatever renders. Padding
+   and border match `.map-toolbar`, which it sits directly on top of in 2-D; it wraps for the same
+   reason that one does (map-toolbar.test.ts) — the cell can be 280px wide. */
+.connect-map-bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+/* The picker's segments wrap rather than clip in a locale whose four labels outgrow the bar. */
+.map-picker {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+/* 3D on a machine that cannot draw it: still focusable (aria-disabled), visibly unavailable. */
+.map-proj button[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* The lazy 3-D chunk's placeholder fills what is left under the bar, not the whole cell. */
+.connect-map > .globe3d-loading {
+  flex: 1;
+  height: auto;
+  min-height: 0;
 }
 /* The 3-D globe fills the center cell exactly, like the 2-D .map-view does. */
 .globe3d-wrap {
@@ -1483,31 +1573,89 @@ button.nb-chip:hover {
   color: var(--accent);
   border-color: var(--accent);
 }
-/* 3-D layers panel — top-left overlay, matches the 2-D map's Layers aside. */
+/* ⭐ THE LAYERS PANEL — ONE PLACE ON BOTH MAP SURFACES: 2-D `.map-layers` (MapView) and 3-D
+   `.globe3d-layers` (Globe3D), both framed by MapLayersPanel.tsx. An overlay pinned top-left of the
+   map, mirroring the Conditions rail pinned right (`.map-insights`) and folding the same way.
+   WHY AN OVERLAY, not the 2-D map's old 200px in-flow column (the pane-grid contract):
+   1. The map is the centre cell of Connect's grid (`.connect-map`, overflow:hidden). At the
+      1024×768 floor that cell is ~460px wide and the in-flow column was pushed PAST its right edge,
+      where overflow:hidden clipped the whole panel off screen (headless Chrome: panel left 769px,
+      cell right 742px). An overlay is positioned inside the box it belongs to and cannot leave it.
+   2. Folding, unfolding, or peeking it in full screen never resizes the canvas — no 2-D
+      re-projection, no WebGL resize — so opening it for one checkbox costs nothing.
+   3. It is the ONE scroller in its corner: capped to the map's height, it scrolls its own rows
+      instead of being a hard-floored child under the cell's overflow:hidden.
+   z-index 4: under the hover card (5) and the selected-path chip (6). */
+.map-layers,
 .globe3d-layers {
   position: absolute;
   top: 8px;
   left: 8px;
-  z-index: 3;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
   padding: var(--space-2) 10px;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 0.72rem;
-  /* Scroll the toggle list inside the globe cell instead of clipping the bottom rows against the
-     parent .connect-map (overflow:hidden) when the cell is short (pop-out / small window). */
-  max-height: calc(100% - 16px);
-  overflow-y: auto;
+  box-shadow: var(--elev-2);
 }
-.globe3d-layers-h {
+.globe3d-layers {
+  font-size: 0.72rem;
+}
+/* The head: the panel's name and its fold chevron (the Conditions rail's `.mi-head` shape). */
+.ml-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: 2px;
+}
+.ml-title {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.ml-collapse {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ml-collapse:hover {
+  color: var(--text);
+}
+/* FOLDED: the `.map-insights.collapsed` pill, on the left edge. A declared width, so the flare/PCA
+   chips beside it (below) know where it ends. */
+.map-layers.collapsed,
+.globe3d-layers.collapsed {
+  width: 2rem;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  writing-mode: vertical-rl;
+  font-size: var(--fs-micro);
   font-weight: 700;
   color: var(--text-dim);
-  margin-bottom: 2px;
+  cursor: pointer;
+}
+.map-layers.collapsed:hover,
+.globe3d-layers.collapsed:hover {
+  color: var(--text);
+}
+.ml-pill-label {
+  letter-spacing: 0.04em;
 }
 .globe3d-layers label {
   display: flex;
@@ -1539,16 +1687,24 @@ button.nb-chip:hover {
 }
 .connect-map > .map-view {
   flex: 1;
+  /* The cell decides the map's width, never its toolbar's content (a flex item's auto min-width is
+     its min-content — the overflow that clipped the toolbar at 1024). map-toolbar.test.ts. */
+  min-width: 0;
 }
 /* The operatemap pop-out mounts a bare MapView with no .connect-map wrapper — same
    flex-fill rule, direct child of the detached window's own flex column instead. */
 .app.detached > .map-view {
   flex: 1;
 }
+/* The strip spans every column in the grid's IMPLICIT auto row (no named area — an area
+   would re-create the explicit row, and its gap, for a strip that is closed). Its panes are
+   AUTO columns, so however many are open split the width evenly: a fixed `repeat(3, 1fr)`
+   left a dead third beside two panes. */
 .connect-strip {
-  grid-area: strip;
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: var(--space-3);
   min-width: 0;
 }
@@ -1598,6 +1754,37 @@ button.nb-chip:hover {
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 1px var(--space-1);
+}
+/* Connect's ✕ (close this slot) — no taller than the picker beside it, so adding it changes no
+   pane head's height. Measured, 2026-09-13: the cockpit frame's 24px icon button grew every
+   Connect head by 8px, and the strip row took that height straight out of the map. */
+/* The picker + ✕ cluster in a Connect pane head. It may SHRINK (min-width: 0) and the picker
+   gives up its width first, so the ✕ is never cut off by the frame's clip. Measured, 2026-09-13:
+   with neither shrinkable, the Conditions pane's long picker pushed its ✕ past the frame edge
+   at the 248px default rail, and at a 200px rail both controls of both left panes were gone. */
+.pane-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.pane-acts > .pane-pick {
+  min-width: 0;
+}
+.pane-close {
+  flex: none;
+  font-size: var(--fs-micro);
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px var(--space-1);
+  cursor: pointer;
+}
+.pane-close:hover {
+  color: var(--text);
+  border-color: var(--accent);
 }
 .pane-body {
   flex: 1;
@@ -1732,14 +1919,11 @@ button.nb-chip:hover {
 }
 [data-viewport='xs'] .connect {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh))) auto auto auto auto auto;
-  grid-template-areas:
-    'center'
-    'left1'
-    'left2'
-    'right1'
-    'right2'
-    'strip';
+  /* The globe row is the only explicit one here too: the rails and the strip auto-place into
+     implicit `auto` rows under it (grid-auto-rows on .connect), in DOM order — so a closed
+     rail or strip takes no row and leaves no gap in the stack. */
+  grid-template-rows: minmax(280px, calc(0.46 * var(--vh-eff, 100vh)));
+  grid-template-areas: 'center';
   /* THE STACK NEEDS ITS OWN SCROLLER. Nothing above it scrolls — the shell rule on
      .layout.single, .connect-shell and .connect itself all clip or declare no overflow,
      and every row is a .pane-frame that clips. So at xs, where the globe keeps a 280px
@@ -1749,7 +1933,83 @@ button.nb-chip:hover {
   overflow-y: auto;
 }
 [data-viewport='xs'] .connect-strip {
-  grid-template-columns: 1fr;
+  grid-auto-flow: row;
+}
+/* No 'left'/'right' area exists in the xs template — a named area would drop the rail into an
+   implicit track OUTSIDE the grid — so the rail auto-places under the map. Its frames are
+   content-height in a content-height stack (a basis-0 grower collapses there), which is what
+   the old per-pane `auto` rows gave them. */
+[data-viewport='xs'] .connect-rail {
+  grid-area: auto;
+  --connect-pane-flex: 0 0 auto;
+}
+
+/* THE RAIL HANDLES (components/connect/RailHandles.tsx). Out of flow by design: each sits in a
+   gap the grid already has — the column gap beside a rail, or the rail's own gap between its
+   two panes — so no handle can move a rectangle of the default layout. Focusable separators;
+   the focus ring is drawn inside the box so it is not clipped by a neighbour. */
+.connect-sep {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+  border-radius: 4px;
+  background: transparent;
+  transition: background var(--transition);
+}
+.connect-sep:where([aria-orientation='vertical']) {
+  top: 0;
+  bottom: 0;
+  width: var(--space-3);
+  cursor: col-resize;
+}
+/* The left rail's handle is in the gap AFTER it, the right rail's in the gap BEFORE it. */
+.connect-sep:where([data-edge='end']) {
+  left: 100%;
+}
+.connect-sep:where([data-edge='start']) {
+  right: 100%;
+}
+/* The split seam: in the rail's gap between its two panes. The top pane is
+   (railHeight − gap) × split tall, so that is where the gap starts. */
+.connect-sep:where([aria-orientation='horizontal']) {
+  left: 0;
+  right: 0;
+  height: var(--space-3);
+  top: calc((100% - var(--space-3)) * var(--connect-split, 0.5));
+  cursor: row-resize;
+}
+.connect-sep:hover,
+.connect-sep:focus-visible {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.connect-sep:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* Nothing to resize in a single stacked column. */
+[data-viewport='xs'] .connect-sep {
+  display: none;
+}
+/* The row-resize twin of body.resizing (a split drag): the cursor holds, text never selects. */
+body.resizing-row {
+  cursor: row-resize;
+  user-select: none;
+}
+/* FULL-SCREEN MAP — one cell, no frame. The header, the four rail panes and the bottom
+   strip are UNMOUNTED by ConnectView, so this only has to collapse the grid they were laid
+   out in; the padding and gap go too, or the "full screen" map would sit in a 12px border.
+   ⚠️ SPECIFICITY, NOT SOURCE ORDER: `[data-viewport='xs'] .connect` is (0,2,0) and rewrites
+   all three template properties for the stacked layout, so the two-class descendant form
+   (0,3,0) is what makes this hold at EVERY viewport class. A bare `.connect.map-full` would
+   tie at (0,2,0) and win only by sitting later in the file — one reordering from silently
+   restacking a full-screen map on a small window. Grower stays minmax(0,1fr): the canvas is
+   100%-width/height and a bare 1fr lets it run away. */
+.connect-shell.map-full .connect {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'center';
+  padding: 0;
+  gap: 0;
 }
 .connect-hero-row {
   display: flex;
@@ -2489,7 +2749,14 @@ button.nb-chip:hover {
 .map-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  /* ⭐ WRAPS. A control strip that cannot wrap has its min-content as the map's minimum width: at
+     the 1024×768 floor (a ~460px Connect cell) that pushed the map past the cell's right edge and
+     `.connect-map { overflow: hidden }` clipped Reset and Full screen out of reach; with the rails
+     dragged wider the cell reaches 280px. Wrapping keeps every control where it is, with its label
+     (any locale), and the strip simply grows a row — it is content-sized, and the canvas below is
+     the grower that absorbs the height (`.map-body { flex: 1; min-height: 0 }`). map-toolbar.test.ts. */
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
 }
@@ -2534,8 +2801,12 @@ button.nb-chip:hover {
   color: var(--alert-warning);
   border-color: var(--alert-warning);
 }
-.map-reset {
-  margin-left: auto;
+/* Toolbar buttons that stand alone (not in a .map-proj segmented group): Reset, and the
+   full-screen / Layers pair beside it. One look, one rule; only Reset takes the auto margin
+   that pushes the trailing group to the right edge — repeating it on each of the three would
+   split the free space BETWEEN them instead of grouping them. */
+.map-reset,
+.map-chrome-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -2546,6 +2817,16 @@ button.nb-chip:hover {
   padding: var(--space-1) var(--space-2);
   font-size: var(--fs-label);
   cursor: pointer;
+  white-space: nowrap;
+}
+.map-reset {
+  margin-left: auto;
+}
+/* Pressed state, matching the segmented groups' `.map-proj button.active`. */
+.map-chrome-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
 }
 .map-body {
   display: flex;
@@ -2577,17 +2858,35 @@ button.nb-chip:hover {
   inset: 0;
   display: block;
 }
+/* ⭐ THE MAP HOVER CARD is read at whatever distance the map is being read at, and the map is
+   the one surface an operator pops out full screen on a second monitor. At 11px with 2px of
+   padding it was a caption on a chart; this is a readable card.
+   `--map-ui-scale` is stamped inline by MapView from its own `markerScale`, so the card grows
+   with the map exactly as the icons do (fallback 1 — Globe3D shares this class and sets none).
+   NOT a size @media: that would be zoom-blind, and the scale composes with `--ui-zoom` anyway.
+   `left`/`top` come from `placeHoverCard` — off the marker, inside the map, stable. */
 .map-hover {
   position: absolute;
   pointer-events: none;
+  /* MEASURED, not guessed (headless Chrome against this sheet, 2026-09-08): the map's tooltips
+     are single logical lines of ~70-110 chars, and at 56ch they reflowed a one-line spot into
+     THREE — bigger type that is harder to read, which is the request backwards. 72ch fits the
+     common spot/park line on one line at every size; the 92% keeps a small embedded globe's
+     card inside the globe. */
+  max-width: min(72ch, 92%);
   background: var(--bg-elev-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 2px var(--space-2);
+  padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  box-shadow: var(--elev-2);
+  font-size: calc(var(--fs-label) * var(--map-ui-scale, 1));
+  line-height: var(--lh-normal);
+  /* A long tooltip must wrap into the card, not run off the edge of the map. */
+  overflow-wrap: anywhere;
+  /* Elevation one step up: the card floats over a busy, high-contrast picture, and --elev-2
+     is not enough separation from a starfield or a relief raster. */
+  box-shadow: var(--elev-3);
   z-index: 5;
 }
 /* Persistent selected-path readout (bearing + distance, SP/LP) — top-right so it
@@ -2627,7 +2926,9 @@ button.nb-chip:hover {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--elev-2);
-  z-index: 5;
+  /* Under the Layers panel (4): on a narrow map the two overlays meet, and the Layers rows and fold
+     chevron must stay on top — this rail's own chevron is on its far edge, clear of Layers. */
+  z-index: 3;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text-dim) 55%, transparent) transparent;
 }
@@ -2833,6 +3134,13 @@ button.nb-chip:hover {
   transform: translateX(-50%);
   bottom: var(--space-3);
   display: flex;
+  /* Wraps because the TX/RX path keys made this row long enough to matter: it is
+     centre-anchored with `translateX(-50%)`, so an un-wrapped overflow spills out of BOTH
+     sides of a narrow map (a tall pop-out, or the 1024 floor with the layer panel open)
+     rather than clipping at one edge. */
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100% - 2 * var(--space-3));
   align-items: center;
   gap: 6px;
   background: var(--bg-elev);
@@ -2990,6 +3298,23 @@ button.nb-chip:hover {
   background: var(--text-faint);
   opacity: 0.5;
 }
+/* TX/RX path swatches. The colors and the dash rhythm both MIRROR what MapView strokes on
+   the canvas (GETTING_OUT + [5,4]; PATH_RX + [1,3]) — a legend that draws a different line
+   from the map is worse than none. Theme-agnostic like the rest of the map palette. */
+.map-legend-line {
+  width: 18px;
+  height: 0;
+  display: inline-block;
+  border-top-width: 2px;
+}
+.map-legend-line.tx {
+  border-top-style: dashed;
+  border-top-color: #3ddc6a;
+}
+.map-legend-line.rx {
+  border-top-style: dotted;
+  border-top-color: #8fb8d8;
+}
 .map-empty-hint {
   position: absolute;
   left: 50%;
@@ -3022,19 +3347,18 @@ button.nb-chip:hover {
   height: 8px;
   border-radius: 4px;
 }
+/* 2-D Layers rows carry an opacity slider, so the open panel has a width to give them. Placement,
+   fold and scroll are the shared overlay rule beside `.globe3d-layers`. */
 .map-layers {
-  width: 200px;
-  flex: none;
-  border-left: 1px solid var(--border);
-  padding: var(--space-3);
-  overflow: auto;
+  width: min(200px, calc(100% - 16px));
 }
-.map-layers h3 {
-  font-size: var(--fs-label);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-dim);
-  margin: 0 0 var(--space-2);
+/* The flare/PCA chips share the map's top-left corner with the Layers panel (rendered before them
+   in MapView for this selector): they sit just right of it, open or folded, instead of under it. */
+.map-layers ~ .flare-chip {
+  left: calc(16px + min(200px, calc(100% - 16px)));
+}
+.map-layers.collapsed ~ .flare-chip {
+  left: calc(16px + 2rem);
 }
 .map-layer {
   margin-bottom: var(--space-3);
@@ -3061,6 +3385,7 @@ button.nb-chip:hover {
   color: var(--text);
 }
 
+
 /* Logbook header action buttons (Import ADIF / Log QSO). */
 /* Export date range (#98) — compact from/to beside Export ADIF. Vars only, so both themes hold. */
 .log-export-range {
@@ -3075,6 +3400,13 @@ button.nb-chip:hover {
   font-size: 12px;
   padding: 0 var(--space-2);
   width: 9em;
+}
+/* The per-activation picker sits in the same row. Wider than a date because each option carries
+   callsign · park · date · count, but capped so it can never push its Export button off the row. */
+.log-export-activation {
+  font-size: 12px;
+  padding: 0 var(--space-2);
+  max-width: 22em;
 }
 .log-actions {
   display: inline-flex;
@@ -3146,6 +3478,13 @@ button.nb-chip:hover {
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
+  /* ASKED FOR, NOT YET CONFIRMED — the Remote optimistic dial and the confirming indicator on a
+     control whose command is still out. De-emphasised ink rather than a colour of its own: the
+     signal is "this is not the station's word yet", which is the same thing --text-dim says
+     everywhere else, and routing it through that token carries the field-mode contrast lift
+     (data-contrast='high') for free instead of stranding one hex outdoors. Declared in the light
+     block too, like the three above it, so the pairing is visible at both sites. */
+  --state-pending: var(--text-dim);
   --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 
   /* APRS symbol categories. Colour says WHAT a station is, never how urgent it is — the map is
@@ -3242,6 +3581,7 @@ button.nb-chip:hover {
   --state-good: var(--snr-strong);
   --state-ok: var(--snr-marginal);
   --state-weak: var(--snr-weak);
+  --state-pending: var(--text-dim);
   --shadow: 0 4px 14px rgba(30, 50, 80, 0.12);
   /* The light --need-* inks do NOT live here — see the palette further down. */
 }
@@ -4227,12 +4567,25 @@ select {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-/* The Logbook's per-row QSL menu is a 22×22 icon button, not a field: the arrow IS its whole
-   content, so it centres instead of sitting after text there is no room for. Higher
-   specificity + important is what it takes to beat the important above. */
+/* The Logbook's per-row QSL menu. THE SANCTIONED EXCEPTION to the arrow above, and the one
+   place in the sheet where a select draws none: its closed label is the token `QSL▸`, which
+   ends in an arrowhead of its own. The base rule's purpose — a select must not read as a text
+   input — is met by the label itself, and drawing the engine arrow as well printed a second
+   arrowhead ON TOP of the text (the box is 22px tall and was 22px wide; `background-position:
+   center` put the 5px arrow exactly where "QSL▸" already was). That overlap is part of what
+   was reported on 2026-09-16, so the arrow goes and the gutter it needed goes with it.
+
+   ⚠️ AND THE WIDTH IS PINNED, DELIBERATELY. A <select> is as wide as its WIDEST OPTION, not
+   its closed label, and these options are translated prose — "Card NOT received", "Karte
+   NICHT erhalten". Left to size itself the control measures 98px in English and 110px in
+   German (harness, 2026-09-16), so the row's action cluster — and the grid floor that has to
+   hold it — would become a property of the catalog, changing width when an operator changes
+   language. The closed label needs 34px here (harness `qslLabelW`), so 44 carries about 29%
+   for a wider face; the label is an invariant token, so it cannot grow behind this number. */
 select.log-rowbtn {
-  background-position: center !important;
+  background-image: none !important;
   padding-right: 0 !important;
+  width: 44px;
 }
 /* Native <select> POPUPS render on the OS's (usually light) background, so the app's dim
    text is nearly unreadable there. Force a dark popup + readable text for EVERY dropdown
@@ -4418,6 +4771,33 @@ select optgroup {
 .readout.blocked .readout-val {
   color: var(--tx);
 }
+/* THE OPTIMISTIC DIAL, while the station has not read it back (FrequencyReadout's
+   `provisionalMhz`). Dimmed and trailed by an ellipsis so the number never claims to be the
+   radio's: what you see is what was asked for. `--tx` red still wins over it, because a dial off
+   the operator's privileges is the louder thing to say.
+   THE INK IS PAINT-ONLY, like the digit regions below: a colour change costs no layout, so the
+   digits do not jitter as one burst confirms and the next starts. THE ELLIPSIS IS NOT — it is a
+   real element (a `::after` glyph would be exactly the "presence in CSS" a test cannot see), so
+   it takes width in the flex row. It is therefore mounted for as long as the readout has a
+   provisional dial at all and only made invisible in between, which keeps the unit and the band
+   chip beside it still through a whole spin instead of nudging them on every step. The digits
+   never move either way: `.readout-val` is the first item in the row. */
+.readout.awaiting .readout-val {
+  color: var(--state-pending);
+}
+.readout.awaiting.blocked .readout-val {
+  color: var(--tx);
+  opacity: 0.72;
+}
+.readout-awaiting {
+  color: var(--state-pending);
+  font-size: 0.7em;
+  line-height: 1;
+  align-self: center;
+}
+.readout-awaiting.settled {
+  visibility: hidden;
+}
 /* Per-digit tuning hit regions (the main dial only — CockpitHeader passes digitTune).
    NOTHING here may affect layout: `.readout-val` is tabular-nums precisely so the digits don't
    jitter while tuning, and a padding / font-weight / transform on hover is the classic way that
@@ -4438,6 +4818,12 @@ select optgroup {
 .readout-digit.sel {
   background: color-mix(in srgb, currentColor 12%, transparent);
   box-shadow: inset 0 -0.12em 0 var(--focus-ring);
+}
+/* Digits drawn while tuning is not available right now (a Remote authority re-read): no tuning
+   cursor, no hover tint. Paint-only, like the rules above. */
+.readout-val[data-digit-tune='off'] .readout-digit {
+  cursor: inherit;
+  background: none;
 }
 .readout-unit {
   font-size: 11px;
@@ -6509,6 +6895,18 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cockpit-stoptx:hover {
   background: color-mix(in srgb, var(--state-weak) 22%, transparent);
 }
+/* How far a REMOTE Stop has got, beside the button that sent it. `--state-weak` while it is only
+   SENT (the station accepted it; the rig may still be keyed), `--state-good` once the station's own
+   reading says the transmitter is free. Both variables exist in each theme. */
+.cockpit-stopstate {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--state-weak);
+}
+.cockpit-stopstate.done {
+  color: var(--state-good);
+}
 /* Tune (ATU/amp carrier) + Stop-TX utilities — shared look across the Phone & CW cockpits.
    Restored after the de-FT8 pass dropped them; reuse the Operate cockpit's set_tune/halt_tx. */
 .ph-tx-utils {
@@ -6902,6 +7300,25 @@ input.cw-pitch::-webkit-inner-spin-button {
 .cw-send-btn:disabled {
   opacity: 0.4;
 }
+/* #286: His Call, leading the send row — a callsign-wide field that never shrinks below a call. */
+.cw-hiscall {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+.cw-hiscall-label {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.cw-hiscall-input {
+  width: 9em;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-transform: uppercase;
+}
 
 /* ---- Shared cockpit log strip (CW + Phone): rich entry — autofill, prior-QSO, notes ---- */
 .log-entry {
@@ -7151,6 +7568,55 @@ input.cw-pitch::-webkit-inner-spin-button {
   font-weight: 700;
 }
 .le-park-hit-name {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ⭐ THE EXCHANGE TYPE-AHEAD — county or state suggestions under a contest box. Same
+   shape as the park dropdown above; its own classes because the FD strip's field is a
+   `label` that has to become the positioning context. */
+.le-fd-suggest {
+  position: absolute;
+  z-index: 20;
+  /* ⚠️ ABOVE the box, not below it: this strip is bottom-anchored in the dock, so a list
+     hanging below the field would open off the bottom of the window. */
+  bottom: calc(100% + 2px);
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 16em;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+.le-fd-suggest button {
+  display: flex;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+}
+.le-fd-suggest button:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.le-fd-hit-code {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 700;
+}
+.le-fd-hit-name {
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7501,6 +7967,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: var(--fs-micro);
   color: var(--text-dim);
   letter-spacing: 0.02em;
+}
+/* #204: "Calling K9XYZ" — the station this one is calling, one click to its card. */
+.recall-calling {
+  display: block;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-micro);
+  text-align: left;
+  cursor: pointer;
+}
+.recall-calling:hover {
+  text-decoration: underline;
 }
 .recall-badges {
   flex: none;
@@ -7898,7 +8379,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* The band is a primary operating control, so it looks like one: bigger, bolder,
    band-colored (the color + border come from an inline style keyed on the band). */
-.band-picker-select {
+.band-picker-trigger {
   padding: 5px 10px;
   font-size: 15px;
   font-weight: 800;
@@ -7912,12 +8393,90 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   cursor: pointer;
   transition: box-shadow 0.12s ease, filter 0.12s ease;
 }
-.band-picker-select:hover {
+.band-picker-trigger:hover {
   filter: brightness(1.15);
 }
-.band-picker-select:focus-visible {
+.band-picker-trigger:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 1px;
+}
+/* ── THE BAND MENU (BandMenu.tsx) — the band dropdown as a Nexus menu, not the system select.
+   The trigger keeps the look of the select it replaced (its surface class — .band-picker-trigger
+   or .freq-channel — carries font, border and the band colour); this adds the arrow the select's
+   own rule used to draw, and lays the value out on one line. */
+.band-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  /* NO max-width here: the surface class (.freq-channel caps a channel label at 150px) owns it.
+     A `max-width: 100%` in this later rule outranked that cap at equal specificity and let an
+     Operate/RTTY channel trigger grow to 215-268px, pushing Tune off the header at 110% zoom
+     (measured in the headless-Chrome harness). */
+  white-space: nowrap;
+}
+.band-menu-trigger:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.band-menu-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.band-menu-caret {
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--text-dim);
+}
+/* The open list: bounded by the space Radix measured, scrolls inside itself. */
+.band-menu {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+}
+.band-menu-group {
+  padding: var(--space-1) var(--space-2) 0;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.band-menu-item {
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.band-menu-item[data-state='checked'] {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.band-menu-cond {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.band-menu-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+/* Unknown or stale condition data: a HOLLOW neutral dot and a neutral word — never a colour
+   that could be read as open. */
+.band-menu-item[data-condition='unknown'] .band-menu-dot {
+  background: transparent;
+  border: 1.5px solid var(--text-faint);
+}
+.band-menu-item[data-condition='unknown'] .band-menu-cond {
+  color: var(--text-faint);
+}
+.band-menu-item[data-highlighted] .band-menu-cond {
+  color: inherit;
 }
 .tx-lock {
   padding: 2px var(--space-2);
@@ -8631,6 +9190,20 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   padding-top: var(--space-2);
   border-top: 1px solid var(--border-soft);
 }
+/* THE END-OF-CONTEST MERGE — the trigger and its report, on the row above the upload
+   switch so both sit under the same limitation hint. It wraps rather than growing: the
+   report is a sentence, not a column, and the block is a control strip that may never
+   use surplus height. */
+.fd-merge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.fd-merge-report {
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+}
 .fd-upload-row {
   display: flex;
   align-items: center;
@@ -9140,6 +9713,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .fd-log-row {
   grid-template-columns: 0.55fr 1.3fr 0.7fr 0.9fr 0.7fr 0.7fr;
 }
+/* …and a contest that is not Field Day: Time · Call · one column per received slot · Band ·
+   Mode. `--fd-slots` is set beside `data-slots` by ContestView (1–5). */
+.fd-log-head[data-slots],
+.fd-log-row[data-slots] {
+  grid-template-columns: 0.55fr 1.3fr repeat(var(--fd-slots), 0.7fr) 0.7fr 0.7fr;
+}
 .fd-col.mode {
   /* Mode chip column */
 }
@@ -9200,6 +9779,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-1);
   flex: 0 0 auto;
   cursor: text;
+  /* The positioning context for the exchange type-ahead (`.le-fd-suggest`). */
+  position: relative;
 }
 .le-fd-field-call {
   flex: 1 1 200px;
@@ -9682,11 +10263,40 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--accent);
   padding: 0 6px;
 }
+/* A disabling group INSIDE a `.settings-section`, with no box of its own. It exists because
+   `disabled` is the only way to switch off a set of controls at once, and HTML gives that to
+   `<fieldset>` alone — but a control inside a disabled fieldset is disabled whatever its own
+   `disabled` attribute says, so a section that has ONE writable control (Operator & radio: Units
+   is on the Remote allow-list, the rest is not) cannot put the attribute on the section itself.
+   The section keeps its border, legend and id; this carries the disabling and nothing else, so
+   the children lay out exactly as they did when they were the section's own children. Add no
+   border, padding, margin or display here — that is the whole point of the class. */
+.settings-fieldgroup {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
   align-content: start;
+}
+/* A `.settings-grid` holding ONE field, which the base rule's `auto-fit` blows up: auto-fit
+   collapses the tracks that ended up empty and hands the space to the survivor, so a lone field
+   becomes as wide as the whole section. MEASURED at the 1024 floor (viewport `sm`, layout harness,
+   real Chrome): the Units row came out 955.9px — `955.938px 0px 0px 0px` — beside station fields
+   of 227.7px. The 520px lone-control cap in the prose audit below does NOT catch it, and the reason
+   is worth writing down rather than rediscovering: that cap is scoped to `[data-viewport='md'|
+   'lg'|'xl']`, and the 1024 floor is `sm`, so at the one width the floor is defined at, it is not
+   applied at all — which is also why this needs fixing at the grid rather than with a max-width.
+   auto-fill
+   keeps the empty tracks, so the field is one track wide and lines up with the fields above it.
+   Must sit AFTER the base rule to win at xs/sm; at md+ the `[data-viewport]` rule below is more
+   specific and already auto-fill, which is the behaviour this wants. */
+.settings-grid--lone {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
 }
 /* `auto-fit` IS A TRAP ONCE THE PANEL IS UNBOUND (2026-08-12, with the md+ widening).
    auto-fit collapses the tracks that ended up empty and hands the freed space to the
@@ -11265,6 +11875,28 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   cursor: pointer;
   accent-color: var(--accent, #4ea1ff);
 }
+/* #230: "the waterfall goes out of focus and does not show the transmitted signal" (W9GTY).
+   While we key, the backend drops the rows captured from the rig's muted receiver and readers
+   repeat the last real picture — deliberate, and on RTTY/PSK/SSTV/JS8 (no dark band) it looks
+   exactly like a dead waterfall. This badge says the picture is held. Display only: the
+   waterfall is never fed our own transmit audio. Click-through, like the toasts. */
+.wf-tx-held {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: none;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--alert-critical);
+  color: var(--accent-ink);
+  font-size: var(--fs-micro);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  box-shadow: var(--elev-2);
+}
 .wf-stage {
   position: relative;
   flex: 1;
@@ -12065,6 +12697,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .logbook-field .logbook-when {
   min-width: 190px;
 }
+/* CALL is the only field that shares its grid track with a button (the QRZ lookup), and this
+   grid really does sit at its 140px floor: auto-fit packs 140px columns, so a ~900px form gives
+   tracks of exactly 140px. The button takes ~56px and the gap 8px, leaving the input a ~50px
+   text box — five characters at 14px. That is how a logged WW9WTF reads back as "WW9WT" in the
+   edit form (operator report, 2026-09-08). The VALUE was never short: the form loads and saves
+   the whole call (Logbook.test.tsx), so this is the view, not the data.
+   Fixed by letting the row WRAP rather than by squeezing the input — a min-width floor here
+   (the .logbook-when idiom above) would overflow the track at the width this grid most often
+   produces. At a comfortable track nothing moves; at a tight one the button drops to its own
+   line and the input gets the full track. */
+.logbook-field-call .settings-input-row {
+  flex-wrap: wrap;
+}
+.logbook-field-call .settings-input {
+  flex: 1 1 120px;
+}
 .logbook-notes {
   resize: vertical;
   min-height: 58px;
@@ -12086,20 +12734,66 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   margin-top: var(--space-3);
 }
 .logbook-row {
-  /* Last track (row actions) gets a fixed floor, not a bare 0.8fr: at ~1366px / >=110% zoom the
-     fractional share shrinks below the button cluster and .log-cell{overflow:hidden} + justify-end
-     clip the leading QRZ/ClubLog push buttons off the LEFT, unclickable. A deterministic px floor
-     (not max-content) keeps the empty header cell aligned with the button-filled data cells. */
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 1.4fr minmax(160px, 0.8fr);
+  /* Last track (row actions) gets a fixed floor, not a bare 0.8fr: the fractional share
+     shrinks below the button cluster and .log-cell{overflow:hidden} + justify-end clip the
+     leading QRZ/ClubLog push buttons off the LEFT, unclickable. A deterministic px floor (not
+     max-content) keeps the empty header cell aligned with the button-filled data cells.
+
+     336px, and the number is MEASURED, not reasoned. The 160px floor was written 2026-07-15
+     (8da8036c) against the cluster of the day: SIX controls, each a 22px square — ↥ CL HL,
+     the QSL menu, ✎ ✕ — which is 6×22 + 5×4 = 152px, and 160 fitted it with 8px to spare.
+     Since then three controls joined (📢, QRZ✎, WRL), ↥ became the word QRZ, and the floor
+     never moved. Nine content-sized controls is a different number entirely. 0.8fr only
+     exceeds 160px above roughly 2400px of window, so the floor was what nearly every
+     operator got: at 1366–1920 the harness measures 70px of the cluster sheared off the left
+     — 📢, QRZ and part of QRZ✎, gone and unclickable — with every surviving label also
+     overrunning its own 22px box (operator report, 2026-09-16: that is what "cramped"
+     describes). ui/layout-harness's measure-logbook-actions.sh lays the real cluster out in
+     real Chrome: the nine content-sized controls need 324.6px at --space-scale 1, on the
+     widest of the five sans faces installed on that box; the spread across those faces is
+     11.1px. 336 = that requirement plus one spread, so a wider face on Windows still fits.
+     styles-logbook-actions.test.tsx fails if the cluster outgrows it again. */
+  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 1.4fr minmax(336px, 0.8fr);
 }
 .log-note {
+  /* Flex so the comment toggle (#162) can ellipsize beside the 📝 flag: a <button> is an atomic
+     inline box, which text-overflow on the cell cannot clip with an ellipsis. */
+  display: flex;
+  align-items: center;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-dim);
 }
 .log-note-flag {
+  flex: none;
   margin-right: var(--space-1);
+}
+.log-note-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* #162: an opened comment wraps to its full length inside its row. Only the row grows; the
+   column template is untouched. */
+.log-note.expanded {
+  align-items: flex-start;
+  white-space: normal;
+}
+.log-note.expanded .log-note-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .log-country {
   overflow: hidden;
@@ -12122,8 +12816,24 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--bg);
   color: var(--text-dim);
   border-radius: 4px;
-  width: 22px;
+  /* A 22px SQUARE is right for a glyph, and the square was written when most of these were
+     one (↥ ✎ ✕). They are TEXT now — QRZ, QRZ✎, CL, HL, WRL, QSL▸ — and a fixed 22px box
+     cannot hold three characters, so the labels overran their borders and printed across each
+     other (reported 2026-09-16). Size to the content and keep 22px as the FLOOR, so a
+     one-glyph button is still the square it was and a worded one is as wide as its word.
+     `flex: 0 0 auto` because a content-sized flex item's default `0 1 auto` would let a tight
+     column squeeze the labels back into overlap. (It never did while they were pinned to
+     22px — the harness measures every control at exactly 22px on the old sheet — so this
+     forecloses a failure mode content sizing would have opened, rather than fixing an
+     observed one.) It also makes the floor in `.logbook-row` LOAD-BEARING: nothing gives any
+     more, so a floor too small shears the leading buttons off the left instead of squeezing
+     them. Measured with ui/layout-harness/measure-logbook-actions.sh; guarded by
+     styles-logbook-actions.test.tsx. */
+  min-width: 22px;
   height: 22px;
+  flex: 0 0 auto;
+  padding: 0 var(--space-1);
+  white-space: nowrap;
   line-height: 1;
   font-size: 0.8rem;
   opacity: 0;
@@ -12183,11 +12893,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 
 /* Narrow (EFFECTIVE width — the old raw @media hid six columns at the 900-px
    Tauri minimum where all eleven fit, and never fired under pinned zoom where
-   they don't): keep Call, Country, Band, QSL, actions; hide
-   Freq/Mode/Sent/Rcvd/Time/Park. */
+   they don't): keep Call, Country, Band, QSL, Notes, actions; hide
+   Freq/Mode/Sent/Rcvd/Time/Park.
+
+   SIX TRACKS, AND THE COUNT IS THE POINT. This was five, written 2026-06-07 when five cells
+   survived the hide list. The Notes column landed 2026-08-23 and is not in that list, so the
+   row has had SIX visible cells and five tracks ever since — and grid-auto-flow being `row`,
+   the sixth cell (the action cluster) was auto-placed onto a second GRID ROW, under the
+   callsign, on every narrow window and at every pinned zoom that produces one. That is the
+   1024×768 supported floor and 1366 at 125%. It also left the cluster in an implicit `auto`
+   track where no floor from this sheet could reach it. The tail track carries the same
+   measured floor as the wide template above; styles-logbook-actions.test.tsx checks the track
+   count against the cells the component actually renders, so a seventh column cannot do this
+   again silently. */
 [data-viewport='sm'] .logbook-row,
 [data-viewport='xs'] .logbook-row {
-  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 0.7fr;
+  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 1fr minmax(336px, 0.8fr);
 }
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(4),
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(5),
@@ -12207,6 +12928,30 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 [data-viewport='sm'] .logbook-row .log-rowbtn,
 [data-viewport='xs'] .logbook-row .log-rowbtn {
   opacity: 1;
+}
+/* #239 "More columns": the wide log. `.log-scroll` stays the ONE scroll owner and only gains
+   the horizontal axis in this mode; the sticky search + header ride inside it, so header and
+   rows scroll sideways together. 19 tracks = the 12 above with seven inserted before Notes
+   (my grid, rig, name, QTH, state, power, operator). The floor is on the scroller's CONTENT,
+   so nothing is clipped — it scrolls. Off, none of this applies and the compact table and its
+   narrow-viewport column rules are exactly as they were; on, every column shows at any width,
+   because the point of the mode is to see them all. */
+.logbook-table.wide .log-scroll {
+  overflow-x: auto;
+}
+.logbook-table.wide .log-sticky,
+.logbook-table.wide .log-rows {
+  min-width: 118rem;
+}
+.logbook-table.wide .logbook-row {
+  grid-template-columns:
+    1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr
+    0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr
+    1.4fr minmax(336px, 0.8fr);
+}
+[data-viewport='sm'] .logbook-table.wide .logbook-row .log-cell,
+[data-viewport='xs'] .logbook-table.wide .logbook-row .log-cell {
+  display: block;
 }
 
 /* scrollbars */
@@ -12809,7 +13554,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-height: 44px;
 }
 .ch-freq {
-  flex: 0 0 auto;
+  /* Shrinkable (0 1 auto) since Tune moved into this cluster (#287): with the band control AND
+     Tune/ATU here, the cluster's max-content outgrows a 1024-wide header at 110-125% zoom, and a
+     non-shrinking flex item overflows instead of wrapping — measured, Tune off-screen. Allowed to
+     shrink, its own flex-wrap below drops Tune/ATU to a second line of the cluster. The readout
+     keeps its min-content width, so the number itself never compresses. */
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -12859,6 +13609,23 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
+}
+/* The band control + Tune as one unit: it wraps as a whole, so Tune stays beside the band
+   control on whichever line the pair lands (#287, measured at 1024x768 110-125%). */
+.ch-bandtune {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+/* #287: Tune (and the rig's ATU beside it) directly after the band control — one fixed place in
+   every cockpit header. A rigid group so the two never split across a wrap. */
+.ch-tune {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 .ch-actions {
   margin-left: auto;
@@ -14093,25 +14860,6 @@ button.cq-skiptx1.on {
   min-height: 24px;
 }
 /* The 2D/3D map-mode toggle — groups to the right next to Pop-out. */
-.connect-3d-toggle {
-  margin-left: auto;
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elev-2);
-  color: var(--text);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.connect-3d-toggle:hover {
-  border-color: var(--accent);
-}
-.connect-3d-toggle.active {
-  border-color: var(--accent);
-  color: var(--accent);
-}
 /* 3D globe lazy-load placeholder (three.js chunk loading). */
 .globe3d-loading {
   display: flex;
@@ -14149,6 +14897,28 @@ button.cq-skiptx1.on {
 .app.detached .needed-panel {
   flex: 1;
   min-height: 0;
+}
+/* A `.panel`-rooted view torn off on its own: the panel IS the window, so it takes the height
+   and owns its own deficit — the SAME fate `.layout.single > .panel` gives it docked, in the
+   host that has no `.layout.single` to give it. Without this the only overflow declaration
+   reaching it is `.panel { overflow: hidden }`, a clip with nothing interposed: the operator
+   reported the torn-off POTA/SOTA board (the one view in this shape today) as having "no
+   ability to scroll down", with every spot below the fold unreachable.
+
+   It is the docked rule's own history one host over. `.pota-view` used to carry a private
+   `overflow-y: auto` to escape that clip; ed50c50e retired it as dead because
+   `.layout.single > .panel` had just declared the identical value at (0,2,0) — true when
+   written, and its comment says why ("POTA renders nowhere else"). Then the pop-out shipped.
+   Written on the HOST rather than back on `.pota-view` for the reason that fix was: a private
+   escape per view is what let five of them drift, and a second `.panel` pop-out would arrive
+   trapped in exactly this way. (0,2,0) with the child combinator, so it beats `.panel` (0,1,0)
+   and reaches only a panel that is the whole window — never a cockpit pane, which is always
+   nested. overflow-x stays hidden, as it does docked. Computed in
+   DetachedPanel.scroll.test.tsx. */
+.app.detached > .panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 /* The torn-off Needed window used to bump its root font + --space-scale 25% here, because
    it is read from across the shack and every pop-out was pinned to the 65% zoom floor
@@ -15003,6 +15773,17 @@ button.cq-skiptx1.on {
 .od-head h2 {
   margin: 0;
   font-size: 0.95rem;
+}
+/* Title + the pane's own ✕ on one line. `.od-head` is a flex COLUMN (title over the filter
+   row) and the compact head is a flex ROW, so a bare close button appended to either lands
+   somewhere different; this row makes the corner the same in both. The button supplies its
+   own `margin-left: auto` (.cockpit-popout), so it parks at the right edge. */
+.od-titlerow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .od-controls {
   display: flex;
@@ -18559,6 +19340,103 @@ button.sat-chip:disabled {
   min-height: 0;
 }
 
+/* --- The received-picture viewer pop-out (its own OS window) ---
+   Same zoom-corrected height contract as `.detached-waterfall` above: the branch carries
+   `.app`, where zoom lives, so a raw 100vh would overshoot the window by the zoom factor
+   and clip the details strip off the bottom. --vh-eff is innerHeight/zoom; the fallback
+   covers the first paint before useViewport runs. */
+.detached-sstvviewer {
+  display: flex;
+  flex-direction: column;
+  height: var(--vh-eff, 100vh);
+}
+.sstv-viewer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+/* THE GROWER, and it points at content that can actually stretch: the picture is sized by
+   `max-width/max-height: 100%` below, so it takes the surplus instead of leaving a black
+   box under a fixed-height image (the pane-grid contract's most-repeated bug). min-height:0
+   is what lets it shrink inside the flex column rather than pushing the strip off-screen. */
+.sstv-viewer-stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.sstv-viewer-stage img,
+.sstv-viewer-stage canvas {
+  max-width: 100%;
+  max-height: 100%;
+  /* The decode is a fixed raster; showing it bigger than 1:1 only shows the interpolation.
+     `image-rendering: pixelated` is deliberate for the same reason the gallery uses it. */
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+/* Content height — a strip cannot use surplus, and giving it any would take the room from
+   the picture. Wraps rather than overflowing when the window is dragged narrow. */
+.sstv-viewer-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+.sstv-viewer-facts,
+.sstv-viewer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+.sstv-viewer-mode {
+  font-weight: 600;
+  color: var(--text);
+}
+.sstv-viewer-call {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: var(--fs-label);
+}
+.sstv-viewer-meta,
+.sstv-viewer-count {
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+}
+.sstv-viewer.empty {
+  align-items: center;
+  justify-content: center;
+}
+/* The gallery thumbnail is a button now (it opens the viewer). Strip the button chrome so
+   the grid looks exactly as it did, and keep a visible focus ring — it is reachable from
+   the keyboard, which the old bare <img> was not. */
+.sstv-thumb-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.sstv-thumb-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* --- CW F-key macro editor (Settings ▸ Macros) --- */
 .cw-macro-editor {
   grid-column: 1 / -1;
@@ -20593,6 +21471,12 @@ button.sat-chip:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Remote only: holds the Save link's exact box while its picture is still on the way. It carries
+   `.cw-macro` too, so the reserved height is the link's own height at any zoom or font size — no
+   number here to drift — and the card never changes height when the picture lands. */
+.sstv-thumb-save-slot {
+  visibility: hidden;
 }
 /* --- Transmit panel: intake + live preview + mode picker + Send/Stop/progress.
    Nothing here keys the rig until Send (the backend enforces this too). --- */
@@ -23180,3 +24064,7 @@ tr.sel .aprs-sym {
 .tv-app .map-empty-hint {
   display: none;
 }
+
+/* App owns the remote Phone/CW keep-alive hosts, beside its other view hosts. */
+.remote-contact-host { display: contents; }
+.remote-contact-host[hidden] { display: none; }
