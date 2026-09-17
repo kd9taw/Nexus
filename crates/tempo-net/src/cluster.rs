@@ -2182,10 +2182,12 @@ mod tests {
         }
     }
 
-    /// Millisecond clocks for the proof tests.
+    /// Millisecond clocks for the proof tests. The proof clock is 100 ms rather than something
+    /// tighter so a test thread preempted between an answer and the next check on a loaded runner
+    /// cannot see the clock run out where the node never let it.
     const QUICK: SessionTiming = SessionTiming {
         greeting_deadline: Duration::from_millis(50),
-        proof_after: Duration::from_millis(50),
+        proof_after: Duration::from_millis(100),
     };
 
     #[test]
@@ -2195,10 +2197,10 @@ mod tests {
         let connected = AtomicBool::new(false);
         let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
         let mut proofs = 0;
-        // ~40 quiet reads at 5 ms: four times the proof clock.
+        // ~80 quiet reads at 5 ms: four times the proof clock.
         let reader = GreetsThenQuiet {
             reads: 0,
-            quiet_reads_before_stop: 40,
+            quiet_reads_before_stop: 80,
             stop: &stop,
         };
         let session = pump(
@@ -2225,9 +2227,10 @@ mod tests {
         let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
         let mut proofs = 0;
         let session = pump(
+            // ~80 prompts at 5 ms: four times the proof clock, restarted by every answer.
             RepromptsEveryRead {
                 reads: 0,
-                limit: 40,
+                limit: 80,
             },
             Vec::new(),
             "W9XYZ",
