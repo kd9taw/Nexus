@@ -115,13 +115,26 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
         serde_json::json!([]),
         "the seed declares no multiplier — the block below is a real addition"
     );
-    spec["rulesets"][0]["scoring"]["multipliers"] = serde_json::json!([{
-        "id": "section",
-        "source": { "type": "field", "key": "SECTION", "domain": "fd_sections" },
-        "scope": "per_band",
-        "excluding": ["DX"],
-        "roles": [""],
-    }]);
+    spec["rulesets"][0]["scoring"]["multipliers"] = serde_json::json!([
+        {
+            "id": "section",
+            "source": { "type": "field", "key": "SECTION", "domain": "fd_sections" },
+            "scope": "per_band",
+            "excluding": ["DX"],
+            "roles": [""],
+        },
+        // The second rule exists for its `cap` alone: a file that writes one and
+        // a file that omits one must build DIFFERENT rules, which one rule
+        // cannot show.
+        {
+            "id": "country",
+            "source": { "type": "dxcc_entity" },
+            "scope": "per_log",
+            "excluding": [],
+            "roles": [],
+            "cap": 5,
+        },
+    ]);
     spec["generated"] = "2026-12-31T00:00:00Z".into();
     let stats = fd_rules::install_from(&spec.to_string()).expect("valid file installs");
     assert_eq!(stats.generated, "2026-12-31T00:00:00Z");
@@ -143,22 +156,36 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
 
     // -- …and a declared multiplier reaches the built ruleset intact. -------
     // The whole of `MultiplierRule` survives the leak-once build: its id, both
-    // halves of the field source, the scope, the exclusion list and the role
-    // filter. Nothing SCORES it yet (§11.2 — it lands unused), so this walk is
+    // halves of the field source, the scope, the exclusion list, the role
+    // filter and the cap — present on one rule and absent on the other. Nothing SCORES it yet (§11.2 — it lands unused), so this walk is
     // the only thing standing between a typo in `build` and a batch-10 contest
     // silently counting the wrong universe.
     assert_eq!(
         rs.scoring.multipliers,
-        &[tempo_core::contest::MultiplierRule {
-            id: "section",
-            source: tempo_core::contest::MultSource::Field {
-                key: "SECTION",
-                domain: Some("fd_sections"),
+        &[
+            tempo_core::contest::MultiplierRule {
+                id: "section",
+                source: tempo_core::contest::MultSource::Field {
+                    key: "SECTION",
+                    domain: Some("fd_sections"),
+                },
+                scope: tempo_core::contest::MultScope::PerBand,
+                excluding: &["DX"],
+                roles: &[""],
+                // An ABSENT cap is no cap — every ruleset written before the key
+                // existed keeps counting exactly as it did.
+                cap: None,
             },
-            scope: tempo_core::contest::MultScope::PerBand,
-            excluding: &["DX"],
-            roles: &[""],
-        }],
+            tempo_core::contest::MultiplierRule {
+                id: "country",
+                source: tempo_core::contest::MultSource::DxccEntity,
+                scope: tempo_core::contest::MultScope::PerLog,
+                excluding: &[],
+                roles: &[],
+                // …and a written one arrives as written (ILQP's "maximum 5").
+                cap: Some(5),
+            },
+        ],
         "the installed multiplier must reach the ruleset"
     );
     // The scoring MATH is untouched by its presence: 24/48 above is the same

@@ -299,6 +299,24 @@ pub struct MultiplierRule {
     pub excluding: &'static [&'static str],
     /// Which roles count this multiplier. **Empty = every role.**
     pub roles: &'static [&'static str],
+    /// ⭐ **The most this universe can contribute, however many were worked.** `None`
+    /// — every contest but one — is uncapped.
+    ///
+    /// The Illinois QSO Party is why it exists: *"IL stations multiply points by the
+    /// sum of IL counties, US states, VE provinces and DXCC countries (maximum 5)
+    /// worked"* (w9awe.org, read 2026-09-17). The sixth entity is a legal contact worth
+    /// points and worth no multiplier, so nothing upstream of the count can express it
+    /// — not the domain (every entity is a member), not [`excluding`] (which entity
+    /// would it name?), not the operator (who may work them in any order).
+    ///
+    /// ⚠️ **It caps the rule's whole count, at whatever scope the rule counts** — for
+    /// [`MultScope::PerLog`], which is the only scope a researched contest caps, that is
+    /// the log-wide total the sponsor's sentence means. A capped per-band rule would cap
+    /// the sum across bands rather than each band, so a contest wanting the other
+    /// reading needs its own arm rather than this field.
+    ///
+    /// [`excluding`]: MultiplierRule::excluding
+    pub cap: Option<u32>,
 }
 
 /// What happens to the QSO-point total after the multipliers.
@@ -371,6 +389,10 @@ impl Scoring {
     /// **A row counts only for the rules its own ROLE counts** ([`MultiplierRule::roles`]),
     /// and a value in [`MultiplierRule::excluding`] counts for none.
     ///
+    /// **A rule with a [`cap`](MultiplierRule::cap) returns at most that many** — ILQP's
+    /// *"DXCC countries (maximum 5)"*. The rows above the cap are still counted as
+    /// contacts and still earn QSO points; only the number returned here stops.
+    ///
     /// ⚠️ **A `Field` rule with a `domain` counts only values that MATCHED that
     /// domain** — not every value in the slot. That is the whole reason the matched arm
     /// travels on the value: an Ohio operator's `QTH` slot holds counties and states
@@ -417,7 +439,13 @@ impl Scoring {
         self.multipliers
             .iter()
             .zip(seen)
-            .map(|(m, set)| (m.id, set.len()))
+            .map(|(m, set)| {
+                // A cap is a ceiling on what may be CLAIMED, not on what may be worked
+                // ([`MultiplierRule::cap`]) — the rows above are all counted, and the
+                // sixth DX entity simply does not raise the number.
+                let n = set.len();
+                (m.id, m.cap.map_or(n, |c| n.min(c as usize)))
+            })
             .collect()
     }
 
@@ -892,6 +920,7 @@ mod tests {
                 scope: MultScope::PerBand,
                 excluding: &[],
                 roles: &[],
+                cap: None,
             },
             MultiplierRule {
                 id: "county",
@@ -902,6 +931,7 @@ mod tests {
                 scope: MultScope::PerLog,
                 excluding: &[],
                 roles: &["out_of_state"],
+                cap: None,
             },
             // Not a slot: its universe is the country file, not a domain.
             MultiplierRule {
@@ -910,6 +940,7 @@ mod tests {
                 scope: MultScope::PerBand,
                 excluding: &[],
                 roles: &[],
+                cap: None,
             },
         ];
         static POST: &[PostMultiplier] = &[];
@@ -951,6 +982,78 @@ mod tests {
         assert!(boards(&scoring, spec, &theirs)
             .iter()
             .all(|x| x.slot != "SECTION"));
+    }
+
+    /// ⭐ **A capped universe stops counting at its cap**, and an uncapped one does not.
+    ///
+    /// The Illinois QSO Party, w9awe.org's own 2025 rules (read 2026-09-17):
+    /// > *"IL stations multiply points by the sum of IL counties, US states, VE
+    /// > provinces and DXCC countries (maximum 5) worked. … Additional DX contacts
+    /// > count for points but not multipliers."*
+    ///
+    /// Nothing upstream can enforce that: the log is allowed to hold twenty entities
+    /// and the operator is allowed to work them — only five may be CLAIMED. So the cap
+    /// lives on the rule and is applied where the counting happens, which also keeps
+    /// the board the operator reads and the score they submit the same number.
+    #[test]
+    fn a_capped_multiplier_stops_counting_at_its_cap() {
+        static CAPPED: &[MultiplierRule] = &[MultiplierRule {
+            id: "dxcc",
+            source: MultSource::DxccEntity,
+            scope: MultScope::PerLog,
+            excluding: &[],
+            roles: &[],
+            cap: Some(5),
+        }];
+        static UNCAPPED: &[MultiplierRule] = &[MultiplierRule {
+            id: "dxcc",
+            source: MultSource::DxccEntity,
+            scope: MultScope::PerLog,
+            excluding: &[],
+            roles: &[],
+            cap: None,
+        }];
+        let entities = [
+            "Germany", "France", "Spain", "Italy", "Japan", "Brazil", "Chile",
+        ];
+        let rows: Vec<ScoreRow> = entities
+            .iter()
+            .map(|e| ScoreRow {
+                mode_class: "CW",
+                band: "20m",
+                role: "",
+                rx: &[],
+                entity: Some(e),
+                prefix: None,
+                relation: None,
+            })
+            .collect();
+        let scoring = |m| Scoring {
+            qso_points: PointsRule::ByModeClass(FD_POINTS),
+            multipliers: m,
+            post: &[],
+        };
+        assert_eq!(
+            scoring(CAPPED).mult_counts(rows.iter().copied()),
+            vec![("dxcc", 5)],
+            "seven entities worked, five claimable"
+        );
+        // POSITIVE CONTROL: the same seven rows, one field apart — without it this
+        // test would pass against a counter that had simply stopped at five.
+        assert_eq!(
+            scoring(UNCAPPED).mult_counts(rows.iter().copied()),
+            vec![("dxcc", 7)]
+        );
+        // And the cap reaches the claimed TOTAL, not just the board: 7 CW QSOs × 2 = 14.
+        assert_eq!(
+            scoring(CAPPED).score(rows.iter().copied(), 1),
+            (14, 14, Some(5), 70)
+        );
+        // Under the cap it is inert — the arm that must not fire when it must not.
+        assert_eq!(
+            scoring(CAPPED).mult_counts(rows.iter().take(3).copied()),
+            vec![("dxcc", 3)]
+        );
     }
 
     /// The ARRL tiers, and every value between and around them. Moved here with

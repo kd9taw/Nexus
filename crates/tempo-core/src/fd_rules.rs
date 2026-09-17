@@ -1181,6 +1181,13 @@ struct MultiplierSpec {
     excluding: Vec<String>,
     /// Which roles count this multiplier. `[]` = every role.
     roles: Vec<String>,
+    /// ⭐ **The most this universe can contribute** — ILQP's *"DXCC countries
+    /// (maximum 5)"*. `0`, which is also what an ABSENT key means, is "no cap", the
+    /// same statement `""` makes for a `domain`: every ruleset written before this key
+    /// existed keeps counting exactly as it did, and none of them has to be rewritten
+    /// to say so.
+    #[serde(default)]
+    cap: u32,
 }
 
 /// Where a multiplier's value comes from, in the rules file — internally tagged
@@ -2215,6 +2222,9 @@ fn build(spec: FileSpec) -> RulesTable {
                         },
                         excluding: leak_keys(m.excluding),
                         roles: leak_keys(m.roles),
+                        // 0 (and an absent key) is "no cap", the same statement ""
+                        // makes for a domain just above.
+                        cap: (m.cap > 0).then_some(m.cap),
                     })
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
