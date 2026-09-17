@@ -24,6 +24,7 @@ import { bandLabelForMhz, bandRangeForLabel } from '../band'
 import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
+import { useRemoteWheelTuning } from '../remote-web/wheel-tuning-context'
 import { t } from '../i18n'
 
 /** The header's annunciator plates — state, not prose: the CAT link's ✓/✗ pill and the three
@@ -208,6 +209,7 @@ export function CockpitHeader({
   // transmitter — and if it carries across a band edge, halts the over and re-commands mode too.
   //
   // Do NOT re-derive this from flags. Ask the arbiter; it ships the reason with the answer.
+  const remoteTuning = useRemoteWheelTuning()
   const tuneBy = useWheelTune(readoutRef, {
     remoteFrequency,
     radioId: snap.activeRadioId,
@@ -291,6 +293,11 @@ export function CockpitHeader({
             remoteFrequency={remoteFrequency}
             digitTune={digitTune}
             onTuneHz={tuneBy}
+            // THE optimistic dial, and the only readout in the app that gets one: the main dial of
+            // a remote cockpit. Passed explicitly rather than read from the context inside the
+            // readout, because every other readout in the tree (the top bar, Settings, the memory
+            // rows) must keep showing the station's own number and nothing else.
+            provisionalMhz={remoteFrequency ? remoteTuning.provisionalMhz : undefined}
           />
         </div>
         {frequencyExtras && <div className="ch-freq-extras">{frequencyExtras}</div>}

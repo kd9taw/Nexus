@@ -14,6 +14,9 @@ import { useRemoteWheelTuning } from '../remote-web/wheel-tuning-context'
 
 /** The unit printed beside the dial. A unit symbol, not a word. */
 const MHZ = 'MHz'
+/** Trails a dial the station has not read back yet. A glyph, not prose: it says "still going",
+ * the same in every language, and it is paired with `aria-busy` for a reader that cannot see it. */
+const PENDING = '…'
 
 /** Format a dial frequency (MHz) for DISPLAY — 4 decimals (100 Hz resolution). */
 export function formatDialMhz(mhz: number): string {
@@ -91,6 +94,18 @@ interface Props {
    * coalesced target the wheel uses (CockpitHeader passes `useWheelTune`'s applier): two
    * optimistic targets on one dial is the failure this whole design avoids. */
   onTuneHz?: (hz: number) => void
+  /** THE OPTIMISTIC DIAL, and the only thing in this app that is one. The MHz this browser has
+   * asked a remote station for, shown at once so the digits follow the wheel at frame rate instead
+   * of waiting a round trip. It is a DISPLAY value and it is kept out of every shared object on
+   * purpose: `dialMhz` above — the station's own reading — is what the band, the mode, the
+   * privilege shading, the TX controls and the S-meter go on reading, here and everywhere else.
+   *
+   * While it differs from `dialMhz` the station has not shown it yet, so it renders dimmed with a
+   * trailing ellipsis and `aria-busy`: what you see is what was asked for, not what the radio has
+   * confirmed. When the station's reading catches up the two agree and it renders as any other
+   * dial. It is never left standing — `WheelTuning` reverts it, and says so, if the station never
+   * confirms it (see PROVISIONAL_MS there). */
+  provisionalMhz?: number
 }
 
 /**
@@ -112,6 +127,7 @@ export function FrequencyReadout({
   digitTune = false,
   onTuneHz,
   remoteFrequency = false,
+  provisionalMhz,
 }: Props) {
   const control = useStationControl(), frequencyControl = useStationCapability('frequency')
   const blocked = disabled
@@ -128,7 +144,12 @@ export function FrequencyReadout({
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const canEdit = editable && !disabled
-  const text = formatDialMhz(dialMhz)
+  // The number ON SCREEN: what was asked for while the station catches up, its own reading
+  // otherwise. Every judgement in this file that is not the digits themselves — TX blocking, the
+  // band chip, what is announced — keeps reading `dialMhz`, which is the station's.
+  const shown = provisionalMhz ?? dialMhz
+  const awaiting = provisionalMhz !== undefined && Math.round(provisionalMhz * 1e6) !== Math.round(dialMhz * 1e6)
+  const text = formatDialMhz(shown)
   const digits = digitsShown ? dialDigits(text) : null
   // The digit the KEYBOARD spins (the wheel takes the one under the pointer instead). null until
   // the operator asks for one, so a mouse user never sees a selection they did not make.
@@ -146,8 +167,10 @@ export function FrequencyReadout({
   const startEdit = () => {
     if (!canEdit) return
     // Seed at 10 Hz (finer than the 100 Hz display) so re-committing an unchanged value doesn't
-    // round the rig off-frequency.
-    setDraft(dialMhz.toFixed(5))
+    // round the rig off-frequency. From the number ON SCREEN, so opening the field never rewrites
+    // the digits the operator was looking at (identical to the dial wherever there is no
+    // provisional value, which is everywhere but the remote main dial).
+    setDraft(shown.toFixed(5))
     setEditing(true)
   }
   const commit = () => {
@@ -160,7 +183,7 @@ export function FrequencyReadout({
     setEditing(false)
     if (!canEdit) return
     // Skip a no-op commit (opened + Enter/blur without changing) so it never fires a spurious QSY.
-    if (Number.isFinite(v) && v > 0 && Math.abs(v - dialMhz) >= UNCHANGED_EPS) onCommit?.(v)
+    if (Number.isFinite(v) && v > 0 && Math.abs(v - shown) >= UNCHANGED_EPS) onCommit?.(v)
   }
 
   // ── The keyboard equivalent of hover-and-scroll ───────────────────────────────────────────
@@ -222,7 +245,8 @@ export function FrequencyReadout({
 
   return (
     <span
-      className={`readout ${size}${txBlocked ? ' blocked' : ''}${canEdit ? ' editable' : ''}`}
+      className={`readout ${size}${txBlocked ? ' blocked' : ''}${canEdit ? ' editable' : ''}${awaiting ? ' awaiting' : ''}`}
+      aria-busy={awaiting || undefined}
       title={
         title ??
         (canTuneDigits
@@ -277,6 +301,13 @@ export function FrequencyReadout({
             )
           : text}
       </span>
+      {/* Mounted for as long as this readout HAS a provisional dial, not only while one is
+          unconfirmed: it is a flex item, so appearing and disappearing per burst would shift the
+          unit and the band chip beside it on every wheel step. One appearance per spin, and the
+          digits themselves never move (they are the first item in the row). Decoration — the
+          meaning is on `aria-busy` above. */}
+      {provisionalMhz !== undefined &&
+        <span className={`readout-awaiting${awaiting ? '' : ' settled'}`} aria-hidden="true">{PENDING}</span>}
       <span className="readout-unit">{MHZ}</span>
       {band && <span className="band-chip active">{band}</span>}
     </span>

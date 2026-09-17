@@ -55,12 +55,40 @@ async function measure(rttMs: number, version: 4 | 5 = 4, probe = new Responsive
  * pushed outcome resolved the control but did not clear its receipt on a real page (the receipt's
  * write needs the storage lock, which only the polled path held), so the controls stayed refused
  * until the fallback poll a second on. The cases under "a pushed outcome and the pending-control
- * receipt" hold the fix, and "push-completion against polling" holds the gesture count. */
+ * receipt" hold the fix, and "push-completion against polling" holds the gesture count.
+ *
+ * ── THE OPTIMISTIC DIAL (2026-09-17) ──────────────────────────────────────────────────────────
+ * `stepsSent` is **10 of 10 on every link and both versions**, up from 4/3/5/4: a step made while
+ * a command is in flight now joins the next burst instead of being refused. `screen` is **0 ms**
+ * everywhere, down from 120-200: the digits move on the step itself, so PERCEIVED is no longer
+ * "when the burst was flushed". Those are the batch.
+ *
+ * ⚠️ AND `tuneConfirmed` AND `readout` WENT UP — 1100→1550, 1900→2950, 750→800, 1100→1550 — WHICH
+ * IS NOT A REGRESSION, AND HERE IS HOW TO CHECK THAT RATHER THAN BELIEVE IT. Both are measured
+ * FROM THE GESTURE, over the gestures that got confirmed at all. Before, six of the operator's ten
+ * notches were refused and contributed nothing to either clock; the four that survived were each
+ * the head of their own burst. Now all ten are served, and the later ones necessarily queue behind
+ * the earlier ones on one CAT link — so the population grew by the slowest members it used to
+ * throw away. The clock that is INDEPENDENT of how many gestures rode on a command is
+ * `commandConfirmed` (confirmed − sent, per command), and it is unchanged: 550 / 1450 / 250 / 550,
+ * the same numbers to the millisecond as `bandConfirmed`, which is one command per gesture by
+ * construction and still passes its own untouched ratchet. The link and the radio cost exactly
+ * what they cost before. If a future change makes a COMMAND slower, `commandConfirmed` and
+ * `bandConfirmed` go red together and no amount of gesture accounting hides it.
+ *
+ * Flicker is the honest cost, measured against this same twin run on the batch's own base: 6→8,
+ * 5→6, 7→12 and 6→8 controls-off events per run. Serving ten notches instead of four means ten
+ * `controlPending` windows instead of four, and each one is the §3(b) grey-out that batch 1
+ * (lapse-not-loss, "stay lit, show it is confirming") removes. Batch 3 adds no new mechanism; it
+ * exercises the existing one more often, and that is a thing the operator can see until batch 1
+ * lands. There is no ratchet line for it here because the budget already demands zero.
+ *
+ * Budget lines met, per link: 1 of 6 before, 3 of 6 after — screen and steps joined band. */
 const BASELINE = {
-  'v4/100': { screen: 130, tuneConfirmed: 1200, bandConfirmed: 650, readout: 1100, stepsSent: 4 },
-  'v4/400': { screen: 220, tuneConfirmed: 2050, bandConfirmed: 1550, readout: 1650, stepsSent: 3 },
-  'v5/100': { screen: 130, tuneConfirmed: 850, bandConfirmed: 350, readout: 1100, stepsSent: 5 },
-  'v5/400': { screen: 220, tuneConfirmed: 1250, bandConfirmed: 650, readout: 1650, stepsSent: 4 }
+  'v4/100': { screen: 50, tuneConfirmed: 1700, commandConfirmed: 650, bandConfirmed: 650, readout: 1650, stepsSent: 10 },
+  'v4/400': { screen: 50, tuneConfirmed: 3250, commandConfirmed: 1600, bandConfirmed: 1550, readout: 2750, stepsSent: 10 },
+  'v5/100': { screen: 50, tuneConfirmed: 900, commandConfirmed: 350, bandConfirmed: 350, readout: 1100, stepsSent: 10 },
+  'v5/400': { screen: 50, tuneConfirmed: 1700, commandConfirmed: 650, bandConfirmed: 650, readout: 2200, stepsSent: 10 }
 } as const
 
 describe.each([
@@ -87,8 +115,15 @@ describe.each([
     expect(reportText(r)).toContain(version === 5 ? 'by polling: 0' : "by the station's push: 0")
     const line = BASELINE[`v${version}/${rttMs}`]
     expect(r.tune.sent).toBeGreaterThanOrEqual(line.stepsSent)
+    // Not one of them left hanging: every step that went out came back with an outcome.
+    expect(r.tune.unconfirmed).toBe(0)
     expect(r.tune.screen!.worst).toBeLessThanOrEqual(line.screen)
     expect(r.tune.confirmed!.worst).toBeLessThanOrEqual(line.tuneConfirmed)
+    // THE GESTURE-COUNT-FREE CLOCK — what one command costs on this link, whoever rode on it. The
+    // line above moves whenever the number of gestures a run serves changes; this one does not, so
+    // it is the one that can say a COMMAND got slower. See the baseline's note.
+    const perCommand = r.interactions.filter(i => i.kind === 'tune' && i.confirmed !== undefined).map(i => i.confirmed! - i.sent!)
+    expect(Math.max(...perCommand)).toBeLessThanOrEqual(line.commandConfirmed)
     expect(r.band.confirmed!.worst).toBeLessThanOrEqual(line.bandConfirmed)
     expect(r.tune.readout!.worst).toBeLessThanOrEqual(line.readout)
   })

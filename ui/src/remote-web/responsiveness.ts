@@ -141,12 +141,25 @@ export class ResponsivenessProbe {
   /** `lane` put something on the render path. */
   responded(lane: Lane) {
     if (!this.awaitingResponse.length) return
-    const at = this.now(), mine = this.awaitingResponse.filter(i => LANE[i.kind] === lane)
+    const mine = this.awaitingResponse.filter(i => LANE[i.kind] === lane)
     if (!mine.length) return
     this.awaitingResponse = this.awaitingResponse.filter(i => LANE[i.kind] !== lane)
-    for (const i of mine) i.responded = at
-    if (this.frame) this.frame(frameAt => { for (const i of mine) if (i.perceived === undefined) i.perceived = frameAt })
-    else for (const i of mine) i.perceived = at
+    this.stamp(mine)
+  }
+  /** THE OPTIMISTIC DIAL: this gesture's own path has ALREADY changed what is on screen — the
+   * digits moved on the step itself, before its burst was coalesced or anything was sent. That is
+   * PERCEIVED exactly as defined above (the first change the interaction's own path puts on the
+   * render path), and it has to be stamped here because such a step is not yet DISPATCHED, so
+   * `responded` — which works off the dispatched list — would not see it and would instead report
+   * the flush, up to a whole command later. Stamped once: `dispatch` never re-stamps. */
+  shown(i: Interaction | null) {
+    if (i && i.responded === undefined) this.stamp([i])
+  }
+  private stamp(list: Interaction[]) {
+    const at = this.now()
+    for (const i of list) i.responded = at
+    if (this.frame) this.frame(frameAt => { for (const i of list) if (i.perceived === undefined) i.perceived = frameAt })
+    else for (const i of list) i.perceived = at
   }
   sent(requestId: string) {
     if (!this.awaitingSend.length) return
