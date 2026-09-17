@@ -49,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A cluster node that accepts a connection and then goes silent no longer kills that feed
+  slot for the rest of the session.** Some nodes accept the connection and never send a login
+  prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it
+  forever: it never logged in, never gave up, and never retried, so that node stayed dead
+  until you restarted the app, and nothing on screen said why. Nexus now gives a node 30
+  seconds to say anything at all, then disconnects and retries it on the usual backoff, and
+  **Settings › Connections** records that the node accepted the connection but never
+  prompted. A node that has greeted you is never dropped for being quiet afterwards — a
+  cluster on a dead band can be silent for a long time and that is not a fault.
 - **A cluster node that was working could be reported as dead.** Nexus asked the system for the
   node's address and then only ever tried the first one it was handed. Many nodes have both an
   IPv6 and an IPv4 address, and on a connection with no working IPv6 route the IPv6 one is

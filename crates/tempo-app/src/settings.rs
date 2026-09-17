@@ -228,9 +228,17 @@ pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 /// The first two are the pair every install up to 1.13.0 shipped with. On 2026-09-16 both
 /// were down at once — ve7cc accepted TCP and never sent a login prompt, wa9pie refused — and
 /// every default-config install had no phone source at all; that is the whole reason the list
-/// grew. ve7cc was answering again by 2026-09-17, so read the `load` migration as adding
-/// margin, not as retiring either node. The migration recognises exactly that shipped pair and
-/// appends the rest; the operator edits the list in Settings ▸ Connections.
+/// grew. The migration recognises exactly that shipped pair and appends the rest; the operator
+/// edits the list in Settings ▸ Connections.
+///
+/// ⚠️ **"Accepts TCP" is not "is a working node", and this comment previously got that wrong.**
+/// It claimed ve7cc "was answering again by 2026-09-17" on the strength of a connect check,
+/// which proves only that something holds the port open. Measured on 2026-09-17, banner read
+/// with no login sent: **ve7cc accepted the connection and sent nothing at all** (0 bytes in
+/// 6 s, and 0 in 22 s on a second observation) and **wa9pie:8000 actively refused**. Only
+/// `dx.w1nr.net` (DXSpider) and `dxspots.com` (CC Cluster 3.397) greeted. So two of these four
+/// were unusable that day, and the margin is thinner than the list length suggests.
+/// The only check worth believing here is one that reads a greeting back.
 pub const DEFAULT_CLUSTER_HOSTS: [&str; 4] = [
     "ve7cc.net:23",
     "dxc.wa9pie.net:8000",

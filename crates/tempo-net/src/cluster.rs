@@ -539,8 +539,13 @@ impl Default for SpotBuffer {
     }
 }
 
-/// Drive a [`ClusterSession`] over a connected duplex until EOF or `stop`. Pure
-/// over any Read/Write, so it's unit-testable without a socket.
+/// Drive a [`ClusterSession`] over a connected duplex until EOF, `stop`, or a peer that
+/// never speaks (see `greeting_deadline`). Pure over any Read/Write, so it's unit-testable
+/// without a socket — including the silent peer, which is the one case a live socket makes
+/// hardest to reproduce.
+// One private caller, and every parameter is a distinct collaborator rather than a bag of
+// options — grouping them into a struct would hide the wiring this function exists to show.
+#[allow(clippy::too_many_arguments)]
 fn pump<R: Read, W: Write>(
     mut reader: R,
     mut writer: W,
@@ -549,9 +554,16 @@ fn pump<R: Read, W: Write>(
     stop: &AtomicBool,
     connected: &AtomicBool,
     outbox: &Mutex<VecDeque<String>>,
+    greeting_deadline: Duration,
 ) -> std::io::Result<()> {
     let mut session = ClusterSession::new(call);
     let mut buf = [0u8; 4096];
+    let opened = Instant::now();
+    // Disarmed by the node's FIRST byte and never re-armed — see [`GREETING_DEADLINE`].
+    // Bounding the greeting rather than the login is what makes "a quiet band drops the
+    // session" unrepresentable instead of merely guarded: an established session has by
+    // definition already received bytes, and a slow MOTD is itself bytes.
+    let mut heard_from_node = false;
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
@@ -582,10 +594,17 @@ fn pump<R: Read, W: Write>(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                continue
+                // On a peer that never speaks this timeout is the ONLY thing that ever
+                // fires, so without this the loop spins here for the life of the process.
+                // Ending the session is what hands it back to `run`'s reconnect backoff.
+                if !heard_from_node && opened.elapsed() >= greeting_deadline {
+                    return Ok(());
+                }
+                continue;
             }
             Err(e) => return Err(e),
         };
+        heard_from_node = true;
         let chunk = String::from_utf8_lossy(&buf[..n]);
         for action in session.feed(&chunk) {
             match action {
@@ -609,13 +628,14 @@ fn pump<R: Read, W: Write>(
 /// is up) so the UI can tell "connected but quiet" from "can't connect" — a
 /// spotless session previously read as an indistinguishable-from-broken "waiting".
 ///
-/// `on_reach_error` reports that the node could not be reached, with a rendered reason
-/// naming every address tried. It exists because "cannot reach this node" was previously
-/// silent: a node answering on IPv4 while the box's resolver offered an unreachable AAAA
-/// first looked exactly like a dead node, with nothing anywhere saying which had happened.
-/// Called only when the reason CHANGES (a node unreachable the same way for an hour is one
-/// fact, not sixty) — the sink is a small ring shared with every other connector, and a
-/// per-retry line would evict everything else in it.
+/// `on_reach_error` reports the two ways a node fails to become a session, both of which
+/// were previously silent — which is the whole reason they were invisible to the operator:
+/// none of its addresses could be reached (the reason names every one tried), or it
+/// ACCEPTED the connection and never sent a login prompt. The second is not a connect
+/// error — the port answers — so nothing else in this path would ever mention it.
+/// Called only when the reason CHANGES, and cleared only by a session that actually logs
+/// in: the sink is a small ring shared with every other connector, and a node that is down
+/// the same way for an hour is one fact, not sixty.
 pub fn run(
     addr: &str,
     call: &str,
@@ -628,20 +648,51 @@ pub fn run(
     const BASE: Duration = Duration::from_secs(2);
     const MAX: Duration = Duration::from_secs(60);
     let mut backoff = BASE;
-    // The last reach failure reported, so an unchanged one isn't re-reported every
-    // backoff. Cleared on a successful connect, so a node that goes away AGAIN after
-    // coming back is reported again rather than swallowed as a repeat.
+    // The last failure reported, so an unchanged one isn't re-reported every backoff.
+    // Cleared by a session that actually LOGGED IN — never by a bare TCP connect, which a
+    // mute node succeeds at on every retry — so a node that breaks again after genuinely
+    // coming back is reported afresh rather than swallowed as a repeat.
     let mut reported: Option<String> = None;
     while !stop.load(Ordering::Relaxed) {
         let started = Instant::now();
         match connect(addr) {
             Ok(stream) => {
-                reported = None;
                 if let Ok(reader) = stream.try_clone() {
                     // `connected` flips true inside pump when the login prompt is
                     // ANSWERED (not on bare TCP-establish), and clears on session end.
-                    let _ = pump(reader, stream, call, &mut on_spot, stop, connected, outbox);
-                    connected.store(false, Ordering::Relaxed);
+                    let _ = pump(
+                        reader,
+                        stream,
+                        call,
+                        &mut on_spot,
+                        stop,
+                        connected,
+                        outbox,
+                        GREETING_DEADLINE,
+                    );
+                    // `connected` is true here iff a login prompt was ANSWERED — pump only
+                    // ever sets it and this is the only place it is cleared, so the swap
+                    // both reads the outcome and does the clearing.
+                    let logged_in = connected.swap(false, Ordering::Relaxed);
+                    if logged_in {
+                        // A REAL session happened, so whatever goes wrong next is news
+                        // again. Cleared here and not on a bare TCP connect: a node that
+                        // accepts and stays mute connects successfully every retry, so
+                        // clearing on connect would re-report it for as long as it is down.
+                        reported = None;
+                    } else if !stop.load(Ordering::Relaxed) {
+                        // A session that ended without ever logging in is the INVISIBLE
+                        // failure: the port answered, so it is not a connect error and
+                        // nothing above reports it, leaving the operator an honest "not
+                        // connected" with no reason. A shipped default node sat in exactly
+                        // this state, and this silence is why nobody could see it.
+                        let why =
+                            format!("{addr} accepted the connection but never sent a login prompt");
+                        if reported.as_deref() != Some(why.as_str()) {
+                            on_reach_error(&why);
+                            reported = Some(why);
+                        }
+                    }
                 }
             }
             Err(why) => {
@@ -679,6 +730,23 @@ fn sleep_interruptible(dur: Duration, stop: &AtomicBool) -> bool {
 
 /// How long ONE resolved address gets to answer.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// How long a node has to send ANYTHING before the session is abandoned to [`run`]'s
+/// reconnect backoff.
+///
+/// This bounds the socket that ACCEPTS and then never speaks. `ve7cc.net:23` — a
+/// SHIPPED default node — was measured in exactly that state: connection accepted,
+/// not one byte in 22 seconds. Such a peer makes every read time out, so [`pump`]
+/// spins forever and never returns; the backoff never runs, the caller's per-host
+/// start latch stays taken, and that feed slot is dead for the life of the process
+/// while the operator sees an honest "not connected" with nothing retrying behind it.
+///
+/// **Measured, not guessed.** Every reachable node greets inside the FIRST read
+/// (DXSpider and CC Cluster both send a banner ending `login:`; RBN sends
+/// `Please enter your call:`), and DXSpider's own server-side login timeout is 60 s.
+/// 30 s therefore sits far above any healthy greeting and well inside the node's own
+/// limit.
+const GREETING_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The socket read timeout — not a protocol deadline, it just wakes the pump loop
 /// often enough to observe `stop`.
@@ -1287,6 +1355,7 @@ mod tests {
             &stop,
             &connected,
             &outbox,
+            GREETING_DEADLINE,
         )
         .unwrap();
         assert_eq!(writer, b"W9XYZ\r\n", "the callsign was sent at the prompt");
@@ -1317,6 +1386,7 @@ mod tests {
             &stop,
             &connected,
             &outbox,
+            GREETING_DEADLINE,
         )
         .unwrap();
         assert!(writer.is_empty());
@@ -1388,6 +1458,7 @@ mod tests {
             &stop,
             &connected,
             &outbox,
+            GREETING_DEADLINE,
         )
         .unwrap();
         assert_eq!(
@@ -1423,6 +1494,7 @@ mod tests {
             &stop,
             &connected,
             &outbox,
+            GREETING_DEADLINE,
         )
         .unwrap();
         assert!(writer.is_empty(), "nothing sent before login");
@@ -1494,6 +1566,133 @@ mod tests {
         );
     }
 
+    /// A `Read` whose peer accepted the connection and then said nothing at all —
+    /// every read reports a timeout, exactly as the live socket does. Each read costs
+    /// a little wall-clock so a deadline measured in milliseconds can actually expire.
+    struct SilentPeer;
+    impl Read for SilentPeer {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            std::thread::sleep(Duration::from_millis(5));
+            Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+        }
+    }
+
+    /// Greets once with a login prompt, then behaves like a live session on a dead
+    /// band: timing out forever. Sets `stop` once it has been quiet well past the
+    /// deadline, which is what ends the test — if the deadline were (wrongly) applied
+    /// to an established session, `pump` would return BEFORE that happens.
+    struct GreetsThenQuiet<'a> {
+        reads: usize,
+        quiet_reads_before_stop: usize,
+        stop: &'a AtomicBool,
+    }
+    impl Read for GreetsThenQuiet<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            if self.reads == 1 {
+                let greeting = b"login: ";
+                buf[..greeting.len()].copy_from_slice(greeting);
+                return Ok(greeting.len());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            if self.reads > self.quiet_reads_before_stop {
+                self.stop.store(true, Ordering::Relaxed);
+            }
+            Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+        }
+    }
+
+    #[test]
+    fn a_peer_that_never_speaks_ends_the_session_instead_of_wedging_forever() {
+        // THE BUG: a host that accepts TCP and then sends nothing makes every read
+        // time out, so the pump loop spins forever. `pump` never returns, so `run`'s
+        // reconnect backoff never runs and that feed slot is dead for the life of the
+        // process. `ve7cc.net:23` — a SHIPPED default node — was measured doing
+        // exactly this: connection accepted, nothing sent in 22 seconds.
+        let deadline = Duration::from_millis(200);
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        // Borrows, so the atomics stay readable here after the worker has them.
+        let (stop_ref, connected_ref, outbox_ref) = (&stop, &connected, &outbox);
+        // `pump` runs on its own thread so "never returns" is a bounded FAILURE with a
+        // name, not a hung test binary that reports nothing at all.
+        std::thread::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            s.spawn(move || {
+                let r = pump(
+                    SilentPeer,
+                    Vec::new(),
+                    "W9XYZ",
+                    &mut |_| {},
+                    stop_ref,
+                    connected_ref,
+                    outbox_ref,
+                    deadline,
+                );
+                let _ = tx.send(r.is_ok());
+            });
+            let finished = rx.recv_timeout(Duration::from_secs(5));
+            // Release the worker BEFORE asserting: on failure it is still looping, and
+            // the scope would otherwise block forever joining it instead of failing.
+            stop.store(true, Ordering::Relaxed);
+            assert!(
+                finished.is_ok(),
+                "pump must END on a peer that never speaks, handing the session back to \
+                 run's backoff — it is still looping"
+            );
+        });
+        assert!(
+            !connected.load(Ordering::Relaxed),
+            "a peer that never prompted is never a connected session"
+        );
+    }
+
+    #[test]
+    fn a_session_that_greeted_survives_a_long_silence() {
+        // POSITIVE CONTROL, and it guards a WORSE bug than the one above: the deadline
+        // is armed only until the node's FIRST byte, never on an established session.
+        // A cluster on a quiet band legitimately sends nothing for long stretches, and
+        // dropping it would read to the operator as random dropouts.
+        let deadline = Duration::from_millis(50);
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        let mut writer: Vec<u8> = Vec::new();
+        // ~40 quiet reads at 5 ms ≈ 200 ms of silence, four times the deadline.
+        let reader = GreetsThenQuiet {
+            reads: 0,
+            quiet_reads_before_stop: 40,
+            stop: &stop,
+        };
+        pump(
+            reader,
+            &mut writer,
+            "W9XYZ",
+            &mut |_| {},
+            &stop,
+            &connected,
+            &outbox,
+            deadline,
+        )
+        .unwrap();
+        // The session ended because STOP was set, not because the deadline cut it: the
+        // reader only sets stop after being quiet for far longer than the deadline, so
+        // a deadline that survived the greeting would have returned first.
+        assert!(
+            stop.load(Ordering::Relaxed),
+            "the session must run until stop, not be cut by the greeting deadline"
+        );
+        assert_eq!(
+            writer, b"W9XYZ\r\n",
+            "it greeted, so the login was answered"
+        );
+        assert!(
+            connected.load(Ordering::Relaxed),
+            "an answered prompt is a connected session, however quiet the band goes"
+        );
+    }
+
     /// A loopback port with nothing listening: bound to learn a free port, then
     /// dropped. Connecting to it fails immediately (refused) rather than hanging.
     fn dead_port() -> u16 {
@@ -1562,6 +1761,7 @@ mod tests {
             &stop,
             &connected,
             &outbox,
+            GREETING_DEADLINE,
         )
         .unwrap();
         assert!(writer.is_empty(), "nothing to answer, nothing sent");
