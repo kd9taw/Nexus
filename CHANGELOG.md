@@ -21,6 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one you already use in the other program. Your spots still reach the network under your plain
   callsign either way; nodes relaying them strip the suffix.
 
+- **Stations you have already worked now step aside on the POTA/SOTA board and the Spots panel.**
+  Both are **on by default**, and each says how many rows it is hiding.
+  - **POTA/SOTA board — Hide worked today.** An activator you logged at their park since 0000Z
+    (UTC) is hidden, so the board lists the activations you still need today. It comes back at
+    0000Z, or as soon as that activator is spotted at a different park. Only a contact logged
+    **with the park** counts: HUNT, double-clicking a park on the Connect map and Work on the
+    Needed board all add it for you, but a contact logged without the park reference hides
+    nothing.
+  - **Spots panel — Hide worked.** A station you logged is hidden on every band, for the rest of
+    the UTC day. The picker beside the chip changes that window to 1 hour, 4 hours, 24 hours or
+    7 days — for 13 Colonies, Route 66 and other events where one callsign is on the air all
+    week. A station you still need on the band and mode it was spotted on always stays.
+  - **To see everything again,** click the chip — **Hide worked today · 3** on the board,
+    **Hide worked · 12** on the Spots panel. Every row comes back marked **WORKED TODAY** or
+    **worked 2h ago**. The board remembers your choice per window; the Spots panel until you
+    close Nexus.
+
 ### Changed
 
 - **Remote: the dial follows the wheel, and it stops swallowing your corrections.** Spinning the
@@ -48,6 +65,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs both updated.
 
 ### Fixed
+
+- **Work on the Needed board now tags the park.** Working a POTA or SOTA row from the Needed
+  board moved the radio but, unlike HUNT and the map, never told the logbook which park it was —
+  so the contact was logged without the park reference: it earned no hunter credit, exported
+  without `SIG`/`SIG_INFO`, and pota.app could not match it. The next contact with that activator
+  is now tagged with the park, exactly as HUNT does it.
+
+- **A contact logged at two parks at once counts for both of them.** A two-fer — one QSO at a
+  site where two park boundaries overlap, logged as `US-0001,US-0002` — matched neither park, so
+  both kept their NEW PARK badge and the Needed board went on offering both activations after you
+  had worked them.
 
 - **A cluster node that accepts a connection and then goes silent no longer kills that feed
   slot for the rest of the session.** Some nodes accept the connection and never send a login
