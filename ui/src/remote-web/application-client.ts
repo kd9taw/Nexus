@@ -15,6 +15,7 @@ import { parseAprsLive } from './aprs'
 import { parseSatelliteLive } from './navigation'
 import { shareStructure } from './stable-share'
 import { ApplicationQueryClient } from './application-query-client'
+import type { ResponsivenessProbe } from './responsiveness'
 import { POUNCE_COMMAND, PARKS_COMMAND, CONFIRMATIONS_COMMAND, CONFIGURATION_COMMAND, configurationCollection, NAVIGATION_COMMAND, navigationCollection, SSTV_IMAGE_COMMAND, APRS_COMMAND, JS8_CONTEXT_COMMAND, FIELD_DAY_COMMAND, OTA_COMMAND, MEMORIES_COMMAND, DXPEDITIONS_COMMAND, INSIGHTS_COMMAND, QUERY_COMMAND, RECALL_COMMAND, insightCollection } from './application-query-protocol'
 
 export type ApplicationPhase = 'connecting' | 'ready' | 'updateRequired' | 'unavailable'
@@ -41,6 +42,8 @@ export class ApplicationClient implements ApplicationTransport {
     this.query = new ApplicationQueryClient(send, () => { this.disconnected(); close() })
   }
   supports(command: string): boolean { return this.phase === 'ready' && applicationCommands(this.version).includes(command) }
+  /** The responsiveness probe reads snapshot arrivals off the instrument stream; null detaches it. */
+  attachProbe(probe: ResponsivenessProbe | null): void { this.stream.probe = probe }
   getPhase = (): ApplicationPhase => this.phase
   age(command: StreamTopic): number {
     if (this.version >= 2) return this.stream.age(command)
