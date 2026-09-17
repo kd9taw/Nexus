@@ -115,6 +115,12 @@ it('edits a remote row through the log form without the fields the station keeps
   fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: 'W1AW' }) }))
   expect(screen.queryByText(t('logbook.field.txPower.label'))).toBeNull()
   expect(screen.queryByText(t('logbook.field.parkMine.label'))).toBeNull()
+  // Nor the four the record cannot carry: the form used to show them, take the operator's tick,
+  // and drop it under an "updated" toast. (The shack's form shows all four: Logbook.fields.test.)
+  expect(screen.queryByText(t('logbook.field.myGrid.label'))).toBeNull()
+  expect(screen.queryByText(t('logbook.field.myRig.label'))).toBeNull()
+  expect(screen.queryByText(t('logbook.field.qslSent.label'))).toBeNull()
+  expect(screen.queryByText(t('logbook.field.qslCard.label'))).toBeNull()
   fireEvent.change(screen.getByDisplayValue('FN31'), { target: { value: 'FN42' } })
   fireEvent.click(screen.getByRole('button', { name: t('logbook.form.save') }))
   await waitFor(() => expect(test.changes()).toHaveLength(1))

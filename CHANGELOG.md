@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hosted edit form only knew POTA and SOTA, so saving any correction — a grid, a name — rewrote
   the park's program to POTA. The program now rides through exactly as the log holds it, as it
   already did at the shack.
+- **The Remote edit form no longer offers four fields it could not save.** My grid, Rig, QSL sent
+  and Card received were shown in the hosted form, took your entry, and dropped it under an
+  "updated" message. They are shack-only for now; QSL sent and Card received are still on the
+  hosted row menu, where they do save.
 
 ## [1.13.0] — 2026-09-16
 

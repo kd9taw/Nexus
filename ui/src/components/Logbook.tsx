@@ -1626,33 +1626,41 @@ export function Logbook({
               <span>{t('logbook.field.comment.label')}</span>
               <input className="settings-input" value={draft.comment} onChange={(e) => setField('comment', e.target.value)} placeholder={t('logbook.field.comment.placeholder')} autoComplete="off" />
             </label>
-            {/* #239: your own location and rig for THIS contact (ADIF MY_GRIDSQUARE / MY_RIG). */}
-            <label className="logbook-field">
-              <span>{t('logbook.field.myGrid.label')}</span>
-              <input
-                className="settings-input"
-                value={draft.myGrid}
-                onChange={(e) => setField('myGrid', e.target.value)}
-                title={t('logbook.field.myGrid.title')}
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </label>
-            <label className="logbook-field">
-              <span>{t('logbook.field.myRig.label')}</span>
-              <input
-                className="settings-input"
-                value={draft.myRig}
-                onChange={(e) => setField('myRig', e.target.value)}
-                title={t('logbook.field.myRig.title')}
-                autoComplete="off"
-              />
-            </label>
+            {/* #239: your own location and rig for THIS contact (ADIF MY_GRIDSQUARE / MY_RIG).
+                Shack only: the Remote record carries neither, so the hosted form showed two
+                fields whose values it then threw away under an "updated" toast. */}
+            {!remoteLog && (
+              <>
+                <label className="logbook-field">
+                  <span>{t('logbook.field.myGrid.label')}</span>
+                  <input
+                    className="settings-input"
+                    value={draft.myGrid}
+                    onChange={(e) => setField('myGrid', e.target.value)}
+                    title={t('logbook.field.myGrid.title')}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="logbook-field">
+                  <span>{t('logbook.field.myRig.label')}</span>
+                  <input
+                    className="settings-input"
+                    value={draft.myRig}
+                    onChange={(e) => setField('myRig', e.target.value)}
+                    title={t('logbook.field.myRig.title')}
+                    autoComplete="off"
+                  />
+                </label>
+              </>
+            )}
             {/* #239: QSL status where the rest of the contact is edited — the row QSL menu's two
                 commands, run after the save, only for what changed. LoTW and eQSL confirmations
                 stay the services'; only the card is the operator's to mark. Edit mode only: both
-                commands address a logged record. */}
-            {editIndex !== null && (
+                commands address a logged record. Shack only: a Remote edit is one change keyed by
+                the row it started from, and the two follow-ups would each need the key of the row
+                the previous write produced; the hosted row menu already offers both marks by key. */}
+            {editIndex !== null && !remoteLog && (
               <>
                 <div className="logbook-field">
                   <label htmlFor="logbook-qsl-sent">{t('logbook.field.qslSent.label')}</label>
