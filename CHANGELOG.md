@@ -26,9 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hours, 160 through 2 m without the WARC bands, phone 1 point and CW or digital 2. Illinois
   stations send RST and their county; everyone else sends RST and their state, province or
   **country** — this party asks a DX station for its country rather than the word DX. **The county
-  box takes the name as well as the code**: type `Cook` and it offers COOK, `st clair` offers SCLA,
-  and space turns the name into the code that goes in the log; a name that could be several
-  counties is left exactly as you typed it. **CW and digital count as one mode for dupes here**, so
+  box takes the county name as well as the code**: type `Cook` and it offers COOK, `st clair` offers
+  SCLA, and space turns a full name into the code that goes in the log. A half-typed name is not
+  completed for you and neither is one that could be several counties — pick from the list or
+  finish typing, because nothing is ever guessed onto the air. **CW and digital count as one mode for dupes here**, so
   a station worked on CW shows as a dupe on RTTY on that band — the strip says so before you call
   them. **FT8 and FT4 earn no credit** (the sponsor's own rule); other digital modes are
   encouraged. Illinois entrants multiply by counties, states, provinces and up to five DXCC
