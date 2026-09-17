@@ -197,18 +197,46 @@ it('a station command whose wait expires is refused as not sent, and nothing is 
   expect(h.heartbeats()).toBeGreaterThan(0)
 })
 
-it('a transmit action is never delayed by a lapse: it is still refused at once, unsent', async () => {
+// OPERATOR APPROVAL 2026-09-17 replaced the rule this used to pin ("a transmit action is never
+// delayed by a lapse: it is still refused at once, unsent"). An FT gesture made during a lapse — the
+// one after a command, or the one between two replies on a slow link — now waits for current control
+// like every other command, because being refused on a control that was still lit is what an
+// operator read as "Not sent". Both halves are pinned here: it leaves once, on current control, and
+// it is never sent late when the lapse outlasts the wait.
+it('a transmit action waits out a lapse like any other command, and is refused unsent when the lapse outlasts the wait', async () => {
   const transmitEpoch = '000000000000002a'
-  const h = station(['ftOperate'], { transmitEpoch })
-  await longLapse(h)
-  let settled = false
-  const refused = h.client.control({ action: 'ft.txEnabled', expectedTier: 'FT8', transmitEpoch, on: false } as never)
-    .catch(error => error).finally(() => { settled = true })
-  await step(0)
-  expect(settled).toBe(true)
-  expect(await refused).toMatchObject({ message: 'notController', sent: false })
-  await step(2000)
-  expect(h.writes()).toHaveLength(0)
+  {
+    // A slow link: control is stale between two replies, and the next one is on its way.
+    const h = station(['ftOperate'], { transmitEpoch })
+    await longLapse(h)
+    let settled = false
+    const armed = h.client.control({ action: 'ft.txEnabled', expectedTier: 'FT8', transmitEpoch, on: true } as never)
+      .catch(error => error).finally(() => { settled = true })
+    await step(0)
+    expect(settled, 'it waits, where it used to refuse at once').toBe(false)
+    expect(h.writes()).toHaveLength(0)
+    await until(() => settled, 4000)
+    expect(await armed).toMatchObject({ outcome: 'applied' })
+    expect(h.writes()).toHaveLength(1)
+    expect(h.writes()[0].request.action).toMatchObject({ action: 'ft.txEnabled', on: true })
+    expect(h.writes()[0].fresh, 'and only on current control').toBe(true)
+  }
+  {
+    // The station stops answering: the wait runs out and the gesture is refused, never sent late.
+    const h = station(['ftOperate'], { transmitEpoch })
+    await until(() => h.client.getSnapshot().fresh)
+    h.link.answering = false
+    await until(() => !h.client.getSnapshot().fresh)
+    let settled = false
+    const refused = h.client.control({ action: 'ft.txEnabled', expectedTier: 'FT8', transmitEpoch, on: false } as never)
+      .catch(error => error).finally(() => { settled = true })
+    await step(0)
+    expect(settled, 'the wait is a wait, not a refusal').toBe(false)
+    await step(1700)
+    expect(await refused).toMatchObject({ message: 'notController', sent: false })
+    await step(2000)
+    expect(h.writes(), 'never sent late').toHaveLength(0)
+  }
 })
 
 it('a manual log made during a control lapse is sent once on current control, or refused as not sent', async () => {
