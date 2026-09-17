@@ -1679,3 +1679,464 @@ pub fn execute_transmit(
     });
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// THE SAFETY PIN UNDER OPTIMISTIC TUNING. The browser is allowed to draw a dial the radio has
+    /// not reached yet, and the first argument for why that is safe is this: **the whole remote
+    /// transmit surface is FT-sequencer arming.** There is no remote PTT, no remote CW key and no
+    /// remote Tune, so no browser-side number can ever become a keying decision — the engine keys
+    /// through its own gates against its own CAT readback.
+    ///
+    /// That argument is only as good as the code, so it is pinned here rather than written down:
+    /// every `Action` carrying a `transmit_epoch` is an `Ft*` action, and every `Ft*` action
+    /// carries one. The day someone adds a remote PTT, this fails at that commit.
+    ///
+    /// It cannot be skipped by accident. `ordinal` matches EXHAUSTIVELY — no wildcard arm — so a
+    /// new variant does not compile until it is listed, and the test then demands a dense set of
+    /// ordinals, so the author must also add an instance to `every_action` (a gap fails, a reused
+    /// number fails, a number past the end fails). Whatever they do, the assertion runs on it.
+    fn ordinal(action: &Action) -> (usize, &'static str) {
+        match action {
+            Action::FtRuntime { .. } => (0, "FtRuntime"),
+            Action::FtSetting { .. } => (1, "FtSetting"),
+            Action::QsoLogCurrent { .. } => (2, "QsoLogCurrent"),
+            Action::QsoConfirm { .. } => (3, "QsoConfirm"),
+            Action::QsoDiscard { .. } => (4, "QsoDiscard"),
+            Action::FtMessage { .. } => (5, "FtMessage"),
+            Action::FtExchange { .. } => (6, "FtExchange"),
+            Action::FtCq { .. } => (7, "FtCq"),
+            Action::FtCall { .. } => (8, "FtCall"),
+            Action::FtTxEnabled { .. } => (9, "FtTxEnabled"),
+            Action::Level { .. } => (10, "Level"),
+            Action::ReceiverArm { .. } => (11, "ReceiverArm"),
+            Action::ReceiverClear { .. } => (12, "ReceiverClear"),
+            Action::ReceiverAfcReset { .. } => (13, "ReceiverAfcReset"),
+            Action::ReceiverNet { .. } => (14, "ReceiverNet"),
+            Action::PskMode { .. } => (15, "PskMode"),
+            Action::AiCw { .. } => (16, "AiCw"),
+            Action::Redecode { .. } => (17, "Redecode"),
+            Action::Split { .. } => (18, "Split"),
+            Action::Rit { .. } => (19, "Rit"),
+            Action::Xit { .. } => (20, "Xit"),
+            Action::Vfo { .. } => (21, "Vfo"),
+            Action::Js8Speed { .. } => (22, "Js8Speed"),
+            Action::Msk144Period { .. } => (23, "Msk144Period"),
+            Action::DecodeDepth { .. } => (24, "DecodeDepth"),
+            Action::RxOffset { .. } => (25, "RxOffset"),
+            Action::RxGain { .. } => (26, "RxGain"),
+            Action::Disarm { .. } => (27, "Disarm"),
+            Action::Frequency { .. } => (28, "Frequency"),
+            Action::Band { .. } => (29, "Band"),
+            Action::FilterWidth { .. } => (30, "FilterWidth"),
+            Action::ReceiverFunction { .. } => (31, "ReceiverFunction"),
+            Action::Agc { .. } => (32, "Agc"),
+            Action::PhoneMode { .. } => (33, "PhoneMode"),
+            Action::Mode { .. } => (34, "Mode"),
+            Action::WorkSpot { .. } => (35, "WorkSpot"),
+            Action::WorkRttySpot { .. } => (36, "WorkRttySpot"),
+            Action::WorkDigitalSpot { .. } => (37, "WorkDigitalSpot"),
+            Action::Repeater { .. } => (38, "Repeater"),
+            Action::AprsTune { .. } => (39, "AprsTune"),
+            Action::RotatorPoint { .. } => (40, "RotatorPoint"),
+            Action::RotatorPointAtCall { .. } => (41, "RotatorPointAtCall"),
+            Action::RotatorStop { .. } => (42, "RotatorStop"),
+            Action::SatTrack { .. } => (43, "SatTrack"),
+            Action::SatStopTrack { .. } => (44, "SatStopTrack"),
+            Action::SatTransponder { .. } => (45, "SatTransponder"),
+            Action::SatDoppler { .. } => (46, "SatDoppler"),
+            Action::SatUplinkMap { .. } => (47, "SatUplinkMap"),
+            Action::SatPeg { .. } => (48, "SatPeg"),
+            Action::SatElements { .. } => (49, "SatElements"),
+            Action::SstvDeleteImage { .. } => (50, "SstvDeleteImage"),
+            Action::Scope { .. } => (51, "Scope"),
+            Action::MemoryRecall { .. } => (52, "MemoryRecall"),
+            Action::Tier { .. } => (53, "Tier"),
+            Action::Workspace { .. } => (54, "Workspace"),
+            Action::Radio { .. } => (55, "Radio"),
+            Action::AmpOperate { .. } => (56, "AmpOperate"),
+            Action::AmpBand { .. } => (57, "AmpBand"),
+            Action::AmpFollowBand { .. } => (58, "AmpFollowBand"),
+        }
+    }
+
+    /// One of every variant. The field VALUES are placeholders and mean nothing — `transmit_epoch`
+    /// is read for its presence, never its content.
+    fn every_action() -> Vec<Action> {
+        use tempo_app::dto::Tier;
+        use tempo_app::engine::remote_logging::PendingLogEdits;
+        use tempo_app::engine::remote_radio::Workspace;
+        use tempo_app::engine::remote_transmit::runtime::{FtRuntimeChange, FtRuntimeContext};
+        use tempo_app::engine::remote_transmit::settings::{FtSettingChange, FtSettingsContext};
+        use tempo_app::engine::remote_transmit::{
+            FtCallSelection, FtExchangeChange, FtExchangeContext,
+        };
+
+        let ft_settings = || FtSettingsContext {
+            key: "x".into(),
+            tx_offset_hz: 0.0,
+            rx_offset_hz: 0.0,
+            hold_tx_freq: false,
+            tx_even: false,
+            tx_cycle_auto: false,
+        };
+        let ft_qso = || FtExchangeContext {
+            dxcall: None,
+            state: "x".into(),
+            tx_now: None,
+            cq_running: false,
+        };
+        vec![
+            Action::FtRuntime {
+                expected_tier: Tier::Ft8,
+                transmit_epoch: "2a".into(),
+                expected: FtRuntimeContext {
+                    settings: ft_settings(),
+                    skip_tx1: false,
+                },
+                change: FtRuntimeChange::RxOffset { hz: 0.0 },
+            },
+            Action::FtSetting {
+                expected_tier: Tier::Ft8,
+                transmit_epoch: "2a".into(),
+                expected: ft_settings(),
+                change: FtSettingChange::TxOffset { hz: 0.0 },
+            },
+            Action::QsoLogCurrent {
+                expected_key: "x".into(),
+                expected_tier: Tier::Ft8,
+                expected_qso: ft_qso(),
+            },
+            Action::QsoConfirm {
+                expected_key: "x".into(),
+                edits: PendingLogEdits {
+                    call: "x".into(),
+                    grid: None,
+                    rst_sent: None,
+                    rst_rcvd: None,
+                },
+            },
+            Action::QsoDiscard {
+                expected_key: "x".into(),
+            },
+            Action::FtMessage {
+                expected_tier: Tier::Ft8,
+                transmit_epoch: "2a".into(),
+                expected_qso: ft_qso(),
+                call: "x".into(),
+                grid: None,
+                text: "x".into(),
+            },
+            Action::FtExchange {
+                expected_tier: Tier::Ft8,
+                transmit_epoch: "2a".into(),
+                expected_qso: ft_qso(),
+                change: FtExchangeChange::Resend,
+            },
+            Action::FtCq {
+                expected_tier: Tier::Ft8,
+                transmit_epoch: "2a".into(),
+                direction: None,
+            },
+            Action::FtCall {
+                expected_tier: Tier::Ft8,
+                transmit_epoch: "2a".into(),
+                selection: FtCallSelection {
+                    call: "x".into(),
+                    grid: None,
+                    message: None,
+                    snr: None,
+                    freq: None,
+                },
+            },
+            Action::FtTxEnabled {
+                expected_tier: Tier::Ft8,
+                transmit_epoch: "2a".into(),
+                on: false,
+            },
+            Action::Level {
+                mode: "x".into(),
+                level: "x".into(),
+                expected: 0.0,
+                value: 0.0,
+            },
+            Action::ReceiverArm {
+                receiver: Receiver::Rtty,
+                on: false,
+            },
+            Action::ReceiverClear {
+                receiver: TextReceiver::Cw,
+            },
+            Action::ReceiverAfcReset {
+                receiver: KeyboardReceiver::Rtty,
+            },
+            Action::ReceiverNet {
+                receiver: KeyboardReceiver::Rtty,
+                hz: 0.0,
+            },
+            Action::PskMode {
+                mode: "x".into(),
+                reverse: false,
+            },
+            Action::AiCw {
+                expected_on: false,
+                on: false,
+            },
+            Action::Redecode {
+                expected_tier: Tier::Ft8,
+            },
+            Action::Split {
+                expected_tx_mhz: None,
+                tx_mhz: None,
+            },
+            Action::Rit {
+                expected_hz: 0,
+                hz: 0,
+            },
+            Action::Xit {
+                expected_hz: 0,
+                hz: 0,
+            },
+            Action::Vfo {
+                expected_vfo: Vfo::A,
+                vfo: Vfo::A,
+            },
+            Action::Js8Speed {
+                expected_speed: 0,
+                speed: 0,
+            },
+            Action::Msk144Period {
+                expected_period_secs: 0,
+                period_secs: 0,
+            },
+            Action::DecodeDepth {
+                expected_tier: Tier::Ft8,
+                expected_depth: 0,
+                depth: 0,
+            },
+            Action::RxOffset {
+                expected_tier: Tier::Ft8,
+                expected_hz: 0.0,
+                hz: 0.0,
+            },
+            Action::RxGain {
+                radio_id: 0,
+                expected_settings_revision: "x".into(),
+                expected_gain: 0.0,
+                gain: 0.0,
+            },
+            Action::Disarm {},
+            Action::Frequency {
+                dial_mhz: 0.0,
+                band: "x".into(),
+                sideband: "x".into(),
+            },
+            Action::Band {
+                band: "x".into(),
+                mode: "x".into(),
+            },
+            Action::FilterWidth {
+                mode: "x".into(),
+                expected_hz: 0,
+                hz: 0,
+            },
+            Action::ReceiverFunction {
+                mode: "x".into(),
+                func: "x".into(),
+                expected_on: false,
+                on: false,
+            },
+            Action::Agc {
+                mode: "x".into(),
+                expected_speed: "x".into(),
+                speed: "x".into(),
+            },
+            Action::PhoneMode {
+                expected_mode: "x".into(),
+                mode: "x".into(),
+            },
+            Action::Mode {
+                mode: "x".into(),
+                follow_frequency: false,
+            },
+            Action::WorkSpot {
+                mode: "x".into(),
+                dial_mhz: 0.0,
+                band: "x".into(),
+                call: "x".into(),
+            },
+            Action::WorkRttySpot {
+                dial_mhz: 0.0,
+                band: "x".into(),
+                call: "x".into(),
+            },
+            Action::WorkDigitalSpot {
+                tier: Tier::Ft8,
+                dial_mhz: 0.0,
+                band: "x".into(),
+                call: "x".into(),
+            },
+            Action::Repeater {
+                output_mhz: 0.0,
+                shift: RepeaterShift::Simplex,
+                offset_hz: 0,
+                tone_hz: 0.0,
+            },
+            Action::AprsTune { dial_mhz: 0.0 },
+            Action::RotatorPoint { azimuth_deg: 0.0 },
+            Action::RotatorPointAtCall { call: "x".into() },
+            Action::RotatorStop {},
+            Action::SatTrack {
+                name: "x".into(),
+                aos_unix: 0,
+            },
+            Action::SatStopTrack {},
+            Action::SatTransponder {
+                name: "x".into(),
+                index: None,
+                auto: false,
+            },
+            Action::SatDoppler { on: false },
+            Action::SatUplinkMap {
+                map: None,
+                radio_id: None,
+            },
+            Action::SatPeg { on: false },
+            Action::SatElements {},
+            Action::SstvDeleteImage {
+                finished_utc: "x".into(),
+                mode: "x".into(),
+            },
+            Action::Scope {
+                setting: ScopeSetting::Span,
+                hz: None,
+                tenths_db: None,
+                position: None,
+                ref_dbm: None,
+            },
+            Action::MemoryRecall {
+                section: RecallSection::Cw,
+                dial_mhz: 0.0,
+                band: "x".into(),
+                sideband: None,
+                fm: None,
+            },
+            Action::Tier { tier: Tier::Ft8 },
+            Action::Workspace {
+                workspace: Workspace::Ft,
+            },
+            Action::Radio { radio_id: 0 },
+            Action::AmpOperate {
+                expected_operate: false,
+                operate: false,
+            },
+            Action::AmpBand {
+                expected_band: "x".into(),
+                direction: 0,
+            },
+            Action::AmpFollowBand {
+                radio_id: 0,
+                expected_settings_revision: "x".into(),
+                expected_follow: false,
+                follow: false,
+            },
+        ]
+    }
+
+    /// Every variant name on the `Action` declaration, read out of this file's own source. A
+    /// variant is one line at the enum's own indentation beginning with an upper-case name; its
+    /// fields are indented deeper and named in lower case, so nothing else can match.
+    fn declared_variants() -> Vec<&'static str> {
+        let source = include_str!("station.rs");
+        let body = source
+            .split_once("pub enum Action {")
+            .expect("the Action declaration")
+            .1;
+        let mut names = Vec::new();
+        for line in body.lines() {
+            if line == "}" {
+                break;
+            }
+            let Some(rest) = line.strip_prefix("    ") else {
+                continue;
+            };
+            if !rest.starts_with(|c: char| c.is_ascii_uppercase()) {
+                continue;
+            }
+            let name = rest
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .next()
+                .unwrap_or("");
+            if !name.is_empty() {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    #[test]
+    fn every_action_carrying_a_transmit_epoch_is_ft_arming() {
+        let actions = every_action();
+        let mut seen: Vec<Option<&'static str>> = vec![None; actions.len()];
+        for action in &actions {
+            let (at, name) = ordinal(action);
+            assert!(
+                at < seen.len(),
+                "{name} has ordinal {at} but only {} actions are built: add one to every_action",
+                seen.len()
+            );
+            assert!(
+                seen[at].is_none(),
+                "{name} reuses ordinal {at}, already taken by {}: every variant needs its own",
+                seen[at].unwrap()
+            );
+            seen[at] = Some(name);
+        }
+        for (at, name) in seen.iter().enumerate() {
+            assert!(
+                name.is_some(),
+                "no action was built for ordinal {at}: every_action is missing a variant"
+            );
+        }
+        // AND THE VARIANTS THEMSELVES, READ OFF THE DECLARATION. The exhaustive match alone does
+        // not close this: an author who adds `Ptt`, gives it the next free ordinal and builds no
+        // instance compiles and passes, because nothing ever calls `ordinal` on a variant that has
+        // no instance. (Found by running exactly that mutation against the first version of this
+        // test, which went green.) So the enum's own declaration is the roll call, and every name
+        // on it has to have answered above.
+        let declared = declared_variants();
+        assert!(
+            declared.len() >= 50
+                && declared.contains(&"FtCq")
+                && declared.contains(&"AmpFollowBand"),
+            "the Action declaration was not parsed: {} name(s) found",
+            declared.len()
+        );
+        let built: Vec<&str> = seen.iter().map(|n| n.unwrap()).collect();
+        for name in &declared {
+            assert!(
+                built.contains(name),
+                "{name} is declared on Action but every_action builds no instance of it, so the \
+                 transmit-epoch check below never ran against it"
+            );
+        }
+        assert_eq!(
+            declared.len(),
+            built.len(),
+            "declared vs built action variants"
+        );
+        for action in &actions {
+            let (_, name) = ordinal(action);
+            assert_eq!(
+                action.transmit_epoch().is_some(),
+                name.starts_with("Ft"),
+                "{name}: the remote transmit surface is FT arming only. An action that carries a \
+                 transmit epoch can key the radio, and every one of them must be an Ft* action — \
+                 adding a remote PTT, CW key or Tune breaks the safety case that lets the browser \
+                 show an optimistic dial at all. Re-read that case before changing this test."
+            );
+        }
+    }
+}
