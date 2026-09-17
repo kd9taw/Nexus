@@ -327,11 +327,14 @@ fn working_the_clubs_two_calls_adds_two_hundred_points_once_each() {
     let adam = fields(&[("RST", "599"), ("QTH", "ADAM")]);
     assert!(log.log_fields_at("W9AWE", &adam, "CW", "", 0, 100));
     assert_eq!(earned(&log), 100);
-    // The club's CW call again on another band is a legal contact and not a second bonus.
-    let mut log2 = FieldDayLog::new("W9XYZ", select(&station("IL", "COOK")), "20m");
-    assert!(log2.log_fields_at("W9AWE", &adam, "PH", "", 0, 110));
-    assert!(log2.log_fields_at("W9OAB", &adam, "PH", "", 0, 120));
-    assert_eq!(earned(&log2), 200, "both calls, the sponsor's maximum");
+    // ⭐ The SAME club call again on phone is a legal second contact — a different mode
+    // class, so the dupe rule admits it — and it is not a second bonus.
+    assert!(log.log_fields_at("W9AWE", &adam, "PH", "", 0, 110));
+    assert_eq!(log.qso_count(), 2);
+    assert_eq!(earned(&log), 100, "once per LOG, not once per contact");
+    // The other call is the second 100, and the pair is the sponsor's stated maximum.
+    assert!(log.log_fields_at("W9OAB", &adam, "PH", "", 0, 120));
+    assert_eq!(earned(&log), 200, "both calls, the sponsor's maximum");
     // CONTROL: every other shipped party awards none of this.
     let oh = ruleset_by_id("ohqp", CURRENT_RULES_YEAR).expect("shipped");
     assert_eq!(oh.bonus_station_points(["W9AWE", "W9OAB"]), 0);
