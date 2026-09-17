@@ -47,18 +47,39 @@ it('refuses controls and preserves bounded pending routing through hibernation',
   expect(browser.close).toHaveBeenCalledWith(1008, 'invalidApplicationRequest')
   expect(station.send).toHaveBeenCalledTimes(1)
 })
-it('drops a result after revocation and disconnects a consumer that never acknowledges', () => {
+it('drops a result after revocation', () => {
   const { station, browser, relay } = setup()
   relay.receiveBrowser('browser', request(), 1)
   const sent = browser.send.mock.calls.length
   relay.sync({ peer: station, version: 1 }, [], 2)
   relay.receiveStation(reply(), 3)
   expect(browser.send).toHaveBeenCalledTimes(sent)
-  const next = setup()
-  next.relay.receiveBrowser('browser', request(), 1)
-  next.relay.receiveStation(reply(), 2)
-  next.relay.expire(3001)
-  expect(next.browser.close).toHaveBeenCalledWith(1008, 'applicationTimeout')
+})
+// A read the station did not answer in time fails THAT read and keeps the browser: this lane carries
+// background panel reads, and a slow one used to close the observer with 1008 - which ended the
+// operating session over a station that was still publishing. Same shape as the query lane's fix.
+it('fails a read the station never answered and keeps the browser for the next one', () => {
+  const { station, browser, relay } = setup()
+  relay.receiveBrowser('browser', request(), 1)
+  relay.expire(3001)
+  expect(browser.close).not.toHaveBeenCalled()
+  expect(JSON.parse(browser.send.mock.lastCall![0])).toEqual({ type: 'applicationError', requestId: id, error: 'applicationUnavailable' })
+  expect(relay.checkpoint('browser')).toMatchObject({ version: 1, pending: null })
+  // The late answer has no owner and is dropped, and the station is not blamed for it.
+  relay.receiveStation(reply(), 3002)
+  expect(station.close).not.toHaveBeenCalled()
+  relay.receiveBrowser('browser', { ...request(), requestId: '056c07c9-65c3-48fc-a188-957de3338a4a' }, 3003)
+  expect(station.send).toHaveBeenCalledTimes(2)
+  // An answer arriving exactly at the deadline is treated the same as one that never came.
+  relay.receiveStation(reply(), 6003)
+  expect(JSON.parse(browser.send.mock.lastCall![0]).error).toBe('applicationUnavailable')
+  expect(browser.close).not.toHaveBeenCalled()
+  // Positive control: a consumer whose socket is gone is still closed, and the station is not.
+  browser.send.mockImplementation(() => { throw new Error('socket closed') })
+  relay.receiveBrowser('browser', request(), 6004)
+  relay.expire(9004)
+  expect(browser.close).toHaveBeenCalledWith(1001, 'applicationUnavailable')
+  expect(station.close).not.toHaveBeenCalled()
 })
 it('isolates a failed consumer send from the station and another approved browser', () => {
   const station = peer(), failed = peer(), other = peer()

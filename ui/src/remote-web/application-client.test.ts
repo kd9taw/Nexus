@@ -58,12 +58,33 @@ it('drops cached data and pending reads on loss, and requires a new full respons
   client.receive(result(sent[sent.length - 1], 1, { mycall: 'TEST2' }))
   expect(await again).toEqual({ mycall: 'TEST2' })
 })
-it('bounds a stalled read and reports an older installer without attempting application reads', async () => {
+// A stalled read fails THAT read, never the session. The v1 lane used to close the socket at the
+// deadline, which ended the operating session - operations, lease and all - over one slow panel read.
+// The lane is held until the late answer lands (the relay still holds its own slot for this read),
+// then ACKed unread so the next read can go.
+it('bounds a stalled read without closing the session, and holds the lane until the late answer is ACKed', async () => {
   const { client, sent, close } = setup()
   const request = client.invoke('get_snapshot').catch(error => error.message)
   await vi.advanceTimersByTimeAsync(3000)
   expect(await request).toBe('applicationUnavailable')
-  expect(close).toHaveBeenCalledOnce()
+  expect(close).not.toHaveBeenCalled()
+  expect(client.getPhase()).toBe('ready')
+  const queued = client.invoke('get_settings')
+  expect(sent.filter(m => m.type === 'applicationRead')).toHaveLength(1)
+  client.receive(result(sent[1], 1, { mycall: 'LATE' }))
+  expect(sent[2]).toEqual({ type: 'applicationAck', requestId: sent[1].requestId })
+  expect(sent[3].command).toBe('get_settings')
+  client.receive(result(sent[3], 1, { units: 'metric' }))
+  expect(await queued).toEqual({ units: 'metric' })
+  // The abandoned answer was dropped unread: a fresh read of that command is a full read.
+  const again = client.invoke('get_snapshot')
+  expect(sent[sent.length - 1].revision).toBe(null)
+  client.receive(result(sent[sent.length - 1], 2, { mycall: 'TEST' }))
+  expect(await again).toEqual({ mycall: 'TEST' })
+})
+it('reports an older installer without attempting application reads', async () => {
+  const { client, sent } = setup()
+  client.disconnected()
   client.open(); client.receive({ type: 'applicationCapabilities', version: 0, commands: [] })
   const count = sent.length
   await expect(client.invoke('get_snapshot')).rejects.toThrow('stationUpdateRequired')
