@@ -21881,6 +21881,40 @@ mod tests {
         assert_eq!(e.poll_rtty_one(), Some("TEST".to_string()));
     }
 
+    /// ⭐ The RTTY cockpit frames every F-key macro for the air — CR LF, the message, one space
+    /// (`frameForAir` in the UI, the published RTTY contest convention) — and that framing is
+    /// only worth anything if it reaches the rig. `rtty_filter` uppercases and drops whatever
+    /// ITA2 cannot encode; CR and LF are in both shift planes and the space is a character, so
+    /// all three must come through the queued over AND the latched stream, byte for byte. The
+    /// frame is three characters of the 1000-character over like any other three.
+    #[test]
+    fn an_f_key_macros_frame_survives_the_queued_over_and_the_latched_stream() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        e.rtty_send_text("\r\nCQ TEST W9XYZ W9XYZ CQ ").unwrap();
+        assert_eq!(
+            e.poll_rtty_one(),
+            Some("\r\nCQ TEST W9XYZ W9XYZ CQ ".to_string()),
+            "the queued over lost its line break or its trailing space"
+        );
+        assert!(e
+            .rtty_send_text(&format!("\r\n{} ", "A".repeat(997)))
+            .is_ok());
+        assert_eq!(e.poll_rtty_one().unwrap().chars().count(), 1000);
+        assert!(e
+            .rtty_send_text(&format!("\r\n{} ", "A".repeat(998)))
+            .unwrap_err()
+            .contains("too long"));
+
+        let mut e = rtty_latched_engine();
+        e.rtty_send_text("\r\nTU W9XYZ CQ ").unwrap();
+        assert_eq!(
+            e.poll_rtty_stream(99),
+            RttyStreamTick::Text("\r\nTU W9XYZ CQ ".into()),
+            "the latched stream lost its line break or its trailing space"
+        );
+    }
+
     // ----- PSK31 continuous TX (Keyboard Modes Phase 2) — the RTTY latch
     // suite instantiated over the second mode. Same shapes on purpose: these
     // are the latched-scene contracts every keyboard mode must hold, and the
@@ -25792,6 +25826,54 @@ mod tests {
         let macros = serde_json::to_value(&e.settings().macros).unwrap();
         assert_eq!(macros["rttyProfiles"], serde_json::json!([]));
         assert_eq!(macros["activeRttyProfile"], serde_json::json!(""));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The OTHER half of the one-writer carve-out, and the half a carve-out gets wrong: the two
+    /// paths that REPLACE the settings must still move the macro sets. Both call
+    /// `apply_restored_settings` — `reset_settings` sends `Settings::default()`, and
+    /// `import_settings_bundle` sends the backup's — which is the same `keep_live_roster: false`
+    /// mechanism the beta-channel opt-in uses, so one test names both.
+    #[test]
+    fn a_factory_reset_and_a_restored_backup_both_move_the_rtty_macros() {
+        let (mut e, path) = rtty_macro_engine("restore");
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .expect("the cockpit edit saves");
+
+        // FACTORY RESET — what `reset_settings` sends.
+        let mut fresh = Settings::default();
+        fresh.ensure_radio_profiles();
+        e.apply_restored_settings(fresh);
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            macros["rttyProfiles"],
+            serde_json::json!([]),
+            "a factory reset left the operator's RTTY macros in place"
+        );
+        assert_eq!(macros["activeRttyProfile"], serde_json::json!(""));
+
+        // RESTORED BACKUP — the bundle's own sets, not this station's.
+        use crate::settings::{RttyMacro, RttyMacroProfile};
+        let mut bundle = Settings::default();
+        bundle.macros.rtty_profiles = vec![RttyMacroProfile {
+            name: "everyday".into(),
+            macros: vec![RttyMacro {
+                key: "F5".into(),
+                label: "Rig".into(),
+                text: "RIG HERE IS 100W".into(),
+            }],
+        }];
+        bundle.macros.active_rtty_profile = "everyday".into();
+        e.apply_restored_settings(bundle);
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            macros["rttyProfiles"],
+            serde_json::json!([{"name": "everyday", "macros": [
+                {"key": "F5", "label": "Rig", "text": "RIG HERE IS 100W"}
+            ]}]),
+            "a restored backup did not bring its own RTTY macros"
+        );
+        assert_eq!(macros["activeRttyProfile"], serde_json::json!("everyday"));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

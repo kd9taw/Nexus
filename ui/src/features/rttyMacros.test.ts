@@ -150,4 +150,13 @@ describe('on the air', () => {
     expect(frameForAir('CQ TEST W9XYZ W9XYZ CQ')).toBe('\r\nCQ TEST W9XYZ W9XYZ CQ ')
     expect(frameForAir('  TU W9XYZ CQ  ')).toBe('\r\nTU W9XYZ CQ ')
   })
+
+  it('frames ONCE: a message already on a new line, or already ending in a space, is not framed twice', () => {
+    const framed = frameForAir('CQ TEST W9XYZ CQ')
+    expect(frameForAir(framed)).toBe(framed)
+    expect(frameForAir('\nCQ TEST W9XYZ CQ')).toBe('\r\nCQ TEST W9XYZ CQ ')
+    expect(frameForAir('\r\n\r\nCQ TEST W9XYZ CQ   ')).toBe('\r\nCQ TEST W9XYZ CQ ')
+    // A line break INSIDE the message is the operator's, and it stays.
+    expect(frameForAir('W1AW 599 05 IL\r\nTU')).toBe('\r\nW1AW 599 05 IL\r\nTU ')
+  })
 })
