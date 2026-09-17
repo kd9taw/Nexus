@@ -51,14 +51,24 @@
 :is([data-viewport='xs'], [data-viewport='sm']) .remote-control-result[data-idle],
 :is([data-viewport='xs'], [data-viewport='sm']) .remote-control-result > [data-reserved] { display: none; }
 .remote-view-unavailable { padding: 1em; overflow: auto; }
+/* The summary column: a status strip, the summary itself, and (on Awards) the responsiveness
+   strip. Both strips are content-height and cannot shrink, so on a short window their combined
+   height exceeds this box — the vertical deficit SCROLLS here rather than clipping whatever
+   sits at the bottom of the column out of reach. Horizontally it still clips, as it always did. */
 .remote-insights-view {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  overflow: hidden;
+  overflow: hidden auto;
 }
+/* The summary is the only child here that yields, and `flex: 1` sizes it from ZERO — so with a
+   strip above AND below it, a short window collapses it to nothing: its tab bar and card
+   scroller then spill out of that zero-height box and paint over the strip below, which is what
+   put a phone-sized Awards view out of reach entirely. The floor is a share of the window capped
+   at 18em, so it shrinks with the window and stops binding as soon as the summary has room. */
+.remote-insights-view > .awards-journey { min-height: min(18em, calc(0.35 * var(--vh-eff, 100vh))); }
 .remote-insights-status {
   display: flex;
   flex: 0 0 auto;
@@ -70,7 +80,8 @@
 .remote-insights-status button { min-height: 48px; }
 .remote-insights-status span { flex: 1 1 20em; }
 /* The responsiveness check: a content-height strip under the award summary. Its report scrolls
-   inside a bounded box so a long copy never pushes the summary off the screen. */
+   inside a bounded box so a long copy never pushes the summary off the screen. The strip's own
+   height is not bounded and does not shrink — the column above owns that deficit. */
 .remote-responsiveness {
   display: flex;
   flex: 0 0 auto;
