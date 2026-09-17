@@ -281,6 +281,20 @@ interface Props {
     confirmed: boolean
   } | null
   /**
+   * The host holds the SAME callsign in a field of its own (RTTY's Call box), and the two are
+   * one field shown twice. Called with the strip's call, trimmed and uppercased, whenever it
+   * changes by any path but a `cwLive` fill — typing, a click-to-work, or the clear after a
+   * contact is logged — so the host's box follows the strip.
+   *
+   * ⚠️ IT CHANGES WHAT `cwLive` MEANS. Without it, `cwLive` fills a call this strip has not
+   * filled before and never clobbers one the operator typed over it. With it, `cwLive.call` is
+   * simply the host's side of the one field: whenever it differs from the call both sides last
+   * agreed on, the strip takes it — including an empty one (the host's box was cleared) and
+   * including the call just logged (a station worked again). And a value this strip reported is
+   * never filled straight back, which is what keeps a keystroke typed during the round trip.
+   */
+  onCallChange?: (call: string) => void
+  /**
    * When provided, the component enters FD mode: contacts go to contestLogManual()
    * instead of the general logbook.  The `mode` prop determines the FD mode
    * code ('CW' in CwCockpit, 'PH' in PhoneCockpit).
@@ -347,6 +361,7 @@ export function LogEntry({
   pendingWork,
   onConsumeWork,
   cwLive,
+  onCallChange,
   fieldDay,
   fdMode,
   fdSubmode,
@@ -675,11 +690,25 @@ export function LogEntry({
   const cwFilledFor = useRef<string | null>(null)
   const cwRstFilled = useRef(false)
   const cwNameFilled = useRef(false)
+  // The two-way link (`onCallChange`): the call the strip and its host last agreed on, trimmed and
+  // uppercased. A fill sets it BEFORE the strip changes, so the change is not reported back; a
+  // report sets it before the host changes, so the host's echo is not filled back over a keystroke.
+  const onCallChangeRef = useRef(onCallChange)
+  onCallChangeRef.current = onCallChange
+  const linkedCall = useRef('')
   useEffect(() => {
+    const linked = onCallChangeRef.current != null
+    if (linked && !cwLive?.call && linkedCall.current !== '') {
+      // The host's box was emptied — the one field is empty.
+      linkedCall.current = ''
+      cwFilledFor.current = null
+      setLogCall('')
+      return
+    }
     if (!cwLive?.call) return
     const up = cwLive.call.toUpperCase()
     const { rst, name } = cwLive
-    if (cwFilledFor.current !== up) {
+    if (linked ? up !== linkedCall.current : cwFilledFor.current !== up) {
       // A confirmed chip click always lands. An unconfirmed best-guess fills only if the
       // operator hasn't typed their own call over our previous auto-fill (don't clobber).
       const overridden =
@@ -687,6 +716,7 @@ export function LogEntry({
         logCallRef.current.trim() !== '' &&
         logCallRef.current.toUpperCase() !== (cwFilledFor.current ?? '')
       if (!overridden) {
+        if (linked) linkedCall.current = up
         setLogCall(up)
         humanCallEditRef.current = false // decoder fill, not a keystroke…
         // …and enrich it once the decoder is SURE. A best guess still changes character by
@@ -708,6 +738,13 @@ export function LogEntry({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwLive?.call, cwLive?.rst, cwLive?.name])
+  // …and the strip's side of the link: every change the fill above did not make is reported.
+  useEffect(() => {
+    const c = logCall.trim().toUpperCase()
+    if (!onCallChangeRef.current || c === linkedCall.current) return
+    linkedCall.current = c
+    onCallChangeRef.current(c)
+  }, [logCall])
 
   const hist = useMemo(
     // `mode` is this cockpit's LOG mode; the scope flag mirrors the engine's worked-band sets

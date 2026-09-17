@@ -38,6 +38,7 @@ import {
   setTune,
 } from '../api'
 import { bandLabelForMhz } from '../band'
+import { grabAt } from '../features/rttyGrab'
 import { pushToast, withErrorToast } from '../toast'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -120,6 +121,34 @@ const MACROS: { key: string; label: () => string; text: string }[] = [
  * field hang it fixed) lives with the function. */
 export { confidenceRuns, TRANSCRIPT_MAX_RUNS as RTTY_MAX_RUNS } from '../transcript'
 import { confidenceRuns } from '../transcript'
+
+/** The character under a point, as an offset into `box.textContent` — or null when nothing
+ *  under it is in `box`. The browser's caret hit-test first (`caretPositionFromPoint`, or the
+ *  WebKit/Chromium `caretRangeFromPoint`), then the selection the double-click itself just made.
+ *  Only the POSITION is taken from any of them: the word is re-derived from the string
+ *  (`rttyGrab.ts`), because native word selection stops at the `/` of a compound call. */
+function caretOffsetIn(box: HTMLElement, x: number, y: number): number | null {
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+  }
+  const pos = doc.caretPositionFromPoint?.(x, y)
+  const range = pos ? null : doc.caretRangeFromPoint?.(x, y)
+  const sel = window.getSelection()
+  const points: [Node | null | undefined, number][] = [
+    [pos?.offsetNode, pos?.offset ?? 0],
+    [range?.startContainer, range?.startOffset ?? 0],
+    [sel && sel.rangeCount > 0 ? sel.anchorNode : null, sel?.anchorOffset ?? 0],
+  ]
+  for (const [node, offset] of points) {
+    if (!node || !box.contains(node)) continue
+    const before = document.createRange()
+    before.setStart(box, 0)
+    before.setEnd(node, offset)
+    return before.toString().length
+  }
+  return null
+}
 
 /** "+12 Hz" (signed) AFC readout. */
 function fmtAfc(hz: number): string {
@@ -304,6 +333,50 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // ownership and returns why a send was refused (surfaced as a toast).
   const [text, setText] = useState('')
   const [hisCall, setHisCall] = useState('')
+  // THE CALL BOX AND THE LOG STRIP'S CALLSIGN ARE ONE FIELD, shown twice. The dock → strip half
+  // is PSK's bridge (PskCockpit.tsx `settledHisCall`, whose comment carries the reasoning): the
+  // strip's live machine-fill channel, which moves no caret, DEBOUNCED so typing K, K1, K1A… does
+  // not spend a callbook lookup per keystroke. The strip → dock half is `onCallChange`, which
+  // also carries the clear after a contact is logged. A value that arrives whole — a grab, or
+  // the strip's own — is settled at once: there is no typing to wait out.
+  const [settledHisCall, setSettledHisCall] = useState('')
+  useEffect(() => {
+    const id = setTimeout(() => setSettledHisCall(hisCall.trim().toUpperCase()), 500)
+    return () => clearTimeout(id)
+  }, [hisCall])
+  const setCallNow = (call: string) => {
+    setHisCall(call)
+    setSettledHisCall(call)
+  }
+
+  // THE GRAB — double-click a callsign in Decoded text. The offset is resolved at EVENT time
+  // against the text on screen at that instant (the ring is front-trimmed and re-rendered twice
+  // a second, so a stored offset is a different character by the next poll) and the word is
+  // derived from that string (`features/rttyGrab.ts`). Anything that is not a call is a no-op
+  // with no toast. A Remote observer's Call box is disabled, and so is this.
+  //
+  // ⚠️ THE CARET GOES BACK WHERE IT WAS. A press on plain text takes focus out of the field the
+  // operator was typing in; with continuous TX latched that field is the compose bar, the only
+  // one that feeds the air, and a grab that left it there would silently stop the transmission
+  // taking their typing. So the element focused at the FIRST press of the double-click
+  // (`detail` 1 — by the second press the browser has already moved focus) is focused again.
+  const grabFocus = useRef<Element | null>(null)
+  const onStreamMouseDown = (e: React.MouseEvent) => {
+    if (e.detail <= 1) grabFocus.current = document.activeElement
+  }
+  const onStreamDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!control || !text_rx) return
+    const box = e.currentTarget
+    const offset = caretOffsetIn(box, e.clientX, e.clientY)
+    const hit = offset == null ? null : grabAt(box.textContent ?? '', offset)
+    // Contest exchange grabs (zone, QTH) are classified already and wired with the contest strip.
+    if (hit?.kind !== 'call') return
+    setCallNow(hit.value)
+    const prior = grabFocus.current
+    if (prior instanceof HTMLElement && prior !== document.body && prior.isConnected) {
+      prior.focus({ preventScroll: true })
+    }
+  }
   // Live snapshot ref so send() reads the CURRENT privilege state (same pattern
   // as the CW cockpit's keyboard handler).
   const snapRef = useRef(snap)
@@ -679,7 +752,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         {!control && (!rtty || !armed) && <p className="cw-decode-idle" role="status">
           {rtty ? t('remote.keyboardStopped') : t('remote.keyboardUnavailable')}
         </p>}
-        <div className="cw-decode-text" ref={streamPin.ref} onScroll={streamPin.onScroll}>
+        <div
+          className="cw-decode-text"
+          ref={streamPin.ref}
+          onScroll={streamPin.onScroll}
+          onMouseDown={onStreamMouseDown}
+          onDoubleClick={onStreamDoubleClick}
+        >
           {text_rx ? (
             runs.map((run, i) => (
               <span key={i} style={run.opacity < 1 ? { opacity: run.opacity } : undefined}>
@@ -733,6 +812,14 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             defaultRst="599"
             exchange="terrestrial"
             titled={false}
+            // The dock's Call box, settled, and the strip's call back into it — one field. See
+            // `settledHisCall`. `confirmed: true` because the operator typed or grabbed it.
+            cwLive={
+              settledHisCall
+                ? { call: settledHisCall, rst: null, name: null, confirmed: true }
+                : null
+            }
+            onCallChange={setCallNow}
             fieldDay={snap.fieldDay ?? null}
             fdMode="DIG"
             fdSubmode={RTTY}
