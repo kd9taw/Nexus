@@ -21,6 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one you already use in the other program. Your spots still reach the network under your plain
   callsign either way; nodes relaying them strip the suffix.
 
+- **Illinois QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
+  the Western Illinois ARC's own rules: 1700Z Sunday of the third full weekend of October for eight
+  hours, 160 through 2 m without the WARC bands, phone 1 point and CW or digital 2. Illinois
+  stations send RST and their county; everyone else sends RST and their state, province or
+  **country** — this party asks a DX station for its country rather than the word DX. **The county
+  box takes the name as well as the code**: type `Cook` and it offers COOK, `st clair` offers SCLA,
+  and space turns the name into the code that goes in the log; a name that could be several
+  counties is left exactly as you typed it. **CW and digital count as one mode for dupes here**, so
+  a station worked on CW shows as a dupe on RTTY on that band — the strip says so before you call
+  them. **FT8 and FT4 earn no credit** (the sponsor's own rule); other digital modes are
+  encouraged. Illinois entrants multiply by counties, states, provinces and up to five DXCC
+  entities; everyone else by the Illinois counties worked. **The club's two calls, W9AWE and
+  W9OAB, are worth 100 bonus points each** and Nexus adds them to your score and your claimed
+  score as soon as they are in the log — there is no box to tick. The Cabrillo export writes
+  `CONTEST: ILLINOIS QSO PARTY` and an `IL-COUNTY:` header for an Illinois entry, exactly as the
+  sponsor's sample log does.
+
 - **CQ World-Wide RTTY DX Contest.** Pick it under **Settings › Contesting › Contest** and the log
   strip takes its exchange: RST, your CQ zone and, for stations in the continental USA and Canada,
   a state or Canadian call area, using the sponsor's own codes (NWT, NF, LB and PEI among them).
