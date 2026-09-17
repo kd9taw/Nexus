@@ -2168,6 +2168,11 @@ export interface NeedAlert {
   /** Geography-based rarity of the heard grid (when the source carried one) —
    * drives the gem + a NewGrid priority boost. */
   gridRarity?: GridRarity | null
+  /** The park or summit this row is an ACTIVATION of, when it is one. Working the row sets the
+   *  hunt target with it — the way HUNT and a map double-click do — so the contact it leads to is
+   *  logged with the reference. Absent/null on every other need: a row that names no activation
+   *  must never tag one. */
+  park?: { program: string; reference: string } | null
 }
 
 /** One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose).

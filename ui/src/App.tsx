@@ -1916,6 +1916,15 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         pushToast(t('remote.b1.workUnavailable'), 'info', 4000)
         return
       }
+      // A POTA/SOTA row names the activation it IS (`park`), so working it tags the hunt before
+      // the QSY — the same order as the map's own setHuntTarget-then-QSY split — and the contact
+      // this leads to is logged with the park. Without it a contact worked from the Needed board
+      // was an ordinary QSO: no hunter credit, no SIG/SIG_INFO, and nothing for the POTA board's
+      // Hide worked to see. Native only: a browser's hunt is a station change under the logging
+      // grant (RemoteOta's own path), not this command.
+      if (!remote && alert.park) {
+        void setHuntTarget(alert.call, alert.park.program, alert.park.reference).catch(() => {})
+      }
       // `target`, not `t` — `t` is the translator in this file.
       const target = workTarget(alert, bandPlan)
       if (!target) {

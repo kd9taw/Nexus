@@ -466,6 +466,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           // and its snapshot nav-hint (workTick) makes the MAIN window follow to
           // the matching cockpit — this window can't navigate it directly.
           onWork={(a) => {
+            // A park/summit row names its activation: tag the hunt first, exactly as the docked
+            // board and `onWorkSpot` above do, so the contact this leads to carries the park.
+            if (a.park) void setHuntTarget(a.call, a.park.program, a.park.reference).catch(() => {})
             const t = workTarget(a, bandPlan)
             if (!t) {
               qsyBand(a.band, a.freqMhz ?? undefined)

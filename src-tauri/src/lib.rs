@@ -15074,6 +15074,22 @@ fn read_need_alerts(
                         a.tags.push(tag);
                         a.headline = format!("{} · {} {}", a.headline, sp.program, sp.reference);
                     }
+                    // WHICH ACTIVATION, so Work from the board can tag the hunt — the same field
+                    // `activation_alert` sets on its own rows. It rides here for the same reason
+                    // the park NEED does: an activator loud enough to reach the cluster arrives
+                    // as a cluster row and never reaches that branch, and those are exactly the
+                    // ones a chaser works. First spot wins: a two-fer is spotted per park, and
+                    // one contact is one hunt target.
+                    if a.park.is_none() {
+                        a.park = Some(propagation::ParkRef {
+                            program: if tag == propagation::NeedTag::Sota {
+                                "SOTA".into()
+                            } else {
+                                "POTA".into()
+                            },
+                            reference: sp.reference.clone(),
+                        });
+                    }
                 }
             }
             // A park need raises priority, so the board must re-rank — same reason the
@@ -31042,6 +31058,77 @@ mod tests {
         let flags = crate::ota_log_flags(&e, &spots, HIDE_NOON);
         assert!(flags[0].hunted_today && flags[1].hunted_today);
         assert!(!flags[0].new_park && !flags[1].new_park);
+    }
+
+    /// The Needed board's TWO POTA paths, through the real `read_need_alerts`: a station the
+    /// CLUSTER spotted that is also on the hunter feed (decorated by the programme-tag pass), and
+    /// an activator only the hunter feed knows (its own `activation_alert` row). Both must name
+    /// the park, because Work tags the hunt off the row and nothing downstream knows which park a
+    /// callsign is at. Tagging only one path would leave exactly the stations a park chaser works
+    /// most — the ones loud enough to hit the cluster — logged without their reference.
+    #[test]
+    fn a_needed_row_for_a_live_activator_names_its_park_on_both_paths() {
+        use std::sync::{Arc, Mutex};
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let now = crate::now_unix();
+        let cluster = |call: &str| ClusterSpot {
+            spotter: "W3LPL".into(), // a voice on the operator's own continent (the locality gate)
+            dx_call: call.into(),
+            freq_khz: 14_025.0, // 20 m CW
+            comment: "CW 18 dB".into(),
+            time_utc: None,
+            received_unix: now as u64,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let mut buf = SpotBuffer::new(100);
+        buf.push(cluster("K1ABC")); // …also on the hunter feed
+        buf.push(cluster("DL1ABC")); // …and this one is not
+        let spots: crate::SharedSpots = Arc::new(Mutex::new(buf));
+
+        let feed = |activator: &str, reference: &str| {
+            let mut sp = ota_spot(activator, reference);
+            sp.spot_time_unix = Some(now);
+            sp
+        };
+        let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        ota.lock().unwrap().insert(
+            "POTA".into(),
+            (
+                now,
+                vec![feed("K1ABC", "US-0001"), feed("W9XYZ", "US-0002")],
+            ),
+        );
+        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        let region =
+            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+        let engine: SharedEngine = Arc::new(Mutex::new(tempo_app::engine::Engine::new(
+            "KD9TAW", "EN52", 0,
+        )));
+        let alerts =
+            crate::read_need_alerts(engine_lock(&engine), &live, &region, &spots, &ota).unwrap();
+        let park_of = |call: &str, mode: &str| {
+            alerts
+                .iter()
+                .find(|a| a.call == call && a.mode == mode)
+                .unwrap_or_else(|| panic!("no {call} row in {alerts:?}"))
+                .park
+                .as_ref()
+                .map(|p| (p.program.clone(), p.reference.clone()))
+        };
+        assert_eq!(
+            park_of("K1ABC", "CW"),
+            Some(("POTA".into(), "US-0001".into())),
+            "the cluster row is where a park chaser meets a loud activator"
+        );
+        assert_eq!(
+            park_of("W9XYZ", "Phone"),
+            Some(("POTA".into(), "US-0002".into())),
+            "…and the hunter feed's own row"
+        );
+        // CONTROL: a cluster row for a station on no hunter feed names no activation, so Work
+        // tags nothing onto it.
+        assert_eq!(park_of("DL1ABC", "CW"), None);
     }
 
     #[test]
