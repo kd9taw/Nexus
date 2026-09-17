@@ -59,6 +59,9 @@ export const PER_SURFACE = [
   'nexus.operate.layout',
   'nexus.operateLayout',
   'nexus.ota.bandFilter',
+  // Hide worked today: a statement about what THIS board shows, like the filters beside it — a
+  // POTA board and a SOTA board in two windows may answer it differently.
+  'nexus.ota.hideWorked',
   'nexus.ota.modeFilter',
   'nexus.ota.program',
   'nexus.ota.sortAsc',
@@ -208,6 +211,9 @@ const SESSION_SCOPED = [
   'nexus.spots.bands',
   'nexus.spots.filtersOpen',
   'nexus.spots.hiddenModes',
+  // Hide worked and the window it reaches back over. Session-lived like the filters around them:
+  // on again next launch, which is the default the operator chose.
+  'nexus.spots.hideWorked',
   'nexus.spots.licensedOnly',
   'nexus.spots.localOnly',
   'nexus.spots.query',
@@ -216,6 +222,7 @@ const SESSION_SCOPED = [
   'nexus.spots.spotterConts',
   'nexus.spots.spotterEntities',
   'nexus.spots.states',
+  'nexus.spots.workedWindow',
 ]
 
 describe('zero migration: the main window keeps the exact key strings already on disk', () => {

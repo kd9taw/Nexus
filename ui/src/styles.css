@@ -14915,6 +14915,38 @@ button.cq-skiptx1.on {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* "worked 2h ago" on a Spots row — what Hide worked would drop, said on the row once the chip
+   is off. The b4-chip's palette on purpose (--text-faint, not a need colour): it is a fact about
+   your log, never something to chase. It leads the COMMENT cell, the widest flexible column, so
+   the age reads in full at the 1024 px floor and the comment keeps the ellipsis. */
+.sp-worked {
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--text-faint);
+  background: color-mix(in srgb, var(--text-faint) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-faint) 35%, transparent);
+}
+/* How far back Hide worked reaches — a chip-sized picker beside it in the filter bar. The
+   `select` base rule owns the arrow (background-image / padding-right, both !important), so
+   this sets only the colours and the pill shape. */
+.sp-worked-window {
+  padding: 1px 6px;
+  font-size: 0.71rem;
+  font-weight: 600;
+  background-color: var(--bg-elev-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.sp-worked-window:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
 .np-freq {
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -16954,6 +16986,14 @@ button.cq-skiptx1.on {
   color: #22c55e;
   background: color-mix(in srgb, #22c55e 18%, transparent);
   border: 1px solid color-mix(in srgb, #22c55e 50%, transparent);
+}
+/* WORKED TODAY — this activation is already in the log (only reachable with Hide worked today
+   switched off). Dim, in the B4 palette rather than an accent: it is a fact about your log, not
+   something to chase. */
+.pota-badge-worked {
+  color: var(--text-faint);
+  background: color-mix(in srgb, var(--text-faint) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-faint) 35%, transparent);
 }
 .pota-spot-line2 {
   display: flex;

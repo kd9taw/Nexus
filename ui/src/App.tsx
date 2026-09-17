@@ -2779,6 +2779,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           onSelect={handleSelect}
           onWork={handleWorkSpot}
           canWork={remote ? canRemoteWorkSpot : undefined}
+          // The BOARD's feed (band scopes honoured, mode-feature neutral), because the panel asks
+          // it exactly what the Needed board would say: is this station still needed on the band
+          // and mode it is spotted on? If so, Hide worked leaves it alone.
+          needAlerts={boardAlerts}
         />
       )
       break

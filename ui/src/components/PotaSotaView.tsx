@@ -193,6 +193,14 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     return isOtaSort(raw) ? raw : 'value'
   })
   const [sortAsc, setSortAsc] = useState(() => surfaceGet('nexus.ota.sortAsc') === '1')
+  // Hide worked today (operator decision 2026-09-17): an activator already logged AT THIS PARK
+  // since 0000Z is an activation you have; the board is for the ones you still need today.
+  // DEFAULT ON, per-surface like every other filter here, stored raw ('1'/'0') in the sortAsc
+  // shape so a stale or hand-edited value falls back to on rather than to a silent off.
+  const [hideWorked, setHideWorked] = useState(() => surfaceGet('nexus.ota.hideWorked') !== '0')
+  useEffect(() => {
+    surfaceSet('nexus.ota.hideWorked', hideWorked ? '1' : '0')
+  }, [hideWorked])
   useEffect(() => {
     surfaceSet('nexus.ota.sortKey', sortKey)
   }, [sortKey])
@@ -242,6 +250,29 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     if (!observed) void loadSpots(program)
   }, [program, loadSpots, observed])
 
+  // Re-derive what the LOG says over the rows already fetched, when the log changes. A contact
+  // just logged has to drop its activator off the board now, not up to 60 s later — but
+  // `logTick` moves on every upload stamp as well as every contact, several times per QSO, so
+  // this reads the shared cache and can reach no feed (`getOtaSpots(p, true)`). Nothing cached
+  // yet (the first moments after launch, or a fetch that failed) leaves the board as it is: the
+  // next poll fetches anyway, and a blank board would be a worse answer than a stale one.
+  const rereadSpots = useCallback(async (p: Program) => {
+    const programs: Program[] = p === 'Both' ? ['POTA', 'SOTA'] : [p]
+    try {
+      const parts = await Promise.all(programs.map((x) => getOtaSpots(x, true)))
+      if (parts.every(Array.isArray)) setSpots(parts.flat())
+    } catch {
+      /* nothing cached for this programme — keep what the board shows */
+    }
+  }, [])
+  const logTick = snap.logTick
+  const lastLogTick = useRef(logTick)
+  useEffect(() => {
+    if (observed || logTick === lastLogTick.current) return
+    lastLogTick.current = logTick
+    void rereadSpots(program)
+  }, [logTick, program, observed, rereadSpots])
+
   // Auto-poll every 60 s
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   useEffect(() => {
@@ -277,16 +308,23 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   })()
 
   // Filter + sort
+  const inScope = spots.filter((s) => {
+    // Always honor the selected program — guards against stale spots lingering from the
+    // previous program during an in-flight re-fetch (the "I'm on SOTA but still see POTA"
+    // bug), and any mixed array. 'Both' shows everything.
+    if (program !== 'Both' && s.program !== program) return false
+    if (bandFilter.length > 0 && !bandFilter.includes(bandFromKhz(s.freqKhz))) return false
+    if (modeFilter !== 'All' && spotDisplayMode(s.mode) !== modeFilter) return false
+    return true
+  })
+  // The chip renders only when the rows can ANSWER: an observed station's feed carries no flag,
+  // and a board that cannot tell hides nothing rather than guessing.
+  const canHideWorked = spots.some((s) => typeof s.huntedToday === 'boolean')
+  // Counted after the other filters, so the number on the chip is exactly what one click brings
+  // back — the locality chip's bargain on the Spots panel, made here too.
+  const workedHidden = hideWorked ? inScope.filter((s) => s.huntedToday === true).length : 0
   const filtered = sortSpots(
-    spots.filter((s) => {
-      // Always honor the selected program — guards against stale spots lingering from the
-      // previous program during an in-flight re-fetch (the "I'm on SOTA but still see POTA"
-      // bug), and any mixed array. 'Both' shows everything.
-      if (program !== 'Both' && s.program !== program) return false
-      if (bandFilter.length > 0 && !bandFilter.includes(bandFromKhz(s.freqKhz))) return false
-      if (modeFilter !== 'All' && spotDisplayMode(s.mode) !== modeFilter) return false
-      return true
-    }),
+    hideWorked ? inScope.filter((s) => s.huntedToday !== true) : inScope,
     sortKey,
     sortAsc,
   )
@@ -630,6 +668,22 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             ))}
           </div>
 
+          {/* Hide worked today — the count of what it hides rides ON the chip, so "where did
+              that activator go" is answered on screen rather than in a support thread. */}
+          {canHideWorked && (
+            <button
+              type="button"
+              className={`filter-chip${hideWorked ? ' active' : ''}`}
+              aria-pressed={hideWorked}
+              onClick={() => setHideWorked((v) => !v)}
+              title={t('ota.filter.hideWorked.title')}
+            >
+              {hideWorked && workedHidden > 0
+                ? t('ota.filter.hideWorked.hidden', { count: workedHidden })
+                : t('ota.filter.hideWorked.label')}
+            </button>
+          )}
+
           {/* Refresh + timestamp */}
           {!observed && <div className="pota-refresh-row">
             <button
@@ -737,6 +791,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             ? t('ota.loading')
             : observation && observation.feeds.some(f => (program === 'Both' || f.program === program) && f.status !== 'ready')
               ? t('remote.collectionUnavailable')
+            : workedHidden > 0
+              ? t('ota.empty.worked', { count: workedHidden })
             : bandFilter.length > 0 || modeFilter !== 'All'
               ? t('ota.empty.filtered')
               : t('ota.empty', {
@@ -786,6 +842,16 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                           title={t('ota.badge.bandOpen.title')}
                         >
                           {t('ota.badge.bandOpen')}
+                        </span>
+                      )}
+                      {/* Only reachable with the chip OFF — it says what Hide worked would have
+                          dropped, so bringing the rows back explains itself. */}
+                      {s.huntedToday && (
+                        <span
+                          className="pota-badge pota-badge-worked"
+                          title={t('ota.badge.workedToday.title')}
+                        >
+                          {t('ota.badge.workedToday')}
                         </span>
                       )}
                     </span>
