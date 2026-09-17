@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { StationDataContext, useStationCapability } from './stationAccess'
 import { publishBandConditions } from './bandConditions'
@@ -257,7 +257,7 @@ import { RemoteFieldDay } from './remote-web/RemoteFieldDay'
 import { RemoteOta } from './remote-web/RemoteOta'
 import { RemoteMemories } from './remote-web/RemoteMemories'
 
-export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
+function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const remoteWorkAllowed = useStationCapability('workSpot')
   const remoteDigitalWorkAllowed = useStationCapability('workDigitalSpot')
   const remoteRttyWorkAllowed = useStationCapability('workRttySpot')
@@ -3448,3 +3448,11 @@ export default function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     </div>
   )
 }
+
+// Memoised on its one prop. In the browser workspace the host (BrowserApplication) re-renders
+// itself every 500 ms to re-read the sample age and again on every observation poll, and this
+// component sat under it unmemoised, so every one of those was a full reconciliation of the
+// whole workspace with nothing to show for it - six a second at idle, measured. `remote` is
+// the only prop and its identity already changes only when its contents do; everything else
+// App reads arrives through context, which memo never blocks, so no genuine update is lost.
+export default memo(App)
