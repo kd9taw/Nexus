@@ -26,6 +26,7 @@ import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { isFieldDay } from '../fdEvent'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -315,6 +316,23 @@ const DEFAULT_MACROS: CwMacro[] = [
  * F3 send the exchange (twice, for copy) → F4 confirm + TU. */
 export const DEFAULT_FD_MACROS: CwMacro[] = [
   { key: 'F1', label: 'CQ FD', text: 'CQ FD DE {MYCALL} {MYCALL} K' },
+  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
+  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
+  { key: 'F4', label: 'TU', text: '! TU {EXCH} DE {MYCALL} K' },
+  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
+  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
+  { key: 'F7', label: 'AGN', text: 'AGN AGN' },
+  { key: 'F8', label: '?', text: '? ' },
+]
+
+/** Default CONTEST CW macro set — the Field Day cadence with the call every other contest
+ * uses. Field Day's own `CQ FD` went on the air in any contest that was running, so an
+ * Illinois QSO Party or CQ WW CW operator called CQ for somebody else's event; `CQ TEST` is
+ * what a contest CQ is, and the exchange tokens are unchanged ({EXCH} is the running
+ * contest's own exchange). Everything below F1 is Field Day's set, which is what a contest
+ * needs. */
+export const DEFAULT_CONTEST_MACROS: CwMacro[] = [
+  { key: 'F1', label: 'CQ TEST', text: 'CQ TEST DE {MYCALL} {MYCALL} K' },
   { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
   { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
   { key: 'F4', label: 'TU', text: '! TU {EXCH} DE {MYCALL} K' },
@@ -726,8 +744,14 @@ export function CwCockpit({
   const profileMacros = profiles[activeProfile]?.macros
   // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
-  const macros: CwMacro[] =
-    profileMacros && profileMacros.length ? profileMacros : fieldDay ? DEFAULT_FD_MACROS : DEFAULT_MACROS
+  // ⭐ WHICH CONTEST IS RUNNING decides the built-in set: Field Day's own `CQ FD` is right
+  // for the two Field Day events and wrong on the air in every other contest.
+  const builtIn = fieldDay
+    ? isFieldDay(fieldDay.event)
+      ? DEFAULT_FD_MACROS
+      : DEFAULT_CONTEST_MACROS
+    : DEFAULT_MACROS
+  const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
   // Switch the active macro profile from the cockpit (optimistic) and persist it.
   const switchProfile = (i: number) => {
     if (!control) return

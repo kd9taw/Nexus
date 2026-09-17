@@ -286,30 +286,42 @@ describe('CW F-key macros match CwCockpit.tsx', () => {
   const SETS = {
     default: { const: 'DEFAULT_MACROS', macros: sourceSet('DEFAULT_MACROS') },
     fieldDay: { const: 'DEFAULT_FD_MACROS', macros: sourceSet('DEFAULT_FD_MACROS') },
+    contest: { const: 'DEFAULT_CONTEST_MACROS', macros: sourceSet('DEFAULT_CONTEST_MACROS') },
   }
 
   // A published CW macro table is any table headed Key | Label | … on a CW page (every
   // per-mode page is `<mode>.md`, so RTTY's own four-macro table is not mistaken for this
-  // one). The Field Day set is the table under a Field Day heading. Both classifications
-  // are read off the doc, so a renamed section or a reordered column fails rather than
-  // silently guarding nothing.
+  // one). The Field Day set is the table under a Field Day heading, and the contest set the
+  // table under a heading that says contest and does not say Field Day — the cockpit picks
+  // between those two the same way. All three classifications are read off the doc, so a
+  // renamed section or a reordered column fails rather than silently guarding nothing.
   const macroTables = docCorpus()
     .filter((abs) => /(^|\/)cw\.md$/i.test(rel(abs)))
     .flatMap((abs) => tables(read(abs), rel(abs)))
     .filter((t) => t.headers[0]?.toLowerCase() === 'key' && t.headers[1]?.toLowerCase() === 'label')
-    .map((t) => ({ ...t, set: /field day/i.test(t.heading) ? SETS.fieldDay : SETS.default }))
+    .map((t) => ({
+      ...t,
+      set: /field day/i.test(t.heading)
+        ? SETS.fieldDay
+        : /contest/i.test(t.heading)
+          ? SETS.contest
+          : SETS.default,
+    }))
 
   // A guard that quietly matches no table is worse than no guard, so what it found is
   // asserted before what it found is compared.
-  it('finds a published table for both macro sets', () => {
+  it('finds a published table for every macro set', () => {
     expect(SETS.default.macros).toHaveLength(8)
     expect(SETS.fieldDay.macros).toHaveLength(8)
+    expect(SETS.contest.macros).toHaveLength(8)
     const files = [...new Set(macroTables.map((t) => t.file))]
     expect(files, 'no CW page publishes a "Key | Label" table — this guard is checking nothing').toContain(
       'docs/manual/CW.md',
     )
     const fd = macroTables.filter((t) => t.set === SETS.fieldDay).map((t) => `${t.file} — ${t.heading}`)
     expect(fd, 'no Field Day macro table found — DEFAULT_FD_MACROS is unguarded').not.toEqual([])
+    const contest = macroTables.filter((t) => t.set === SETS.contest).map((t) => `${t.file} — ${t.heading}`)
+    expect(contest, 'no contest macro table found — DEFAULT_CONTEST_MACROS is unguarded').not.toEqual([])
   })
 
   it.each(macroTables.map((t) => [`${t.file} — ${t.heading}`, t] as const))(

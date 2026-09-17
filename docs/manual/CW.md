@@ -100,8 +100,9 @@ Eight macros are fired by `F1`–`F8` or the corresponding on-screen buttons. **
 on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:470`):
 
 1. a saved **macro profile**, if one is active — see *Custom macro profiles* below;
-2. otherwise the **Field Day set**, whenever Field Day mode is on;
-3. otherwise the **default set**.
+2. otherwise the **Field Day set**, in ARRL Field Day and Winter Field Day;
+3. otherwise the **contest set**, in any other contest you have picked;
+4. otherwise the **default set**.
 
 ### The default set
 
@@ -120,11 +121,29 @@ on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:470`):
 
 ### The Field Day set
 
-Active whenever contest mode is on. In Field Day, `{EXCH}` expands to your class and section. In any other contest it is that contest's exchange without the signal report — your zone in CQ WW CW, for example.
+Active in ARRL Field Day and Winter Field Day, where `{EXCH}` expands to your class and section.
 
 | Key | Label | Content |
 |---|---|---|
 | `F1` | CQ FD | `CQ FD DE {MYCALL} {MYCALL} K` |
+| `F2` | Call | `! DE {MYCALL} K` |
+| `F3` | Exch | `! DE {MYCALL} {EXCH} {EXCH} K` |
+| `F4` | TU | `! TU {EXCH} DE {MYCALL} K` |
+| `F5` | My Call | `{MYCALL}` |
+| `F6` | His Call | `! ` |
+| `F7` | AGN | `AGN AGN` |
+| `F8` | ? | `? ` |
+
+### The contest set
+
+Active in any other contest you pick on the Contesting tab. The same cadence with the call a
+contest uses — Field Day's `CQ FD` belongs to Field Day, and keying it in the Illinois QSO
+Party or CQ WW CW calls for somebody else's event. `{EXCH}` is that contest's own exchange
+without the signal report — your zone in CQ WW CW, your county in a QSO party.
+
+| Key | Label | Content |
+|---|---|---|
+| `F1` | CQ TEST | `CQ TEST DE {MYCALL} {MYCALL} K` |
 | `F2` | Call | `! DE {MYCALL} K` |
 | `F3` | Exch | `! DE {MYCALL} {EXCH} {EXCH} K` |
 | `F4` | TU | `! TU {EXCH} DE {MYCALL} K` |
