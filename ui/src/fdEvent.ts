@@ -70,6 +70,9 @@ export const CONTESTS: { id: string; name: string; short: string }[] = [
   { id: 'cqwpx_cw', name: 'CQ World-Wide WPX Contest (CW)', short: 'CQ WPX CW' },
   { id: 'cqwpx_ssb', name: 'CQ World-Wide WPX Contest (SSB)', short: 'CQ WPX SSB' },
   { id: 'cqp', name: 'California QSO Party', short: 'CQP' },
+  // The sponsor is the Western Illinois Amateur Radio Club; the name is the one its own
+  // rules and its sample log use ("Announcing the 2025 Illinois QSO Party").
+  { id: 'ilqp', name: 'Illinois QSO Party', short: 'ILQP' },
   { id: 'ohqp', name: 'Ohio QSO Party', short: 'OhQP' },
   { id: 'tnqp', name: 'Tennessee QSO Party', short: 'TNQP' },
   { id: 'txqp', name: 'Texas QSO Party', short: 'TXQP' },

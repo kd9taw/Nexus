@@ -24,7 +24,11 @@ impl Engine {
         let (qso_pts, _powered, mult_count, scored) = rs
             .scoring
             .score(log.score_rows(), self.settings.fd_power_mult);
-        let bonus = rs.bonus_points(&self.settings.fd_bonuses);
+        // ⭐ The TICKED menu plus what the LOG earned. ILQP's two club calls are worth
+        // 100 each to whoever works them ("added to the final score"), and nothing asks
+        // the operator to claim them — a screen that showed only the ticked menu would
+        // be 200 points light on the number the sponsor credits.
+        let bonus = rs.bonus_points(&self.settings.fd_bonuses) + log.bonus_station_points();
         // The exchange and the role this session is running — read ONCE here, so the
         // strip's boxes, the sent display and the multiplier boards cannot disagree
         // about which role the operator is in.

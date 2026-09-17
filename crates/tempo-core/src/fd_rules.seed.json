@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "generated": "2026-09-17T00:00:00Z",
+  "generated": "2026-09-17T21:00:00Z",
   "_provenance": {
     "qso_parties": "The four state QSO parties (TNQP, OhQP, CQP, TXQP) were written from each sponsor's own current page or PDF, all read 2026-09-09. TNQP: https://tnqp.org/rules/ renders only navigation (an EmbedPress wrapper), so the source is the PDF that page embeds, https://tnqp.org/wp-content/uploads/2026/08/Tennessee-QSO-Party-2026-Rules.pdf, \"Tennessee QSO Party 2026 Rules\". OhQP: https://www.ohqp.org/index.php/rules/ plus /official-list-of-mults-for-ohio-stations/ and /official-list-of-mults-for-non-ohio-stations/. CQP: https://www.cqp.org/Rules.html (Last Update 19-July-2026, 61st running) plus https://www.cqp.org/cqp_multipliers.html. TXQP: https://www.txqp.net/?page_id=23 plus https://www.txqp.net/?page_id=90 (the previously-cited https://www.txqp.net/index.php/rules/operating-rules is DEAD, HTTP 404 — the sponsor rebuilt the site). Each county list was PARSED off the sponsor's own table and its size counted, never read off a stated total: 95 TN, 88 OH (+62 non-county codes = 150), 58 CA (+63 state/province codes), 254 TX.",
     "txqp_county_codes": "⚠️ THE SPONSOR'S PROSE AND THE SPONSOR'S LIST DISAGREE, AND THE LIST WINS. txqp.net/?page_id=23 says \"Log submissions must use the approved four-letter county abbreviation for the exchange.\" The official list on ?page_id=90 has 254 entries, of which TWO ARE THREE LETTERS: BEE (Bee) and LEE (Lee). A domain or validator written to the prose (len == 4) rejects two real Texas counties, and a Texas mobile operating in either one produces an unsubmittable log for every QSO made from it. The domain below is the sponsor's 254 codes verbatim. Do not normalise, pad or \"fix\" BEE and LEE, and do not generate codes from county names — the scheme is irregular (Brazoria=BZIA, Brazos=BZOS, Cameron=CMRN, Collin=COLN, Collingsworth=COLW, Comal=COML, Comanche=COMA, Dallam=DALM, Dallas=DALS).",
@@ -27,7 +27,8 @@
     "sweepstakes": "ARRL November Sweepstakes ships as TWO rulesets, arrlss_cw and arrlss_ssb, written from https://contests.arrl.org/ContestRules/SS-Rules.pdf, Version 2.1, all 10 pages extracted and read 2026-09-09. TWO RULESETS AND NOT ONE MODE-SPLIT ROW: the sponsor runs them as separate contests on separate weekends (\"CW: First full weekend in November / Phone: Third full weekend in November\"; §2.4 \"Use only CW during the CW weekend and Phone during the Phone weekend\"), with separate certificates, separate Clean Sweep mugs and separate CONTEST tokens — and a WindowRule holds one weekend, so one row could not carry both dates whatever the token did. EXCHANGE (§4, verbatim): \"4.1 Serial Number - a consecutive contact number starting with 1; 4.2 Precedence “Q” for Single Operator, QRP / “A” for Single Operator, Low Power / “B” for Single Operator, High Power / “U” for Single Operator Unlimited, High Power, Single Operator Unlimited, Low Power and Single Operator Unlimited, QRP / “M” for Multioperator, High Power or Multioperator, Low Power / “S” for School Club; 4.3 Your call sign (the call sign must be included during the exchange); 4.4 Check — 4.4.1 The last two digits of the year the operator or the station was first licensed. 4.4.2 The same Check must be sent throughout the contest; 4.5 Section – send and log the abbreviations in the ARRL Contest Multipliers List.\" ⚠️ The narrative on p.2 says \"The following SIX pieces of information must be sent\" and then enumerates FIVE, the same five §4.1–§4.5 lists; five ship and the count is a sponsor slip. \"It is highly recommended that you send the information in this order\" — RECOMMENDED, not mandatory, so the send order below is the sponsor's and a parser must not require it. SCORING (§5): \"5.1 QSO points: Each contact counts for two (2) points. 5.2 Multipliers: ARRL/RAC Sections plus Northern Territories. 5.3 Final score equals the total QSO points times the total multipliers contacted.\" Two points is written here as points_by_mode_class PH/CW/DIG all 2 rather than a new flat-points model, because the sponsor's rule carries no mode qualification and widening the file's scoring vocabulary would strand every shipped build's rules updates on its bundled seed (§8d). DUPE (§2.2): \"Each station may be contacted only once, regardless of band.\" — by_call true, by_band FALSE, by_mode_class FALSE. SECTIONS: the domain is ss_sections, 85 codes parsed off https://contests.arrl.org/contestmultipliers.php?a=wve (read 2026-09-09), which states \"These are the names of the 85 W/VE sections used in ARRL contests, along with their standard abbreviations.\" ⚠️ THE TERRITORIES ABBREVIATION IS TER, NOT NT. §5.2's phrase \"plus Northern Territories\" is prose, not an abbreviation; NT does not appear anywhere in the sponsor's list. ⚠️ ss_sections IS NOT fd_sections, and the difference is a live defect in the OTHER list, recorded here and deliberately not fixed in this batch: the top-level sections array this file has always carried holds 83 codes from an older ARRL era — MAR (Maritime, since split into NB/NS/PE), GTA (since renamed GH, Ontario Golden Horseshoe) and NT (since TER). Correcting it moves Field Day's section domain, the TypeScript section mirror and the §8(a) goldens, which is its own change. Sweepstakes therefore declares its own domain from the sponsor's current list. CABRILLO: the tokens are ARRL-SS-CW and ARRL-SS-SSB and BOTH REGISTRIES AGREE for once — ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, \"updated 2026-03-22\", read 2026-09-09) lists ARRL-SS-CW = \"ARRL November Sweepstakes (CW)\" and ARRL-SS-SSB = \"ARRL November Sweepstakes (Phone)\" and carries no unsplit ARRL-SS; the WA7BNM master list the Cabrillo V3 specification points at (https://www.contestcalendar.com/cabnames.php, Revision Date February 23, 2026, read 2026-09-09) carries the same two strings at ids 177 and 178; and ARRL's OWN page https://www.arrl.org/cabrillo-format-tutorial (read 2026-09-09) prints complete worked headers containing the literal lines \"CONTEST: ARRL-SS-CW\" and \"CONTEST: ARRL-SS-SSB\". So cabrillo_contest_token passes both through unchanged, and the crossing guard covers them. QSO-LINE COLUMN ORDER: the rules PDF publishes none (\"ELOG.1. The official ARRL format for electronic logs is the Cabrillo format\"), but the same arrl.org tutorial page publishes a QSO DATA TEMPLATE for Sweepstakes with a lettered legend — \"E= Your call. F= Your QSO #. G= Your precedence. H= Your check … I= Your ARRL Section. J= The call of the station you worked. K= Their QSO number to you. L= Their precedence. M= Their check. N = Their ARRL Section.\" — over the sample line \"QSO: 14000 CW 2009-11-07 2100 W1AW 1 M 38 CT K8MM 1 Q 92 MI\". ⚠️ THE CALLSIGN IS THE STRUCTURAL COLUMN, FIRST OF EACH SIDE, AND THE EXCHANGE COLUMNS ARE SERIAL/PRECEDENCE/CHECK/SECTION WITH NO CALLSIGN AMONG THEM. The design sketch (§6.2) assumed the reverse and reserved the question for the batch that read the sponsor; the reading corrects it. PRECEDENCE: derived from the entry's declared category (contest_category_operator / _power / _assisted / _station), never typed, so the letter on every QSO line and the CATEGORY-* headers of the same entry are one fact; the power thresholds are the same PDF's Entry Categories table (\"Version 1.6 – 20 Sep 2023\"): QRP \"5 watts PEP output or less\", Low Power \"100 watts PEP output or less\", High Power \"1500 watts PEP output or the maximum allowable power level established by the national licensing authority\". An undeclared axis REFUSES the session with a sentence rather than defaulting — a default here is a category claim transmitted on every contact of a 24-hour contest. WINDOW: \"Contest Period: Begins 2100 UTC Saturday and runs through 0259 UTC Monday\" = start_hour_utc 21, duration_hours 30, month 11, nth_full weekend 1 (CW) and 3 (Phone). §1.1's 24-of-30-hour operating limit and §1.2's after-24-hours rule are NOT modelled: nothing in this build tracks off times, and a score that silently dropped contacts would be worse than one that does not know about the limit. UNESTABLISHED: whether ARRL's log robot validates the CONTEST token at all — the rules say only that electronic logs go to contest-log-submission.arrl.org, whose web form selects the contest.",
     "cqww_wpx": "CQ WW DX and CQ WPX ship as FOUR rulesets — cqww_cw, cqww_ssb, cqwpx_cw, cqwpx_ssb — written from the sponsors' own current pages, all read 2026-09-09: https://www.cqww.com/rules/ (\"The 2026 CQ World-Wide DX Contest\"), https://cqwpx.com/rules/ (\"2026 CQ World-Wide WPX Contest\"), https://cqwpx.com/rules_faq.htm, https://cqww.com/cabrillo.htm and https://cqwpx.com/cabrillo.htm. FOUR AND NOT SIX: the team brief listed CQ-WW-RTTY and CQ-WPX-RTTY as further mode arms of these contests and they are NOT. Each sponsor's own cabrillo.htm says \"The contest-name must be one of the following\" over exactly TWO names, and ADIF 3.1.7's own labels name the other two as somebody else's contests — CQ-WW-RTTY = \"CQ/RJ WW RTTY DX Contest\" and CQ-WPX-RTTY = \"CQ/RJ WW RTTY WPX Contest\" (CQ/RJ = CQ + RTTY Journal), which have their own rules, their own exchanges (the RTTY events add a US state / Canadian province to the exchange and count it as a multiplier) and their own multiplier sets. Shipping either token on these rulesets would file a log under a contest whose rules it was not scored by. TWO RULESETS PER CONTEST rather than one mode-split row, for the reason Sweepstakes needed: a WindowRule holds ONE weekend and each mode is a different weekend. EXCHANGE. CQ WW (§III): \"SSB: RS report plus CQ Zone number of the station transmitter location (e.g., 59 05). CW: RST report plus CQ Zone of the station transmitter location (e.g., 599 05).\" — so the ZN slot is a Number 1..40 sourced from the contest_cq_zone setting, exported under ADIF's CQZ / MY_CQ_ZONE (both \"PositiveInteger … in the range 1 to 40\", adif.org/317, read 2026-09-09). CQ WPX (§IV): \"RS(T) report plus a progressive contact serial number starting with 001 for the first contact.\" ⚠️ The same rule adds \"Multi-Two, Multi-Unlimited, and Multi-Distributed entrants use separate serial number sequences on each band\"; SerialScope::PerBand exists only to be REFUSED by name in this build, so these rulesets declare per_contest, which is right for every single-operator entry and wrong for those three multi categories. DUPE. CQ WW §IV.B \"Stations may be contacted once on each band.\"; CQ WPX §V.B \"A station may be worked once on each band for QSO point credit\". by_call true, by_band true, by_mode_class FALSE — each ruleset is a single-mode weekend, so a mode axis inside one log has nothing to separate. POINTS — the first contest in this build priced by the RELATION between the two stations, not by mode class. CQ WW §IV.B: \"Contacts between stations on different continents count three (3) points. Contacts between stations on the same continent but in different countries count one (1) point. Exception: Contacts between stations in different countries within the North American boundaries count two (2) points. Contacts between stations in the same country have zero (0) QSO point value, but count for zone and country multiplier credit.\" CQ WPX §V.B: \"1. Contacts between stations on different continents are worth three (3) points on 28, 21, and 14 MHz and six (6) points on 7, 3.5, and 1.8 MHz. 2. Contacts between stations on the same continent, but different countries, are worth one (1) point on 28, 21, and 14 MHz and two (2) points on 7, 3.5, and 1.8 MHz. Exception: For North American stations only—contacts between stations within the North American boundaries (both stations must be located in North America) are worth two (2) points on 28, 21, and 14 MHz and four (4) points on 7, 3.5, and 1.8 MHz. 3. Contacts between stations in the same country are worth 1 point regardless of band.\" ⚠️ ARM 3 IS THE ONE THE DESIGN SPEC'S §14 WAS MISSING, and it is where the two contests diverge on the SAME relation: CQ WW gives a same-country contact ZERO and CQ WPX gives it ONE. That is exactly why relation_points is a table in this file and not a function in the code. The loader refuses a relation_points table that names no same_country, same_continent or different_continent row, because a missing arm scores those contacts at zero silently — which is the defect §14 had. MULTIPLIERS. CQ WW §IV.C: \"There are two types of multipliers. Zone: A multiplier of one (1) for each different CQ Zone contacted on each band. The CQ Worked All Zones rules are the standard. Country: A multiplier of one (1) for each different country contacted on each band. The DXCC entity list, Worked All Europe (WAE) multiplier list plus IG9/IH9, and continental boundaries are the standards for defining country multipliers.\" — two INDEPENDENT per-band universes, one off the exchange (the zone) and one off the callsign (the entity), summed: \"the sum of zone and country multipliers\". CQ WPX §V.C: \"Each PREFIX is counted only once regardless of the band or number of times the same prefix is worked.\" — per_log, off the callsign. THE PREFIX RULE. §V.C.1 verbatim: \"A PREFIX is the letter/numeral combination which forms the first part of the amateur call. Examples: N8, W8, WD8, HG1, HG19, KC2, OE2, OE25, LY1000, etc. Any difference in the numbering, lettering, or order of same shall count as a separate prefix. In cases of portable operation, the portable designator will then become the prefix. The portable prefix must be an authorized prefix of the country/call area of operation. Portable designators without numbers will be assigned a zero (Ø) after the second letter of the portable designator to form the prefix. Example: PA/N8BJQ would become PAØ. All calls without numbers will be assigned a zero (Ø) after the first two letters to form the prefix. Example: XEFTJW would count as XEØ. Maritime mobile, mobile, /A, /E, /J, /P, or other license class identifiers do not count as prefixes.\" — plus the sponsor's own FAQ, which is where WHERE THE PREFIX ENDS is actually answered: \"The prefix includes everything up to the end of the first numbers in the call. … OL25LP = OL25 / DL60CHILD = DL60 / 9A800VZ = 9A800 / DR2006Q = DR2006 / LY1000CW = LY1000 / KL7RA/WK9 = WK9 / OE/K5ZD = OEØ\". ⚠️ \"the first numbers\" means the first digit run AFTER A LETTER, not the first digit: 9A800VZ is the sponsor's own counterexample (stopping at the leading 9 would give \"9\"), and 4U1ITU is the same shape and counts as 4U1. ⚠️ ONE ARM HAS NO SPONSOR WORKED EXAMPLE: a portable designator that is BARE DIGITS (W1AW/4). It is implemented as digit substitution on the base prefix (W1AW/4 = W4) from \"the portable designator will then become the prefix\" plus \"must be an authorized prefix of the country/call area of operation\" — a bare 4 is not an authorized prefix on its own. That reading is this build's, not the sponsor's. The whole rule is contest::callsign::wpx_prefix and every example above is a literal in its tests. CABRILLO. Tokens CQ-WW-CW / CQ-WW-SSB / CQ-WPX-CW / CQ-WPX-SSB, and for these four THE TWO REGISTRIES AGREE — verified separately, because a token confirmed in one says nothing about the other. ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, \"updated 2026-03-22\") carries all four; the WA7BNM master list (https://www.contestcalendar.com/cabnames.php, Revision Date February 23, 2026) carries the same four at ids 192, 172, 29 and 291; and both sponsors publish them directly with \"Be sure to use hyphens as shown. DO NOT PUT THE YEAR OR USE PH INSTEAD OF SSB.\" So cabrillo_contest_token gets NO arm for any of them and the token test pins all four. QSO LINE: both sponsors publish the same template, \"QSO: freq mo date time call rst exch call rst exch t\", with samples \"QSO: 3799 PH 2000-11-26 0711 N6TW 59 03 JT1Z 59 23 0\" (CQ WW) and \"QSO: 3799 PH 1999-03-06 0711 HC8N 59 001 W1AW 59 001 0\" (CQ WPX) — which is §6.2's structural shape exactly. TRANSMITTER COLUMN: \"Note for Column 81 (transmitter number): For the MULTI-ONE and MULTI-TWO categories, the last column in the log indicates which transmitter made the QSO. It must be a 0 or a 1. This column is not required for other categories.\" (WPX says the same for MULTI-TWO.) These four rulesets are the only ones that declare transmitter_column true; a single-position entry writes 0, which every sample line on both pages carries. ⚠️ A real MULTI-TWO entry's second transmitter must write 1 and this build has no second position to write it — the column is honest for one position and incomplete for two. WINDOWS. \"SSB: October 24-25  CW: November 28-29 / Starts 00:00:00 UTC Saturday  Ends 23:59:59 UTC Sunday\" (CQ WW) and \"SSB: March 28-29  CW: May 30-31 / Starts: 0000 UTC Saturday Ends: 2359 UTC Sunday\" (CQ WPX) — each the LAST FULL WEEKEND of its month, 0000Z Saturday, 48 hours. ⚠️ The WPX page prints \"SSB: March 28-29, 2025\" while its own log deadline says \"SSB logs no later than 2359 UTC 31 March 2026\": a sponsor typo in the year, and March 28-29 IS the last full weekend of March 2026. ⚠️ CQ WW's II and CQ WPX's III both restrict operation to six bands (1.8/3.5/7/14/21/28 MHz) and a ruleset has no band field, so that is not expressed; no score or dupe here depends on it, but a contact on 30 m would find no relation_points band row and score zero rather than being refused. ⚠️ CQ WPX's II (\"Single Operator stations may operate 36 of the 48 hours\") and CQ WW's off-time rules are not modelled — nothing in this build tracks off times, and a score that silently dropped contacts would be worse than one that does not know about the limit. WHAT IS DELIBERATELY NOT MODELLED. (1) \"Maritime mobile stations count only for a zone multiplier\" (CQ WW §IV.C). The country file places a /MM call by its home call, so a /MM contact counts a COUNTRY multiplier it should not — an over-count of one per distinct /MM entity worked, in a contest where a /MM contact is rare. The sponsor states no points rule for /MM at all, so the alternative (refusing to place a /MM call) would score its QSO points at zero, which is a bigger error in the other direction. (2) The MULTI-TWO transmitter id, above. (3) Overlay categories, off-time limits and the log-checking penalties, none of which a logger computes.",
     "cqww_rtty": "CQ WW RTTY ships as ONE ruleset, cqww_rtty, written from the sponsor's own pages, all read 2026-09-17: https://cqwwrtty.com/rules.htm (\"The 2026 CQ World Wide RTTY DX Contest\"), https://cqwwrtty.com/cabrillo.htm and https://cqwwrtty.com/locations.htm. It is NOT an arm of cqww_cw/cqww_ssb: ADIF 3.1.7 names CQ-WW-RTTY \"CQ/RJ WW RTTY DX Contest\", and it has its own exchange, its own point table and a third multiplier. WINDOW. \"The 2026 CQ World Wide RTTY DX Contest / September 26-27 / Starts 00:00:00 UTC Saturday -- Ends 23:59:59 UTC Sunday\". ⚠️ THE SPONSOR PUBLISHES DATES, NOT A RULE: last_full September reproduces 2026 and every date on the sponsor's own archived rules (\"September 24-25\" 2022, \"September 23-24\" 2023, \"September 28-29\" 2024, \"September 27-28\" 2025) — 2023 is the discriminating year, when September 30 was a Saturday whose Sunday fell in October. That reading is this build's, not the sponsor's; re-read each year. BANDS. II: \"Five bands only: 3.5, 7, 14, 21 and 28 MHz.\" — carried as the advisory `bands` list, which the entry strip reads to say the rig is on a band the contest does not use. No score or dupe reads it, and nothing is refused. EXCHANGE. III: \"RST report plus CQ zone number of the station location (e.g., 599 05). Stations in the continental USA and Canada also send QTH (e.g., 599 05 MA).\" ROLES: w_ve (my location is one of the 63 QTH codes) sends RST ZN QTH; dx (everyone else, the trailing always) sends RST ZN. Both RECEIVE RST ZN QTH, and QTH is required: false because a DX station sends none. ⚠️ Alaska and Hawaii are the dx role: IV.C.3 \"Note: Alaska (KL7) and Hawaii (KH6) are counted as country multipliers only and not as state multipliers\", and only \"continental USA and Canada\" send a QTH. ⚠️ A W/VE operator whose contest_qth_state is blank, an ARRL section (EMA) or a spelling the sponsor does not print lands in the dx role and sends no QTH — the role is selected on the sponsor's own codes, exactly as ohqp's is. When the station's own call is in the United States or Canada the session carries a WARNING, never a refusal (a US call operating from abroad, or maritime mobile, is legitimately DX), naming the listed code a section's name points at (EMA → MA; NL → NF or LB, between which it does not choose). LOCATION ALIASES (`location_aliases`): the two Canada Post spellings locations.htm itself prints for exchange codes — \"NT … Northwest Territories\" and \"PE … Prince Edward Island\" — are read as NWT and PEI when typed as the state. NL is not aliased: it is two call areas, NF (VO1) and LB (VO2). QTH VALUES. IV.C.3: \"W/VE QTH: A multiplier of one (1) for each continental US state (48), The District of Columbia and each Canadian call area (14) contacted on each band. Please use only official U.S. Postal Service abbreviations to identify states (e.g., Michigan = MI, Massachusetts = MA, Ohio = OH, The District of Columbia = DC). … Canadian call areas (14 total) are as follows: NB (VE9), NS (VE1), QC (VE2), ON (VE3), MB (VE4), SK (VE5), AB (VE6), BC (VE7), NWT (VE8), NF (VO1), LB (VO2), NU (VY0), YT (VY1), PEI (VY2).\" The 14 Canadian codes are the sponsor's own, verbatim and in its order. The sponsor names the AUTHORITY for the US codes and does not print them: the 49 here are USPS Publication 28 Appendix B \"Two–Letter State and Possession Abbreviations\" (https://pe.usps.com/text/pub28/28apb.htm, read 2026-09-17) minus Alaska, Hawaii and the possessions — 63 codes. The domain exports under NO ADIF column (rcvd and sent both \"\"): NWT, NF, LB and PEI are not ADIF STATE values, so the value rides the private carrier rather than writing a malformed STATE. POINTS. IV.B: \"Stations may be contacted once on each band. QSO points are based on the location of the station worked. Contacts between stations on different continents count three (3) points. Contacts between stations on the same continent but in different countries count two (2) points. Contacts between stations in the same country count one (1) point.\" — no North American exception (unlike CQ WW CW/SSB), so relation_points declares no within_north_america row and a W-to-VE contact falls back to same_continent: 2. MULTIPLIERS, all three per band. IV.A: \"The final score is the result of the total QSO points multiplied by the sum of zone, country and QTH multipliers.\" IV.C: \"Zone: A multiplier of one (1) for each different CQ zone contacted on each band. The CQ Worked All Zones rules are the standard. Country: A multiplier of one (1) for each different country contacted on each band. The DXCC entity list, Worked All Europe (WAE) multiplier list plus IG9/IH9, and continental boundaries are standards for defining country multipliers.\" — the country file's entities, WAE included (cty.dat's *-marked entities such as Sicily). ⚠️ READ AS WRITTEN: the rules name NO exclusion from the country multiplier, so the United States and Canada count as countries like any other DXCC entity — a W/VE contact counts its country as well as its QTH, and the KL7/KH6 note above reads the same way. That is the plain reading of IV.C, not a sponsor clarification (the rules FAQ link on rules.htm, cqwwrtty.com/rules_faq.htm, returned HTTP 404 on 2026-09-17). The QTH rule counts the QTH domain only, and excluding DX keeps the Cabrillo placeholder from ever reaching the bucket. DUPE. IV.B \"Stations may be contacted once on each band.\" — by_call and by_band; by_mode_class false (one mode). CABRILLO TOKEN. CQ-WW-RTTY, and all three registries agree, each read on its own: the sponsor (cabrillo.htm: \"The contest-name must be the following. CQ-WW-RTTY Be sure to use hyphens as shown.\"), ADIF 3.1.7's CONTEST_ID enumeration (https://adif.org/317/ADIF_317.htm, \"updated 2026-03-22\", read 2026-09-17: CQ-WW-RTTY \"CQ/RJ WW RTTY DX Contest\") and the WA7BNM master list (https://www.contestcalendar.com/cabnames.php, \"Revision Date: February 23, 2026\", read 2026-09-17: \"CQ Worldwide DX Contest, RTTY\" CQ-WW-RTTY), so cabrillo_contest_token gets no arm. QSO LINE (`cabrillo.columns`). cabrillo.htm: \"QSO: freq mo date time call rst Zn exch call rst Zn exch t\" over \"QSO: ***** ** yyyy-mm-dd nnnn ************* nnn ** **** ************* nnn ** **** n\", and \"CQ WW RTTY requires RST plus two exchange fields. One is for the CQ zone and the second is for the location. USA and Canada stations will have state or province. All others use 'DX' as a placeholder.\" So RST, ZN written two digits wide (the template's \"**\" and every sample's \"04\"/\"10\"), and QTH written as DX when blank — on BOTH sides, including the sent side of a dx-role row, whose role sends no QTH on the air (every sample line from HC8N reads \"599 10 DX\"). FREQUENCY. X.1: \"Stations competing for World and Continent awards must provide accurate frequencies for all contacts in the log.\" — the QSO line carries the dial the contact was logged on when the row knows it and it lies inside the row's band, and the band edge otherwise. HEADERS (`cabrillo.headers`). cabrillo.htm lists CATEGORY-ASSISTED (\"ASSISTED NON-ASSISTED\"), CATEGORY-MODE (\"must be the following. RTTY\"), CATEGORY-BAND (\"If you are entering an all band category, use ALL, otherwise select one of the individual bands shown.\"), CATEGORY-POWER (\"HIGH LOW QRP\"), CLAIMED-SCORE (\"(This field is optional.)\"), EMAIL (\"A place to put an email address where we can contact you if there is a question about your log.\") and NAME. Each is written only when it holds a value: ASSISTED and POWER are the entry's own declarations from Settings (read when the session starts, like CATEGORY-OPERATOR); MODE is read off the log's rows; CLAIMED-SCORE is the score the screen shows; NAME and EMAIL are the operator's own settings, read at export. CATEGORY-BAND is read off the log, and that is the sponsor's own classification: X.2 \"Logs with contacts only on one band will be classified as single band entries.\" and VI \"A log containing more than one band will be judged as an all-band entry unless specified as a single-band entry.\" A single-band entrant whose log also holds other bands must change that line by hand — a declaration this build cannot make. Not written: CATEGORY-TRANSMITTER, CATEGORY-STATION, CATEGORY-OVERLAY, CLUB, OPERATORS, ADDRESS, SOAPBOX. LOCATION (`cabrillo.location`). X.3: \"Note: USA and Canada stations must indicate the operating location in the CABRILLO header (e.g., LOCATION: OH); other stations indicate 'DX' (e.g., LOCATION: DX).\" locations.htm: \"Entries from within USA/Canada must enter a LOCATION abbreviation from the list below. Entries outside the USA/Canada enter DX.\" That list is NOT the exchange's QTH list: 58 of the 63 QTH codes appear in it verbatim, and five do not — it has \"MDC … Maryland District of Columbia\" and no DC, \"NL … Newfoundland and Labrador\" for the exchange's NF and LB, \"NT … Northwest Territories\" for NWT and \"PE … Prince Edward Island\" for PEI. The map carries exactly those five; a dx-role entry writes DX. TRANSMITTER COLUMN. cabrillo.htm: \"Note for the last column (transmitter number): For the MULTI-ONE and MULTI-TWO categories the last column in the log indicates which transmitter made the QSO. It must be a 0 or a 1. This column is not required for other categories.\" — true, 0 for a single position, as every sample line carries. ASSISTANCE. V.A.1 prohibits QSO finding assistance for Single Operator and V.A.2 allows it for Single Operator Assisted (and the multi-operator categories allow it), so the flags stay allowed (category-dependent, advisory only) as for cqww_cw. WHAT IS DELIBERATELY NOT MODELLED. (1) IX.10 \"Only 45.45 Baud. 170 Hz shift ITA2 mode is permitted.\" — an allow-list; banned_modes is a deny-list, so nothing is banned here rather than half the modes that are not RTTY. (2) IV.C \"Maritime mobile stations count only for a zone multiplier.\" (the /MM over-count cqww_wpx describes). (3) The overlay categories, off-time limits and log-checking penalties.",
-    "arrlvhf": "ARRL January / June / September VHF, all three runnings, written from the sponsor's own https://contests.arrl.org/ContestRules/JanJunSep-VHF-Rules.pdf, Version 1.2, ALL 14 PAGES extracted (29,345 characters), read 2026-09-09. ⚠️ THREE RULESETS, NOT ONE, AND THE POINT TABLE IS ONLY HALF THE REASON. (a) The points differ: §5.1 \"QSO points for January contest: … 5.1.3 Count four points for each 902- or 1296-MHz QSO. 5.1.4 Count eight points for each 2.3 GHz (or higher) QSO\" against §5.2 \"QSO points for June and September contests: … 5.2.3 Count three points for each 902- or 1296-MHz QSO. 5.2.4 Count four points for each 2.3 GHz (or higher) QSO\" — a 2× divergence on 2.3 GHz and up that no single band_points table can carry. (b) A WindowRule holds ONE month and these are January, June and September, so even the two runnings that SHARE a table cannot share a row. (c) The two registries each name three, independently verified 2026-09-09: ADIF 3.1.7's Contest_ID enumeration (https://adif.org/317/ADIF_317.htm, page states \"updated 2026-03-22\") gives ARRL-VHF-JAN = \"ARRL January VHF Sweepstakes\", ARRL-VHF-JUN = \"ARRL June VHF QSO Party\", ARRL-VHF-SEP = \"ARRL September VHF QSO Party\"; the WA7BNM master list (https://www.contestcalendar.com/cabnames.php, \"Revision Date: February 23, 2026\") gives the same three strings at ids 231, 43 and 113. The two registries AGREE, so cabrillo_contest_token gets no arm for any of them. EXCHANGE: §4.1 \"4-character Maidenhead grid-square locator (www.arrl.org/grid-squares)\", §4.2 \"A signal report is optional.\" The report is NOT modelled as a slot: the sponsor's own worked example on page 1 carries none (\"CQer: W9SZ EM48 / Answer: EN50\"), and a constant-sourced RST slot would put 599 on every line of a file the sponsor's example has no report in. GRID exports as GRIDSQUARE received / MY_GRIDSQUARE sent — both verified in the ADIF 3.1.7 field list on 2026-09-09 (\"the contacted station's … Maidenhead Grid Square\" / \"the logging station's … Maidenhead Grid Square\"), with GRID, MY_GRID and THEIR_GRIDSQUARE as absent negative controls. DUPE: page 1 \"Contact stations only once per band\" and §2.2 \"Stations may be contacted for contest credit once per band from any specific grid square\" — so by_band is true and by_mode_class is FALSE, the mode being no part of the sponsor's sentence. Both field lists name GRID, from the two halves of the rover rule: §2.2.1 \"Rover stations using the same call sign may be contacted from more than one grid square\" (the received half) and VCAT.5.1.4 \"If more than one contact on a given band is made between stations in a specific four-character grid locator, only one contact is counted for scoring purposes\" (which is symmetric in the two stations' grids, and is the sent half — a rover working the same station again after moving). MULTIPLIER: §5.3.1 \"The number of different grid squares contacted from each band. Each grid square counts as a multiplier on each band.\" → one rule, source the received GRID slot, scope per_band. SCORE: §5.4.1 \"Fixed stations: total QSO points from all bands times the total multipliers.\" → model \"none\", no power tiers, no post-multiplier. ⚠️ WHAT IS NOT MODELLED, and why score_note_key is empty anyway. §5.4.2 gives ROVERS a second multiplier term: \"total QSO points from all bands times the sum of unique grid squares worked per band (regardless of the grid square in which the contact was made) plus one additional multiplier for every grid square from which a contact was successfully completed.\" That term is a SENT-side multiplier (the grids I operated from), and MultSource has no sent-side arm and ScoreRow carries no tx vector — but adding one would not be enough, because the term belongs to a ROVER ENTRY and §5.4.1 gives a fixed station no such term, while MultiplierRule::roles filters on the exchange ROLE and this contest has exactly one. This build declares no rover category (contest_category_* carries operator/power/assisted/station, and only SCHOOL is read from the last), so §5.4.2 is unreachable rather than wrong: every entry this build can declare is scored by §5.4.1, which IS computed. A score note would therefore tell every fixed entrant their complete score is incomplete. The gap becomes real the moment a rover category is declarable, and that batch owns it. WINDOWS: §1.1 \"January: 1900 UTC Saturday through 0359 UTC Monday\", §1.2 \"June and September: 1800 UTC Saturday through 0259 UTC Monday\" — 33 hours from the anchor Saturday in each case, rounded up to the whole hour exactly as Sweepstakes' 30 is. ⚠️ JANUARY'S WEEKEND IS AMBIGUOUS IN THE RULES AND RESOLVED BY THE SPONSOR'S OWN CALENDAR. Page 1 says \"Third or fourth full weekend in January as announced\" and arrl.org/contest-calendar says \"The third or fourth weekend in January. See the current rules for this year's exact date.\" ARRL's contest calendar (https://contests.arrl.org/calendar.php, read 2026-09-09) announces Jan 17-19 (2026), Jan 16-18 (2027), Jan 15-17 (2028), Jan 20-22 (2029), Jan 19-21 (2030) and Jan 18-20 (2031) — every one of which is the THIRD full weekend, so nth_full 3 reproduces all six announced dates and no override is needed. If ARRL ever announces a fourth-weekend January, that year gets a window override; do not change the rule. June and September are unambiguous (\"Second full weekend\"), and the calendar's six announced dates for each are the second full weekend in every year. BANDS: the four band_points groups are the sponsor's own four rows mapped onto this build's band labels — 50 MHz = 6m, 144 MHz = 2m, 222 MHz = 1.25m, 432 MHz = 70cm, 902 MHz = 33cm, 1296 MHz = 23cm, and \"2.3 GHz (or higher)\" = 13cm, 9cm, 6cm, 3cm, which are every band above 2.3 GHz this build has a label for. ⚠️ A band no row names scores zero, which is right for an HF band and is also what a contact above 10 GHz would get: §2.1 permits \"any band above 50 MHz\" and STTN.5 contemplates operation above 300 GHz, so an entrant working 24 GHz would be scored short until this build has a label for that band. ASSISTANCE: spotting and cluster are BOTH allowed and this is the sponsor saying so rather than the dormant default — OPRG.8.1 \"All entrants, regardless of category, are permitted to use spotting assistance or nets including but not limited to DX-alerting nets, internet chat rooms, APRS and other packet, reverse beacon networks and repeaters to identify stations available for contacts and to announce their availability for contacts.\" CABRILLO: ARRL publishes NO CONTEST: token and NO QSO-line template for these contests. The rules say only ELOG.1 \"The official ARRL format for electronic logs is the Cabrillo format (wwrof.org/cabrillo)\", and ARRL's own Cabrillo Format & Tutorial page (https://www.arrl.org/cabrillo-format-tutorial, read 2026-09-09) carries zero occurrences of \"VHF\" — the only worked templates on it are Sweepstakes'. So the token is taken from the two registries above and the column order is the STRUCTURAL one §6.2 states (callsign column, then that side's exchange slots, per side), which for this exchange is one grid per side and nothing else. transmitter_column is false: nothing sponsor-side publishes such a column for these contests, and §3.3's multioperator categories are Unlimited and Limited — there is no two-transmitter category for ELOG.5 to apply to. ⚠️ STTN.4 IS THE VHF FORM OF THE COUNTY-LINE RULE AND IT IS WHY THE SENT GRID IS A PER-ROW FACT: \"A station located precisely on a dividing line between grid squares must select only one as the location for exchange purposes. A different grid-square location cannot be given without moving the complete station (including antennas) at least 100 meters.\" §6.3 forbids a FIXED station changing location at all; a rover is the category the move exists for, and every row keeps the grid it actually sent."
+    "arrlvhf": "ARRL January / June / September VHF, all three runnings, written from the sponsor's own https://contests.arrl.org/ContestRules/JanJunSep-VHF-Rules.pdf, Version 1.2, ALL 14 PAGES extracted (29,345 characters), read 2026-09-09. ⚠️ THREE RULESETS, NOT ONE, AND THE POINT TABLE IS ONLY HALF THE REASON. (a) The points differ: §5.1 \"QSO points for January contest: … 5.1.3 Count four points for each 902- or 1296-MHz QSO. 5.1.4 Count eight points for each 2.3 GHz (or higher) QSO\" against §5.2 \"QSO points for June and September contests: … 5.2.3 Count three points for each 902- or 1296-MHz QSO. 5.2.4 Count four points for each 2.3 GHz (or higher) QSO\" — a 2× divergence on 2.3 GHz and up that no single band_points table can carry. (b) A WindowRule holds ONE month and these are January, June and September, so even the two runnings that SHARE a table cannot share a row. (c) The two registries each name three, independently verified 2026-09-09: ADIF 3.1.7's Contest_ID enumeration (https://adif.org/317/ADIF_317.htm, page states \"updated 2026-03-22\") gives ARRL-VHF-JAN = \"ARRL January VHF Sweepstakes\", ARRL-VHF-JUN = \"ARRL June VHF QSO Party\", ARRL-VHF-SEP = \"ARRL September VHF QSO Party\"; the WA7BNM master list (https://www.contestcalendar.com/cabnames.php, \"Revision Date: February 23, 2026\") gives the same three strings at ids 231, 43 and 113. The two registries AGREE, so cabrillo_contest_token gets no arm for any of them. EXCHANGE: §4.1 \"4-character Maidenhead grid-square locator (www.arrl.org/grid-squares)\", §4.2 \"A signal report is optional.\" The report is NOT modelled as a slot: the sponsor's own worked example on page 1 carries none (\"CQer: W9SZ EM48 / Answer: EN50\"), and a constant-sourced RST slot would put 599 on every line of a file the sponsor's example has no report in. GRID exports as GRIDSQUARE received / MY_GRIDSQUARE sent — both verified in the ADIF 3.1.7 field list on 2026-09-09 (\"the contacted station's … Maidenhead Grid Square\" / \"the logging station's … Maidenhead Grid Square\"), with GRID, MY_GRID and THEIR_GRIDSQUARE as absent negative controls. DUPE: page 1 \"Contact stations only once per band\" and §2.2 \"Stations may be contacted for contest credit once per band from any specific grid square\" — so by_band is true and by_mode_class is FALSE, the mode being no part of the sponsor's sentence. Both field lists name GRID, from the two halves of the rover rule: §2.2.1 \"Rover stations using the same call sign may be contacted from more than one grid square\" (the received half) and VCAT.5.1.4 \"If more than one contact on a given band is made between stations in a specific four-character grid locator, only one contact is counted for scoring purposes\" (which is symmetric in the two stations' grids, and is the sent half — a rover working the same station again after moving). MULTIPLIER: §5.3.1 \"The number of different grid squares contacted from each band. Each grid square counts as a multiplier on each band.\" → one rule, source the received GRID slot, scope per_band. SCORE: §5.4.1 \"Fixed stations: total QSO points from all bands times the total multipliers.\" → model \"none\", no power tiers, no post-multiplier. ⚠️ WHAT IS NOT MODELLED, and why score_note_key is empty anyway. §5.4.2 gives ROVERS a second multiplier term: \"total QSO points from all bands times the sum of unique grid squares worked per band (regardless of the grid square in which the contact was made) plus one additional multiplier for every grid square from which a contact was successfully completed.\" That term is a SENT-side multiplier (the grids I operated from), and MultSource has no sent-side arm and ScoreRow carries no tx vector — but adding one would not be enough, because the term belongs to a ROVER ENTRY and §5.4.1 gives a fixed station no such term, while MultiplierRule::roles filters on the exchange ROLE and this contest has exactly one. This build declares no rover category (contest_category_* carries operator/power/assisted/station, and only SCHOOL is read from the last), so §5.4.2 is unreachable rather than wrong: every entry this build can declare is scored by §5.4.1, which IS computed. A score note would therefore tell every fixed entrant their complete score is incomplete. The gap becomes real the moment a rover category is declarable, and that batch owns it. WINDOWS: §1.1 \"January: 1900 UTC Saturday through 0359 UTC Monday\", §1.2 \"June and September: 1800 UTC Saturday through 0259 UTC Monday\" — 33 hours from the anchor Saturday in each case, rounded up to the whole hour exactly as Sweepstakes' 30 is. ⚠️ JANUARY'S WEEKEND IS AMBIGUOUS IN THE RULES AND RESOLVED BY THE SPONSOR'S OWN CALENDAR. Page 1 says \"Third or fourth full weekend in January as announced\" and arrl.org/contest-calendar says \"The third or fourth weekend in January. See the current rules for this year's exact date.\" ARRL's contest calendar (https://contests.arrl.org/calendar.php, read 2026-09-09) announces Jan 17-19 (2026), Jan 16-18 (2027), Jan 15-17 (2028), Jan 20-22 (2029), Jan 19-21 (2030) and Jan 18-20 (2031) — every one of which is the THIRD full weekend, so nth_full 3 reproduces all six announced dates and no override is needed. If ARRL ever announces a fourth-weekend January, that year gets a window override; do not change the rule. June and September are unambiguous (\"Second full weekend\"), and the calendar's six announced dates for each are the second full weekend in every year. BANDS: the four band_points groups are the sponsor's own four rows mapped onto this build's band labels — 50 MHz = 6m, 144 MHz = 2m, 222 MHz = 1.25m, 432 MHz = 70cm, 902 MHz = 33cm, 1296 MHz = 23cm, and \"2.3 GHz (or higher)\" = 13cm, 9cm, 6cm, 3cm, which are every band above 2.3 GHz this build has a label for. ⚠️ A band no row names scores zero, which is right for an HF band and is also what a contact above 10 GHz would get: §2.1 permits \"any band above 50 MHz\" and STTN.5 contemplates operation above 300 GHz, so an entrant working 24 GHz would be scored short until this build has a label for that band. ASSISTANCE: spotting and cluster are BOTH allowed and this is the sponsor saying so rather than the dormant default — OPRG.8.1 \"All entrants, regardless of category, are permitted to use spotting assistance or nets including but not limited to DX-alerting nets, internet chat rooms, APRS and other packet, reverse beacon networks and repeaters to identify stations available for contacts and to announce their availability for contacts.\" CABRILLO: ARRL publishes NO CONTEST: token and NO QSO-line template for these contests. The rules say only ELOG.1 \"The official ARRL format for electronic logs is the Cabrillo format (wwrof.org/cabrillo)\", and ARRL's own Cabrillo Format & Tutorial page (https://www.arrl.org/cabrillo-format-tutorial, read 2026-09-09) carries zero occurrences of \"VHF\" — the only worked templates on it are Sweepstakes'. So the token is taken from the two registries above and the column order is the STRUCTURAL one §6.2 states (callsign column, then that side's exchange slots, per side), which for this exchange is one grid per side and nothing else. transmitter_column is false: nothing sponsor-side publishes such a column for these contests, and §3.3's multioperator categories are Unlimited and Limited — there is no two-transmitter category for ELOG.5 to apply to. ⚠️ STTN.4 IS THE VHF FORM OF THE COUNTY-LINE RULE AND IT IS WHY THE SENT GRID IS A PER-ROW FACT: \"A station located precisely on a dividing line between grid squares must select only one as the location for exchange purposes. A different grid-square location cannot be given without moving the complete station (including antennas) at least 100 meters.\" §6.3 forbids a FIXED station changing location at all; a rover is the category the move exists for, and every row keeps the grid it actually sent.",
+    "ilqp": "The Illinois QSO Party ships as ONE ruleset, ilqp, written from the sponsoring club's own pages, all read 2026-09-17: https://w9awe.org/ilqp/ (the Western Illinois Amateur Radio Club), its rules PDF \"Announcing the 2025 Illinois QSO Party\", its ILQP COUNTIES CHART PDF (footed \"N9CDX 10-18-2014\"), its Sample_Excel_Log workbook and its county/state/province/country score-records PDF (\"updated 2025\"). WINDOW. The sponsor publishes a DATE for the running -- \"Date/Time: 1700 UTC October 19, 2025 to 0100 UTC October 20, 2025\" -- and its own page states the rule those dates follow: Sunday of the third full weekend of October, eight hours. Carried as month 10, nth_full n=3, start_hour_utc 41 (Saturday + 41 h = Sunday 1700Z), duration 8. That reading reproduces every year the sponsor's records list; it is still this build's reading of a rule the sponsor states in prose, so re-read it each year. ⚠️ THE 2026 DATES ARE NOT PUBLISHED YET and neither is a 2026 LOG DEADLINE: 2025's was midnight Central November 5, and the contest-calendar entry that says November 19 disagrees with the sponsor. The deadline is therefore UNDEFINED here rather than guessed, and nothing in this build reads one. BANDS. \"Bands: 160 through 2 meters, excluding WARC bands (60, 30, 17 and 12 meters)\" -- carried as the advisory `bands` list (160, 80, 40, 20, 15, 10, 6 and 2 m). Nothing scores or dupes off it. EXCHANGE. \"Exchange: IL stations give RS/T and county; others give RS/T and state, province or country\". ⭐ THE LAST WORD IS THE DIVERGENCE FROM EVERY OTHER PARTY THIS BUILD SHIPS: a DX entrant sends their COUNTRY, where OhQP's sends the literal \"DX\". That is why the QTH slot is sourced `derived:my_location_or_typed` rather than `derived:my_location`, and why its third arm is free text -- the sponsor publishes no country list. POINTS and DUPES. \"Scoring: Phone QSO: 1 point; CW/digital QSO 2 points. No repeater QSOs. ... Stations may be worked once per band and mode (phone and CW/digital) and once per band/mode/county for IL Mobile and Rover stations.\" ⚠️ The parenthesis is two modes where this build counts three, so the dupe rule carries mode_class_groups [[\"CW\", \"DIG\"]]: CW then RTTY with the same station on one band is a DUPE here and two contacts everywhere else. The county half is by_fields/by_sent_fields QTH, the same shape the other parties use for their mobile rule. ⚠️ \"Contacts with/by stations at the border of 2/3/4 counties count as 2/3/4 counties and 2/3/4 QSOs\" is an OPERATOR action, not a computed one: the operator logs the contact once per county and the county-keyed dupe rule admits each. Nothing in this build multiplies a single row. \"No repeater QSOs\" is likewise not enforced. MULTIPLIERS. \"IL stations multiply points by the sum of IL counties, US states, VE provinces and DXCC countries (maximum 5) worked. Canada, KH6 and KL7 do not count as DX entities. Additional DX contacts count for points but not multipliers. Non-IL stations multiply points by the number of IL counties worked.\" Carried as three rules, all per_log: county (il_counties, every role), mult (il_mults, in_state only) and dxcc (DxccEntity, in_state only, cap 5). The cap is the reason MultiplierRule grew a `cap` field. The four excluded entity strings are cty.dat's own spellings (United States / Canada / Alaska / Hawaii), the same four TNQP and TXQP already exclude. BONUS STATIONS. \"NEW FOR 2025: BONUS STATIONS!! The sponsoring club of ILQP is the Western Illinois ARC, which is authorized to use two callsigns: W9AWE (the historical call) and W9OAB (the call of a long-time member and benefactor). Both of these calls will be used during the 2025 event, and any entrant contacting these stations will have a 100 point bonus added to the final score. Total of 200 points possible. W9AWE will be primarily CW, W9OAB will be primarily phone.\" ⚠️ These are EARNED from the log, not ticked on a menu, so they are `bonus_stations` rather than `bonuses` and they are in the score on screen and in the Cabrillo CLAIMED-SCORE. ILQP therefore carries NO score_note_key: unlike TNQP and TXQP, nothing this sponsor adds to the score is missing from the number. COUNTIES. il_counties is the sponsor's own chart, PARSED and counted rather than read off a stated total: 102 codes, which is exactly Illinois' county count, with one THREE-letter code (LEE) among 101 four-letter ones. The names are the chart's own spellings, including \"JoDaviess\" closed up and \"St. Clair\" with the period. STATES AND PROVINCES. ⚠️ THE SPONSOR PUBLISHES NO EXCHANGE CODE LIST for the other half of the exchange; what it publishes is a records table, and the codes IN it are the evidence: 49 US states (Illinois absent, as it must be) plus DC, and AB BC LAB MB NB NF NS NU ON PEI QC SK YT for Canada. il_mults carries those, plus NT (Northwest Territories, absent from the records only because nobody has ever submitted from there) and NL and PE (the modern Canada Post codes many loggers send for Newfoundland-and-Labrador and Prince Edward Island, beside the sponsor's own NF/LAB/PEI). A VE station sending either spelling therefore counts; a spelling nobody sends costs nothing. CABRILLO. ⚠️ THREE REGISTRIES DISAGREE about the CONTEST token: ADIF 3.1.7 enumerates \"IL QSO Party\" (spaces and mixed case, an outlier among its hyphenated neighbours), WA7BNM's master list carries \"IL-QSO-PARTY\", and the sponsor's own Sample_Excel_Log writes \"CONTEST: ILLINOIS QSO PARTY\". The contest is judged by its sponsor from an emailed file, so the file carries the SPONSOR's spelling and the ADIF export carries ADIF's. The sample log's header block also carries IL-COUNTY (\"IL-COUNTY: ADAMS\" -- the county's NAME, beside QSO lines carrying its four-letter code), which this build writes for an Illinois entry, and ENTRY-CLASS, QRP-COMPETITION, CLUB, OPERATORS, ADDRESS* and SOAPBOX, which it does NOT: nothing in Nexus can source them, and a header nobody set is a claim nobody made. Its QSO line is the structural one (freq mo date time, then each side's call RST county), so no column template is needed. ASSISTANCE. \"Spotting: Spotting of stations worked, especially mobile and rover stations, is encouraged. All categories of entrants are allowed to self-spot.\" -- spotting and cluster both allowed, with no note. DIGITAL. \"Note on digital modes: NEW....NOTE!! Due to the complexity of creating a log entry conforming to ILQP log submission rules, FT4 and FT8 contacts will receive no contact credit. Other digital modes are encouraged.\" -- banned_modes FT8 and FT4, which is advisory (the strip warns; nothing is refused or removed)."
   },
   "rulesets": [
     {
@@ -3659,6 +3660,988 @@
       "enforcement": "warn",
       "objectives": [],
       "score_note_key": "settings.contestScore.incomplete"
+    },
+    {
+      "event": "ilqp",
+      "rules_year": 2026,
+      "contest_id": "IL QSO Party",
+      "window": {
+        "month": 10,
+        "weekend": "nth_full",
+        "n": 3,
+        "start_hour_utc": 41,
+        "duration_hours": 8,
+        "overrides": {}
+      },
+      "scoring": {
+        "model": "none",
+        "points_by_mode_class": {
+          "PH": 1,
+          "CW": 2,
+          "DIG": 2
+        },
+        "power_tiers": [],
+        "multipliers": [
+          {
+            "id": "county",
+            "source": {
+              "type": "field",
+              "key": "QTH",
+              "domain": "il_counties"
+            },
+            "scope": "per_log",
+            "excluding": [],
+            "roles": []
+          },
+          {
+            "id": "mult",
+            "source": {
+              "type": "field",
+              "key": "QTH",
+              "domain": "il_mults"
+            },
+            "scope": "per_log",
+            "excluding": [],
+            "roles": [
+              "in_state"
+            ]
+          },
+          {
+            "id": "dxcc",
+            "source": {
+              "type": "dxcc_entity"
+            },
+            "scope": "per_log",
+            "excluding": [
+              "United States",
+              "Canada",
+              "Alaska",
+              "Hawaii"
+            ],
+            "roles": [
+              "in_state"
+            ],
+            "cap": 5
+          }
+        ],
+        "relation_points": [],
+        "band_points": []
+      },
+      "transmitter_column": false,
+      "dupe": {
+        "by_call": true,
+        "by_band": true,
+        "by_mode_class": true,
+        "by_fields": [
+          "QTH"
+        ],
+        "by_sent_fields": [
+          "QTH"
+        ],
+        "mode_class_groups": [
+          [
+            "CW",
+            "DIG"
+          ]
+        ]
+      },
+      "domains": [
+        {
+          "id": "il_counties",
+          "adif": {
+            "rcvd": "",
+            "sent": ""
+          },
+          "values": [
+            {
+              "code": "ADAM",
+              "label": "Adams"
+            },
+            {
+              "code": "ALEX",
+              "label": "Alexander"
+            },
+            {
+              "code": "BOND",
+              "label": "Bond"
+            },
+            {
+              "code": "BOON",
+              "label": "Boone"
+            },
+            {
+              "code": "BROW",
+              "label": "Brown"
+            },
+            {
+              "code": "BURO",
+              "label": "Bureau"
+            },
+            {
+              "code": "CALH",
+              "label": "Calhoun"
+            },
+            {
+              "code": "CARR",
+              "label": "Carroll"
+            },
+            {
+              "code": "CASS",
+              "label": "Cass"
+            },
+            {
+              "code": "CHAM",
+              "label": "Champaign"
+            },
+            {
+              "code": "CHRS",
+              "label": "Christian"
+            },
+            {
+              "code": "CLRK",
+              "label": "Clark"
+            },
+            {
+              "code": "CLAY",
+              "label": "Clay"
+            },
+            {
+              "code": "CLNT",
+              "label": "Clinton"
+            },
+            {
+              "code": "COLE",
+              "label": "Coles"
+            },
+            {
+              "code": "COOK",
+              "label": "Cook"
+            },
+            {
+              "code": "CRAW",
+              "label": "Crawford"
+            },
+            {
+              "code": "CUMB",
+              "label": "Cumberland"
+            },
+            {
+              "code": "DEKA",
+              "label": "DeKalb"
+            },
+            {
+              "code": "DEWT",
+              "label": "DeWitt"
+            },
+            {
+              "code": "DOUG",
+              "label": "Douglas"
+            },
+            {
+              "code": "DUPG",
+              "label": "DuPage"
+            },
+            {
+              "code": "EDGR",
+              "label": "Edgar"
+            },
+            {
+              "code": "EDWA",
+              "label": "Edwards"
+            },
+            {
+              "code": "EFFG",
+              "label": "Effingham"
+            },
+            {
+              "code": "FAYE",
+              "label": "Fayette"
+            },
+            {
+              "code": "FORD",
+              "label": "Ford"
+            },
+            {
+              "code": "FRNK",
+              "label": "Franklin"
+            },
+            {
+              "code": "FULT",
+              "label": "Fulton"
+            },
+            {
+              "code": "GALL",
+              "label": "Gallatin"
+            },
+            {
+              "code": "GREE",
+              "label": "Greene"
+            },
+            {
+              "code": "GRUN",
+              "label": "Grundy"
+            },
+            {
+              "code": "HAML",
+              "label": "Hamilton"
+            },
+            {
+              "code": "HANC",
+              "label": "Hancock"
+            },
+            {
+              "code": "HARD",
+              "label": "Hardin"
+            },
+            {
+              "code": "HNDR",
+              "label": "Henderson"
+            },
+            {
+              "code": "HENR",
+              "label": "Henry"
+            },
+            {
+              "code": "IROQ",
+              "label": "Iroquois"
+            },
+            {
+              "code": "JACK",
+              "label": "Jackson"
+            },
+            {
+              "code": "JASP",
+              "label": "Jasper"
+            },
+            {
+              "code": "JEFF",
+              "label": "Jefferson"
+            },
+            {
+              "code": "JERS",
+              "label": "Jersey"
+            },
+            {
+              "code": "JODA",
+              "label": "JoDaviess"
+            },
+            {
+              "code": "JOHN",
+              "label": "Johnson"
+            },
+            {
+              "code": "KANE",
+              "label": "Kane"
+            },
+            {
+              "code": "KANK",
+              "label": "Kankakee"
+            },
+            {
+              "code": "KEND",
+              "label": "Kendall"
+            },
+            {
+              "code": "KNOX",
+              "label": "Knox"
+            },
+            {
+              "code": "LAKE",
+              "label": "Lake"
+            },
+            {
+              "code": "LASA",
+              "label": "LaSalle"
+            },
+            {
+              "code": "LAWR",
+              "label": "Lawrence"
+            },
+            {
+              "code": "LEE",
+              "label": "Lee"
+            },
+            {
+              "code": "LIVG",
+              "label": "Livingston"
+            },
+            {
+              "code": "LOGN",
+              "label": "Logan"
+            },
+            {
+              "code": "MACN",
+              "label": "Macon"
+            },
+            {
+              "code": "MCPN",
+              "label": "Macoupin"
+            },
+            {
+              "code": "MADN",
+              "label": "Madison"
+            },
+            {
+              "code": "MARI",
+              "label": "Marion"
+            },
+            {
+              "code": "MSHL",
+              "label": "Marshall"
+            },
+            {
+              "code": "MASN",
+              "label": "Mason"
+            },
+            {
+              "code": "MSSC",
+              "label": "Massac"
+            },
+            {
+              "code": "MCDN",
+              "label": "McDonough"
+            },
+            {
+              "code": "MCHE",
+              "label": "McHenry"
+            },
+            {
+              "code": "MCLN",
+              "label": "McLean"
+            },
+            {
+              "code": "MNRD",
+              "label": "Menard"
+            },
+            {
+              "code": "MRCR",
+              "label": "Mercer"
+            },
+            {
+              "code": "MNRO",
+              "label": "Monroe"
+            },
+            {
+              "code": "MNTG",
+              "label": "Montgomery"
+            },
+            {
+              "code": "MORG",
+              "label": "Morgan"
+            },
+            {
+              "code": "MOUL",
+              "label": "Moultrie"
+            },
+            {
+              "code": "OGLE",
+              "label": "Ogle"
+            },
+            {
+              "code": "PEOR",
+              "label": "Peoria"
+            },
+            {
+              "code": "PERR",
+              "label": "Perry"
+            },
+            {
+              "code": "PIAT",
+              "label": "Piatt"
+            },
+            {
+              "code": "PIKE",
+              "label": "Pike"
+            },
+            {
+              "code": "POPE",
+              "label": "Pope"
+            },
+            {
+              "code": "PULA",
+              "label": "Pulaski"
+            },
+            {
+              "code": "PUTN",
+              "label": "Putnam"
+            },
+            {
+              "code": "RAND",
+              "label": "Randolph"
+            },
+            {
+              "code": "RICH",
+              "label": "Richland"
+            },
+            {
+              "code": "ROCK",
+              "label": "Rock Island"
+            },
+            {
+              "code": "SALI",
+              "label": "Saline"
+            },
+            {
+              "code": "SANG",
+              "label": "Sangamon"
+            },
+            {
+              "code": "SCHY",
+              "label": "Schuyler"
+            },
+            {
+              "code": "SCOT",
+              "label": "Scott"
+            },
+            {
+              "code": "SHEL",
+              "label": "Shelby"
+            },
+            {
+              "code": "STAR",
+              "label": "Stark"
+            },
+            {
+              "code": "SCLA",
+              "label": "St. Clair"
+            },
+            {
+              "code": "STEP",
+              "label": "Stephenson"
+            },
+            {
+              "code": "TAZW",
+              "label": "Tazewell"
+            },
+            {
+              "code": "UNIO",
+              "label": "Union"
+            },
+            {
+              "code": "VERM",
+              "label": "Vermilion"
+            },
+            {
+              "code": "WABA",
+              "label": "Wabash"
+            },
+            {
+              "code": "WARR",
+              "label": "Warren"
+            },
+            {
+              "code": "WASH",
+              "label": "Washington"
+            },
+            {
+              "code": "WAYN",
+              "label": "Wayne"
+            },
+            {
+              "code": "WHIT",
+              "label": "White"
+            },
+            {
+              "code": "WTSD",
+              "label": "Whiteside"
+            },
+            {
+              "code": "WILL",
+              "label": "Will"
+            },
+            {
+              "code": "WMSN",
+              "label": "Williamson"
+            },
+            {
+              "code": "WBGO",
+              "label": "Winnebago"
+            },
+            {
+              "code": "WOOD",
+              "label": "Woodford"
+            }
+          ]
+        },
+        {
+          "id": "il_mults",
+          "adif": {
+            "rcvd": "",
+            "sent": ""
+          },
+          "values": [
+            {
+              "code": "AL",
+              "label": "Alabama"
+            },
+            {
+              "code": "AK",
+              "label": "Alaska"
+            },
+            {
+              "code": "AZ",
+              "label": "Arizona"
+            },
+            {
+              "code": "AR",
+              "label": "Arkansas"
+            },
+            {
+              "code": "CA",
+              "label": "California"
+            },
+            {
+              "code": "CO",
+              "label": "Colorado"
+            },
+            {
+              "code": "CT",
+              "label": "Connecticut"
+            },
+            {
+              "code": "DC",
+              "label": "District of Columbia"
+            },
+            {
+              "code": "DE",
+              "label": "Delaware"
+            },
+            {
+              "code": "FL",
+              "label": "Florida"
+            },
+            {
+              "code": "GA",
+              "label": "Georgia"
+            },
+            {
+              "code": "HI",
+              "label": "Hawaii"
+            },
+            {
+              "code": "ID",
+              "label": "Idaho"
+            },
+            {
+              "code": "IN",
+              "label": "Indiana"
+            },
+            {
+              "code": "IA",
+              "label": "Iowa"
+            },
+            {
+              "code": "KS",
+              "label": "Kansas"
+            },
+            {
+              "code": "KY",
+              "label": "Kentucky"
+            },
+            {
+              "code": "LA",
+              "label": "Louisiana"
+            },
+            {
+              "code": "ME",
+              "label": "Maine"
+            },
+            {
+              "code": "MD",
+              "label": "Maryland"
+            },
+            {
+              "code": "MA",
+              "label": "Massachusetts"
+            },
+            {
+              "code": "MI",
+              "label": "Michigan"
+            },
+            {
+              "code": "MN",
+              "label": "Minnesota"
+            },
+            {
+              "code": "MS",
+              "label": "Mississippi"
+            },
+            {
+              "code": "MO",
+              "label": "Missouri"
+            },
+            {
+              "code": "MT",
+              "label": "Montana"
+            },
+            {
+              "code": "NE",
+              "label": "Nebraska"
+            },
+            {
+              "code": "NV",
+              "label": "Nevada"
+            },
+            {
+              "code": "NH",
+              "label": "New Hampshire"
+            },
+            {
+              "code": "NJ",
+              "label": "New Jersey"
+            },
+            {
+              "code": "NM",
+              "label": "New Mexico"
+            },
+            {
+              "code": "NY",
+              "label": "New York"
+            },
+            {
+              "code": "NC",
+              "label": "North Carolina"
+            },
+            {
+              "code": "ND",
+              "label": "North Dakota"
+            },
+            {
+              "code": "OH",
+              "label": "Ohio"
+            },
+            {
+              "code": "OK",
+              "label": "Oklahoma"
+            },
+            {
+              "code": "OR",
+              "label": "Oregon"
+            },
+            {
+              "code": "PA",
+              "label": "Pennsylvania"
+            },
+            {
+              "code": "RI",
+              "label": "Rhode Island"
+            },
+            {
+              "code": "SC",
+              "label": "South Carolina"
+            },
+            {
+              "code": "SD",
+              "label": "South Dakota"
+            },
+            {
+              "code": "TN",
+              "label": "Tennessee"
+            },
+            {
+              "code": "TX",
+              "label": "Texas"
+            },
+            {
+              "code": "UT",
+              "label": "Utah"
+            },
+            {
+              "code": "VT",
+              "label": "Vermont"
+            },
+            {
+              "code": "VA",
+              "label": "Virginia"
+            },
+            {
+              "code": "WA",
+              "label": "Washington"
+            },
+            {
+              "code": "WV",
+              "label": "West Virginia"
+            },
+            {
+              "code": "WI",
+              "label": "Wisconsin"
+            },
+            {
+              "code": "WY",
+              "label": "Wyoming"
+            },
+            {
+              "code": "NL",
+              "label": "Newfoundland and Labrador"
+            },
+            {
+              "code": "NF",
+              "label": "Newfoundland"
+            },
+            {
+              "code": "LAB",
+              "label": "Labrador"
+            },
+            {
+              "code": "PE",
+              "label": "Prince Edward Island"
+            },
+            {
+              "code": "PEI",
+              "label": "Prince Edward Island"
+            },
+            {
+              "code": "NS",
+              "label": "Nova Scotia"
+            },
+            {
+              "code": "NB",
+              "label": "New Brunswick"
+            },
+            {
+              "code": "QC",
+              "label": "Quebec"
+            },
+            {
+              "code": "ON",
+              "label": "Ontario"
+            },
+            {
+              "code": "MB",
+              "label": "Manitoba"
+            },
+            {
+              "code": "SK",
+              "label": "Saskatchewan"
+            },
+            {
+              "code": "AB",
+              "label": "Alberta"
+            },
+            {
+              "code": "BC",
+              "label": "British Columbia"
+            },
+            {
+              "code": "NT",
+              "label": "Northwest Territories"
+            },
+            {
+              "code": "NU",
+              "label": "Nunavut"
+            },
+            {
+              "code": "YT",
+              "label": "Yukon"
+            }
+          ]
+        }
+      ],
+      "exchange": {
+        "name": "ilqp",
+        "fields": [
+          {
+            "key": "RST",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "RST_RCVD",
+              "sent": "RST_SENT"
+            },
+            "source": "constant",
+            "kind": {
+              "type": "rst",
+              "digits": 3
+            }
+          },
+          {
+            "key": "QTH",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "source": "derived:my_location_or_typed",
+            "kind": {
+              "type": "one_of",
+              "of": [
+                {
+                  "type": "enum",
+                  "domain": "il_counties"
+                },
+                {
+                  "type": "enum",
+                  "domain": "il_mults"
+                },
+                {
+                  "type": "text",
+                  "max_len": 16
+                }
+              ]
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "in_state",
+            "selector": {
+              "type": "my_location_in",
+              "locations": [
+                "IL"
+              ]
+            },
+            "sends": [
+              "RST",
+              "QTH"
+            ],
+            "receives": [
+              "RST",
+              "QTH"
+            ],
+            "constant_sent": []
+          },
+          {
+            "id": "w_ve",
+            "selector": {
+              "type": "my_location_in",
+              "locations": [
+                "AL",
+                "AK",
+                "AZ",
+                "AR",
+                "CA",
+                "CO",
+                "CT",
+                "DC",
+                "DE",
+                "FL",
+                "GA",
+                "HI",
+                "ID",
+                "IN",
+                "IA",
+                "KS",
+                "KY",
+                "LA",
+                "ME",
+                "MD",
+                "MA",
+                "MI",
+                "MN",
+                "MS",
+                "MO",
+                "MT",
+                "NE",
+                "NV",
+                "NH",
+                "NJ",
+                "NM",
+                "NY",
+                "NC",
+                "ND",
+                "OH",
+                "OK",
+                "OR",
+                "PA",
+                "RI",
+                "SC",
+                "SD",
+                "TN",
+                "TX",
+                "UT",
+                "VT",
+                "VA",
+                "WA",
+                "WV",
+                "WI",
+                "WY",
+                "NL",
+                "NF",
+                "LAB",
+                "PE",
+                "PEI",
+                "NS",
+                "NB",
+                "QC",
+                "ON",
+                "MB",
+                "SK",
+                "AB",
+                "BC",
+                "NT",
+                "NU",
+                "YT"
+              ]
+            },
+            "sends": [
+              "RST",
+              "QTH"
+            ],
+            "receives": [
+              "RST",
+              "QTH"
+            ],
+            "constant_sent": []
+          },
+          {
+            "id": "dx",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "RST",
+              "QTH"
+            ],
+            "receives": [
+              "RST",
+              "QTH"
+            ],
+            "constant_sent": []
+          }
+        ]
+      },
+      "bonuses": [],
+      "bonus_stations": [
+        {
+          "call": "W9AWE",
+          "points": 100
+        },
+        {
+          "call": "W9OAB",
+          "points": 100
+        }
+      ],
+      "banned_modes": [
+        "FT8",
+        "FT4"
+      ],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": [],
+      "cabrillo": {
+        "headers": [
+          "CLAIMED-SCORE",
+          "EMAIL",
+          "IL-COUNTY",
+          "NAME"
+        ]
+      },
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ]
     },
     {
       "event": "arrlss_cw",

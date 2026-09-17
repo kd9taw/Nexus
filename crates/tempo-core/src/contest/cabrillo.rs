@@ -307,6 +307,15 @@ pub fn cabrillo_contest_token(adif_id: &str) -> &str {
         "OH-QSO-PARTY" => "MRRC-OHQP",
         // master list id 133, "Texas QSO Party"
         "TX-QSO-PARTY" => "TXQP",
+        // ⭐ THREE registries disagree about this one, and the SPONSOR wins. ADIF's
+        // enumeration writes `IL QSO Party` (spaces and mixed case, an outlier among its
+        // neighbours), WA7BNM's contest calendar writes `IL-QSO-PARTY`, and the Western
+        // Illinois ARC's own Sample_Excel_Log — the file their checker was built to eat —
+        // writes `CONTEST: ILLINOIS QSO PARTY`. This contest is judged by its sponsor
+        // from an emailed file, not by a robot keyed to a master list, so the sponsor's
+        // spelling is the one that goes in the file. Other loggers emit the hyphenated
+        // token and the sponsor plainly accepts those too.
+        "IL QSO Party" => "ILLINOIS QSO PARTY",
         other => other,
     }
 }
@@ -411,6 +420,15 @@ mod tests {
             ("ohqp", "OH-QSO-PARTY", "MRRC-OHQP"),
             ("cqp", "CA-QSO-PARTY", "CA-QSO-PARTY"),
             ("txqp", "TX-QSO-PARTY", "TXQP"),
+            // ⭐ ILQP — the one row where THREE registries disagree, verified against
+            // each on 2026-09-17. ADIF 3.1.7's CONTEST_ID enumeration lists `IL QSO
+            // Party` with spaces and mixed case (an outlier among its hyphenated
+            // neighbours, so nobody may "tidy" it); WA7BNM's master list carries
+            // `IL-QSO-PARTY`; and the sponsor's own Sample_Excel_Log — the file the
+            // Western Illinois ARC's checker was built to eat — writes `CONTEST:
+            // ILLINOIS QSO PARTY`. Sponsor-first, the same rule the ARRL-SS and CQ-WW
+            // rows above follow when a registry and a sponsor disagree.
+            ("ilqp", "IL QSO Party", "ILLINOIS QSO PARTY"),
             // ⭐ Sweepstakes is the contest where the two registries AGREE, and it is
             // pinned for that reason: ADIF 3.1.7's CONTEST_ID enumeration lists
             // ARRL-SS-CW = "ARRL November Sweepstakes (CW)" and ARRL-SS-SSB = "ARRL

@@ -4393,6 +4393,16 @@ mod tests {
                 [2, 3, 3],
                 MultScope::PerLog,
             ),
+            // ⚠️ ILQP's ADIF id is the odd one: `IL QSO Party`, spaces and mixed case,
+            // which is ADIF 3.1.7's own enumeration value. The Cabrillo token is the
+            // SPONSOR's `ILLINOIS QSO PARTY` (see `contest::cabrillo`'s map).
+            (
+                "ilqp",
+                "IL QSO Party",
+                ["RST", "QTH"],
+                [1, 2, 2],
+                MultScope::PerLog,
+            ),
         ] {
             let rs = party(event);
             assert_eq!(rs.contest_id, contest_id);
@@ -4448,7 +4458,9 @@ mod tests {
                 "{event} computes bonuses this build does not, and must say so"
             );
         }
-        for event in ["ohqp", "cqp"] {
+        // ⭐ ILQP is the third: its bonus stations ARE computed (they are in the log,
+        // not on a menu), so its score omits nothing and it carries no note.
+        for event in ["ohqp", "cqp", "ilqp"] {
             assert!(
                 party(event).score_note_key.is_empty(),
                 "{event}'s score is complete — no note"
@@ -4684,8 +4696,8 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            16,
-            "two Field Day events + four QSO parties + both Sweepstakes weekends + \
+            17,
+            "two Field Day events + five QSO parties + both Sweepstakes weekends + \
              CQ WW's two and CQ WPX's two + ARRL VHF's three runnings + CQ WW RTTY"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());
