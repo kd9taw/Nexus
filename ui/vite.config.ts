@@ -4,6 +4,7 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { execSync } from 'node:child_process'
+import { failuresReporter } from './vitest-failures-reporter'
 
 // A build stamp (commit hash + build time) baked in at build time, so the app can SHOW which
 // build is running — the product version string is always "0.2.0", which made it impossible
@@ -65,6 +66,9 @@ export default defineConfig({
   // and breaks every suite that clears storage between cases.
   test: {
     setupFiles: ['./src/test-setup.ts'],
+    // The default reporter, plus one that names the failing tests LAST and in a
+    // file — see vitest-failures-reporter.ts for why a red run needs that.
+    reporters: ['default', failuresReporter],
   },
   build: {
     outDir: 'dist',

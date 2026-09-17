@@ -4,3 +4,5 @@ dist-ssr
 *.local
 .vite
 *.tsbuildinfo
+# vitest-failures-reporter.ts writes failures.txt here on every run
+test-results
