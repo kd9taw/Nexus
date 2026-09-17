@@ -5156,14 +5156,26 @@ impl Engine {
     /// A no-op leaves the operating mode EXACTLY as it was — load-bearing since
     /// #100: `apply_settings` calls this on every save with the master on, so a
     /// master left on with a blank exchange must not disturb a contact in flight.
+    ///
+    /// ⚠️ **The class + section test is Field Day's alone.** Every other contest sends
+    /// neither, and its session constructor (`ContestSession::for_ruleset`, reached
+    /// through `set_mode`) refuses its own blank or out-of-domain exchange by name —
+    /// before the mode changes, so a refused restore is the same no-op.
     pub fn restore_field_day_if_enabled(&mut self) {
-        if self.settings.fd_active
-            && !self.settings.fd_class.trim().is_empty()
-            && !self.settings.fd_section.trim().is_empty()
-            && !matches!(self.mode, Mode::FieldDay { .. })
-        {
+        let exchange_set = !self.contest_is_field_day()
+            || (!self.settings.fd_class.trim().is_empty()
+                && !self.settings.fd_section.trim().is_empty());
+        if self.settings.fd_active && exchange_set && !matches!(self.mode, Mode::FieldDay { .. }) {
             let _ = self.set_mode("fieldday-sp");
         }
+    }
+
+    /// Is the contest the picker names one of the two Field Day events (or the blank
+    /// default, which is ARRL Field Day)? The same test `set_mode` applies before it
+    /// asks for a class and section, so the two cannot disagree about which contests
+    /// need them.
+    fn contest_is_field_day(&self) -> bool {
+        matches!(self.settings.fd_event.trim(), "" | "arrlfd" | "wfd")
     }
 
     /// Advance the persisted LoTW incremental-sync cursor (`lotw_last_qsl`) WITHOUT
@@ -10284,7 +10296,7 @@ impl Engine {
         // value it could not accept — a more useful message than this one, but not one
         // worth changing a shipped refusal for.
         if spec.starts_with("fieldday")
-            && matches!(self.settings.fd_event.trim(), "" | "arrlfd" | "wfd")
+            && self.contest_is_field_day()
             && (self.settings.fd_class.trim().is_empty()
                 || self.settings.fd_section.trim().is_empty())
         {
@@ -33252,6 +33264,64 @@ mod tests {
             e.snapshot().field_day.expect("still in FD").qso_count,
             1,
             "restore is a no-op once already in FD (never rebuilds the log)"
+        );
+    }
+
+    /// ⭐ **A contest that is not Field Day restores on relaunch without a Field Day class
+    /// or section.** The restore gate asked for the two values only Field Day transmits,
+    /// so an Ohio QSO Party left running came back from a restart in Chat, with its log
+    /// sitting unread in the journal, for as long as `fd_class`/`fd_section` were blank —
+    /// which, for an operator who has never entered Field Day, is always.
+    #[test]
+    fn a_non_field_day_contest_restores_without_a_field_day_class_or_section() {
+        let mut s = Engine::new("W8ABC", "EN80", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "OH".into();
+        s.contest_qth_county = "FRAN".into();
+        assert!(
+            s.fd_class.trim().is_empty() && s.fd_section.trim().is_empty(),
+            "harness: no Field Day exchange at all"
+        );
+        let mut e = Engine::with_settings(s);
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "harness: boots out of the contest"
+        );
+        e.restore_field_day_if_enabled();
+        assert_eq!(
+            e.snapshot().field_day.map(|fd| fd.event).as_deref(),
+            Some("ohqp"),
+            "the party the operator left running comes back"
+        );
+
+        // POSITIVE CONTROL: Field Day itself still needs its class and section. The gate
+        // moved for the contests that do not send them, not for the one that does.
+        let mut s = Engine::new("W9XYZ", "EN61", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "arrlfd".into();
+        let mut e = Engine::with_settings(s);
+        e.restore_field_day_if_enabled();
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "Field Day with no class or section still stays out"
+        );
+
+        // …and a contest whose OWN exchange cannot be built is refused by its session and
+        // leaves the operator exactly where they were (#100): a restore runs on every save.
+        let mut s = Engine::new("W8ABC", "EN80", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "OH".into(); // in state, but no county to send
+        let mut e = Engine::with_settings(s);
+        e.call_station("K1ABC");
+        assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
+        e.restore_field_day_if_enabled();
+        assert!(e.snapshot().field_day.is_none(), "no county, no party");
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("K1ABC"),
+            "a declined restore must not disturb the contact in flight (#100)"
         );
     }
 
