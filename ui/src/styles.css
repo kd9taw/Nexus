@@ -20992,7 +20992,7 @@ button.sat-chip:disabled {
    wraps wherever it runs out of room puts Esc/Stop somewhere different at every width. So the keys
    are a fixed eight-track grid — an F-key keeps its place, the way it does on the keyboard — and
    `.rtty-dock-keys` lays the keys and the fixed row side by side where the dock can hold both
-   (the keys want ~64em for eight readable captions) and folds the fixed row under the keys where
+   (the keys want ~76em for eight readable captions) and folds the fixed row under the keys where
    it cannot. A WRAP, so it follows the dock's own width at any zoom, never a viewport guess.
 
    WHY THE FOLD IS WIDTH-DRIVEN RATHER THAN ALWAYS TWO ROWS — MEASURED (headless Chrome, the real
@@ -21000,14 +21000,26 @@ button.sat-chip:disabled {
    the dock goes 113 → 155 px at 100 % and 96 → 133 px at the 85 % auto zoom. At 1920×1080 the log
    strip's Log button already sat 4 px below its pane's fold with the old four-key row; two rows
    there left it 29 px below. Sharing the line gives that back — 4 px, as before — with each key
-   150 px wide; at 1680×1050 the keys are 120 px and the button 18 px below; from 64em down the
-   fixed row folds under the keys. At the 1024×768 floor (85 %) the dock is two rows (keys 111 px),
-   the log pane is 138 px instead of 175, and the Log button is reached by the log pane's own
-   scroll, as it already was; Esc/Stop and Stop TX stay in view at every size measured, 175 %
-   pinned included. An operator's own long caption ellipsizes inside its key (its tooltip keeps the
-   message); every built-in caption fits, in all five catalogs, down to the 111 px keys at the
-   floor — German's S&P key was shortened to fit. On a narrow window the keys fold to two rows of
-   four, still in keyboard order. */
+   150 px wide; from 76em down the fixed row folds under the keys. At the 1024×768 floor (85 %) the
+   dock is two rows (keys 111 px), the log pane is 138 px instead of 175, and the Log button is
+   reached by the log pane's own scroll, as it already was; Esc/Stop and Stop TX stay in view at
+   every size measured, 175 % pinned included. An operator's own long caption ellipsizes inside its
+   key (its tooltip keeps the message); every built-in caption fits, in all five catalogs, at every
+   key width the fold produces — German's S&P key was shortened to fit. On a narrow window the keys
+   fold to two rows of four, still in keyboard order.
+
+   ⚠️ WHY THE BASIS IS 76em AND NOT 64em: A KEY MUST NEVER BE NARROWER THAN AT THE FLOOR — MEASURED
+   (2026-09-17, the same harness, five catalogs). `em` here is the row's own 14 px font, so 64em was
+   896 px = 112 px of CSS per key, while the 1024×768 floor gives each key 131. A WIDER window
+   therefore produced NARROWER keys — 93–94 px at 1366×768 / 85 % against 111 px at the floor — and
+   Japanese's built-in S&P key (`S&P ナンバー`) ellipsized there while every catalog fitted at the
+   floor. It was the BASIS, not a squeeze: the row measured 904 px against its 896 px basis, so
+   `flex-shrink` was never the knob. 76em = 1064 px holds the shared line's keys at the floor's width
+   or better, and where that will not fit the row folds instead: at 1366×768 the dock becomes two
+   rows with 153 px keys in all five catalogs (93 → 153), the log pane 175 px instead of 198, and a
+   CQ WW RTTY strip still shows Call, RST, Zone, QTH, the missing-QTH warning AND its Log button
+   inside the pane. 1920×1080 does not move (one row, 150 px keys, the Log button 4 px below the
+   pane fold), nor do 1280×800 (two rows, 143 px) or the 1024×768 floor (two rows, 111 px). */
 .rtty-dock-keys {
   display: flex;
   flex-wrap: wrap;
@@ -21021,7 +21033,7 @@ button.sat-chip:disabled {
   grid-template-columns: repeat(8, minmax(0, 1fr));
 }
 .rtty-dock-keys > .rtty-macros {
-  flex: 999 1 64em;
+  flex: 999 1 76em;
   min-width: 0;
 }
 .rtty-dock-keys > .rtty-dock-row {
