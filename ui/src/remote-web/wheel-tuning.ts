@@ -189,7 +189,7 @@ export class WheelTuning {
   captureTarget(source: WheelSource): ((dialHz: number) => boolean) | null {
     if (!this.ready() || !this.matchesSource(source) || this.burst || !Number.isFinite(source.dialMhz) || source.dialMhz <= 0 || source.dialMhz > 250000 ||
       !['USB', 'LSB', 'AM', 'FM'].includes(source.sideband)) return null
-    const fromHz = Math.round(source.dialMhz * 1e6), context = this.context(), input = this.inputContext()
+    const fromHz = this.dialNow(source.dialMhz), context = this.context(), input = this.inputContext()
     const state = this.operations.getSnapshot().state!
     const b: Burst = { ...source, fromHz, targetHz: fromHz, authority: context, radioId: state.controls!.context.radioId,
       edgeSaid: false, owners: new Set(source.owner ? [source.owner] : []), send: this.operations.prepareControl(source.context!) }
@@ -341,9 +341,21 @@ export class WheelTuning {
    * of ours had read back has simply not caught up — it is older news than that readback, not
    * evidence the dial moved under us. Refusing on it would drop every burst made while the previous
    * one was in flight, which is the whole of what this batch fixes; accepting a sample taken AFTER
-   * the readback is what still catches a dial that really did move. */
+   * the readback is what still catches a dial that really did move.
+   *
+   * A step's sample is the page's RENDER, and `age` does not time a render: it times the newest
+   * sample the stream holds, which the render trails by up to a poll. Taken after the readback by
+   * that clock, the render could still show the dial the command moved away from, and a step built
+   * on it was refused by the re-read as if the radio had moved — the notch after a readback lost
+   * whenever it landed in that poll. So the question is put to the newest sample itself: while it
+   * shows the readback, the radio is where the readback put it and a render that disagrees is older
+   * news; once it shows another dial, the radio moved, and the step keeps the render's dial for the
+   * re-read to refuse unless the page already shows that move. */
   private dialNow(sampleDialMhz: number): number {
-    const c = this.confirmed
-    return c && performance.now() - this.application.age('get_snapshot') < c.at ? c.hz : Math.round(sampleDialMhz * 1e6)
+    const c = this.confirmed, sample = Math.round(sampleDialMhz * 1e6)
+    if (!c) return sample
+    if (performance.now() - this.application.age('get_snapshot') < c.at) return c.hz
+    const held = (this.application.held('get_snapshot') as AppSnapshot | undefined)?.radio?.dialMhz
+    return held !== undefined && Math.round(held * 1e6) === c.hz ? c.hz : sample
   }
 }

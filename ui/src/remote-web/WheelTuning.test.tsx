@@ -42,7 +42,7 @@ function fixture(dialMhz = 7.2) {
   let age = 0
   let revision = state.revision, sequence = 1
   const read = vi.fn(async (): Promise<AppSnapshot> => structuredClone(snapshot)), failed = vi.fn()
-  const app = { invoke: read, age: () => age } as unknown as ApplicationClient
+  const app = { invoke: read, age: () => age, held: () => snapshot } as unknown as ApplicationClient
   const tuning = new WheelTuning(client, app, failed); tuning.activate()
   closes.push(() => { tuning.dispose(); client.disconnected() })
   const source = () => ({ dialMhz: snapshot.radio.dialMhz, sideband: snapshot.radio.sideband, context: state.controls!.context })
@@ -187,6 +187,33 @@ it('control: a reading taken AFTER that readback, disagreeing, still refuses the
   expect(h.writes()).toHaveLength(1)
   expect(h.failed).toHaveBeenCalledOnce()
   expect(h.failed.mock.calls[0][0].message).toBe('staleContext')
+})
+
+// THE PAGE DRAWS A SAMPLE A POLL AFTER THE STREAM HOLDS IT. After a readback, a sample taken later
+// can already be in the stream while the cockpit still draws the one from before the command.
+// `drawnBehind` renders the real controls on that older sample (`drawn`) and never re-renders them
+// with the newer one, which is exactly the poll in which an operator's next notch or press lands.
+function drawnBehind(h: ReturnType<typeof fixture>, controls: (snap: AppSnapshot) => React.ReactNode) {
+  const drawn = h.getSnapshot()
+  return render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+    <RemoteOperationsContext.Provider value={h.client}><RemoteWheelTuningContext.Provider value={h.tuning}><RemoteObservationContext.Provider value={h.observation}>
+      {controls(drawn)}
+    </RemoteObservationContext.Provider></RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>)
+}
+
+it('a keyboard notch made while the page still draws the sample from before a readback builds on the readback', async () => {
+  const h = fixture()
+  const ui = drawnBehind(h, snap => <CockpitHeader snap={snap} modeIndicator="Phone" bandControl={null} onCommitDial={vi.fn()} wheelTune digitTune remoteFrequency/>)
+  await tick()
+  fireEvent.wheel(ui.container.querySelector('[data-decade="3"]')!, { deltaY: -100, deltaMode: 0 }); await tick(120)
+  expect(h.writes()[0].request.action.dialMhz).toBe(7.201)
+  // The station read the radio back at 7.201 and its next sample says so; the page still draws 7.2.
+  act(() => h.finish()); await h.fresh(7.201)
+  fireEvent.keyDown(ui.container.querySelector('.readout[role="button"]')!, { key: 'ArrowUp' }); await tick(120)
+  expect(h.failed).not.toHaveBeenCalled()
+  expect(h.writes()).toHaveLength(2); expect(h.writes()[1].request.action.dialMhz).toBe(7.2011)
+  act(() => h.finish()); await tick()
 })
 
 it('refuses a queued burst whole when the LEASE it was made under is replaced, and says so', async () => {
