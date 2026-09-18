@@ -46,6 +46,7 @@ fn settle(f: &Fixture, command: &Request) -> Value {
 
 #[test]
 fn rotator_point_needs_v3_its_hint_and_one_rotctld_command_off_the_engine_lock() {
+    let _alone = super::satellite::alone(); // shares the process-wide SAT_TRACK badge — see :101
     let (f, fake) = station();
     let state = acquire_controls_version(&f, Instant::now(), 3);
     assert!(state["controls"]["capabilities"]
@@ -71,6 +72,7 @@ fn rotator_point_needs_v3_its_hint_and_one_rotctld_command_off_the_engine_lock()
 
 #[test]
 fn a_station_with_no_rotator_refuses_and_a_failed_rotctld_reply_is_unknown_not_applied() {
+    let _alone = super::satellite::alone(); // shares the process-wide SAT_TRACK badge — see :101
     // No rotator configured: nothing to point.
     let f = Fixture::new();
     let state = acquire_controls_version(&f, Instant::now(), 3);
@@ -93,6 +95,12 @@ fn a_station_with_no_rotator_refuses_and_a_failed_rotctld_reply_is_unknown_not_a
 #[test]
 fn stop_reaches_rotctld_and_point_at_call_uses_the_desktop_bearing() {
     let (f, fake) = station();
+    // ⚠️ SHARED WITH THE SATELLITE TESTS, and this is not tidiness. `SAT_TRACK` is process-wide,
+    // and it is exactly what tells the rotator path the satellite loop is steering the mast. A
+    // satellite test holding a live badge in a sibling thread turns the gesture below into
+    // `rejected`, which reads as a rotator flake and is a collision. Measured before this guard:
+    // 2 failures in 20 full-suite runs, always `rejected` where `applied` was expected.
+    let _alone = super::satellite::alone();
     let state = acquire_controls_version(&f, Instant::now(), 3);
     let stop = control_request(&state, json!({"action":"rotator.stop"}));
     assert_eq!(settle(&f, &stop)["outcome"], "applied");
@@ -170,6 +178,7 @@ fn a_satellite_track_refuses_a_point_but_never_a_stop() {
 
 #[test]
 fn a_pending_point_holds_the_single_receipt_so_stop_waits_behind_it() {
+    let _alone = super::satellite::alone(); // shares the process-wide SAT_TRACK badge — see :101
     // Documented, not designed: the station admits one pending control receipt at a time, so a
     // Stop sent while a point is still waiting on rotctld is refused as busy until it settles.
     let (f, fake) = station();

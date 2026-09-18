@@ -9,12 +9,13 @@ use super::receiver_filter::run;
 use super::*;
 
 /// Exclusive use of the process-wide track badge for the length of one test. Held by every test
-/// in this file, because `SAT_TRACK`/`SAT_TRACK_GEN` are process-wide: a sibling arming or
+/// in this file AND by the ROTATOR tests, because `SAT_TRACK`/`SAT_TRACK_GEN` are process-wide and
+/// the badge is what tells the rotator the satellite loop is steering the mast: a sibling arming or
 /// clearing a badge mid-test would (correctly) win, which reads as flake rather than as the
 /// collision it is.
 /// It also starts the test from an idle badge, so "no track is running" is a fact this test
 /// established rather than whatever the previous one happened to leave behind.
-fn alone() -> std::sync::MutexGuard<'static, ()> {
+pub(super) fn alone() -> std::sync::MutexGuard<'static, ()> {
     let guard = crate::TEST_SAT_TRACK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
