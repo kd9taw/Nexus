@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
 import { SstvView } from './SstvView'
+import { ConfirmHost } from '../confirm'
 import * as api from '../api'
 import { EN } from '../i18n'
 import type { AppSnapshot, SstvHealth, SstvState } from '../types'
@@ -643,6 +644,82 @@ describe('SstvView TX panel', () => {
     // 180 − 68 = 112 s = 1:52 remaining.
     expect(screen.getByText('TX — Scottie 1 · 1:52 remaining')).toBeTruthy()
   })
+  // ⭐ THE ISS 145.800 GUARD, end to end through a REAL dialog.
+  //
+  // This guard and Prove TX were the last two `window.confirm` calls in the app, held back when
+  // the other twelve were converted because both are transmit-path and moving them is a
+  // TX-behaviour change needing sign-off (operator sign-off 2026-09-18). `window.confirm` is
+  // INERT in this webview — wry implements no `runJavaScriptConfirmPanel`, so it shows nothing and
+  // returns false — which means for 32 days on macOS **SSTV could not be sent on 145.800 at all**.
+  //
+  // It failed CLOSED, so the ISS downlink was never transmitted on by accident: the loss was the
+  // sanctioned ARISS uplink case, not the protection. Both halves are asserted here, because
+  // `confirm.tsx`'s own header records that the original bug survived precisely because none of
+  // the converted paths had any coverage — "a guard nothing exercises cannot fail".
+  describe('the ISS 145.800 guard', () => {
+    const issSnap = { ...snap, radio: { ...snap.radio, dialMhz: 145.8 } } as AppSnapshot
+
+    it('asks before transmitting on the ISS downlink, and sends when agreed', async () => {
+      render(
+        <>
+          <SstvView snap={issSnap} />
+          <ConfirmHost />
+        </>,
+      )
+      const send = await loadPicture()
+      fireEvent.click(send)
+
+      // The dialog is REAL — this is the half that was dead on macOS.
+      await screen.findByText(/145\.800 MHz is the ISS SSTV downlink/i)
+      expect(sstvSend).not.toHaveBeenCalled() // nothing is queued on the ASK
+
+      // Scope to the dialog: `getByRole` takes no `selector` option (see SetupHealth.provetx).
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    })
+
+    it('sends nothing when the operator declines', async () => {
+      render(
+        <>
+          <SstvView snap={issSnap} />
+          <ConfirmHost />
+        </>,
+      )
+      const send = await loadPicture()
+      fireEvent.click(send)
+      await screen.findByText(/145\.800 MHz is the ISS SSTV downlink/i)
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      await waitFor(() =>
+        expect(screen.queryByText(/is the ISS SSTV downlink/i)).toBeNull(),
+      )
+      expect(sstvSend).not.toHaveBeenCalled()
+    })
+
+    // ⛔ FAIL CLOSED: with no host mounted `confirmDialog` resolves false, so a missing dialog can
+    // never become an unconsented transmission on the downlink. That default is what made this a
+    // useless button rather than a dangerous one for 32 days.
+    it('sends nothing on the downlink when no dialog host is mounted', async () => {
+      render(<SstvView snap={issSnap} />)
+      const send = await loadPicture()
+      fireEvent.click(send)
+      await new Promise((r) => setTimeout(r, 20))
+      expect(sstvSend).not.toHaveBeenCalled()
+    })
+
+    // CONTROL: off the downlink the guard must not fire at all, or "it asked" would prove nothing.
+    it('does not ask when the dial is nowhere near 145.800', async () => {
+      render(
+        <>
+          <SstvView snap={snap} />
+          <ConfirmHost />
+        </>,
+      )
+      const send = await loadPicture()
+      fireEvent.click(send)
+      await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+      expect(screen.queryByText(/is the ISS SSTV downlink/i)).toBeNull()
+    })
+  })
 })
 
 // #130 — the gallery pane reveals the folder the received pictures are saved in. There were Reveal
@@ -742,4 +819,6 @@ describe('the gallery opens a received picture in its own window', () => {
     expect(del.closest('button')).toBe(del)
     expect(open.contains(del)).toBe(false)
   })
+
+
 })
