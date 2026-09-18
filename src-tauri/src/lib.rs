@@ -14837,6 +14837,60 @@ fn hunted_activations(
     }))
 }
 
+/// An activation counts as "current" for about this long after its spot. Both hunter-feed
+/// passes below judge a spot by its OWN time and not only by the poller's fetch stamp, because
+/// SOTAwatch returns the last n spots by COUNT, not by recency (see `pota::OtaSpot::
+/// spot_time_unix`) — a summit from this morning rides along on a perfectly fresh fetch.
+const OTA_ACTIVE_SECS: i64 = 3600;
+
+/// Every DISTINCT activation `call` is on the air at right now, as normalized
+/// (programme, reference) pairs — sorted, so the answer can never depend on `HashMap` or feed
+/// order, and deduped, so a re-spot at the same park is one activation and not two.
+///
+/// MORE THAN ONE MEANS THE APP CANNOT TELL WHICH PARK A QSO BELONGS TO, and the operator's
+/// ruling (2026-09-17) is to tag nothing and say so: a missing reference the operator adds by
+/// hand, but a wrong one is a hunt POTA will never credit, because the activator's own log names
+/// the other park. It is not a rare shape — many summits are also parks and activators self-spot
+/// to both programmes. Callers tag only when this returns exactly one candidate.
+///
+/// Base-call match: the spot says K1ABC, the decode may say K1ABC/P — the portable suffix is
+/// exactly the case a park chaser cares about.
+fn live_activations<'a>(
+    spots: impl Iterator<Item = &'a propagation::OtaSpot>,
+    call: &str,
+) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = spots
+        .filter(|sp| tempo_core::message::same_call(&sp.activator, call))
+        .map(|sp| {
+            // The hunt target is set with the programme CODE, never the feed's own spelling.
+            let program = if sp.program.eq_ignore_ascii_case("SOTA") {
+                "SOTA"
+            } else {
+                "POTA"
+            };
+            (program.to_string(), sp.reference.clone())
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// What a row says INSTEAD of a park when it cannot tell which one — the operator picks, from
+/// the POTA/SOTA board, where every live activation has its own HUNT button. Named references,
+/// because "ambiguous" alone gives the operator nothing to act on.
+fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
+    let list = candidates
+        .iter()
+        .map(|(program, reference)| format!("{program} {reference}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{} activations live ({list}) — pick one on the POTA/SOTA board",
+        candidates.len()
+    )
+}
+
 // Shared calculation, with an immutable engine guard. Remote never invokes the
 // native command's shared-log reconciliation or any logbook write/recovery path.
 fn read_need_alerts(
@@ -15036,59 +15090,75 @@ fn read_need_alerts(
     // them on the board at a glance. Appended like Dxped; no priority change
     // (a park is a park — the award tier still drives the row).
     if let Ok(cache) = ota_cache.lock() {
-        // All fresh programs' activators (POTA + SOTA when both are polled).
+        let now = now_unix();
+        // All fresh programs' activators (POTA + SOTA when both are polled). The cache STAMP
+        // proves the poller is alive; the per-spot TIME proves the activation itself is current
+        // — see `OTA_ACTIVE_SECS`. Without the second filter a stale summit could both win the
+        // park and, worse, hide a live one behind an ambiguity that was never real.
         let spots: Vec<&propagation::OtaSpot> = cache
             .values()
-            .filter(|(stamp, _)| now_unix().saturating_sub(*stamp) <= 600)
+            .filter(|(stamp, _)| now.saturating_sub(*stamp) <= 600)
             .flat_map(|(_, v)| v.iter())
+            .filter(|sp| {
+                sp.spot_time_unix
+                    .is_none_or(|t| now.saturating_sub(t) <= OTA_ACTIVE_SECS)
+            })
             .collect();
         if !spots.is_empty() {
             for a in &mut alerts {
-                if let Some(sp) = spots
-                    .iter()
-                    // Base-call match: the spot says K1ABC, the decode may say
-                    // K1ABC/P — the suffix is exactly the portable case a park
-                    // chaser cares about.
-                    .find(|sp| tempo_core::message::same_call(&sp.activator, &a.call))
+                let live = live_activations(spots.iter().copied(), &a.call);
+                if live.is_empty() {
+                    continue;
+                }
+                // The park NEED rides here too, not only on `activation_alert` rows. An
+                // activator that ALSO hit the cluster arrives as a cluster row and never
+                // reaches that branch (it is deduped away), so tagging only there would
+                // have left exactly those stations without the need that keeps them
+                // through Hide worked — the original defect, moved one row along.
+                // ANY live reference still to be worked is a need: the safe direction is
+                // showing a row the operator has already worked, never hiding one they have not.
+                let base = tempo_core::message::base_call(&a.call);
+                if live.iter().any(|(_, r)| hunted.needed(r, &base, now))
+                    && !a.tags.contains(&propagation::NeedTag::NewPark)
                 {
-                    let tag = if sp.program.eq_ignore_ascii_case("SOTA") {
+                    a.tags.push(propagation::NeedTag::NewPark);
+                    a.priority = a.priority.max(propagation::NeedTag::NewPark.tier());
+                }
+                // A chip per programme the activator is live on — both, when they are on a
+                // summit that is also a park. The chip is a label, so it is safe either way.
+                for (program, _) in &live {
+                    let tag = if program == "SOTA" {
                         propagation::NeedTag::Sota
                     } else {
                         propagation::NeedTag::Pota
                     };
-                    // The park NEED rides here too, not only on `activation_alert` rows. An
-                    // activator that ALSO hit the cluster arrives as a cluster row and never
-                    // reaches that branch (it is deduped away), so tagging only there would
-                    // have left exactly those stations without the need that keeps them
-                    // through Hide worked — the original defect, moved one row along.
-                    if hunted.needed(
-                        &sp.reference,
-                        &tempo_core::message::base_call(&sp.activator),
-                        now_unix(),
-                    ) && !a.tags.contains(&propagation::NeedTag::NewPark)
-                    {
-                        a.tags.push(propagation::NeedTag::NewPark);
-                        a.priority = a.priority.max(propagation::NeedTag::NewPark.tier());
-                    }
                     if !a.tags.contains(&tag) {
                         a.tags.push(tag);
-                        a.headline = format!("{} · {} {}", a.headline, sp.program, sp.reference);
                     }
-                    // WHICH ACTIVATION, so Work from the board can tag the hunt — the same field
-                    // `activation_alert` sets on its own rows. It rides here for the same reason
-                    // the park NEED does: an activator loud enough to reach the cluster arrives
-                    // as a cluster row and never reaches that branch, and those are exactly the
-                    // ones a chaser works. First spot wins: a two-fer is spotted per park, and
-                    // one contact is one hunt target.
-                    if a.park.is_none() {
-                        a.park = Some(propagation::ParkRef {
-                            program: if tag == propagation::NeedTag::Sota {
-                                "SOTA".into()
-                            } else {
-                                "POTA".into()
-                            },
-                            reference: sp.reference.clone(),
-                        });
+                }
+                // WHICH ACTIVATION, so Work from the board can tag the hunt — the same field
+                // `activation_alert` sets on its own rows. It rides here for the same reason
+                // the park NEED does: an activator loud enough to reach the cluster arrives
+                // as a cluster row and never reaches that branch, and those are exactly the
+                // ones a chaser works.
+                //
+                // EXACTLY ONE live reference, or none at all — see `live_activations`. This
+                // used to take the first cache entry to match, which for an activator on both
+                // feeds was whichever programme `HashMap` order handed over, and could differ
+                // between two polls a minute apart.
+                match live.as_slice() {
+                    [(program, reference)] => {
+                        a.headline = format!("{} · {} {}", a.headline, program, reference);
+                        if a.park.is_none() {
+                            a.park = Some(propagation::ParkRef {
+                                program: program.clone(),
+                                reference: reference.clone(),
+                            });
+                        }
+                    }
+                    many => {
+                        a.headline =
+                            format!("{} · {}", a.headline, ambiguous_activation_note(many));
                     }
                 }
             }
@@ -15104,7 +15174,6 @@ fn read_need_alerts(
     // activator (fresh poller + recent spot time) that isn't already a row for the same
     // (call, band, mode) is scored via `activation_alert` (any DX award it also satisfies
     // is merged, so a new-entity park outranks a domestic one) and appended.
-    const OTA_ACTIVE_SECS: i64 = 3600; // an activation counts as "current" for ~1 h
     if let Ok(cache) = ota_cache.lock() {
         let now = now_unix();
         let fresh: Vec<propagation::OtaSpot> = cache
@@ -15120,18 +15189,31 @@ fn read_need_alerts(
             .collect();
         drop(cache);
         for sp in &fresh {
-            let reference_needed = hunted.needed(
-                &sp.reference,
-                &tempo_core::message::base_call(&sp.activator),
-                now,
-            );
-            let Some(alert) =
+            let live = live_activations(fresh.iter(), &sp.activator);
+            // ANY live reference still to be worked is a need, exactly as in the decoration pass
+            // — and for the same reason. Read off this ONE spot, the need depended on which of an
+            // activator's several spots the cache happened to hand over first, so a summit worked
+            // this morning could sink a park they still need below every real need on the board.
+            let reference_needed = live.iter().any(|(_, r)| {
+                hunted.needed(r, &tempo_core::message::base_call(&sp.activator), now)
+            });
+            let Some(mut alert) =
                 propagation::activation_alert(sp, &needs, &needs.slots(), reference_needed)
             else {
                 continue;
             };
             if alert.call == me_up {
                 continue; // never chase yourself
+            }
+            // THE SAME RULING as the decoration pass above, and it has to be applied here rather
+            // than inside `activation_alert`: that function is handed ONE spot and can only name
+            // it, while this loop can see the whole feed. Without this the row named whichever
+            // spot came out of the cache first — and the (call, band, mode) skip below then
+            // threw the other one away, so the arbitrary choice was also the only one.
+            if live.len() > 1 {
+                alert.park = None;
+                alert.headline =
+                    format!("{} · {}", alert.headline, ambiguous_activation_note(&live));
             }
             // Skip if the cluster path already produced this row — the tag loop above has
             // decorated it with the P/S chip + reference.
@@ -30971,6 +31053,239 @@ mod tests {
 
     fn hunted_today(e: &tempo_app::engine::Engine, spot: &propagation::OtaSpot, now: i64) -> bool {
         crate::ota_log_flags(e, std::slice::from_ref(spot), now)[0].hunted_today
+    }
+
+    /// One hunter-feed row, spotted `age_secs` ago. The AGE is the point: both feed paths judge
+    /// an activation by the spot's own time, not by when the poller last fetched.
+    fn live_spot(
+        program: &str,
+        activator: &str,
+        reference: &str,
+        age_secs: i64,
+    ) -> propagation::OtaSpot {
+        let mut sp = ota_spot(activator, reference);
+        sp.program = program.into();
+        sp.spot_time_unix = Some(crate::now_unix() - age_secs);
+        sp
+    }
+
+    /// The Needed board through the REAL `read_need_alerts`: `cluster` calls arrive as 20 m CW
+    /// cluster spots (the decorated path), `feed` fills the hunter cache per programme (the
+    /// `activation_alert` path). An empty log, so every row is a need.
+    fn needed_board(
+        cluster: &[&str],
+        feed: &[(&str, &[propagation::OtaSpot])],
+    ) -> Vec<propagation::NeedAlert> {
+        needed_board_for(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+            cluster,
+            feed,
+        )
+    }
+
+    /// …and the same board for an operator whose log already holds something.
+    fn needed_board_for(
+        engine: tempo_app::engine::Engine,
+        cluster: &[&str],
+        feed: &[(&str, &[propagation::OtaSpot])],
+    ) -> Vec<propagation::NeedAlert> {
+        use std::sync::{Arc, Mutex};
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let now = crate::now_unix();
+        let mut buf = SpotBuffer::new(100);
+        for call in cluster {
+            buf.push(ClusterSpot {
+                spotter: "W3LPL".into(), // the operator's own continent — the locality gate
+                dx_call: (*call).into(),
+                freq_khz: 14_025.0, // 20 m CW
+                comment: "CW 18 dB".into(),
+                time_utc: None,
+                received_unix: now as u64,
+                corroborators: Vec::new(),
+                rbn: false,
+            });
+        }
+        let spots: crate::SharedSpots = Arc::new(Mutex::new(buf));
+        let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        for (program, rows) in feed {
+            ota.lock()
+                .unwrap()
+                .insert((*program).into(), (now, rows.to_vec()));
+        }
+        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        let region =
+            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+        let engine: SharedEngine = Arc::new(Mutex::new(engine));
+        crate::read_need_alerts(engine_lock(&engine), &live, &region, &spots, &ota).unwrap()
+    }
+
+    /// Today's 0000Z on the real clock the board reads — a log timestamp that is always "today"
+    /// and never in the future, whatever hour the suite runs at. `HIDE_NOON` cannot be used with
+    /// `needed_board`, which asks the wall clock.
+    fn today_0000z() -> i64 {
+        let now = crate::now_unix();
+        now - now.rem_euclid(86_400)
+    }
+
+    fn board_row<'a>(
+        alerts: &'a [propagation::NeedAlert],
+        call: &str,
+        mode: &str,
+    ) -> &'a propagation::NeedAlert {
+        alerts
+            .iter()
+            .find(|a| a.call == call && a.mode == mode)
+            .unwrap_or_else(|| panic!("no {call} {mode} row in {alerts:?}"))
+    }
+
+    fn board_park(
+        alerts: &[propagation::NeedAlert],
+        call: &str,
+        mode: &str,
+    ) -> Option<(String, String)> {
+        board_row(alerts, call, mode)
+            .park
+            .as_ref()
+            .map(|p| (p.program.clone(), p.reference.clone()))
+    }
+
+    /// The board for an activator live at two references at once — on the POTA feed at a park and
+    /// on the SOTA feed at a summit, which is routine: many summits are also parks and activators
+    /// self-spot to both. W9XYZ is live at exactly one, as the control.
+    fn two_reference_board() -> Vec<propagation::NeedAlert> {
+        let pota = [
+            live_spot("POTA", "K1ABC", "US-0001", 60),
+            live_spot("POTA", "W9XYZ", "US-0002", 60),
+        ];
+        let sota = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 60)];
+        needed_board(&["K1ABC"], &[("POTA", &pota), ("SOTA", &sota)])
+    }
+
+    /// AMBIGUITY IS NOT A GUESS (operator ruling, 2026-09-17). An activator live at more than one
+    /// reference gets NO park, and the row says so: a missing reference is recoverable by hand, a
+    /// wrong one is a hunt POTA will never credit, because the activator's own log names the other
+    /// park. THE CLUSTER ROW here — it took the first `HashMap` value to match, so which programme
+    /// it named could differ between two polls a minute apart.
+    #[test]
+    fn an_activator_live_at_two_references_names_no_park_on_the_cluster_row() {
+        let alerts = two_reference_board();
+        let cluster = board_row(&alerts, "K1ABC", "CW");
+        assert_eq!(
+            cluster.park, None,
+            "two live references — tagging either one is a QSO the activator's log never matches"
+        );
+        assert!(
+            cluster.headline.contains("US-0001") && cluster.headline.contains("W7A/MN-001"),
+            "the row must say WHICH it could not choose between: {:?}",
+            cluster.headline
+        );
+        // CONTROL, same run: one live reference still tags, or the fix is just "never tag".
+        assert_eq!(
+            board_park(&alerts, "W9XYZ", "Phone"),
+            Some(("POTA".into(), "US-0002".into())),
+            "an unambiguous activator is tagged exactly as before"
+        );
+    }
+
+    /// …and THE FEED'S OWN ROW, which is a separate defect with the same cause: `activation_alert`
+    /// is handed one spot and names it, and the (call, band, mode) skip below then discards the
+    /// other — so the arbitrary pick was also the only one. An activator who never reaches the
+    /// cluster has only this row.
+    #[test]
+    fn an_activator_live_at_two_references_names_no_park_on_the_feeds_own_row() {
+        let alerts = two_reference_board();
+        let feed = board_row(&alerts, "K1ABC", "Phone");
+        assert_eq!(feed.park, None, "the same ruling on the feed's own row");
+        assert!(
+            feed.headline.contains("US-0001") && feed.headline.contains("W7A/MN-001"),
+            "…and it says which too: {:?}",
+            feed.headline
+        );
+        // CONTROL: the feed's row for an unambiguous activator is built by the same call.
+        assert_eq!(
+            board_park(&alerts, "W9XYZ", "Phone"),
+            Some(("POTA".into(), "US-0002".into()))
+        );
+    }
+
+    /// SOTAwatch returns the last n spots by COUNT, not by recency (see `pota::OtaSpot::
+    /// spot_time_unix`), so a summit from this morning rides along on a fresh fetch. The
+    /// decorated path judged freshness on the POLLER's fetch stamp alone, so that summit could
+    /// both win the park and hide a live one behind a false ambiguity.
+    #[test]
+    fn a_stale_summit_neither_tags_a_park_nor_hides_a_live_one() {
+        let pota = [live_spot("POTA", "K1ABC", "US-0001", 60)];
+        let stale = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 7_200)];
+        let alerts = needed_board(&["K1ABC"], &[("POTA", &pota), ("SOTA", &stale)]);
+        assert_eq!(
+            board_park(&alerts, "K1ABC", "CW"),
+            Some(("POTA".into(), "US-0001".into())),
+            "this morning's summit is not an activation happening now"
+        );
+        // POSITIVE CONTROL: the very same summit, spotted NOW, is a second live activation.
+        let fresh = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 60)];
+        let alerts = needed_board(&["K1ABC"], &[("POTA", &pota), ("SOTA", &fresh)]);
+        assert_eq!(
+            board_park(&alerts, "K1ABC", "CW"),
+            None,
+            "…and then it is ambiguous, so the freshness filter is what decided the case above"
+        );
+    }
+
+    /// A PARK STILL TO BE WORKED MUST NOT SINK BECAUSE OF THE ONE BESIDE IT. The feed's own row
+    /// asked "is THIS spot's reference needed?", and which of an activator's spots built the row
+    /// was arbitrary — so a summit already hunted this morning could answer for a park the
+    /// operator still needs, costing that row its NewPark chip and its priority floor. Any live
+    /// reference still to be worked is a need; the safe direction is showing, never hiding.
+    #[test]
+    fn a_needed_park_keeps_its_chip_when_the_park_beside_it_is_already_hunted() {
+        // ONE programme, both references, the hunted one FIRST — so which spot builds the row is
+        // the feed's own order and not `HashMap` order, and the case is the same every run.
+        let pota = [
+            live_spot("POTA", "K1ABC", "US-0002", 120), // …worked at 0000Z today
+            live_spot("POTA", "K1ABC", "US-0001", 60),  // …never worked
+        ];
+        let logged = logged_with("K1ABC", Some("US-0002"), today_0000z());
+        let alerts = needed_board_for(logged, &[], &[("POTA", &pota)]);
+        let row = board_row(&alerts, "K1ABC", "Phone");
+        assert!(
+            row.tags.contains(&propagation::NeedTag::NewPark),
+            "US-0001 has never been worked — the row is still a park need: {:?}",
+            row.tags
+        );
+        // CONTROL: with BOTH references hunted today there is no park need left to show.
+        // The second contact is on ANOTHER BAND, and that is load-bearing: `log_qso` dedups a
+        // repeat of the same call on the same band inside an hour, so logging both at 0000Z on
+        // 20 m would silently drop this one and leave US-0001 needed — the control would then
+        // "fail" for a reason that has nothing to do with the guard under test.
+        let mut both = logged_with("K1ABC", Some("US-0002"), today_0000z());
+        let mut second = park_rec("K1ABC", Some("US-0001"), today_0000z());
+        second.band = "40m".into();
+        second.freq_mhz = 7.185;
+        both.log_qso(second);
+        let alerts = needed_board_for(both, &[], &[("POTA", &pota)]);
+        assert!(
+            !board_row(&alerts, "K1ABC", "Phone")
+                .tags
+                .contains(&propagation::NeedTag::NewPark),
+            "both hunted today — nothing left to need"
+        );
+    }
+
+    /// `parse_pota_spots` does not dedup per activator, so a re-spot at the SAME park is two live
+    /// rows. That is one activation, not an ambiguity — it must still tag.
+    #[test]
+    fn the_same_park_spotted_twice_is_one_activation_and_still_tags() {
+        let pota = [
+            live_spot("POTA", "K1ABC", "US-0001", 300),
+            live_spot("POTA", "K1ABC", "US-0001", 60),
+        ];
+        let alerts = needed_board(&["K1ABC"], &[("POTA", &pota)]);
+        assert_eq!(
+            board_park(&alerts, "K1ABC", "CW"),
+            Some(("POTA".into(), "US-0001".into())),
+            "same park twice is one candidate"
+        );
     }
 
     #[test]

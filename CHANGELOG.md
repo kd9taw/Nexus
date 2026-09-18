@@ -178,6 +178,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data reconnects straight away. This matters because the browser itself sometimes drops the link
   after a slow reply, and a station that was answering the whole time should not be the one made
   to wait for it.
+- **An activator on two parks at once no longer gets you tagged with the wrong one.** Work on the
+  Needed board tags the contact with the activation the row names, and the row picked whichever
+  spot came to hand first — so an operator on a summit that is also a park, self-spotted to both
+  programmes, could be tagged with either, and it could change between one refresh and the next. A
+  wrong reference costs you the hunt outright: the activator's log names the other park, so the
+  two never match and POTA credits nothing. A row with more than one activation live now tags
+  nothing and says which ones it could not choose between — **2 activations live (POTA US-0001,
+  SOTA W7A/MN-001)** — and you pick the one you worked on the POTA/SOTA board. A row with a single
+  activation still tags it for you, as before. A summit spotted hours ago no longer counts as live
+  either: SOTA's feed hands back its last spots by count rather than by recency, so one from the
+  morning could ride along on a perfectly fresh fetch and take the tag off a park that really was.
 
 ## [1.13.0] — 2026-09-16
 
