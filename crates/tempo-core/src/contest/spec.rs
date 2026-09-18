@@ -243,11 +243,17 @@ impl ExchangeSpec {
     /// is what lets a multiplier bucket refuse to count it. A non-`Enum` arm (a `Text`
     /// catch-all, which is how TNQP and TXQP express "or anything else") also yields
     /// `None`: it has no domain to name.
+    ///
+    /// ⚠️ **A plain `Enum` follows the same rule.** It used to record its one domain for
+    /// ANY copied value, so a CQ WW RTTY QTH typed as `EMA` (a section, not a state)
+    /// claimed a match it did not have and counted as a QTH multiplier. A value that is
+    /// not a member is still copied — the contact is kept, and the operator may fix it —
+    /// but it names no domain, so no domain-scoped multiplier counts it.
     pub fn copied(&self, key: &str, raw: &str) -> Option<FieldValue> {
         let f = self.field(key)?;
         let up = raw.trim().to_ascii_uppercase();
         let domain = match f.kind {
-            FieldKind::Enum { domain } => Some(domain.id),
+            FieldKind::Enum { domain } => domain.contains(&up).then_some(domain.id),
             FieldKind::OneOf(arms) => arms.iter().find_map(|a| match a {
                 FieldKind::Enum { domain } if domain.contains(&up) => Some(domain.id),
                 _ => None,
@@ -286,6 +292,36 @@ mod tests {
         assert!(!TEST_DOMAIN.contains("W I"));
         assert!(!TEST_DOMAIN.contains("XX"));
         assert!(!TEST_DOMAIN.contains(""));
+    }
+
+    /// ⭐ A copied `Enum` value names its domain only when it is a member of it — the rule
+    /// a `OneOf` already followed — so a multiplier bucket can refuse a value outside the
+    /// universe. The value itself is kept as copied either way.
+    #[test]
+    fn a_copied_enum_value_names_its_domain_only_when_it_is_a_member() {
+        static FIELDS: &[FieldSpec] = &[FieldSpec {
+            key: "SEC",
+            adif: AdifTags {
+                rcvd: Some("ARRL_SECT"),
+                sent: None,
+            },
+            label: None,
+            required: true,
+            kind: FieldKind::Enum {
+                domain: &TEST_DOMAIN,
+            },
+            source: "",
+        }];
+        let spec = ExchangeSpec {
+            name: "test",
+            fields: FIELDS,
+            roles: &[],
+        };
+        let member = spec.copied("SEC", " wi ").expect("declared slot");
+        assert_eq!(member.domain, Some("test"));
+        let outsider = spec.copied("SEC", "XX").expect("declared slot");
+        assert_eq!(outsider.domain, None, "not a member, so no domain");
+        assert_eq!(outsider.raw, "XX", "…and still copied as it was");
     }
 
     #[test]

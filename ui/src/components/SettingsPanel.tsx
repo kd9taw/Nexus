@@ -151,6 +151,7 @@ import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api
 import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
 import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
 import { getFdRuleset, type FdRulesetDto } from '../api'
+import { locationWarningText } from '../features/contestLocation'
 import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
@@ -10751,6 +10752,17 @@ export function SettingsPanel({
                     {rulesetPreview.problem}
                   </span>
                 ) : null}
+                {/* ⭐ A US or Canadian call about to send the DX exchange: a WARNING, never a
+                    refusal (a US call abroad really is DX). The live session's once the
+                    contest runs, else what these settings would start it with. */}
+                {(() => {
+                  const w = fieldDay ? fieldDay.locationWarning : rulesetPreview?.locationWarning
+                  return w ? (
+                    <span className="fd-section-warn" role="status">
+                      {locationWarningText(w)}
+                    </span>
+                  ) : null
+                })()}
               </div>
 
               <div className="settings-field">
@@ -10820,6 +10832,22 @@ export function SettingsPanel({
                 </div>
               ))}
               <span className="settings-hint">{t('settings.contestPick.entryAxes.hint')}</span>
+              {/* The address a contest log's Cabrillo EMAIL line carries. Optional, and read
+                  when the log is exported rather than when a contest starts: nothing sent on
+                  the air depends on it. NAME is the Station tab's operator name. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.contestPick.email.label')}</span>
+                <input
+                  disabled={locked('contestEmail')}
+                  className="settings-input"
+                  type="email"
+                  value={form.contestEmail ?? ''}
+                  onChange={(e) => update('contestEmail', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.contestPick.email.hint')}</span>
+              </label>
             </fieldset>
           )}
 

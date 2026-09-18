@@ -20,6 +20,7 @@ import type {
   MeterReadout,
   SkimHit,
   PskState,
+  RttyMacroProfile,
   RttyState,
   SstvState,
   ClubLogPushResult,
@@ -427,7 +428,7 @@ export interface FdRulesetDto {
   /**
    * The rules-file event id — 'arrlfd' | 'wfd' | 'tnqp' | 'ohqp' | 'cqp' | 'txqp' |
    * 'arrlss_cw' | 'arrlss_ssb' | 'arrlvhf_jan' | 'arrlvhf_jun' | 'arrlvhf_sep' |
-   * 'cqww_cw' | 'cqww_ssb' | 'cqwpx_cw' | 'cqwpx_ssb'.
+   * 'cqww_cw' | 'cqww_ssb' | 'cqww_rtty' | 'cqwpx_cw' | 'cqwpx_ssb'.
    */
   event: string
   rulesYear: number
@@ -446,6 +447,8 @@ export interface FdRulesetDto {
   /** Why no session could be built from the saved settings — the sentence mode entry
    *  would refuse with. `''` when the configuration is good. */
   problem?: string
+  /** The W/VE warning (never a refusal) these settings would start the contest with. */
+  locationWarning?: import('./types').ContestLocationWarning
 }
 
 /** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of
@@ -888,6 +891,13 @@ export async function getLog(): Promise<LoggedQso[]> {
  * identity the "new one" badge keys on (never the QRZ country string). */
 export async function resolveEntity(call: string): Promise<string | null> {
   return invoke<string | null>('resolve_entity', { call })
+}
+
+/** The CQ zone the country file gives a callsign, or null — through the same adapter the
+ *  contest scorer places a call with. A HINT for the contest strip's zone box (its
+ *  placeholder), never a logged value: a station outside its prefix's zone sends its own. */
+export async function contestZoneHint(call: string): Promise<number | null> {
+  return invoke<number | null>('contest_zone_hint', { call })
 }
 
 /** Edit a logged contact (a correction). `target` is the row as `getLog()` showed it — never a
@@ -2662,6 +2672,19 @@ export async function answerRemoteAutostartOffer(): Promise<AppSnapshot> {
  * effects are reason enough.) The engine trims + uppercases. */
 export async function setFdOperator(call: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_fd_operator', { call })
+}
+
+/** Save the RTTY cockpit's macro sets and which one it shows — the ONE write path for
+ * `macros.rttyProfiles` + `macros.activeRttyProfile`, from the dock's editor and its
+ * Everyday/Contest switch. Narrow and atomic, NEVER the settings form: `set_settings` advances
+ * the TX gate generation (an over just queued would not key) and revokes Remote actuation. The
+ * payload must round-trip exactly or the save is refused, and a Settings-panel save keeps the
+ * live value. Resolves with the saved `macros`, for the caller's settings mirror. */
+export async function setRttyMacros(
+  profiles: RttyMacroProfile[],
+  active: string,
+): Promise<Settings['macros']> {
+  return invoke<Settings['macros']>('set_rtty_macros', { profiles, active })
 }
 
 /** Load persisted operator + radio settings. */

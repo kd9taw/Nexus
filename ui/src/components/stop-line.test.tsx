@@ -91,7 +91,8 @@
 // lines are the same on the event weekend as off it. The Field Day section itself draws no
 // transmit control at all — it is setup, score, sections, bonuses, the log and the club board.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, act } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
+import * as api from '../api'
 import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 import { RttyCockpit } from './RttyCockpit'
@@ -695,5 +696,77 @@ describe('the stop line, computed against the real cockpits', () => {
       expect(vocab, `no vocabulary named "${c.view}"`).toBeDefined()
       expect([...c.ids], `${c.cockpit} sweeps a stale id list`).toEqual([...vocab!.panelIds])
     }
+  })
+})
+
+describe('RTTY: the macro editor never stands between the operator and a stop', () => {
+  // The F-key editor is the one RTTY surface that takes the caret out of the dock and puts a form
+  // in front of the operator, and Esc is the key both "cancel" and "stop" live on. So, with it
+  // open: Stop TX and the dock's Esc/Stop are on screen and live while an over is on the air, and
+  // Esc stops exactly as it does without the editor. With nothing on the air, Esc closes the
+  // editor ONLY — a stop there is haltTx, which turns TX off over a key meant as "cancel".
+  //
+  // Rendered with the REAL header, as every case above is, because Stop TX lives in it.
+  const rttyStop = () => vi.mocked(api.rttyStop)
+  const haltTx = () => vi.mocked(api.haltTx)
+
+  /** Mount RTTY in `state`, wait until the cockpit shows it, and open the F1 editor. */
+  async function openEditor(state: RttyState, ready: () => void) {
+    vi.mocked(api.getRttyState).mockImplementation(async () => state)
+    render(<RttyCockpit snap={snap} active onSetTxEnabled={() => {}} />)
+    await settle()
+    await waitFor(ready)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Edit the F1 macro' }))
+    })
+    expect(document.querySelector('.rtty-macro-editor'), 'fixture: the editor is open').not.toBeNull()
+    rttyStop().mockClear()
+    haltTx().mockClear()
+  }
+  const onAir = () => expect(screen.getByText('TX ▲')).toBeTruthy()
+  const latchUp = () =>
+    expect(document.querySelector('.rtty-tx-latch')?.getAttribute('aria-pressed')).toBe('true')
+
+  afterEach(() => {
+    vi.mocked(api.getRttyState).mockImplementation(async () => rttyState)
+  })
+
+  it('Stop TX and the Esc/Stop macro are on screen and enabled while an over is on the air', async () => {
+    await openEditor({ ...rttyState, sending: true } as RttyState, onAir)
+    const stopTx = screen.getByRole('button', { name: /^stop tx$/i }) as HTMLButtonElement
+    const escStop = screen.getByRole('button', { name: /^esc\s*stop$/i }) as HTMLButtonElement
+    expect(stopTx.disabled).toBe(false)
+    expect(escStop.disabled).toBe(false)
+    // …and they still do what they are for, with the editor open.
+    fireEvent.click(stopTx)
+    expect(haltTx()).toHaveBeenCalled()
+    fireEvent.click(escStop)
+    expect(rttyStop()).toHaveBeenCalled()
+  })
+
+  it('Esc while an over is on the air STOPS — the editor does not swallow it', async () => {
+    await openEditor({ ...rttyState, sending: true } as RttyState, onAir)
+    fireEvent.keyDown(screen.getByLabelText(/^title$/i), { key: 'Escape' })
+    expect(rttyStop()).toHaveBeenCalled()
+    expect(haltTx()).toHaveBeenCalled()
+  })
+
+  it('Esc while continuous TX is latched STOPS', async () => {
+    await openEditor({ ...rttyState, latched: true } as RttyState, latchUp)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(rttyStop()).toHaveBeenCalled()
+    expect(haltTx()).toHaveBeenCalled()
+  })
+
+  it('Esc with nothing on the air closes the editor and stops NOTHING', async () => {
+    await openEditor(rttyState, () => expect(document.querySelector('.rtty-macros')).not.toBeNull())
+    fireEvent.keyDown(screen.getByLabelText(/^title$/i), { key: 'Escape' })
+    expect(document.querySelector('.rtty-macro-editor'), 'Esc did not close the editor').toBeNull()
+    expect(rttyStop()).not.toHaveBeenCalled()
+    expect(haltTx(), 'Esc-to-cancel turned TX off').not.toHaveBeenCalled()
+    // POSITIVE CONTROL: with the editor closed, the same idle Esc is a stop, as it always was.
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(rttyStop()).toHaveBeenCalled()
+    expect(haltTx()).toHaveBeenCalled()
   })
 })

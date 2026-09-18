@@ -4,13 +4,16 @@
 // (its off-click aborts the QSO and unkeys) and the continuous-TX latch, plus the TX pill's
 // tooltip, which is the wording that states what Stop TX does to an over in flight. Those
 // move in the transmit-path batch, with the stop-line sweeps re-run. Everything else is in
-// the catalog under `rtty.*`; the baud, shift, tone and AFC figures, the F-key macro TEXTS
-// and the mode/direction plates are invariant tokens and stay in the code.
+// the catalog under `rtty.*`; the baud, shift, tone and AFC figures and the mode/direction
+// plates are invariant tokens and stay in the code. The F-key macro sets (their texts are
+// invariant too) live in `features/rttyMacros.ts`, and their buttons and editor in the migrated
+// `RttyMacroEditor.tsx`.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSnapshot, BandChannel, RttyState } from '../types'
+import type { AppSnapshot, BandChannel, RttyMacroProfile, RttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { LogEntry } from './LogEntry'
+import { RttyMacroButton, RttyMacroEditor, RttyMacroSetSwitch, isEmptyRttySlot } from './RttyMacroEditor'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { RTTY_PANEL_IDS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -35,9 +38,23 @@ import {
   rttyStop,
   rttyType,
   setRfPower,
+  setRttyMacros,
   setTune,
 } from '../api'
 import { bandLabelForMhz } from '../band'
+import { contestDomain } from '../features/contestDomains'
+import { grabAt } from '../features/rttyGrab'
+import {
+  expandRttyMacro,
+  frameForAir,
+  resolveRttySet,
+  rttySetId,
+  withRttyEntry,
+  withRttySetReset,
+  type RttyMacroKey,
+  type RttyMacroSlot,
+  type RttySetId,
+} from '../features/rttyMacros'
 import { pushToast, withErrorToast } from '../toast'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -72,12 +89,18 @@ interface Props {
   /** Panel visibility record — host-owned (App) so it survives remounts. Optional: without it
    *  the decode stream shows and there's no ⊞ menu. */
   panels?: PanelLayoutApi<RttyPanelId>
+  /** The persisted macros (App's settings mirror), for the F-key sets in `rttyProfiles` /
+   *  `activeRttyProfile`. Passed down rather than fetched here, so this cockpit adds no settings
+   *  read of its own. Absent → the built-in sets. */
+  macros?: Settings['macros'] | null
+  /** The engine saved the macro sets: here is the `macros` it now holds, for the mirror. */
+  onMacrosSaved?: (macros: Settings['macros']) => void
 }
 
 /** This cockpit's INVARIANT vocabulary — the words that are the mode's own technical
  *  tokens rather than prose, gathered here so the i18n guard reads them as the deliberate
  *  constants they are: the mode name in the badge, the RX/TX direction plates, and the
- *  Q-code the CQ macro is named for. */
+ *  Q-code the auto-sequencer's CQ button is named for. */
 const RTTY = 'RTTY'
 /** Baud · shift as the badge prints them before the decoder has answered — the HF standard
  *  pair, figures and unit both, so it is a token exactly as the live reading is. */
@@ -85,7 +108,6 @@ const DEFAULT_TONES = '45.45 · 170 Hz'
 const RX_PLATE = 'RX ▼'
 const TX_PLATE = 'TX ▲'
 const CQ = 'CQ'
-const SEVENTY_THREE = '73'
 
 /** Display labels for the RTTY removable panels (the ⊞ Panels menu). Resolved when the
  *  menu is BUILT — a module constant would freeze the first locale loaded. */
@@ -97,21 +119,6 @@ const rttyPanelLabels = (): Record<RttyPanelId, string> => ({
   stream: t('rtty.panel.stream'),
 })
 
-/** Standard casual RTTY F-key set (599-not-5NN comes with the contest schemas).
- * Simple templates for now — {MYCALL} from the snapshot, {CALL} from the
- * their-call field; the full auto-sequencer wiring is a later wave. The engine
- * re-validates every gate (TX-enable, privileges, RTTY section) on each send.
- *
- * `text` is what goes ON THE AIR and is invariant, every character of it. The LABELS are
- * mixed: `CQ` is a Q-code and `73` a number, both invariant; the other two are words, so
- * the label is resolved when the row renders rather than at import. */
-const MACROS: { key: string; label: () => string; text: string }[] = [
-  { key: 'F1', label: () => CQ, text: 'CQ CQ CQ DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', label: () => t('rtty.macro.answer.label'), text: '{CALL} DE {MYCALL} {MYCALL} K' },
-  { key: 'F3', label: () => t('rtty.macro.exchange.label'), text: '{CALL} DE {MYCALL} UR 599 599 K' },
-  { key: 'F4', label: () => SEVENTY_THREE, text: '{CALL} DE {MYCALL} TU 73 SK' },
-]
-
 /** The transcript renderer is SHARED with the PSK cockpit (and every keyboard
  * mode after it) — lifted verbatim to `../transcript` in Keyboard Modes
  * Phase 1. Re-exported here under RTTY's original names so this cockpit's
@@ -120,6 +127,34 @@ const MACROS: { key: string; label: () => string; text: string }[] = [
  * field hang it fixed) lives with the function. */
 export { confidenceRuns, TRANSCRIPT_MAX_RUNS as RTTY_MAX_RUNS } from '../transcript'
 import { confidenceRuns } from '../transcript'
+
+/** The character under a point, as an offset into `box.textContent` — or null when nothing
+ *  under it is in `box`. The browser's caret hit-test first (`caretPositionFromPoint`, or the
+ *  WebKit/Chromium `caretRangeFromPoint`), then the selection the double-click itself just made.
+ *  Only the POSITION is taken from any of them: the word is re-derived from the string
+ *  (`rttyGrab.ts`), because native word selection stops at the `/` of a compound call. */
+function caretOffsetIn(box: HTMLElement, x: number, y: number): number | null {
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+  }
+  const pos = doc.caretPositionFromPoint?.(x, y)
+  const range = pos ? null : doc.caretRangeFromPoint?.(x, y)
+  const sel = window.getSelection()
+  const points: [Node | null | undefined, number][] = [
+    [pos?.offsetNode, pos?.offset ?? 0],
+    [range?.startContainer, range?.startOffset ?? 0],
+    [sel && sel.rangeCount > 0 ? sel.anchorNode : null, sel?.anchorOffset ?? 0],
+  ]
+  for (const [node, offset] of points) {
+    if (!node || !box.contains(node)) continue
+    const before = document.createRange()
+    before.setStart(box, 0)
+    before.setEnd(node, offset)
+    return before.toString().length
+  }
+  return null
+}
 
 /** "+12 Hz" (signed) AFC readout. */
 function fmtAfc(hz: number): string {
@@ -147,6 +182,19 @@ function seqLabel(s: string): string {
 }
 
 /**
+ * Does the build KNOW this value to be a member of that domain? The grab's enum test.
+ *
+ * ⚠️ Deliberately NOT `inDomain`, which the entry strip uses and which answers TRUE for a
+ * domain it carries no values for. That is the honest while-typing verdict — an absent value
+ * set is no evidence the operator typed something wrong — and it is the wrong polarity for a
+ * grab, where it would file the first word double-clicked, a CALLSIGN, as the exchange. A grab
+ * fills only what can be recognised; everything else stays the operator's to type.
+ */
+function knownCode(domain: string | undefined, value: string): boolean {
+  return contestDomain(domain)?.codes.has(value.trim().toUpperCase()) ?? false
+}
+
+/**
  * RTTY operating cockpit (Digital rail: FT · Tempo · RTTY · SSTV) — live RX
  * (arm the decoder; the tempo_core::rtty demod prints with per-character
  * confidence fading + the acquire-then-freeze AFC readout) and operator-keyed
@@ -156,7 +204,7 @@ function seqLabel(s: string): string {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels, macros, onMacrosSaved }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const dataAvailable = useStationData()
@@ -242,9 +290,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const heardCq = rtty?.heardCq ?? null
   const toggleAuto = () => {
     if (!control) return
-    void rttySetAuto(!auto)
-      .then(setRtty)
-      .catch(() => pushToast(t('rtty.auto.failed'), 'error'))
+    // `withErrorToast`, not a bare catch: the engine REFUSES to arm in any contest but the two
+    // Field Day events, and it refuses with a sentence that says what to do instead (send the
+    // exchange with the macros, log each contact yourself). A catch that toasted only this
+    // file's fallback would leave the operator a button that does nothing and no reason why.
+    void withErrorToast(() => rttySetAuto(!auto), t('rtty.auto.failed')).then((s) => {
+      if (s) setRtty(s)
+    })
   }
   const autoCq = () => {
     if (!control) return
@@ -304,22 +356,108 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // ownership and returns why a send was refused (surfaced as a toast).
   const [text, setText] = useState('')
   const [hisCall, setHisCall] = useState('')
+  // THE CALL BOX AND THE LOG STRIP'S CALLSIGN ARE ONE FIELD, shown twice. The dock → strip half
+  // is PSK's bridge (PskCockpit.tsx `settledHisCall`, whose comment carries the reasoning): the
+  // strip's live machine-fill channel, which moves no caret, DEBOUNCED so typing K, K1, K1A… does
+  // not spend a callbook lookup per keystroke. The strip → dock half is `onCallChange`, which
+  // also carries the clear after a contact is logged. A value that arrives whole — a grab, or
+  // the strip's own — is settled at once: there is no typing to wait out.
+  const [settledHisCall, setSettledHisCall] = useState('')
+  useEffect(() => {
+    const id = setTimeout(() => setSettledHisCall(hisCall.trim().toUpperCase()), 500)
+    return () => clearTimeout(id)
+  }, [hisCall])
+  const setCallNow = (call: string) => {
+    setHisCall(call)
+    setSettledHisCall(call)
+  }
+
+  // THE GRAB — double-click a callsign in Decoded text, or (in a contest) a value of the
+  // exchange. The offset is resolved at EVENT time against the text on screen at that instant
+  // (the ring is front-trimmed and re-rendered twice a second, so a stored offset is a
+  // different character by the next poll) and the word is derived from that string
+  // (`features/rttyGrab.ts`). Anything the classifier does not recognise is a no-op with no
+  // toast. A Remote observer's Call box is disabled, and so is this.
+  //
+  // WHAT THE EXCHANGE LOOKS LIKE IS THE SESSION'S TO SAY, never this file's: the slots come off
+  // `snap.fieldDay.receives`, so a zone's bounds and a QTH's legal values are the running
+  // ruleset's own. A filled value reaches the strip through `fillExchange` — contest-rules' fill
+  // API — which refills one box on every new `ts`; `fillSeq` keeps that stamp strictly rising
+  // because two grabs CAN share a millisecond and the second must not read as "no change".
+  //
+  // ⚠️ THE CARET GOES BACK WHERE IT WAS. A press on plain text takes focus out of the field the
+  // operator was typing in; with continuous TX latched that field is the compose bar, the only
+  // one that feeds the air, and a grab that left it there would silently stop the transmission
+  // taking their typing. So the element focused at the FIRST press of the double-click
+  // (`detail` 1 — by the second press the browser has already moved focus) is focused again.
+  const [fillExchange, setFillExchange] = useState<{
+    key: string
+    value: string
+    ts: number
+  } | null>(null)
+  const fillSeq = useRef(0)
+  const grabFocus = useRef<Element | null>(null)
+  const onStreamMouseDown = (e: React.MouseEvent) => {
+    if (e.detail <= 1) grabFocus.current = document.activeElement
+  }
+  const onStreamDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!control || !text_rx) return
+    const box = e.currentTarget
+    const offset = caretOffsetIn(box, e.clientX, e.clientY)
+    const hit =
+      offset == null
+        ? null
+        : grabAt(box.textContent ?? '', offset, {
+            slots: snapRef.current?.fieldDay?.receives,
+            knownCode,
+          })
+    if (!hit) return
+    if (hit.kind === 'call') setCallNow(hit.value)
+    else {
+      fillSeq.current = Math.max(Date.now(), fillSeq.current + 1)
+      setFillExchange({ key: hit.slot, value: hit.value, ts: fillSeq.current })
+    }
+    const prior = grabFocus.current
+    if (prior instanceof HTMLElement && prior !== document.body && prior.isConnected) {
+      prior.focus({ preventScroll: true })
+    }
+  }
   // Live snapshot ref so send() reads the CURRENT privilege state (same pattern
   // as the CW cockpit's keyboard handler).
   const snapRef = useRef(snap)
   snapRef.current = snap
   // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter
   // by that name would shadow it here and nowhere else.
-  const send = (line: string) => {
+  //
+  // THE ONE PATH TO `rtty_send`, for the compose bar, a click on a macro and an F-key alike —
+  // there is no second way to the transmitter to keep honest. Tokens go through the RTTY
+  // expander (`features/rttyMacros.ts`, never `cw::expand`): {MYCALL}, {CALL}, {RST} = 599 and
+  // {EXCH}, the running contest's exchange — none yet, so a message using it is refused exactly
+  // like a {CALL} with no call. A token it does not know is refused too: RTTY cannot send
+  // braces, so it would otherwise go out as a bare word. `macro` frames an F-key message for the
+  // air (a line of its own, ending in a space); what is typed in the compose bar goes as typed.
+  const send = (line: string, macro = false) => {
     if (!control) return
     if (!line.trim()) return
-    const mycall = snapRef.current?.mycall?.trim() ?? ''
-    if (line.includes('{MYCALL}') && !mycall) {
-      pushToast(t('rtty.send.noCallsign'), 'info', 3500)
+    // {EXCH} IS THE RUNNING CONTEST'S SENT EXCHANGE, off the session itself — never Field Day's
+    // two Settings fields, which is what the CW expander read and which keyed last June's class
+    // and section at every station in a QSO party. The field is on every snapshot and EMPTY
+    // outside a contest, so an empty one is "there is none": refused like a missing {CALL},
+    // rather than sent as a message with a hole where the exchange goes.
+    const exch = snapRef.current?.fieldDay?.sentExchange?.trim()
+    const expanded = expandRttyMacro(line, {
+      mycall: snapRef.current?.mycall ?? '',
+      call: hisCall,
+      exch: exch ? exch : null,
+    })
+    if ('unknown' in expanded) {
+      pushToast(t('rtty.send.unknownToken', { token: expanded.unknown }), 'info', 3500)
       return
     }
-    if (line.includes('{CALL}') && !hisCall.trim()) {
-      pushToast(t('rtty.send.noTheirCall'), 'info', 3000)
+    if ('missing' in expanded) {
+      if (expanded.missing === 'mycall') pushToast(t('rtty.send.noCallsign'), 'info', 3500)
+      else if (expanded.missing === 'call') pushToast(t('rtty.send.noTheirCall'), 'info', 3000)
+      else pushToast(t('rtty.send.noExchange'), 'info', 3500)
       return
     }
     // The engine blocks keying outside privileges anyway; surface why up front.
@@ -327,10 +465,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       pushToast(t('rtty.send.txLocked'), 'info', 3500)
       return
     }
-    const expanded = line
-      .replace(/\{MYCALL\}/g, mycall)
-      .replace(/\{CALL\}/g, hisCall.trim().toUpperCase())
-    void withErrorToast(() => rttySend(expanded), t('rtty.send.failed')).then((s) => {
+    const onAir = macro ? frameForAir(expanded.text) : expanded.text
+    void withErrorToast(() => rttySend(onAir), t('rtty.send.failed')).then((s) => {
       if (s) setRtty(s)
     })
   }
@@ -404,23 +540,148 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     el.addEventListener('beforeinput', onBeforeInput)
     return () => el.removeEventListener('beforeinput', onBeforeInput)
   }, [latched, control])
-  // Esc stops RTTY from anywhere in the cockpit. RTTY had no keyboard binding at
-  // all (the Stop macro's "Esc" glyph was decoration); a latched transmitter is
-  // what makes that gap matter. Bound only while this is the VISIBLE view — the
-  // cockpit stays mounted in the keep-alive host, so an unconditional listener
-  // would fire Stop TX from inside another section.
+  // --- THE F1–F8 MACROS ------------------------------------------------------------------
+  // Two built-in sets, Everyday and Contest, with the operator's saved keys folded over them
+  // (`features/rttyMacros.ts`). The saved sets are App's settings mirror; a save goes through
+  // `setRttyMacros` — the engine's atomic one-writer save, NEVER the settings form, which would
+  // advance the TX gate generation (an over just queued would not key) — and the engine's answer
+  // is what renders afterwards, here and in App.
+  const [macroSets, setMacroSets] = useState(() => ({
+    profiles: macros?.rttyProfiles ?? [],
+    active: macros?.activeRttyProfile ?? '',
+  }))
+  useEffect(() => {
+    setMacroSets({ profiles: macros?.rttyProfiles ?? [], active: macros?.activeRttyProfile ?? '' })
+  }, [macros?.rttyProfiles, macros?.activeRttyProfile])
+  const macroSet = rttySetId(macroSets.active)
+  const slots = resolveRttySet(macroSets.profiles, macroSet, t)
+  const [editing, setEditing] = useState<RttyMacroKey | null>(null)
+  const [editorLeft, setEditorLeft] = useState(0)
+  const [confirmSetReset, setConfirmSetReset] = useState(false)
+  const [savingMacros, setSavingMacros] = useState(false)
+  const dockRef = useRef<HTMLDivElement | null>(null)
+  const openEditor = (key: RttyMacroKey) => {
+    if (!control) return
+    // Layout units (`offsetLeft`, against the dock — the key's nearest positioned ancestor), so
+    // the app's zoom cancels out; the editor clamps itself against the dock's right edge.
+    const el = dockRef.current?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"]`)
+    setEditorLeft(el?.offsetLeft ?? 0)
+    setConfirmSetReset(false)
+    setEditing(key)
+  }
+  const closeEditor = () => {
+    const key = editing
+    setEditing(null)
+    setConfirmSetReset(false)
+    // The caret goes back to the key the editor was opened from, not to the top of the page.
+    if (key) {
+      dockRef.current
+        ?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"] .cw-macro`)
+        ?.focus({ preventScroll: true })
+    }
+  }
+  const saveMacroSets = async (profiles: RttyMacroProfile[], activeSet: string): Promise<boolean> => {
+    if (!control) return false
+    setSavingMacros(true)
+    const saved = await withErrorToast(
+      () => setRttyMacros(profiles, activeSet),
+      t('rtty.macros.saveFailed'),
+    )
+    setSavingMacros(false)
+    if (!saved) return false
+    setMacroSets({ profiles: saved.rttyProfiles ?? [], active: saved.activeRttyProfile ?? '' })
+    onMacrosSaved?.(saved)
+    return true
+  }
+  const saveMacro = async (slot: RttyMacroSlot, label: string, message: string) => {
+    if (label === slot.label && message === slot.text) {
+      closeEditor()
+      return
+    }
+    const next = withRttyEntry(macroSets.profiles, macroSet, slot.key, { label, text: message })
+    if (await saveMacroSets(next, macroSets.active)) closeEditor()
+  }
+  const resetMacro = async (key: RttyMacroKey) => {
+    const next = withRttyEntry(macroSets.profiles, macroSet, key, null)
+    if (await saveMacroSets(next, macroSets.active)) closeEditor()
+  }
+  const switchMacroSet = (id: RttySetId) => {
+    setEditing(null)
+    setConfirmSetReset(false)
+    void saveMacroSets(macroSets.profiles, id)
+  }
+  const resetMacroSet = () => {
+    setEditing(null)
+    void saveMacroSets(withRttySetReset(macroSets.profiles, macroSet), macroSets.active)
+  }
+  const sendMacro = (slot: RttyMacroSlot) => {
+    if (!control || isEmptyRttySlot(slot)) return
+    send(slot.text, true)
+  }
+  /** A key's hover text: the message with what is known filled in, tokens left where not. */
+  const macroTitle = (message: string) => {
+    const mycall = snap?.mycall?.trim().toUpperCase() || '{MYCALL}'
+    const call = hisCall.trim().toUpperCase() || '{CALL}'
+    const filled = message
+      .replace(/\{MYCALL\}/gi, mycall)
+      .replace(/\{CALL\}/gi, call)
+      .replace(/\{RST\}/gi, '599')
+    return `${filled}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`
+  }
+
+  // THE KEYBOARD — Esc, and F1–F8. Bound only while this is the VISIBLE view: the cockpit stays
+  // mounted in the keep-alive host, so an unconditional listener would fire from inside another
+  // section. One listener bound per visit, reading the live state through `keys`.
+  //
+  // Esc stops RTTY from anywhere in the cockpit (RTTY had no keyboard binding at all until a
+  // latched transmitter made the gap matter) — with ONE exception, and it is the macro editor's:
+  // while the editor (or the reset-set question) is open and NOTHING is live, Esc closes it and
+  // stops nothing. A stop there is `haltTx`, which turns TX off, over a key the operator meant as
+  // "cancel". "Live" is the Esc/Stop macro's own predicate — an over on the air or queued
+  // (`sending`) or continuous TX latched — widened by a running auto sequence, which keys again
+  // on its next step and has its own Abort live in the dock. Anything live, Esc stops, editor or
+  // no editor.
+  //
+  // F1–F8 send through the same `sendMacro` → `send()` → `rtty_send` a click does. They work
+  // with the caret in the compose bar, the Call box or the log strip; not while the editor is
+  // open; not on a held key's repeats (one press, one over); and never with Alt, Ctrl or Cmd,
+  // which belong to the system (Alt+F4). A bound F-key's default is cancelled even while the
+  // editor is open, so the webview's own F-key actions never fire from this view.
+  const keys = useRef({ editorOpen: false, live: false, slots, closeEditor, sendMacro })
+  keys.current = {
+    editorOpen: editing !== null || confirmSetReset,
+    live: sending || latched || (auto && seqState !== 'idle' && seqState !== 'done'),
+    slots,
+    closeEditor,
+    sendMacro,
+  }
   useEffect(() => {
     if (!control || !active) return
     const onKey = (e: KeyboardEvent) => {
+      const k = keys.current
       if (e.key === 'Escape') {
         e.preventDefault()
-        stop()
+        if (k.editorOpen && !k.live) k.closeEditor()
+        else stop()
+        return
       }
+      if (!/^F[1-8]$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
+      e.preventDefault()
+      if (e.repeat || k.editorOpen) return
+      const slot = k.slots.find((s) => s.key === e.key)
+      if (slot) k.sendMacro(slot)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, control])
+  // An editor is operator state for THIS station: a lost control hand closes it.
+  useEffect(() => {
+    if (!control) {
+      setEditing(null)
+      setConfirmSetReset(false)
+    }
+  }, [control])
 
   const text_rx = rtty?.text ?? ''
   // Only re-walk the ring when the transcript itself changed. App re-renders
@@ -679,7 +940,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         {!control && (!rtty || !armed) && <p className="cw-decode-idle" role="status">
           {rtty ? t('remote.keyboardStopped') : t('remote.keyboardUnavailable')}
         </p>}
-        <div className="cw-decode-text" ref={streamPin.ref} onScroll={streamPin.onScroll}>
+        <div
+          className="cw-decode-text"
+          ref={streamPin.ref}
+          onScroll={streamPin.onScroll}
+          onMouseDown={onStreamMouseDown}
+          onDoubleClick={onStreamDoubleClick}
+        >
           {text_rx ? (
             runs.map((run, i) => (
               <span key={i} style={run.opacity < 1 ? { opacity: run.opacity } : undefined}>
@@ -722,7 +989,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           The strip needs 296 px of pane height to put its Log button on screen; an even 1:1
           split gives 292 px at 1920×1080 and misses it by four pixels, and `fit="content"`
           (488 px with a recall card open) drives the SHELL onto its deficit valve in the
-          ordinary case. See PskCockpit.tsx for the full table of sizes. */}
+          ordinary case. See PskCockpit.tsx for the full table of sizes.
+
+          ⭐ THE CONTEST STRIP IS THE EASY CASE, measured in a CQ WW RTTY session (Call + RST +
+          Zone + QTH and the missing-QTH warning line) in headless Chrome, so this weight is
+          RIGHT for a contest weekend and needed no change: at 1024×768 / 85 % every box, the
+          warning line AND the Log button are inside the pane's 118 px with 2 px to spare (the
+          6 px that overflow are the strip's bottom padding); at 1024×768 pinned to 100 %, at
+          1366×768 and at 1920×1080 all of it is in view with room over. The EVERYDAY strip is
+          the tall one — name, QTH, state, country, park, notes — and it is the one whose Log
+          button needs a pane scroll at 1024×768. Only 175 % pinned puts the contest boxes
+          behind a scroll, and the everyday strip is no better there: that is the zoom's, not
+          the contest's. Esc/Stop and Stop TX are on screen at every size measured, and the
+          page body never scrolls. */}
       {snap && (
         <CockpitPaneFrame title={t('rtty.pane.log.title')} paneId="log" weight={1.5}>
           {!control ? <RemoteRecallEntry snap={snap} mode={RTTY} onOpenLog={onOpenLogbook} /> : (
@@ -733,6 +1012,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             defaultRst="599"
             exchange="terrestrial"
             titled={false}
+            // The dock's Call box, settled, and the strip's call back into it — one field. See
+            // `settledHisCall`. `confirmed: true` because the operator typed or grabbed it.
+            cwLive={
+              settledHisCall
+                ? { call: settledHisCall, rst: null, name: null, confirmed: true }
+                : null
+            }
+            onCallChange={setCallNow}
+            // The grab's exchange half: one box, refilled on every new `ts`. See the grab.
+            fillExchange={fillExchange}
             fieldDay={snap.fieldDay ?? null}
             fdMode="DIG"
             fdSubmode={RTTY}
@@ -766,7 +1055,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           over: the engine's per-tick gate re-check, which unkeys within one tick on a section
           change, a QSY out of privileges, a tune, or a radio handoff — none of which is a
           control the operator pressed. */}
-      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
+      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`} ref={dockRef}>
       {auto && (
         <div className="cw-macros rtty-auto-row" role="group" aria-label={t('rtty.seq.aria')}>
           {seqState === 'idle' ? (
@@ -824,7 +1113,30 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
       )}
 
+      {/* THE KEYS AND THE FIXED ROW, which share one line where the dock is wide enough for
+          both and fold into two where it is not (styles.css `.rtty-dock-keys`). */}
+      <div className="rtty-dock-keys">
+      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest. Senders,
+          every one — the rule is indifferent to senders, and none of them may be captioned as a
+          stop (the editor refuses it). Default Mac keyboards eat bare F-keys as media keys, so
+          each key's tooltip carries the cure there. */}
       <div className="cw-macros rtty-macros" role="group" aria-label={t('rtty.macros.aria')}>
+        {slots.map((slot) => (
+          <RttyMacroButton
+            key={slot.key}
+            slot={slot}
+            control={control}
+            editing={editing === slot.key}
+            title={macroTitle(slot.text)}
+            onSend={() => sendMacro(slot)}
+            onEdit={() => openEditor(slot.key)}
+          />
+        ))}
+      </div>
+
+      {/* THE FIXED ROW: the Call box, the set switch, and — at the right, together, outside
+          every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}
+      <div className="rtty-dock-row">
         <input
           disabled={!control}
           className="settings-input rtty-hiscall"
@@ -835,25 +1147,15 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           autoComplete="off"
           spellCheck={false}
         />
-        {/* The buttons ADVERTISE their F-keys; default Mac keyboards eat bare F-keys as
-            media keys, so the tooltip carries the cure there (mac QA audit). */}
-        {MACROS.map((m) => (
-          <button
-            disabled={!control}
-            key={m.key}
-            type="button"
-            className="cw-macro"
-            onClick={() => send(m.text)}
-            title={`${m.text
-              .replace(/\{MYCALL\}/g, snap?.mycall ?? '{MYCALL}')
-              .replace(/\{CALL\}/g, hisCall.trim().toUpperCase() || '{CALL}')}${
-              IS_MAC ? `\n${FN_KEY_HINT}` : ''
-            }`}
-          >
-            <span className="cw-macro-key">{m.key}</span>
-            <span className="cw-macro-label">{m.label()}</span>
-          </button>
-        ))}
+        <RttyMacroSetSwitch
+          set={macroSet}
+          control={control}
+          customized={slots.some((s) => s.custom)}
+          confirming={confirmSetReset}
+          onConfirming={setConfirmSetReset}
+          onSwitch={switchMacroSet}
+          onReset={resetMacroSet}
+        />
         {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
             tooltip is the wording that states what clicking it off does NOT do (it lets
             what was typed finish keying). Label and tooltips move with the stop line. */}
@@ -892,6 +1194,24 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           <span className="cw-macro-label">Stop</span>
         </button>
       </div>
+      </div>
+
+      {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so it
+          moves and covers no control in the dock; non-modal, so Stop TX in the header stays one
+          click away. Esc is decided by the cockpit's keyboard handler above, never here. */}
+      {control && editing && (
+        <RttyMacroEditor
+          key={editing}
+          slot={slots.find((s) => s.key === editing)!}
+          left={editorLeft}
+          saving={savingMacros}
+          onSave={(label, message) =>
+            void saveMacro(slots.find((s) => s.key === editing)!, label, message)
+          }
+          onCancel={closeEditor}
+          onReset={() => void resetMacro(editing)}
+        />
+      )}
 
       <div className="cw-send">
         <input

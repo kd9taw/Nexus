@@ -18,6 +18,7 @@
   "contestCategoryPower": "",
   "contestCategoryAssisted": "",
   "contestCategoryStation": "",
+  "contestEmail": "",
   "contestQthCounty": "",
   "contestQthState": "",
   "contestCheck": "",
@@ -268,7 +269,9 @@
     ],
     "cw": [],
     "cwProfiles": [],
-    "activeCwProfile": 0
+    "activeCwProfile": 0,
+    "rttyProfiles": [],
+    "activeRttyProfile": ""
   },
   "voiceMessages": [
     {

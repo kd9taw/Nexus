@@ -221,6 +221,26 @@ pub struct FdRuleset {
     /// the column, which is why a single-position entry writes `0` rather than omitting
     /// it — see [`ContestSession::transmitter_id`](crate::contest::ContestSession::transmitter_id).
     pub transmitter_column: bool,
+    /// ⭐ **The sponsor's own Cabrillo exchange columns**, when its QSO template is not the
+    /// structural one — empty for every contest whose template is (all of them before
+    /// CQ WW RTTY). See [`CabrilloColumn`](crate::contest::CabrilloColumn).
+    pub cabrillo_columns: &'static [crate::contest::CabrilloColumn],
+    /// The OPTIONAL Cabrillo headers the sponsor's page lists and this build can source
+    /// (`"CATEGORY-POWER"`, `"NAME"`…). Empty writes none — the header block every contest
+    /// wrote before this existed.
+    pub cabrillo_headers: &'static [&'static str],
+    /// `LOCATION` spellings that differ from the exchange's: `(sent QTH, LOCATION)`.
+    /// CQ WW RTTY's exchange sends `PEI` and its LOCATION list spells the same place `PE`.
+    pub cabrillo_location: &'static [(&'static str, &'static str)],
+    /// ⭐ **The bands this contest runs on, as ADVISORY data** (`"20m"`), or empty when the
+    /// ruleset names none. Nothing scores or dupes off it: a contact on another band is
+    /// logged, and the entry strip says the contest does not use that band.
+    pub bands: &'static [&'static str],
+    /// Other spellings of a W/VE location the operator may type into the state field,
+    /// read as the code a role lists: `(typed, listed)`. CQ WW RTTY's exchange writes
+    /// `PEI` and `NWT`, and Canada Post (and the sponsor's LOCATION list) write `PE` and
+    /// `NT`. Empty for every contest that names none.
+    pub location_aliases: &'static [(&'static str, &'static str)],
 }
 
 impl FdRuleset {
@@ -746,7 +766,69 @@ struct RulesetSpec {
     score_note_key: String,
     #[serde(default)]
     objectives: Vec<BonusSpec>,
+    /// ⭐ **The sponsor's own Cabrillo template, where it asks for more than the
+    /// structural one** — CQ WW RTTY's fixed exchange columns, its optional headers and
+    /// its LOCATION spellings.
+    ///
+    /// ⚠️ **`#[serde(default)]`, and absent is a decision, not a hole.** An absent block
+    /// is the structural QSO line and the header block every contest shipped before this
+    /// key already writes — the `score_note_key` case (absent means what the existing
+    /// contests mean), not the `exchange`/`scoring` case §8(c) rules on, where a default
+    /// would load a file with a whole behaviour missing. A block that IS present is
+    /// validated in full, and one that forgot a slot is refused by name.
+    #[serde(default)]
+    cabrillo: CabrilloSpec,
+    /// Advisory band labels (`["80m", "40m"]`); `[]` = the ruleset names no band list.
+    /// `#[serde(default)]` for the same reason as `score_note_key`: absent is what every
+    /// contest before it means, and nothing scores off it.
+    #[serde(default)]
+    bands: Vec<String>,
+    /// Typed spelling → the listed location code it means (`{"PE": "PEI"}`); `{}` = none.
+    /// `#[serde(default)]` for the `score_note_key` reason: absent is what every contest
+    /// before it means. A map that is present is validated: it may only point at a code a
+    /// role lists, and may not re-point one.
+    #[serde(default)]
+    location_aliases: std::collections::BTreeMap<String, String>,
 }
+
+/// A ruleset's Cabrillo template in the rules file. Every part defaults to "what the
+/// structural writer already does".
+#[derive(Debug, Default, serde::Deserialize)]
+struct CabrilloSpec {
+    /// The fixed exchange columns, in order; `[]` = the structural QSO line.
+    #[serde(default)]
+    columns: Vec<CabrilloColumnSpec>,
+    /// The optional headers to write (each only when it holds a value).
+    #[serde(default)]
+    headers: Vec<String>,
+    /// Sent QTH → `LOCATION` spelling, where the two lists differ.
+    #[serde(default)]
+    location: std::collections::BTreeMap<String, String>,
+}
+
+/// One column of [`CabrilloSpec`].
+#[derive(Debug, serde::Deserialize)]
+struct CabrilloColumnSpec {
+    /// The exchange slot it writes.
+    key: String,
+    /// Zero-pad an all-digit value to this width; `0` = as copied.
+    width: u8,
+    /// Written for an empty value; `""` = nothing.
+    blank: String,
+}
+
+/// The optional Cabrillo headers a ruleset may ask for — the ones this build has a
+/// source for (see `contest::cabrillo`'s module header). Anything else in a rules file
+/// is refused rather than silently not written.
+const CABRILLO_OPTIONAL_HEADERS: &[&str] = &[
+    "CATEGORY-ASSISTED",
+    "CATEGORY-BAND",
+    "CATEGORY-MODE",
+    "CATEGORY-POWER",
+    "CLAIMED-SCORE",
+    "EMAIL",
+    "NAME",
+];
 
 /// One ADIF tag pair in the rules FILE, one tag per direction.
 ///
@@ -1656,6 +1738,122 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 ));
             }
         }
+        // ⭐ A SPONSOR'S CABRILLO TEMPLATE writes every exchange slot once, and nothing that
+        // would split a whitespace-delimited column. Each refusal is a QSO line a log robot
+        // would misread, caught at load instead of in a submitted file.
+        {
+            let cols = &r.cabrillo.columns;
+            let mut seen: Vec<&str> = Vec::new();
+            let is_call = |key: &str| {
+                matches!(
+                    x.fields.iter().find(|f| f.key == key).map(|f| &f.kind),
+                    Some(KindSpec::Call)
+                )
+            };
+            for c in cols {
+                if !x.fields.iter().any(|f| f.key == c.key) {
+                    return Err(format!(
+                        "{tag}: cabrillo column {:?} is not a slot this exchange declares",
+                        c.key
+                    ));
+                }
+                if is_call(&c.key) {
+                    return Err(format!(
+                        "{tag}: cabrillo column {:?} is a callsign slot (the QSO line's call \
+                         columns are its own)",
+                        c.key
+                    ));
+                }
+                if seen.contains(&c.key.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo column {:?} is listed twice",
+                        c.key
+                    ));
+                }
+                seen.push(&c.key);
+                if !c
+                    .blank
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                {
+                    return Err(format!(
+                        "{tag}: cabrillo column {:?} placeholder {:?} is not uppercase letters \
+                         and digits (a space would split the column)",
+                        c.key, c.blank
+                    ));
+                }
+            }
+            if !cols.is_empty() {
+                for role in &x.roles {
+                    for key in role.sends.iter().chain(&role.receives) {
+                        if !is_call(key) && !seen.contains(&key.as_str()) {
+                            return Err(format!(
+                                "{tag}: role {:?} exchanges slot {key:?}, which the cabrillo \
+                                 columns never write",
+                                role.id
+                            ));
+                        }
+                    }
+                }
+            }
+            for h in &r.cabrillo.headers {
+                if !CABRILLO_OPTIONAL_HEADERS.contains(&h.as_str()) {
+                    return Err(format!(
+                        "{tag}: cabrillo header {h:?} is not one this build can write"
+                    ));
+                }
+            }
+            let token = |v: &str| {
+                !v.is_empty()
+                    && v.bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            };
+            for (from, to) in &r.cabrillo.location {
+                if !token(from) || !token(to) {
+                    return Err(format!(
+                        "{tag}: cabrillo location {from:?} -> {to:?} is not two uppercase codes"
+                    ));
+                }
+            }
+        }
+        // ⭐ A LOCATION ALIAS picks a role, so it must land on a location a role actually
+        // lists — otherwise it silently selects nothing — and it must not re-point a code
+        // that is already listed, which would move an operator out of the role their own
+        // code puts them in.
+        {
+            let listed: Vec<&str> = x
+                .roles
+                .iter()
+                .filter_map(|role| match &role.selector {
+                    SelectorSpec::MyLocationIn { locations } => Some(locations),
+                    _ => None,
+                })
+                .flatten()
+                .map(String::as_str)
+                .collect();
+            for (from, to) in &r.location_aliases {
+                // The state field is read upper-cased, so a key that is not could never match.
+                if from.is_empty()
+                    || !from
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                {
+                    return Err(format!(
+                        "{tag}: location alias {from:?} is not an uppercase code"
+                    ));
+                }
+                if listed.contains(&from.as_str()) {
+                    return Err(format!(
+                        "{tag}: location alias {from:?} is itself a listed location"
+                    ));
+                }
+                if !listed.contains(&to.as_str()) {
+                    return Err(format!(
+                        "{tag}: location alias {from:?} -> {to:?} names a location no role lists"
+                    ));
+                }
+            }
+        }
         let mut mult_ids: Vec<&str> = Vec::new();
         for m in &r.scoring.multipliers {
             if m.id.is_empty() {
@@ -2142,6 +2340,35 @@ fn build(spec: FileSpec) -> RulesTable {
                 enforcement: leak_str(r.enforcement),
                 score_note_key: leak_str(r.score_note_key),
                 transmitter_column: r.transmitter_column,
+                cabrillo_columns: Box::leak(
+                    r.cabrillo
+                        .columns
+                        .into_iter()
+                        .map(|c| crate::contest::CabrilloColumn {
+                            key: leak_str(c.key),
+                            width: c.width,
+                            blank: leak_str(c.blank),
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+                cabrillo_headers: leak_keys(r.cabrillo.headers),
+                cabrillo_location: Box::leak(
+                    r.cabrillo
+                        .location
+                        .into_iter()
+                        .map(|(from, to)| (leak_str(from), leak_str(to)))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
+                bands: leak_keys(r.bands),
+                location_aliases: Box::leak(
+                    r.location_aliases
+                        .into_iter()
+                        .map(|(from, to)| (leak_str(from), leak_str(to)))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
                 window: WindowRule {
                     month: r.window.month,
                     weekend: match r.window.weekend.as_str() {
@@ -2493,6 +2720,89 @@ mod tests {
             rust_divs, ts_divs,
             "the division block order drifted between the two lists"
         );
+    }
+
+    /// ⭐ **CQ WW RTTY's QTH list is the same list on both sides of the IPC.** The UI holds a
+    /// copy (`ui/src/features/cqwwRttyQth.ts`) so the entry strip can refuse a typo while it
+    /// is typed, with no round trip; a code on one side and not the other is a legal QTH
+    /// refused, or a typo accepted and logged as a multiplier.
+    #[test]
+    fn the_typescript_cqww_rtty_qth_mirror_matches_the_seed_domain() {
+        let ts_src = include_str!("../../../ui/src/features/cqwwRttyQth.ts");
+        let ts: Vec<(&str, &str)> = ts_src
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+            .filter_map(|l| Some((ts_str_field(l, "code")?, ts_str_field(l, "name")?)))
+            .collect();
+        // A parser that found nothing would pass nothing below — but say so by name.
+        assert!(
+            ts.len() > 50,
+            "parsed only {} QTH rows out of cqwwRttyQth.ts — the parser is broken, not the mirror",
+            ts.len()
+        );
+        let rs = ruleset_by_id("cqww_rtty", CURRENT_RULES_YEAR).expect("cqww_rtty is seeded");
+        let domain = rs
+            .domains
+            .iter()
+            .find(|d| d.id == "cqww_rtty_qth")
+            .expect("the QTH domain is declared");
+        assert_eq!(
+            domain.values.len(),
+            63,
+            "48 states + DC + 14 Canadian call areas"
+        );
+        assert_eq!(
+            ts,
+            domain.values.to_vec(),
+            "ui/src/features/cqwwRttyQth.ts drifted from the seed's cqww_rtty_qth \
+             (code, name and order)"
+        );
+        // POSITIVE CONTROL: a mirror missing one code is not equal.
+        let mut short = ts.clone();
+        short.retain(|(c, _)| *c != "PEI");
+        assert_ne!(short, domain.values.to_vec());
+    }
+
+    /// ⭐ **Every contest the bundled rules table carries is on the picker's menu.**
+    ///
+    /// The picker (`CONTESTS` in ui/src/fdEvent.ts) is a hand-written list, because a ruleset
+    /// has no display name — so a contest added to the seed and not to the menu ships
+    /// scored, tested and unreachable, and nothing says so. One direction only: a menu entry
+    /// the data does not carry is the documented degradation (a downloaded file that dropped
+    /// a contest), while a seeded contest nobody can pick is simply a missed line.
+    #[test]
+    fn every_seeded_ruleset_is_on_the_contest_picker() {
+        let ts_src = include_str!("../../../ui/src/fdEvent.ts");
+        let menu: Vec<&str> = ts_src
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+            .filter_map(|l| ts_str_field(l, "id"))
+            .collect();
+        // A parser that found nothing would pass the comparison below it.
+        assert!(
+            menu.len() >= 15,
+            "parsed only {} contest ids out of fdEvent.ts — the parser is broken, not the menu",
+            menu.len()
+        );
+        let unpicked = |menu: &[&str]| -> Vec<&'static str> {
+            table()
+                .rulesets
+                .iter()
+                .map(|r| r.event)
+                .filter(|e| !menu.contains(e))
+                .collect()
+        };
+        assert!(
+            unpicked(&menu).is_empty(),
+            "ruleset(s) {:?} are in the rules seed but not in CONTESTS in ui/src/fdEvent.ts — \
+             no operator can pick them",
+            unpicked(&menu)
+        );
+        // POSITIVE CONTROL: the same comparison against a menu missing one entry names it.
+        let short: Vec<&str> = menu.iter().copied().filter(|id| *id != "ohqp").collect();
+        assert_eq!(unpicked(&short), vec!["ohqp"]);
     }
 
     /// SAME GUARD for the RETIRED list: [`RETIRED_SECTIONS`] vs `RETIRED_SECTIONS`
@@ -3099,6 +3409,56 @@ mod tests {
                 "{e:?}: (call, band, mode class)"
             );
         }
+    }
+
+    /// ⭐ A Cabrillo template may not write a CALLSIGN slot into its exchange columns: the
+    /// QSO line's two call columns are its own, so the call would be on the line twice
+    /// (Sweepstakes sends the call inside its exchange, and the structural line leaves it
+    /// out for exactly that reason). The corpus seed has no callsign slot, so this refusal
+    /// cannot be a corpus fixture one mutation off it; it is pinned here on the shipped
+    /// Sweepstakes ruleset instead.
+    #[test]
+    fn a_cabrillo_template_may_not_write_a_callsign_slot() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        let ss = v["rulesets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|r| r["event"] == "arrlss_cw")
+            .expect("Sweepstakes is seeded");
+        let fields = v["rulesets"][ss]["exchange"]["fields"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let call = fields
+            .iter()
+            .find(|f| f["kind"]["type"] == "call")
+            .expect("Sweepstakes carries a callsign slot")["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let column =
+            |f: &serde_json::Value| serde_json::json!({"key": f["key"], "width": 0, "blank": ""});
+        v["rulesets"][ss]["cabrillo"] =
+            serde_json::json!({ "columns": fields.iter().map(column).collect::<Vec<_>>() });
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(
+            e.contains(&format!("cabrillo column {call:?} is a callsign slot")),
+            "{e}"
+        );
+        // POSITIVE CONTROL: the same template without the callsign slot loads.
+        v["rulesets"][ss]["cabrillo"] = serde_json::json!({
+            "columns": fields
+                .iter()
+                .filter(|f| f["key"] != call.as_str())
+                .map(column)
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            parse_spec(&v.to_string()).is_ok(),
+            "control: {:?}",
+            parse_spec(&v.to_string()).err()
+        );
     }
 
     /// A dupe rule that does not key on the callsign is not a dupe rule — every
@@ -3991,9 +4351,9 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            15,
+            16,
             "two Field Day events + four QSO parties + both Sweepstakes weekends + \
-             CQ WW's two and CQ WPX's two + ARRL VHF's three runnings"
+             CQ WW's two and CQ WPX's two + ARRL VHF's three runnings + CQ WW RTTY"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());
         for (x, y) in a.rulesets.iter().zip(b.rulesets) {
@@ -4008,6 +4368,27 @@ mod tests {
             // (ids, selectors, send/receive order). `ExchangeSpec` is `PartialEq` all
             // the way down, so this compares the recursive `one_of` arms too.
             assert_eq!(x.exchange, y.exchange, "{}: exchange", x.event);
+            assert_eq!(
+                x.cabrillo_columns, y.cabrillo_columns,
+                "{}: cabrillo",
+                x.event
+            );
+            assert_eq!(
+                x.cabrillo_headers, y.cabrillo_headers,
+                "{}: headers",
+                x.event
+            );
+            assert_eq!(
+                x.cabrillo_location, y.cabrillo_location,
+                "{}: location",
+                x.event
+            );
+            assert_eq!(x.bands, y.bands, "{}: bands", x.event);
+            assert_eq!(
+                x.location_aliases, y.location_aliases,
+                "{}: location aliases",
+                x.event
+            );
             assert_eq!(
                 x.domains.len(),
                 y.domains.len(),

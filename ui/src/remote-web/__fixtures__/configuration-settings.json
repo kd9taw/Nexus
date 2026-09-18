@@ -367,6 +367,7 @@
     "cloudlogStationId",
     "cloudlogKey",
     "voiceMessages",
+    "contestEmail",
     "launchAtLogin",
     "remoteAutostartOfferAnswered"
   ]

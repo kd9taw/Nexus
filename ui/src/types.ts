@@ -2649,9 +2649,20 @@ export interface FieldDayQso {
    *  a contact worked before the move sent the old one. Absent on a snapshot from a
    *  build older than this field. */
   mex?: string
+  /** What THIS contact received — one value per entry of `FieldDayStatus.receives`, in
+   *  that order: the contest log table's columns. Absent for Field Day, whose two slots
+   *  are `class` and `section`, and on a build older than the field. */
+  rcvd?: string[]
 }
 
 /** Field Day operating + scoring status. */
+/** What a W/VE location warning says: the state the operator typed (`''` = none) and the listed
+ *  codes it most likely means (several = ambiguous; the operator picks). */
+export interface ContestLocationWarning {
+  typed: string
+  hints: string[]
+}
+
 export interface FieldDayStatus {
   /* ⛔ NO SESSION-LEVEL SENT EXCHANGE LIVES HERE. The `myClass`/`mySection` pair that
      used to head this interface was DELETED, not renamed: two interop emitters read it
@@ -2717,6 +2728,20 @@ export interface FieldDayStatus {
    *  A VECTOR, never a preformatted string: a rendered session-level exchange is the
    *  thing three emitters got wrong by stamping it on rows it did not describe. */
   composing?: ContestFieldValue[]
+  /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
+   *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
+   *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.
+   *
+   *  ⚠️ It describes the NEXT transmission only. A logged row's own sent exchange is its
+   *  `mex`; never label a row with this. Absent on a build older than the field. */
+  sentExchange?: string
+  /** The bands this contest runs on (`'20m'`) — advisory: the strip warns when the rig is on
+   *  another band and never refuses the contact. Absent when the ruleset names none. */
+  bands?: string[]
+  /** ⭐ This station's call is in the USA or Canada, and the contest state it was given would
+   *  send the DX exchange (no QTH) — a WARNING the strip shows, never a refusal. Absent when it
+   *  does not apply. Worded by `features/contestLocation.ts`. */
+  locationWarning?: ContestLocationWarning
   /** The session's role id — `''` for a symmetric contest (both Field Day events).
    *  Shown beside the exchange only when it names something. */
   role?: string
@@ -2739,6 +2764,14 @@ export interface ContestFieldSpec {
    *  The VALUES live in the UI (`features/contestDomains.ts`), because the verdict runs
    *  on every keystroke and must cost no IPC. */
   domain?: string
+  /** For a `number` slot, its inclusive bounds — a CQ zone is 1–40. Absent for every other
+   *  kind, and a number slot without them gets the non-blank test only. */
+  min?: number
+  max?: number
+  /** The ADIF tag a RECEIVED value of this slot exports under (`'CQZ'`, `'RST_RCVD'`), when
+   *  it has one. It says what a slot MEANS without the UI guessing from a slot id — the
+   *  zone hint is offered on the slot tagged `CQZ`. */
+  adif?: string
 }
 
 /** One copied exchange value. */
@@ -2863,6 +2896,19 @@ export interface UpdateInfo {
   updateAvailable: boolean
   /** The download page to open (GitHub Releases). */
   downloadUrl: string
+}
+
+/** One RTTY F-key macro as the operator saved it (Rust `RttyMacro`). */
+export interface RttyMacro {
+  key: string
+  label: string
+  text: string
+}
+
+/** One RTTY macro set's saved overrides (Rust `RttyMacroProfile`). */
+export interface RttyMacroProfile {
+  name: string
+  macros: RttyMacro[]
 }
 
 /** Persistent operator + radio settings. */
@@ -3339,6 +3385,9 @@ export interface Settings {
   contestCategoryAssisted?: string
   /** Cabrillo `CATEGORY-STATION` — 'SCHOOL', '' = the ordinary entry. */
   contestCategoryStation?: string
+  /** Cabrillo `EMAIL` for a contest log, '' = the header is left out. Not the ClubLog login.
+   *  Withheld from Remote. */
+  contestEmail?: string
   /** ⭐ The station data a SENT exchange needs (spec §3.4) — added BESIDE the frozen
    *  `fd*` names, never replacing them (§8c). Every one of these is what a rules file
    *  may name as the SOURCE of a slot its role sends; a ruleset naming anything else
@@ -3623,6 +3672,12 @@ export interface Settings {
     cwProfiles?: { name: string; macros: { key: string; label: string; text: string }[] }[]
     /** Index into `cwProfiles` of the active set. */
     activeCwProfile?: number
+    /** The RTTY cockpit's F1–F8 sets by name (`everyday`, `contest`), each holding ONLY the keys
+     * the operator changed — a key with no entry is the built-in, and an empty list is the whole
+     * built-in set. Written only by `setRttyMacros`; a Settings save keeps the live value. */
+    rttyProfiles?: RttyMacroProfile[]
+    /** The RTTY set the cockpit shows: `contest`, or Everyday for anything else. */
+    activeRttyProfile?: string
   }
   // --- dual-radio ---
   /** Configured radios (dual-radio). Migrated to a single profile for a one-radio station; the flat

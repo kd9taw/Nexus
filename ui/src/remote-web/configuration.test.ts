@@ -48,6 +48,22 @@ it('accepts an older station that predates the station-local withheld keys', () 
   expect(settingsForm(parseConfiguration(older, 'settings') as SettingsConfiguration).launchAtLogin).toBe(false)
 })
 
+// The contest log's EMAIL is withheld (a browser has no use for it) and newer than every station
+// already in the field. A station that predates it cannot declare it withheld, and refusing that
+// station's whole settings document over a field it never had is the outage the station-local list
+// exists to prevent — so the older station is accepted, and the form still gets a STRING.
+it('accepts an older station that predates the contest email field', () => {
+  const older = structuredClone(settings) as Record<string, unknown>
+  older.withheld = (older.withheld as string[]).filter(k => k !== 'contestEmail')
+  expect((older.withheld as string[]).length, 'positive control: the fixture declared it').toBe((settings.withheld as string[]).length - 1)
+  expect(() => parseConfiguration(older, 'settings')).not.toThrow()
+  expect(settingsForm(parseConfiguration(older, 'settings') as SettingsConfiguration).contestEmail).toBe('')
+  // …and a station that declares it withheld and sends it anyway is still refused.
+  const leaked = structuredClone(settings) as {settings: Record<string, unknown>}
+  leaked.settings.contestEmail = 'op@example.com'
+  expect(() => parseConfiguration(leaked, 'settings')).toThrow()
+})
+
 // RADIO_WITHHELD_KEYS is empty today, so this pins the mechanism rather than a current secret: the
 // first per-radio credential must be refused on arrival, not merely undeclared.
 it('refuses a per-radio credential even when the station declares it withheld', async () => {

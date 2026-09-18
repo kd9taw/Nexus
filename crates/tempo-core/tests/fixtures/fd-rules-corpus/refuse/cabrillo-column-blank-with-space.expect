@@ -1,0 +1,1 @@
+ruleset arrlfd/2026: cabrillo column "SECTION" placeholder "D X" is not uppercase letters and digits (a space would split the column)

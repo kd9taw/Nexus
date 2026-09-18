@@ -120,7 +120,7 @@ on state**, resolved in this order (`ui/src/components/CwCockpit.tsx:470`):
 
 ### The Field Day set
 
-Active whenever Field Day mode is on. `{EXCH}` expands to your class and section.
+Active whenever contest mode is on. In Field Day, `{EXCH}` expands to your class and section. In any other contest it is that contest's exchange without the signal report — your zone in CQ WW CW, for example.
 
 | Key | Label | Content |
 |---|---|---|
@@ -141,7 +141,7 @@ Active whenever Field Day mode is on. `{EXCH}` expands to your class and section
 | `{NAME}` | Your name (`op_name` in Settings; empty by default until set) |
 | `{MYGRID}` | Your Maidenhead grid square |
 | `{RST}` | `5NN` (hardcoded 599 with cut numbers: 9→N, 0→T) |
-| `{EXCH}` | Your Field Day exchange — class and section (Field Day macro set only) |
+| `{EXCH}` | Your contest exchange without the report: class and section in Field Day, the running contest's own exchange otherwise. Serial numbers are not included. Empty outside a contest. |
 | `!` | The worked callsign (the callsign prefilled by a Needed-board click or typed by you) |
 
 If `{NAME}` or `!` is empty, the token collapses and surrounding whitespace is normalized — no double-space appears mid-message.

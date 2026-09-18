@@ -78,6 +78,11 @@ const MIGRATED = [
   'remote-monitor/MonitorApp.tsx',
   'remote-monitor/preview.tsx',
   'components/SettingsStation.tsx',
+  // The RTTY F-key surface (2026-09-17): the macro buttons, their editor and the set switch,
+  // and the set model's caption keys. Migrated as they were written. RttyCockpit.tsx stays on
+  // PARTIAL for its stop controls; nothing here stops a transmission.
+  'components/RttyMacroEditor.tsx',
+  'features/rttyMacros.ts',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
   'components/RevealNudge.tsx',
@@ -198,6 +203,10 @@ const MIGRATED = [
   // keys; "pota.app" and "DX cluster" in them name the services.
   'selfSpot.ts',
   'components/ContestView.tsx',
+  // The contest slot captions (2026-09-17): born migrated — the entry strip and the contest
+  // log table read one table of catalog keys; a slot id it has no caption for is a token.
+  'features/contestSlots.ts',
+  'features/contestLocation.ts',
   // The warn-only FD advisories (2026-08-29): born migrated — its two banner/header
   // chips are catalog keys from birth; the mode names, event names and assistance-source
   // labels it interpolates are invariant tokens.

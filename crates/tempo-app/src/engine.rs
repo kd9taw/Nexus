@@ -4854,6 +4854,12 @@ impl Engine {
         // way no other setting's is: the operator is quietly moved back to the stable channel,
         // the betas stop arriving, and there is no error, no toast and no log line to notice.
         let live_beta_updates = self.settings.beta_updates;
+        // The RTTY macro sets: the same ONE-WRITER shape (`save_rtty_macros`, from the cockpit's
+        // editor). The Settings panel holds a whole-struct snapshot from whenever it loaded, so
+        // without this an unrelated Save reverts a macro the operator edited in the cockpit since.
+        let live_rtty_profiles = std::mem::take(&mut self.settings.macros.rtty_profiles);
+        let live_active_rtty_profile =
+            std::mem::take(&mut self.settings.macros.active_rtty_profile);
         // Start at sign-in and Remote's one-time offer to switch it on: the same ONE-WRITER shape
         // as the beta channel. `launch_at_login` mirrors the operating system's login entry, which
         // only `set_launch_at_login` changes, so a payload's copy would make the switch disagree
@@ -4942,6 +4948,8 @@ impl Engine {
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
             self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
+            self.settings.macros.rtty_profiles = live_rtty_profiles;
+            self.settings.macros.active_rtty_profile = live_active_rtty_profile;
         }
         // Start at sign-in is kept on EVERY path, restore and factory reset included: it mirrors
         // the operating system's login entry, which neither of them changes, so taking the
@@ -5162,14 +5170,26 @@ impl Engine {
     /// A no-op leaves the operating mode EXACTLY as it was — load-bearing since
     /// #100: `apply_settings` calls this on every save with the master on, so a
     /// master left on with a blank exchange must not disturb a contact in flight.
+    ///
+    /// ⚠️ **The class + section test is Field Day's alone.** Every other contest sends
+    /// neither, and its session constructor (`ContestSession::for_ruleset`, reached
+    /// through `set_mode`) refuses its own blank or out-of-domain exchange by name —
+    /// before the mode changes, so a refused restore is the same no-op.
     pub fn restore_field_day_if_enabled(&mut self) {
-        if self.settings.fd_active
-            && !self.settings.fd_class.trim().is_empty()
-            && !self.settings.fd_section.trim().is_empty()
-            && !matches!(self.mode, Mode::FieldDay { .. })
-        {
+        let exchange_set = !self.contest_is_field_day()
+            || (!self.settings.fd_class.trim().is_empty()
+                && !self.settings.fd_section.trim().is_empty());
+        if self.settings.fd_active && exchange_set && !matches!(self.mode, Mode::FieldDay { .. }) {
             let _ = self.set_mode("fieldday-sp");
         }
+    }
+
+    /// Is the contest the picker names one of the two Field Day events (or the blank
+    /// default, which is ARRL Field Day)? The same test `set_mode` applies before it
+    /// asks for a class and section, so the two cannot disagree about which contests
+    /// need them.
+    fn contest_is_field_day(&self) -> bool {
+        matches!(self.settings.fd_event.trim(), "" | "arrlfd" | "wfd")
     }
 
     /// Advance the persisted LoTW incremental-sync cursor (`lotw_last_qsl`) WITHOUT
@@ -5299,6 +5319,33 @@ impl Engine {
         &self.settings
     }
 
+    /// ⛔ **THE ONE WRITER of the RTTY cockpit's macro sets** — `macros.rttyProfiles` and
+    /// `macros.activeRttyProfile`, from the dock's editor and its Everyday/Contest switch.
+    ///
+    /// NEVER a form save, for two transmit-path reasons: `apply_settings` advances `tx_gate_gen`,
+    /// so an over the operator had just queued would not key, and it revokes Remote actuation.
+    /// This is the atomic preference save instead ([`Self::save_remote_preferences`], the path
+    /// the satellite Doppler switch reuses): the two fields replaced on a copy of the live
+    /// `macros`, the copy required to round-trip EXACTLY — so a malformed entry, which a LOAD
+    /// forgives entry by entry, is refused here rather than silently dropped — then persisted and
+    /// adopted. A refused or failed save changes nothing. `apply_settings_inner` keeps both
+    /// fields on a form save, which is what makes this the one writer.
+    pub fn save_rtty_macros(
+        &mut self,
+        profiles: serde_json::Value,
+        active: serde_json::Value,
+    ) -> Result<(), crate::remote_control::Reason> {
+        use crate::remote_control::Reason;
+        let mut macros =
+            serde_json::to_value(&self.settings.macros).map_err(|_| Reason::InvalidAction)?;
+        let fields = macros.as_object_mut().ok_or(Reason::InvalidAction)?;
+        fields.insert("rttyProfiles".into(), profiles);
+        fields.insert("activeRttyProfile".into(), active);
+        let mut values = serde_json::Map::new();
+        values.insert("macros".into(), macros);
+        self.save_remote_preferences(&values, &["macros"])
+    }
+
     /// ⛔ **THE ONE WRITER of `launch_at_login`** (Settings ▸ Start at sign-in). The caller has
     /// already changed the operating system's login entry and calls this only when that worked;
     /// `apply_settings` keeps the live value, so a stale Settings payload cannot contradict it.
@@ -5324,8 +5371,16 @@ impl Engine {
     /// under the ENTRY band (wrong Cabrillo/N3FJP band, corrupted dupe keys).
     fn sync_fd_band(&mut self) {
         let band = self.settings.band.clone();
+        // …and the dial beside it, which a contest's Cabrillo writes in place of the band
+        // edge (`FieldDayLog::dial_khz`). Rounded to the kHz the QSO line is written in.
+        let dial_khz = if self.settings.dial_mhz.is_finite() && self.settings.dial_mhz > 0.0 {
+            (self.settings.dial_mhz * 1000.0).round() as u32
+        } else {
+            0
+        };
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
+            station.log.dial_khz = dial_khz;
         }
     }
 
@@ -7555,12 +7610,21 @@ impl Engine {
         } else {
             ("", "")
         };
-        // Field Day exchange tokens ({CLASS}/{SECTION}/{EXCH}) are live only while the FD
-        // master switch is on; outside FD they're empty so a stray token collapses cleanly.
-        let (class, section): (&str, &str) = if self.settings.fd_active {
+        // Field Day exchange tokens ({CLASS}/{SECTION}, and {EXCH} built from them) are live
+        // only while the contest switch is on AND the contest is one of the two Field Day
+        // events; outside FD they're empty so a stray token collapses cleanly. Every other
+        // contest keys its own running exchange through {EXCH} — Field Day's settings sent
+        // in the Ohio QSO Party were a wrong exchange at every station worked.
+        let field_day = self.settings.fd_active && self.contest_is_field_day();
+        let (class, section): (&str, &str) = if field_day {
             (&self.settings.fd_class, &self.settings.fd_section)
         } else {
             ("", "")
+        };
+        let exch = if self.settings.fd_active && !field_day {
+            self.contest_sent_exchange().unwrap_or_default()
+        } else {
+            String::new()
         };
         let ctx = tempo_core::cw::CwContext {
             mycall: &self.settings.mycall,
@@ -7573,8 +7637,46 @@ impl Engine {
             rst: "599",
             class,
             section,
+            exch: &exch,
         };
         tempo_core::cw::expand(text, &ctx)
+    }
+
+    /// ⭐ **The exchange this station is about to SEND, without the signal report** — what
+    /// `{EXCH}` keys in a contest that is not Field Day, and what the RTTY macros read off
+    /// the snapshot as `sentExchange`. `None` outside a contest session.
+    ///
+    /// The running session's composing slots, in its role's send order. Two kinds are left
+    /// out, each because it has its own answer: an RST, which `{RST}` keys (and which a
+    /// phone contact sends as 59, not the session's 599); and a SERIAL, whose session
+    /// value is a placeholder — a number is issued to a contact, not to a session, and
+    /// keying the placeholder would put a serial nobody was given on the air.
+    ///
+    /// ⚠️ **It describes the NEXT transmission, never a contact already logged.** A row
+    /// carries its own sent exchange (`LoggedQso::tx`, rendered by
+    /// `contest::sent_exchange`), and a mobile's session moves under rows that must not —
+    /// the defect `contest::render` exists to make unrepresentable. This reads forward in
+    /// time, exactly as `ContestSession::field` does.
+    pub fn contest_sent_exchange(&self) -> Option<String> {
+        use tempo_core::contest::FieldKind;
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return None;
+        };
+        let session = &station.log.session;
+        let words: Vec<&str> = session
+            .role()
+            .sends
+            .iter()
+            .filter(|key| {
+                matches!(
+                    session.exchange.field(key).map(|f| f.kind),
+                    Some(kind) if !matches!(kind, FieldKind::Rst { .. } | FieldKind::Serial { .. })
+                )
+            })
+            .map(|key| session.field(key))
+            .filter(|v| !v.is_empty())
+            .collect();
+        Some(words.join(" "))
     }
 
     /// Record the worked station's QRZ name + US state for the `{HISNAME}`/`{HISSTATE}` CW
@@ -10307,7 +10409,7 @@ impl Engine {
         // value it could not accept — a more useful message than this one, but not one
         // worth changing a shipped refusal for.
         if spec.starts_with("fieldday")
-            && matches!(self.settings.fd_event.trim(), "" | "arrlfd" | "wfd")
+            && self.contest_is_field_day()
             && (self.settings.fd_class.trim().is_empty()
                 || self.settings.fd_section.trim().is_empty())
         {
@@ -15834,8 +15936,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// FD master switch is on, else casual RST/name/QTH (mirroring `set_mode`'s
     /// exchange selection). Off aborts any live session and stops TX. NEVER
     /// transmits: a session only ever starts from `rtty_auto_cq` / `rtty_auto_answer`.
-    pub fn set_rtty_auto(&mut self, on: bool) {
+    ///
+    /// ⚠️ **On is REFUSED in any contest that is not Field Day** — see
+    /// [`Self::rtty_auto_contest_gate`]. Off is never refused: it is a stop.
+    pub fn set_rtty_auto(&mut self, on: bool) -> Result<(), String> {
         if on {
+            self.rtty_auto_contest_gate()?;
             let mycall = self.settings.mycall.clone();
             let seq = if self.settings.fd_active {
                 let exch = [
@@ -15868,6 +15974,27 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.rtty_seq = None;
             self.rtty_auto_over = false;
         }
+        Ok(())
+    }
+
+    /// ⭐ **The contests the RTTY auto-sequencer can work: Field Day's two, and none.**
+    ///
+    /// It has exactly two exchanges — `contest::field_day()` while the contest switch is
+    /// on and `contest::casual()` while it is off — so in any other contest it would send
+    /// a Field Day class and section to every station it worked and copy theirs against a
+    /// Field Day grammar. Refused with a sentence rather than armed wrong. Checked where
+    /// Auto is ARMED and again at both human-initiate doors, because the picker can move
+    /// to another contest under a sequencer armed in Field Day.
+    fn rtty_auto_contest_gate(&self) -> Result<(), String> {
+        if self.settings.fd_active && !self.contest_is_field_day() {
+            return Err(
+                "RTTY Auto works the Field Day exchange only (ARRL Field Day and \
+Winter Field Day). For this contest, send your exchange with the macros and log each \
+contact yourself."
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 
     /// Operator starts an auto CQ run (a human-initiate gate). Errors if Auto is
@@ -15876,6 +16003,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.rtty_seq.is_none() {
             return Err("Turn on Auto first".to_string());
         }
+        self.rtty_auto_contest_gate()?;
         self.rtty_no_latch_gate()?;
         self.rtty_tx_gate()?;
         self.rtty_drive(RttyOp::StartCq);
@@ -15888,6 +16016,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.rtty_seq.is_none() {
             return Err("Turn on Auto first".to_string());
         }
+        self.rtty_auto_contest_gate()?;
         self.rtty_no_latch_gate()?;
         self.rtty_tx_gate()?;
         self.rtty_drive(RttyOp::Answer(call.to_string()));
@@ -20293,7 +20422,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 let freq_khz = (self.settings.dial_mhz * 1000.0).round() as u32;
                 match format.to_ascii_lowercase().as_str() {
                     "adif" => Ok(station.log.adif()),
-                    _ => station.log.cabrillo(freq_khz),
+                    // NAME and EMAIL are the entrant's own settings, read at export so a
+                    // corrected typo reaches the next file; the log writes them only where
+                    // the contest's rules list those headers (never for Field Day).
+                    _ => station.log.cabrillo_with(
+                        freq_khz,
+                        &tempo_core::contest::CabrilloEntrant {
+                            name: self.settings.op_name.trim().to_string(),
+                            email: self.settings.contest_email.trim().to_string(),
+                        },
+                    ),
                 }
             }
             _ => Err("nothing to export (enter Field Day mode first)".to_string()),
@@ -21887,6 +22025,40 @@ mod tests {
         assert_eq!(e.poll_rtty_one(), Some("TEST".to_string()));
     }
 
+    /// ⭐ The RTTY cockpit frames every F-key macro for the air — CR LF, the message, one space
+    /// (`frameForAir` in the UI, the published RTTY contest convention) — and that framing is
+    /// only worth anything if it reaches the rig. `rtty_filter` uppercases and drops whatever
+    /// ITA2 cannot encode; CR and LF are in both shift planes and the space is a character, so
+    /// all three must come through the queued over AND the latched stream, byte for byte. The
+    /// frame is three characters of the 1000-character over like any other three.
+    #[test]
+    fn an_f_key_macros_frame_survives_the_queued_over_and_the_latched_stream() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        e.rtty_send_text("\r\nCQ TEST W9XYZ W9XYZ CQ ").unwrap();
+        assert_eq!(
+            e.poll_rtty_one(),
+            Some("\r\nCQ TEST W9XYZ W9XYZ CQ ".to_string()),
+            "the queued over lost its line break or its trailing space"
+        );
+        assert!(e
+            .rtty_send_text(&format!("\r\n{} ", "A".repeat(997)))
+            .is_ok());
+        assert_eq!(e.poll_rtty_one().unwrap().chars().count(), 1000);
+        assert!(e
+            .rtty_send_text(&format!("\r\n{} ", "A".repeat(998)))
+            .unwrap_err()
+            .contains("too long"));
+
+        let mut e = rtty_latched_engine();
+        e.rtty_send_text("\r\nTU W9XYZ CQ ").unwrap();
+        assert_eq!(
+            e.poll_rtty_stream(99),
+            RttyStreamTick::Text("\r\nTU W9XYZ CQ ".into()),
+            "the latched stream lost its line break or its trailing space"
+        );
+    }
+
     // ----- PSK31 continuous TX (Keyboard Modes Phase 2) — the RTTY latch
     // suite instantiated over the second mode. Same shapes on purpose: these
     // are the latched-scene contracts every keyboard mode must hold, and the
@@ -22299,7 +22471,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         e.set_operating_mode("rtty", false); // arms TX (a manual mode, like CW)
         assert!(e.tx_enabled() && e.tx_allowed(), "gate open for the tests");
-        e.set_rtty_auto(true);
+        e.set_rtty_auto(true).expect("Auto arms outside a contest");
         e
     }
 
@@ -22393,8 +22565,54 @@ mod tests {
         s.fd_section = "WI".into();
         e.apply_settings(s); // master on + class/section → enters Mode::FieldDay
         e.set_operating_mode("rtty", false);
-        e.set_rtty_auto(true);
+        e.set_rtty_auto(true).expect("Auto arms in ARRL Field Day");
         e
+    }
+
+    /// ⭐ **RTTY Auto works Field Day's exchange and nothing else, so it refuses in every
+    /// other contest.** It built `contest::field_day()` whenever the contest switch was
+    /// on, whatever the picker named — armed in the Ohio QSO Party (or CQ WW RTTY) it would
+    /// have sent a Field Day class and section to every station it worked, and copied
+    /// theirs against a Field Day grammar.
+    #[test]
+    fn rtty_auto_refuses_a_contest_that_is_not_field_day() {
+        let mut e = Engine::new("W8ABC", "EN82", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "MI".into();
+        // Field Day's exchange, left from June — exactly what Auto would have sent.
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s);
+        e.set_operating_mode("rtty", false);
+        let err = e.set_rtty_auto(true).unwrap_err();
+        assert!(err.contains("Field Day"), "names what Auto can work: {err}");
+        assert!(!e.rtty_state().auto, "a refused arm arms nothing");
+        assert!(e.rtty_auto_cq().is_err(), "and no CQ can start without it");
+
+        // …and a sequencer armed in Field Day cannot START once the picker has moved to
+        // another contest: the human-initiate doors ask the same question.
+        let mut e = rtty_auto_fd_engine();
+        assert!(e.rtty_state().auto, "armed in Field Day");
+        let mut s = e.settings().clone();
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "MI".into();
+        e.apply_settings(s);
+        assert!(e.rtty_auto_cq().unwrap_err().contains("Field Day"));
+        assert!(e
+            .rtty_auto_answer("W1AW")
+            .unwrap_err()
+            .contains("Field Day"));
+        assert_eq!(e.poll_rtty_one(), None, "nothing was queued to key");
+
+        // POSITIVE CONTROLS: Auto still arms in ARRL Field Day and outside any contest.
+        let mut e = rtty_auto_fd_engine();
+        assert!(e.rtty_state().auto, "ARRL Field Day arms");
+        e.rtty_auto_cq().expect("and starts a CQ");
+        let mut e = rtty_auto_engine();
+        assert!(e.rtty_state().auto, "no contest arms");
+        e.rtty_auto_cq().expect("and starts a CQ");
     }
 
     /// FIELD DAY IS ALL-MODE, AND RTTY IS ITS DIGITAL CLASS. The auto-sequencer
@@ -25742,6 +25960,153 @@ mod tests {
             !e.settings().beta_updates,
             "and back off — the switch is two-way"
         );
+    }
+
+    /// An engine whose atomic preference store is a scratch file — the store the RTTY macro verb
+    /// persists through.
+    fn rtty_macro_engine(tag: &str) -> (Engine, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("nexus-rtty-macros-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.configure_remote_settings_store(path.clone());
+        (e, path)
+    }
+
+    fn contest_f1_edit() -> serde_json::Value {
+        serde_json::json!([{"name": "contest", "macros": [
+            {"key": "F1", "label": "Run", "text": "CQ TEST {MYCALL} {MYCALL} CQ"}
+        ]}])
+    }
+
+    /// ⛔ **A Settings-panel save cannot revert an RTTY macro edit made in the cockpit.**
+    ///
+    /// The panel posts the WHOLE struct from whenever it read the settings, so without this a
+    /// macro edited in the cockpit while the panel was open — or since it last loaded — is
+    /// silently put back by an unrelated Save. The cockpit edit has one writer,
+    /// `save_rtty_macros`, and the form path keeps the live value, the `beta_updates` shape.
+    #[test]
+    fn a_settings_panel_save_cannot_revert_an_rtty_macro_edit() {
+        let (mut e, path) = rtty_macro_engine("form");
+        let mut panel = e.settings().clone(); // read BEFORE the cockpit edit
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .expect("the cockpit edit saves");
+
+        panel.op_name = "Edited in the panel".into();
+        e.apply_settings(panel);
+        assert_eq!(
+            e.settings().op_name,
+            "Edited in the panel",
+            "control: the panel's own edit landed, so the save really ran"
+        );
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            macros["rttyProfiles"],
+            contest_f1_edit(),
+            "a stale Settings-panel save reverted the operator's RTTY macro edit"
+        );
+        assert_eq!(macros["activeRttyProfile"], serde_json::json!("contest"));
+
+        // POSITIVE CONTROL: a restore or factory reset is the opposite contract — the incoming
+        // settings are the whole truth — so the same fields DO move there, and the preservation
+        // above is scoped to the form path rather than making the sets immovable.
+        e.apply_restored_settings(Settings::default());
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(macros["rttyProfiles"], serde_json::json!([]));
+        assert_eq!(macros["activeRttyProfile"], serde_json::json!(""));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The OTHER half of the one-writer carve-out, and the half a carve-out gets wrong: the two
+    /// paths that REPLACE the settings must still move the macro sets. Both call
+    /// `apply_restored_settings` — `reset_settings` sends `Settings::default()`, and
+    /// `import_settings_bundle` sends the backup's — which is the same `keep_live_roster: false`
+    /// mechanism the beta-channel opt-in uses, so one test names both.
+    #[test]
+    fn a_factory_reset_and_a_restored_backup_both_move_the_rtty_macros() {
+        let (mut e, path) = rtty_macro_engine("restore");
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .expect("the cockpit edit saves");
+
+        // FACTORY RESET — what `reset_settings` sends.
+        let mut fresh = Settings::default();
+        fresh.ensure_radio_profiles();
+        e.apply_restored_settings(fresh);
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            macros["rttyProfiles"],
+            serde_json::json!([]),
+            "a factory reset left the operator's RTTY macros in place"
+        );
+        assert_eq!(macros["activeRttyProfile"], serde_json::json!(""));
+
+        // RESTORED BACKUP — the bundle's own sets, not this station's.
+        use crate::settings::{RttyMacro, RttyMacroProfile};
+        let mut bundle = Settings::default();
+        bundle.macros.rtty_profiles = vec![RttyMacroProfile {
+            name: "everyday".into(),
+            macros: vec![RttyMacro {
+                key: "F5".into(),
+                label: "Rig".into(),
+                text: "RIG HERE IS 100W".into(),
+            }],
+        }];
+        bundle.macros.active_rtty_profile = "everyday".into();
+        e.apply_restored_settings(bundle);
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            macros["rttyProfiles"],
+            serde_json::json!([{"name": "everyday", "macros": [
+                {"key": "F5", "label": "Rig", "text": "RIG HERE IS 100W"}
+            ]}]),
+            "a restored backup did not bring its own RTTY macros"
+        );
+        assert_eq!(macros["activeRttyProfile"], serde_json::json!("everyday"));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The cockpit's macro save is two fields in one atomic write and NOTHING a form save does:
+    /// the TX gate generation does not move (an over the operator had just queued still keys),
+    /// every other setting is byte-identical, the file on disk agrees, and a payload that would
+    /// not round-trip exactly — one LOAD would forgive — is refused and changes nothing.
+    #[test]
+    fn saving_rtty_macros_writes_two_fields_and_no_transmit_state() {
+        let (mut e, path) = rtty_macro_engine("atomic");
+        let generation = e.tx_gate_gen;
+        let mut expected = serde_json::to_value(e.settings()).unwrap();
+        expected["macros"]["rttyProfiles"] = contest_f1_edit();
+        expected["macros"]["activeRttyProfile"] = serde_json::json!("contest");
+
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .unwrap();
+        assert_eq!(
+            e.tx_gate_gen, generation,
+            "a macro save advanced the TX gate generation — a queued over would not key"
+        );
+        assert_eq!(serde_json::to_value(e.settings()).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_value(Settings::load(&path)).unwrap()["macros"]["rttyProfiles"],
+            contest_f1_edit(),
+            "persisted"
+        );
+
+        let bad = serde_json::json!([{"name": "contest", "macros": [{"key": "F1", "label": 5}]}]);
+        assert!(e
+            .save_rtty_macros(bad, serde_json::json!("contest"))
+            .is_err());
+        assert_eq!(
+            serde_json::to_value(e.settings()).unwrap(),
+            expected,
+            "a refused save changed something"
+        );
+
+        // POSITIVE CONTROL for the generation check: a form save does advance it.
+        let s = e.settings().clone();
+        e.apply_settings(s);
+        assert_ne!(e.tx_gate_gen, generation);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     /// ⛔ **No settings payload moves Start at sign-in, on ANY path.** `set_launch_at_login` is
@@ -33294,6 +33659,140 @@ mod tests {
             1,
             "restore is a no-op once already in FD (never rebuilds the log)"
         );
+    }
+
+    /// ⭐ **A contest that is not Field Day restores on relaunch without a Field Day class
+    /// or section.** The restore gate asked for the two values only Field Day transmits,
+    /// so an Ohio QSO Party left running came back from a restart in Chat, with its log
+    /// sitting unread in the journal, for as long as `fd_class`/`fd_section` were blank —
+    /// which, for an operator who has never entered Field Day, is always.
+    #[test]
+    fn a_non_field_day_contest_restores_without_a_field_day_class_or_section() {
+        let mut s = Engine::new("W8ABC", "EN80", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "OH".into();
+        s.contest_qth_county = "FRAN".into();
+        assert!(
+            s.fd_class.trim().is_empty() && s.fd_section.trim().is_empty(),
+            "harness: no Field Day exchange at all"
+        );
+        let mut e = Engine::with_settings(s);
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "harness: boots out of the contest"
+        );
+        e.restore_field_day_if_enabled();
+        assert_eq!(
+            e.snapshot().field_day.map(|fd| fd.event).as_deref(),
+            Some("ohqp"),
+            "the party the operator left running comes back"
+        );
+
+        // POSITIVE CONTROL: Field Day itself still needs its class and section. The gate
+        // moved for the contests that do not send them, not for the one that does.
+        let mut s = Engine::new("W9XYZ", "EN61", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "arrlfd".into();
+        let mut e = Engine::with_settings(s);
+        e.restore_field_day_if_enabled();
+        assert!(
+            e.snapshot().field_day.is_none(),
+            "Field Day with no class or section still stays out"
+        );
+
+        // …and a contest whose OWN exchange cannot be built is refused by its session and
+        // leaves the operator exactly where they were (#100): a restore runs on every save.
+        let mut s = Engine::new("W8ABC", "EN80", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "OH".into(); // in state, but no county to send
+        let mut e = Engine::with_settings(s);
+        e.call_station("K1ABC");
+        assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
+        e.restore_field_day_if_enabled();
+        assert!(e.snapshot().field_day.is_none(), "no county, no party");
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("K1ABC"),
+            "a declined restore must not disturb the contact in flight (#100)"
+        );
+    }
+
+    /// ⭐ **`{EXCH}` keys the exchange of the contest that is running**, not Field Day's.
+    ///
+    /// The CW expander read `fd_class`/`fd_section` whenever the contest switch was on,
+    /// so an operator in the Ohio QSO Party with last June's `3A WI` still in Settings
+    /// keyed `3A WI` at every station — and with no class set, keyed nothing at all.
+    /// `{EXCH}` is now the running session's SENT exchange without the signal report
+    /// (the report has its own token), and the two Field Day tokens are empty outside
+    /// the two Field Day events.
+    #[test]
+    fn exch_keys_the_running_contests_sent_exchange_and_field_day_is_unchanged() {
+        // A Michigan station in the Ohio QSO Party sends RST + its state.
+        let mut s = Engine::new("W8ABC", "EN82", 0).settings().clone();
+        s.fd_active = true;
+        s.fd_event = "ohqp".into();
+        s.contest_qth_state = "MI".into();
+        // Field Day's exchange, left over from June — it must not reach the air here.
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        let mut e = Engine::with_settings(s);
+        e.set_mode("fieldday-sp")
+            .expect("a Michigan OhQP session builds");
+        assert_eq!(
+            e.preview_cw("{EXCH}"),
+            "MI",
+            "the party's exchange, without RST"
+        );
+        assert_eq!(
+            e.preview_cw("{CLASS}"),
+            "",
+            "no Field Day class in this contest"
+        );
+        assert_eq!(e.preview_cw("{SECTION}"), "", "no Field Day section either");
+        assert_eq!(
+            e.preview_cw("TU {RST} {EXCH} DE {MYCALL}"),
+            "TU 5NN MI DE W8ABC"
+        );
+        // The same string the RTTY macros read off the snapshot.
+        assert_eq!(
+            e.snapshot().field_day.map(|fd| fd.sent_exchange).as_deref(),
+            Some("MI")
+        );
+
+        // POSITIVE CONTROL — Field Day keys exactly what it always has, from Settings,
+        // in the mode and before it.
+        for event in ["", "arrlfd"] {
+            let mut s = Engine::new("W9XYZ", "EN61", 0).settings().clone();
+            s.fd_active = true;
+            s.fd_event = event.into();
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            let mut e = Engine::with_settings(s.clone());
+            // `with_settings` does not enter the mode — the tokens are live on the switch.
+            assert_eq!(
+                e.preview_cw("{EXCH}"),
+                "3A WI",
+                "event {event:?}, out of the mode"
+            );
+            e.set_mode("fieldday-run").expect("Field Day builds");
+            assert_eq!(
+                e.preview_cw("{EXCH}"),
+                "3A WI",
+                "event {event:?}, in the mode"
+            );
+            assert_eq!(e.preview_cw("{CLASS}"), "3A");
+            assert_eq!(e.preview_cw("{SECTION}"), "WI");
+            assert_eq!(
+                e.snapshot().field_day.map(|fd| fd.sent_exchange).as_deref(),
+                Some("3A WI")
+            );
+        }
+
+        // …and outside any contest every exchange token is empty, as it always was.
+        let e = Engine::new("W9XYZ", "EN61", 0);
+        assert_eq!(e.preview_cw("! {EXCH} {CLASS} {SECTION} K"), "K");
     }
 
     /// M15: the Field Day contest log is memory-only, so the shell needs a way to

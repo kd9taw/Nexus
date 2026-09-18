@@ -654,7 +654,10 @@ describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0
     ['phone-cockpit', 'ph-ptt-row', ['ph-ptt-row']],
     ['cw-cockpit', 'cw-macros', ['cw-macros']],
     ['cw-cockpit', 'cw-send', ['cw-send']],
-    ['rtty-cockpit', 'cw-macros (macro row)', ['cw-macros']],
+    // RTTY's F1–F8 and its fixed row (Call, set switch, TX latch, Esc/Stop) sit in ONE dock child,
+    // `.rtty-dock-keys`, which lays them on one line or two by width — so that wrapper is the row
+    // the dock's column can squeeze, and the one that carries the pin.
+    ['rtty-cockpit', 'rtty-dock-keys (F1–F8, Call, TX latch, Esc/Stop)', ['rtty-dock-keys']],
     ['rtty-cockpit', 'cw-macros.rtty-auto-row (auto-sequencer)', ['cw-macros', 'rtty-auto-row']],
     ['rtty-cockpit', 'cw-send (compose bar)', ['cw-send']],
     ['js8-cockpit', 'js8-dock-row (compose + beacon rows)', ['js8-dock-row']],

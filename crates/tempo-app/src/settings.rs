@@ -846,6 +846,18 @@ pub struct Settings {
     /// empty for the ordinary entry. The only arm anything in this build reads.
     #[serde(default)]
     pub contest_category_station: String,
+    /// Cabrillo `EMAIL` — where a sponsor can reach the entrant about a log, written into
+    /// the header of a contest whose rules list it, and left out when this is empty (the
+    /// header is optional). Read at EXPORT, not when a session starts: nothing sent on the
+    /// air depends on it, and a corrected typo must reach the next file.
+    ///
+    /// ⚠️ **Not [`Self::clublog_email`]**, which is a connector's LOGIN. Writing an
+    /// account identifier into a file the operator sends to a sponsor would be a surprise
+    /// nobody asked for, so the two are separate fields.
+    ///
+    /// Withheld from Remote (`query/configuration.rs`): a browser has no use for it.
+    #[serde(default)]
+    pub contest_email: String,
     // ---- The station data a SENT exchange needs (spec §3.4) -----------------
     //
     // ⭐ **These land BESIDE the frozen `fd_*` names, never replacing them**
@@ -2783,6 +2795,16 @@ pub struct Macros {
     /// Index into `cw_profiles` of the active set. Clamped in range on load.
     #[serde(default)]
     pub active_cw_profile: usize,
+    /// The RTTY cockpit's F1–F8 sets, by name — see [`RttyMacroProfile`]. Empty = every set is
+    /// the cockpit's built-in. ONE WRITER, `Engine::save_rtty_macros`: a form save keeps the live
+    /// value (`apply_settings_inner`), so a Settings panel opened before a cockpit edit cannot
+    /// revert it. Loaded entry by entry ([`lenient_list`]).
+    #[serde(default, deserialize_with = "lenient_list")]
+    pub rtty_profiles: Vec<RttyMacroProfile>,
+    /// The set the RTTY cockpit shows: `contest`, or Everyday for anything else (empty included).
+    /// Same one writer as `rtty_profiles`.
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub active_rtty_profile: String,
 }
 
 /// One customizable CW F-key macro.
@@ -2802,6 +2824,64 @@ pub struct CwMacroProfile {
     pub macros: Vec<CwMacroDef>,
 }
 
+/// A list loaded ENTRY BY ENTRY: each entry that parses is kept, each one that does not is
+/// dropped, and a value that is not a list at all loads empty.
+///
+/// ⚠️ WHY: `Settings::load` sets a file it cannot parse aside and starts from defaults — the
+/// operator's identity blanked and `license_class` reset to `Open`, which drops the Part 97 TX
+/// lockout. A hand-editable list must cost the entry that is wrong, never the file around it.
+/// Only LOAD is forgiving: `Engine::save_rtty_macros` requires its payload to round-trip exactly,
+/// so a malformed entry sent to be saved is refused rather than silently dropped.
+fn lenient_list<'de, D, T>(de: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(match serde_json::Value::deserialize(de)? {
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .filter_map(|item| serde_json::from_value(item).ok())
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+/// [`lenient_list`]'s scalar twin: a string, or empty for any other JSON value.
+fn lenient_string<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {
+    Ok(match serde_json::Value::deserialize(de)? {
+        serde_json::Value::String(s) => s,
+        _ => String::new(),
+    })
+}
+
+/// One RTTY F-key macro as the operator saved it. Every field defaults, so an entry missing one
+/// loads as that field blank.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RttyMacro {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// One RTTY macro set — `name` is its id, `everyday` or `contest` — holding ONLY THE KEYS THE
+/// OPERATOR CHANGED. An entry replaces that key's built-in (an entry with an empty label and
+/// text is a slot deliberately emptied); a key with no entry IS the built-in, whose caption the
+/// cockpit translates, while a saved caption is the operator's own words and never is. So an
+/// empty list is the whole built-in set, which is exactly what "Reset set to defaults" writes,
+/// and "Reset this button" removes one entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RttyMacroProfile {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, deserialize_with = "lenient_list")]
+    pub macros: Vec<RttyMacro>,
+}
+
 impl Default for Macros {
     fn default() -> Self {
         let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect();
@@ -2815,6 +2895,8 @@ impl Default for Macros {
             cw: Vec::new(),
             cw_profiles: Vec::new(),
             active_cw_profile: 0,
+            rtty_profiles: Vec::new(),
+            active_rtty_profile: String::new(),
         }
     }
 }
@@ -3757,6 +3839,7 @@ impl Default for Settings {
             contest_category_power: String::new(),
             contest_category_assisted: String::new(),
             contest_category_station: String::new(),
+            contest_email: String::new(), // "" = no EMAIL header
             // §3.4's station-data block. Every one of these is empty/0 on a fresh
             // install: none of them can be guessed, and a guessed exchange goes on
             // the air. The Contesting tab asks for the ones the picked contest sends.
@@ -7534,6 +7617,109 @@ mod tests {
         assert!(old.rtty_rx_auto_arm, "an upgrader's file predates the key");
         let off: Settings = serde_json::from_str(r#"{"rttyRxAutoArm":false}"#).unwrap();
         assert!(!off.rtty_rx_auto_arm, "and an explicit opt-out survives");
+    }
+
+    /// The RTTY cockpit's F1–F8 sets, on the exact wire keys `ui/src/types.ts` hand-writes
+    /// (`macros.rttyProfiles`, `macros.activeRttyProfile`). Read through the JSON, not the
+    /// fields, so the keys are what is under test.
+    #[test]
+    fn rtty_macro_sets_default_and_wire_keys() {
+        let v = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(
+            v["macros"]["rttyProfiles"],
+            serde_json::json!([]),
+            "missing or non-empty wire key macros.rttyProfiles — empty means every set built in"
+        );
+        assert_eq!(
+            v["macros"]["activeRttyProfile"],
+            serde_json::json!(""),
+            "missing wire key macros.activeRttyProfile"
+        );
+        // An upgrader's file predates both keys: built-ins, Everyday.
+        let old: Settings = serde_json::from_str(r#"{"macros":{"band":["73"]}}"#).unwrap();
+        let old = serde_json::to_value(old).unwrap();
+        assert_eq!(old["macros"]["rttyProfiles"], serde_json::json!([]));
+        assert_eq!(old["macros"]["activeRttyProfile"], serde_json::json!(""));
+        // …and an edited set survives the round trip byte for byte.
+        let edited = serde_json::json!({"macros": {
+            "rttyProfiles": [{"name": "contest", "macros": [{"key": "F1", "label": "CQ", "text": "CQ TEST {MYCALL} CQ"}]}],
+            "activeRttyProfile": "contest"
+        }});
+        let back =
+            serde_json::to_value(serde_json::from_value::<Settings>(edited.clone()).unwrap())
+                .unwrap();
+        assert_eq!(
+            back["macros"]["rttyProfiles"],
+            edited["macros"]["rttyProfiles"]
+        );
+        assert_eq!(
+            back["macros"]["activeRttyProfile"],
+            edited["macros"]["activeRttyProfile"]
+        );
+    }
+
+    /// ⛔ **A damaged RTTY macro costs that macro — never the settings file.**
+    ///
+    /// `Settings::load` sets a file it cannot parse aside as `.corrupt` and starts from defaults,
+    /// which resets `license_class` to `Open` and drops the Part 97 TX lockout. A macro list is
+    /// the likeliest thing in the file for an operator (or a tool) to hand-edit, so one bad entry
+    /// must cost only itself: here a wrong-typed label, a string where an entry belongs, a set
+    /// whose list is not a list and a wrong-typed active set, around entries that must survive.
+    #[test]
+    fn a_malformed_rtty_macro_entry_does_not_discard_the_settings_file() {
+        let dir = scratch_dir_ready("rtty_macro_malformed");
+        let path = dir.join("settings.json");
+        let good = Settings {
+            mycall: "W9XYZ".into(),
+            license_class: LicenseClass::Technician,
+            ..Settings::default()
+        };
+        let mut file = serde_json::to_value(&good).unwrap();
+        file["macros"]["rttyProfiles"] = serde_json::json!([
+            {"name": "contest", "macros": [
+                {"key": "F1", "label": "CQ", "text": "CQ TEST {MYCALL} {MYCALL} CQ"},
+                {"key": "F2", "label": 5, "text": null},
+                "not a macro",
+                {"key": "F3"}
+            ]},
+            "not a set",
+            {"name": "everyday", "macros": "not a list"}
+        ]);
+        file["macros"]["activeRttyProfile"] = serde_json::json!(1);
+        std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+
+        let back = Settings::load(&path);
+        assert!(
+            !path.with_extension("json.corrupt").exists(),
+            "one bad macro set the WHOLE settings file aside"
+        );
+        assert_eq!(back.mycall, "W9XYZ", "identity survived");
+        assert_eq!(
+            back.license_class,
+            LicenseClass::Technician,
+            "the TX lockout survived — not reset to Open"
+        );
+        let v = serde_json::to_value(&back).unwrap();
+        assert_eq!(
+            v["macros"]["rttyProfiles"],
+            serde_json::json!([
+                {"name": "contest", "macros": [
+                    {"key": "F1", "label": "CQ", "text": "CQ TEST {MYCALL} {MYCALL} CQ"},
+                    {"key": "F3", "label": "", "text": ""}
+                ]},
+                {"name": "everyday", "macros": []}
+            ]),
+            "the good entries survive, a missing field defaults, and only the bad ones went"
+        );
+        assert_eq!(v["macros"]["activeRttyProfile"], serde_json::json!(""));
+        // POSITIVE CONTROL: the file really is otherwise loadable only because of the leniency —
+        // a type error anywhere ELSE still takes the `.corrupt` path, so this test is not passing
+        // on a load that forgives everything.
+        file["dialMhz"] = serde_json::json!("fourteen");
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        assert_eq!(Settings::load(&path).license_class, LicenseClass::Open);
+        assert!(path.with_extension("json.corrupt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The ten JS8 fields: JS8Call's own defaults (G3, operator-approved 2026-09-05), the

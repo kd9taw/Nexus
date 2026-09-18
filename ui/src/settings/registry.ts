@@ -306,7 +306,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'RTTY',
     tab: 'digital',
     keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
-      'mark', 'space', 'auto arm', 'start receiving', 'not decoding'],
+      'mark', 'space', 'auto arm', 'start receiving', 'not decoding', 'macro'],
   },
   {
     id: 'psk',
@@ -461,7 +461,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['contest', 'field day', 'winter field day', 'arrl', 'wfd', 'event',
       'which contest', 'role', 'in state', 'out of state', 'category', 'entry category',
       'cabrillo', 'category-operator', 'single-op', 'multi-op', 'checklog', 'single op',
-      'multi op', 'check log', 'operators'],
+      'multi op', 'check log', 'operators', 'email', 'e-mail', 'cabrillo email'],
   },
   // The station data a SENT exchange needs (spec §3.4). It sits under the contest
   // picker because WHICH of these fields goes on the air is the contest's business —

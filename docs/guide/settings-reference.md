@@ -1684,10 +1684,13 @@ The first thing on this tab, because the contest decides everything under it: th
 exchange you pass, what counts as a duplicate, how the log is scored, and what goes in
 the Cabrillo headers.
 
-- **Contest** — ARRL Field Day or Winter Field Day. Field Day Setup below is the setup
-  for whichever of the two you pick. (This is the same setting the Event chips used to
-  carry inside Field Day Setup; it moved up one level so there is one contest picker
-  rather than a setting buried inside one contest's own section.)
+- **Contest** — ARRL Field Day, Winter Field Day, ARRL November Sweepstakes (CW or
+  Phone), the ARRL January, June and September VHF contests, CQ World-Wide DX (CW or
+  SSB), the CQ World-Wide RTTY DX Contest, CQ WPX (CW or SSB), and the California,
+  Ohio, Tennessee and Texas QSO Parties. Field Day Setup below is the setup for the
+  two Field Day events. (This is the same setting the Event chips used to carry inside
+  Field Day Setup; it moved up one level so there is one contest picker rather than a
+  setting buried inside one contest's own section.)
 - **Your role** — read-only, and derived rather than chosen. A role is decided by where
   you are: in a QSO party the in-state and out-of-state stations send different things,
   and crossing the line changes which one you are. Both Field Day events work the same
@@ -1697,6 +1700,15 @@ the Cabrillo headers.
   Nexus guessing: pick `CHECKLOG` when you are sending the log to help the sponsor
   check other people's rather than to be scored yourself. New sessions read this;
   a session already running keeps the declaration it started with.
+- **Power category**, **Spotting assistance** and **Station type** — the rest of
+  what your Cabrillo log declares about the entry. Sweepstakes sends these on the
+  air as its precedence letter, and a CQ WW RTTY log carries the power category and
+  the assistance as header lines.
+- **Email for contest logs** — goes on the EMAIL line of the Cabrillo log you
+  export for a contest whose log has one (CQ WW RTTY), so the sponsor can reach you
+  about your entry. The NAME line is your operator name from the
+  [Station](#station) tab. Leave this blank and the EMAIL line is left out. It is
+  not your ClubLog account email, and Remote never sees it.
 
 ### Your station data
 
@@ -1711,7 +1723,15 @@ goes on the air has to be one you typed.
 - **State or province** — your state, province or territory, two letters. This is
   **not** your ARRL section. Western New York is `WNY` as a section and `NY` as a
   state, and a QSO party wants the state; Field Day Setup below is where the
-  section lives.
+  section lives. CQ WW RTTY uses its sponsor's own Canadian codes, and some differ
+  from the usual ones: `NF` (VO1) and `LB` (VO2) rather than `NL`, `NWT` rather
+  than `NT`, and `PEI` rather than `PE`. Typing `NT` or `PE` is read as `NWT` or
+  `PEI`; `NL` is not, because it is two call areas, so pick `NF` or `LB`. With a
+  code the contest does not list, or none, you enter as a DX station and send no
+  QTH. If your callsign is in the US or Canada, Nexus warns you about that here,
+  on the contest log strip and when the contest starts, and suggests the code a
+  section means (`EMA` is `MA`). It never stops you: operating from outside the US
+  and Canada really is DX.
 - **Check** — the last two digits of the year you were first licensed. Sweepstakes
   asks for it, and you send the same two digits all contest.
 - **CQ zone** — 1 to 40, for CQ WW. Leave it at 0 if you do not know it yet.

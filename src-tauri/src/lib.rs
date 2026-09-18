@@ -4899,7 +4899,19 @@ fn contest_place_call(call: &str) -> Option<tempo_core::contest::CallLocation> {
     Some(tempo_core::contest::CallLocation {
         entity: info.entity,
         continent: info.cont,
+        // The prefix's own zone where cty.dat gives one, else the entity's — the strip's
+        // hint. 0 is the file's "no zone".
+        cq_zone: (info.cq_zone != 0).then_some(info.cq_zone),
     })
+}
+
+/// The CQ zone the country file gives a callsign — the contest strip's zone HINT (the
+/// box's placeholder, never its value). Read through [`contest_place_call`], the adapter
+/// the scorer places a call with, so the hint and the scorer cannot disagree about where a
+/// station is.
+#[tauri::command]
+fn contest_zone_hint(call: String) -> Option<u8> {
+    contest_place_call(&call).and_then(|l| l.cq_zone)
 }
 
 /// Install [`contest_place_call`] once, at startup. Logged either way; a second install is
@@ -5102,6 +5114,11 @@ struct FdRulesetDto {
     /// mode entry would refuse with, shown before the operator gets there. `""` when
     /// the configuration is good.
     problem: String,
+    /// ⭐ **The station's call is in the USA or Canada, and these settings would send the
+    /// DX exchange** (no QTH) — the warning, never a refusal, the same session carries once
+    /// the contest starts. Absent when it does not apply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location_warning: Option<tempo_app::dto::LocationWarningDto>,
 }
 
 fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
@@ -5127,6 +5144,7 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
         role: String::new(),
         exchange: Vec::new(),
         problem: String::new(),
+        location_warning: None,
     }
 }
 
@@ -5136,6 +5154,12 @@ fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
 #[tauri::command(async)]
 fn get_fd_ruleset(state: State<'_, SharedEngine>) -> Result<FdRulesetDto, String> {
     let eng = engine_lock(&state);
+    Ok(fd_ruleset_preview(&eng))
+}
+
+/// [`get_fd_ruleset`]'s answer for one engine: the ruleset facts plus the role, exchange,
+/// refusal or warning the saved settings would start the contest with.
+fn fd_ruleset_preview(eng: &tempo_app::engine::Engine) -> FdRulesetDto {
     let mut dto = fd_ruleset_dto(&eng.settings().fd_event);
     // ⭐ THE ROLE PREVIEW. It is built by the SAME constructor mode entry uses, on the
     // same station data, so what Settings shows is what will go on the air — a second
@@ -5149,11 +5173,15 @@ fn get_fd_ruleset(state: State<'_, SharedEngine>) -> Result<FdRulesetDto, String
             Ok(s) => {
                 dto.role = s.role().id.to_string();
                 dto.exchange = s.my_exchange.iter().map(|v| v.raw.clone()).collect();
+                dto.location_warning = s
+                    .location_warning
+                    .as_ref()
+                    .map(tempo_app::dto::LocationWarningDto::from);
             }
             Err(e) => dto.problem = e,
         }
     }
-    Ok(dto)
+    dto
 }
 
 /// The LEGACY per-profile TLE cache (a bare `Vec<Tle>` array, pre-snapshot
@@ -11540,13 +11568,14 @@ fn psk_set_mode(
 }
 
 /// Turn the RTTY auto-sequencer on/off. On builds the sequencer from the operator's
-/// identity + active exchange (Field Day class/section vs casual RST/name/QTH); off
+/// identity + active exchange (Field Day class/section vs casual RST/name/QTH), and is
+/// refused with the engine's sentence in any contest that is not Field Day; off
 /// aborts any live session and stops TX. NEVER transmits — a session only ever
 /// starts from an explicit CQ/Answer (the human-initiate gate).
 #[tauri::command(async)]
 fn rtty_set_auto(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, String> {
     let mut eng = engine_lock(&state);
-    eng.set_rtty_auto(on);
+    eng.set_rtty_auto(on)?;
     Ok(rtty_state_dto(&eng))
 }
 
@@ -13581,6 +13610,24 @@ fn set_blocked_calls(
         eprintln!("tempo: failed to persist blocked calls: {e}");
     }
     Ok(eng.snapshot())
+}
+
+/// The RTTY cockpit's macro editor and its Everyday/Contest switch: one atomic write of
+/// `macros.rttyProfiles` + `macros.activeRttyProfile` through `Engine::save_rtty_macros`, NEVER
+/// the settings form — `set_settings` advances the TX gate generation (an over the operator had
+/// just queued would not key) and revokes Remote actuation. The payload is taken as JSON so the
+/// engine's exact round-trip check sees what the UI sent: a malformed macro is refused here, not
+/// quietly dropped the way a LOAD forgives one. Returns the saved `macros` for the UI's mirror.
+#[tauri::command(async)]
+fn set_rtty_macros(
+    state: State<'_, SharedEngine>,
+    profiles: serde_json::Value,
+    active: serde_json::Value,
+) -> Result<tempo_app::settings::Macros, String> {
+    let mut eng = engine_lock(&state);
+    eng.save_rtty_macros(profiles, active)
+        .map_err(|reason| format!("RTTY macros were not saved ({reason:?})"))?;
+    Ok(eng.settings().macros.clone())
 }
 
 /// Default inner size (CSS px) a pop-out OPENS at, per panel slug — "give this panel
@@ -24365,6 +24412,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             n3fjp_test_connection,
             set_hold_tx_freq,
             set_blocked_calls,
+            set_rtty_macros,
             set_beta_updates,
             set_launch_at_login,
             answer_remote_autostart_offer,
@@ -24382,6 +24430,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             log_qso,
             get_log,
             resolve_entity,
+            contest_zone_hint,
             edit_qso,
             mark_qsl_sent,
             mark_qsl_card,
@@ -25410,6 +25459,83 @@ mod tests {
         assert!(super::contest_place_call("...").is_none());
     }
 
+    /// ⭐ **The CQ zone the contest strip offers as a hint is the country file's own**,
+    /// carried through the same adapter the scorer places a call with — which dropped it.
+    ///
+    /// The United States and Canada are the cases that make it worth having: one entity,
+    /// several zones, and cty.dat's per-prefix `(cq)` overrides are what say W6 is zone 3
+    /// and W0 is zone 4. A zone derived from the entity alone would hint 5 for all of them.
+    #[test]
+    fn the_contest_zone_hint_is_the_country_files_cq_zone() {
+        for (call, zone) in [
+            ("W1XYZ", 5),
+            ("W6ABC", 3),
+            ("W0ABC", 4),
+            ("VE3XYZ", 4),
+            ("VE7ABC", 3),
+            ("DL1ABC", 14),
+            ("JA1ABC", 25),
+            ("KH6ABC", 31),
+        ] {
+            assert_eq!(
+                super::contest_place_call(call).and_then(|l| l.cq_zone),
+                Some(zone),
+                "{call} places in zone {zone}"
+            );
+            assert_eq!(super::contest_zone_hint(call.into()), Some(zone), "{call}");
+        }
+        // NEGATIVE CONTROL: nothing to place, nothing to hint — never a made-up zone.
+        assert_eq!(super::contest_zone_hint(String::new()), None);
+        assert_eq!(super::contest_zone_hint("...".into()), None);
+    }
+
+    /// ⭐ **The entity spellings the W/VE warning keys on are this country file's own.**
+    /// `ContestSession::location_warning` compares the station's resolved entity with
+    /// "United States" and "Canada"; a file that spelled either differently would switch the
+    /// warning off without a sound. Alaska and Hawaii are entities of their own, and a US call
+    /// signing portable from another entity resolves to that entity.
+    #[test]
+    fn the_w_ve_warning_entities_are_the_country_files_own_spellings() {
+        let entity = |call: &str| super::contest_place_call(call).map(|l| l.entity);
+        assert_eq!(entity("W1XYZ"), Some("United States"));
+        assert_eq!(entity("K9XYZ"), Some("United States"));
+        assert_eq!(entity("VE3XYZ"), Some("Canada"));
+        assert_eq!(entity("VO1XYZ"), Some("Canada"));
+        assert_eq!(entity("KH6XYZ"), Some("Hawaii"));
+        assert_eq!(entity("KL7XYZ"), Some("Alaska"));
+        assert_ne!(entity("W1XYZ/VP2V"), Some("United States"));
+    }
+
+    /// ⭐ **Settings shows the W/VE warning before the contest starts** — the preview is the
+    /// same session constructor the mode entry uses, so it carries the same warning.
+    #[test]
+    fn the_settings_preview_carries_the_location_warning() {
+        // The real country file, installed exactly as startup installs it (a second install
+        // in this test binary is refused, which is fine: it is the same resolver).
+        let _ = tempo_core::contest::install_call_resolver(super::contest_place_call);
+        let preview = |state: &str| {
+            let s = tempo_app::settings::Settings {
+                mycall: "W9XYZ".into(),
+                fd_event: "cqww_rtty".into(),
+                contest_cq_zone: 4,
+                contest_qth_state: state.into(),
+                ..Default::default()
+            };
+            super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s))
+        };
+        let blank = preview("");
+        assert_eq!(blank.problem, "", "a warning is not a refusal");
+        assert_eq!(blank.role, "dx");
+        let w = blank
+            .location_warning
+            .expect("a US call with no state is warned");
+        assert_eq!((w.typed.as_str(), w.hints.len()), ("", 0));
+        // CONTROL: a listed state is not warned, and sends its QTH.
+        let il = preview("IL");
+        assert_eq!(il.location_warning, None);
+        assert_eq!(il.exchange, vec!["599", "4", "IL"]);
+    }
+
     #[cfg(feature = "radio")]
     #[test]
     fn local_amp_gesture_revokes_remote_permission_without_changing_tx() {
@@ -25694,6 +25820,39 @@ mod tests {
                 "{name} is not registered — invoking it from the UI would fail at runtime"
             );
         }
+    }
+
+    /// The RTTY cockpit's macro editor saves through `set_rtty_macros` — defined, registered, and
+    /// routed through `Engine::save_rtty_macros` rather than any form save (`set_settings`
+    /// advances the TX gate generation, so a queued over would not key). Source-scanned for the
+    /// same reason as the auto-arm test above: registration is what is under test.
+    #[test]
+    fn the_rtty_macro_save_command_is_registered_and_never_a_form_save() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split_once("\nfn set_rtty_macros(")
+            .expect("the command the RTTY cockpit invokes must exist")
+            .1;
+        let body = body.split_once("\n}\n").expect("the end of the command").0;
+        assert!(
+            body.contains("save_rtty_macros("),
+            "it saves through the atomic verb"
+        );
+        assert!(
+            !body.contains("apply_settings") && !body.contains("apply_and_persist"),
+            "the macro save must never run the form-save path"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "set_rtty_macros,"),
+            "set_rtty_macros is not registered — the cockpit's save would fail at runtime"
+        );
     }
 
     /// The advisory DTO carries the ruleset's facts verbatim — and pins the 2026

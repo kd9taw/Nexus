@@ -73,6 +73,30 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
         ),
         "an older generated stamp loses to the seed"
     );
+    // ⭐ THE UPGRADE CASE. Installs already hold the rules file published from the PREVIOUS
+    // seed, stamped 2026-08-29 — before CQ WW RTTY existed. A download wins over the seed on
+    // an EQUAL stamp (fd_rules_install_equal_stamp.rs), so had the seed kept that stamp,
+    // every upgraded install would have kept the old file and CQ WW RTTY would simply not be
+    // there, with nothing to say so. Both halves are pinned: the seed moved, and that file
+    // now loses to it.
+    assert!(
+        fd_rules::seed_generated() >= "2026-09-17T00:00:00Z",
+        "the seed carrying cqww_rtty is stamped no earlier than the day it was added, got {}",
+        fd_rules::seed_generated()
+    );
+    let mut before_rtty: serde_json::Value = serde_json::from_str(SEED).unwrap();
+    before_rtty["rulesets"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|r| r["event"] != "cqww_rtty");
+    before_rtty["generated"] = "2026-08-29T00:00:00Z".into();
+    assert!(
+        matches!(
+            fd_rules::install_from(&before_rtty.to_string()),
+            Err(RulesInitError::OlderThanSeed { .. })
+        ),
+        "a file downloaded before CQ WW RTTY existed loses to this seed"
+    );
 
     // -- The install: seed with SFD phone points edited 1 → 3. -------------
     let mut spec: serde_json::Value = serde_json::from_str(SEED).unwrap();

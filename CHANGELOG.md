@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **RTTY: double-click a callsign to grab it, and F1–F8 you can edit.** Double-click a call in
+  RTTY's Decoded text and it fills the Their call box and the log strip's callsign together —
+  a portable or compound call such as VE3/K1ABC comes across whole, and a call garbled by a
+  lost figures shift is filled as printed for you to correct. Anything that is not a call (599,
+  CQ, TEST, a grid square) is ignored, and the caret stays where you were typing. The two call
+  fields are now one: type in either and the other follows, and logging the contact clears
+  both. The dock now has eight macro keys, and **F1–F8 work from the keyboard** while the RTTY
+  cockpit is on screen. Two sets are built in and switched from the dock: **Everyday**, the
+  four you had plus four empty keys, and **Contest** — CQ, exchange, TU, my call, his call,
+  S&P exchange, AGN and B4. Hover a key and click ✎, or click an empty key, to change its title
+  and message; it is saved straight away, and you can put one key or a whole set back to the
+  built-in messages. Every macro now goes out on a line of its own and ends with a space, the
+  way RTTY contest messages are written, so your call starts a line on the other station's
+  screen. The Contest set's exchange keys send the exchange of the contest you are running —
+  the zone and QTH, state or section you are sending this weekend, not last June's Field Day
+  class — and with no contest running they tell you so instead of sending. **In a contest the
+  double-click also fills the exchange**: a zone lands in the zone box, a section or state in
+  the QTH box, by that contest's own rules rather than a fixed list, and **Enter** in one of
+  those boxes logs the contact. A word that could be two things, or one Nexus has no list of
+  values for, is left for you to type.
+
 - **Cluster login SSID — stop two stations on one callsign knocking each other off.** A cluster
   node allows one session per callsign and disconnects the older one, so running a second Nexus,
   or Nexus beside another cluster program on the same call, made the two bump each other
@@ -37,8 +58,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     **Hide worked · 12** on the Spots panel. Every row comes back marked **WORKED TODAY** or
     **worked 2h ago**. The board remembers your choice per window; the Spots panel until you
     close Nexus.
+- **CQ World-Wide RTTY DX Contest.** Pick it under **Settings › Contesting › Contest** and the log
+  strip takes its exchange: RST, your CQ zone and, for stations in the continental USA and Canada,
+  a state or Canadian call area, using the sponsor's own codes (NWT, NF, LB and PEI among them).
+  Contacts score the way the sponsor counts them: 3 points between continents, 2 within a
+  continent, 1 within your own country, with zones, countries and W/VE QTHs each counted once per
+  band. The strip tells you when the rig is on a band the contest does not use (it runs on 80, 40,
+  20, 15 and 10 m) and still logs the contact. The Cabrillo export follows the sponsor's template:
+  a two-digit zone, DX where a station sent no QTH, the LOCATION spelling the sponsor's list uses,
+  and the category, claimed-score, name and email headers. The email comes from a new optional
+  **Email for contest logs** setting; leave it blank and the line is left out. If your callsign is
+  in the US or Canada but your contest state is blank or not on the sponsor's list, you would send
+  the DX exchange with no QTH, so Nexus warns you in Settings, on the log strip and when the
+  contest starts, and suggests the code a section means (EMA is MA). It never stops you, because
+  operating from outside the US and Canada really is DX. Typing NT or PE is read as NWT or PEI.
+
+- **The contest strip suggests a CQ zone and flags a missing QTH.** Type a call in a contest that
+  exchanges CQ zones and the zone box shows the zone the country file gives that call as a faint
+  hint — it never fills the box, because a station outside its prefix's zone sends its own. And
+  when a USA or Canada station is about to be logged without a QTH in a contest where they send
+  one, the strip says so; you can still log it.
 
 ### Changed
+
+- **Contest Cabrillo logs record the frequency you were on.** Outside Field Day, each QSO line now
+  carries the dial the contact was logged on instead of the band's lower edge, which sponsors
+  such as CQ WW ask award entrants for. Contacts logged before this update keep the band edge.
+  Field Day logs are unchanged.
 
 - **Remote: the dial follows the wheel, and it stops swallowing your corrections.** Spinning the
   readout digits over a remote link used to ignore every notch made while a command was still out
@@ -87,6 +133,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both kept their NEW PARK badge and the Needed board went on offering both activations after you
   had worked them.
 
+- **A mistyped QTH or section no longer counts as a multiplier.** In a contest with a list of
+  QTHs or sections (CQ WW RTTY's states and provinces, Sweepstakes' sections), a received value
+  that is not on the list, such as an ARRL section typed where a state belongs, counted as a
+  multiplier of its own. The contact is still logged; the value just counts for nothing.
+- **Remote shows the contest screen for every contest.** Through Remote, the contest screen was
+  blank for any contest except ARRL Field Day and Winter Field Day, because the browser refused
+  the contest's rules as unknown. It now shows for all of them, CQ WW RTTY included.
+- **A contest other than Field Day comes back after a restart.** If you left a QSO party or
+  another contest running and restarted Nexus, it came back in Chat unless a Field Day class and
+  section happened to be filled in, and the contacts you had logged stayed out of view. Nexus now
+  reopens the contest you left running. A contest whose own exchange is incomplete still stays
+  closed, and entering it tells you what to fill in.
+- **`{EXCH}` in a CW macro sends the exchange of the contest you are running.** It always sent your
+  Field Day class and section, so in any other contest a macro with `{EXCH}` sent the wrong
+  exchange, or nothing at all. It now sends that contest's exchange without the signal report —
+  your zone in CQ WW CW, for example. Field Day sends exactly what it did before. `{CLASS}` and
+  `{SECTION}` are empty outside Field Day.
+- **RTTY Auto no longer sends a Field Day exchange in other contests.** The auto-sequencer only
+  knows the Field Day exchange, yet it turned on in any contest and would have sent your Field
+  Day class and section to every station it worked. In any contest other than ARRL Field Day or
+  Winter Field Day it now refuses to turn on and says why: send your exchange with the macros and
+  log each contact yourself. Outside a contest, and in both Field Days, Auto works as before.
+- **The contest log strip works for contests other than Field Day.** In a contest whose exchange
+  includes a signal report, the report box came back blank after every contact; it now goes back
+  to 599 (59 on phone). A CQ zone has to be a number from 1 to 40, and the strip says so while
+  you type. A box the contest does not require — the QTH a DX station never sends in CQ WW RTTY —
+  can be left blank. The strip's label, hint and button now say "contest log" instead of Field
+  Day, and the zone box is captioned Zone. Field Day's strip is unchanged.
+- **The contest screen names the contest you are running.** Outside Field Day the banner still
+  read "ARRL Field Day", the header showed an empty class and section, the log table's columns were
+  Class and Section (blank on every row), the Score Summary printed a station class, a power
+  multiplier and a bonus list, and the Field Day bonus checklist sat under the score. The banner
+  and header now name the contest and show what you are sending, the log table has one column
+  per field that contest exchanges, the Score Summary shows QSO points × multipliers, and the
+  bonus checklist appears only in Field Day. Field Day's screen is unchanged.
 - **A cluster node that accepts a connection and then goes silent no longer kills that feed
   slot for the rest of the session.** Some nodes accept the connection and never send a login
   prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it

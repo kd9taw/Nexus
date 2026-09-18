@@ -324,7 +324,9 @@ still says what a thing does *not* do, and so does every entry in the changelog.
   2026-07-26), and their **sensitivity figures are still simulation numbers**. On-air
   decode-rate-vs-SNR is the open gate and the single most useful contribution you can make.
 - **CW and Phone cockpits** are casual and ragchew grade by design: macros, voice keyer, panadapter,
-  live decoder, WinKeyer support, full logging. No contest exchanges.
+  live decoder, WinKeyer support, full logging. In a contest picked on the Contesting tab (CQ WW
+  RTTY among them) the log strip takes that contest's exchange and flags dupes, and the contest log
+  exports to Cabrillo. Neither cockpit runs a contest for you.
 - **Windows, macOS, Linux and Raspberry Pi** builds ship together every release.
 - Not implemented yet: **contest modes** (NA VHF, RTTY RU, WW Digi), the **Fox role** (running a
   DXpedition end), **transmit-side iGating** (deliberately never, since it means a radio keying up

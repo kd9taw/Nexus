@@ -51,6 +51,7 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast } from './toast'
+import { contestStartWarning } from './features/contestLocation'
 import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
 import { setUnitsMirror } from './units'
@@ -2113,6 +2114,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const handleSetMode = useCallback((mode: ModeRequest, expectedQso?: import('./types').QsoStatus | null) => {
     void withErrorToast(() => apiSetMode(mode, expectedQso), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
+      // A contest that starts about to send the DX exchange from a US or Canadian call says so,
+      // loudly and once, as it starts (the strip keeps saying it). Never a refusal.
+      const warning = contestStartWarning(mode, s)
+      if (warning) pushToast(warning, 'info', 15_000, { prominent: true })
     })
   }, [])
 
@@ -3342,6 +3347,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
+                macros={settings?.macros}
+                onMacrosSaved={(macros) => setSettings((prev) => (prev ? { ...prev, macros } : prev))}
               />
             </div>
           )}
