@@ -7573,6 +7573,55 @@ input.cw-pitch::-webkit-inner-spin-button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* ⭐ THE EXCHANGE TYPE-AHEAD — county or state suggestions under a contest box. Same
+   shape as the park dropdown above; its own classes because the FD strip's field is a
+   `label` that has to become the positioning context. */
+.le-fd-suggest {
+  position: absolute;
+  z-index: 20;
+  /* ⚠️ ABOVE the box, not below it: this strip is bottom-anchored in the dock, so a list
+     hanging below the field would open off the bottom of the window. */
+  bottom: calc(100% + 2px);
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 16em;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+.le-fd-suggest button {
+  display: flex;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+}
+.le-fd-suggest button:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.le-fd-hit-code {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 700;
+}
+.le-fd-hit-name {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* Auto-loaded park detail (name/location/grid) for a complete reference. */
 .le-park-detail {
   display: flex;
@@ -9730,6 +9779,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-1);
   flex: 0 0 auto;
   cursor: text;
+  /* The positioning context for the exchange type-ahead (`.le-fd-suggest`). */
+  position: relative;
 }
 .le-fd-field-call {
   flex: 1 1 200px;

@@ -651,6 +651,19 @@ impl FieldDayLog {
         })
     }
 
+    /// ⭐ **Points this log EARNED from the contest's bonus stations** — once per
+    /// station, whatever the band or mode
+    /// ([`FdRuleset::bonus_station_points`](crate::fd_rules::FdRuleset::bonus_station_points)).
+    ///
+    /// Separate from the ticked bonus menu (`FdRuleset::bonus_points`) because the two
+    /// answer different questions: that one is what the operator CLAIMED, this one is
+    /// what the log holds. 0 for every ruleset that declares no bonus station, which is
+    /// every contest but the Illinois QSO Party.
+    pub fn bonus_station_points(&self) -> u32 {
+        self.ruleset()
+            .bonus_station_points(self.qsos.iter().map(|q| q.call.as_str()))
+    }
+
     /// Distinct ARRL/RAC sections worked — a DISPLAY count for the worked-sections
     /// board, **not a multiplier**: neither Field Day event has one, and no scoring
     /// path reads this. (Said otherwise here until 2026-09-08, on the very function
@@ -1084,9 +1097,37 @@ impl FieldDayLog {
                 && !self.qsos.is_empty()
                 && rs.scoring.post.is_empty()
                 && rs.score_note_key.is_empty())
-            .then(|| rs.scoring.score(self.score_rows(), 1).3),
+            .then(|| {
+                // ⭐ …plus the bonus stations this LOG earned, which the sponsor adds
+                // "to the final score" (ILQP's two club calls). They are derived from
+                // the rows rather than claimed on a menu, so a file that left them out
+                // would claim 100 or 200 points less than the club will credit. The
+                // ticked-bonus menu is the other thing entirely, and a ruleset carrying
+                // one takes the `post` arm above and writes no claimed score at all.
+                rs.scoring.score(self.score_rows(), 1).3 + self.bonus_station_points()
+            }),
             email: declared("EMAIL", entrant.email.trim().to_string()),
             name: declared("NAME", entrant.name.trim().to_string()),
+            // ⭐ THE SPONSOR'S OWN HEADER, for the entrant it is about. ILQP's sample
+            // log heads an Illinois entry `IL-COUNTY: ADAMS` — the NAME of the county,
+            // beside QSO lines carrying its code — and an entry from anywhere else has
+            // no Illinois county to name. The value is read back off the exchange this
+            // session is COMPOSING (the first slot whose copied value matched a domain,
+            // which is the in-state role's own location slot), so the header and the
+            // QSO lines cannot disagree about where the entry ran from.
+            il_county: declared(
+                "IL-COUNTY",
+                (self.session.role().id == "in_state")
+                    .then(|| {
+                        self.session
+                            .my_exchange
+                            .iter()
+                            .find_map(|v| spec.name_of(v))
+                    })
+                    .flatten()
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
         };
         let mut s = headers.render();
         for q in &self.qsos {

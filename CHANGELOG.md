@@ -58,6 +58,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     **Hide worked · 12** on the Spots panel. Every row comes back marked **WORKED TODAY** or
     **worked 2h ago**. The board remembers your choice per window; the Spots panel until you
     close Nexus.
+- **Illinois QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
+  the Western Illinois ARC's own rules: 1700Z Sunday of the third full weekend of October for eight
+  hours, 160 through 2 m without the WARC bands, phone 1 point and CW or digital 2. Illinois
+  stations send RST and their county; everyone else sends RST and their state, province or
+  **country** — this party asks a DX station for its country rather than the word DX. **The county
+  box takes the county name as well as the code**: type `Cook` and it offers COOK, `st clair` offers
+  SCLA, and space turns a full name into the code that goes in the log. A half-typed name is not
+  completed for you and neither is one that could be several counties — pick from the list or
+  finish typing, because nothing is ever guessed onto the air. **CW and digital count as one mode for dupes here**, so
+  a station worked on CW shows as a dupe on RTTY on that band — the strip says so before you call
+  them. **FT8 and FT4 earn no credit** (the sponsor's own rule); other digital modes are
+  encouraged. Illinois entrants multiply by counties, states, provinces and up to five DXCC
+  entities; everyone else by the Illinois counties worked. **The club's two calls, W9AWE and
+  W9OAB, are worth 100 bonus points each** and Nexus adds them to your score and your claimed
+  score as soon as they are in the log — there is no box to tick. The Cabrillo export writes
+  `CONTEST: ILLINOIS QSO PARTY` and an `IL-COUNTY:` header for an Illinois entry, exactly as the
+  sponsor's sample log does.
+
 - **CQ World-Wide RTTY DX Contest.** Pick it under **Settings › Contesting › Contest** and the log
   strip takes its exchange: RST, your CQ zone and, for stations in the continental USA and Canada,
   a state or Canadian call area, using the sponsor's own codes (NWT, NF, LB and PEI among them).
@@ -133,6 +151,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both kept their NEW PARK badge and the Needed board went on offering both activations after you
   had worked them.
 
+- **CW macros no longer call "CQ FD" in another contest.** The cockpit had two built-in macro
+  sets, casual and Field Day, and used the Field Day one in every contest — so `F1` in the
+  Illinois QSO Party or CQ WW CW called `CQ FD DE …`, Field Day's own call, on the air. There is
+  now a contest set with the same cadence and `CQ TEST`; Field Day keeps `CQ FD`, and a macro
+  profile of your own still wins over both.
+- **A banned-mode warning names the contest you are in.** It read every contest except Winter
+  Field Day as ARRL Field Day, so a contest that bans a mode would have blamed Field Day's rules.
 - **A mistyped QTH or section no longer counts as a multiplier.** In a contest with a list of
   QTHs or sections (CQ WW RTTY's states and provinces, Sweepstakes' sections), a received value
   that is not on the list, such as an ARRL section typed where a state belongs, counted as a

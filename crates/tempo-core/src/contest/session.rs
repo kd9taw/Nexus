@@ -844,10 +844,22 @@ fn location_hints(
         .split(|c: char| !c.is_ascii_alphanumeric())
         .collect();
     let mut out: Vec<&'static str> = Vec::new();
-    for f in exchange.fields {
-        let super::FieldKind::Enum { domain } = f.kind else {
-            continue;
-        };
+    // ⚠️ **Every domain the slot can draw on, including a `OneOf`'s arms.** A QSO party's
+    // QTH is county-or-state-or-anything-else, so a walk that looked only at plain `Enum`
+    // slots found no universe at all there and the warning shipped with no suggestion —
+    // exactly where the mistake (a section typed into the state box) is most likely.
+    let domains = exchange.fields.iter().flat_map(|f| match f.kind {
+        super::FieldKind::Enum { domain } => vec![domain],
+        super::FieldKind::OneOf(arms) => arms
+            .iter()
+            .filter_map(|a| match a {
+                super::FieldKind::Enum { domain } => Some(*domain),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    });
+    for domain in domains {
         for (code, name) in domain.values {
             // A place name, without the call area the sponsor appends: "Ontario (VE3)".
             let place = name.split(" (").next().unwrap_or(name);
@@ -930,6 +942,24 @@ an RST slot",
         "derived:my_location" => Ok(match role.id {
             "in_state" => my_location.county.clone().unwrap_or_default(),
             "dx" => "DX".to_string(),
+            _ => my_location.state.clone(),
+        }),
+        // ⭐ The same slot for a contest whose sentence ends differently: *"IL stations
+        // give RS/T and county; others give RS/T and state, province or country"*
+        // (w9awe.org's own 2025 ILQP rules, read 2026-09-17). A DX entrant sends THEIR
+        // COUNTRY as they declared it, because this contest has no `DX` token to send.
+        //
+        // It is a second derivation rather than a flag on the first because the arm it
+        // replaces is the one four shipped rulesets are written against — OhQP's *"DX
+        // stations outside of W/VE send RST and "DX""* — and a file says which sentence
+        // it means. Both read the same two settings, which is what keeps `derived:`
+        // from being a place to hide a missing one.
+        //
+        // ⚠️ An entrant who has declared nothing resolves EMPTY here, and the caller
+        // refuses a required slot that does — inventing `DX` would transmit a token
+        // this contest does not define.
+        "derived:my_location_or_typed" => Ok(match role.id {
+            "in_state" => my_location.county.clone().unwrap_or_default(),
             _ => my_location.state.clone(),
         }),
         other => match other.split_once(':') {
@@ -1089,6 +1119,119 @@ mod tests {
             }
         )
         .is_ok());
+    }
+
+    /// ⭐ **The two QTH derivations, side by side over the same operator.**
+    ///
+    /// Every QSO party in the shipped set ends its exchange sentence the same way —
+    /// OhQP: *"DX stations outside of W/VE send RST and "DX""* — and the Illinois QSO
+    /// Party does not: *"Exchange: IL stations give RS/T and county; others give RS/T
+    /// and state, province or country"* (w9awe.org's own 2025 rules, read 2026-09-17).
+    /// A DX entrant there sends **their country**, and there is no token for "DX" in
+    /// the contest at all.
+    ///
+    /// The difference is one role's arm, so it is one derivation beside the other
+    /// rather than a flag on the old one: a ruleset says which sentence it means, and
+    /// the four shipped parties keep the one they were written against.
+    #[test]
+    fn the_or_typed_derivation_sends_a_dx_operators_country_where_my_location_sends_dx() {
+        use super::super::spec::{AdifTags, Domain, FieldKind, FieldSpec};
+        static ANY: Domain = Domain {
+            id: "test_qth",
+            adif: AdifTags {
+                rcvd: Some("STATE"),
+                sent: Some("MY_STATE"),
+            },
+            values: &[
+                ("COOK", "Cook"),
+                ("WI", "Wisconsin"),
+                ("GERMANY", "Germany"),
+            ],
+        };
+        static OLD: FieldSpec = FieldSpec {
+            key: "QTH",
+            adif: AdifTags {
+                rcvd: Some("STATE"),
+                sent: Some("MY_STATE"),
+            },
+            label: None,
+            required: true,
+            source: "derived:my_location",
+            kind: FieldKind::Enum { domain: &ANY },
+        };
+        static NEW: FieldSpec = FieldSpec {
+            source: "derived:my_location_or_typed",
+            ..OLD
+        };
+        static ROLES: &[RoleSpec] = &[
+            RoleSpec {
+                id: "in_state",
+                selector: RoleSelector::Always,
+                sends: &["QTH"],
+                receives: &["QTH"],
+                constant_sent: &[],
+            },
+            RoleSpec {
+                id: "w_ve",
+                selector: RoleSelector::Always,
+                sends: &["QTH"],
+                receives: &["QTH"],
+                constant_sent: &[],
+            },
+            RoleSpec {
+                id: "dx",
+                selector: RoleSelector::Always,
+                sends: &["QTH"],
+                receives: &["QTH"],
+                constant_sent: &[],
+            },
+        ];
+        let station = StationData::default();
+        let at = |field: &'static FieldSpec, role: usize, loc: &MyLocation| {
+            sent_value(field, &ROLES[role], &station, loc).expect("both derivations resolve")
+        };
+        let dx_op = MyLocation {
+            county: None,
+            state: "GERMANY".to_string(),
+            dxcc: true,
+        };
+        // The whole difference, on the one role it touches.
+        assert_eq!(at(&NEW, 2, &dx_op), "GERMANY");
+        assert_eq!(
+            at(&OLD, 2, &dx_op),
+            "DX",
+            "POSITIVE CONTROL: the shipped derivation still sends OhQP's literal DX"
+        );
+        // …and nothing else moves: the other two roles answer identically under both.
+        let il_op = MyLocation {
+            county: Some("COOK".to_string()),
+            state: "IL".to_string(),
+            dxcc: false,
+        };
+        let w_ve_op = MyLocation {
+            county: None,
+            state: "WI".to_string(),
+            dxcc: false,
+        };
+        for (role, loc, want) in [(0, &il_op, "COOK"), (1, &w_ve_op, "WI")] {
+            assert_eq!(at(&OLD, role, loc), want);
+            assert_eq!(at(&NEW, role, loc), want);
+        }
+        // ⚠️ A DX entrant who has typed nothing resolves EMPTY, not `DX`. The empty is
+        // what `for_ruleset` refuses by name ("Your QTH is empty…"); inventing a `DX`
+        // here would put a token on the air that this contest does not define.
+        assert_eq!(
+            at(
+                &NEW,
+                2,
+                &MyLocation {
+                    county: None,
+                    state: String::new(),
+                    dxcc: true,
+                }
+            ),
+            ""
+        );
     }
 
     #[test]

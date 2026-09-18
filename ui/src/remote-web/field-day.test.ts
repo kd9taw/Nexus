@@ -67,6 +67,29 @@ it('accepts the contest\'s advisory band list, and still bounds it',()=>{
  expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
 })
 
+// ILQP counts CW and digital as ONE mode for dupes, so its status carries the grouping the
+// browser's DUPE badge folds through. A key the validator does not know is a REFUSED payload —
+// the whole contest view blank through Remote — which is why every addition gets a row here.
+it('accepts the dupe rule\'s mode grouping, and still bounds it',()=>{
+ const page=fieldDayPage()
+ const fd=(page.meta as {source:{fieldDay:Record<string,unknown>}}).source.fieldDay
+ fd.dupeModeGroups=[['CW','DIG']]
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ // …and the empty list every other contest sends.
+ fd.dupeModeGroups=[]
+ expect(()=>parseFieldDay(page)).not.toThrow()
+ // Negative controls: not a list of lists, a group that is not text, and a list past any
+ // plausible mode vocabulary.
+ fd.dupeModeGroups=['CW','DIG']
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+ fd.dupeModeGroups=[[1,2]]
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+ fd.dupeModeGroups=Array(9).fill(['CW','DIG'])
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+ fd.dupeModeGroups=[Array(9).fill('CW')]
+ expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
+})
+
 // Every contest in the rules file has to survive the browser's validator. This pins the defect
 // where it only accepted arrlfd and wfd: thirteen of the fifteen events then in the rules table
 // had their ENTIRE Field Day payload rejected, so a station running a QSO party or a VHF contest

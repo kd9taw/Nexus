@@ -76,6 +76,61 @@ pub struct Bonus {
     pub points: u32,
 }
 
+/// ⭐ **A bonus the LOG earns, not one the operator claims** — a station worth points
+/// to whoever works it.
+///
+/// ILQP's own 2025 rules (w9awe.org, read 2026-09-17): *"any entrant contacting these
+/// stations will have a 100 point bonus added to the final score. Total of 200 points
+/// possible."* Every [`Bonus`] above it is a box the operator ticks; this one is in the
+/// log already, so offering it as a box would leave an entrant who did not know about
+/// the box submitting a score 200 points light.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BonusStation {
+    /// The callsign, uppercase and without a portable affix — matched against each
+    /// logged call's BASE ([`crate::message::base_call`]), so `W9AWE/M` counts and
+    /// `KW9AWE` does not. A file writing an affix is refused, because the match would
+    /// never fire and nothing would say so.
+    pub call: &'static str,
+    pub points: u32,
+}
+
+/// Points earned by working the bonus stations `stations` declares — **once per
+/// station, whatever the band, mode or number of contacts.**
+///
+/// A free function so it can be tested against a literal list rather than a whole
+/// installed ruleset; [`FdRuleset::bonus_station_points`] is the method every caller
+/// actually uses.
+pub fn bonus_station_points<'a, I>(stations: &[BonusStation], calls: I) -> u32
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    if stations.is_empty() {
+        return 0;
+    }
+    let mut hit = vec![false; stations.len()];
+    for call in calls {
+        if hit.iter().all(|h| *h) {
+            break;
+        }
+        let call = call.trim();
+        // The base-call walk allocates, so it is reached only by a call that could
+        // need it — the ordinary log row is one `eq_ignore_ascii_case`.
+        let base = call.contains('/').then(|| crate::message::base_call(call));
+        for (i, s) in stations.iter().enumerate() {
+            hit[i] = hit[i]
+                || base
+                    .as_deref()
+                    .map_or_else(|| call.eq_ignore_ascii_case(s.call), |b| b == s.call);
+        }
+    }
+    stations
+        .iter()
+        .zip(hit)
+        .filter(|(_, h)| *h)
+        .map(|(s, _)| s.points)
+        .sum()
+}
+
 /// One ARRL/RAC Field Day section: the exchange abbreviation sent on the air
 /// (e.g. `WI`), its full name, and the ARRL division it sits in (so the
 /// worked-sections board can lay the cells out division-by-division).
@@ -164,6 +219,10 @@ pub struct FdRuleset {
     pub exchange: &'static crate::contest::ExchangeSpec,
     pub scoring: crate::contest::Scoring,
     pub bonuses: &'static [Bonus],
+    /// ⭐ **Stations worth points to whoever works them** ([`BonusStation`]) — ILQP's
+    /// two club calls. Empty for every contest that names none, which is every contest
+    /// written before this key existed.
+    pub bonus_stations: &'static [BonusStation],
     pub dupe_rule: DupeRule,
     /// Tempo (FT1 keyboard chat) is a first-class FD contact surface for this
     /// event: WFD `true` (the digital-friendly event), SFD `false`.
@@ -253,6 +312,19 @@ impl FdRuleset {
     /// Total points for a set of claimed bonus ids (unknown ids score nothing).
     pub fn bonus_points(&self, claimed: &[String]) -> u32 {
         claimed.iter().filter_map(|id| self.bonus(id)).sum()
+    }
+
+    /// ⭐ **Points this LOG earns from the contest's bonus stations** — once per
+    /// station, whatever the band or mode ([`bonus_station_points`]).
+    ///
+    /// Separate from [`bonus_points`](Self::bonus_points) because the two answer
+    /// different questions: that one is what the operator CLAIMED, this one is what the
+    /// log holds. 0 for every ruleset that declares no bonus station.
+    pub fn bonus_station_points<'a, I>(&self, calls: I) -> u32
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        bonus_station_points(self.bonus_stations, calls)
     }
 
     /// True if the ACTUAL on-air mode (e.g. `FT8`, `RTTY`) is banned by this
@@ -751,6 +823,16 @@ struct RulesetSpec {
     domains: Vec<DomainSpec>,
     exchange: ExchangeBlockSpec,
     bonuses: Vec<BonusSpec>,
+    /// ⭐ **Stations worth points to whoever works them** — ILQP's two club calls,
+    /// `[{"call": "W9AWE", "points": 100}, …]`.
+    ///
+    /// ⚠️ `#[serde(default)]` for the `score_note_key` reason: absent is `[]`, which is
+    /// what every contest written before this key existed means and already does. A
+    /// list that IS present is validated in full — an empty, lower-case or affixed
+    /// call, a call named twice and a zero-point station are each refused by name,
+    /// because each is a bonus that silently never fires.
+    #[serde(default)]
+    bonus_stations: Vec<BonusStationSpec>,
     banned_modes: Vec<String>,
     tempo_fd: bool,
     assistance: AssistanceSpec,
@@ -827,6 +909,12 @@ const CABRILLO_OPTIONAL_HEADERS: &[&str] = &[
     "CATEGORY-POWER",
     "CLAIMED-SCORE",
     "EMAIL",
+    // ⭐ A SPONSOR'S OWN header, not a Cabrillo 3.0 one: the Illinois QSO Party's sample
+    // log heads an Illinois entry `IL-COUNTY: ADAMS`, the county's NAME beside QSO lines
+    // carrying its code. It is here rather than behind a generic "extra headers" key
+    // because this build can SOURCE it — a header nothing can fill is a header that
+    // ships blank.
+    "IL-COUNTY",
     "NAME",
 ];
 
@@ -981,6 +1069,13 @@ const SENT_SLOT_DERIVATIONS: &[(&str, &[&str])] = &[
     // §3.4: "QTH (county / state / DX) → contest_qth_county, contest_qth_state —
     // this is `my_location` (§3)". One slot, two settings, chosen by role.
     ("my_location", &["contest_qth_county", "contest_qth_state"]),
+    // The same two settings for a contest whose DX entrants send their COUNTRY rather
+    // than the literal `DX` (ILQP: *"others give RS/T and state, province or
+    // country"*). Same inputs, one different role arm — see `session::sent_value`.
+    (
+        "my_location_or_typed",
+        &["contest_qth_county", "contest_qth_state"],
+    ),
     // §6.3's `PREC`: Sweepstakes' precedence letter is the entry's declared category
     // restated (SS-Rules v2.1 §4.2), so it is derived from the four `CATEGORY-*` axes
     // and never typed into the exchange. All four inputs are settings this build
@@ -1072,7 +1167,26 @@ struct DupeSpec {
     /// unchanged, so a key built from the received side alone refuses my own
     /// legal contact.
     by_sent_fields: Vec<String>,
+    /// ⭐ **Mode classes that count as ONE mode** — ILQP's *"once per band and mode
+    /// (phone and CW/digital)"*, written `[["CW", "DIG"]]`.
+    ///
+    /// ⚠️ `#[serde(default)]`, and absent is a decision rather than a hole: `[]` is
+    /// three separate classes, which is what every contest written before this key
+    /// existed means and what it already does. That is the `score_note_key` case, not
+    /// the `exchange`/`scoring` case §8(c) rules on. A list that IS present is
+    /// validated in full — an unknown class, a class in two groups, a group of one and
+    /// a grouping on a rule that does not key on the mode are each refused by name,
+    /// because each of them is a dupe rule that silently does something else.
+    #[serde(default)]
+    mode_class_groups: Vec<Vec<String>>,
 }
+
+/// The mode classes a dupe rule may group — the vocabulary
+/// [`LoggedQso::mode`](crate::fieldday::LoggedQso::mode) holds, and the same three
+/// `scoring.points_by_mode_class` prices. A file naming anything else is refused: a
+/// `"DIGI"` that grouped nothing would be a dupe rule that quietly counts three modes
+/// where the sponsor counts two.
+const MODE_CLASSES: [&str; 3] = ["PH", "CW", "DIG"];
 
 /// The whole scoring model for one ruleset, as one block.
 ///
@@ -1181,6 +1295,13 @@ struct MultiplierSpec {
     excluding: Vec<String>,
     /// Which roles count this multiplier. `[]` = every role.
     roles: Vec<String>,
+    /// ⭐ **The most this universe can contribute** — ILQP's *"DXCC countries
+    /// (maximum 5)"*. `0`, which is also what an ABSENT key means, is "no cap", the
+    /// same statement `""` makes for a `domain`: every ruleset written before this key
+    /// existed keeps counting exactly as it did, and none of them has to be rewritten
+    /// to say so.
+    #[serde(default)]
+    cap: u32,
 }
 
 /// Where a multiplier's value comes from, in the rules file — internally tagged
@@ -1236,6 +1357,15 @@ struct WindowOverrideSpec {
 struct BonusSpec {
     id: String,
     label: String,
+    points: u32,
+}
+
+/// One [`BonusStation`] in the rules file.
+#[derive(Debug, serde::Deserialize)]
+struct BonusStationSpec {
+    /// The callsign, uppercase and WITHOUT a portable affix — the match is against
+    /// each logged call's base, so `"W9AWE/M"` here would never fire.
+    call: String,
     points: u32,
 }
 
@@ -1738,6 +1868,39 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 ));
             }
         }
+        // ⭐ MODE-CLASS GROUPS (ILQP's "phone and CW/digital"). Each refusal is a rule
+        // that would silently count a different number of modes than the sponsor does.
+        if !r.dupe.mode_class_groups.is_empty() && !r.dupe.by_mode_class {
+            return Err(format!(
+                "{tag}: dupe.mode_class_groups is set but by_mode_class is false \
+(a rule that does not key on the mode cannot group modes)"
+            ));
+        }
+        let mut grouped: Vec<&str> = Vec::new();
+        for g in &r.dupe.mode_class_groups {
+            if g.len() < 2 {
+                return Err(format!(
+                    "{tag}: dupe.mode_class_groups has a group of {} \
+(a group names the two or more classes that count as one mode)",
+                    g.len()
+                ));
+            }
+            for class in g {
+                if !MODE_CLASSES.contains(&class.as_str()) {
+                    return Err(format!(
+                        "{tag}: dupe.mode_class_groups names {class:?}, which is not a \
+mode class ({})",
+                        MODE_CLASSES.join(", ")
+                    ));
+                }
+                if grouped.contains(&class.as_str()) {
+                    return Err(format!(
+                        "{tag}: dupe.mode_class_groups names {class:?} in two groups"
+                    ));
+                }
+                grouped.push(class);
+            }
+        }
         // ⭐ A SPONSOR'S CABRILLO TEMPLATE writes every exchange slot once, and nothing that
         // would split a whitespace-delimited column. Each refusal is a QSO line a log robot
         // would misread, caught at load instead of in a submitted file.
@@ -1898,6 +2061,34 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 return Err(format!("{tag}: duplicate bonus id {:?}", b.id));
             }
             ids.push(&b.id);
+        }
+        // ⭐ BONUS STATIONS. Each refusal is a bonus that would load and then never
+        // fire — the silent 100 points an entrant's submitted score is short.
+        let mut bonus_calls: Vec<&str> = Vec::new();
+        for b in &r.bonus_stations {
+            if b.call.is_empty() || b.call != b.call.trim().to_ascii_uppercase() {
+                return Err(format!(
+                    "{tag}: bonus station call {:?} is not a trimmed uppercase callsign",
+                    b.call
+                ));
+            }
+            if b.call.contains('/') {
+                return Err(format!(
+                    "{tag}: bonus station call {:?} carries a portable affix (the match \
+is against each logged call's BASE, so this one would never fire)",
+                    b.call
+                ));
+            }
+            if bonus_calls.contains(&b.call.as_str()) {
+                return Err(format!("{tag}: duplicate bonus station {:?}", b.call));
+            }
+            bonus_calls.push(&b.call);
+            if b.points == 0 {
+                return Err(format!(
+                    "{tag}: bonus station {:?} is worth 0 points",
+                    b.call
+                ));
+            }
         }
         for m in &r.banned_modes {
             if m.is_empty() || *m != m.to_ascii_uppercase() {
@@ -2215,6 +2406,9 @@ fn build(spec: FileSpec) -> RulesTable {
                         },
                         excluding: leak_keys(m.excluding),
                         roles: leak_keys(m.roles),
+                        // 0 (and an absent key) is "no cap", the same statement ""
+                        // makes for a domain just above.
+                        cap: (m.cap > 0).then_some(m.cap),
                     })
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
@@ -2314,6 +2508,16 @@ fn build(spec: FileSpec) -> RulesTable {
                 contest_id: leak_str(r.contest_id),
                 scoring,
                 bonuses: leak_bonuses(r.bonuses),
+                bonus_stations: Box::leak(
+                    r.bonus_stations
+                        .into_iter()
+                        .map(|b| BonusStation {
+                            call: leak_str(b.call),
+                            points: b.points,
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
                 domains: domains_built,
                 exchange: exchange_built,
                 dupe_rule: DupeRule {
@@ -2322,6 +2526,14 @@ fn build(spec: FileSpec) -> RulesTable {
                     by_mode_class: r.dupe.by_mode_class,
                     by_fields: leak_keys(r.dupe.by_fields),
                     by_sent_fields: leak_keys(r.dupe.by_sent_fields),
+                    mode_class_groups: Box::leak(
+                        r.dupe
+                            .mode_class_groups
+                            .into_iter()
+                            .map(leak_keys)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    ),
                 },
                 tempo_fd: r.tempo_fd,
                 banned_modes: Box::leak(
@@ -2566,6 +2778,93 @@ mod tests {
         }
     }
 
+    /// ⭐ **A bonus you EARN by working a station, not one you tick a box for.**
+    ///
+    /// The Illinois QSO Party, w9awe.org's own 2025 rules (read 2026-09-17):
+    /// > *"NEW FOR 2025: BONUS STATIONS!! The sponsoring club of ILQP is the Western
+    /// > Illinois ARC, which is authorized to use two callsigns: W9AWE (the historical
+    /// > call) and W9OAB … any entrant contacting these stations will have a 100 point
+    /// > bonus added to the final score. Total of 200 points possible."*
+    ///
+    /// Every bonus this build shipped before is CLAIMED — the operator ticks
+    /// "W1AW bulletin copied" and nothing in the log says so. This one is in the log,
+    /// which is why it is derived rather than offered: an entrant who worked both club
+    /// calls and did not know there was a box to tick would submit a score 200 points
+    /// light.
+    #[test]
+    fn a_bonus_station_scores_once_per_log_however_many_times_it_is_worked() {
+        static ILQP: &[BonusStation] = &[
+            BonusStation {
+                call: "W9AWE",
+                points: 100,
+            },
+            BonusStation {
+                call: "W9OAB",
+                points: 100,
+            },
+        ];
+        let earned = |calls: &[&str]| bonus_station_points(ILQP, calls.iter().copied());
+        assert_eq!(earned(&["K1ABC", "W9XYZ"]), 0, "neither club call worked");
+        assert_eq!(earned(&["W9AWE"]), 100);
+        assert_eq!(
+            earned(&["W9AWE", "W9AWE", "W9AWE"]),
+            100,
+            "ONCE per log — three bands, three modes, one bonus"
+        );
+        assert_eq!(
+            earned(&["W9OAB", "K1ABC", "W9AWE"]),
+            200,
+            "both, in any order"
+        );
+        // Case and whitespace are what any other callsign comparison ignores.
+        assert_eq!(earned(&[" w9awe "]), 100);
+        // ⭐ A PORTABLE club call still counts: the entrant worked that station. Matched
+        // on the BASE call, the same rule the rest of the build matches callsigns by.
+        assert_eq!(earned(&["W9AWE/M"]), 100);
+        assert_eq!(earned(&["W9AWE/9", "W9OAB/P"]), 200);
+        // …and a call that merely CONTAINS one is not it.
+        assert_eq!(earned(&["W9AWES", "KW9AWE"]), 0);
+        // POSITIVE CONTROL for the whole mechanism: a ruleset that declares no bonus
+        // station — every contest but this one — earns nothing from the same log.
+        assert_eq!(bonus_station_points(&[], ["W9AWE", "W9OAB"]), 0);
+    }
+
+    /// ⭐ **The four ways a declared bonus station can fail to fire**, each refused at
+    /// load. A bonus that never fires is not a loud failure anywhere else: the entrant
+    /// works the club call, sees no extra points, and has no reason to suspect the
+    /// rules file rather than their own memory of the rules.
+    #[test]
+    fn a_bonus_station_that_could_never_fire_is_refused() {
+        let with = |stations: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["bonus_stations"] = stations;
+            parse_spec(&v.to_string())
+        };
+        let e = with(serde_json::json!([{"call": "w9awe", "points": 100}])).unwrap_err();
+        assert!(e.contains("\"w9awe\"") && e.contains("uppercase"), "{e}");
+        let e = with(serde_json::json!([{"call": "", "points": 100}])).unwrap_err();
+        assert!(e.contains("uppercase"), "{e}");
+        let e = with(serde_json::json!([{"call": "W9AWE/M", "points": 100}])).unwrap_err();
+        assert!(e.contains("portable affix"), "{e}");
+        let e = with(serde_json::json!([
+            {"call": "W9AWE", "points": 100},
+            {"call": "W9AWE", "points": 100},
+        ]))
+        .unwrap_err();
+        assert!(e.contains("duplicate bonus station"), "{e}");
+        let e = with(serde_json::json!([{"call": "W9AWE", "points": 0}])).unwrap_err();
+        assert!(e.contains("0 points"), "{e}");
+        // POSITIVE CONTROLS: ILQP's own pair loads, and so does the absent key every
+        // shipped ruleset relies on.
+        assert!(with(serde_json::json!([
+            {"call": "W9AWE", "points": 100},
+            {"call": "W9OAB", "points": 100},
+        ]))
+        .is_ok());
+        assert!(with(serde_json::json!([])).is_ok());
+        assert!(parse_spec(SEED).is_ok(), "the file that actually ships");
+    }
+
     #[test]
     fn bonus_lookup_matches_the_old_table_semantics() {
         let rs = ruleset(FdEvent::ArrlFd, 2026);
@@ -2762,6 +3061,58 @@ mod tests {
         let mut short = ts.clone();
         short.retain(|(c, _)| *c != "PEI");
         assert_ne!(short, domain.values.to_vec());
+    }
+
+    /// ⭐ **The Illinois QSO Party's two universes, mirrored into the UI and guarded.**
+    ///
+    /// The strip answers three questions on every keystroke — is this a legal county, what
+    /// county is the operator typing the NAME of, and which cells does the board have —
+    /// and all three must cost no IPC, so the tables live in TypeScript as well. A
+    /// mirror that drifts is a county the operator cannot type or a suggestion that fills
+    /// in the wrong code, so both directions are compared here: every code, every name
+    /// and the order.
+    #[test]
+    fn the_typescript_ilqp_mirror_matches_the_seed_domains() {
+        let ts_src = include_str!("../../../ui/src/features/ilqpQth.ts");
+        let ts: Vec<(&str, &str)> = ts_src
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+            .filter_map(|l| Some((ts_str_field(l, "code")?, ts_str_field(l, "name")?)))
+            .collect();
+        // A parser that found nothing would pass the comparisons below it.
+        assert!(
+            ts.len() > 150,
+            "parsed only {} rows out of ilqpQth.ts — the parser is broken, not the mirror",
+            ts.len()
+        );
+        let rs = ruleset_by_id("ilqp", CURRENT_RULES_YEAR).expect("ilqp is seeded");
+        let domain = |id: &str| {
+            rs.domains
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap_or_else(|| panic!("{id} is declared"))
+                .values
+                .to_vec()
+        };
+        let counties = domain("il_counties");
+        let mults = domain("il_mults");
+        assert_eq!(counties.len(), 102, "Illinois' whole county chart");
+        assert_eq!(
+            mults.len(),
+            66,
+            "49 states + DC + the Canadian codes, both spellings"
+        );
+        let want: Vec<(&str, &str)> = counties.iter().chain(&mults).copied().collect();
+        assert_eq!(
+            ts, want,
+            "ui/src/features/ilqpQth.ts drifted from the seed's ILQP domains \
+             (code, name and order)"
+        );
+        // POSITIVE CONTROL: a mirror missing one county is not equal.
+        let mut short = ts.clone();
+        short.retain(|(c, _)| *c != "COOK");
+        assert_ne!(short, want);
     }
 
     /// ⭐ **Every contest the bundled rules table carries is on the picker's menu.**
@@ -3478,6 +3829,38 @@ mod tests {
         );
     }
 
+    /// ⭐ **The four ways a mode-class grouping can lie, each refused by name.**
+    ///
+    /// ILQP is the first contest in the researched set to count two of this build's
+    /// three classes as one mode (*"once per band and mode (phone and CW/digital)"*),
+    /// and every one of these mutations produces a rule that loads and then counts a
+    /// different number of modes than the sponsor does — the failure a dupe rule
+    /// cannot afford, because over-grouping refuses a legal contact and under-grouping
+    /// accepts a duplicate that scores zero.
+    #[test]
+    fn a_mode_class_grouping_that_could_not_mean_what_it_says_is_refused() {
+        let with = |groups: serde_json::Value, by_mode_class: bool| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["dupe"]["mode_class_groups"] = groups;
+            v["rulesets"][0]["dupe"]["by_mode_class"] = by_mode_class.into();
+            parse_spec(&v.to_string())
+        };
+        let e = with(serde_json::json!([["CW", "DIGI"]]), true).unwrap_err();
+        assert!(e.contains("\"DIGI\"") && e.contains("PH, CW, DIG"), "{e}");
+        let e = with(serde_json::json!([["CW"]]), true).unwrap_err();
+        assert!(e.contains("group of 1"), "{e}");
+        let e = with(serde_json::json!([["CW", "DIG"], ["DIG", "PH"]]), true).unwrap_err();
+        assert!(e.contains("\"DIG\" in two groups"), "{e}");
+        let e = with(serde_json::json!([["CW", "DIG"]]), false).unwrap_err();
+        assert!(e.contains("by_mode_class is false"), "{e}");
+        // POSITIVE CONTROLS: the grouping ILQP declares loads, and so does the absent
+        // key every shipped ruleset relies on — without this pair the four refusals
+        // above would also pass against a validator that refused everything.
+        assert!(with(serde_json::json!([["CW", "DIG"]]), true).is_ok());
+        assert!(with(serde_json::json!([]), true).is_ok());
+        assert!(parse_spec(SEED).is_ok(), "the file that actually ships");
+    }
+
     /// §8(c) again, on this block: absent is loud, never a silent default.
     #[test]
     fn a_ruleset_with_no_dupe_block_is_refused() {
@@ -4062,6 +4445,16 @@ mod tests {
                 [2, 3, 3],
                 MultScope::PerLog,
             ),
+            // ⚠️ ILQP's ADIF id is the odd one: `IL QSO Party`, spaces and mixed case,
+            // which is ADIF 3.1.7's own enumeration value. The Cabrillo token is the
+            // SPONSOR's `ILLINOIS QSO PARTY` (see `contest::cabrillo`'s map).
+            (
+                "ilqp",
+                "IL QSO Party",
+                ["RST", "QTH"],
+                [1, 2, 2],
+                MultScope::PerLog,
+            ),
         ] {
             let rs = party(event);
             assert_eq!(rs.contest_id, contest_id);
@@ -4117,7 +4510,9 @@ mod tests {
                 "{event} computes bonuses this build does not, and must say so"
             );
         }
-        for event in ["ohqp", "cqp"] {
+        // ⭐ ILQP is the third: its bonus stations ARE computed (they are in the log,
+        // not on a menu), so its score omits nothing and it carries no note.
+        for event in ["ohqp", "cqp", "ilqp"] {
             assert!(
                 party(event).score_note_key.is_empty(),
                 "{event}'s score is complete — no note"
@@ -4229,6 +4624,8 @@ mod tests {
             "setting:contest_check",
             "setting:mygrid",
             "derived:my_location",
+            // ILQP's variant of the same slot, whose DX entrants send their country.
+            "derived:my_location_or_typed",
         ] {
             assert!(
                 at(&|v| src(v, good)).is_ok(),
@@ -4351,8 +4748,8 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            16,
-            "two Field Day events + four QSO parties + both Sweepstakes weekends + \
+            17,
+            "two Field Day events + five QSO parties + both Sweepstakes weekends + \
              CQ WW's two and CQ WPX's two + ARRL VHF's three runnings + CQ WW RTTY"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());

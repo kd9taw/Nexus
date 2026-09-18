@@ -37,13 +37,16 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','bands','locationWarning'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','bands','locationWarning','dupeModeGroups'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
     // What {EXCH} keys next (the macros read it). A string, bounded like every other.
     (f.sentExchange !== undefined && !text(f.sentExchange)) ||
     // The contest's advisory band list.
     (f.bands !== undefined && !texts(f.bands,32)) ||
+    // The dupe rule's mode grouping: a short list of short lists of mode classes.
+    (f.dupeModeGroups !== undefined && (!Array.isArray(f.dupeModeGroups) || f.dupeModeGroups.length > 8 ||
+      !f.dupeModeGroups.every(g => texts(g,8)))) ||
     // A W/VE call about to send the DX exchange: what was typed, and the codes it likely means.
     (f.locationWarning !== undefined && !locationWarning(f.locationWarning)) ||
     (f.scoreNoteKey !== undefined && !text(f.scoreNoteKey)) || (f.role !== undefined && !text(f.role)) ||

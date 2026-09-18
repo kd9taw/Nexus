@@ -71,6 +71,32 @@ describe('the banned-mode chip (the first consumer bannedModes has ever had)', (
   })
 })
 
+// ⭐ THE EVENT NAMED IS THE CONTEST THAT IS RUNNING. The name was read as "Winter Field Day"
+// for `wfd` and "ARRL Field Day" for LITERALLY EVERYTHING ELSE, so a contest that bans a mode
+// would have told its operator the ban came from Field Day. Latent until a ruleset other than
+// WFD banned something — the Illinois QSO Party bans FT8 and FT4.
+describe('the event the advisory names', () => {
+  it('is the running contest, not Field Day', () => {
+    const rtty: FdRulesetDto = { ...WFD, event: 'cqww_rtty' }
+    render(<FdAdvisories fdActive ruleset={rtty} activeMode="FT8" />)
+    const chip = document.querySelector('.fd-advisory.banned')!
+    expect(chip.textContent).toContain('CQ World-Wide RTTY DX Contest')
+    expect(chip.textContent).not.toContain('Field Day')
+    // A ruleset id this build's picker does not list is shown as itself — a token, never
+    // another contest's name.
+    cleanup()
+    render(<FdAdvisories fdActive ruleset={{ ...WFD, event: 'zzqp' }} activeMode="FT8" />)
+    expect(document.querySelector('.fd-advisory.banned')!.textContent).toContain('zzqp')
+    // POSITIVE CONTROLS: both Field Day events still name themselves.
+    cleanup()
+    render(<FdAdvisories fdActive ruleset={WFD} activeMode="FT8" />)
+    expect(document.querySelector('.fd-advisory.banned')!.textContent).toContain('Winter Field Day')
+    cleanup()
+    render(<FdAdvisories fdActive ruleset={{ ...SFD, bannedModes: ['FT8'] }} activeMode="FT8" />)
+    expect(document.querySelector('.fd-advisory.banned')!.textContent).toContain('ARRL Field Day')
+  })
+})
+
 describe('the assistance advisory', () => {
   const LIVE = ['AI CW decoder', 'DX cluster / RBN', 'PSK Reporter needs']
 

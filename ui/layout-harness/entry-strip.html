@@ -49,6 +49,18 @@
    overflows or wraps. The control still trips — six fields reports
    `boxesOnOneLine: false`, `stripH 204` — so these are a measurement, not a page that
    stopped laying out.
+
+  THE EXCHANGE TYPE-AHEAD's DROPDOWN (2026-09-17, the county type-ahead):
+   The list hangs off the last exchange box and this dock is BOTTOM-ANCHORED, so the
+   only question is which way it may open. Measured with the strip pinned to the bottom
+   of a 1024x768 window (`--window-size=1024,855`; headless gives innerHeight H-87):
+     • 6 items, 1024 / 1366 / 1920:  listH 138, top 552, bottom 690, box top 710
+       — `opensUpward` `fullyInView` `coversNoBox` all true at every width
+     • 20 items (past the list's own cap): listH 220, top 470 — the max-height holds
+       and it scrolls instead of growing
+     • NEGATIVE CONTROL, the same list opening DOWNWARD (what the sheet would do without
+       `bottom: calc(100% + 2px)`): top 756, bottom 894 in a 768 px window —
+       `fullyInView: false`. The check can fail, so the trues above are evidence.
 -->
 <body>
 <div class="app" style="display:block">
@@ -148,6 +160,53 @@ function measure(width, caps, where, sentText) {
   };
 }
 
+// ⭐ THE EXCHANGE TYPE-AHEAD's dropdown. It hangs off the QTH box, and this dock is
+// BOTTOM-ANCHORED, so the question a real layout engine has to answer is whether the
+// list opens into the window or off the edge of it. `suggest(n)` builds the real markup;
+// `measureSuggest` pins the strip to the bottom of the viewport the way the dock does
+// and reads the list against the window, not against the host div.
+function suggest(n) {
+  const host = [...document.querySelectorAll('.le-fd-field')].pop();
+  host.querySelector('.le-fd-suggest')?.remove();
+  if (!n) return;
+  const ul = document.createElement('ul');
+  ul.className = 'le-fd-suggest';
+  ul.innerHTML = Array.from({ length: n }, (_, i) =>
+    '<li><button type="button"><span class="mono le-fd-hit-code">MCPN</span>' +
+    '<span class="le-fd-hit-name">Macoupin ' + i + '</span></button></li>').join('');
+  host.appendChild(ul);
+}
+
+function measureSuggest(width, n, down) {
+  const host = document.querySelector('.host');
+  host.style.cssText = 'position:fixed;left:0;bottom:0;width:' + width + 'px';
+  measure(width, QP, 'header', SENT.qp);
+  suggest(n);
+  const r = e => e.getBoundingClientRect();
+  const ul = document.querySelector('.le-fd-suggest');
+  // NEGATIVE CONTROL: the same list opening DOWNWARD, which is what the sheet would do
+  // without `bottom: calc(100% + 2px)`. It must report `fullyInView: false` — a check
+  // that cannot fail is not a check.
+  if (down) { ul.style.bottom = 'auto'; ul.style.top = 'calc(100% + 2px)'; }
+  const box = [...document.querySelectorAll('.le-fd-input-code')].pop();
+  const u = r(ul), b = r(box);
+  return {
+    width,
+    items: n,
+    opens: down ? 'down (control)' : 'up',
+    innerHeight: window.innerHeight,
+    listTop: +u.top.toFixed(1),
+    listBottom: +u.bottom.toFixed(1),
+    listH: +u.height.toFixed(1),
+    listW: +u.width.toFixed(1),
+    boxTop: +b.top.toFixed(1),
+    // The three things that must hold, in a real engine rather than in a sentence.
+    opensUpward: u.bottom <= b.top + 0.5,
+    fullyInView: u.top >= 0 && u.bottom <= window.innerHeight + 0.5,
+    coversNoBox: u.bottom <= b.top + 0.5,
+  };
+}
+
 function run() {
   const rows = [];
   for (const w of [1024, 1366, 1920]) {
@@ -163,6 +222,12 @@ function run() {
   // CONTROL: one MORE field than the budget admits. If the numbers below do not move
   // from the five-field row, the measurement is not seeing the boxes.
   rows.push(measure(1024, SS.concat(['SIX']), 'header'));
+  // THE TYPE-AHEAD DROPDOWN, at the floor and at the two widths the fold sizes differ at,
+  // with the six items the strip caps a suggestion list at — plus a CONTROL of twenty,
+  // which is past the list's own max-height and must therefore scroll rather than grow.
+  for (const w of [1024, 1366, 1920]) rows.push(measureSuggest(w, 6));
+  rows.push(measureSuggest(1024, 20));
+  rows.push(measureSuggest(1024, 6, true));
   document.getElementById('out').textContent = JSON.stringify(rows, null, 1);
   return rows;
 }

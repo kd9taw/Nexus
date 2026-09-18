@@ -266,6 +266,38 @@ impl ExchangeSpec {
             domain,
         })
     }
+
+    /// ⭐ **The NAME beside a copied code**, from the arm that matched it — `Adams` for
+    /// the county `ADAM`.
+    ///
+    /// ILQP's sample log is why: its header is `IL-COUNTY: ADAMS` while its QSO lines
+    /// carry the four-letter code, so one declared value has to be readable both ways.
+    /// It reads the domain RECORDED on the value ([`copied`](Self::copied)) rather than
+    /// re-matching the raw text, so a slot with several domain arms cannot answer out
+    /// of the wrong one.
+    ///
+    /// `None` when the value matched no domain, when its slot is not one this exchange
+    /// declares, or when the recorded domain does not hold the code — never a guess and
+    /// never the code itself, so a caller can tell "no name" from "the name is the
+    /// code".
+    pub fn name_of(&self, v: &FieldValue) -> Option<&'static str> {
+        let id = v.domain?;
+        let up = v.raw.trim().to_ascii_uppercase();
+        let named = |d: &'static Domain| {
+            (d.id == id)
+                .then(|| d.values.iter().find(|(code, _)| *code == up))
+                .flatten()
+                .map(|(_, name)| *name)
+        };
+        match self.field(v.key)?.kind {
+            FieldKind::Enum { domain } => named(domain),
+            FieldKind::OneOf(arms) => arms.iter().find_map(|a| match a {
+                FieldKind::Enum { domain } => named(domain),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -322,6 +354,68 @@ mod tests {
         let outsider = spec.copied("SEC", "XX").expect("declared slot");
         assert_eq!(outsider.domain, None, "not a member, so no domain");
         assert_eq!(outsider.raw, "XX", "…and still copied as it was");
+    }
+
+    /// ⭐ **The NAME beside a copied code**, which is what a header asks for where a
+    /// QSO line asks for the code.
+    ///
+    /// The Illinois QSO Party's own sample log writes `IL-COUNTY: ADAMS` in the header
+    /// and `JODA`-shaped county CODES on every QSO line (w9awe.org's Sample_Excel_Log,
+    /// read 2026-09-17). Both come from one value the operator declared once, so the
+    /// name is looked up from the arm that MATCHED rather than stored a second time.
+    #[test]
+    fn a_copied_value_can_be_read_back_as_the_name_beside_its_code() {
+        static COUNTIES: Domain = Domain {
+            id: "il_counties",
+            adif: AdifTags {
+                rcvd: Some("CNTY"),
+                sent: None,
+            },
+            values: &[("ADAM", "Adams"), ("JODA", "Jo Daviess")],
+        };
+        static FIELDS: &[FieldSpec] = &[
+            FieldSpec {
+                key: "QTH",
+                adif: AdifTags {
+                    rcvd: Some("CNTY"),
+                    sent: None,
+                },
+                label: None,
+                required: true,
+                kind: FieldKind::OneOf(&[
+                    FieldKind::Enum { domain: &COUNTIES },
+                    FieldKind::Enum {
+                        domain: &TEST_DOMAIN,
+                    },
+                ]),
+                source: "",
+            },
+            FieldSpec {
+                key: "CLASS",
+                adif: AdifTags {
+                    rcvd: None,
+                    sent: None,
+                },
+                label: None,
+                required: true,
+                kind: FieldKind::Pattern { re: "^[0-9]A$" },
+                source: "",
+            },
+        ];
+        let spec = ExchangeSpec {
+            name: "test",
+            fields: FIELDS,
+            roles: &[],
+        };
+        let name_of = |slot, raw| spec.name_of(&spec.copied(slot, raw).expect("declared slot"));
+        assert_eq!(name_of("QTH", "adam"), Some("Adams"));
+        // The OTHER arm of the same slot, which is how an out-of-state entrant's value
+        // must not come back as a county.
+        assert_eq!(name_of("QTH", "WI"), Some("Wisconsin"));
+        // A value in no arm has no domain and therefore no name…
+        assert_eq!(name_of("QTH", "XX"), None);
+        // …and neither has a value whose slot carries no domain at all.
+        assert_eq!(name_of("CLASS", "3A"), None);
     }
 
     #[test]

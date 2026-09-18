@@ -109,6 +109,17 @@ pub struct CabrilloHeaders {
     pub email: String,
     /// `NAME` — the entrant's name. Optional: `""` writes no line.
     pub name: String,
+    /// ⭐ **`IL-COUNTY`** — the Illinois QSO Party's own header, the NAME of the county
+    /// an Illinois entry was operated from (`Adams`), beside QSO lines that carry its
+    /// code. Optional: `""` writes no line, which is what every other contest and every
+    /// entry from outside Illinois means.
+    ///
+    /// ⚠️ **Not a Cabrillo 3.0 header, and there is no generic mechanism for one.** A
+    /// sponsor-named header earns a field here, a name in
+    /// [`fd_rules::CABRILLO_OPTIONAL_HEADERS`](crate::fd_rules) and a source this build
+    /// can actually fill — the three together being what stops "extra headers" from
+    /// becoming a place to put anything.
+    pub il_county: String,
     /// `X-` headers, emitted last in the order given. Cabrillo-legal and ignored by
     /// robots; `X-NEXUS-RULES-YEAR` says which rules data scored the entry.
     pub x_headers: Vec<(String, String)>,
@@ -141,6 +152,7 @@ impl CabrilloHeaders {
         s.push_str(&format!("CREATED-BY: {}\n", self.created_by));
         optional(&mut s, "EMAIL", &self.email);
         optional(&mut s, "NAME", &self.name);
+        optional(&mut s, "IL-COUNTY", &self.il_county);
         for (tag, val) in &self.x_headers {
             s.push_str(&format!("{tag}: {val}\n"));
         }
@@ -295,6 +307,15 @@ pub fn cabrillo_contest_token(adif_id: &str) -> &str {
         "OH-QSO-PARTY" => "MRRC-OHQP",
         // master list id 133, "Texas QSO Party"
         "TX-QSO-PARTY" => "TXQP",
+        // ⭐ THREE registries disagree about this one, and the SPONSOR wins. ADIF's
+        // enumeration writes `IL QSO Party` (spaces and mixed case, an outlier among its
+        // neighbours), WA7BNM's contest calendar writes `IL-QSO-PARTY`, and the Western
+        // Illinois ARC's own Sample_Excel_Log — the file their checker was built to eat —
+        // writes `CONTEST: ILLINOIS QSO PARTY`. This contest is judged by its sponsor
+        // from an emailed file, not by a robot keyed to a master list, so the sponsor's
+        // spelling is the one that goes in the file. Other loggers emit the hyphenated
+        // token and the sponsor plainly accepts those too.
+        "IL QSO Party" => "ILLINOIS QSO PARTY",
         other => other,
     }
 }
@@ -399,6 +420,15 @@ mod tests {
             ("ohqp", "OH-QSO-PARTY", "MRRC-OHQP"),
             ("cqp", "CA-QSO-PARTY", "CA-QSO-PARTY"),
             ("txqp", "TX-QSO-PARTY", "TXQP"),
+            // ⭐ ILQP — the one row where THREE registries disagree, verified against
+            // each on 2026-09-17. ADIF 3.1.7's CONTEST_ID enumeration lists `IL QSO
+            // Party` with spaces and mixed case (an outlier among its hyphenated
+            // neighbours, so nobody may "tidy" it); WA7BNM's master list carries
+            // `IL-QSO-PARTY`; and the sponsor's own Sample_Excel_Log — the file the
+            // Western Illinois ARC's checker was built to eat — writes `CONTEST:
+            // ILLINOIS QSO PARTY`. Sponsor-first, the same rule the ARRL-SS and CQ-WW
+            // rows above follow when a registry and a sponsor disagree.
+            ("ilqp", "IL QSO Party", "ILLINOIS QSO PARTY"),
             // ⭐ Sweepstakes is the contest where the two registries AGREE, and it is
             // pinned for that reason: ADIF 3.1.7's CONTEST_ID enumeration lists
             // ARRL-SS-CW = "ARRL November Sweepstakes (CW)" and ARRL-SS-SSB = "ARRL
@@ -595,6 +625,50 @@ mod tests {
             bare.render(),
             "START-OF-LOG: 3.0\n\
              CONTEST: CQ-WW-RTTY\n\
+             CALLSIGN: W9XYZ\n\
+             CATEGORY-OPERATOR: SINGLE-OP\n\
+             LOCATION: IL\n\
+             CREATED-BY: Nexus\n"
+        );
+    }
+
+    /// ⭐ **A SPONSOR'S OWN HEADER, and only for the entrant it is about.**
+    ///
+    /// ILQP's Sample_Excel_Log (w9awe.org, read 2026-09-17) heads an Illinois entry
+    /// `IL-COUNTY: ADAMS` — the county's NAME, beside QSO lines carrying its code. It
+    /// is not a Cabrillo 3.0 header and no other contest writes it, so it renders only
+    /// when the ruleset asked for it and the entrant has one.
+    #[test]
+    fn a_sponsors_own_header_renders_beside_the_standard_ones() {
+        let il = CabrilloHeaders {
+            contest: "ILLINOIS QSO PARTY".into(),
+            callsign: "W9XYZ".into(),
+            location: "IL".into(),
+            created_by: "Nexus".into(),
+            il_county: "Adams".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            il.render(),
+            "START-OF-LOG: 3.0\n\
+             CONTEST: ILLINOIS QSO PARTY\n\
+             CALLSIGN: W9XYZ\n\
+             CATEGORY-OPERATOR: SINGLE-OP\n\
+             LOCATION: IL\n\
+             CREATED-BY: Nexus\n\
+             IL-COUNTY: Adams\n"
+        );
+        // CONTROL: the same entry from outside Illinois — no county, no line, and the
+        // block is byte-identical to what every other contest writes.
+        let outside = CabrilloHeaders {
+            il_county: String::new(),
+            ..il.clone()
+        };
+        assert!(!outside.render().contains("IL-COUNTY"));
+        assert_eq!(
+            outside.render(),
+            "START-OF-LOG: 3.0\n\
+             CONTEST: ILLINOIS QSO PARTY\n\
              CALLSIGN: W9XYZ\n\
              CATEGORY-OPERATOR: SINGLE-OP\n\
              LOCATION: IL\n\

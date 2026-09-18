@@ -25,6 +25,7 @@
 
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from './arrlSections'
 import { CQWW_RTTY_US_QTH, CQWW_RTTY_VE_QTH } from './cqwwRttyQth'
+import { ILQP_COUNTIES, ILQP_MULTS } from './ilqpQth'
 
 /** One cell of a board / one legal value of a slot. */
 export interface DomainValue {
@@ -78,11 +79,43 @@ const CQWW_RTTY_QTH: ContestDomain = {
   total: CQWW_RTTY_US_QTH.length + CQWW_RTTY_VE_QTH.length,
 }
 
+/** ⭐ The Illinois QSO Party's 102 counties — the sponsor's own chart, mirrored in
+ *  `ilqpQth.ts`. One block: the chart is alphabetical and has no grouping of its own, and
+ *  inventing one (by region, by call area) would be this build's grouping shown as the
+ *  sponsor's. */
+const IL_COUNTIES: ContestDomain = {
+  codes: new Set(ILQP_COUNTIES.map((c) => c.code)),
+  groups: [{ label: 'IL', values: ILQP_COUNTIES }],
+  total: ILQP_COUNTIES.length,
+}
+
+/** The Canadian half of `il_mults`, by code — the sponsor's own NF/LAB/PEI spellings
+ *  beside the modern NL/PE, since it publishes no exchange code list. Listed rather than
+ *  derived: every rule that could separate these from a US state (two letters, a set of
+ *  prefixes) is a rule that would silently move one the day a code changes. */
+const VE_CODES = new Set([
+  'NL', 'NF', 'LAB', 'PE', 'PEI', 'NS', 'NB', 'QC', 'ON', 'MB', 'SK', 'AB', 'BC', 'NT', 'NU', 'YT',
+])
+
+/** What a station outside Illinois sends — the states and DC, then the Canadian codes.
+ *  The two block labels are call-area TOKENS, never translated, the same convention the
+ *  CQ WW RTTY board uses. */
+const IL_MULTS: ContestDomain = {
+  codes: new Set(ILQP_MULTS.map((c) => c.code)),
+  groups: [
+    { label: 'W', values: ILQP_MULTS.filter((c) => !VE_CODES.has(c.code)) },
+    { label: 'VE', values: ILQP_MULTS.filter((c) => VE_CODES.has(c.code)) },
+  ],
+  total: ILQP_MULTS.length,
+}
+
 const DOMAINS: Record<string, ContestDomain> = {
   fd_sections: FD_SECTIONS,
   // The plain 85-section universe under its own Rust id, same table.
   arrl_sections: FD_SECTIONS,
   cqww_rtty_qth: CQWW_RTTY_QTH,
+  il_counties: IL_COUNTIES,
+  il_mults: IL_MULTS,
 }
 
 /** The domain behind an id, or `undefined` when this build carries no value set for it. */
@@ -101,4 +134,87 @@ export function contestDomain(id: string | undefined): ContestDomain | undefined
 export function inDomain(domainId: string | undefined, value: string): boolean {
   const d = contestDomain(domainId)
   return d ? d.codes.has(value.trim().toUpperCase()) : true
+}
+
+/** A value's name, folded for matching: upper-case, and without the punctuation and
+ *  spacing an operator will not type ("St. Clair" → "STCLAIR", "Jo Daviess" → "JODAVIESS",
+ *  which is also how the ILQP chart itself writes it). */
+const nameKey = (s: string): string => s.toUpperCase().replace(/[^A-Z0-9]/g, '')
+
+/**
+ * ⭐ **What the operator might mean by what they have typed so far** — the type-ahead
+ * behind an exchange box, over every universe the slot draws on.
+ *
+ * A county exchange is four letters an operator has to know (`JODA`, `SCLA`, `MCDN`), and
+ * the name is the part they actually know. So a code prefix and a name prefix both match,
+ * in that order: `CO` offers COOK and COLE before Coles-by-name, and `Cook` offers COOK.
+ * A name that merely CONTAINS the text is offered last, because `SALINE` is a real answer
+ * to "lin" and a poor one to "SA".
+ *
+ * Empty for an empty box (a list of 102 counties is not a suggestion) and for a domain
+ * this build carries no table for — never a guess.
+ */
+export function domainSuggestions(
+  domainIds: string[] | undefined,
+  typed: string,
+  limit = 6,
+): DomainValue[] {
+  const q = typed.trim().toUpperCase()
+  if (q === '' || !domainIds?.length) return []
+  const qk = nameKey(q)
+  const seen = new Set<string>()
+  const out: DomainValue[] = []
+  const take = (pick: (v: DomainValue) => boolean) => {
+    for (const id of domainIds) {
+      for (const g of contestDomain(id)?.groups ?? []) {
+        for (const v of g.values) {
+          if (out.length >= limit) return
+          if (seen.has(v.code) || !pick(v)) continue
+          seen.add(v.code)
+          out.push(v)
+        }
+      }
+    }
+  }
+  take((v) => v.code.startsWith(q))
+  take((v) => nameKey(v.name).startsWith(qk))
+  take((v) => nameKey(v.name).includes(qk))
+  return out
+}
+
+/**
+ * ⭐ **The CODE the operator means by `typed`, when exactly one value can be meant** —
+ * `Cook` → `COOK` — and `undefined` whenever more than one can, so nothing is ever
+ * guessed onto the air.
+ *
+ * A value that is already a code is returned as itself (upper-cased), so this is safe to
+ * run over a box holding `COOK` as well as one holding `cook county`. Otherwise the name
+ * must match **in full**, punctuation and spacing aside.
+ *
+ * ⚠️ **A PREFIX is not enough, and the reason is ARRL's section list.** An earlier
+ * version accepted an unambiguous name prefix, which reads as generous and is not:
+ * several sections cover one state, and `New York` is a prefix of exactly one of the
+ * four names that cover New York ("New York City-Long Island"), so it resolved to `NLI`
+ * — a plausible code for a state the operator did not name. A resolver that picks one of
+ * several is worse than one that refuses, because the refusal is visible and the pick is
+ * not. What replaces the convenience is [`domainSuggestions`], which offers all four
+ * while they type.
+ *
+ * Two values sharing a name (ILQP lists `PE` and `PEI` as Prince Edward Island) are
+ * likewise several, and resolve to nothing.
+ */
+export function resolveDomainValue(
+  domainIds: string[] | undefined,
+  typed: string,
+): string | undefined {
+  const q = typed.trim().toUpperCase()
+  if (q === '' || !domainIds?.length) return undefined
+  const values: DomainValue[] = []
+  for (const id of domainIds) {
+    for (const g of contestDomain(id)?.groups ?? []) values.push(...g.values)
+  }
+  if (values.some((v) => v.code === q)) return q
+  const qk = nameKey(q)
+  const named = values.filter((v) => nameKey(v.name) === qk)
+  return named.length === 1 ? named[0].code : undefined
 }

@@ -9177,7 +9177,9 @@ impl Engine {
         let (qso_pts, _powered, _mults, scored) = rs
             .scoring
             .score(station.log.score_rows(), self.settings.fd_power_mult);
-        let bonus = rs.bonus_points(&self.settings.fd_bonuses);
+        // The ticked menu plus what the log earned — the same sum the snapshot shows
+        // (`field_day_display`), so the two cannot disagree about the total.
+        let bonus = rs.bonus_points(&self.settings.fd_bonuses) + station.log.bonus_station_points();
         Some((qso_pts, scored, bonus))
     }
 
@@ -33064,6 +33066,57 @@ mod tests {
         let cab = e.export_log("cabrillo").expect("one entry");
         assert!(cab.contains("CONTEST: TN-QSO-PARTY\n"), "{cab}");
         assert!(cab.contains(" W4ABC 599 WILL K1ABC 599 CT\n"), "{cab}");
+    }
+
+    /// ⭐ **The bonus stations reach the operator's SCORE**, not just the rules data.
+    ///
+    /// ILQP (w9awe.org's own 2025 rules, read 2026-09-17): *"any entrant contacting
+    /// these stations will have a 100 point bonus added to the final score. Total of 200
+    /// points possible."* Every other bonus in this build is a box the operator ticks;
+    /// these two are in the log, so the screen must find them without being told.
+    #[test]
+    fn the_illinois_partys_bonus_stations_land_in_the_score_on_screen() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "ilqp".into();
+            s.contest_qth_state = "IL".into();
+            s.contest_qth_county = "COOK".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        let ex = |q: &str| {
+            vec![
+                ("RST".to_string(), "599".to_string()),
+                ("QTH".to_string(), q.to_string()),
+            ]
+        };
+        // An ordinary contact first: the bonus is still zero, which is the control that
+        // the 200 below comes from the two club calls and not from the log's size.
+        assert!(e
+            .contest_log_manual("K9NR", &ex("KANK"), "CW", None)
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("the contest workspace is up");
+        assert_eq!(fd.bonus_points, 0, "no club call worked yet");
+        assert_eq!(fd.total_score, fd.powered_points);
+        // The club's two calls — CW on one, phone on the other, as the sponsor says
+        // they will be operated.
+        assert!(e
+            .contest_log_manual("W9AWE", &ex("ADAM"), "CW", None)
+            .unwrap());
+        assert!(e
+            .contest_log_manual("W9OAB", &ex("COOK"), "PH", None)
+            .unwrap());
+        let fd = e.snapshot().field_day.expect("still in the contest");
+        assert_eq!(fd.qso_count, 3);
+        assert_eq!(fd.points, 5, "CW 2 + CW 2 + phone 1");
+        assert_eq!(fd.mult_count, Some(3), "KANK, ADAM and COOK");
+        assert_eq!(fd.bonus_points, 200, "the sponsor's maximum, once each");
+        assert_eq!(fd.total_score, 5 * 3 + 200);
+        // …and the score says it leaves nothing out, which is what lets the Cabrillo
+        // carry a CLAIMED-SCORE at all.
+        assert_eq!(fd.score_note_key, "");
     }
 
     /// ⚠️ **A NAMED BEHAVIOUR CHANGE, pinned here rather than discovered.** A section

@@ -1,0 +1,1 @@
+ruleset arrlfd/2026: dupe.mode_class_groups names "DIGI", which is not a mode class (PH, CW, DIG)
