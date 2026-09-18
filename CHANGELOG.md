@@ -76,6 +76,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Icom: a refused scope span now tells you why, instead of guessing.** When an Icom refused a
+  span change, Nexus always said the scope was in Fixed mode and told you to switch it to Center —
+  even when it was already in Center, so you were sent to check a setting that was already right.
+  It now asks the radio. If the scope really is in Fixed mode it says so; if it is in Center it
+  says that plainly, and suggests the other likely cause: a span change while the radio is
+  transmitting or tuning. Nothing about how Nexus sets the span has changed.
+
 - **macOS: Prove TX now works, and SSTV can be sent on 145.800.** Two confirmation prompts asked
   their question through the browser's own `confirm()` box, which this app's macOS webview does
   not draw. No dialog appeared and the answer came back as "no", so on macOS **Prove TX** did

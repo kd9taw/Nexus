@@ -981,6 +981,30 @@ impl CivDaemon {
             Expect::Ack,
         );
     }
+
+    /// READ the rig's scope CENTER/FIXED mode (`27 14`). `Some(true)` = fixed, `Some(false)` =
+    /// center, `None` when the rig did not answer or answered something else.
+    ///
+    /// ⚠️ ONLY USED TO EXPLAIN A REFUSAL, never to decide one. `set_scope_span` used to report
+    /// every `NG` as "your scope is not in Center mode" — the most likely cause stated as a fact.
+    /// An operator whose scope WAS in Center was sent to check a setting that was already right
+    /// (2026-09-18, IC-7300, photo showed CENTER lit), and the real cause stayed behind our guess.
+    /// `None` is a perfectly good answer here: it means we still do not know, and the caller must
+    /// say so rather than fall back to the guess this exists to retire.
+    pub fn scope_center_mode(&self) -> Option<bool> {
+        self.engine
+            .handle()
+            .transact(
+                commands::read_scope_center_mode(self.civ_addr, self.scope_ms()),
+                Expect::Reply {
+                    cmd: 0x27,
+                    sub: Some(0x14),
+                },
+            )
+            .ok()
+            .as_ref()
+            .and_then(commands::parse_scope_center_mode)
+    }
 }
 
 impl Drop for CivDaemon {
@@ -1092,8 +1116,26 @@ mod tests {
             "control: the fixture really is in Center mode"
         );
 
+        // ⚠️ AND NEXUS CAN NOW ASK WHY, instead of guessing. `set_scope_span` reported every
+        // refusal as "your scope is not in Center mode" — the most likely cause stated as a fact —
+        // so an operator whose scope WAS in Center was sent to check a setting that was already
+        // correct (2026-09-18, IC-7300; their photo showed CENTER lit) while the real cause stayed
+        // hidden. Read in BOTH directions, because a reader that always answers "center" would
+        // satisfy a one-sided check and still be useless.
+        assert_eq!(
+            d.scope_center_mode(),
+            Some(false),
+            "the rig is in Center and must read back as Center"
+        );
+
         // …and in Fixed mode the radio rejects it.
         d.set_scope_center_mode(true);
+        assert_eq!(
+            d.scope_center_mode(),
+            Some(true),
+            "the rig is in Fixed and must read back as Fixed — a read stuck on one answer is no \
+             better than the guess it replaces"
+        );
         assert_eq!(
             d.set_scope_span(25_000),
             Err(CivError::Nak),
@@ -1126,6 +1168,59 @@ mod tests {
     // select-written into Sub, selection returned to Main.
 
     use super::super::engine::tests_support::Regs;
+
+    /// ⭐ THE WATERFALL'S OWN DATA PATH, which had no test at all until a control went looking.
+    ///
+    /// The engine routes scope WAVEFORM frames to the assembler and keeps them out of request
+    /// matching. That routing line is what puts a sweep on the operator's screen, and nothing
+    /// exercised it: the assembler is unit-tested in `scope.rs`, and the daemon is tested through
+    /// commands, but no test ever pushed a `27 00` burst at the engine and asked whether a sweep
+    /// came out. Breaking the routing outright left all 19 scope-named tests green.
+    ///
+    /// It matters more now, because the condition got NARROWER: it used to swallow every `27`
+    /// frame, and now it tests the sub-command so that `27 14`/`27 15` REPLIES can reach request
+    /// matching (without which no scope read can ever resolve). A narrowing is exactly the kind of
+    /// change that can silently stop feeding the waterfall.
+    #[test]
+    fn a_waveform_burst_reaches_the_assembler_and_a_reply_does_not() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let (radio, push) = FakeRadio::new(0xA2);
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1).unwrap();
+
+        // A single-frame burst: 27 00 <main> <seq=1> <total=1>, then the header the assembler
+        // requires — mode 00 (Center), centre frequency, ± half-width, out-of-range flag — then
+        // the points. A header with a zero span is DISCARDED (`hi_hz <= lo_hz`), so an all-zero
+        // frame tests nothing; the sweep has to be one a radio could really send.
+        let mut data = vec![0x00, 0x00, 0x01, 0x01, 0x00];
+        data.extend_from_slice(&crate::civ::frame::freq_to_bcd(14_150_000)); // centre
+        data.extend_from_slice(&crate::civ::frame::freq_to_bcd(10_000)); // ± half-width
+        data.push(0x00); // in range
+        data.extend_from_slice(&[0x40; 16]); // points
+        let f = Frame {
+            to: 0x00,
+            from: 0xA2,
+            cmd: 0x27,
+            data,
+        };
+        push.lock().unwrap().extend(f.to_bytes());
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut got = None;
+        while std::time::Instant::now() < deadline {
+            if let Some(s) = d.take_scope_row() {
+                got = Some(s);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            got.is_some(),
+            "a 27 00 waveform burst must reach the assembler — this is the path that draws the \
+             waterfall, and narrowing the router is exactly what could cut it"
+        );
+    }
 
     fn daemon_with_regs() -> (CivDaemon, u16, Arc<std::sync::Mutex<Regs>>) {
         let probe = TcpListener::bind("127.0.0.1:0").unwrap();

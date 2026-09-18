@@ -463,6 +463,29 @@ pub fn set_scope_center_mode(radio: u8, main_sub: Option<u8>, fixed: bool) -> Fr
     scope_ctrl_frame(radio, 0x14, main_sub, &[u8::from(fixed)])
 }
 
+/// READ the scope CENTER/FIXED mode (`27 14` with no payload). The rig answers with the same
+/// sub-command and a trailing mode byte.
+///
+/// ⚠️ THIS EXISTS SO NEXUS STOPS GUESSING WHY A SPAN WAS REFUSED. `set_scope_span` was reporting
+/// every `NG` as "your scope is not in Center mode", which is only the MOST LIKELY cause and not a
+/// fact — an operator whose scope WAS in Center (issue report 2026-09-18, IC-7300, photo showed
+/// CENTER lit) was sent to check a setting that was already correct, and the real cause stayed
+/// hidden behind our guess. A refusal is a fact about the radio; the reason for it is not, unless
+/// we ask.
+pub fn read_scope_center_mode(radio: u8, main_sub: Option<u8>) -> Frame {
+    scope_ctrl_frame(radio, 0x14, main_sub, &[])
+}
+
+/// The mode byte from a `27 14` reply: `Some(true)` = fixed, `Some(false)` = center, `None` when
+/// the frame is not that reply or carries no mode byte.
+///
+/// The byte is LAST rather than at a fixed index, because a dual-receiver rig puts a Main/Sub
+/// selector between the sub-command and the payload and a single-receiver one does not.
+pub fn parse_scope_center_mode(f: &Frame) -> Option<bool> {
+    (f.cmd == 0x27 && f.data.first() == Some(&0x14) && f.data.len() >= 2)
+        .then(|| f.data.last().is_some_and(|b| *b != 0))
+}
+
 // ---- reply decoders ----
 
 /// Extract the frequency (Hz) from a `03` frequency report (or an unsolicited transceive
