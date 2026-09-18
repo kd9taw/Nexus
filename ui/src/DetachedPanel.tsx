@@ -340,14 +340,27 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       return
     apply(archiveConversation(peer))
   }
-  const onWorkSpot = (t: SpotTarget) => {
+  // `spot`, not `t` — `t` is the translator in this file.
+  const onWorkSpot = async (spot: SpotTarget) => {
+    const mode = modeClassOf(spot.mode).toLowerCase() as 'cw' | 'phone' | 'digital'
+    // Nothing here can move the rig: no frequency of its own AND no channel for the band, which
+    // is exactly the case `qsyBand` below silently does nothing about. Tagging anyway armed a
+    // four-hour pend (HUNT_TTL_SECS) for a QSY that provably did not happen, waiting to stamp
+    // that park on the next contact with the callsign, whatever band it was made on.
+    if (spot.freqMhz == null && !bandPlan.some((c) => c.band === spot.band)) return
     // Tag the hunt target BEFORE the QSY — same order as PotaSotaView's own
-    // setHuntTarget-then-QSY split (handleHunt) — so a POTA map pop-out (a later task)
-    // credits the activator too, not just the QSY.
-    if (t.program && t.reference) void setHuntTarget(t.call, t.program, t.reference).catch(() => {})
-    const mode = modeClassOf(t.mode).toLowerCase() as 'cw' | 'phone' | 'digital'
-    if (t.freqMhz != null) apply(workSpot(mode, t.freqMhz, t.band, t.call))
-    else qsyBand(t.band)
+    // setHuntTarget-then-QSY split (handleHunt) — so a POTA map pop-out credits the activator
+    // too, not just the QSY. Awaited and said out loud: `set_hunt_target` rejects on a reference
+    // it cannot normalize, and swallowing that left the contact logged with no park at all.
+    if (spot.program && spot.reference) {
+      const { program, reference } = spot
+      await withErrorToast(
+        () => setHuntTarget(spot.call, program, reference),
+        t('ota.hunt.setFailed', { call: spot.call }),
+      )
+    }
+    if (spot.freqMhz != null) apply(workSpot(mode, spot.freqMhz, spot.band, spot.call))
+    else qsyBand(spot.band)
   }
   // Work a decoded/roster station from the cockpit (guards the self-QSO false toast).
   const onCall = (call: string, grid?: string, message?: string, snr?: number, freq?: number) => {
@@ -569,8 +582,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needAlerts={gatedAlerts}
           amp={snap?.radio.amp ?? null}
           onPoint={
-            // Same rotator gate as App (model-launched rotctld OR external host);
-            // silent fire-and-forget — detached windows have no toast host.
+            // Same rotator gate as App (model-launched rotctld OR external host). This failure
+            // IS still swallowed — but that is a gap, not a constraint. A detached window has a
+            // toast host: `DetachedShell` mounts `<Toasts/>`, and `onWorkSpot` above reports a
+            // failed hunt through it. Nothing has been wired to report a failed point yet.
             (settings?.rotatorModel ?? 0) > 0 || settings?.rotatorHost?.trim()
               ? (call) => void pointRotatorAtCall(call).catch(() => {})
               : undefined
@@ -593,8 +608,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // were built for: a POTA board beside a SOTA board, each window keeping its own
     // program/filter/sort. The board needs snap.hunt for its banner, so wait for the
     // first snapshot like the Operate arm. Its own toasts (hunt set/cleared, refresh
-    // errors) are silent here — fire-and-forget with no toast host is the detached
-    // pattern (see the Connect arm's onPoint).
+    // errors) are silent here — a GAP, not the detached pattern it used to be called. This
+    // window can report: `DetachedShell` mounts `<Toasts/>` (see `onWorkSpot`, which toasts a
+    // failed hunt through it). The Connect arm's `onPoint` is the other one still silent.
     if (!snap) {
       return (
         <DetachedShell>

@@ -189,11 +189,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   activation still tags it for you, as before. A summit spotted hours ago no longer counts as live
   either: SOTA's feed hands back its last spots by count rather than by recency, so one from the
   morning could ride along on a perfectly fresh fetch and take the tag off a park that really was.
-- **A hunt that could not be set now says so.** When the feed's spelling of a reference was one
-  Nexus could not read, Work went ahead with the QSY in silence and the contact was logged with no
-  park at all — the only sign was its absence, hours later. It now tells you, and still works the
-  station so you can add the reference by hand. A row Nexus has nowhere to QSY to no longer arms a
-  hunt at all: it used to leave a four-hour tag waiting to land on the next contact with that
+- **A hunt that could not be set now says so** — on the Needed board and on the Connect map, in
+  the main window and in a torn-off one. When the feed's spelling of a reference was one Nexus
+  could not read, Work went ahead with the QSY in silence and the contact was logged with no park
+  at all — the only sign was its absence, hours later. It now tells you, and still works the
+  station so you can add the reference by hand. A spot Nexus has nowhere to QSY to no longer arms
+  a hunt at all: it used to leave a four-hour tag waiting to land on the next contact with that
   callsign, whatever band it was made on.
 
 ## [1.13.0] — 2026-09-16

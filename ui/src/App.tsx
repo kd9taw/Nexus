@@ -2012,26 +2012,41 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // board (workSpot → rig jumps band+mode+freq, cockpit opens). The source-reported
   // mode routes the cockpit: CW→CW, SSB/FM→Phone, FT8/unknown→Digital.
   const handleWorkMapSpot = useCallback(
-    (t: { call: string; band: string; mode: string | null; freqMhz: number | null; program?: string; reference?: string }) => {
-      // Tag the hunt target BEFORE the QSY — same order as the POTA/SOTA board's own
-      // setHuntTarget-then-QSY split (handleHuntSpot below) — so a park worked from the
-      // map credits the activator too, not just the QSY.
-      if (t.program && t.reference) void setHuntTarget(t.call, t.program, t.reference).catch(() => {})
-      handleWorkNeeded({
-        call: t.call,
+    // `spot`, not `t` — `t` is the translator in this file.
+    async (spot: { call: string; band: string; mode: string | null; freqMhz: number | null; program?: string; reference?: string }) => {
+      const alert: NeedAlert = {
+        call: spot.call,
         entity: '',
-        band: t.band,
+        band: spot.band,
         zone: 0,
         tags: [],
         priority: 0,
         headline: '',
         // Keep FT4/FT8 specific so the tier-switch guard fires (same as handleWorkSpot);
         // everything else collapses to its class for cockpit routing.
-        mode: t.mode === 'FT4' || t.mode === 'FT8' ? t.mode : modeClassOf(t.mode),
-        freqMhz: t.freqMhz,
-      })
+        mode: spot.mode === 'FT4' || spot.mode === 'FT8' ? spot.mode : modeClassOf(spot.mode),
+        freqMhz: spot.freqMhz,
+      }
+      // Tag the hunt target BEFORE the QSY — same order as the POTA/SOTA board's own
+      // setHuntTarget-then-QSY split (handleHuntSpot below) — so a park worked from the
+      // map credits the activator too, not just the QSY.
+      //
+      // ONLY WHEN THE QSY WILL HAPPEN. `handleWorkNeeded` bails out on a row with no workable
+      // frequency, and `handleQsy` reads that same missing band-plan channel, so the rig does not
+      // move; a tag set regardless armed a four-hour pend (HUNT_TTL_SECS) for a QSY that provably
+      // did not happen, waiting to stamp that park on the next contact with the call. Awaited and
+      // reported for the reasons `handleWorkNeeded` spells out — `set_hunt_target` rejects on a
+      // reference it cannot normalize, and that used to be swallowed.
+      if (spot.program && spot.reference && workTarget(alert, bandPlan)) {
+        const { program, reference } = spot
+        await withErrorToast(
+          () => setHuntTarget(spot.call, program, reference),
+          t('ota.hunt.setFailed', { call: spot.call }),
+        )
+      }
+      void handleWorkNeeded(alert)
     },
-    [handleWorkNeeded],
+    [handleWorkNeeded, bandPlan],
   )
   // The chase toast's "Work" action — assigned via ref because the prop poller
   // (defined above, deps []) closes over its startup scope. Routes by the
