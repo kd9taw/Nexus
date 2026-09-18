@@ -457,8 +457,13 @@ const transcript = (text, exit) =>
   `        run: |\n          cat <<'TRANSCRIPT'\n${text.split('\n').map((l) => `          ${l}`).join('\n')}\n          TRANSCRIPT\n          exit ${exit}\n`;
 
 test('a real `node --test` failure is named, with its nesting and its error', () => {
-  // The real tool, end to end: node's own runner, TAP on a pipe (its default
-  // off a TTY, and a pipe is what the gate runner hands it).
+  // The real tool, end to end, through node's own runner in TAP.
+  // ⚠️ THE REPORTER IS FORCED, and that is the point. This used to rely on TAP being
+  // node's default off a TTY — true through Node 22, false from Node 24, which emits
+  // spec. So the same assertions exercised a different shape depending on the box,
+  // passed on a Node 22 machine, and failed on CI's Node 24 against nesting that spec
+  // does not carry. A test whose SUBJECT depends on the runtime version cannot tell
+  // you which shape broke. The spec shape is pinned in its own test below.
   const suite = scratch(
     'named.test.mjs',
     `import test from 'node:test';\n` +
@@ -466,7 +471,7 @@ test('a real `node --test` failure is named, with its nesting and its error', ()
       `test('a flat one that fails', () => { throw new Error('planted-nope'); });\n` +
       `test('one that passes', () => {});\n`
   );
-  const red = gates(['--workflow', scratch('node-red.yml', MINIMAL.replace('        run: echo alpha-ran\n', `        run: node --test ${suite}\n`))]);
+  const red = gates(['--workflow', scratch('node-red.yml', MINIMAL.replace('        run: echo alpha-ran\n', `        run: node --test --test-reporter=tap ${suite}\n`))]);
   assert.equal(red.code, 1);
   assert.ok(red.out.includes('failing test(s), 2:'), `the count was not stated:\n${red.out}`);
   assert.ok(red.out.includes('outer group > the inner one that fails'), 'the nested failure was not named with its path');
@@ -482,10 +487,43 @@ test('a real `node --test` failure is named, with its nesting and its error', ()
 
   // CONTROL: the same suite with the failures removed names nothing, and the
   // summary says so by having no failing-test block at all.
-  const green = gates(['--workflow', scratch('node-green.yml', MINIMAL.replace('        run: echo alpha-ran\n', `        run: node --test ${scratch('green.test.mjs', "import test from 'node:test';\ntest('one that passes', () => {});\n")}\n`))]);
+  const green = gates(['--workflow', scratch('node-green.yml', MINIMAL.replace('        run: echo alpha-ran\n', `        run: node --test --test-reporter=tap ${scratch('green.test.mjs', "import test from 'node:test';\ntest('one that passes', () => {});\n")}\n`))]);
   assert.equal(green.code, 0, green.out);
   assert.ok(!green.out.includes('failing test(s)'), 'a green run reported failing tests');
   assert.ok(!summaryOf(green.out).includes('failing test(s)'));
+});
+
+// ⚠️ THE SAME SUITE, READ THROUGH THE SPEC REPORTER. Node 24 emits spec off a TTY
+// where Node 22 emitted TAP, so the test above exercises whichever shape the local
+// runtime happens to produce — it passed on a Node 22 box and failed on CI's Node 24,
+// which is exactly the divergence a version-dependent test cannot show you. Forcing
+// the reporter pins BOTH shapes on ANY Node.
+// Two things spec gets wrong if read naively, and both are asserted here: the body
+// carries `✖ outer group` for a parent that only failed because its child did, and
+// the trailing summary is headed by `✖ failing tests:`, which matches the same shape
+// as a test name. Reading the body counted four where the answer is two.
+test('a `node --test` failure is named the same through the spec reporter', () => {
+  const suite = scratch(
+    'named-spec.test.mjs',
+    `import test from 'node:test';\n` +
+      `test('outer group', async (t) => { await t.test('the inner one that fails', () => { throw new Error('planted-boom'); }); });\n` +
+      `test('a flat one that fails', () => { throw new Error('planted-nope'); });\n` +
+      `test('one that passes', () => {});\n`
+  );
+  const red = gates(['--workflow', scratch('node-spec.yml', MINIMAL.replace('        run: echo alpha-ran\n', `        run: node --test --test-reporter=spec ${suite}\n`))]);
+  assert.equal(red.code, 1);
+  assert.ok(red.out.includes('failing test(s), 2:'), `spec: the count was not stated as 2:\n${red.out}`);
+  assert.ok(red.out.includes('the inner one that fails'), 'spec: the nested failure was not named');
+  assert.ok(red.out.includes('a flat one that fails'), 'spec: the flat failure was not named');
+  const summary = summaryOf(red.out);
+  assert.ok(!/^\s+outer group$/m.test(summary), 'spec: the PARENT of a failing subtest was reported as if it were the failing test');
+  assert.ok(!/failing tests:/.test(summary.replace(/failing test\(s\)/g, '')), "spec: the reporter's own summary header was counted as a test");
+  assert.ok(!summary.includes('one that passes'), 'spec: a passing test was named as failing');
+
+  // CONTROL: green through the same reporter names nothing.
+  const green = gates(['--workflow', scratch('node-spec-green.yml', MINIMAL.replace('        run: echo alpha-ran\n', `        run: node --test --test-reporter=spec ${scratch('green-spec.test.mjs', "import test from 'node:test';\ntest('one that passes', () => {});\n")}\n`))]);
+  assert.equal(green.code, 0, green.out);
+  assert.ok(!green.out.includes('failing test(s)'), 'spec: a green run reported failing tests');
 });
 
 test("cargo's transcript is read: the test name and its panic line", () => {

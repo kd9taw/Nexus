@@ -991,11 +991,16 @@ function loadWorkflow(file) {
 //                   blocks carrying the panic line.
 //   vitest          ` FAIL  file > suite > name`, then the assertion message and a
 //                   `❯ file:line:col` frame.
-//   node --test     TAP when its output is a pipe (which it is here): `# Subtest:`
-//                   nesting, `not ok N - name` with a YAML block; a parent whose
-//                   `failureType` is `subtestsFailed` is not the failing test.
-//                   The spec reporter's `✖ name (ms)` is read too, for a step that
-//                   asks for it.
+//   node --test     TAP on a pipe up to Node 22: `# Subtest:` nesting, `not ok N -
+//                   name` with a YAML block; a parent whose `failureType` is
+//                   `subtestsFailed` is not the failing test. ⚠️ NODE 24 EMITS SPEC
+//                   OFF A TTY, NOT TAP — CI pins Node 24 and this box may be older,
+//                   so both shapes must parse or a red names nothing on CI while
+//                   looking right locally. In spec, `✖ name (ms)` marks a failure,
+//                   but the body also carries PARENT groups that failed only because
+//                   a child did, and the trailing `✖ failing tests:` header matches
+//                   the same shape. That trailing section lists exactly the LEAF
+//                   failures, so it is preferred over the body when present.
 // ---------------------------------------------------------------------------
 
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
@@ -1068,10 +1073,19 @@ function failingTests(text) {
     }
     if (!parent) add([...stack.slice(0, depth), nok[2]].join(' > '), ctx);
   }
-  // node --test, spec reporter.
-  for (const l of lines) {
+  // node --test, spec reporter — the default off a TTY from Node 24 on.
+  // Its trailing `✖ failing tests:` section lists exactly the LEAF failures, which
+  // is the set we want. Read that in preference to the body, because the body also
+  // carries every PARENT group that failed only because a child did (TAP tells us
+  // so with `subtestsFailed`; spec gives no such marker, and indentation is not a
+  // reliable substitute once a name wraps). Falling back to the body when there is
+  // no summary — a truncated or killed run — can still over-count parents; that is
+  // the honest limit of reading a log that stopped early, and it over-names rather
+  // than under-names, which is the safe direction for a red.
+  const specSummary = lines.findIndex((l) => /^\s*✖ failing tests:\s*$/.test(l));
+  for (const l of specSummary >= 0 ? lines.slice(specSummary + 1) : lines) {
     const m = l.match(/^\s*✖ (.+?)(?: \(\d+(?:\.\d+)?ms\))?\s*$/);
-    if (m) add(m[1], []);
+    if (m && m[1] !== 'failing tests:') add(m[1], []);
   }
 
   // Nothing above matched: the usual reasons are a compile error or a runner
