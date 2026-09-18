@@ -259,6 +259,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data reconnects straight away. This matters because the browser itself sometimes drops the link
   after a slow reply, and a station that was answering the whole time should not be the one made
   to wait for it.
+- **An activator on two parks at once no longer gets you tagged with the wrong one.** Work on the
+  Needed board tags the contact with the activation the row names, and the row picked whichever
+  spot came to hand first — so an operator on a summit that is also a park, self-spotted to both
+  programmes, could be tagged with either, and it could change between one refresh and the next. A
+  wrong reference costs you the hunt outright: the activator's log names the other park, so the
+  two never match and POTA credits nothing. A row with more than one activation live now tags
+  nothing and says which ones it could not choose between — **2 activations live (POTA US-0001,
+  SOTA W7A/MN-001)** — and you pick the one you worked on the POTA/SOTA board. A row with a single
+  activation still tags it for you, as before. A summit spotted hours ago no longer counts as live
+  either: SOTA's feed hands back its last spots by count rather than by recency, so one from the
+  morning could ride along on a perfectly fresh fetch and take the tag off a park that really was.
+- **A hunt that could not be set now says so** — on the Needed board and on the Connect map, in
+  the main window and in a torn-off one. When the feed's spelling of a reference was one Nexus
+  could not read, Work went ahead with the QSY in silence and the contact was logged with no park
+  at all — the only sign was its absence, hours later. It now tells you, and still works the
+  station so you can add the reference by hand. A spot Nexus has nowhere to QSY to no longer arms
+  a hunt at all: it used to leave a four-hour tag waiting to land on the next contact with that
+  callsign, whatever band it was made on.
 
 ## [1.13.0] — 2026-09-16
 
