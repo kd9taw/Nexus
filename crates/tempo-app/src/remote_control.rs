@@ -15,7 +15,7 @@ use std::time::Instant;
 pub mod amplifier;
 pub mod transmit;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Revocation(Arc<AtomicU64>);
 
 impl Revocation {

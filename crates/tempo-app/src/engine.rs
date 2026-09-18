@@ -2313,6 +2313,11 @@ pub struct Engine {
     tx_gate_gen: u64,
     remote_receiver_gen: u64,
     remote_actuation: crate::remote_control::Revocation,
+    /// The remote TRANSMIT authority's revocation, shared with the Remote service (an `Arc`
+    /// inside, installed by `set_remote_transmit_revocation`). Default until then, so a build
+    /// with no Remote service revokes a counter nobody reads rather than needing an `Option`.
+    /// `halt_tx` moves it — see there for why.
+    remote_transmit_stand_down: crate::remote_control::Revocation,
     remote_amp_command: Option<crate::remote_control::amplifier::Request>,
     remote_radio_command: Option<remote_radio::Request>,
     remote_radio_selection: Option<remote_selection::Request>,
@@ -4406,6 +4411,7 @@ impl Engine {
             tx_gate_gen: 0,
             remote_receiver_gen: 0,
             remote_actuation: Default::default(),
+            remote_transmit_stand_down: Default::default(),
             remote_amp_command: None,
             remote_radio_command: None,
             remote_radio_selection: None,
@@ -9748,6 +9754,23 @@ impl Engine {
         self.remote_actuation.generation()
     }
 
+    /// Share the Remote service's transmit-authority revocation with the engine, so a local
+    /// stand-down (`halt_tx`) retires remote transmit the way Remote's own Stop does. Installed
+    /// once, when the service is built; `Revocation` is an `Arc` inside, so both sides move the
+    /// same counter and a browser's `transmitEpoch` goes stale the instant the operator stops.
+    pub fn set_remote_transmit_revocation(
+        &mut self,
+        revocation: crate::remote_control::Revocation,
+    ) {
+        self.remote_transmit_stand_down = revocation;
+    }
+
+    /// The generation a browser is shown as its `transmitEpoch`. Test-visible so a stand-down
+    /// can be asserted to move it without reaching through the Remote service.
+    pub fn remote_transmit_stand_down_generation(&self) -> u64 {
+        self.remote_transmit_stand_down.generation()
+    }
+
     /// A local amplifier gesture supersedes pending Remote hardware work. This
     /// does not alter the local TX latch or transmit sequence generation.
     pub fn note_local_amplifier_command(&self) {
@@ -11701,6 +11724,19 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // all match again by commit time (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.remote_actuation.revoke();
+        // ⛔ A STAND-DOWN HERE RETIRES REMOTE TRANSMIT AUTHORITY TOO, and it has to happen on
+        // THIS verb rather than at any one button, because every local stop funnels through
+        // here: the desktop's Stop TX, WSJT-X's UDP HaltTx, a broker client holding T 1.
+        //
+        // Without it, a browser gesture being HELD through its confirming window
+        // (`operation-client.ts` holdTransmit, up to CONTROL_RESUME_MS) still carried a
+        // `transmitEpoch` that validated, because that epoch is this generation and only
+        // Remote's OWN Stop moved it. The operator pressed Stop TX at the radio to end a run
+        // and the rig armed and keyed again up to a second and a half later, off a gesture
+        // pressed before they stood it down — the shape this file already documents further
+        // down ("the operator halted twice and an over went out 45 s later"). Refusing a
+        // held gesture costs one deliberate press to re-arm; not refusing it transmits.
+        self.remote_transmit_stand_down.revoke();
         // Stop transmitting AND stay stopped: disable TX so the auto-sequencer
         // doesn't immediately re-arm on the next slot (WSJT-X "Halt Tx" also
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.

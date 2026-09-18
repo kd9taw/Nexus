@@ -434,10 +434,18 @@ impl Service {
             .spawn(move || write_remembered(writer_vault, decisions))
             .ok()
             .map(|_| writer);
+        let operations = Arc::new(operations::Authority::with_spots(
+            feeds.sources.as_ref().map(|s| s.spots.clone()),
+        ));
+        // A stand-down at the shack retires remote transmit authority. Handing the engine this
+        // revocation is what makes `Engine::halt_tx` — the verb every local stop funnels through,
+        // including WSJT-X's UDP HaltTx — move the generation a browser carries as its
+        // `transmitEpoch`, so a gesture held across the operator's own Stop TX is refused instead
+        // of arming the rig a second later. See `Engine::halt_tx`.
+        tempo_app::engine::engine_lock(&engine)
+            .set_remote_transmit_revocation(operations.transmit_revocation());
         let control = Arc::new(Mutex::new(Control {
-            operations: Arc::new(operations::Authority::with_spots(
-                feeds.sources.as_ref().map(|s| s.spots.clone()),
-            )),
+            operations,
             memories: feeds
                 .sources
                 .as_ref()

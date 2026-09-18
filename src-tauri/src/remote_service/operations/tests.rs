@@ -95,6 +95,9 @@ impl Fixture {
         engine.apply_settings(settings);
         engine.set_log_path(dir.join("contacts.adi"));
         let authority = Authority::default();
+        // Wired exactly as `Service::new` wires it, so a stand-down at the shack retires
+        // remote transmit here too — a fixture that skipped this would prove nothing.
+        engine.set_remote_transmit_revocation(authority.transmit_revocation());
         let connection = authority.start_connection();
         Self {
             authority,

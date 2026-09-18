@@ -458,6 +458,12 @@ impl Authority {
                 post(freq_mhz, call, comment)
             })
     }
+    /// The transmit authority's revocation, for the ENGINE to hold so that a local stand-down
+    /// (`Engine::halt_tx`) retires remote transmit the way Remote's own Stop does. Shares the
+    /// counter a browser is shown as `transmitEpoch`.
+    pub fn transmit_revocation(&self) -> tempo_app::remote_control::Revocation {
+        self.transmit.revocation()
+    }
     fn revoke_execution(&self) {
         self.hardware.revoke();
         self.transmit.revoke();

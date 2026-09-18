@@ -1316,3 +1316,56 @@ fn ft_runtime_refuses_local_skip_change_or_revoked_transmit_grant() {
         assert!(!f.dir.join("settings.json").exists());
     }
 }
+
+// ── A stand-down AT THE SHACK retires the browser's transmit epoch ──────────────────────────────
+// `d564adc5` made an FT gesture pressed during a confirming window HELD rather than refused, and
+// the browser cancels a held gesture only on its OWN Stop or TX-off. Nothing at the shack moved
+// the transmit generation: the desktop's Stop TX calls `Engine::halt_tx` and no more, so the epoch
+// a held gesture carried still validated and `call_station_ctx` re-armed the rig up to a second and
+// a half after the operator stood it down. Operator sign-off for this FT-gate change: 2026-09-17.
+//
+// The check is on `halt_tx` itself rather than on the Stop TX command, because every local stop
+// funnels through that verb — the desktop button, WSJT-X's UDP HaltTx, a broker client. A fix
+// hooked to the button alone would leave a logger's halt with the same hole.
+#[test]
+fn a_stand_down_at_the_shack_retires_a_held_browser_transmit_epoch() {
+    let (f, now, state) = controlling(true);
+    let epoch = state["transmitEpoch"]
+        .as_str()
+        .expect("a controlling browser with transmit permission is shown an epoch")
+        .to_string();
+    assert_eq!(
+        u64::from_str_radix(&epoch, 16).unwrap(),
+        f.authority.transmit.generation(),
+        "the epoch a browser is shown is the transmit generation"
+    );
+
+    // The shack operator presses Stop TX. Not Remote's Stop — the desktop's own verb.
+    f.engine.lock().unwrap().halt_tx();
+
+    // The gesture the browser was holding now carries a generation that no longer exists, so the
+    // permit it would be minted against must not be issued.
+    assert_ne!(
+        u64::from_str_radix(&epoch, 16).unwrap(),
+        f.authority.transmit.generation(),
+        "a local stand-down left the held gesture's transmit epoch still valid"
+    );
+    assert!(
+        f.authority
+            .transmit
+            .permit_generation(u64::from_str_radix(&epoch, 16).unwrap(), now + LEASE)
+            .is_none(),
+        "a gesture held across the operator's own Stop TX was still admitted"
+    );
+
+    // CONTROL, so this cannot pass by refusing everything: the epoch the browser is shown AFTER
+    // the stand-down still works, which is the deliberate re-arm the operator has to make.
+    let fresh = f.authority.transmit.generation();
+    assert!(
+        f.authority
+            .transmit
+            .permit_generation(fresh, now + LEASE)
+            .is_some(),
+        "the browser could not re-arm after the stand-down"
+    );
+}

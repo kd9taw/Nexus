@@ -17,6 +17,21 @@ impl TransmitAuthority {
         self.0.generation()
     }
 
+    /// A handle on this authority's revocation, for the ENGINE to hold.
+    ///
+    /// The generation behind it is what a browser is shown as its `transmitEpoch`, and what
+    /// `permit_generation` checks an arming gesture against. `Engine::halt_tx` is the one verb
+    /// every local stand-down funnels through — the desktop's own Stop TX, WSJT-X's UDP HaltTx,
+    /// a broker client — and each of those must retire remote transmit authority the way Remote's
+    /// own Stop already does. Handing the engine this clone is what lets it, and it is an `Arc`
+    /// inside, so both sides move the same counter.
+    ///
+    /// ⛔ It revokes; it cannot issue. A permit still comes only from the native host after its
+    /// own local transmit-grant and controller checks.
+    pub fn revocation(&self) -> super::Revocation {
+        self.0.clone()
+    }
+
     /// A delayed Stop can retire only the generation it displayed. Atomic
     /// comparison prevents it racing a newer controller or transmission.
     pub fn revoke_generation(&self, expected: u64) -> bool {
