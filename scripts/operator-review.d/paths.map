@@ -59,6 +59,27 @@ transmit | crates/tempo-app/src/remote_control.rs | the station side of Remote c
 transmit | crates/tempo-app/src/remote_control/** | as above
 transmit | ui/src/remote-web/RemoteApp.tsx | the Remote browser's own cockpit — the stop line applies to it too
 
+# THE UI STOP LINE, added 2026-09-18 after a transmit-path change to Prove TX and the SSTV
+# ISS guard got NO REVIEW REQUIRED. The lens already had `ui/src/components/*Cockpit.tsx`,
+# and every gap below is a file that renders a control which keys or stops a transmission
+# and simply is not NAMED `*Cockpit.tsx`. Same failure as the src-tauri gap recorded above:
+# the map was silent, confidently, about the surface that keys the operator's radio.
+transmit | ui/src/components/FtStopControl.tsx | THE Stop TX button itself (`onHaltTx`, "cuts even an over already in flight"). Rendered by CockpitHeader, OperateQsoStrip and LogConfirm — a change here breaks the stop line in three places at once
+transmit | ui/src/components/SstvView.tsx | the SSTV cockpit: transmits a picture, owns `.sstv-tx-bar` Stop and the TX-enable latch that arms `sstv_abort`. CLAUDE.md lists SSTV in the stop line; the `*Cockpit.tsx` glob never matched it
+transmit | ui/src/components/VoiceKeyer.tsx | the voice keyer's ■ Stop (`stopVoice` → `Engine::stop_voice`, flushes the ring and unkeys). A recorded message keys the rig with no operator hand on the mic — the same hazard the `voice.rs` entry names, on the surface that starts it
+transmit | ui/src/components/OperateQsoStrip.tsx | Operate's TX strip: hosts FtStopControl and the TX-enable latch
+transmit | ui/src/components/LogConfirm.tsx | hosts FtStopControl so a transmission stays stoppable while a Remote log dialog is open — the dialog is exactly when a stop is hardest to reach
+transmit | ui/src/components/SetupHealth.tsx | Prove TX keys a ~2 s tune carrier straight from the health strip, outside any cockpit
+transmit | ui/src/components/TopBar.tsx | Stop TX, Tune and the TX-enable latch for every view that is not a cockpit
+# DELIBERATELY NOT LISTED, so the next reader does not re-derive it:
+#   RoamPanel.tsx — its `Stop → home` stops channel HOPPING, not a transmission; that file's
+#     own header says it is on no cockpit's stop-line census.
+#   App.tsx — 3 transmit symbols in ~3500 lines. A glob here would make almost every UI change
+#     require the transmit lens, and a lens a reviewer is sent to with nothing to check gets
+#     waved through, which this file's header calls worse than not sending them.
+#   SettingsPanel.tsx / SetupWizard.tsx / DetachedPanel.tsx — they pass `onProveTx` through as a
+#     prop and render no transmit control of their own.
+
 # ---------------------------------------------------------------------------
 cat-rig :: Does this build, send, order or interpret a command to a radio, amplifier or rotator? Ask what the RIG remembers that the code does not, and what happens in the window between two commands.
 
