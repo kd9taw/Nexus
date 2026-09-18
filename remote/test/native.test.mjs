@@ -806,7 +806,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    await delay(270);socket.send(envelope(edited.request));assert.deepEqual(await labeled(socket,'edit replay',v=>v.type==='operationResponse'&&v.requestId===edited.request.requestId),edited.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
    // Positive control: the pre-edit row is stale now, so a delete aimed at it changes nothing.
    const stale=await write(s=>changeRequest(s,{kind:'delete',target:target(before)}))
-   assert.equal(stale.response.value.outcome,'rejected');assert.equal(stale.response.value.reason,'contextChanged');assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
+   assert.equal(stale.response.value?.outcome,'rejected',JSON.stringify(stale.response));assert.equal(stale.response.value.reason,'contextChanged');assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
    const edit=await rowFor('K1ABC',row=>row.comment==='Edited from the browser')
    const carded=await write(s=>changeRequest(s,{kind:'qslCard',target:target(edit),received:true}))
    assert.equal(carded.response.value.outcome,'applied',JSON.stringify(carded.response));assert.equal(carded.response.value.evidence,'fileSynced')
