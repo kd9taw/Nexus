@@ -34,6 +34,14 @@ const alerts = vi.hoisted(() => [
     call: 'W9XYZ', entity: 'United States', band: '20m', zone: 4, tags: ['NewBand'],
     priority: 50, headline: 'New band slot', mode: 'Digital', freqMhz: 14.076, park: null,
   },
+  // A park row the rig cannot be sent to: no frequency of its own, Digital (so no mode
+  // default) and — with the empty band plan these tests mount — no channel either. `workTarget`
+  // is null for exactly this shape, and `handleQsy` reads the same missing channel.
+  {
+    call: 'N0PRK', entity: 'United States', band: '60m', zone: 4, tags: ['NewPark', 'Pota'],
+    priority: 20, headline: 'POTA US-0003', mode: 'Digital', freqMhz: null,
+    park: { program: 'POTA', reference: 'US-0003' },
+  },
 ])
 
 vi.mock('./api', async (importOriginal) => {
@@ -69,16 +77,32 @@ vi.mock('./api', async (importOriginal) => {
     getTleStatus: vi.fn(async () => null),
     setOperatingMode: vi.fn(async () => snapshot),
     setArea: vi.fn(async () => snapshot),
+    // Clicking any row selects the station first, and the real command answers with a SNAPSHOT.
+    // The blanket `async () => ({})` above answers with an object that has no `link`, which App
+    // stores and then reads `link.tier` off — a crash the shorter tests here only escaped by
+    // unmounting before the promise landed.
+    selectPeer: vi.fn(async () => snapshot),
     appVersion: vi.fn(async () => '0.0.0-test'),
     workSpot: vi.fn(async () => snapshot),
     setHuntTarget: vi.fn(async () => snapshot),
     openPanelWindow: vi.fn(async () => {}),
   }
 })
+const toasted = vi.hoisted(() => vi.fn())
 vi.mock('./toast', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  pushToast: vi.fn(),
-  withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),
+  pushToast: toasted,
+  // Faithful to the real helper in toast.ts — a rejection becomes an error toast and a null
+  // result, never a swallowed promise. That IS what the failure cases below are about, so a
+  // pass-through stand-in would make them untestable.
+  withErrorToast: vi.fn(async (action: () => Promise<unknown>, fallback: string) => {
+    try {
+      return await action()
+    } catch {
+      toasted(fallback, 'error')
+      return null
+    }
+  }),
 }))
 vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="waterfall" /> }))
 
@@ -94,6 +118,7 @@ beforeEach(() => {
   localStorage.setItem('nexus.needed.autopop', 'off')
   vi.mocked(setHuntTarget).mockClear()
   vi.mocked(workSpot).mockClear()
+  toasted.mockClear()
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
   window.matchMedia = ((q: string) => ({
     matches: false, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
@@ -122,5 +147,40 @@ describe('the Needed board tags a park when a park row is worked', () => {
     fireEvent.click(row('W9XYZ'))
     await waitFor(() => expect(workSpot).toHaveBeenCalled())
     expect(setHuntTarget).not.toHaveBeenCalled()
+  })
+
+  // A HUNT THAT COULD NOT BE SET HAS TO SAY SO. `set_hunt_target` rejects whenever the feed's
+  // spelling of a reference will not normalize (station.rs). Swallowed, the operator watched the
+  // QSY land, worked the park, and logged the contact with no reference at all — the one outcome
+  // that costs the hunt, and the only clue was its absence hours later.
+  it('says so when the hunt cannot be set, and still works the station', async () => {
+    await board()
+    vi.mocked(setHuntTarget).mockRejectedValueOnce(new Error('invalid POTA reference "K-1234"'))
+    fireEvent.click(row('K1ABC'))
+    await waitFor(() =>
+      expect(toasted).toHaveBeenCalledWith(expect.stringContaining('K1ABC'), 'error'),
+    )
+    await waitFor(() => expect(workSpot).toHaveBeenCalled())
+  })
+
+  // CONTROL for the one above — a handler that toasted on every Work would pass it.
+  it('a hunt that IS set says nothing', async () => {
+    await board()
+    fireEvent.click(row('K1ABC'))
+    await waitFor(() => expect(setHuntTarget).toHaveBeenCalled())
+    expect(toasted).not.toHaveBeenCalledWith(expect.anything(), 'error')
+  })
+
+  // A ROW THE RIG CANNOT BE SENT TO MUST NOT ARM A PEND. The tag used to be set before the
+  // work-target bail-out, so a row off the band plan armed a four-hour hunt (HUNT_TTL_SECS) for
+  // a QSY that never happened — waiting to stamp that park on the next contact with the call,
+  // whichever band it was made on.
+  it('a park row with nowhere to QSY to tags nothing', async () => {
+    await board()
+    fireEvent.click(row('N0PRK'))
+    // The row DID take the bail-out — the rig has no channel for its band.
+    await waitFor(() => expect(toasted).toHaveBeenCalledWith(expect.anything(), 'error', 3000))
+    expect(setHuntTarget).not.toHaveBeenCalled()
+    expect(workSpot).not.toHaveBeenCalled()
   })
 })

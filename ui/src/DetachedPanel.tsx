@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { t } from './i18n'
 import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
+import { withErrorToast } from './toast'
 import { WSPR_WATERFALL_WINDOW } from './waterfall'
 import type {
   AppSnapshot,
@@ -465,32 +466,42 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           // rig's MODE + exact frequency (a bare QSY left CW clicks in DATA-U),
           // and its snapshot nav-hint (workTick) makes the MAIN window follow to
           // the matching cockpit — this window can't navigate it directly.
-          onWork={(a) => {
-            // A park/summit row names its activation: tag the hunt first, exactly as the docked
-            // board and `onWorkSpot` above do, so the contact this leads to carries the park.
-            if (a.park) void setHuntTarget(a.call, a.park.program, a.park.reference).catch(() => {})
-            const t = workTarget(a, bandPlan)
-            if (!t) {
+          onWork={async (a) => {
+            // `target`, not `t` — `t` is the translator in this file (App.tsx's own idiom).
+            const target = workTarget(a, bandPlan)
+            if (!target) {
               qsyBand(a.band, a.freqMhz ?? undefined)
               return
+            }
+            // A park/summit row names its activation: tag the hunt first, exactly as the docked
+            // board and `onWorkSpot` above do, so the contact this leads to carries the park.
+            // AFTER the bail-out above and AWAITED — handleWorkNeeded spells out why, and here
+            // the bail-out is the harder no-op of the two: `workTarget` is null only when the
+            // band has no plan channel, and `qsyBand` then silently moves nothing at all.
+            if (a.park) {
+              const park = a.park
+              await withErrorToast(
+                () => setHuntTarget(a.call, park.program, park.reference),
+                t('ota.hunt.setFailed', { call: a.call }),
+              )
             }
             // The board lists ALL modes, but the CW/Phone cockpits are opt-in features.
             // If the target cockpit is disabled, the MAIN window's nav-hint effect refuses
             // to follow (same gate as handleWorkNeeded) — so a workSpot would silently
             // switch the rig into a hidden mode with no UI. Just QSY to the spot instead.
             const modes = readEnabledModes()
-            if ((t.view === 'cw' && !modes.cw) || (t.view === 'phone' && !modes.phone)) {
+            if ((target.view === 'cw' && !modes.cw) || (target.view === 'phone' && !modes.phone)) {
               qsyBand(a.band, a.freqMhz ?? undefined)
               return
             }
-            const opMode = t.view === 'operate' ? 'digital' : t.view
+            const opMode = target.view === 'operate' ? 'digital' : target.view
             // A digital spot's FT8/FT4 protocol rides the same atomic call (the engine
             // no-ops on a same-tier request) — the pop-out used to not switch the tier at
             // all, leaving an FT4 click decoding FT8, and doing it as a second call would
             // recreate the main window's default-dial-first double retune.
             const m = a.mode?.toUpperCase()
             const spotTier = opMode === 'digital' && (m === 'FT4' || m === 'FT8') ? m : undefined
-            apply(workSpot(opMode, t.freqMhz, t.band, t.call, spotTier))
+            apply(workSpot(opMode, target.freqMhz, target.band, target.call, spotTier))
           }}
         />
       </DetachedShell>

@@ -1910,10 +1910,16 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
 
   // resolvable frequency at all falls back to a plain band QSY.
   const handleWorkNeeded = useCallback(
-    (alert: NeedAlert) => {
+    async (alert: NeedAlert) => {
       if (remote && !canRemoteWork(alert)) {
         // The map and DXpedition Work buttons reach here for every spot; say why nothing moved.
         pushToast(t('remote.b1.workUnavailable'), 'info', 4000)
+        return
+      }
+      // `target`, not `t` — `t` is the translator in this file.
+      const target = workTarget(alert, bandPlan)
+      if (!target) {
+        handleQsy(alert.band)
         return
       }
       // A POTA/SOTA row names the activation it IS (`park`), so working it tags the hunt before
@@ -1922,14 +1928,24 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       // was an ordinary QSO: no hunter credit, no SIG/SIG_INFO, and nothing for the POTA board's
       // Hide worked to see. Native only: a browser's hunt is a station change under the logging
       // grant (RemoteOta's own path), not this command.
+      //
+      // AFTER that bail-out, never before it. `workTarget` is null only when the row has no
+      // frequency of its own, no mode default AND no band-plan channel — and `handleQsy` reads
+      // that same missing channel, so it toasts "no channel" and the rig does not move. Tagging
+      // there armed a four-hour pend (HUNT_TTL_SECS) for a QSY that provably did not happen,
+      // waiting to stamp that park on the next contact with the call, wherever it was made.
+      //
+      // AWAITED, and its failure said out loud: `set_hunt_target` rejects whenever the feed's
+      // spelling of the reference will not normalize, and the swallowed rejection left the
+      // operator watching the QSY land, working the park, and logging it with no reference at
+      // all. The work still proceeds on a failed tag — the station is real and the operator can
+      // add the reference by hand; refusing the QSY would be the bigger surprise.
       if (!remote && alert.park) {
-        void setHuntTarget(alert.call, alert.park.program, alert.park.reference).catch(() => {})
-      }
-      // `target`, not `t` — `t` is the translator in this file.
-      const target = workTarget(alert, bandPlan)
-      if (!target) {
-        handleQsy(alert.band)
-        return
+        const park = alert.park
+        await withErrorToast(
+          () => setHuntTarget(alert.call, park.program, park.reference),
+          t('ota.hunt.setFailed', { call: alert.call }),
+        )
       }
       // The Needed board now lists ALL modes (W1), but the CW/Phone cockpits are opt-in
       // features. If the target cockpit is disabled, don't navigate into a hidden view
