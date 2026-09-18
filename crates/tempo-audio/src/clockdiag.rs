@@ -43,11 +43,21 @@ use std::time::{Duration, Instant};
 /// clock and Nexus stands down entirely (guard 8) — a second disciplinarian is
 /// how two programs fight over one clock and neither wins. On the machine this
 /// was developed against, NetTime does 88% of the corrections.
-const THIRD_PARTY_CLIENTS: [(&str, &str); 4] = [
-    ("NetTimeService.exe", "NetTime"),
+const THIRD_PARTY_CLIENTS: [(&str, &str); 5] = [
+    ("nettimeservice.exe", "NetTime"),
     ("ntpd.exe", "Meinberg NTP"),
-    ("D4.exe", "Dimension 4"),
+    ("d4.exe", "Dimension 4"),
     ("chronyd.exe", "chrony"),
+    // Reported 2026-09-17: an operator's waterfall froze intermittently alongside this program's
+    // "Invalid Server Time! Server: time.nist.gov" dialog. Nexus never asks a time server, so the
+    // dialog was never ours — but a client that fails and retries steps the clock more often than
+    // a healthy one, and a step is what stalls a wall-clock-driven decode. Image confirmed as
+    // `timesync.exe` in `C:\Program Files (x86)\VOVSOFT\Time Sync`.
+    // ⚠️ Catches it only while it is RESIDENT. The vendor documents neither a service nor a tray
+    // mode, so a scheduled run that steps the clock and exits is invisible to `tasklist` and this
+    // guard will not fire for it. That gap is real and is not closed here; closing it needs the
+    // "who last wrote the clock" evidence (the Windows event log), which this module does not read.
+    ("timesync.exe", "VOVSOFT Time Sync"),
 ];
 
 /// ⛔ THE REGISTRY VALUE NEXUS WRITES, AND THE ONLY ONE.
@@ -550,9 +560,16 @@ pub fn parse_timedatectl(out: &str) -> (Option<bool>, Option<bool>) {
 
 /// The first `THIRD_PARTY_CLIENTS` image found in `tasklist` output.
 pub fn parse_third_party(tasklist_out: &str) -> Option<String> {
+    // ⚠️ CASE-INSENSITIVE, and the entries above are lower-cased to match. Windows filenames are
+    // case-insensitive, so `tasklist` prints whatever casing the image on disk happens to carry —
+    // an installer, a rename or a repackage can change it without changing the program. A
+    // case-SENSITIVE `contains` (what this was) therefore misses silently, and a miss here is not
+    // cosmetic: guard 8 is what makes Nexus stand down instead of fighting another program for the
+    // clock, and two disciplinarians is how a clock ends up stepping under a decode.
+    let hay = tasklist_out.to_ascii_lowercase();
     THIRD_PARTY_CLIENTS
         .iter()
-        .find(|(image, _)| tasklist_out.contains(image))
+        .find(|(image, _)| hay.contains(image))
         .map(|(_, label)| (*label).to_string())
 }
 
@@ -1131,6 +1148,66 @@ NetTimeService.exe            6240 Services                   0      3,960 K
         assert!(repair_commands(d.repair).is_empty(), "and nothing is run");
         assert_eq!(d.state, ServiceState::Synced);
         assert!(!d.unvouched);
+    }
+
+    const TASKLIST_WITH_VOVSOFT: &str = "\
+Image Name                     PID Session Name        Session#    Mem Usage
+========================= ======== ================ =========== ============
+TimeSync.exe                  9112 Console                    1     12,480 K
+";
+
+    /// An operator reported an intermittently freezing waterfall alongside VOVSOFT Time Sync's
+    /// "Invalid Server Time!" dialog (2026-09-17). Nexus never asks a time server, so that dialog
+    /// was never ours — but the program owns the clock while it runs, and guard 8 has to see it.
+    ///
+    /// ⚠️ THE CASING IN THIS FIXTURE IS THE POINT. `tasklist` prints the image as it is named on
+    /// disk, and the vendor ships `timesync.exe` while a repackage or a rename can just as easily
+    /// print `TimeSync.exe`. The match used to be case-SENSITIVE, so this exact output found
+    /// nothing and Nexus went on disciplining a clock another program was already steering.
+    #[test]
+    fn a_third_party_client_is_recognised_whatever_case_tasklist_prints() {
+        assert_eq!(
+            parse_third_party(TASKLIST_WITH_VOVSOFT).as_deref(),
+            Some("VOVSOFT Time Sync")
+        );
+        // Every entry, in three casings, so no single one can rot back to case-sensitive.
+        for (image, label) in THIRD_PARTY_CLIENTS {
+            for cased in [image.to_string(), image.to_ascii_uppercase(), {
+                let mut c = image.chars();
+                c.next()
+                    .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+                    .unwrap_or_default()
+            }] {
+                let line = format!("Image Name\n=====\n{cased}   1234 Console   1   1,000 K\n");
+                assert_eq!(
+                    parse_third_party(&line).as_deref(),
+                    Some(label),
+                    "{cased} was not recognised"
+                );
+            }
+        }
+        // CONTROL: the check can still answer "nobody else owns the clock".
+        // CONTROL: a machine with none of them running answers None, so the sweep above cannot
+        // be passing by matching everything.
+        assert_eq!(
+            parse_third_party(
+                "Image Name                     PID Session Name\n                 ========================= ======== ================\n                 explorer.exe                  4128 Console\n                 w32tm.exe                     6600 Console\n"
+            ),
+            None
+        );
+    }
+
+    /// The table is matched against a lower-cased haystack, so an entry carrying an upper-case
+    /// letter can never match — it would look present and be dead. Cheaper to pin than to debug.
+    #[test]
+    fn every_third_party_image_is_lower_case() {
+        for (image, label) in THIRD_PARTY_CLIENTS {
+            assert_eq!(
+                image,
+                image.to_ascii_lowercase(),
+                "{label}'s image must be lower-case or it can never match"
+            );
+        }
     }
 
     /// ⚠️ GUARD 8, and this machine is the live case: NetTime is running on the
