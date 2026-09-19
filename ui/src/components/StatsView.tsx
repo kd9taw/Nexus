@@ -4,7 +4,7 @@
 // these cards slice (data), and the three names in SERVICE_LABELS below — LoTW and eQSL are the
 // services' own names and DX is ham shorthand, all invariant tokens (see `i18n/index.ts`).
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { getLogStats } from '../api'
 import { t } from '../i18n'
 import type { LoggedQso, GeoLogStats } from '../types'
@@ -66,6 +66,9 @@ export function StatsView({ observation }: { observation?: { statistics: LogStat
       .catch(() => { if (live) setGeo(null) })
     return () => { live = false }
   }, [observation])
+  // Once per log, not once per render: six passes over the whole log, and this view re-renders
+  // on every snapshot. Declared above the early returns, as a hook must be.
+  const nativeStats = useMemo(() => (log ? computeLogStats(log) : null), [log])
 
   if (!observation && failed) {
     return (
@@ -82,7 +85,7 @@ export function StatsView({ observation }: { observation?: { statistics: LogStat
       </main>
     )
   }
-  const s = observation?.statistics ?? computeLogStats(log!)
+  const s = observation?.statistics ?? nativeStats!
   if (s.total === 0) {
     return (
       <main className="layout single stats-view">

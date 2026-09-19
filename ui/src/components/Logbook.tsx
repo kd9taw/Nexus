@@ -14,6 +14,7 @@ import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import { modeKey } from '../features/callHistory'
 import { NO_LOG, refreshSharedLog, useSharedLog } from '../features/logStore'
+import { lotwBacklog } from '../features/lotwBacklog'
 import { SpotDialog } from './SpotDialog'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
@@ -531,16 +532,9 @@ export function Logbook({
     }
   }
 
-  // QSOs not yet sent to LoTW: award-unconfirmed + never uploaded or a prior bounce.
-  // Mirrors the backend batch builder (lotw_unsent_indices): award-unconfirmed,
-  // never-sent-or-bounced, AND the time of day is known — LoTW matches on time,
-  // so a date-only import can never confirm and is excluded, with the count
-  // shown separately so the operator learns why instead of wondering.
-  const lotwEligible = (q: LoggedQso) =>
-    !q.awardConfirmed &&
-    (!q.upload?.lotw || ['rejected', 'authfail'].includes(q.upload.lotw.outcome))
-  const unsentLotw = log.filter((q) => lotwEligible(q) && q.timeKnown !== false).length
-  const timelessLotw = log.filter((q) => lotwEligible(q) && q.timeKnown === false).length
+  // QSOs not yet sent to LoTW, and the date-only ones LoTW can never match (features/
+  // lotwBacklog). Once per log, not once per render: this view re-renders on every snapshot.
+  const { unsent: unsentLotw, timeless: timelessLotw } = useMemo(() => lotwBacklog(log), [log])
 
   // Sign + upload the unsent batch to LoTW via the operator's TQSL.
   const onUploadLotw = async () => {
