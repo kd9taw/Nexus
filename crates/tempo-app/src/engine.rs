@@ -32,6 +32,7 @@ pub enum LogWriteOutcome {
     Duplicate,
 }
 
+use self::remote_logging::{GridSource, HeldQso};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -2137,7 +2138,7 @@ pub struct Engine {
     /// contact the popup is showing; a later completion waits behind it. Stock WSJT-X refuses
     /// the second contact outright (`LogQSO::initLogQSO` returns while its dialog is open), which
     /// loses it; the operator asked for it to be queued instead.
-    pending_logs: VecDeque<QsoRecord>,
+    pending_logs: VecDeque<HeldQso>,
     /// The identity of the hold at the FRONT — a fresh `Arc` and epoch every time that
     /// changes, so a confirm or discard for a hold that has moved on is refused rather than
     /// applied to the contact now showing.
@@ -9075,13 +9076,16 @@ impl Engine {
     /// loss, or a quit with the popup open) so the operator can still log it. Called by the
     /// shell at startup AFTER [`Self::set_pending_qso_path`], once per restored contact, in
     /// the order they were held; each joins the back of the queue.
+    /// A caller with a bare record cannot say where its grid came from, so it counts as a
+    /// lookup — see [`GridSource::LookedUp`]. The journal's own restore keeps what it
+    /// recorded (`load_pending_qso_json`).
     pub fn load_pending_qso(&mut self, rec: QsoRecord) {
-        self.hold_pending_log(rec);
+        self.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
     }
 
     /// The contact the confirm-before-log popup is showing — the front of the queue.
     pub(crate) fn pending_log(&self) -> Option<&QsoRecord> {
-        self.pending_logs.front()
+        self.pending_logs.front().map(|held| &held.record)
     }
 
     /// How many contacts are waiting BEHIND the one the popup is showing.
@@ -9097,9 +9101,9 @@ impl Engine {
     /// ruling is that no contact is lost, and a queue this deep means nobody is at the radio to
     /// answer the popup. The one the popup is showing is never the one taken: the operator is
     /// looking at it. [`PENDING_LOG_QUEUE_CAP`] is about an hour of unattended FT8 completions.
-    pub(crate) fn hold_pending_log(&mut self, rec: QsoRecord) {
+    pub(crate) fn hold_pending_log(&mut self, held: HeldQso) {
         if self.pending_logs.is_empty() {
-            self.replace_pending_log(Some(rec));
+            self.replace_pending_log(Some(held));
             self.persist_pending_qso();
             return;
         }
@@ -9111,13 +9115,13 @@ impl Engine {
                         "logged the QSO with {} WITHOUT your confirmation: the \
                          confirm-before-log queue is full, with {PENDING_LOG_QUEUE_CAP} \
                          contacts already waiting",
-                        overflow.call
+                        overflow.record.call
                     ),
                 );
-                self.log_qso(overflow);
+                self.log_qso(overflow.record);
             }
         }
-        self.pending_logs.push_back(rec);
+        self.pending_logs.push_back(held);
         self.persist_pending_qso();
     }
 
@@ -11256,24 +11260,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.pending_qso_log_key().as_deref() != Some(expected_key) {
             return false;
         }
-        let Some(mut held) = self.pending_logs.front().cloned() else {
+        let Some(was) = self.pending_logs.front().cloned() else {
             return false;
         };
-        let (was_call, was_sent, was_rcvd) = (
-            held.call.clone(),
-            held.rst_sent.clone(),
-            held.rst_rcvd.clone(),
-        );
+        let mut held = was.record.clone();
         held.call = rec.call;
         held.grid = rec.grid;
         held.rst_sent = rec.rst_sent;
         held.rst_rcvd = rec.rst_rcvd;
-        self.rederive_after_edits(
-            &mut held,
-            &was_call,
-            was_sent.as_deref(),
-            was_rcvd.as_deref(),
-        );
+        self.rederive_after_edits(&mut held, &was.record, was.grid_source);
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
         self.log_qso(held);
@@ -11290,23 +11285,42 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// NAME is whatever a lookup in THIS session answered for the new call, which is usually
     /// nothing. An unchanged call keeps everything, byte for byte.
     ///
+    /// THE GRID GOES THE SAME WAY, BUT ONLY WHEN IT WAS A LOOKUP (R2 follow-up). Of
+    /// `dx_grid_resolved`'s three sources only the first — the grid the station SENT — is
+    /// still that station's after a mis-copied call is corrected; the roster and the
+    /// previously-logged grid are keyed on the busted call, so they are a stranger's.
+    /// [`GridSource`] is what the hold recorded, because the record cannot say.
+    ///
     /// The reports have the same shape through `log_reports_to_comments`: the COMMENT is built
     /// from the reports at hold time, and the invariant it was written with is that it "can
     /// never disagree with the record". So an edited report rebuilds it — but ONLY when the
     /// comment is still exactly the one we generated, never a comment from anywhere else.
-    fn rederive_after_edits(
-        &self,
-        held: &mut QsoRecord,
-        was_call: &str,
-        was_sent: Option<&str>,
-        was_rcvd: Option<&str>,
-    ) {
+    /// Every field here follows that rule: re-derive what WE put there, never what the
+    /// operator typed.
+    ///
+    /// `held` is the edited copy about to be logged; `was` is the record as held, and `grid`
+    /// its grid's provenance.
+    fn rederive_after_edits(&self, held: &mut QsoRecord, was: &QsoRecord, grid: GridSource) {
+        let was_sent = was.rst_sent.as_deref();
+        let was_rcvd = was.rst_rcvd.as_deref();
         // The same rule `StationCore::update_qso` reads an edit with, so the two cannot
         // disagree about what a correction is: the same call in another case is not one.
-        if !held.call.trim().eq_ignore_ascii_case(was_call.trim()) {
+        if !held.call.trim().eq_ignore_ascii_case(was.call.trim()) {
             held.country = None; // `log_qso_inner` resolves it from the call it is logging
             held.state = None;
             held.name = self.callbook_name_for(&held.call);
+            // The grid only goes if it was a LOOKUP keyed on the call that turned out to be
+            // wrong — a grid the station TRANSMITTED is still that station's. And only while
+            // it is still the one we resolved: a grid the operator typed over ours is theirs,
+            // not something to re-derive (the COMMENT rule below draws the same line).
+            let stale_lookup = grid == GridSource::LookedUp
+                && match (held.grid.as_deref(), was.grid.as_deref()) {
+                    (Some(now), Some(before)) => now.trim().eq_ignore_ascii_case(before.trim()),
+                    (now, before) => now == before,
+                };
+            if stale_lookup {
+                held.grid = None;
+            }
         }
         if held.rst_sent.as_deref() != was_sent || held.rst_rcvd.as_deref() != was_rcvd {
             let ours = reports_comment(&held.mode, was_sent, was_rcvd);
@@ -11346,21 +11360,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// even if the sequence hasn't reached the final 73. Marks the QSO logged so it
     /// isn't also auto-logged on completion. Returns false outside a QSO / no DX.
     pub fn log_current_qso(&mut self) -> bool {
-        let Some(rec) = self.take_current_qso_record() else {
+        let Some(held) = self.take_current_qso_record() else {
             return false;
         };
         // Respect prompt-to-log just like auto-log.
         if self.settings.prompt_to_log {
-            self.hold_pending_log(rec);
+            self.hold_pending_log(held);
         } else {
-            self.log_qso(rec);
+            self.log_qso(held.record);
         }
         true
     }
 
     /// Shared eligibility, captured fields and write-once transition for the
     /// local Log QSO button and its remote equivalent. No transport policy here.
-    fn take_current_qso_record(&mut self) -> Option<QsoRecord> {
+    fn take_current_qso_record(&mut self) -> Option<HeldQso> {
         // Write-once: if this contact was already logged (manual double-click, or
         // it auto-logged on completion), don't log it again.
         if self.qso_logged {
@@ -11412,10 +11426,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if rx_report.is_none() && self.qso_report_sent.is_none() && !report_impossible {
             return None;
         }
+        let grid_source = GridSource::of(dxgrid.as_deref());
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
         self.qso_start_unix = None;
-        Some(rec)
+        Some(HeldQso::new(rec, grid_source))
     }
 
     /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
@@ -16331,8 +16346,10 @@ contact yourself."
                     let rec = self.rtty_qso_record(&call, &exchange);
                     if self.settings.prompt_to_log {
                         // Hold for the operator's confirm-before-log popup — behind whatever
-                        // it is already showing, never over it.
-                        self.hold_pending_log(rec);
+                        // it is already showing, never over it. An RTTY exchange carries no
+                        // grid at all (`rtty_qso_record` logs none), so there is no grid for a
+                        // corrected call to keep or drop.
+                        self.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
                     } else {
                         self.log_qso(rec);
                     }
@@ -20094,11 +20111,14 @@ contact yourself."
         }
         if let Some((dxcall, dxgrid, rx_report)) = completed {
             if self.settings.auto_log {
+                let grid_source = GridSource::of(dxgrid.as_deref());
                 let rec = self.qso_record(dxcall, dxgrid, rx_report);
                 if self.settings.prompt_to_log {
                     // Hold for the operator's confirm-before-log popup instead of writing it
-                    // silently — behind whatever it is already showing, never over it.
-                    self.hold_pending_log(rec);
+                    // silently — behind whatever it is already showing, never over it. The
+                    // hold carries where its grid came from: the popup can correct the call,
+                    // and a LOOKED-UP grid was keyed on the call that turned out to be wrong.
+                    self.hold_pending_log(HeldQso::new(rec, grid_source));
                 } else {
                     self.log_qso(rec);
                 }
@@ -20300,16 +20320,20 @@ contact yourself."
     /// box and the logged GRIDSQUARE resolve identically — they diverged before, and the
     /// operator saw a blank grid on screen for a contact that logged correctly.
     fn dx_grid_resolved(&self, dxcall: &str, dxgrid: Option<String>) -> Option<String> {
-        dxgrid
+        // Which of the three this takes is also what the confirm popup needs to know later —
+        // `GridSource::of` is the one predicate, so the hold's provenance cannot drift from
+        // what actually resolved the grid.
+        if GridSource::of(dxgrid.as_deref()) == GridSource::Transmitted {
+            return dxgrid;
+        }
+        // Both remaining sources are LOOKUPS KEYED ON `dxcall` — see `GridSource::LookedUp`
+        // for what that means once the operator corrects a busted call in the confirm popup.
+        self.app
+            .inbox
+            .roster
+            .get(dxcall)
+            .and_then(|h| h.grid.clone())
             .filter(|g| !g.trim().is_empty())
-            .or_else(|| {
-                self.app
-                    .inbox
-                    .roster
-                    .get(dxcall)
-                    .and_then(|h| h.grid.clone())
-                    .filter(|g| !g.trim().is_empty())
-            })
             .or_else(|| {
                 // Third and last: a grid we LOGGED for this station before. The session roster
                 // only remembers stations heard since launch, so a station worked on a previous
@@ -34783,6 +34807,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// …and WHERE EACH GRID CAME FROM has to come back with it. A restored hold whose
+    /// provenance was forgotten would drop a transmitted grid on the first corrected call, so
+    /// the journal records it. A journal written by an older build records nothing, and those
+    /// come back as lookups — the safe way round: a missing grid can be filled in later, a
+    /// wrong one is exported and uploaded.
+    #[test]
+    fn a_restored_hold_remembers_where_its_grid_came_from() {
+        let dir = std::env::temp_dir().join(format!("nexus-pendinggrid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("pending_qso.json");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.set_pending_qso_path(path.clone());
+        e.call_station("EA3ABC");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC IM12", -7)], 3); // their grid, on the air
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC -10", -7)], 5);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC RR73", -7)], 7);
+        drop(e); // the crash: nothing but the journal survives
+
+        let text = std::fs::read_to_string(&path).expect("journal readable after the crash");
+        assert!(
+            text.contains("\"gridSource\":\"transmitted\""),
+            "the journal has to carry what the record cannot say: {text}"
+        );
+        let mut relaunched = Engine::new("K2DEF", "FN31", 0);
+        let mut sent = restored_hold_corrected_to_ea8(&mut relaunched, &text);
+        assert_eq!(
+            sent.grid.as_deref(),
+            Some("IM12"),
+            "the grid EA8ABC sent survives the restart AND the correction"
+        );
+
+        // THE OTHER DIRECTION: the same journal from a build that recorded no provenance.
+        let legacy = text.replace(",\"gridSource\":\"transmitted\"", "");
+        assert!(!legacy.contains("gridSource"), "a pre-provenance journal");
+        let mut older = Engine::new("K2DEF", "FN31", 0);
+        sent = restored_hold_corrected_to_ea8(&mut older, &legacy);
+        assert_eq!(
+            sent.grid, None,
+            "a grid nobody vouched for goes with the busted call"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Restore `journal` into `e`, confirm the hold it brings back with the call corrected to
+    /// EA8ABC, and hand back the record that reached the log.
+    fn restored_hold_corrected_to_ea8(e: &mut Engine, journal: &str) -> QsoRecord {
+        e.load_pending_qso_json(journal);
+        let mut sent = e.snapshot().pending_log.expect("the hold comes back");
+        sent.call = "EA8ABC".into();
+        assert!(confirm_held(e, sent.into()));
+        e.get_log()[0].clone()
+    }
+
     #[test]
     fn a_full_hold_queue_logs_the_oldest_waiting_contact_rather_than_losing_it() {
         // The bound exists so an operator who walked away cannot grow the queue without limit.
@@ -34791,12 +34869,14 @@ mod tests {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.settings.prompt_to_log = true;
         for i in 0..PENDING_LOG_QUEUE_CAP {
-            e.hold_pending_log(e.qso_record(format!("W9A{i}"), None, None));
+            let rec = e.qso_record(format!("W9A{i}"), None, None);
+            e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
         }
         assert_eq!(e.pending_logs_waiting(), PENDING_LOG_QUEUE_CAP - 1);
         assert!(e.get_log().is_empty(), "the queue is holding, not logging");
 
-        e.hold_pending_log(e.qso_record("K1NEW".into(), None, None));
+        let newest = e.qso_record("K1NEW".into(), None, None);
+        e.hold_pending_log(HeldQso::new(newest, GridSource::LookedUp));
         assert_eq!(
             e.pending_log().map(|q| q.call.as_str()),
             Some("W9A0"),
@@ -34869,6 +34949,88 @@ mod tests {
                 assert_eq!(logged.name, held.name);
             }
         }
+    }
+
+    /// ⭐ R2 follow-up (operator review, 2026-09-19) — THE GRID GOES THE SAME WAY, SPLIT BY
+    /// PROVENANCE. `dx_grid_resolved` has three sources. The first is the grid the station
+    /// itself SENT in the decode: mis-copying its CALL does not make that grid wrong. The
+    /// other two — the session roster, then a grid logged for that call before — are LOOKUPS
+    /// KEYED ON THE CALL, so on a corrected call they are another station's grid and must go
+    /// the way COUNTRY and NAME go.
+    ///
+    /// The two scenes below differ by ONE DECODE: the same station, the same grid string, the
+    /// same earlier CQ in the roster. In one, EA3ABC answers our call with its grid — that
+    /// grid came off the air. In the other the whole contact is a bare report exchange, and
+    /// the grid on the record can only have come from the roster.
+    #[test]
+    fn a_corrected_call_keeps_a_transmitted_grid_and_drops_a_looked_up_one() {
+        for transmitted in [true, false] {
+            for correct in [true, false] {
+                let mut e = Engine::new("K2DEF", "FN31", 0);
+                e.settings.prompt_to_log = true;
+                // Heard either way: this is what fills the session roster.
+                e.ingest_decodes_for_test(&[dec_snr("CQ EA3ABC IM12", -7)], 1);
+                e.call_station("EA3ABC");
+                if transmitted {
+                    // The standard FT8 answer to our call carries their grid.
+                    e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC IM12", -7)], 3);
+                }
+                e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC -10", -7)], 5);
+                e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC RR73", -7)], 7);
+
+                let held = e.pending_log().cloned().expect("held for confirm");
+                assert_eq!(
+                    held.grid.as_deref(),
+                    Some("IM12"),
+                    "precondition: the hold shows the same grid either way ({transmitted})"
+                );
+
+                let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+                if correct {
+                    sent.call = "EA8ABC".into();
+                }
+                assert!(confirm_held(&mut e, sent.into()));
+
+                let logged = &e.get_log()[0];
+                match (transmitted, correct) {
+                    (true, true) => assert_eq!(
+                        logged.grid.as_deref(),
+                        Some("IM12"),
+                        "EA8ABC sent this grid itself — the busted CALL is what was wrong"
+                    ),
+                    (false, true) => assert_eq!(
+                        logged.grid, None,
+                        "that grid was looked up under EA3ABC, and EA3ABC is not who we worked"
+                    ),
+                    // CONTROL: no correction, so nothing is stale and the grid stands.
+                    (_, false) => assert_eq!(logged.grid.as_deref(), Some("IM12")),
+                }
+            }
+        }
+    }
+
+    /// …and a grid the OPERATOR typed over ours is theirs: correcting the call in the same
+    /// confirm must not throw it away. The COMMENT rule's shape — re-derive only what is
+    /// still exactly what we resolved.
+    #[test]
+    fn a_corrected_call_keeps_the_grid_the_operator_typed() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.ingest_decodes_for_test(&[dec_snr("CQ EA3ABC IM12", -7)], 1);
+        e.call_station("EA3ABC"); // the grid can only come from the roster
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC -10", -7)], 5);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC RR73", -7)], 7);
+
+        let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+        sent.call = "EA8ABC".into();
+        sent.grid = Some("IL18".into()); // …and the operator knows where EA8ABC is
+        assert!(confirm_held(&mut e, sent.into()));
+
+        assert_eq!(
+            e.get_log()[0].grid.as_deref(),
+            Some("IL18"),
+            "the operator's own grid is not a stale lookup"
+        );
     }
 
     /// The same shape through `log_reports_to_comments`: the COMMENT is built from the reports
