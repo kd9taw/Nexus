@@ -1886,6 +1886,7 @@ export const FR: PartialCatalog = {
   "logbook.delete.heading": "Supprimer le QSO avec {{call}} sur {{band}} ?",
   "logbook.empty": "Aucun contact enregistré pour l'instant.",
   "logbook.emptySearch": "Aucun contact ne correspond à “{{query}}”.",
+  "logbook.export.rangeInvalid": "Saisissez la plage en dates UTC ({{date}}), ou laissez les champs vides pour tout le journal.",
   "logbook.export.adif.label": "Exporter ADIF",
   "logbook.export.adif.title": "Enregistrer tout le journal en fichier ADIF dans votre dossier Téléchargements",
   "logbook.export.adif.titleRange": "Enregistrer la plage de dates choisie en fichier ADIF dans votre dossier Téléchargements",

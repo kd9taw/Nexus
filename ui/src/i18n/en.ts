@@ -946,6 +946,8 @@ export const EN = {
     'Export only QSOs on/after this UTC date (empty = from the beginning)',
   'logbook.export.to.label': 'to',
   'logbook.export.to.title': 'Export only QSOs on/before this UTC date (empty = to the end)',
+  'logbook.export.rangeInvalid':
+    'Enter the date range in UTC ({{date}}), or leave the boxes blank for the whole log.',
   'logbook.export.adif.label': 'Export ADIF',
   'logbook.export.adif.title': 'Save the whole logbook as an ADIF file in your Downloads folder',
   'logbook.export.adif.titleRange':

@@ -655,6 +655,7 @@ export const JA: PartialCatalog = {
   "logbook.export.from.title": "このUTC日付以降のQSOのみエクスポート（空欄＝最初から）",
   "logbook.export.to.label": "終了",
   "logbook.export.to.title": "このUTC日付以前のQSOのみエクスポート（空欄＝最後まで）",
+  "logbook.export.rangeInvalid": "期間はUTCの日付（{{date}}）で入力するか、ログ全体なら両方を空欄にしてください。",
   "logbook.export.adif.label": "ADIFをエクスポート",
   "logbook.export.adif.title": "ログブック全体をADIFファイルとしてダウンロードフォルダーに保存",
   "logbook.export.adif.titleRange": "選択した日付範囲をADIFファイルとしてダウンロードフォルダーに保存",

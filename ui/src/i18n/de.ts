@@ -1816,6 +1816,7 @@ export const DE: PartialCatalog = {
   "logbook.export.from.title": "Nur QSOs ab diesem UTC-Datum exportieren (leer = ab Beginn)",
   "logbook.export.to.label": "bis",
   "logbook.export.to.title": "Nur QSOs bis einschließlich diesem UTC-Datum exportieren (leer = bis zum Ende)",
+  "logbook.export.rangeInvalid": "Zeitraum als UTC-Datum ({{date}}) eingeben oder die Felder für das ganze Log leer lassen.",
   "logbook.export.adif.label": "ADIF exportieren",
   "logbook.export.adif.title": "Das gesamte Logbuch als ADIF-Datei im Downloads-Ordner speichern",
   "logbook.export.adif.titleRange": "Den gewählten Datumsbereich als ADIF-Datei im Downloads-Ordner speichern",

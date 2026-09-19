@@ -578,6 +578,12 @@ export function Logbook({
   // The same for the date box — a day that does not exist (2026-02-30) is refused, not rolled
   // forward, and the operator keeps what they typed instead of watching the box blank itself.
   const whenDateBad = draft.whenDate.trim() !== '' && parseUtcDate(draft.whenDate) === null
+  // …and for the export range below. A bound that is not a date HOLDS the export: the backend
+  // reads an unparseable bound as no bound, so running anyway would hand over the whole log
+  // where a slice was meant — for a file that goes to an awards submission or an upload.
+  const exportFromBad = exportFrom.trim() !== '' && parseUtcDate(exportFrom) === null
+  const exportToBad = exportTo.trim() !== '' && parseUtcDate(exportTo) === null
+  const exportRangeBad = exportFromBad || exportToBad
 
   // Open the form pre-filled to correct an existing entry (busted call, wrong band…).
   const startEdit = (q: LoggedQso, i: number) => {
@@ -1288,25 +1294,33 @@ export function Logbook({
           <label className="log-export-range" title={t('logbook.export.from.title')}>
             <span>{t('logbook.export.from.label')}</span>
             <input
-              type="date"
-              className="settings-input log-export-date"
+              className={`settings-input mono log-export-date${exportFromBad ? ' invalid' : ''}`}
               value={exportFrom}
               onChange={(e) => setExportFrom(e.target.value)}
+              placeholder={UTC_DATE_FORMAT}
+              maxLength={10}
+              spellCheck={false}
+              autoComplete="off"
+              aria-invalid={exportFromBad}
             />
           </label>
           <label className="log-export-range" title={t('logbook.export.to.title')}>
             <span>{t('logbook.export.to.label')}</span>
             <input
-              type="date"
-              className="settings-input log-export-date"
+              className={`settings-input mono log-export-date${exportToBad ? ' invalid' : ''}`}
               value={exportTo}
               onChange={(e) => setExportTo(e.target.value)}
+              placeholder={UTC_DATE_FORMAT}
+              maxLength={10}
+              spellCheck={false}
+              autoComplete="off"
+              aria-invalid={exportToBad}
             />
           </label>
           <button
             type="button"
             className="export-btn"
-            disabled={log.length === 0}
+            disabled={log.length === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
                 const text = await exportGeneralLog('adif', exportFrom, exportTo)
@@ -1318,9 +1332,11 @@ export function Logbook({
               }, t('logbook.export.failed'))
             }
             title={
-              exportFrom || exportTo
-                ? t('logbook.export.adif.titleRange')
-                : t('logbook.export.adif.title')
+              exportRangeBad
+                ? t('logbook.export.rangeInvalid', { date: UTC_DATE_FORMAT })
+                : exportFrom || exportTo
+                  ? t('logbook.export.adif.titleRange')
+                  : t('logbook.export.adif.title')
             }
           >
             {t('logbook.export.adif.label')}
@@ -1421,7 +1437,7 @@ export function Logbook({
           <button
             type="button"
             className="export-btn"
-            disabled={log.length === 0}
+            disabled={log.length === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
                 const text = await exportGeneralLog('csv', exportFrom, exportTo)
@@ -1433,9 +1449,11 @@ export function Logbook({
               }, t('logbook.export.failed'))
             }
             title={
-              exportFrom || exportTo
-                ? t('logbook.export.csv.titleRange')
-                : t('logbook.export.csv.title')
+              exportRangeBad
+                ? t('logbook.export.rangeInvalid', { date: UTC_DATE_FORMAT })
+                : exportFrom || exportTo
+                  ? t('logbook.export.csv.titleRange')
+                  : t('logbook.export.csv.title')
             }
           >
             {t('logbook.export.csv.label')}
