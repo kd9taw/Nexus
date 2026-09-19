@@ -1,10 +1,11 @@
 import type { Settings, RadioProgProject } from '../types'
-import { SETTINGS_KEYS, SETTINGS_SHAPES, STATION_LOCAL_SETTINGS_KEYS, WITHHELD_RADIO_KEYS, WITHHELD_SETTINGS_KEYS } from './configuration-schema'
+import { NEWER_SETTINGS, SETTINGS_KEYS, SETTINGS_SHAPES, STATION_LOCAL_SETTINGS_KEYS, WITHHELD_RADIO_KEYS, WITHHELD_SETTINGS_KEYS } from './configuration-schema'
 import { finite, integer, object, openObject, text } from './display-validation'
 export type SettingsConfiguration = {settings:Record<string,unknown>;withheld:readonly string[];revision:string;platform:'linux'|'windows'|'macos'}
 export type ProgrammingConfiguration = {mygrid:string;projects:RadioProgProject[];revision:string;saved:boolean}
 const bad=():never=>{throw new Error('invalidConfiguration')}
 const revision=(v:unknown)=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v)
+const newer=(key:string)=>Object.prototype.hasOwnProperty.call(NEWER_SETTINGS,key)
 export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):SettingsConfiguration|ProgrammingConfiguration {
   if(kind==='settings'){
     // Still CLOSED - an unexpected top-level key is refused - but `radioWithheld` is allowed when
@@ -14,8 +15,9 @@ export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):Se
     const v=object(raw,['settings','withheld','revision','platform',
       ...(raw&&typeof raw==='object'&&Object.prototype.hasOwnProperty.call(raw,'radioWithheld')?['radioWithheld']:[])])
     // Tolerates a setting this browser has not heard of, so a station one release ahead is not
-    // refused wholesale; every key we DO know must still be present and correctly typed.
-    const values=openObject(v.settings,[...SETTINGS_KEYS])
+    // refused wholesale; every key we DO know must still be present and correctly typed - except a
+    // setting newer than a station still in the field (NEWER_SETTINGS), which that station never had.
+    const values=openObject(v.settings,SETTINGS_KEYS.filter(key=>!newer(key)))
     // The credential proof, stated rather than inferred. It used to rest on the key COUNT being
     // exact, which caught a leak only as arithmetic; now a withheld key appearing in the payload
     // is refused because it is withheld.
@@ -48,6 +50,8 @@ export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):Se
     for(const radio of values.radios as Record<string,unknown>[])
       if(radioSecret.some(k=>Object.prototype.hasOwnProperty.call(radio,k)))bad()
     for(const [key,shape]of Object.entries(SETTINGS_SHAPES)){
+      // Only a newer setting can be absent here (openObject required the rest); one that is sent is checked.
+      if(newer(key)&&!Object.prototype.hasOwnProperty.call(values,key))continue
       const value=values[key]
       if(value===null&&shape.startsWith('nullable-'))continue
       const type=shape.replace('nullable-','')
@@ -75,7 +79,9 @@ export function parseConfiguration(raw:unknown,kind:'settings'|'programming'):Se
 }
 /** The native form expects these fields structurally. They are not station
  * values: their account/backup sections are replaced by a station-managed note,
- * and all station writes are disabled. Never submit this adapter's output. */
+ * and all station writes are disabled. Never submit this adapter's output.
+ * A newer setting the station did not send shows what that station does
+ * (NEWER_SETTINGS); one it did send is never overridden. */
 export function settingsForm(doc:SettingsConfiguration):Settings {
-  return {...doc.settings,...Object.fromEntries(WITHHELD_SETTINGS_KEYS.map(k=>[k,k==='voiceMessages'?[]:''])),...Object.fromEntries(STATION_LOCAL_SETTINGS_KEYS.map(k=>[k,k==='contestEmail'?'':false]))} as unknown as Settings
+  return {...NEWER_SETTINGS,...doc.settings,...Object.fromEntries(WITHHELD_SETTINGS_KEYS.map(k=>[k,k==='voiceMessages'?[]:''])),...Object.fromEntries(STATION_LOCAL_SETTINGS_KEYS.map(k=>[k,k==='contestEmail'?'':false]))} as unknown as Settings
 }

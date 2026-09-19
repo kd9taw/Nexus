@@ -1,8 +1,9 @@
 import {expect,it} from 'vitest'
 import settings from './__fixtures__/configuration-settings.json'
 import programming from './__fixtures__/configuration-programming.json'
+import keysOf1130 from './__fixtures__/settings-keys-1.13.0.json'
 import {parseConfiguration,settingsForm,type SettingsConfiguration} from './configuration'
-import {SETTINGS_KEYS,STATION_LOCAL_SETTINGS_KEYS,WITHHELD_RADIO_KEYS,WITHHELD_SETTINGS_KEYS,WRITABLE_CONTROL_SETTINGS_KEYS,WRITABLE_LOGGING_SETTINGS_KEYS} from './configuration-schema'
+import {NEWER_SETTINGS,SETTINGS_KEYS,STATION_LOCAL_SETTINGS_KEYS,WITHHELD_RADIO_KEYS,WITHHELD_SETTINGS_KEYS,WRITABLE_CONTROL_SETTINGS_KEYS,WRITABLE_LOGGING_SETTINGS_KEYS} from './configuration-schema'
 it('accepts the native serialized station choices and excludes account fields instead of supplying defaults',()=>{
   const parsed=parseConfiguration(structuredClone(settings),'settings') as SettingsConfiguration
   expect(parsed.settings.mycall).toBe('W1AW');expect(parsed.settings.mygrid).toBe('FN31RX09')
@@ -11,7 +12,8 @@ it('accepts the native serialized station choices and excludes account fields in
   const adapted=settingsForm(parsed)
   expect(adapted.mycall).toBe('W1AW');expect(adapted.voiceMessages).toEqual([])
   for(const change of [{settings:{...settings.settings,clublogApiKey:'private'}},{withheld:[]},{revision:'current'},{platform:'browser'},{settings:{...settings.settings,radios:'unknown'}}])expect(()=>parseConfiguration({...settings,...change},'settings')).toThrow()
-  for(const key of SETTINGS_KEYS){const broken=structuredClone(settings) as unknown as {settings:Record<string,unknown>};delete broken.settings[key];expect(()=>parseConfiguration(broken,'settings')).toThrow()}
+  // Every key but the newer settings an older station never had (their own test is below).
+  for(const key of SETTINGS_KEYS.filter(k=>!Object.prototype.hasOwnProperty.call(NEWER_SETTINGS,k))){const broken=structuredClone(settings) as unknown as {settings:Record<string,unknown>};delete broken.settings[key];expect(()=>parseConfiguration(broken,'settings')).toThrow()}
 })
 it('retains all 1200 saved channels with exact metadata and fails closed on malformed or oversized project lists',()=>{
   expect(parseConfiguration(structuredClone(programming),'programming')).toEqual(programming)
@@ -62,6 +64,60 @@ it('accepts an older station that predates the contest email field', () => {
   const leaked = structuredClone(settings) as {settings: Record<string, unknown>}
   leaked.settings.contestEmail = 'op@example.com'
   expect(() => parseConfiguration(leaked, 'settings')).toThrow()
+})
+
+// A 1.13.0 station predates two settings this page knows: automatic cluster-node choice and the
+// login SSID. The page required every key it knew, so the relay deploy that carries it would have
+// refused the whole settings document of every station still on 1.13.0 over two fields it never had.
+// It is accepted, and the form describes what that station actually does: it connects to its node
+// list as written, and logs in with the bare callsign.
+it('accepts a 1.13.0 station, which predates the cluster node choice and the login SSID', () => {
+  const older = structuredClone(settings) as unknown as {settings: Record<string, unknown>}
+  for (const key of ['clusterNodesAuto', 'clusterSsid']) {
+    expect(older.settings, `positive control: the fixture sends ${key}`).toHaveProperty(key)
+    delete older.settings[key]
+  }
+  const parsed = parseConfiguration(older, 'settings') as SettingsConfiguration
+  // The document stays what the station sent; only the form fills the gap.
+  expect(parsed.settings).not.toHaveProperty('clusterNodesAuto')
+  const form = settingsForm(parsed)
+  expect(form.clusterNodesAuto).toBe(false)
+  expect(form.clusterSsid).toBe('')
+})
+
+// The tolerance is for ABSENCE, of those settings only. A station that sends one is read exactly as
+// before: its own value, type-checked, never replaced by the stand-in.
+it('still type-checks a newer setting that a station sends, and never replaces its value', () => {
+  for (const [key, value] of [['clusterSsid', 2], ['clusterSsid', null], ['clusterNodesAuto', 'yes'], ['clusterNodesAuto', null]] as const) {
+    const malformed = structuredClone(settings) as unknown as {settings: Record<string, unknown>}
+    malformed.settings[key] = value
+    expect(() => parseConfiguration(malformed, 'settings'), `${key}: ${JSON.stringify(value)}`).toThrow('invalidConfiguration')
+  }
+  const current = structuredClone(settings) as unknown as {settings: Record<string, unknown>}
+  current.settings.clusterSsid = '7'
+  expect(current.settings.clusterNodesAuto, 'positive control: the station value differs from the stand-in').toBe(true)
+  const parsed = parseConfiguration(current, 'settings') as SettingsConfiguration
+  expect(parsed).toEqual(current)
+  expect(settingsForm(parsed).clusterNodesAuto).toBe(true)
+  expect(settingsForm(parsed).clusterSsid).toBe('7')
+})
+
+// THE GATE FOR THE NEXT ONE. A relay deploy reaches every station at once, and each station updates
+// on its own time, so a setting added to SETTINGS_KEYS is one that stations in the field do not send.
+// Each must be in NEWER_SETTINGS, with the value that says what such a station does. The frozen list
+// is the 1.13.0 station's own projection (SETTINGS_KEYS in query/configuration.rs at v1.13.0), the
+// oldest station this page serves.
+it('lets a station omit exactly the settings newer than 1.13.0, and none of them is writable', () => {
+  expect(keysOf1130.length, 'positive control: the frozen 1.13.0 list is really read').toBe(272)
+  expect(SETTINGS_KEYS.filter(key => !keysOf1130.includes(key)).sort()).toEqual(Object.keys(NEWER_SETTINGS).sort())
+  // Each stand-in is a value a station could send: a document carrying them all parses.
+  const standIns = structuredClone(settings) as unknown as {settings: Record<string, unknown>}
+  Object.assign(standIns.settings, NEWER_SETTINGS)
+  expect(() => parseConfiguration(standIns, 'settings')).not.toThrow()
+  // None is writable, so no edit is offered for a key the station did not report, and a stand-in can
+  // never be counted as a change and sent to a station that does not have the setting.
+  const writable: readonly string[] = [...WRITABLE_CONTROL_SETTINGS_KEYS, ...WRITABLE_LOGGING_SETTINGS_KEYS]
+  expect(Object.keys(NEWER_SETTINGS).filter(key => writable.includes(key))).toEqual([])
 })
 
 // RADIO_WITHHELD_KEYS is empty today, so this pins the mechanism rather than a current secret: the

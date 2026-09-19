@@ -304,6 +304,19 @@ export const STATION_LOCAL_SETTINGS_KEYS = [
   'remoteAutostartOfferAnswered',
   'contestEmail',
 ] as const
+/** Settings newer than the oldest station this page serves (1.13.0), each with the value that says
+ *  what a station without it does. The hosted page is deployed ahead of every station in the field,
+ *  and requiring a key a station never had refuses that station's whole settings document. Such a
+ *  station may omit exactly these, and the form shows this value in their place; a key that IS sent
+ *  is type-checked as ever, and every other known key must still be present. configuration.test.ts
+ *  holds this list to the keys a 1.13.0 station does not send, and holds that none is writable - so
+ *  no edit is ever offered for a key the station did not report. */
+export const NEWER_SETTINGS = {
+  // A 1.13.0 station connects to its node list as written: it has no automatic choice.
+  clusterNodesAuto: false,
+  // It logs in with the bare callsign.
+  clusterSsid: '',
+} as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
  *  browser can refuse a document that carries one anyway. CI pins it to the Rust list. */
