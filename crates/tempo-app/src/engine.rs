@@ -2651,6 +2651,16 @@ pub struct Engine {
     /// (it doesn't need one). Running the tuner KEYS THE TRANSMITTER, so it gets its own request
     /// path behind [`Self::atu_tune_gate`] and must never become reachable from that generic one.
     rig_tuner: Option<bool>,
+    /// ⭐ Whether an ATU press on THIS CAT path can actually start a tune-up, or only switch the
+    /// tuner in line. `true` until the radio loop's probe says otherwise, so an unknown or
+    /// unprobed radio behaves exactly as it did before this existed.
+    ///
+    /// Hamlib's Icom and Kenwood backends clamp `set_func TUNER 2` to 1 (see
+    /// `rigmodels::hamlib_atu_start_tune_reaches` for the source lines), and answer `RPRT 0`
+    /// while doing it — so the press looked accepted, the radio tuned nothing, and (#322 / R4)
+    /// the Digital section stood down for a tune-up that never happened. Operator ruling
+    /// (2026-09-19): "Say it can't, add it natively."
+    rig_atu_start_tune: bool,
     /// A pending "run the rig's own ATU tune-up" request from the operator — the Unix second it
     /// was pressed. Drained by the radio loop via [`Self::take_atu_tune`], which RE-RUNS the TX
     /// gate and enforces [`ATU_REQUEST_MAX_AGE_SECS`] before anything keys.
@@ -4516,6 +4526,7 @@ impl Engine {
             rig_refused_dial_mhz: None,
             pending_func: [None; 6],
             rig_tuner: None,
+            rig_atu_start_tune: true,
             pending_atu_tune: None,
             rig_passband: None,
             pending_passband: None,
@@ -8522,8 +8533,13 @@ impl Engine {
 
     /// Adopt the radio's antenna-tuner capability + state from the loop's probe (`None` = the rig
     /// does not report `TUNER`, so the ATU control disappears).
-    pub fn observe_rig_tuner(&mut self, state: Option<bool>) {
+    ///
+    /// `start_tune` is the second half of that capability: whether the CAT path can START a
+    /// tune-up at all, or only switch the tuner in line ([`Self::rig_atu_start_tune`]). Only the
+    /// loop knows — it owns the connection — so it is told here, beside the state it probed.
+    pub fn observe_rig_tuner(&mut self, state: Option<bool>, start_tune: bool) {
         self.rig_tuner = state;
+        self.rig_atu_start_tune = start_tune;
     }
 
     /// Drop the tuner capability (→ the ATU control hides) on a breaker trip — the same reason as
@@ -8531,6 +8547,7 @@ impl Engine {
     /// and this one offers the operator a button that keys their transmitter.
     pub fn clear_rig_tuner(&mut self) {
         self.rig_tuner = None;
+        self.rig_atu_start_tune = true; // unknown again, and unknown means "as it always was"
     }
 
     /// ⚠️ THE ATU TX GATE. Running the radio's built-in antenna tuner **KEYS THE TRANSMITTER** —
@@ -8547,6 +8564,18 @@ impl Engine {
         if self.rig_tuner.is_none() {
             return Err(
                 "This radio doesn't report an antenna tuner over CAT — nothing to run".to_string(),
+            );
+        }
+        // ⭐ Operator ruling (2026-09-19): "Say it can't, add it natively." On Hamlib's Icom and
+        // Kenwood backends `set_func TUNER 2` is clamped to "tuner in line" and still answers
+        // `RPRT 0`, so letting the press through would switch the tuner in, tune nothing, and —
+        // because the radio "took" it — stand the Digital section down mid-QSO (#322 / R4). The
+        // UI disables the button; this is the other half, for Remote and for a stale window.
+        if !self.rig_atu_start_tune {
+            return Err(
+                "This radio's tuner can't be started over this CAT connection — press TUNER on \
+                 the radio itself"
+                    .to_string(),
             );
         }
         if !self.tx_enabled {
@@ -17881,6 +17910,7 @@ contact yourself."
         s.radio.manual_notch = self.rig_funcs[5];
         // The rig's own ATU: None = no tuner reported → the UI offers no ATU control at all.
         s.radio.atu = self.rig_tuner;
+        s.radio.atu_start_tune_unsupported = !self.rig_atu_start_tune;
         s.radio.filter_width_hz = self.rig_passband;
         s.radio.rit_hz = self.rit_hz;
         s.radio.xit_hz = self.xit_hz;
@@ -23908,7 +23938,7 @@ mod tests {
     /// ATU button is offered in.
     fn atu_engine() -> Engine {
         let mut e = phone_armed_engine();
-        e.observe_rig_tuner(Some(true));
+        e.observe_rig_tuner(Some(true), true);
         e.atu_tune_gate()
             .expect("scene guard: an armed, in-privileges, idle rig with a tuner may run it");
         e
@@ -23932,7 +23962,7 @@ mod tests {
             "the refusal must say the radio has no tuner, got: {err}"
         );
 
-        e.observe_rig_tuner(Some(false));
+        e.observe_rig_tuner(Some(false), true);
         assert_eq!(
             e.snapshot().radio.atu,
             Some(false),
@@ -45557,7 +45587,7 @@ mod tests {
         e.set_tx_enabled(true);
         e.call_station("W9XYZ");
         let slot = cap_a_directed_call(&mut e, 2);
-        e.observe_rig_tuner(Some(true));
+        e.observe_rig_tuner(Some(true), true);
 
         e.atu_tune()
             .expect("an armed, idle rig with a tuner may run it");
@@ -45594,7 +45624,7 @@ mod tests {
             let mut e = Engine::new("K2DEF", "FN31", 0);
             e.settings.operating_mode = mode;
             e.set_tx_enabled(true);
-            e.observe_rig_tuner(Some(true));
+            e.observe_rig_tuner(Some(true), true);
             e.atu_tune()
                 .unwrap_or_else(|why| panic!("{mode:?}: precondition — ATU accepted: {why}"));
             assert!(
@@ -45619,7 +45649,7 @@ mod tests {
         let hits = Cell::new(0u32);
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.set_tx_enabled(true);
-        e.observe_rig_tuner(Some(true));
+        e.observe_rig_tuner(Some(true), true);
         e.atu_tune().expect("an armed, idle rig with a tuner");
 
         assert!(
@@ -45639,6 +45669,61 @@ mod tests {
             "an accepted tune-up stands the sequencer down"
         );
         assert_eq!(hits.get(), 1, "…and drops the a7 table");
+    }
+
+    /// ⭐ THE ATU BUTTON ON A PATH THAT CANNOT START A TUNE (operator ruling, 2026-09-19:
+    /// "Say it can't, add it natively"). Hamlib's Icom and Kenwood backends clamp
+    /// `set_func TUNER 2` to "switch the tuner in line" and answer `RPRT 0` — so before this,
+    /// an ATU press there switched the tuner in, tuned nothing, and (because the radio "took"
+    /// it) stood the Digital section down mid-QSO. The gate refuses it instead, with a reason
+    /// that names the rig's own TUNER button, and the snapshot says so before the press.
+    #[test]
+    fn an_atu_press_is_refused_where_the_cat_path_cannot_start_a_tune() {
+        for can_start in [true, false] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.set_tx_enabled(true);
+            e.observe_rig_tuner(Some(false), can_start);
+
+            let snap = e.snapshot();
+            assert_eq!(
+                snap.radio.atu,
+                Some(false),
+                "the rig has a tuner either way, so the control stays"
+            );
+            assert_eq!(snap.radio.atu_start_tune_unsupported, !can_start);
+
+            match e.atu_tune() {
+                Ok(()) => assert!(can_start, "CONTROL: a path that can tune is not refused"),
+                Err(why) => {
+                    assert!(
+                        !can_start,
+                        "a path that can tune must not be refused: {why}"
+                    );
+                    assert!(
+                        why.contains("TUNER on the radio itself"),
+                        "the refusal has to say what to do instead — got {why:?}"
+                    );
+                }
+            }
+            assert!(
+                e.take_atu_tune() == can_start,
+                "nothing may reach the radio from a refused press"
+            );
+        }
+    }
+
+    /// A CAT drop clears the tuner capability, and with it this one: the next radio is unknown
+    /// again, and unknown has to mean "as it always was" or a Yaesu would come back disabled.
+    #[test]
+    fn a_cat_drop_forgets_that_the_tuner_could_not_be_started() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.observe_rig_tuner(Some(true), false);
+        assert!(e.snapshot().radio.atu_start_tune_unsupported);
+        e.clear_rig_tuner();
+        assert!(
+            !e.snapshot().radio.atu_start_tune_unsupported,
+            "a stale can't-tune must not follow the operator to the next radio"
+        );
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════

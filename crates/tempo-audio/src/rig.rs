@@ -143,6 +143,13 @@ pub fn func_line(func: &str, value: u8) -> String {
 /// So this is a real fix on Yaesu and a no-op everywhere else — never a new behaviour on a
 /// radio that was working.
 ///
+/// ⭐ AND SINCE 1.14 IT IS NOT EVEN SENT THERE (operator ruling, 2026-09-19: "Say it can't,
+/// add it natively"). A no-op the rig ACKs is worse than it looks — the ATU button switched
+/// the tuner in line, tuned nothing, and the Digital section stood down for it (#322 / R4) —
+/// so [`crate::rigmodels::hamlib_atu_start_tune_reaches`] answers the capability from the
+/// model, the engine's ATU gate refuses the press, and the cockpit disables the button with a
+/// reason. The native Icom (CI-V) path is where those rigs get a real tune-up.
+///
 /// ⚠️ NEEDS BENCH (no rig on this machine). What is verified here is the BYTES: that Nexus
 /// sends `U TUNER 2` and that Hamlib carries the 2 to the backend unclamped. What is NOT
 /// verified is the FTDX10 actually starting a tune-up cycle in response to `AC002`, and

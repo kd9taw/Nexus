@@ -98,4 +98,24 @@ describe("the rig's own ATU control", () => {
     atuButton()?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(fired).toHaveBeenCalledTimes(1)
   })
+
+  // ⭐ Operator ruling (2026-09-19): "Say it can't, add it natively." On Hamlib's Icom and
+  // Kenwood backends the start-tune command is clamped to "switch the tuner in line", so the
+  // press tunes nothing. The button STAYS — the tuner and its in-line state are real, and this
+  // is where the operator reads them — and says what to do instead.
+  it('stays, disabled and explaining itself, where the CAT path cannot start a tune', () => {
+    mount(snapWith({ atu: true, atuStartTuneUnsupported: true }))
+    const atu = atuButton()
+    expect(atu).toBeTruthy()
+    expect(atu?.hasAttribute('disabled')).toBe(true)
+    expect(atu?.getAttribute('title')).toContain('TUNER on the radio itself')
+    // …and it still reports the tuner state, which is the other thing this button is for.
+    expect(atu?.getAttribute('title')).toContain('switched in')
+
+    // CONTROL: the same radio on a path that CAN start a tune is live, with no such warning.
+    cleanup()
+    mount(snapWith({ atu: true }))
+    expect(atuButton()?.hasAttribute('disabled')).toBe(false)
+    expect(atuButton()?.getAttribute('title')).not.toContain('TUNER on the radio itself')
+  })
 })

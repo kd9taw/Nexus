@@ -259,18 +259,23 @@ export function OperateQsoStrip({
           >
             Tune
           </button>
+          {/* ⭐ DISABLED, NOT HIDDEN, when this CAT path cannot START a tune — see the same
+              button in `CockpitHeader` for why (Hamlib's Icom and Kenwood backends clamp
+              `set_func TUNER 2` to "tuner in line"; `icom.c:7085`). */}
           {onAtuTune && radio.atu != null && (
             <button
               type="button"
               className="op-btn atu"
               onClick={onAtuTune}
-              disabled={!control || (noTx)}
+              disabled={!control || noTx || !!radio.atuStartTuneUnsupported}
               title={
                 noTx
                   ? noTxWhy
-                  : radio.atu
-                  ? "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is switched in."
-                  : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is currently bypassed."
+                  : `${
+                      radio.atuStartTuneUnsupported
+                        ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
+                        : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
+                    } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`
               }
             >
               ATU

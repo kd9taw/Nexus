@@ -336,6 +336,13 @@ export function CockpitHeader({
                 other refusal (TX off, transmitter busy) comes back from the backend WITH ITS REASON
                 and is shown, because a control that keys the transmitter must never fail silently.
 
+                ⭐ DISABLED, NOT HIDDEN, when this CAT path cannot START a tune (Hamlib's Icom and
+                Kenwood backends clamp `set_func TUNER 2` to "tuner in line" — `icom.c:7085`). The
+                rig's tuner and its in-line state are REAL, which is what `radio.atu` means and what
+                this button's title reports; hiding it would take that away and answer the operator's
+                "where did my ATU go?" with nothing. It is the ACTION that is unavailable, so the
+                button stays and says so — and points at the TUNER button on the radio.
+
                 ⚠️ DEFERRED (i18n): it keys the rig's own tuning carrier, exactly as SetupHealth's
                 Prove TX does. */}
             {onAtuTune && radio.atu != null && (
@@ -343,12 +350,12 @@ export function CockpitHeader({
                 type="button"
                 className="cockpit-tune"
                 onClick={onAtuTune}
-                disabled={!control || (!radio.txAllowed)}
-                title={
-                  radio.atu
-                    ? "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is switched in."
-                    : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two). The tuner is currently bypassed."
-                }
+                disabled={!control || !radio.txAllowed || !!radio.atuStartTuneUnsupported}
+                title={`${
+                  radio.atuStartTuneUnsupported
+                    ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
+                    : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
+                } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`}
               >
                 ATU
               </button>

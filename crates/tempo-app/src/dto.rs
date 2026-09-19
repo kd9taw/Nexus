@@ -836,6 +836,15 @@ pub struct RadioStatus {
     /// own gated command (`atu_tune`), never the generic `set_rig_func`.
     #[serde(default)]
     pub atu: Option<bool>,
+    /// The rig has a tuner (`atu` above) but THIS CAT path cannot START a tune-up on it — only
+    /// switch it in and out. The ATU control stays visible, because the tuner and its in-line
+    /// state are real, and is disabled with a reason that points at the rig's own TUNER button.
+    ///
+    /// NEGATIVE ON PURPOSE. A snapshot from a station older than the page leaves this field
+    /// out, and `false` — "nothing says it can't" — is that station's real behaviour. The
+    /// positive spelling would default a working ATU button to disabled.
+    #[serde(default)]
+    pub atu_start_tune_unsupported: bool,
     /// Rig RX passband / filter width in Hz from CAT; `None` = unknown or the rig's own default.
     #[serde(default)]
     pub filter_width_hz: Option<u32>,
