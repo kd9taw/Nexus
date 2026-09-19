@@ -760,6 +760,21 @@ impl Logbook {
     pub fn read_token(&self) -> std::sync::Arc<()> {
         self.records.read_token()
     }
+    /// The log's revision. It moves on every change to the records, and no two different
+    /// states of any log in this process share one, so a result derived from the records can
+    /// be cached against it and can never outlive the records it describes. It stays below
+    /// 2^53, so it survives a round trip through a JS number (see `logbook::records`).
+    pub fn revision(&self) -> u64 {
+        self.records.revision()
+    }
+    /// Whether every change since this log stood at `revision` was an append ([`Self::add`],
+    /// or an import that only added rows): the records it held then are, unchanged and in the
+    /// same order, the first records it holds now. An edit, delete, clear, merge, reconcile or
+    /// stamp is a rewrite and answers false from then on, as does a revision this log never
+    /// held after its last rewrite.
+    pub fn appended_only_since(&self, revision: u64) -> bool {
+        self.records.appended_only_since(revision)
+    }
     /// Mutable access to the records (for in-place upload-state stamping).
     pub fn records_mut(&mut self) -> &mut [QsoRecord] {
         &mut self.records
@@ -1012,6 +1027,21 @@ impl Logbook {
     /// same [`crate::reconcile`] merge the sync path uses, which only ever ADDS:
     /// a re-import can never un-confirm or un-credit anything.
     pub fn import_adif(&mut self, text: &str) -> (Vec<QsoRecord>, usize, usize) {
+        self.import_adif_with(text, |_| {})
+    }
+
+    /// [`Self::import_adif`], with `prepare` run on each NEW record before it joins the log —
+    /// the way to fill a derived field (the country, from the call) on an imported row. Filled
+    /// after the row has joined, it is an in-place write: the whole import then counts as a
+    /// rewrite (see [`Self::revision`]) instead of an append.
+    ///
+    /// `prepare` must not change what identifies a record (call, band, mode, start time): the
+    /// dedup key is taken before it runs.
+    pub fn import_adif_with(
+        &mut self,
+        text: &str,
+        mut prepare: impl FnMut(&mut QsoRecord),
+    ) -> (Vec<QsoRecord>, usize, usize) {
         // Held records by dedup identity → index, so a dupe can be upgraded in
         // place and not merely counted. First index wins (log order), matching
         // the oldest-first consume order `reconcile` uses for repeated keys.
@@ -1048,13 +1078,21 @@ impl Logbook {
                     // enrichment a confirmation row carries (STATE, COUNTRY) is a
                     // real change the tallies don't name, and the caller has to
                     // persist it.
-                    let before = self.records[i].clone();
-                    crate::reconcile::apply_match(&mut self.records[i], &rec, &mut tally);
-                    if self.records[i] != before {
+                    //
+                    // Upgraded as a COPY, written back only when it changed: a write
+                    // into the records marks the log rewritten (see `revision`), and a
+                    // re-import of rows the log already holds changes nothing, so it
+                    // must stay an append-only change.
+                    let mut upgraded = self.records[i].clone();
+                    crate::reconcile::apply_match(&mut upgraded, &rec, &mut tally);
+                    if upgraded != self.records[i] {
+                        self.records[i] = upgraded;
                         merged += 1;
                     }
                 }
                 None => {
+                    let mut rec = rec;
+                    prepare(&mut rec);
                     held.insert(key, self.records.len());
                     added.push(rec.clone());
                     self.records.push(rec);
@@ -3673,6 +3711,145 @@ mod tests {
             &book.read_token(),
             &replacement.read_token()
         ));
+    }
+
+    /// The revision is what every whole-log cache and the UI's log delta are held against, so
+    /// it must move on EVERY write and must tell an append apart from everything else. Each
+    /// rewrite below is a real method of this type: if one stopped moving the revision, a cache
+    /// would keep serving the log as it stood before that write, and if one passed for an
+    /// append, the UI would keep a row that no longer exists.
+    #[test]
+    fn the_revision_moves_on_every_write_and_tells_an_append_from_a_rewrite() {
+        let mut book = Logbook::new();
+        let born = book.revision();
+        assert!(born < 1 << 53, "the UI holds it as a JS number, exactly");
+        assert!(
+            born > 1_600_000_000_000_000,
+            "counted from this process's start time in µs, not from 1"
+        );
+        let _ = (book.adif(), book.worked_call_set(), book.read_token());
+        assert_eq!(book.revision(), born, "reading is not a write");
+
+        // Appends: the log only grew, so a reader at any earlier revision keeps its rows.
+        book.add(rec("W1AW", "20m", 100));
+        let one = book.revision();
+        assert_ne!(one, born, "an append moves the revision");
+        assert!(book.appended_only_since(born) && book.appended_only_since(one));
+        let text = adif_header() + &adif_record(&rec("K1ABC", "40m", 200));
+        let (added, _, merged) = book.import_adif(&text);
+        assert_eq!(
+            (added.len(), merged),
+            (1, 0),
+            "fixture: one new row, nothing upgraded"
+        );
+        assert_ne!(book.revision(), one);
+        assert!(
+            book.appended_only_since(born),
+            "an import that only adds rows is an append"
+        );
+
+        // Re-importing rows the log already holds changes nothing, so nothing moves.
+        let settled = book.revision();
+        let (added, skipped, merged) = book.import_adif(&book.adif());
+        assert_eq!(
+            (added.len(), skipped, merged),
+            (0, 2, 0),
+            "fixture: all dupes"
+        );
+        assert_eq!(
+            book.revision(),
+            settled,
+            "an import that changes nothing moves nothing"
+        );
+        // Nor does a write the log refuses.
+        assert!(!book.delete(99));
+        assert_eq!(book.revision(), settled, "a refused delete is not a write");
+
+        // Every rewrite moves the revision and ends append-only.
+        type Rewrite = (&'static str, fn(&mut Logbook));
+        let rewrites: Vec<Rewrite> = vec![
+            ("an edit", |b| {
+                let mut r = b.records()[0].clone();
+                r.comment = Some("fixed".into());
+                assert!(b.update_record(0, r));
+            }),
+            ("a QSL-sent mark", |b| {
+                assert!(b.mark_qsl_sent(0, Some(QslVia::Bureau), 300));
+            }),
+            ("a QSL-card mark", |b| assert!(b.mark_qsl_card(0, true))),
+            ("an import that upgrades a held row", |b| {
+                let mut r = b.records()[0].clone();
+                r.state = Some("VT".into());
+                let (_, _, merged) = b.import_adif(&(adif_header() + &adif_record(&r)));
+                assert_eq!(
+                    merged, 1,
+                    "fixture: the dupe carries a STATE the row lacked"
+                );
+            }),
+            ("a confirmation merge", |b| {
+                let _ = b.merge_report(&adif_record(&b.records()[0]));
+            }),
+            ("a downloaded-log merge", |b| {
+                let _ = b.merge_downloaded(&adif_record(&rec("ZL1ABC", "20m", 400)));
+            }),
+            ("an own-QSO echo merge", |b| {
+                let _ = b.merge_own_echo(&adif_record(&b.records()[0]), 500);
+            }),
+            ("a disk reconcile", |b| {
+                b.reconcile_disk(&adif_record(&rec("VK2ABC", "20m", 600)));
+            }),
+            ("an upload stamp", |b| {
+                let pushed = b.records()[0].clone();
+                let status = UploadStatus {
+                    outcome: UploadOutcome::Accepted,
+                    when_unix: 700,
+                    detail: None,
+                };
+                assert!(b.stamp_qrz_upload(&pushed, status));
+            }),
+            ("a park stamp", |b| {
+                let mut r = b.records()[0].clone();
+                r.ota.their_program = Some("POTA".into());
+                r.ota.their_ref = Some("US-0001".into());
+                assert_eq!(b.stamp_ota_refs(&adif_record(&r)).0, 1, "fixture: stamped");
+            }),
+            ("in-place access", |b| {
+                b.records_mut()[0].notes = Some("note".into());
+            }),
+            ("a delete", |b| assert!(b.delete(0))),
+            ("a clear", |b| assert_eq!(b.clear(), 2)),
+        ];
+        for (what, write) in rewrites {
+            let mut b = Logbook::new();
+            b.add(rec("W1AW", "20m", 100));
+            b.add(rec("K1ABC", "40m", 200));
+            let before = b.revision();
+            write(&mut b);
+            assert_ne!(b.revision(), before, "{what} must move the revision");
+            assert!(
+                !b.appended_only_since(before),
+                "{what} is a rewrite, not an append"
+            );
+            assert!(
+                b.appended_only_since(b.revision()),
+                "{what}: append-only again from its own revision"
+            );
+        }
+
+        // A revision this log never held: one from its future, or from the log it replaced.
+        assert!(!book.appended_only_since(book.revision() + 1));
+        let reloaded = Logbook::new();
+        assert!(
+            reloaded.revision() > book.revision(),
+            "a replacement never repeats a revision"
+        );
+        assert!(!reloaded.appended_only_since(book.revision()));
+
+        // A clone is the same records at the same revision; a write moves only the one written.
+        let mut copy = book.clone();
+        assert_eq!(copy.revision(), book.revision());
+        copy.add(rec("VK2XYZ", "15m", 800));
+        assert_ne!(copy.revision(), book.revision());
     }
 
     /// #31's last unfolded example: BPSK31 is a logger spelling of ADIF's PSK31 — one mode,
