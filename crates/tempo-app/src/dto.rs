@@ -2137,6 +2137,7 @@ impl From<QslSentDto> for tempo_core::logbook::QslSent {
 impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
     fn from(q: LoggedQso) -> Self {
         tempo_core::logbook::QsoRecord {
+            id: None,
             call: q.call,
             grid: q.grid,
             country: q.country,

@@ -915,6 +915,7 @@ mod tests {
 
     fn rec(call: &str, band: &str, mode: &str, day: u64) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: None,
             country: None,

@@ -470,6 +470,10 @@ mod tests {
                     <= 2
             );
             expected.time_off_unix = actual.time_off_unix;
+            // Two engines, two logs, so two minters: the id is the row's identity in ITS log,
+            // never a field of the contact, and is the one thing that must NOT match.
+            assert_ne!(expected.id, actual.id);
+            expected.id = actual.id;
             assert_eq!(&expected, actual.as_ref());
             assert_eq!(actual.when_unix, 1_700_000_000);
             assert!(actual.freq_mhz > remote.engine.settings.dial_mhz);

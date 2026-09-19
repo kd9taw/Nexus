@@ -7,7 +7,7 @@
 //! reports confirmations that match **no** logged QSO (the "why is this missing?"
 //! diagnostic). Pure: no network, no DXCC resolution, never fabricates or revokes.
 
-use crate::logbook::{datetime_utc, QsoRecord, StoredRecord};
+use crate::logbook::{datetime_utc, QsoRecord, RecordId, StoredRecord};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 
@@ -156,6 +156,10 @@ fn same_contact(a: &QsoRecord, b: &QsoRecord) -> bool {
         // ...plus the two that do not survive our own round-trip intact.
         r.mode.clear();
         r.time_known = false;
+        // The id is not part of what makes this the same contact: the two sides may have
+        // assigned different ones, and pairing is exactly what lets them converge
+        // (`adopt_id`).
+        r.id = None;
         r
     }
     strip(a) == strip(b)
@@ -351,9 +355,13 @@ pub fn merge_and_add<R: StoredRecord>(
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut buckets = build_buckets(local);
-    merge_pass(local, incoming, &mut buckets, |b, _local, inc| {
-        take_match(b, inc)
-    })
+    merge_pass(
+        local,
+        incoming,
+        &mut buckets,
+        |b, _local, inc| take_match(b, inc),
+        |_, _| {},
+    )
 }
 
 /// Two-way merge of OUR OWN on-disk log back into memory — the two-instance recovery
@@ -397,7 +405,16 @@ pub fn merge_own_disk<R: StoredRecord>(
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut buckets = build_buckets_by(local, exact_key);
-    merge_pass(local, incoming, &mut buckets, take_own_disk)
+    merge_pass(local, incoming, &mut buckets, take_own_disk, adopt_id)
+}
+
+/// Our memory and our own file hold one row under two ids (two instances each gave it one):
+/// both settle on [`RecordId::adopt`], so the instances converge without talking.
+fn adopt_id(local: &mut QsoRecord, disk: &QsoRecord) {
+    local.id = match (local.id, disk.id) {
+        (Some(a), Some(b)) => Some(RecordId::adopt(a, b)),
+        (a, b) => a.or(b),
+    };
 }
 
 /// The shared body of the two-way merges: each incoming row consumes at most one local
@@ -408,12 +425,17 @@ fn merge_pass<R: StoredRecord>(
     incoming: Vec<QsoRecord>,
     buckets: &mut HashMap<Key, Vec<usize>>,
     take: impl Fn(&mut HashMap<Key, Vec<usize>>, &[R], &QsoRecord) -> Option<usize>,
+    on_pair: impl Fn(&mut QsoRecord, &QsoRecord),
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut sum = ReconcileSummary::default();
     let mut added = Vec::new();
     for inc in incoming {
         match take(buckets, local, &inc) {
-            Some(i) => apply_match(local[i].write(), &inc, &mut sum),
+            Some(i) => {
+                let held = local[i].write();
+                apply_match(held, &inc, &mut sum);
+                on_pair(held, &inc);
+            }
             None => {
                 // New contact from the download — append it. Do NOT re-index it into the
                 // consume-once bucket: a later same-key row in this batch is a DISTINCT QSO
@@ -502,6 +524,7 @@ mod tests {
 
     fn rec(call: &str, band: &str, mode: &str, day: u64) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: None,
             country: None,

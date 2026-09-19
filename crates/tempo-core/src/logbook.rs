@@ -103,6 +103,11 @@ pub struct WorkedSince {
 /// One logged contact.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QsoRecord {
+    /// The record's stable identity, `APP_NEXUS_ID` (see [`RecordId`]). Every record the log
+    /// HOLDS carries one; `None` only on a record not yet in a log (a form's row, an imported
+    /// row before it joins), which the log assigns when it adds it. Round-trips via ADIF, and
+    /// never part of what makes two records "the same contact" (dedup and reconcile ignore it).
+    pub id: Option<RecordId>,
     pub call: String,
     pub grid: Option<String>,
     /// DXCC entity name (ADIF `COUNTRY`), resolved from the callsign at log time.
@@ -771,9 +776,13 @@ pub struct LogSnapshot {
 #[derive(Debug, Clone, Default)]
 pub struct Logbook {
     records: Records,
+    /// Mints the ids of the rows this log creates.
+    minter: Minter,
 }
 
+mod id;
 mod records;
+pub use id::{Minter, RecordId};
 use records::Records;
 
 impl Logbook {
@@ -826,9 +835,17 @@ impl Logbook {
         self.records.is_empty()
     }
 
-    /// Add a record in memory.
-    pub fn add(&mut self, rec: QsoRecord) {
+    /// Add a record in memory, and return its id: the one it carries, or one minted now.
+    pub fn add(&mut self, mut rec: QsoRecord) -> RecordId {
+        let id = *rec.id.get_or_insert_with(|| self.minter.mint());
         self.records.push(rec);
+        id
+    }
+
+    /// The station's position id, which the ids this log mints from now on carry (see
+    /// [`RecordId`]); 0 until the profile has one.
+    pub fn set_posid(&mut self, posid: u32) {
+        self.minter.set_posid(posid);
     }
 
     /// Replace the human-entered fields of the record at `index` (a correction —
@@ -839,6 +856,8 @@ impl Logbook {
     pub fn update_record(&mut self, index: usize, mut rec: QsoRecord) -> bool {
         match self.records.get(index) {
             Some(old) => {
+                // An edit is the same row, corrected: it keeps the row's identity.
+                rec.id = old.id;
                 // A field-edit must not wipe an operator-declared QSL-sent mark —
                 // only `mark_qsl_sent` mutates it. (Kept even on a call fix: the
                 // card WAS mailed; that's history, not credit.)
@@ -1090,6 +1109,8 @@ impl Logbook {
         for (i, r) in self.records.iter().enumerate() {
             held.entry(dedup_key(r)).or_insert(i);
         }
+        let mut held_ids: std::collections::HashSet<RecordId> =
+            self.records.iter().filter_map(|r| r.id).collect();
         let mut added = Vec::new();
         let mut skipped = 0usize;
         let mut merged = 0usize;
@@ -1132,6 +1153,14 @@ impl Logbook {
                 }
                 None => {
                     let mut rec = rec;
+                    // A row keeps the id it brings (a Nexus export, re-imported) unless the log
+                    // already holds that id; otherwise this log mints one.
+                    let id = match rec.id {
+                        Some(id) if !held_ids.contains(&id) => id,
+                        _ => self.minter.mint(),
+                    };
+                    held_ids.insert(id);
+                    rec.id = Some(id);
                     prepare(&mut rec);
                     held.insert(key, self.records.len());
                     added.push(rec.clone());
@@ -1155,8 +1184,32 @@ impl Logbook {
     /// so both sides carry the same timestamp, and the day key mis-paired two contacts
     /// with one station inside a day — see [`crate::reconcile::merge_own_disk`].
     pub fn reconcile_disk(&mut self, text: &str) {
-        let incoming = parse_adif(text);
+        // The ids a load of this file would give its rows: their own, or provisional from
+        // their text, so two instances reading one file agree on every row's id.
+        let mut rows = parse_adif_spans(text);
+        id::settle_file_ids(rows.iter_mut().map(|(r, span)| (&mut r.id, *span)));
+        let incoming = rows.into_iter().map(|(r, _)| r).collect();
+        let before = self.records.len();
         crate::reconcile::merge_own_disk(&mut *self.records, incoming);
+        self.settle_new_ids(before);
+    }
+
+    /// Give every row from `from` on an id no other row holds: the one it arrived with if that
+    /// is free, a minted one otherwise. For the rows a merge appended.
+    fn settle_new_ids(&mut self, from: usize) {
+        let mut held: std::collections::HashSet<RecordId> =
+            self.records[..from].iter().filter_map(|r| r.id).collect();
+        let mut needs = Vec::new();
+        for (i, r) in self.records.iter().enumerate().skip(from) {
+            match r.id {
+                Some(id) if held.insert(id) => {}
+                _ => needs.push(i),
+            }
+        }
+        for i in needs {
+            let id = self.minter.mint();
+            Arc::make_mut(&mut self.records[i]).id = Some(id);
+        }
     }
 
     /// Stamp park/summit references from an external OTA log (pota.app hunter or
@@ -1400,9 +1453,14 @@ impl Logbook {
         if let Some(clean) = &clean {
             Self::scrub_log_in_place(path, bytes.len(), clean);
         }
+        // Every row leaves here with an id: its own if it carries one no earlier row holds, a
+        // provisional one from its own text otherwise (see `id`). Assigning writes nothing.
+        let text = String::from_utf8_lossy(clean.as_deref().unwrap_or(&bytes));
+        let mut rows = parse_adif_spans(&text);
+        let nonces = id::settle_file_ids(rows.iter_mut().map(|(r, span)| (&mut r.id, *span)));
         Self {
-            records: parse_adif(&String::from_utf8_lossy(clean.as_deref().unwrap_or(&bytes)))
-                .into(),
+            records: rows.into_iter().map(|(r, _)| r).collect::<Vec<_>>().into(),
+            minter: Minter::new(0, &nonces),
         }
     }
 
@@ -1842,7 +1900,10 @@ impl Logbook {
         text: &str,
     ) -> (Vec<QsoRecord>, crate::reconcile::ReconcileSummary) {
         let incoming = parse_adif(text);
-        crate::reconcile::merge_and_add(&mut *self.records, incoming)
+        let before = self.records.len();
+        let merged = crate::reconcile::merge_and_add(&mut *self.records, incoming);
+        self.settle_new_ids(before);
+        merged
     }
 
     /// Merge a LoTW **own-QSO** report (`qso_qsl=no` ADIF — your records LoTW holds
@@ -2465,6 +2526,11 @@ pub fn adif_record(r: &QsoRecord) -> String {
     // whatever is emitted here is consumed by `parse_record`'s contest block, which is
     // what keeps `extra` free of a tag this build models.
     out.push_str(&contest_fields(r.contest.as_deref()));
+    // The record's identity (APP_-namespaced; other loggers ignore it, and one that drops it
+    // hands back a row the next load gives a provisional id).
+    if let Some(id) = &r.id {
+        out.push_str(&field("APP_NEXUS_ID", &id.to_string()));
+    }
     // Fields this build does not model, preserved from import verbatim — see
     // [`QsoRecord::extra`]. Emitted last so modelled fields always lead.
     for (k, v) in &r.extra {
@@ -2905,6 +2971,15 @@ fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
 }
 
 fn parse_adif(text: &str) -> Vec<QsoRecord> {
+    parse_adif_spans(text)
+        .into_iter()
+        .map(|(rec, _)| rec)
+        .collect()
+}
+
+/// [`parse_adif`], with each record's own text beside it: after the previous `<EOR>` (or the
+/// header) through this record's `<EOR>`. A provisional id hashes that span (see `id`).
+fn parse_adif_spans(text: &str) -> Vec<(QsoRecord, &str)> {
     let body = match text.to_ascii_uppercase().find("<EOH>") {
         Some(i) => &text[i + 5..],
         None => text,
@@ -2913,6 +2988,9 @@ fn parse_adif(text: &str) -> Vec<QsoRecord> {
     let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let bytes = body.as_bytes();
     let mut i = 0;
+    // Where the current record's text begins: always just after an ASCII `>`, so a char
+    // boundary.
+    let mut start = 0;
     while i < bytes.len() {
         if bytes[i] != b'<' {
             i += 1;
@@ -2927,8 +3005,9 @@ fn parse_adif(text: &str) -> Vec<QsoRecord> {
         let upper = tag.to_ascii_uppercase();
         if upper == "EOR" {
             if let Some(rec) = record_from(std::mem::take(&mut cur)) {
-                records.push(rec);
+                records.push((rec, &body[start..i]));
             }
+            start = i;
             continue;
         }
         // NAME:len or NAME:len:type
@@ -3466,6 +3545,9 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
         f.insert("SUBMODE".to_string(), sub);
     }
     let rec = QsoRecord {
+        // Consumed before the `extra` drain like every modelled field. Only the canonical
+        // text parses; anything else is a row without an id, which the loader gives one.
+        id: f.remove("APP_NEXUS_ID").and_then(|s| s.trim().parse().ok()),
         call,
         grid: f.remove("GRIDSQUARE"),
         country: f
@@ -4011,6 +4093,7 @@ mod tests {
 
     fn rec(call: &str, band: &str, when: u64) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: Some("EN37".into()),
             country: None,
@@ -4913,7 +4996,10 @@ mod tests {
     ///
     /// 768 → 816 (#239): `my_grid` and `my_rig`, two `Option<String>` at 24 bytes each — modelled
     /// ADIF fields the log shows and edits, not a contest block inlined.
-    const QSO_RECORD_SIZE: usize = 816;
+    ///
+    /// 816 → 840 (SPEC-1 C2): `id`, the record's stable identity — 24 bytes, and the price of
+    /// being able to address a change to THE row instead of to a position.
+    const QSO_RECORD_SIZE: usize = 840;
 
     #[test]
     fn tempodeep_gets_its_own_submode_not_tempofasts() {
@@ -5976,11 +6062,16 @@ mod tests {
         let path = dir.join("log.adi");
         let mut raw = adif_header();
         for i in 0..n {
-            raw.push_str(&adif_record(&rec(
-                &format!("W{i}AAA"),
-                "20m",
-                1_700_000_000 + i as u64,
-            )));
+            let mut r = rec(&format!("W{i}AAA"), "20m", 1_700_000_000 + i as u64);
+            // The seed carries ids, like any file this build has already written. Giving a row
+            // its first id IS a change to the bytes, and the ring tests below are about what a
+            // save does when nothing changed.
+            r.id = Some(RecordId::Minted {
+                posid: 0,
+                nonce: 0x5eed,
+                seq: i as u32 + 1,
+            });
+            raw.push_str(&adif_record(&r));
         }
         std::fs::write(&path, &raw).unwrap();
         let lb = Logbook::load(&path);
@@ -7930,6 +8021,7 @@ mod operator_split_tests {
 
     fn rec(call: &str, operator: Option<&str>) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: None,
             country: None,
@@ -7973,6 +8065,7 @@ mod operator_split_tests {
     #[test]
     fn operators_lists_each_distinct_operator_once() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 rec("W9AAA", Some("W1ABC")),
                 rec("W9BBB", Some("G0PQR")),
@@ -7992,6 +8085,7 @@ mod operator_split_tests {
     #[test]
     fn operators_invents_no_bucket_for_unstamped_contacts() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![rec("W9AAA", None), rec("W9BBB", Some("  "))].into(),
         };
         assert!(lb.operators().is_empty());
@@ -8000,6 +8094,7 @@ mod operator_split_tests {
     #[test]
     fn an_operators_export_carries_only_their_contacts() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 rec("W9AAA", Some("W1ABC")),
                 rec("W9BBB", Some("G0PQR")),
@@ -8023,6 +8118,7 @@ mod operator_split_tests {
     #[test]
     fn matching_an_operator_ignores_case_and_stray_spaces() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![rec("W9AAA", Some(" w1abc "))].into(),
         };
         assert!(lb.adif_for_operator("W1ABC").contains("W9AAA"));
@@ -8035,6 +8131,7 @@ mod operator_split_tests {
     #[test]
     fn an_operator_with_no_contacts_gets_an_empty_file_not_everyone_elses() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![rec("W9AAA", Some("W1ABC"))].into(),
         };
         let out = lb.adif_for_operator("K9NOBODY");
@@ -8054,6 +8151,7 @@ mod qsl_card_tests {
     /// what these tests are about — the two QSL fields.
     fn rec() -> QsoRecord {
         QsoRecord {
+            id: None,
             call: "K1ABC".into(),
             grid: None,
             country: None,
@@ -8180,6 +8278,7 @@ mod activation_split_tests {
     /// A contact at `when`, activating `my_ref` (None = not activating), signed `call_used`.
     fn act(call: &str, when: u64, my_ref: Option<&str>, call_used: Option<&str>) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: None,
             country: None,
@@ -8251,6 +8350,7 @@ mod activation_split_tests {
         records.push(act("K1HOME", d + 2 * 3600, None, Some("KD9TAW")));
         records.push(act("K2HOME", d + 3 * 3600, None, Some("KD9TAW")));
         let lb = Logbook {
+            minter: Default::default(),
             records: records.into(),
         };
 
@@ -8274,6 +8374,7 @@ mod activation_split_tests {
     fn two_parks_in_one_utc_day_are_two_activations_and_two_files() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW")),
                 act("W9BBB", d + 15 * 3600, Some("US-1234"), Some("KD9TAW")),
@@ -8306,6 +8407,7 @@ mod activation_split_tests {
         let first = day("2026-09-09");
         let second = day("2026-09-10");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 act(
                     "W9AAA",
@@ -8340,6 +8442,7 @@ mod activation_split_tests {
         hunted.ota.their_program = Some("POTA".into());
         hunted.ota.their_ref = Some("US-9999".into());
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 hunted,
                 act("W9AAA", d + 17 * 3600, Some("US-1234"), Some("KD9TAW")),
@@ -8367,6 +8470,7 @@ mod activation_split_tests {
     fn a_short_activation_is_listed_with_the_count_that_falls_short() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: (0..4)
                 .map(|i| {
                     act(
@@ -8392,6 +8496,7 @@ mod activation_split_tests {
     fn a_two_fer_exports_one_file_per_park_each_naming_only_its_own() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act(
                 "W9AAA",
                 d + 16 * 3600,
@@ -8425,6 +8530,7 @@ mod activation_split_tests {
     fn two_callsigns_at_one_park_on_one_day_are_two_activations() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW")),
                 act("W9BBB", d + 15 * 3600, Some("US-1234"), Some("KD9TAW/P")),
@@ -8450,6 +8556,7 @@ mod activation_split_tests {
         r.operator = Some("w1abc".into());
         let unstamped = act("W9BBB", d + 15 * 3600, Some("US-1234"), None);
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![r, unstamped].into(),
         };
         let acts = lb.activations();
@@ -8469,6 +8576,7 @@ mod activation_split_tests {
     fn matching_a_reference_ignores_case_and_stray_spaces() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act(
                 "W9AAA",
                 d + 14 * 3600,
@@ -8490,6 +8598,7 @@ mod activation_split_tests {
     fn any_second_within_the_day_selects_that_days_activation() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))].into(),
         };
         assert_eq!(
@@ -8504,6 +8613,7 @@ mod activation_split_tests {
     fn an_unknown_activation_gets_an_empty_file_not_the_whole_log() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))].into(),
         };
         for out in [
@@ -8524,6 +8634,7 @@ mod activation_split_tests {
         let d = day("2026-09-09");
         assert!(Logbook::default().activations().is_empty());
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act("W9AAA", d, None, Some("KD9TAW"))].into(),
         };
         assert!(lb.activations().is_empty());
@@ -8533,6 +8644,7 @@ mod activation_split_tests {
     #[test]
     fn activations_list_newest_first() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 act(
                     "W9AAA",
@@ -8568,10 +8680,344 @@ mod activation_split_tests {
         let mut r = act("W9AAA", d + 3600, Some("W7A/MN-001"), Some("KD9TAW"));
         r.ota.my_program = Some("SOTA".into());
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![r].into(),
         };
         let acts = lb.activations();
         assert_eq!(acts[0].program.as_deref(), Some("SOTA"));
         assert_eq!(acts[0].reference, "W7A/MN-001");
+    }
+}
+
+/// The record-identity proofs (`APP_NEXUS_ID`, see [`id`]). The property that matters to the
+/// operator is that a row's id is the SAME on every instance and every load, without the two
+/// instances talking and without opening the log writing anything — an id is how a change is
+/// addressed to THE row, so an id that moves is a change landing on the wrong contact.
+#[cfg(test)]
+mod record_id_tests {
+    use super::*;
+
+    /// A unique scratch directory under the OS temp dir; a static counter keeps concurrent
+    /// runs of this module apart (each test wants its own `log.adi` beside its own backups).
+    fn scratch_dir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("tempo_logid_{}_{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A minimal record. `QsoRecord` has no `Default` and spelling every field per test would
+    /// bury what these are about — the id.
+    fn rec(call: &str, when: u64) -> QsoRecord {
+        QsoRecord {
+            id: None,
+            call: call.into(),
+            grid: None,
+            country: None,
+            state: None,
+            band: "20m".into(),
+            freq_mhz: 14.074,
+            freq_rx_mhz: None,
+            mode: "FT8".into(),
+            rst_sent: Some("-10".into()),
+            rst_rcvd: Some("-12".into()),
+            name: None,
+            comment: None,
+            notes: None,
+            qth: None,
+            tx_power: None,
+            when_unix: when,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            my_grid: None,
+            my_rig: None,
+            station_callsign: None,
+            extra: Vec::new(),
+            contest: None,
+        }
+    }
+
+    /// A pre-1.14 log: real rows, no `APP_NEXUS_ID` anywhere.
+    fn legacy(path: &Path, calls: &[&str]) {
+        let mut raw = adif_header();
+        for (i, c) in calls.iter().enumerate() {
+            raw.push_str(&adif_record(&rec(c, 1_700_000_000 + i as u64)));
+        }
+        assert!(!raw.contains("APP_NEXUS_ID"), "the fixture is a legacy log");
+        std::fs::write(path, raw).unwrap();
+    }
+
+    fn ids(lb: &Logbook) -> Vec<RecordId> {
+        lb.records().iter().map(|r| r.id.unwrap()).collect()
+    }
+
+    /// ★ Opening a log WRITES NOTHING — the ids a load assigns live in memory only. A legacy
+    /// log on a read-only stick, or one the operator opens and closes, must come back byte for
+    /// byte as it was: id assignment is not a reason to rewrite the operator's file.
+    #[test]
+    fn opening_a_log_assigns_every_id_and_writes_none_of_them() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        legacy(&path, &["W1AW", "K5XYZ", "DL1ABC"]);
+        let before = std::fs::read(&path).unwrap();
+
+        let lb = Logbook::load(&path);
+        assert_eq!(lb.records().len(), 3);
+        assert!(
+            lb.records().iter().all(|r| r.id.is_some()),
+            "every row leaves the loader with an id"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "...and the file is untouched"
+        );
+    }
+
+    /// R2. The provisional id is a function of the FILE, so every load of one file agrees —
+    /// which is the whole point: two instances holding one log name the same row the same way
+    /// without talking to each other.
+    #[test]
+    fn every_load_of_one_file_settles_on_the_same_ids() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        legacy(&path, &["W1AW", "K5XYZ", "DL1ABC"]);
+
+        let first = ids(&Logbook::load(&path));
+        let second = ids(&Logbook::load(&path));
+        assert_eq!(first, second, "one file, one set of ids");
+        assert!(
+            first
+                .iter()
+                .all(|id| matches!(id, RecordId::Provisional { .. })),
+            "a legacy row is provisional: {first:?}"
+        );
+        assert_eq!(
+            first.iter().collect::<std::collections::HashSet<_>>().len(),
+            3,
+            "and distinct within the file"
+        );
+    }
+
+    /// R2. A provisional id hashes the row's text AS THE FILE HOLDS IT, never a re-serialization
+    /// of the parsed record — so changing what `adif_record` emits (a new field, a different
+    /// order) cannot move the id of a row that was never rewritten.
+    #[test]
+    fn a_provisional_id_is_the_files_own_text_not_our_serializers() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        // Another logger's spelling of one contact: different field order, upper-case band,
+        // tags we keep in `extra`. Our own emitter would write none of it this way.
+        let row = "<CALL:4>W1AW<QSO_DATE:8>20241101<TIME_ON:6>120000<BAND:3>20M\
+                   <MODE:3>FT8<PROGRAMID:5>OTHER<EOR>\n";
+        std::fs::write(&path, format!("{}{row}", adif_header())).unwrap();
+
+        let lb = Logbook::load(&path);
+        assert_eq!(
+            lb.records()[0].id,
+            Some(RecordId::Provisional {
+                hash: id::fnv1a64(row.trim().as_bytes()),
+                ordinal: 0
+            }),
+            "the id is the file's bytes"
+        );
+        assert_ne!(
+            lb.records()[0].id,
+            Some(RecordId::Provisional {
+                hash: id::fnv1a64(adif_record(&lb.records()[0]).trim().as_bytes()),
+                ordinal: 0
+            }),
+            "...and this fixture proves it, because our own emitter differs"
+        );
+    }
+
+    /// The decode is lossy but DETERMINISTIC, so a log carrying bytes that are not UTF-8 — a
+    /// note pasted from a Windows-1252 editor is the usual way — still has the same ids at
+    /// every load. (The caveat the module header records is the other half: a change to the
+    /// DECODER would move an id that was never persisted.)
+    #[test]
+    fn a_non_utf8_log_settles_on_the_same_ids_at_every_load() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        let mut raw = adif_header().into_bytes();
+        raw.extend_from_slice(
+            b"<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20241101<COMMENT:5>caf\xe9!<EOR>\n",
+        );
+        raw.extend_from_slice(b"<CALL:5>K5XYZ<BAND:3>40m<MODE:3>FT8<QSO_DATE:8>20241102<EOR>\n");
+        std::fs::write(&path, &raw).unwrap();
+        assert!(
+            std::str::from_utf8(&raw).is_err(),
+            "the fixture is not UTF-8"
+        );
+
+        let first = ids(&Logbook::load(&path));
+        assert_eq!(first.len(), 2);
+        assert_eq!(first, ids(&Logbook::load(&path)), "stable across loads");
+    }
+
+    /// R2. A stamp is an in-memory change; if the process ends before anything rewrites the
+    /// file, the file is as it was, so the reload settles on exactly the same ids. Only the
+    /// stamp is lost, and a stamp is re-derivable.
+    #[test]
+    fn a_stamp_that_never_reached_the_file_leaves_the_ids_where_they_were() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        legacy(&path, &["W1AW", "K5XYZ"]);
+
+        let before = ids(&Logbook::load(&path));
+        let mut lb = Logbook::load(&path);
+        assert!(lb.mark_qsl_sent(0, None, 1_700_100_000));
+        drop(lb); // ...and the process ends here: nothing was saved.
+        assert_eq!(ids(&Logbook::load(&path)), before);
+    }
+
+    /// R2. The first rewrite persists every id AS IT IS — a provisional id is written, read
+    /// back and kept, never converted to a minted one. From then on the id no longer depends
+    /// on the row's text, so an edit cannot move it.
+    #[test]
+    fn the_first_rewrite_persists_every_id_and_later_loads_read_it_back() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        legacy(&path, &["W1AW", "K5XYZ"]);
+
+        let lb = Logbook::load(&path);
+        let settled = ids(&lb);
+        lb.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        for id in &settled {
+            assert!(
+                text.contains(&format!("<APP_NEXUS_ID:{}>{id}", id.to_string().len())),
+                "the rewrite carries {id}"
+            );
+        }
+        let reloaded = Logbook::load(&path);
+        assert_eq!(ids(&reloaded), settled, "read back, not re-derived");
+        assert!(
+            settled
+                .iter()
+                .all(|id| matches!(id, RecordId::Provisional { .. })),
+            "still provisional — a persisted id is never converted"
+        );
+
+        // Persisted, the id no longer tracks the text: correct the call and it stays put.
+        let mut lb = reloaded;
+        let mut fixed = QsoRecord::clone(&lb.records()[0]);
+        fixed.call = "W1AWX".into();
+        assert!(lb.update_record(0, fixed));
+        assert_eq!(lb.records()[0].id, Some(settled[0]), "an edit keeps the id");
+        assert_eq!(lb.records()[0].call, "W1AWX");
+    }
+
+    /// An import keeps the id a row brings — that is what makes a Nexus export round trip —
+    /// unless this log already holds that id, in which case the arriving row is a DIFFERENT
+    /// contact and gets one of its own. An id is unique within a log or it addresses nothing.
+    #[test]
+    fn an_import_keeps_a_free_id_and_re_mints_one_the_log_already_holds() {
+        let mut lb = Logbook::new();
+        let held = lb.add(rec("W1AW", 1_700_000_000));
+
+        // One arriving row claims the id we already gave W1AW; the other brings a free one.
+        let mut clash = rec("K5XYZ", 1_700_000_100);
+        clash.id = Some(held);
+        let free = RecordId::Minted {
+            posid: 9,
+            nonce: 0xabc,
+            seq: 4,
+        };
+        let mut brought = rec("DL1ABC", 1_700_000_200);
+        brought.id = Some(free);
+        let text = format!(
+            "{}{}{}",
+            adif_header(),
+            adif_record(&clash),
+            adif_record(&brought)
+        );
+        let (added, _, _) = lb.import_adif(&text);
+        assert_eq!(added.len(), 2, "two new contacts");
+
+        let by = |c: &str| {
+            lb.records()
+                .iter()
+                .find(|r| r.call == c)
+                .unwrap()
+                .id
+                .unwrap()
+        };
+        assert_eq!(by("W1AW"), held, "the row that had it keeps it");
+        assert_ne!(by("K5XYZ"), held, "the clash is re-minted");
+        assert_eq!(by("DL1ABC"), free, "a free id survives the import");
+        assert_eq!(
+            lb.records()
+                .iter()
+                .filter_map(|r| r.id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3,
+            "every id unique in the log"
+        );
+    }
+
+    /// Export → import round trip: a log written out and read into an empty one carries every
+    /// row's id through unchanged.
+    #[test]
+    fn an_export_then_import_round_trips_every_id() {
+        let mut lb = Logbook::new();
+        for (i, c) in ["W1AW", "K5XYZ", "DL1ABC"].iter().enumerate() {
+            lb.add(rec(c, 1_700_000_000 + i as u64));
+        }
+        let exported = lb.adif();
+
+        let mut fresh = Logbook::new();
+        fresh.import_adif(&exported);
+        assert_eq!(ids(&fresh), ids(&lb), "the ids came across");
+    }
+
+    /// Two instances each gave one row an id of its own (both opened a log that had none, and
+    /// one of them rewrote it). Reconciling with the file converges on the smaller id from
+    /// either side, so the two instances agree without talking.
+    #[test]
+    fn two_instances_converge_on_one_id_for_one_row() {
+        let mine = RecordId::Minted {
+            posid: 1,
+            nonce: 2,
+            seq: 3,
+        };
+        let theirs = RecordId::Minted {
+            posid: 1,
+            nonce: 1,
+            seq: 9,
+        };
+        assert_eq!(RecordId::adopt(mine, theirs), theirs, "theirs is smaller");
+
+        let settle = |ours: RecordId, disk: RecordId| {
+            let mut r = rec("W1AW", 1_700_000_000);
+            r.id = Some(ours);
+            let mut lb = Logbook {
+                minter: Default::default(),
+                records: vec![r.clone()].into(),
+            };
+            let mut on_disk = r;
+            on_disk.id = Some(disk);
+            lb.reconcile_disk(&format!("{}{}", adif_header(), adif_record(&on_disk)));
+            assert_eq!(lb.records().len(), 1, "one contact, not two");
+            lb.records()[0].id.unwrap()
+        };
+        assert_eq!(settle(mine, theirs), theirs, "we adopt the smaller");
+        assert_eq!(settle(theirs, mine), theirs, "...and so do they");
     }
 }

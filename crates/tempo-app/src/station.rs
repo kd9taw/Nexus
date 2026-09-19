@@ -1755,6 +1755,7 @@ mod grid_tests {
 
     fn rec(call: &str, band: &str, grid: &str) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: Some(grid.into()),
             country: None,
@@ -2048,9 +2049,10 @@ mod grid_tests {
         // Instance A appends a contact we never see in memory.
         Logbook::append(&path, &rec("W3CCC", "40m", "IO91")).unwrap();
 
-        // We log our own contact — memory first, then the file, as log_qso does.
-        let k = rec("K5XYZ", "20m", "FN31");
-        sc.logbook.add(k.clone());
+        // We log our own contact — memory first, then the file, as log_qso does, carrying the
+        // minted id back onto the copy we hand the writer so the two are the same record.
+        let mut k = rec("K5XYZ", "20m", "FN31");
+        k.id = Some(sc.logbook.add(k.clone()));
         sc.append_to_log(std::slice::from_ref(&k));
         assert!(
             sc.last_log_mtime.is_none(),

@@ -29104,6 +29104,7 @@ mod tests {
         freq_mhz: f64,
     ) -> tempo_core::logbook::QsoRecord {
         tempo_core::logbook::QsoRecord {
+            id: None,
             call: call.into(),
             grid: Some(grid.into()),
             country: None,

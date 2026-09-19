@@ -863,6 +863,13 @@ pub fn engine_lock(m: &std::sync::Mutex<Engine>) -> std::sync::MutexGuard<'_, En
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The station's position id as the ids the log mints carry (`RecordId::Minted`): the
+/// profile's `fd_position_id`, eight hex digits, or 0 while the profile has none. Provenance
+/// only — what makes a minted id unique is the nonce and sequence beside it.
+fn log_posid(settings: &Settings) -> u32 {
+    u32::from_str_radix(settings.fd_position_id.trim(), 16).unwrap_or(0)
+}
+
 /// Which CAT daemon is serving the radio RIGHT NOW, as the radio loop sees the
 /// socket it owns. The engine owns the satellite mapping POLICY but cannot see
 /// the wire, so the loop hands it this fact every split apply
@@ -4313,8 +4320,12 @@ impl Engine {
         };
         Self {
             app,
+            station: {
+                let mut station = StationCore::new();
+                station.logbook.set_posid(log_posid(&settings));
+                station
+            },
             settings,
-            station: StationCore::new(),
             tx_offset_hz,
             rx_offset_hz,
             hold_tx_freq,
@@ -4912,6 +4923,8 @@ impl Engine {
             s.active_radio
         };
         self.settings = s;
+        // A settings save can carry a new position id.
+        self.sync_log_posid();
         // Restore the engine-owned pending Cloudlog key captured above (see that comment). Prefer a
         // NON-empty incoming value — that can only be a legacy first-load carrying its own plaintext
         // key, never the frontend — but keep the live pending key whenever `s` carries none, which is
@@ -9393,6 +9406,7 @@ impl Engine {
         self.settings.mycall.hash(&mut h);
         let id = format!("{:08x}", (h.finish() & 0xffff_ffff) as u32);
         self.settings.fd_position_id = id.clone();
+        self.sync_log_posid();
         (id, true)
     }
 
@@ -10228,7 +10242,9 @@ impl Engine {
         // is false until the end of this function, and an unwind inside it (the two
         // `spawn`s below are the live candidates) leaves the contact on disk, out of
         // memory and unrecoverable — the next rewrite deletes it.
-        self.station.logbook.add(rec.clone());
+        // The log mints the row's id; this copy, which the append and every queue below
+        // carry, carries it too.
+        rec.id = Some(self.station.logbook.add(rec.clone()));
         // Through the station's append (not a bare `Logbook::append`) so the shared
         // log's freshness fingerprint moves with the file. Skip it and the recovery
         // gate misses on the next upload stamp / Needed-board poll and re-parses the
@@ -16261,6 +16277,7 @@ contact yourself."
         let comment = (!extras.is_empty()).then(|| extras.join(" "));
         let now = now_unix_secs();
         QsoRecord {
+            id: None,
             call: call.to_string(),
             grid: None,
             country,
@@ -20360,6 +20377,7 @@ contact yourself."
         // moves `dxcall` into the record.
         let callbook_name = self.callbook_name_for(&dxcall);
         QsoRecord {
+            id: None,
             call: dxcall,
             grid,
             country,
@@ -20609,7 +20627,14 @@ contact yourself."
 
     /// See [`StationCore::set_log_path`].
     pub fn set_log_path(&mut self, path: PathBuf) {
-        self.station.set_log_path(path)
+        self.station.set_log_path(path);
+        // A load opens a fresh log, whose ids start without the position id.
+        self.sync_log_posid();
+    }
+
+    /// Hand the log the position id its minted ids carry (see [`log_posid`]).
+    fn sync_log_posid(&mut self) {
+        self.station.logbook.set_posid(log_posid(&self.settings));
     }
 
     /// The general logbook file, when one is configured. Read-only: Remote re-reads it after a
@@ -31951,6 +31976,7 @@ mod tests {
 
         // Manual log path queues too.
         e.log_qso(QsoRecord {
+            id: None,
             call: "N0CALL".into(),
             grid: Some("EN52".into()),
             country: None,
@@ -32934,6 +32960,7 @@ mod tests {
     /// `Default`; only call+band vary here).
     fn qrec(call: &str, band: &str) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: None,
             country: None,
@@ -34741,6 +34768,7 @@ mod tests {
 
         // Log a contact with W9XYZ in grid EN37 → entity "W" and grid EN37 worked.
         e.log_qso(QsoRecord {
+            id: None,
             call: "W9XYZ".into(),
             grid: Some("EN37".into()),
             country: None,

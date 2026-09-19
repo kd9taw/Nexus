@@ -833,6 +833,7 @@ mod tests {
 
     fn local(mode: &str) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: "W1AW".into(),
             grid: None,
             country: None,
