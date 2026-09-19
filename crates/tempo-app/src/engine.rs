@@ -11156,7 +11156,22 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Confirm-and-log a QSO held by the prompt-to-log popup. `rec` is the
     /// (possibly operator-edited) record; logs it and clears the pending hold.
+    ///
+    /// #329: what is logged is the HELD record, with only the popup's four editable fields
+    /// taken from `rec` — the Remote confirm's rule (`confirm_pending_log_for_sync`). `rec`
+    /// arrives through the UI's `LoggedQso`, which carries neither TIME_OFF nor the split
+    /// FREQ_RX, so logging it as sent dropped both from every confirmed contact.
     pub fn confirm_pending_log(&mut self, rec: QsoRecord) {
+        let rec = match self.pending_log.take() {
+            Some(mut held) => {
+                held.call = rec.call;
+                held.grid = rec.grid;
+                held.rst_sent = rec.rst_sent;
+                held.rst_rcvd = rec.rst_rcvd;
+                held
+            }
+            None => rec,
+        };
         self.replace_pending_log(None);
         self.persist_pending_qso(); // clears the journal — it's in the log now
         self.log_qso(rec);
@@ -34161,6 +34176,36 @@ mod tests {
             e.snapshot().pending_log.is_none(),
             "hold cleared after confirm"
         );
+    }
+
+    #[test]
+    fn confirming_a_held_qso_keeps_its_end_time_and_split_leg() {
+        // #329: the popup sends the record back through the UI's `LoggedQso`, which carries
+        // neither TIME_OFF nor FREQ_RX — so a confirmed contact lost both (HRD showed 00:00).
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        let dial = e.settings.dial_mhz;
+        e.split_tx_mhz = Some(dial + 0.002); // same-band split, so the hold carries FREQ_RX
+        e.call_station_with_grid("W9XYZ", Some("en37"));
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        let held = e.pending_log.clone().expect("held for confirm");
+        assert!(
+            held.time_off_unix.is_some() && held.freq_rx_mhz.is_some(),
+            "precondition: the hold carries an end time and a split RX leg"
+        );
+
+        // Exactly what the popup sends: the snapshot's record, with the operator's edits.
+        let mut sent = e.snapshot().pending_log.expect("a QSO awaits confirm");
+        sent.grid = Some("EN38".into());
+        sent.rst_rcvd = Some("-09".into());
+        e.confirm_pending_log(sent.into());
+
+        let saved = &e.station.logbook.records()[0];
+        assert_eq!(saved.time_off_unix, held.time_off_unix, "TIME_OFF survives");
+        assert_eq!(saved.freq_rx_mhz, held.freq_rx_mhz, "FREQ_RX survives");
+        assert_eq!(saved.grid.as_deref(), Some("EN38"), "grid edit lands");
+        assert_eq!(saved.rst_rcvd.as_deref(), Some("-09"), "RST edit lands");
     }
 
     #[test]
