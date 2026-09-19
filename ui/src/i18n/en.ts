@@ -1109,7 +1109,7 @@ export const EN = {
   'logbook.field.notes.placeholder': 'Rig / antenna / weather / what you talked about…',
   'logbook.form.callRequired': 'Callsign is required.',
   'logbook.form.whenInvalid':
-    'Enter a UTC date and a 24-hour time ({{short}} or {{long}}), or leave both blank.',
+    'Enter a UTC date ({{date}}) and a 24-hour time ({{short}} or {{long}}), or leave both blank.',
   'logbook.form.editingNote':
     'Editing — confirmations and upload state are kept, unless you change the callsign: a corrected call re-sends to every service and drops confirmations matched on the old one.',
   'logbook.form.save': 'Save',
@@ -1324,9 +1324,9 @@ export const EN = {
   'logEntry.override.blockedHint': 'Enter a frequency for the override to log',
   'logEntry.override.blocked': 'Enter a valid frequency for the override, or close it',
   'logEntry.override.timeBlocked':
-    'Enter a valid UTC date and 24-hour time ({{short}} or {{long}}) for the override, or close it',
+    'Enter a valid UTC date ({{date}}) and 24-hour time ({{short}} or {{long}}) for the override, or close it',
   'logEntry.override.timeBlockedHint':
-    'Enter the UTC date and a 24-hour time ({{short}} or {{long}}) for the override to log',
+    'Enter the UTC date ({{date}}) and a 24-hour time ({{short}} or {{long}}) for the override to log',
   // Two whole sentences: a dial the band plan cannot name (QO-100 at 10 GHz) has no band
   // slot at all, and a sentence assembled around an empty slot reads as a hole.
   'logEntry.summary': 'Logs to the shared logbook as {{mode}} · {{freq}} MHz',

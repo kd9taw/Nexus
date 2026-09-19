@@ -15,7 +15,7 @@ import { useLogbookGlobe } from '../features/logbookGlobe'
 import { modeKey } from '../features/callHistory'
 import { NO_LOG, refreshSharedLog, useSharedLog } from '../features/logStore'
 import { lotwBacklog } from '../features/lotwBacklog'
-import { UTC_TIME_FORMATS, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
+import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
@@ -575,6 +575,9 @@ export function Logbook({
   }
   // Marks the time box while what is in it is not a 24-hour UTC time; saving then refuses.
   const whenTimeBad = draft.whenTime.trim() !== '' && parseUtcTime(draft.whenTime) === null
+  // The same for the date box — a day that does not exist (2026-02-30) is refused, not rolled
+  // forward, and the operator keeps what they typed instead of watching the box blank itself.
+  const whenDateBad = draft.whenDate.trim() !== '' && parseUtcDate(draft.whenDate) === null
 
   // Open the form pre-filled to correct an existing entry (busted call, wrong band…).
   const startEdit = (q: LoggedQso, i: number) => {
@@ -960,7 +963,7 @@ export function Logbook({
     const whenTyped = draft.whenDate.trim() !== '' || draft.whenTime.trim() !== ''
     const when = whenTyped ? utcDateTimeToUnix(draft.whenDate, draft.whenTime) : null
     if (whenTyped && when === null) {
-      setErr(t('logbook.form.whenInvalid', UTC_TIME_FORMATS))
+      setErr(t('logbook.form.whenInvalid', { date: UTC_DATE_FORMAT, ...UTC_TIME_FORMATS }))
       return
     }
     const freq = Number(draft.freq)
@@ -1536,11 +1539,18 @@ export function Logbook({
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.date.label')}</span>
+              {/* UTC as typed, beside the time and for the same reason (#280): a native date
+                  control is drawn in the OS locale and its "Today" fills the LOCAL date, which
+                  after 0000Z west of Greenwich is the previous UTC day. */}
               <input
-                className="settings-input logbook-when"
-                type="date"
+                className={`settings-input mono logbook-when${whenDateBad ? ' invalid' : ''}`}
                 value={draft.whenDate}
                 onChange={(e) => setField('whenDate', e.target.value)}
+                placeholder={UTC_DATE_FORMAT}
+                maxLength={10}
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={whenDateBad}
                 title={t('logbook.field.when.title')}
               />
             </label>

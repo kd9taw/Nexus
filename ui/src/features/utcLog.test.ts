@@ -6,7 +6,7 @@
 // And draw the time through the OS locale and a 12-hour PC shows 00:58 as "12:58 AM" (#280).
 // These pin the conversion, on the module both forms use (this file used to test copies).
 import { describe, it, expect } from 'vitest'
-import { parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from './utcLog'
+import { parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from './utcLog'
 
 const at = (y: number, mo: number, d: number, h: number, m: number, s = 0) =>
   Math.floor(Date.UTC(y, mo - 1, d, h, m, s) / 1000)
@@ -51,6 +51,23 @@ describe('manual-log UTC handling', () => {
     // Date.UTC would roll these forward to a day nobody typed.
     expect(utcDateTimeToUnix('2026-02-30', '12:00')).toBeNull()
     expect(utcDateTimeToUnix('2026-13-01', '12:00')).toBeNull()
+  })
+})
+
+describe('the UTC date box', () => {
+  it('takes YYYY-MM-DD, including a leap day', () => {
+    expect(parseUtcDate('2026-09-14')).toEqual({ y: 2026, mo: 9, d: 14 })
+    expect(parseUtcDate(' 2028-02-29 ')).toEqual({ y: 2028, mo: 2, d: 29 })
+  })
+
+  it('refuses a day that does not exist, a locale order, and a half-typed date', () => {
+    // 2026 is not a leap year, and Date.UTC would roll each of these forward to a day nobody
+    // typed rather than say no.
+    for (const bad of ['2026-02-29', '2026-02-30', '2026-13-01', '2026-00-10', '2026-09-31',
+      '9/14/2026', '14-09-2026', '2026-9-14', '2026-09', '20260914', 'today', '']) {
+      expect(parseUtcDate(bad), bad).toBeNull()
+      expect(utcDateTimeToUnix(bad, '12:00'), bad).toBeNull()
+    }
   })
 })
 
