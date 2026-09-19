@@ -14179,13 +14179,20 @@ struct LogDelta {
 /// else — an edit, a delete, an import that changed a held row, a sync, an upload stamp, a
 /// reload, or a revision this log never held — `full` is set and `rows` is the whole log,
 /// exactly as [`get_log`] returns it. Rows are converted exactly as `get_log`'s are.
-#[tauri::command(async)]
-fn get_log_delta(
+#[tauri::command]
+async fn get_log_delta(
     state: State<'_, SharedEngine>,
     since_revision: u64,
     have_count: usize,
 ) -> Result<LogDelta, String> {
-    Ok(log_delta(&state, since_revision, have_count))
+    // On the blocking pool, like `with_engine`'s commands (#335): every window asks for this
+    // on every log change, it waits for the engine lock, and a full answer's per-row country
+    // lookup is CPU-bound — none of which may occupy a tokio worker the lock-free waterfall
+    // and meter reads need. `log_delta` takes and releases the lock itself.
+    let engine = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || log_delta(&engine, since_revision, have_count))
+        .await
+        .map_err(|e| format!("engine task failed: {e}"))
 }
 
 fn log_delta(engine: &Mutex<Engine>, since_revision: u64, have_count: usize) -> LogDelta {
