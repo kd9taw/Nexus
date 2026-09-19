@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { checkBetaUpdate, installBetaUpdate, prepareUpdateInstall, restartApp, updateInstallBlock } from './api'
+import { pollSingleFlight } from './singleFlight'
 
 type Phase = 'idle' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'
 
@@ -147,18 +148,13 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
   // the moment the radio goes idle rather than after the next click.
   useEffect(() => {
     if (phase !== 'ready') return
-    let alive = true
-    const poll = () => {
+    // Single-flight (#335): `update_install_block` takes the engine mutex, so a tick skips while
+    // the last read is still out.
+    return pollSingleFlight('update block', 2000, (owns) =>
       updateInstallBlock()
-        .then((r) => alive && setBlockReason(r))
-        .catch(() => {})
-    }
-    poll()
-    const id = window.setInterval(poll, 2000)
-    return () => {
-      alive = false
-      window.clearInterval(id)
-    }
+        .then((r) => owns() && setBlockReason(r))
+        .catch(() => {}),
+    )
   }, [phase])
 
   const install = useCallback(() => {

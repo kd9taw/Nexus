@@ -85,6 +85,7 @@ import { tleRefreshMessage } from '../features/tleMessages'
 import { heatPulse } from '../features/pulse'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
+import { pollSingleFlight } from '../singleFlight'
 import { T } from '../i18n/T'
 import { MapView } from './MapView'
 import { LogEntry } from './LogEntry'
@@ -2172,52 +2173,37 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
   // header badge saying Doppler was live).
   useEffect(() => {
     if(remote)return
-    let live = true
-    // The 2 s tick can lap a slow answer, and a lapped answer applied late
-    // briefly shows a dead pass as "live". Answers carry their issue number;
-    // a straggler that lost the race is dropped, never applied. (The LOS
-    // handback notice this guard once protected now fires from the app-wide
-    // watcher — features/satPassAlert.ts — so it lands even when this
-    // section is closed at LOS.)
-    let issued = 0
-    let applied = 0
-    const load = () => {
-      const seq = ++issued
-      getSatTrackStatus()
-        .then((t) => {
-          if (!live || seq < applied) return
-          applied = seq
-          setTrack(t)
-        })
-        .catch(() => {})
-      getSatTransponder()
-        .then((h) => {
-          if (!live || pickBusy.current) return
+    // ONE single-flight poll (#335): the transponder and Settings reads take the engine mutex,
+    // so a tick skips while any of the last set is still out. That also settles the race the
+    // issue numbers here used to guard — the 2 s tick lapping a slow answer, which applied late
+    // briefly showed a dead pass as "live": a set never laps the one before it now, and a set
+    // the watchdog gave up on delivers nothing. (The LOS handback notice that guard once
+    // protected fires from the app-wide watcher — features/satPassAlert.ts — so it lands even
+    // when this section is closed at LOS.)
+    return pollSingleFlight('satellites', 2000, (owns) =>
+      Promise.allSettled([
+        getSatTrackStatus().then((t) => {
+          if (owns()) setTrack(t)
+        }),
+        getSatTransponder().then((h) => {
+          if (!owns() || pickBusy.current) return
           setBinding(h?.binding ?? null)
           setTuned((cur) => {
             if (h == null || h.index == null) return null
             if (cur && cur.name === h.name && cur.index === h.index) return cur // keep `auto`
             return { name: h.name, index: h.index }
           })
-        })
-        .catch(() => {})
-      if (!settingsWriteBusy.current) {
-        getSettings()
-          .then((s: Settings) => {
-            if (!live || settingsWriteBusy.current) return
-            setDopplerOn(!s.satDopplerOff)
-            setVfoMap(s.satVfoMap ?? 'off')
-            setPegged(!!s.radioPegged)
-          })
-          .catch(() => {})
-      }
-    }
-    load()
-    const id = window.setInterval(load, 2000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
+        }),
+        settingsWriteBusy.current
+          ? Promise.resolve()
+          : getSettings().then((s: Settings) => {
+              if (!owns() || settingsWriteBusy.current) return
+              setDopplerOn(!s.satDopplerOff)
+              setVfoMap(s.satVfoMap ?? 'off')
+              setPegged(!!s.radioPegged)
+            }),
+      ]),
+    )
   }, [])
 
   // ONE-TIME FAVORITES SEEDING. A first-run operator lands on an empty

@@ -73,6 +73,7 @@ import {
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { announce } from '../announce'
 import { pushToast, withErrorToast } from '../toast'
+import { pollSingleFlight } from '../singleFlight'
 import { t } from '../i18n'
 // The 15 transmittable modes, their rasters and their exact key-down seconds. A pure
 // module because Settings ▸ Digital ▸ SSTV picks the DEFAULT mode from the same rows —
@@ -611,26 +612,28 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   snapRef.current = snap
   useEffect(() => {
     if (!active || (remote && !dataAvailable)) { if (remote) {setSstv(null);setPlan([]);setPollError(true)};return }
-    let alive = true
-    const tick = () => {
-      if (!remote) setNow(Math.floor(Date.now() / 1000))
+    // The local clock ticks on its own: the state read below is single-flight (#335 —
+    // `get_sstv_state` takes the engine mutex, so a tick skips while the last read is out), and
+    // a skipped read must not stop the clock.
+    const clock = () => setNow(Math.floor(Date.now() / 1000))
+    if (!remote) clock()
+    const clockId = remote ? undefined : window.setInterval(clock, 1000)
+    const stop = pollSingleFlight('sstv state', 1000, (owns) =>
       getSstvState()
         .then((s) => {
-          if (alive) {
+          if (owns()) {
             setSstv(s)
             if (remote) { setPlan(sstvPlan(s)); setNow(Math.floor(displayNow(s)/1000)) }
             setPollError(false)
           }
         })
         .catch(() => {
-          if (alive) { setPollError(true); if(remote){setSstv(null);setPlan([])} }
-        })
-    }
-    tick()
-    const id = window.setInterval(tick, 1000)
+          if (owns()) { setPollError(true); if(remote){setSstv(null);setPlan([])} }
+        }),
+    )
     return () => {
-      alive = false
-      window.clearInterval(id)
+      window.clearInterval(clockId)
+      stop()
     }
   }, [active, remote, dataAvailable])
 

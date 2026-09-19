@@ -15,6 +15,7 @@ import { useLogbookGlobe } from '../features/logbookGlobe'
 import { modeKey } from '../features/callHistory'
 import { NO_LOG, refreshSharedLog, useSharedLog } from '../features/logStore'
 import { lotwBacklog } from '../features/lotwBacklog'
+import { UTC_TIME_FORMATS, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
@@ -75,10 +76,14 @@ interface DraftQso {
   qth: string
   comment: string
   notes: string
-  /** UTC date+time the contact happened, as `YYYY-MM-DDTHH:MM` (the datetime-local format).
-   * THE field that makes hand-logging work: you log a 2 m contact after the fact, so stamping
-   * "now" writes the wrong time into the log and into every upload downstream. */
-  whenUtc: string
+  /** When the contact happened, in UTC: the date (`YYYY-MM-DD`) and a 24-hour time (`HH:MM` or
+   * `HH:MM:SS`, features/utcLog). THE fields that make hand-logging work: you log a 2 m contact
+   * after the fact, so stamping "now" writes the wrong time into the log and into every upload
+   * downstream. The time is a text box, not a native control, because WebView2 draws those in
+   * the OS locale — 00:58 read "12:58 AM" on a 12-hour PC, and records got "fixed" by 12 hours
+   * (#280). Both blank = now (a new contact) or the stored time (an edit). */
+  whenDate: string
+  whenTime: string
   /** US state (WAS). The auto-log path fills this from the callsign/grid; a hand-logged
    * contact has no decode to derive it from, so it has to be typeable or WAS silently misses. */
   state: string
@@ -191,25 +196,6 @@ const HRDLOG_LABEL = 'HL'
 // Technical product token, not prose — same ruling as the labels above.
 const WRL_LABEL = 'WRL'
 const QSL_MENU_LABEL = 'QSL▸'
-
-/** Parse a `datetime-local` value as UTC seconds. The browser's own Date parsing treats a
- * bare `YYYY-MM-DDTHH:MM` as LOCAL time; a log is UTC, so an operator in EN52 typing the UTC
- * time off their clock would otherwise have it silently shifted by their offset. Returns null
- * for an empty/unparseable value so the caller can fall back. */
-function parseUtcLocal(v: string): number | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v.trim())
-  if (!m) return null
-  const [, y, mo, d, h, mi] = m
-  const ms = Date.UTC(+y, +mo - 1, +d, +h, +mi)
-  return Number.isNaN(ms) ? null : Math.floor(ms / 1000)
-}
-
-/** Format Unix seconds as the `datetime-local` UTC value the form edits. */
-function toUtcLocal(whenUnix: number): string {
-  const d = new Date(whenUnix * 1000)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
-}
 
 function fmtUtc(whenUnix: number): string {
   const d = new Date(whenUnix * 1000)
@@ -330,7 +316,8 @@ export function Logbook({
     qth: '',
     comment: '',
     notes: '',
-    whenUtc: '',
+    whenDate: '',
+    whenTime: '',
     state: '',
     txPower: '',
     parkTheirRef: '',
@@ -586,6 +573,8 @@ export function Logbook({
     setErr(null)
     setDraft((prev) => ({ ...prev, [k]: v }))
   }
+  // Marks the time box while what is in it is not a 24-hour UTC time; saving then refuses.
+  const whenTimeBad = draft.whenTime.trim() !== '' && parseUtcTime(draft.whenTime) === null
 
   // Open the form pre-filled to correct an existing entry (busted call, wrong band…).
   const startEdit = (q: LoggedQso, i: number) => {
@@ -603,7 +592,8 @@ export function Logbook({
       qth: q.qth ?? '',
       comment: q.comment ?? '',
       notes: q.notes ?? '',
-      whenUtc: toUtcLocal(q.whenUnix),
+      whenDate: utcDate(q.whenUnix),
+      whenTime: utcTime(q.whenUnix),
       state: q.state ?? '',
       txPower: q.txPower != null ? String(q.txPower) : '',
       parkTheirRef: q.ota?.theirRef ?? '',
@@ -964,6 +954,15 @@ export function Logbook({
       setErr(t('logbook.form.callRequired'))
       return
     }
+    // The typed UTC instant (#280): the time box is free text, so it is checked here, and a
+    // time that is not one is refused rather than guessed at. Both boxes blank keeps the
+    // fallback below — now for a new contact, the stored time for an edit.
+    const whenTyped = draft.whenDate.trim() !== '' || draft.whenTime.trim() !== ''
+    const when = whenTyped ? utcDateTimeToUnix(draft.whenDate, draft.whenTime) : null
+    if (whenTyped && when === null) {
+      setErr(t('logbook.form.whenInvalid', UTC_TIME_FORMATS))
+      return
+    }
     const freq = Number(draft.freq)
     const existing = editing?.row
     const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
@@ -979,7 +978,7 @@ export function Logbook({
           state: draft.state.trim().toUpperCase() || null, band: draft.band.trim(), freqMhz: freq, mode: draft.mode.trim(),
           rstSent: parseReport(draft.rstSent), rstRcvd: parseReport(draft.rstRcvd), name: draft.name.trim() || null,
           qth: draft.qth.trim() || null, comment: draft.comment.trim() || null, notes: draft.notes.trim() || null,
-          whenUnix: parseUtcLocal(draft.whenUtc) ?? existing?.whenUnix ?? null, confirmed: false, awardConfirmed: false,
+          whenUnix: when ?? existing?.whenUnix ?? null, confirmed: false, awardConfirmed: false,
           // The stored program rides through, as on the desktop path: WWFF (an ADIF SIG kept
           // verbatim) is a real value, and coercing it to SOTA-or-POTA rewrote the park on any edit.
           ...(parkTheirRef ? { ota: { theirProgram: existing?.ota?.theirProgram || 'POTA', theirRef: parkTheirRef } } : {}),
@@ -1005,7 +1004,7 @@ export function Logbook({
         if (outcome.outcome === 'applied') {
           pushToast(t('remote.loggingSaved'), 'success')
           setShowForm(false)
-          setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', parkTheirRef: '' }))
+          setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', state: '', txPower: '', parkTheirRef: '' }))
           remoteLog.refresh(at)
         } else if (outcome.outcome === 'rejected') pushToast(t('remote.loggingRefused'), 'error', 6000)
       } catch (e) {
@@ -1047,8 +1046,7 @@ export function Logbook({
       // The operator's typed UTC wins; otherwise keep the original (edit) or stamp now (new).
       // Hand-logging is inherently after the fact, so "now" is the wrong default whenever the
       // operator has told us when it actually happened.
-      whenUnix: parseUtcLocal(draft.whenUtc)
-        ?? (existing ? existing.whenUnix : Math.floor(Date.now() / 1000)),
+      whenUnix: when ?? (existing ? existing.whenUnix : Math.floor(Date.now() / 1000)),
       confirmed: existing ? existing.confirmed : false,
       awardConfirmed: existing ? existing.awardConfirmed : false,
       // Upload/confirmation policy lives in the BACKEND (Logbook::update_record),
@@ -1083,7 +1081,7 @@ export function Logbook({
         }
         pushToast(t('logbook.form.updated', { call: record.call }), 'success')
         cancelForm()
-        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
+        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
         load()
       }
       return
@@ -1092,7 +1090,7 @@ export function Logbook({
     if (snap) {
       load()
       setShowForm(false)
-      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', myGrid: '', myRig: '' }))
+      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', state: '', txPower: '', myGrid: '', myRig: '' }))
       // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
       // (every log path, the engine auto-log included); outcomes toast via the
       // snapshot uploadTick.
@@ -1537,12 +1535,27 @@ export function Logbook({
               <input className="settings-input" value={draft.rstRcvd} onChange={(e) => setField('rstRcvd', e.target.value)} placeholder={LOG_EXAMPLES.rstRcvd} autoComplete="off" />
             </label>
             <label className="logbook-field">
-              <span>{t('logbook.field.when.label')}</span>
+              <span>{t('logbook.field.date.label')}</span>
               <input
                 className="settings-input logbook-when"
-                type="datetime-local"
-                value={draft.whenUtc}
-                onChange={(e) => setField('whenUtc', e.target.value)}
+                type="date"
+                value={draft.whenDate}
+                onChange={(e) => setField('whenDate', e.target.value)}
+                title={t('logbook.field.when.title')}
+              />
+            </label>
+            <label className="logbook-field">
+              <span>{t('logbook.field.time.label')}</span>
+              {/* 24-hour UTC as typed — a native time control would draw it in the OS locale (#280). */}
+              <input
+                className={`settings-input mono${whenTimeBad ? ' invalid' : ''}`}
+                value={draft.whenTime}
+                onChange={(e) => setField('whenTime', e.target.value)}
+                placeholder={UTC_TIME_FORMATS.short}
+                maxLength={8}
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={whenTimeBad}
                 title={t('logbook.field.when.title')}
               />
             </label>

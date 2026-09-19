@@ -6,6 +6,7 @@
 
 import type { RemoteStationAction, RemoteStationStatus } from './remote-native/types'
 import { remoteApplicationTransport } from './applicationTransport'
+import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
 import type { SelfSpotReport } from './selfSpot'
 import type {
@@ -2955,20 +2956,29 @@ export async function exportLog(format: 'cabrillo' | 'adif'): Promise<string> {
  * listener; polling keeps the contract dependency-free).
  */
 export function subscribeSnapshot(fn: (snap: AppSnapshot) => void): () => void {
-  let alive = true
   // 300 ms: the dial-lag fix's real lever is the backend's fast ~180 ms dial read-back (was 750 ms),
   // so a knob turn now tracks in well under a second even at this UI cadence, and wheel-tuning
   // updates the readout instantly via the flushed set_frequency snapshot. Kept at 300 ms (not
   // faster) because get_snapshot still does an O(roster×log) worked-before scan under the engine
   // mutex — Wave 1 optimizes that scan, after which this can safely drop to ~150 ms.
-  const id = window.setInterval(() => {
-    if (!alive) return
-    invoke<AppSnapshot>('get_snapshot').then(fn).catch(() => {})
-  }, 300)
-  return () => {
-    alive = false
-    window.clearInterval(id)
-  }
+  //
+  // SINGLE-FLIGHT (#335). `get_snapshot` waits for the engine mutex on a tokio worker, and the
+  // mutex is held across blocking CAT I/O and log saves. A bare interval stacked a new waiter
+  // every tick through such a stall — from each window that polls — until no worker was left for
+  // the lock-free waterfall row. A tick now skips while the last snapshot is still out, so the
+  // cadence changes only while the backend is stalled; the watchdog gives up a call that never
+  // answers (see `pollSingleFlight`), and a late answer it gave up on is never delivered.
+  return pollSingleFlight(
+    'snapshot',
+    300,
+    (owns) =>
+      invoke<AppSnapshot>('get_snapshot')
+        .then((snap) => {
+          if (owns()) fn(snap)
+        })
+        .catch(() => {}),
+    { leading: false },
+  )
 }
 
 /** Fetch the next waterfall row (a real Spectrum from the core). */

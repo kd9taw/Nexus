@@ -43,6 +43,7 @@ import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 import { APRS_FREQS, BEACON_SYMBOLS, resolveAprsChannel } from '../aprsBeacon'
 import { parseOperatorNumber } from '../numInput'
 import { t } from '../i18n'
+import { pollSingleFlight } from '../singleFlight'
 
 /** The mode's own name — four letters, the same in every language. */
 const APRS_MODE = 'APRS'
@@ -770,27 +771,22 @@ export function AprsCockpit({
   // Poll the heard list + decoder health (and tick the age clock) while the cockpit is visible.
   useEffect(() => {
     if (!active || remote) return
-    let alive = true
-    const tick = () => {
-      setNow(Math.floor(Date.now() / 1000))
-      void getAprsHeard()
-        .then((h) => alive && setHeard((prev) => (samePackets(prev, h) ? prev : h)))
-        .catch(() => {})
-      void getAprsStations()
-        .then((v) => alive && setRoster((prev) => (sameRoster(prev, v) ? prev : v)))
-        .catch(() => {})
-      void getAprsHealth()
-        .then((h) => alive && setHealth(h))
-        .catch(() => {})
-      void getAprsIsStatus()
-        .then((s) => alive && setIsStatus(s))
-        .catch(() => {})
-    }
-    tick()
-    const id = window.setInterval(tick, 2000)
+    // The age clock ticks on its own; the four reads are ONE single-flight poll (#335): each
+    // takes the engine mutex, so a tick skips while any of the last set is still out.
+    const clock = () => setNow(Math.floor(Date.now() / 1000))
+    clock()
+    const clockId = window.setInterval(clock, 2000)
+    const stop = pollSingleFlight('aprs', 2000, (owns) =>
+      Promise.allSettled([
+        getAprsHeard().then((h) => owns() && setHeard((prev) => (samePackets(prev, h) ? prev : h))),
+        getAprsStations().then((v) => owns() && setRoster((prev) => (sameRoster(prev, v) ? prev : v))),
+        getAprsHealth().then((h) => owns() && setHealth(h)),
+        getAprsIsStatus().then((s) => owns() && setIsStatus(s)),
+      ]),
+    )
     return () => {
-      alive = false
-      window.clearInterval(id)
+      window.clearInterval(clockId)
+      stop()
     }
   }, [active, remote])
 

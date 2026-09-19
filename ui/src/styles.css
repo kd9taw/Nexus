@@ -8449,8 +8449,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-family: var(--font-mono);
   font-weight: 700;
 }
+/* The band you are on is ringed as a whole item. A 3 px inset bar on its left edge alone read as
+   "(" on the rounded item (#323). A ring rather than a tint: it changes nothing under the text,
+   so every condition word keeps the contrast it has on the rest of the menu (an accent tint took
+   the faint "unknown" word below 3.5:1 in the dark theme). band-menu-checked.test.ts resolves
+   this against the sheet in every theme. */
 .band-menu-item[data-state='checked'] {
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 .band-menu-cond {
   display: inline-flex;
@@ -12732,11 +12737,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .logbook-field-wide {
   grid-column: 1 / -1;
 }
-/* macOS WKWebView renders the native <input type="datetime-local"> control wider than
-   Chromium does and clips the minutes segment inside a ~140px grid cell (#233, NEEDS-BENCH
-   mac). Give this one input a floor wide enough for the mac control; Chromium's control fits
-   comfortably within it, so the desktop layout is unchanged. Scoped to this input only — never
-   the shared .settings-input. */
+/* macOS WKWebView renders the native date controls wider than Chromium does and clipped the old
+   <input type="datetime-local"> inside a ~140px grid cell (#233, NEEDS-BENCH mac). Since #280 the
+   time is a plain text box and only the DATE is native; the floor stays on it until a mac shows
+   the date control fits without one. Chromium's control fits comfortably within it, so the
+   desktop layout is unchanged. Scoped to this input only — never the shared .settings-input. */
 .logbook-field .logbook-when {
   min-width: 190px;
 }

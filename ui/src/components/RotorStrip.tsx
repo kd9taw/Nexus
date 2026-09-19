@@ -31,6 +31,7 @@ import type { SatTrackStatus, SatTransponderHeld } from '../types'
 import { magneticDeg } from '../grid'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
+import { pollSingleFlight } from '../singleFlight'
 
 /** The strip's annunciator plates — what the chip is, in the shortest form that fits a cockpit
  *  header bar. Instrument marks rather than sentences (the CwCockpit `SPLIT ▲` / `REC` class),
@@ -113,25 +114,23 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
         alive.current = false
       }
     }
-    const load = () => {
-      readRotator()
-        .then((v) => alive.current && setAz(v))
-        .catch(() => alive.current && setAz(null))
-      getSatTrackStatus()
-        .then((t) => alive.current && setSatTrack(t))
-        .catch(() => {})
-      getSatTransponder()
-        .then((h) => alive.current && setHeld(h))
-        .catch(() => {})
-    }
-    load()
-    const id = window.setInterval(load, 2_000)
+    // One single-flight poll (#335): `read_rotator` and `get_sat_transponder` take the engine
+    // mutex, so a tick skips while any of the last set is still out.
+    const stop = pollSingleFlight('rotor', 2_000, (owns) =>
+      Promise.allSettled([
+        readRotator()
+          .then((v) => owns() && setAz(v))
+          .catch(() => owns() && setAz(null)),
+        getSatTrackStatus().then((t) => owns() && setSatTrack(t)),
+        getSatTransponder().then((h) => owns() && setHeld(h)),
+      ]),
+    )
     getDeclination()
       .then((d) => alive.current && setDeclination(d))
       .catch(() => {})
     return () => {
       alive.current = false
-      window.clearInterval(id)
+      stop()
     }
   }, [active, local])
 

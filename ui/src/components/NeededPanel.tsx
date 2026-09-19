@@ -32,6 +32,7 @@ import { pointRotator, readRotator, openQrzPage } from '../api'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { pushToast, withErrorToast } from '../toast'
+import { pollSingleFlight } from '../singleFlight'
 import { RarityChip } from './RarityChip'
 import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
@@ -56,17 +57,13 @@ function RotatorWidget({ remote = false }: { remote?: boolean }) {
   const heading = useRotatorHeading(remote)
   useEffect(() => {
     if (remote) return
-    let live = true
-    const poll = () =>
+    // Single-flight (#335): `read_rotator` takes the engine mutex and then waits on rotctld,
+    // which may be down; a tick skips while the last read is still out.
+    return pollSingleFlight('rotator widget', 5000, (owns) =>
       readRotator()
-        .then((a) => live && setAz(a))
-        .catch(() => {}) // best-effort — rotctld may be down; the readout just shows —
-    poll()
-    const id = window.setInterval(poll, 5000)
-    return () => {
-      live = false
-      window.clearInterval(id)
-    }
+        .then((a) => owns() && setAz(a))
+        .catch(() => {}), // best-effort — rotctld may be down; the readout just shows —
+    )
   }, [remote])
   const point = async () => {
     // Mirrors the Go button's disabled gate — the Enter key path must never slew

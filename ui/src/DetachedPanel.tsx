@@ -19,6 +19,7 @@ import { t } from './i18n'
 import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
 import { withErrorToast } from './toast'
+import { pollSingleFlight } from './singleFlight'
 import { WSPR_WATERFALL_WINDOW } from './waterfall'
 import type {
   AppSnapshot,
@@ -267,34 +268,36 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     }
   }, [snap?.link.tier])
 
-  // Propagation + needs + band plan + settings: this window polls the shared engine.
+  // Propagation + needs + band plan + settings: this window polls the shared engine. Each poll
+  // is single-flight (#335): all three take the engine mutex, and a propagation read can run
+  // for seconds behind a slow fetch, so a tick skips while its last read is still out — this
+  // window is open by default, and every stacked read held a backend worker.
   useEffect(() => {
     let live = true
-    const loadProp = () =>
+    const stopProp = pollSingleFlight('pop-out propagation', 10_000, (owns) =>
       getPropagation()
         .then((p) => {
-          if (!live) return
+          if (!owns()) return
           setProp(p)
           // A pop-out is its own JS context: publish so its band dropdown shows conditions too.
           publishBandConditions(p)
         })
-        .catch(() => {})
-    const loadNeeds = () => getNeedAlerts().then((a) => live && setNeedAlerts(a)).catch(() => {})
+        .catch(() => {}),
+    )
+    const stopNeeds = pollSingleFlight('pop-out needs', 15_000, (owns) =>
+      getNeedAlerts().then((a) => owns() && setNeedAlerts(a)).catch(() => {}),
+    )
     // Settings aren't in the snapshot, so poll them too — otherwise a preferRrr / QSO-macro
     // change in the main window never reaches the detached cockpit.
-    const loadSettings = () => getSettings().then((s) => live && setSettings(s)).catch(() => {})
-    loadProp()
-    loadNeeds()
-    loadSettings()
+    const stopSettings = pollSingleFlight('pop-out settings', 15_000, (owns) =>
+      getSettings().then((s) => owns() && setSettings(s)).catch(() => {}),
+    )
     getBandPlan().then((b) => live && setBandPlan(b)).catch(() => {})
-    const idP = setInterval(loadProp, 10_000)
-    const idN = setInterval(loadNeeds, 15_000)
-    const idS = setInterval(loadSettings, 15_000)
     return () => {
       live = false
-      clearInterval(idP)
-      clearInterval(idN)
-      clearInterval(idS)
+      stopProp()
+      stopNeeds()
+      stopSettings()
     }
   }, [])
 
