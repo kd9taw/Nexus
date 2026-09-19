@@ -56,6 +56,7 @@ import {
   type RttySetId,
 } from '../features/rttyMacros'
 import { pushToast, withErrorToast } from '../toast'
+import { pollSingleFlight } from '../singleFlight'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
@@ -228,20 +229,15 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       if (!control) setRtty(null)
       return
     }
-    let alive = true
-    const tick = () => {
+    // Single-flight (#335): `get_rtty_state` takes the engine mutex, so a tick skips while the last
+    // read is still out instead of stacking another waiter behind a CAT stall.
+    return pollSingleFlight('rtty state', 500, (owns) =>
       getRttyState()
         .then((s) => {
-          if (alive) setRtty(s)
+          if (owns()) setRtty(s)
         })
-        .catch(() => { if (alive && !control) setRtty(null) })
-    }
-    tick()
-    const id = window.setInterval(tick, 500)
-    return () => {
-      alive = false
-      window.clearInterval(id)
-    }
+        .catch(() => { if (owns() && !control) setRtty(null) }),
+    )
   }, [active, control, dataAvailable])
 
   // Arm the decoder on ENTERING the view. RTTY was the ONLY decode mode without this — PSK,

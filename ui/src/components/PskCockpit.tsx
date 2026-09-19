@@ -35,6 +35,7 @@ import {
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
+import { pollSingleFlight } from '../singleFlight'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { confidenceRuns } from '../transcript'
@@ -157,20 +158,15 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       if (!control) setPsk(null)
       return
     }
-    let alive = true
-    const tick = () => {
+    // Single-flight (#335): `get_psk_state` takes the engine mutex, so a tick skips while the last
+    // read is still out instead of stacking another waiter behind a CAT stall.
+    return pollSingleFlight('psk state', 500, (owns) =>
       getPskState()
         .then((s) => {
-          if (alive) setPsk(s)
+          if (owns()) setPsk(s)
         })
-        .catch(() => { if (alive && !control) setPsk(null) })
-    }
-    tick()
-    const id = window.setInterval(tick, 500)
-    return () => {
-      alive = false
-      window.clearInterval(id)
-    }
+        .catch(() => { if (owns() && !control) setPsk(null) }),
+    )
   }, [active, control, dataAvailable])
 
   // Arm the decoder on ENTERING the view (operator ruling 2026-08-17), so PSK

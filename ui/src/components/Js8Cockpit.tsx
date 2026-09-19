@@ -50,6 +50,7 @@ import { loadJs8Pins, saveJs8Pins, sortPinnedFirst, toggleJs8Pin } from '../feat
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useUnits } from '../units'
 import { pushToast, withErrorToast } from '../toast'
+import { pollSingleFlight } from '../singleFlight'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
 import {
@@ -179,20 +180,15 @@ export function Js8Cockpit({
   const remote = context.remote
   useEffect(() => {
     if (!active || (remote && !dataAvailable)) { if (remote) setJs8(null); return }
-    let alive = true
-    const tick = () => {
+    // Single-flight (#335): `get_js8_state` takes the engine mutex, so a tick skips while the last
+    // read is still out instead of stacking another waiter behind a CAT stall.
+    return pollSingleFlight('js8 state', 500, (owns) =>
       getJs8State()
         .then((s) => {
-          if (alive) setJs8(s)
+          if (owns()) setJs8(s)
         })
-        .catch(() => { if (alive && remote) setJs8(null) })
-    }
-    tick()
-    const id = window.setInterval(tick, 500)
-    return () => {
-      alive = false
-      window.clearInterval(id)
-    }
+        .catch(() => { if (owns() && remote) setJs8(null) }),
+    )
   }, [active, remote, dataAvailable])
 
   // Rising-edge toast for the idle-watchdog trip: the automatic origins just stood down

@@ -29,6 +29,7 @@ import type { SatTrackStatus } from '../../types'
 import { magneticDeg } from '../../grid'
 import { pushToast } from '../../toast'
 import { t } from '../../i18n'
+import { pollSingleFlight } from '../../singleFlight'
 
 const SIZE = 148
 const R = SIZE / 2 - 10
@@ -67,28 +68,28 @@ export function RotorPane() {
         if (alive.current) setConfigured((st.rotatorModel ?? 0) > 0 || st.rotatorHost.trim() !== '')
       })
       .catch(() => {})
-    const load = () => {
-      readRotator()
-        .then((v) => {
-          if (alive.current) setAz(v)
-        })
-        .catch(() => {
-          if (alive.current) setAz(null)
-        })
-      getSatTrackStatus()
-        .then((t) => {
-          if (alive.current) setSatTrack(t)
-        })
-        .catch(() => {})
-    }
-    load()
-    const id = window.setInterval(load, 2_000)
+    // One single-flight poll (#335): `read_rotator` takes the engine mutex (before the rotator
+    // I/O), so a tick skips while the last read is still out.
+    const stop = pollSingleFlight('rotor pane', 2_000, (owns) =>
+      Promise.allSettled([
+        readRotator()
+          .then((v) => {
+            if (owns()) setAz(v)
+          })
+          .catch(() => {
+            if (owns()) setAz(null)
+          }),
+        getSatTrackStatus().then((t) => {
+          if (owns()) setSatTrack(t)
+        }),
+      ]),
+    )
     getDeclination()
       .then((d) => alive.current && setDeclination(d))
       .catch(() => {})
     return () => {
       alive.current = false
-      window.clearInterval(id)
+      stop()
     }
   }, [])
 

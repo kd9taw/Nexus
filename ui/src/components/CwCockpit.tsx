@@ -71,6 +71,7 @@ import {
 } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
+import { pollSingleFlight } from '../singleFlight'
 import { controlFailureMessage } from '../remote-web/control-failure'
 import { latestOnly } from '../remote-web/latest-only'
 import { SplitControl } from './SplitControl'
@@ -782,11 +783,10 @@ export function CwCockpit({
   }, [guide.workedCall, macros])
   useEffect(() => {
     if (!active) return
-    let alive = true
-    const tick = () => {
+    const tick = (owns: () => boolean) =>
       cwDecode(sensitivityRef.current)
         .then((d) => {
-          if (alive) {
+          if (owns()) {
             setDecodeAvailable(true)
             setDecoded({ text: d.text, wpm: d.wpm })
             setSent(d.sent)
@@ -804,21 +804,16 @@ export function CwCockpit({
           }
         })
         .catch(() => {
-          if (alive && !control) {
+          if (owns() && !control) {
             setDecodeAvailable(false); setDecoded({ text: '', wpm: 0 }); setSent([]); setCand([]); setKeyerError(null)
             setGuide({ state: 'listening', headline: '', prompt: '', recommended: null, workedCall: null, rst: null, name: null })
           }
         })
-    }
-    tick()
     // Poll the decoded transcript often — the Rust streaming decoder updates every ~20 ms, so a
     // slow poll is pure display lag (the "desktop lags the web decoder" report). 200 ms ≈ 5 Hz
-    // keeps copy near real-time without hammering the command channel.
-    const id = window.setInterval(tick, 200)
-    return () => {
-      alive = false
-      window.clearInterval(id)
-    }
+    // keeps copy near real-time without hammering the command channel. Single-flight (#335):
+    // `cw_decode` takes the engine mutex, so a tick skips while the last read is still out.
+    return pollSingleFlight('cw decode', 200, tick)
   }, [active, control])
   // Initialize the keyer toggle from the engine's ACTUAL setting (the snapshot is the source
   // of truth) — not a hard-coded 'cat'. A stale local default showed CAT while the backend was
