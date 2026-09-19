@@ -72,7 +72,7 @@ export class ResponsivenessProbe {
   private awaitingSend: Interaction[] = []
   private awaitingStop: Interaction | null = null
   private byRequest = new Map<string, Interaction[]>()
-  private flicker: { at: number; kind: FlickerKind }[] = []
+  private flicker: { at: number; kind: FlickerKind; back?: number }[] = []
   private held: boolean | null = null
   private lastReading: number | null = null
   private hosts: ProbeHosts | null = null
@@ -90,11 +90,16 @@ export class ResponsivenessProbe {
     this.attachedAt = this.now()
     hosts.operations.probe = this; hosts.tuning.probe = this; hosts.application.attachProbe(this)
     // The flicker predicate is `useStationHeld`'s, computed here from the same view so no hook and
-    // no component is touched: held control, gone by itself, is one flicker.
+    // no component is touched: held control, gone by itself, is one flicker. It has to be kept in
+    // step with that hook by hand — a term dropped there and left here would report a flicker the
+    // operator no longer sees, and the reverse would hide one they do. `controlPending` left both
+    // together (operator ruling 2026-09-16, a command in flight is not a loss of control).
     const watch = () => {
       const v = hosts.operations.getSnapshot()
-      const held = !!(v.connected && v.requestReady !== false && !v.unresolved && !v.controlPending && v.state?.phase === 'controlling')
+      const unknown = v.controlResult?.outcome === 'unknown' && !!v.controlPending
+      const held = !!(v.connected && !unknown && (v.requestReady !== false || v.controlPending) && !v.unresolved && v.state?.phase === 'controlling')
       if (this.held === true && !held) this.event('controlsOff')
+      if (this.held === false && held) this.heldAgain(this.now())
       this.held = held
     }
     this.unsubscribe = hosts.operations.subscribe(watch)
@@ -208,6 +213,18 @@ export class ResponsivenessProbe {
     }
   }
   readingRefused() { this.event('readingRefused') }
+  /** Close the open controls-off event, so the report can say how LONG the controls were dark and
+   * not merely how often they blinked. The count alone is not a measure of what the operator
+   * suffers and it misreported batch 1 to its own author: taking the pending receipt out of the
+   * predicate turned eight 550 ms blanks into twenty 100 ms ones on a 100 ms link, which the count
+   * read as two and a half times worse and the clock reads as less than half the darkness. */
+  private heldAgain(at: number) {
+    for (let i = this.flicker.length - 1; i >= 0; i--) {
+      if (this.flicker[i].kind !== 'controlsOff') continue
+      if (this.flicker[i].back === undefined) this.flicker[i].back = at
+      return
+    }
+  }
   private event(kind: FlickerKind, at = this.now()) {
     this.flicker.push({ at, kind })
     const keep = at - KEEP_MS
@@ -217,6 +234,9 @@ export class ResponsivenessProbe {
   report(): Measured {
     const run = this.interactions, end = this.runEnd || this.now()
     const during = this.flicker.filter(e => e.at >= this.runStart && e.at <= end).length
+    // Still dark when the run ended counts to the end of the run, never past it.
+    const darkMs = this.flicker.filter(e => e.kind === 'controlsOff' && e.at >= this.runStart && e.at <= end)
+      .reduce((total, e) => total + Math.max(0, Math.min(e.back ?? end, end) - e.at), 0)
     const idleFrom = Math.max(this.runStart - IDLE_WINDOW_MS, this.attachedAt), idle = this.flicker.filter(e => e.at >= idleFrom && e.at < this.runStart).length
     const of = (kind: InteractionKind) => run.filter(i => i.kind === kind)
     const rtt = run.filter(i => i.sent !== undefined && i.replied !== undefined).map(i => i.replied! - i.sent!)
@@ -242,7 +262,7 @@ export class ResponsivenessProbe {
       tune: summary(of('tune')),
       band: summary(of('band')),
       stop: stop ? { screen: since(stop, stop.perceived), sent: since(stop, stop.sent), accepted: since(stop, stop.confirmed), readout: since(stop, stop.readout) } : null,
-      flicker: { run: during, idle, idleMs: Math.max(0, this.runStart - idleFrom) },
+      flicker: { run: during, idle, idleMs: Math.max(0, this.runStart - idleFrom), darkMs },
       interactions: run.map(i => ({ ...i })),
       durationMs: end - this.runStart
     }
@@ -263,7 +283,7 @@ export type Measured = {
   tune: Summary
   band: Summary
   stop: { screen: number | null; sent: number | null; accepted: number | null; readout: number | null } | null
-  flicker: { run: number; idle: number; idleMs: number }
+  flicker: { run: number; idle: number; idleMs: number; darkMs: number }
   interactions: Interaction[]
   durationMs: number
 }

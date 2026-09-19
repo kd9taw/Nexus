@@ -91,7 +91,9 @@ it('saves depth once from the existing chip and waits for the station sample', a
   const request = h.writes()[0].request
   expect(request.action).toEqual({ action: 'decoder.depth', expectedTier: 'FT8', expectedDepth: 3, depth: 1 })
   expect(request.context).toEqual(h.state.controls.context)
-  expect(chip.disabled).toBe(true); fireEvent.click(chip); await tick(); expect(h.writes()).toHaveLength(1)
+  // Lit while it confirms (operator ruling 2026-09-16, batch 1): the second click is refused by
+  // the client, not by the button, and the write count is now the whole of the evidence.
+  expect(chip.disabled).toBe(false); fireEvent.click(chip); await tick(); expect(h.writes()).toHaveLength(1)
   act(() => h.reply({ operation: 'stationControl', operationId: request.requestId, outcome: 'applied', evidence: 'settingsSaved' })); await tick()
   expect(chip.getAttribute('aria-pressed')).toBe('false')
   h.rerender(h.view({ ...h.snap, radio: { ...h.snap.radio, decodeDepth: 1 } })); await tick()

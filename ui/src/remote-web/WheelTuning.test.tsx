@@ -23,6 +23,8 @@ import { useRemoteScopeClick } from './useRemoteScopeClick'
 vi.mock('../api', async original => ({ ...await original<Record<string, unknown>>(), setFrequency: vi.fn(async () => null) }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 import { setFrequency } from '../api'
+import { pushToast } from '../toast'
+import { t } from '../i18n'
 
 const closes: (() => void)[] = []
 afterEach(() => { cleanup(); closes.splice(0).forEach(f => f()); vi.useRealTimers(); vi.clearAllMocks() })
@@ -229,6 +231,7 @@ it('a nudge pressed while the page still draws the sample from before a readback
   expect(h.writes()[1].request.action.dialMhz).toBe(7.2011)
   act(() => h.finish()); await tick()
   expect(h.failed).not.toHaveBeenCalled()
+  expect(pushToast, 'a press the pipeline took says nothing').not.toHaveBeenCalled()
 })
 
 // ONE WRITER ON ONE DIAL. The strip's arrows used to command an absolute dial of their own, built
@@ -261,6 +264,31 @@ it('a nudge rounds to the step grid first, from the burst\'s own dial', async ()
   expect(h.tuning.nudgeSteps(1, 100, h.source())).toBe(true); await tick(120)
   expect(h.writes()).toHaveLength(1); expect(h.writes()[0].request.action.dialMhz).toBe(7.2003)
   act(() => h.finish()); await tick()
+})
+
+// A PRESS IS ONE GESTURE, SO IT SAYS SOMETHING. A wheel spin refuses quietly on purpose — ten
+// notches must not raise ten toasts — but an arrow that does nothing and says nothing reads as a
+// broken button. The button stays offered (the operator ruling is that held controls stay lit); the
+// press itself carries the refusal, in the same words every other refused-before-sending gesture
+// uses. Here the pipeline cannot take it because the observation this browser is looking at is not
+// current, which is the one state that leaves the arrows enabled and the controller refusing.
+it('a nudge the tuning pipeline cannot take says so once, rather than doing nothing', async () => {
+  const h = fixture()
+  const ui = render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+    <RemoteOperationsContext.Provider value={h.client}><RemoteWheelTuningContext.Provider value={h.tuning}>
+      <RemoteObservationContext.Provider value={{ ...h.observation, status: 'unavailable' } as MonitorState}>
+        <TuningStrip snap={h.getSnapshot()} step={100} showReadout={false}/>
+      </RemoteObservationContext.Provider>
+    </RemoteWheelTuningContext.Provider></RemoteOperationsContext.Provider>
+  </StationDataContext.Provider></StationControlContext.Provider>)
+  await tick()
+  const up = ui.getByRole('button', { name: 'Tune up 100 Hz' }) as HTMLButtonElement
+  expect(up.disabled, 'the button is still offered').toBe(false)
+  fireEvent.click(up); await tick(120)
+  expect(h.writes(), 'and nothing reached the station').toHaveLength(0)
+  expect(setFrequency).not.toHaveBeenCalled()
+  expect(pushToast).toHaveBeenCalledOnce()
+  expect(vi.mocked(pushToast).mock.calls[0][0]).toBe(t('remote.controlNotSent'))
 })
 
 it('control: once the station moved the dial after that readback, a nudge steps from the dial the page draws', async () => {
@@ -480,4 +508,31 @@ it('a confirmed command shows refresh progress, but a failed refresh and disconn
   expect(ui.container.textContent).not.toContain('Updating station controls')
   act(() => h.client.disconnected()); await tick()
   expect(ui.container.textContent).toContain('Station control disconnected')
+})
+
+// Since batch 1 the controls stay lit while a command confirms, so the banner is the ONLY place the
+// page says a command is out — and the only thing a test can wait on, the enabled state having
+// stopped being evidence that the last command landed.
+it('marks the confirming window in the banner, and an unknown outcome is not one', async () => {
+  const h = fixture(), ui = render(<LoggingAuthority client={h.client}/>)
+  const banner = () => ui.container.querySelector('.remote-logging-authority')!
+  expect(banner().hasAttribute('data-confirming')).toBe(false)
+  h.tuning.nudge(100, h.source()); await tick(120)
+  expect(h.sent.filter(w => w.request.type === 'stationControl'), 'a command really is out').toHaveLength(1)
+  expect(banner().getAttribute('data-confirming')).toBe('true')
+  act(() => h.finish()); await tick()
+  expect(banner().hasAttribute('data-confirming')).toBe(false)
+  ui.unmount()
+
+  // An outcome the browser could not resolve keeps its receipt, but it is a question for the
+  // operator rather than a confirming window: useStationHeld greys the controls for it, and the
+  // banner must not say the opposite. Its own fixture, because the command above spent this one's
+  // window and a second nudge would never leave.
+  const u = fixture(), other = render(<LoggingAuthority client={u.client}/>)
+  const held = () => other.container.querySelector('.remote-logging-authority')!
+  u.tuning.nudge(100, u.source()); await tick(120)
+  expect(held().getAttribute('data-confirming')).toBe('true')
+  act(() => u.finish('unknown')); await tick()
+  expect(u.client.getSnapshot().controlPending, 'the receipt is held for the operator').not.toBeNull()
+  expect(held().hasAttribute('data-confirming')).toBe(false)
 })

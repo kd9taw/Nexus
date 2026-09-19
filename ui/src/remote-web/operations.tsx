@@ -61,8 +61,14 @@ export function LoggingAuthority({ client, unavailable }: { client: OperationCli
   // pushed the Quick contact form under its nav), so xs/sm drop the reservation in CSS.
   const checking = !!view.controlPending && !view.controlSending
   const reserved = checking ? {} : { 'data-reserved': true, 'aria-hidden': true, tabIndex: -1 }
+  // CONFIRMING — a command is out and the browser is still resolving it. Since batch 1 the controls
+  // stay lit through this (operator ruling 2026-09-16), so it is the only place the state is on the
+  // page at all, and it is what a test waits on: a control's enabled state is no longer evidence
+  // that the last command has landed. An outcome that came back `unknown` is NOT this — it is a
+  // question for the operator, and `useStationHeld` greys the controls for it.
+  const confirming = !!view.controlPending && view.controlResult?.outcome !== 'unknown'
   return (
-    <div className="remote-logging-authority" data-station-state={view.state ? 'current' : shown ? 'retained' : undefined}>
+    <div className="remote-logging-authority" data-confirming={confirming || undefined} data-station-state={view.state ? 'current' : shown ? 'retained' : undefined}>
       <span className="remote-session-label">
         {unavailable !== undefined && <span role="alert" className="remote-session-unavailable">{unavailable ? t('remote.applicationUnavailable') + ' ' : null}</span>}
         <span role="status">{label}</span>
