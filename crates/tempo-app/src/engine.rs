@@ -11258,14 +11258,65 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let Some(mut held) = self.pending_logs.front().cloned() else {
             return false;
         };
+        let (was_call, was_sent, was_rcvd) = (
+            held.call.clone(),
+            held.rst_sent.clone(),
+            held.rst_rcvd.clone(),
+        );
         held.call = rec.call;
         held.grid = rec.grid;
         held.rst_sent = rec.rst_sent;
         held.rst_rcvd = rec.rst_rcvd;
+        self.rederive_after_edits(
+            &mut held,
+            &was_call,
+            was_sent.as_deref(),
+            was_rcvd.as_deref(),
+        );
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
         self.log_qso(held);
         true
+    }
+
+    /// ⭐ R2 (operator review, 2026-09-19) — WHAT THE POPUP'S EDITS MAKE STALE.
+    ///
+    /// The held record's COUNTRY and its #293 callbook NAME were derived from the call AS
+    /// DECODED, and `log_qso_inner` fills COUNTRY only when it is empty — so correcting EA3ABC
+    /// to EA8ABC logged and exported Spain, with a stranger's name. ADIF defines both as the
+    /// CONTACTED station's, so a corrected call drops them: COUNTRY (and STATE, for the same
+    /// reason) is left empty for the log funnel to resolve for the call actually worked, and
+    /// NAME is whatever a lookup in THIS session answered for the new call, which is usually
+    /// nothing. An unchanged call keeps everything, byte for byte.
+    ///
+    /// The reports have the same shape through `log_reports_to_comments`: the COMMENT is built
+    /// from the reports at hold time, and the invariant it was written with is that it "can
+    /// never disagree with the record". So an edited report rebuilds it — but ONLY when the
+    /// comment is still exactly the one we generated, never a comment from anywhere else.
+    fn rederive_after_edits(
+        &self,
+        held: &mut QsoRecord,
+        was_call: &str,
+        was_sent: Option<&str>,
+        was_rcvd: Option<&str>,
+    ) {
+        // The same rule `StationCore::update_qso` reads an edit with, so the two cannot
+        // disagree about what a correction is: the same call in another case is not one.
+        if !held.call.trim().eq_ignore_ascii_case(was_call.trim()) {
+            held.country = None; // `log_qso_inner` resolves it from the call it is logging
+            held.state = None;
+            held.name = self.callbook_name_for(&held.call);
+        }
+        if held.rst_sent.as_deref() != was_sent || held.rst_rcvd.as_deref() != was_rcvd {
+            let ours = reports_comment(&held.mode, was_sent, was_rcvd);
+            if held.comment == ours {
+                held.comment = reports_comment(
+                    &held.mode,
+                    held.rst_sent.as_deref(),
+                    held.rst_rcvd.as_deref(),
+                );
+            }
+        }
     }
 
     /// Discard the contact the popup is showing without logging it, promoting the next.
@@ -34750,6 +34801,89 @@ mod tests {
             e.pending_logs_waiting(),
             PENDING_LOG_QUEUE_CAP - 1,
             "and the queue stays bounded"
+        );
+    }
+
+    /// ⭐ R2 (operator review, 2026-09-19) — A CORRECTED CALL MUST NOT KEEP THE BUSTED CALL'S
+    /// COUNTRY AND NAME. The hold resolves COUNTRY from the call as DECODED and carries the
+    /// #293 callbook NAME for it, and `log_qso_inner` fills COUNTRY only when it is empty — so
+    /// a CW copy of EA8ABC as EA3ABC, corrected in the popup, still logged and exported Spain,
+    /// with a stranger's name. ADIF defines both as the contacted station's.
+    #[test]
+    fn a_corrected_call_logs_its_own_country_and_no_stale_name() {
+        for correct in [false, true] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.set_dxcc_resolver(|call| {
+                Some(if call.starts_with("EA8") {
+                    "Canary Islands".to_string()
+                } else {
+                    "Spain".to_string()
+                })
+            });
+            e.note_callbook_name("EA3ABC", "the other station's operator");
+            e.settings.prompt_to_log = true;
+            complete_a_contact(&mut e, "EA3ABC", 1);
+            let held = e.pending_log().cloned().expect("held for confirm");
+            assert_eq!(
+                held.country.as_deref(),
+                Some("Spain"),
+                "precondition: the hold carries the DECODED call's country"
+            );
+            assert!(held.name.is_some(), "…and that call's callbook name");
+
+            let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+            if correct {
+                sent.call = "EA8ABC".into();
+            }
+            assert!(confirm_held(&mut e, sent.into()));
+
+            let logged = &e.get_log()[0];
+            if correct {
+                assert_eq!(logged.call, "EA8ABC");
+                assert_eq!(
+                    logged.country.as_deref(),
+                    Some("Canary Islands"),
+                    "the country of the call actually worked"
+                );
+                assert_eq!(
+                    logged.name, None,
+                    "a name looked up for the other station is not this one's"
+                );
+            } else {
+                // CONTROL: an uncorrected confirm keeps what the hold carried.
+                assert_eq!(logged.call, "EA3ABC");
+                assert_eq!(logged.country.as_deref(), Some("Spain"));
+                assert_eq!(logged.name, held.name);
+            }
+        }
+    }
+
+    /// The same shape through `log_reports_to_comments`: the COMMENT is built from the reports
+    /// at hold time, and its own invariant is that it "can never disagree with the record". An
+    /// edited report used to leave the decoded ones in COMMENT — and in every export.
+    #[test]
+    fn an_edited_report_is_not_left_contradicted_by_the_comment() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.settings.log_reports_to_comments = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let held = e.pending_log().cloned().expect("held");
+        assert_eq!(
+            held.comment.as_deref(),
+            Some("FT8  Sent: -07  Rcvd: -10"),
+            "precondition: WSJT-X's own comment, from the decoded reports"
+        );
+
+        let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+        sent.rst_rcvd = Some("-15".into());
+        assert!(confirm_held(&mut e, sent.into()));
+
+        let logged = &e.get_log()[0];
+        assert_eq!(logged.rst_rcvd.as_deref(), Some("-15"));
+        assert_eq!(
+            logged.comment.as_deref(),
+            Some("FT8  Sent: -07  Rcvd: -15"),
+            "the comment must say what the record says"
         );
     }
 
