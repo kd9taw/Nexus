@@ -3209,17 +3209,42 @@ fn write_qso_wav_in(dir: &std::path::Path, call: &str, pcm: &[i16]) -> Result<Pa
     Ok(path)
 }
 
+/// Run `f` on the locked engine for a POLLED command (#335).
+///
+/// Tauri runs every async command on one tokio runtime with a worker per logical CPU, and
+/// `engine_lock` is a std mutex, so a command waiting for it holds a worker for the whole wait.
+/// The radio loop holds the engine across blocking CAT (up to 2.5 s on slow serial) and a log
+/// fsync, and the UI polls these commands on timers that do not wait for the last answer: one
+/// long hold filled every worker, and the lock-free waterfall and meter commands had no thread
+/// to run on. That is the waterfall freezing after a few minutes.
+///
+/// So the wait happens on the BLOCKING pool (hundreds of threads deep), where a waiter costs
+/// the runtime nothing. `f` gets the guard itself, so it can release the lock before work that
+/// does not need it.
+async fn with_engine<T, F>(engine: &SharedEngine, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(std::sync::MutexGuard<'_, Engine>) -> T + Send + 'static,
+{
+    let engine = Arc::clone(engine);
+    tauri::async_runtime::spawn_blocking(move || f(engine_lock(&engine)))
+        .await
+        .map_err(|e| format!("engine task failed: {e}"))
+}
+
 /// Full UI snapshot (`AppSnapshot`) — the UI renders all three zones from this.
 #[tauri::command]
 async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
     // Drain any buffered ALL.TXT decode lines (the engine is I/O-free) and snapshot,
     // then release the lock before the file append so the UI poll never waits on disk.
-    let all_txt = eng.take_all_txt_pending();
-    let snap = eng.snapshot();
-    drop(eng);
-    flush_all_txt(&all_txt);
-    Ok(snap)
+    with_engine(&state, |mut eng| {
+        let all_txt = eng.take_all_txt_pending();
+        let snap = eng.snapshot();
+        drop(eng);
+        flush_all_txt(&all_txt);
+        snap
+    })
+    .await
 }
 
 /// Queue an outbound free-text message to `peer` (auto-chunked + presence-gated
@@ -3349,8 +3374,7 @@ async fn get_propagation(
     spots: State<'_, SharedSpots>,
     wx_history: State<'_, SharedWxHistory>,
 ) -> Result<propagation::PropagationSnapshot, String> {
-    let (mycall, mygrid, needs, local_spots, context) = {
-        let eng = engine_lock(&state);
+    let (mycall, mygrid, needs, local_spots, context) = with_engine(&state, |eng| {
         let s = eng.settings();
         let (mycall, mygrid) = (s.mycall.clone(), s.mygrid.clone());
         // Derive the operator's needs from the ADIF logbook (cty.dat-resolved).
@@ -3395,7 +3419,8 @@ async fn get_propagation(
             log: eng.log_read_token(),
         };
         (mycall, mygrid, needs, local_spots, context)
-    };
+    })
+    .await?;
 
     let now = now_unix();
 
@@ -8941,12 +8966,11 @@ struct SatBindingDto {
     note: Option<String>,
 }
 
-#[tauri::command(async)]
-fn get_sat_transponder(
+#[tauri::command]
+async fn get_sat_transponder(
     state: State<'_, SharedEngine>,
 ) -> Result<Option<SatTransponderHeldDto>, String> {
-    let eng = engine_lock(&state);
-    Ok(satellite_held(&eng))
+    with_engine(&state, |eng| satellite_held(&eng)).await
 }
 
 fn satellite_held(eng: &tempo_app::engine::Engine) -> Option<SatTransponderHeldDto> {
@@ -9153,9 +9177,32 @@ fn get_spectrum_row(
         return Ok(row);
     }
     // Nothing published yet: a Companion/UDP source has no local capture, so its row is
-    // computed on demand from the last decoded buffer. Rare, low-rate, and correct to block on.
-    let eng = engine_lock(&state);
-    Ok(eng.spectrum_row())
+    // computed on demand from the last decoded buffer — if the engine is free.
+    Ok(spectrum_fallback(&state))
+}
+
+/// The row for a source with no local capture (the Companion/UDP path), computed from the
+/// engine's last decoded buffer — WITHOUT waiting for the engine (#335).
+///
+/// This runs on the waterfall's own 50-120 ms poll, and the radio loop can hold the engine for
+/// seconds. Waiting for it here pinned a runtime worker per poll, the very starvation the
+/// lock-free fast path above exists to be immune to. A busy engine gets an EMPTY row: every
+/// display already reads that as "nothing new this tick" (it is `SpectrumFeed`'s own answer for
+/// a stale capture), so the waterfall neither scrolls nor smears, and the next poll asks again.
+/// The window is left unset (0-0 Hz) because no display reads it from an empty row, and a
+/// busy answer has no window to report.
+fn spectrum_fallback(engine: &SharedEngine) -> Spectrum {
+    match engine.try_lock() {
+        Ok(eng) => eng.spectrum_row(),
+        // Poison recovers, exactly as `engine_lock` does.
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().spectrum_row(),
+        Err(std::sync::TryLockError::WouldBlock) => Spectrum {
+            row: Vec::new(),
+            lo_hz: 0.0,
+            hi_hz: 0.0,
+            source: String::new(),
+        },
+    }
 }
 
 /// One row for the RIG SCOPE, computed over the span that scope is actually showing.
@@ -9189,8 +9236,7 @@ fn get_scope_row(
         return Ok(row);
     }
     // Nothing published yet — the Companion/UDP path, exactly as in `get_spectrum_row`.
-    let eng = engine_lock(&state);
-    Ok(eng.spectrum_row())
+    Ok(spectrum_fallback(&state))
 }
 
 /// Fast Graph power trace (MSK144): raw 20 ms RMS samples since `since_seq`. Same meter bus,
@@ -9237,20 +9283,23 @@ fn set_mode(state: State<'_, SharedEngine>, mode: String) -> Result<AppSnapshot,
 }
 
 /// Current operator/station settings.
-#[tauri::command(async)]
-fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
-    let eng = engine_lock(&state);
-    // Defensive: re-mirror the ACTIVE radio's profile into the flat fields the UI reads (idempotent —
-    // a no-op when already in sync). Guarantees the Settings Rig/Audio form always shows the active
-    // radio's own CAT + audio device, independent of which code path last flipped the active radio.
-    let mut s = eng.settings().clone();
-    s.sync_flat_from_active();
-    // The Cloudlog key is write-only and never sent to the frontend. It now serializes while a
-    // legacy plaintext key is pending keychain migration (so a save cannot drop it — round 8 F1),
-    // so clear it from THIS clone before it leaves the shell; the engine's own copy is untouched
-    // and the migration retry still sees it.
-    s.cloudlog_key.clear();
-    Ok(s)
+#[tauri::command]
+async fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
+    with_engine(&state, |eng| {
+        // Defensive: re-mirror the ACTIVE radio's profile into the flat fields the UI reads
+        // (idempotent — a no-op when already in sync). Guarantees the Settings Rig/Audio form
+        // always shows the active radio's own CAT + audio device, independent of which code path
+        // last flipped the active radio.
+        let mut s = eng.settings().clone();
+        s.sync_flat_from_active();
+        // The Cloudlog key is write-only and never sent to the frontend. It now serializes while
+        // a legacy plaintext key is pending keychain migration (so a save cannot drop it — round
+        // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
+        // untouched and the migration retry still sees it.
+        s.cloudlog_key.clear();
+        s
+    })
+    .await
 }
 
 /// Reset the configuration to factory defaults, keeping the logbook and stored credentials.
@@ -10686,10 +10735,7 @@ async fn point_rotator_at_call(
 async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, String> {
     #[cfg(feature = "radio")]
     {
-        let host = {
-            let eng = engine_lock(&state);
-            effective_rotator_addr(eng.settings())
-        };
+        let host = with_engine(&state, |eng| effective_rotator_addr(eng.settings())).await?;
         let Some(host) = host else {
             return Ok(None); // no rotator configured — the pane shows its hint
         };
@@ -10744,11 +10790,16 @@ struct CwDecodeResult {
 
 /// Decode CW from the recent RX audio at the operator's pitch — a live readout for the
 /// CW cockpit. Empty text unless there's a clear keyed signal under the marker.
-#[tauri::command(async)]
-fn cw_decode(state: State<'_, SharedEngine>, sensitivity: f32) -> Result<CwDecodeResult, String> {
-    let mut eng = engine_lock(&state);
-    eng.set_cw_sensitivity(sensitivity); // operator slider; scales the decode gates
-    Ok(read_cw_state(&eng))
+#[tauri::command]
+async fn cw_decode(
+    state: State<'_, SharedEngine>,
+    sensitivity: f32,
+) -> Result<CwDecodeResult, String> {
+    with_engine(&state, move |mut eng| {
+        eng.set_cw_sensitivity(sensitivity); // operator slider; scales the decode gates
+        read_cw_state(&eng)
+    })
+    .await
 }
 
 /// Passive half of the local decoder command. Remote observation must never
@@ -10989,10 +11040,9 @@ fn rtty_auto_arm(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String>
 }
 
 /// The live RTTY state (poll while the RTTY cockpit is visible).
-#[tauri::command(async)]
-fn get_rtty_state(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
-    let eng = engine_lock(&state);
-    Ok(rtty_state_dto(&eng))
+#[tauri::command]
+async fn get_rtty_state(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
+    with_engine(&state, |eng| rtty_state_dto(&eng)).await
 }
 
 /// Arm/disarm the APRS (AFSK-1200 / AX.25) RX decoder (session-only; never launches armed). The
@@ -11023,22 +11073,20 @@ fn aprs_auto_arm(state: State<'_, SharedEngine>) -> Result<bool, String> {
 }
 
 /// The decoded-APRS list, newest last (poll while the APRS cockpit is visible).
-#[tauri::command(async)]
-fn get_aprs_heard(
+#[tauri::command]
+async fn get_aprs_heard(
     state: State<'_, SharedEngine>,
 ) -> Result<Vec<tempo_app::engine::AprsHeard>, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.aprs_heard())
+    with_engine(&state, |eng| eng.aprs_heard()).await
 }
 
 /// What the APRS decoder is hearing: audio level at the tap, HDLC frames seen, how many passed the
 /// FCS, and when the last one landed. Polled beside `get_aprs_heard` so an empty map can say WHY.
-#[tauri::command(async)]
-fn get_aprs_health(
+#[tauri::command]
+async fn get_aprs_health(
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::engine::AprsHealth, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.aprs_health())
+    with_engine(&state, |eng| eng.aprs_health()).await
 }
 
 /// The APRS STATION roster — what the map and the station list draw, plus the aging thresholds
@@ -11047,24 +11095,22 @@ fn get_aprs_health(
 /// Distinct from `get_aprs_heard`, which is the packet LOG. Conflating the two is what made the map
 /// flash: the log is capped by packet count with no age expiry, so a busy APRS-IS feed evicted
 /// stations that were still active. See `AprsStation`.
-#[tauri::command(async)]
-fn get_aprs_stations(
+#[tauri::command]
+async fn get_aprs_stations(
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::engine::AprsStationsView, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.aprs_stations(now_unix()))
+    with_engine(&state, |eng| eng.aprs_stations(now_unix())).await
 }
 
 /// What the APRS-IS internet feed is doing: connected, verified, packets in, packets contributed,
 /// and how many the iGate rules refused. Polled beside `get_aprs_health` so the operator can tell
 /// an internet problem from an RF one — internet stations arriving while the RF chip stays silent
 /// is the diagnostic that proves the fault is in the radio chain.
-#[tauri::command(async)]
-fn get_aprs_is_status(
+#[tauri::command]
+async fn get_aprs_is_status(
     state: State<'_, SharedEngine>,
 ) -> Result<tempo_app::engine::AprsIsStatus, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.aprs_is_status())
+    with_engine(&state, |eng| eng.aprs_is_status()).await
 }
 
 /// Queue an APRS position beacon to transmit — an explicit operator send, the ONLY way APRS TX
@@ -11333,10 +11379,9 @@ fn psk_auto_arm(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
 }
 
 /// The live PSK state (poll while the PSK cockpit is visible).
-#[tauri::command(async)]
-fn get_psk_state(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
-    let eng = engine_lock(&state);
-    Ok(psk_state_dto(&eng))
+#[tauri::command]
+async fn get_psk_state(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
+    with_engine(&state, |eng| psk_state_dto(&eng)).await
 }
 
 // ---- JS8 (the `engine::js8` adapter; every command answers the whole Js8State — the PSK
@@ -11354,10 +11399,9 @@ fn js8_enter(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State,
 }
 
 /// The live JS8 state (poll ~500 ms while the JS8 cockpit is visible).
-#[tauri::command(async)]
-fn get_js8_state(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.js8_state())
+#[tauri::command]
+async fn get_js8_state(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    with_engine(&state, |eng| eng.js8_state()).await
 }
 
 /// Persist the engine's settings after a JS8 verb changed one of them (the engine holds
@@ -11721,10 +11765,9 @@ fn sstv_manual_rx(state: State<'_, SharedEngine>, mode: String) -> Result<SstvSt
 }
 
 /// The live SSTV RX state (poll while the SSTV view is visible).
-#[tauri::command(async)]
-fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
-    let eng = engine_lock(&state);
-    Ok(sstv_state_dto(&eng))
+#[tauri::command]
+async fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String> {
+    with_engine(&state, |eng| sstv_state_dto(&eng)).await
 }
 
 /// Resolve an SSTV mode slug (the stable `short_name`: "pd120", "scottie1",
@@ -14833,13 +14876,21 @@ async fn get_need_alerts(
     spots: State<'_, SharedSpots>,
     ota_cache: State<'_, SharedOtaSpots>,
 ) -> Result<Vec<propagation::NeedAlert>, String> {
-    let mut eng = engine_lock(&state);
-    // Two-instance freshness: if the OTHER radio just logged/confirmed something in the shared
-    // log, fold it in BEFORE computing needs — otherwise this (possibly monitoring) radio would
-    // flag a DXCC/state/grid as needed that the other one already worked. Mtime-gated, so this is
-    // a cheap `stat` whenever the file is unchanged.
-    eng.sync_shared_log_if_changed();
-    read_need_alerts(eng, &live_paths, &region_paths, &spots, &ota_cache)
+    let (live_paths, region_paths, spots, ota_cache) = (
+        live_paths.inner().clone(),
+        SharedRegionPaths(region_paths.0.clone()),
+        spots.inner().clone(),
+        ota_cache.inner().clone(),
+    );
+    with_engine(&state, move |mut eng| {
+        // Two-instance freshness: if the OTHER radio just logged/confirmed something in the
+        // shared log, fold it in BEFORE computing needs — otherwise this (possibly monitoring)
+        // radio would flag a DXCC/state/grid as needed that the other one already worked.
+        // Mtime-gated, so this is a cheap `stat` whenever the file is unchanged.
+        eng.sync_shared_log_if_changed();
+        read_need_alerts(eng, &live_paths, &region_paths, &spots, &ota_cache)
+    })
+    .await?
 }
 
 /// The hunter side of the log as TODAY's activations: which park/summit reference has been
@@ -21598,21 +21649,23 @@ fn install_block_reason(
     None
 }
 
-#[tauri::command(async)]
-fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
-    let eng = engine_lock(&state);
-    let snap = eng.snapshot();
-    let (dxcall, running) = match snap.qso.as_ref() {
-        Some(q) => (q.dxcall.clone(), q.running),
-        None => (None, false),
-    };
-    Ok(install_block_reason(
-        snap.radio.transmitting,
-        eng.tuning(),
-        dxcall.as_deref(),
-        running,
-        eng.tx_enabled(),
-    ))
+#[tauri::command]
+async fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<String>, String> {
+    with_engine(&state, |eng| {
+        let snap = eng.snapshot();
+        let (dxcall, running) = match snap.qso.as_ref() {
+            Some(q) => (q.dxcall.clone(), q.running),
+            None => (None, false),
+        };
+        install_block_reason(
+            snap.radio.transmitting,
+            eng.tuning(),
+            dxcall.as_deref(),
+            running,
+            eng.tx_enabled(),
+        )
+    })
+    .await
 }
 
 /// Finish a self-update: restart Nexus through the ORDINARY quit path.
@@ -28356,6 +28409,219 @@ mod tests {
              `#[tauri::command(async)]`, or `async fn` + `spawn_blocking` if they block for \
              seconds:\n{}",
             offenders.join("\n")
+        );
+    }
+
+    /// #335: the engine-locking commands the UI POLLS — every one it asks at 2 s or faster, plus
+    /// the propagation and need-alert polls. Each must reach the engine through `with_engine`,
+    /// on the blocking pool, and never wait for the lock on a runtime worker.
+    const POLLED_ENGINE_COMMANDS: [&str; 16] = [
+        "get_snapshot",
+        "cw_decode",
+        "get_rtty_state",
+        "get_psk_state",
+        "get_js8_state",
+        "get_sstv_state",
+        "get_settings",
+        "get_sat_transponder",
+        "read_rotator",
+        "get_aprs_heard",
+        "get_aprs_health",
+        "get_aprs_stations",
+        "get_aprs_is_status",
+        "update_install_block",
+        "get_need_alerts",
+        "get_propagation",
+    ];
+
+    /// Each of `names` that `src` lacks, that is not an `async fn`, or that locks the engine
+    /// itself rather than through `with_engine`.
+    fn polled_commands_off_the_blocking_pool(src: &str, names: &[&str]) -> Vec<String> {
+        let lines: Vec<&str> = src.lines().collect();
+        let mut offenders = Vec::new();
+        for name in names {
+            let Some(sig_at) = lines.iter().position(|l| {
+                l.starts_with(&format!("async fn {name}(")) || l.starts_with(&format!("fn {name}("))
+            }) else {
+                offenders.push(format!("{name}: not found"));
+                continue;
+            };
+            // Body extent by brace balance, as the UI-thread scan above does.
+            let mut depth = 0i32;
+            let mut opened = false;
+            let mut end = sig_at;
+            for (j, l) in lines.iter().enumerate().skip(sig_at) {
+                depth += l.matches('{').count() as i32 - l.matches('}').count() as i32;
+                opened |= l.contains('{');
+                end = j;
+                if opened && depth <= 0 {
+                    break;
+                }
+            }
+            let body = lines[sig_at..=end].join("\n");
+            if !lines[sig_at].starts_with("async fn ") {
+                offenders.push(format!(
+                    "{name}: not an async fn, so it cannot await with_engine"
+                ));
+            } else if body.contains("engine_lock")
+                || body.contains("state.lock()")
+                || body.contains("state.try_lock()")
+                || !body.contains("with_engine(")
+            {
+                offenders.push(format!("{name}: locks the engine outside with_engine"));
+            }
+        }
+        offenders
+    }
+
+    #[test]
+    fn every_polled_engine_command_waits_on_the_blocking_pool() {
+        let offenders =
+            polled_commands_off_the_blocking_pool(include_str!("lib.rs"), &POLLED_ENGINE_COMMANDS);
+        assert!(
+            offenders.is_empty(),
+            "a polled command waiting for the engine on a runtime worker starves the lock-free \
+             waterfall and meters (#335) — route it through `with_engine`:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// The scan above is only worth having if it can fail: a bypass, a sync command and a
+    /// missing one are each named, and a command that does it right is not.
+    #[test]
+    fn the_polled_command_scan_names_a_bypass() {
+        // Built from quoted lines so that none of them starts a line of THIS file with `fn`,
+        // which would let the real scan above find these fakes.
+        let src = [
+            "#[tauri::command]",
+            "async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {",
+            "    let eng = engine_lock(&state);",
+            "    Ok(eng.snapshot())",
+            "}",
+            "#[tauri::command(async)]",
+            "fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {",
+            "    Ok(engine_lock(&state).settings().clone())",
+            "}",
+            "#[tauri::command]",
+            "async fn get_psk_state(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {",
+            "    with_engine(&state, |eng| psk_state_dto(&eng)).await",
+            "}",
+        ]
+        .join("\n");
+        let names = [
+            "get_snapshot",
+            "get_settings",
+            "get_psk_state",
+            "get_js8_state",
+        ];
+        assert_eq!(
+            polled_commands_off_the_blocking_pool(&src, &names),
+            [
+                "get_snapshot: locks the engine outside with_engine",
+                "get_settings: not an async fn, so it cannot await with_engine",
+                "get_js8_state: not found",
+            ]
+        );
+    }
+
+    /// #335 (N9RNT: on 1.13.0 the waterfall froze a few minutes in). The shape of the freeze,
+    /// on a runtime with two workers so that a handful of calls can fill it: the radio loop
+    /// holds the engine across a slow CAT round trip while the 300 ms snapshot poll, which does
+    /// not wait for its last answer, keeps asking. The waterfall's fast path needs no engine at
+    /// all and must still be answered.
+    #[test]
+    fn a_held_engine_cannot_starve_the_lock_free_waterfall() {
+        use std::time::{Duration, Instant};
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .build()
+            .unwrap();
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("K2DEF", "FN31", 0),
+        ));
+        let feed = tempo_app::engine::SpectrumFeed::default();
+        feed.publish_audio(super::Spectrum {
+            row: vec![0.5; 512],
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            source: "audio".into(),
+        });
+
+        // The radio loop, holding the engine across a slow CAT round trip.
+        let (held, is_held) = std::sync::mpsc::channel();
+        let holder = {
+            let engine = engine.clone();
+            std::thread::spawn(move || {
+                let _guard = engine_lock(&engine);
+                held.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(1500));
+            })
+        };
+        is_held.recv().unwrap();
+
+        // The snapshot poll, firing on while the lock is held.
+        let polls: Vec<_> = (0..20)
+            .map(|_| {
+                let engine = engine.clone();
+                rt.spawn(async move { super::with_engine(&engine, |eng| eng.snapshot()).await })
+            })
+            .collect();
+        std::thread::sleep(Duration::from_millis(50)); // let them reach the lock
+
+        // The waterfall's fast path, which touches no engine.
+        let (answered, answer) = std::sync::mpsc::channel();
+        let asked = Instant::now();
+        rt.spawn(async move {
+            let _ = answered.send(feed.audio_row());
+        });
+        let row = answer.recv_timeout(Duration::from_millis(500));
+        let waited = asked.elapsed();
+        holder.join().unwrap();
+        for poll in polls {
+            rt.block_on(poll).unwrap().unwrap();
+        }
+        let row = row.expect("the lock-free waterfall row was starved behind the engine lock");
+        assert!(
+            waited < Duration::from_millis(50),
+            "answered after {waited:?}"
+        );
+        assert!(row.is_some_and(|r| !r.row.is_empty()));
+    }
+
+    /// #335: the waterfall's no-capture fallback answers at once while the engine is held (an
+    /// empty row, which no display draws), and still asks the engine when it is free.
+    #[test]
+    fn the_waterfall_fallback_never_waits_for_the_engine() {
+        use std::time::{Duration, Instant};
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("K2DEF", "FN31", 0),
+        ));
+        // CONTROL: a free engine answers with its own row, window and all.
+        let free = super::spectrum_fallback(&engine);
+        assert_eq!(free, engine_lock(&engine).spectrum_row());
+        assert_eq!(free.hi_hz, 4000.0, "the engine's answer, not the busy one");
+
+        let (held, is_held) = std::sync::mpsc::channel();
+        let holder = {
+            let engine = engine.clone();
+            std::thread::spawn(move || {
+                let _guard = engine_lock(&engine);
+                held.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(500));
+            })
+        };
+        is_held.recv().unwrap();
+        let asked = Instant::now();
+        let busy = super::spectrum_fallback(&engine);
+        let waited = asked.elapsed();
+        holder.join().unwrap();
+        assert!(
+            waited < Duration::from_millis(50),
+            "waited {waited:?} for a held engine"
+        );
+        assert!(
+            busy.row.is_empty() && busy.hi_hz == 0.0,
+            "busy answers an empty row"
         );
     }
 
