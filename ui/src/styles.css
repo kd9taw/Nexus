@@ -8449,8 +8449,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-family: var(--font-mono);
   font-weight: 700;
 }
+/* The band you are on is ringed as a whole item. A 3 px inset bar on its left edge alone read as
+   "(" on the rounded item (#323). A ring rather than a tint: it changes nothing under the text,
+   so every condition word keeps the contrast it has on the rest of the menu (an accent tint took
+   the faint "unknown" word below 3.5:1 in the dark theme). band-menu-checked.test.ts resolves
+   this against the sheet in every theme. */
 .band-menu-item[data-state='checked'] {
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 .band-menu-cond {
   display: inline-flex;
