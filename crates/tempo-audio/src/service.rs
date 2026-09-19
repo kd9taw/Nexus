@@ -18101,7 +18101,12 @@ mod tests {
             // Double-click a CW spot on the map, same band (20 m CW segment).
             engine.lock().unwrap().work_spot("cw", 14.030, "20m");
             run(&mut state, &mut rig, &mut backend, 1_000.0);
-            let dial = seen.lock().unwrap().iter().find(|l| l.starts_with("F ")).cloned();
+            let dial = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|l| l.starts_with("F "))
+                .cloned();
             let landed = live_mode.lock().unwrap().clone();
             (landed, dial)
         };
@@ -18168,20 +18173,35 @@ mod tests {
             seen.lock().unwrap().clear();
             engine.lock().unwrap().work_spot("cw", 7.0292, "40m");
             run(&mut state, &mut rig, &mut backend, 1_000.0);
-            let dial = seen.lock().unwrap().iter().find(|l| l.starts_with("F ")).cloned();
+            let dial = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|l| l.starts_with("F "))
+                .cloned();
             let landed = live_mode.lock().unwrap().clone();
             (landed, dial)
         };
         let (cat_mode, cat_dial) = land(tempo_app::settings::CwKeyerBackend::Cat);
-        assert_eq!(cat_mode, "CW", "CONTROL: the CAT keyer works a 40 m CW spot in CW");
+        assert_eq!(
+            cat_mode, "CW",
+            "CONTROL: the CAT keyer works a 40 m CW spot in CW"
+        );
         assert!(
-            cat_dial.as_deref().is_some_and(|l| l.starts_with("F 7029200")),
+            cat_dial
+                .as_deref()
+                .is_some_and(|l| l.starts_with("F 7029200")),
             "CONTROL: and lands ON the spot: {cat_dial:?}"
         );
         let (sc_mode, sc_dial) = land(tempo_app::settings::CwKeyerBackend::Soundcard);
-        assert_eq!(sc_mode, "PKTLSB", "soundcard CW is the LOWER-side data mode below 10 MHz");
+        assert_eq!(
+            sc_mode, "PKTLSB",
+            "soundcard CW is the LOWER-side data mode below 10 MHz"
+        );
         assert!(
-            sc_dial.as_deref().is_some_and(|l| l.starts_with("F 7029800")),
+            sc_dial
+                .as_deref()
+                .is_some_and(|l| l.starts_with("F 7029800")),
             "THE FIX: on the lower side the dial sits one pitch ABOVE the spot, so the tone lands \
              ON 7.0292: {sc_dial:?}"
         );

@@ -6896,11 +6896,17 @@ impl Engine {
     /// keyer (the rig is in CW, pitch-referenced) and every other mode. The side is the same rule
     /// `rig_mode` uses (`dial_mhz < 10.0`), read from the spot: no amateur band straddles 10.000 MHz.
     fn soundcard_cw_pitch_offset_mhz(&self, spot_mhz: f64) -> f64 {
-        if self.settings.operating_mode != crate::settings::OperatingMode::Cw || !self.cw_soundcard() {
+        if self.settings.operating_mode != crate::settings::OperatingMode::Cw
+            || !self.cw_soundcard()
+        {
             return 0.0;
         }
         let pitch = self.cw_pitch_hz() as f64 / 1_000_000.0;
-        if spot_mhz < 10.0 { -pitch } else { pitch }
+        if spot_mhz < 10.0 {
+            -pitch
+        } else {
+            pitch
+        }
     }
 
     pub fn work_spot(&mut self, mode: &str, freq_mhz: f64, band: &str) {
@@ -40304,12 +40310,20 @@ mod tests {
         let mut after = qrec("W1AW", "70cm");
         after.freq_mhz = 436.795;
         e.log_qso(after);
-        assert_eq!(e.get_log()[0].prop_mode.as_deref(), Some("SAT"), "logged after LOS: no satellite tag");
+        assert_eq!(
+            e.get_log()[0].prop_mode.as_deref(),
+            Some("SAT"),
+            "logged after LOS: no satellite tag"
+        );
         assert_eq!(e.get_log()[0].sat_name.as_deref(), Some("SO-50"));
 
         // 2. GUARD — the passband still decides: an HF contact after LOS stays ordinary.
         e.log_qso(qrec("K1ABC", "20m"));
-        assert_eq!(e.get_log()[1].prop_mode, None, "a remembered bird tagged a 20 m contact");
+        assert_eq!(
+            e.get_log()[1].prop_mode,
+            None,
+            "a remembered bird tagged a 20 m contact"
+        );
         assert_eq!(e.get_log()[1].sat_name, None);
 
         // 3. GUARD — the next pick REPLACES the memory: after AO-91, SO-50's downlink is untagged.
@@ -40324,14 +40338,22 @@ mod tests {
         let mut on_so50 = qrec("W1AW", "70cm");
         on_so50.freq_mhz = 436.795;
         e2.log_qso(on_so50);
-        assert_eq!(e2.get_log()[0].prop_mode, None, "a REPLACED bird still tagged a contact");
+        assert_eq!(
+            e2.get_log()[0].prop_mode,
+            None,
+            "a REPLACED bird still tagged a contact"
+        );
 
         // 4. GUARD — nothing ever held, nothing tagged.
         let mut e3 = Engine::new("KD9TAW", "EN52", 0);
         let mut cold = qrec("W1AW", "70cm");
         cold.freq_mhz = 436.795;
         e3.log_qso(cold);
-        assert_eq!(e3.get_log()[0].prop_mode, None, "a fresh engine tagged a contact");
+        assert_eq!(
+            e3.get_log()[0].prop_mode,
+            None,
+            "a fresh engine tagged a contact"
+        );
 
         // 5. GUARD — a bird LoTW refuses stays refused after LOS: never a lone PROP_MODE.
         let mut e4 = Engine::new("KD9TAW", "EN52", 0);
