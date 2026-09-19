@@ -14087,8 +14087,13 @@ fn log_current_qso(state: State<'_, SharedEngine>) -> Result<LogQsoOutcome, Stri
 
 /// What a confirm or discard is told when its key is not the held contact's — the popup is
 /// showing a contact that has already been logged, discarded, or overtaken by the queue.
-const PENDING_LOG_MOVED_ON: &str =
-    "this popup is showing a contact that is no longer the one waiting — nothing was logged";
+///
+/// ⛔ A CODE, NOT A SENTENCE, and the UI owns the words. A sentence from here reaches the
+/// operator through `withErrorToast`, which appends the backend's text raw — so it would be
+/// English in all five catalogs' worth of translated UI, and written twice the moment the UI
+/// wanted to say it properly. Same shape as the Remote operations' refusals (`remoteBusy`,
+/// `staleContext`).
+const PENDING_LOG_MOVED_ON: &str = "pendingLogMovedOn";
 
 /// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
 /// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
@@ -14118,11 +14123,7 @@ fn discard_pending_log(
     let mut eng = engine_lock(&state);
     let key = expected_key.unwrap_or_default();
     if !eng.discard_pending_log(&key) {
-        return Err(
-            "this popup is showing a contact that is no longer the one waiting — nothing was \
-             discarded"
-                .into(),
-        );
+        return Err(PENDING_LOG_MOVED_ON.into());
     }
     Ok(eng.snapshot())
 }

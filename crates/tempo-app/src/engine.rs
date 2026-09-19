@@ -9108,8 +9108,9 @@ impl Engine {
                 tempo_core::applog::warn(
                     "logbook",
                     &format!(
-                        "confirm-before-log queue full ({PENDING_LOG_QUEUE_CAP}) — logged the QSO \
-                         with {} without asking",
+                        "logged the QSO with {} WITHOUT your confirmation: the \
+                         confirm-before-log queue is full, with {PENDING_LOG_QUEUE_CAP} \
+                         contacts already waiting",
                         overflow.call
                     ),
                 );
@@ -34767,6 +34768,18 @@ mod tests {
             snap.pending_logs_waiting, 1,
             "and the one behind it with it"
         );
+
+        // THE OTHER DIRECTION: a journal from a build that held one contact wrote ONE record
+        // and not an array, and it still comes back — as the one contact it was.
+        let legacy = serde_json::to_string(&crate::dto::LoggedQso::from(
+            relaunched.pending_log().cloned().unwrap(),
+        ))
+        .unwrap();
+        let mut older = Engine::new("K2DEF", "FN31", 0);
+        older.load_pending_qso_json(&legacy);
+        let snap = older.snapshot();
+        assert_eq!(snap.pending_log.map(|q| q.call), Some("W9XYZ".to_string()));
+        assert_eq!(snap.pending_logs_waiting, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
