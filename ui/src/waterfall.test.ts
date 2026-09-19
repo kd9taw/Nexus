@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, cwScopeWindow, CW_SCOPE_SPAN_HZ, sidebandSign, zoomRange, zoomWindow, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
+import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, cwScopeWindow, CW_SCOPE_SPAN_HZ, sidebandSign, cwScopeSideSign, zoomRange, zoomWindow, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -1477,3 +1477,26 @@ describe('zoomWindow — a slice that holds still (#164) without going stale (#1
     expect(high.hi - high.lo).toBe(1000)
   })
 })
+
+// The CW scope's click/box sign. `work_spot` stores "USB" on every band, so the soundcard keyer —
+// whose rig is on PKTLSB below 10 MHz — read the WRONG side on 40 m and a scope click there went a
+// pitch the wrong way (2 × pitch, 1,200 Hz off). Field report, FT-710, 2026-09-18.
+describe('cwScopeSideSign — the side the rig is really on', () => {
+  it('soundcard below 10 MHz is LOWER-side even when the stored sideband says USB', () => {
+    // The old code was sidebandSign('USB') here, which is +1: the bug this row pins.
+    expect(sidebandSign('USB')).toBe(1)
+    expect(cwScopeSideSign('soundcard', 7.0292, 'USB')).toBe(-1)
+  })
+  it('soundcard at/above 10 MHz is upper-side', () => {
+    expect(cwScopeSideSign('soundcard', 14.03, 'USB')).toBe(1)
+    expect(cwScopeSideSign('soundcard', 10.12, 'LSB')).toBe(1) // 30 m: the band rule, not the stored side
+  })
+  it('CAT, WinKeyer and Serial keep reading the rig\'s own side — unchanged', () => {
+    for (const k of ['cat', 'winkeyer', 'serial']) {
+      expect(cwScopeSideSign(k, 7.0292, 'USB')).toBe(1)
+      expect(cwScopeSideSign(k, 7.0292, 'LSB')).toBe(-1)
+      expect(cwScopeSideSign(k, 7.0292, 'CW-R')).toBe(-1)
+    }
+  })
+})
+

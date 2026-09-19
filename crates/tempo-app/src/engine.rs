@@ -6890,6 +6890,19 @@ impl Engine {
     /// is set with `follow_freq = false` so its own section-QSY can't override the spot's exact
     /// frequency, which is authoritative. Sideband is always "USB" here (→ PKTUSB for digital;
     /// ignored by the CW/phone policy).
+    /// The signed dial offset for working a spot with the SOUNDCARD CW keyer: its DATA submode
+    /// radiates the tone at dial + pitch on the upper side and dial − pitch on the lower, so the
+    /// dial sits a pitch below the spot on PKTUSB and above it on PKTLSB. Zero for every other
+    /// keyer (the rig is in CW, pitch-referenced) and every other mode. The side is the same rule
+    /// `rig_mode` uses (`dial_mhz < 10.0`), read from the spot: no amateur band straddles 10.000 MHz.
+    fn soundcard_cw_pitch_offset_mhz(&self, spot_mhz: f64) -> f64 {
+        if self.settings.operating_mode != crate::settings::OperatingMode::Cw || !self.cw_soundcard() {
+            return 0.0;
+        }
+        let pitch = self.cw_pitch_hz() as f64 / 1_000_000.0;
+        if spot_mhz < 10.0 { -pitch } else { pitch }
+    }
+
     pub fn work_spot(&mut self, mode: &str, freq_mhz: f64, band: &str) {
         self.work_spot_split(mode, freq_mhz, band, None);
     }
@@ -6939,13 +6952,18 @@ impl Engine {
         reset: impl FnMut(),
     ) {
         self.set_operating_mode_with_arming(mode, false, arm_manual);
-        self.tune_dial_with_reset(freq_mhz, band, "USB", DialOrigin::Operator, reset);
+        // ⚠️ SOUNDCARD CW RIDES A DATA SUBMODE, so its tone radiates at dial ± pitch — not at the
+        // dial, the way a rig in CW keys. Tuning the dial ON the spot put the operator a pitch off
+        // on the air and the DX at ~0 Hz audio, outside the decoder (field report, FT-710). Every
+        // spot surface funnels through here; the scope already offsets (`tuneSnap.ts`).
+        let off = self.soundcard_cw_pitch_offset_mhz(freq_mhz);
+        self.tune_dial_with_reset(freq_mhz - off, band, "USB", DialOrigin::Operator, reset);
         // Working a spot carries explicit mode intent — drop any manual override (even same-band)
         // so the spot's band-auto sideband applies (10 m mixes FM + SSB, so a stale FM override
         // must not key FM onto an SSB spot).
         self.sideband_override = None;
         if let Some(up) = split_up_khz {
-            self.split_tx_mhz = Some(freq_mhz + up / 1000.0);
+            self.split_tx_mhz = Some(freq_mhz + up / 1000.0 - off);
             self.split_dirty = true;
         }
         // Navigation hint: working a spot should land the operator IN the matching

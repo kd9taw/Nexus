@@ -156,6 +156,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CW with the soundcard keyer: clicking a spot now puts you on the spot.** The soundcard keyer
+  sends CW as an audio tone in the radio's data mode, where the tone goes out a pitch above the dial
+  (below it on 80 and 40 m). Clicking a spot tuned the dial straight to the spot, so you transmitted
+  about 600 Hz off the station you clicked, and heard them at a pitch too low to hear or decode. The
+  dial now sits a pitch away from the spot so your signal lands on it, from every place a spot can be
+  clicked, and a pile-up split moves with it. On 80 and 40 m a click on the CW scope also went the
+  wrong way by twice the pitch; it now follows the side the radio is really on. The CAT, WinKeyer and
+  serial keyers were not affected: they put the radio in CW, which is already on the spot.
+
 - **A satellite contact you log after the bird sets now keeps its satellite tag.** The guide says you
   can log a contact once your hands are free, but a contact logged after the pass ended — or after
   choosing "None" or stopping the track — lost `PROP_MODE` and `SAT_NAME`, so it earned no LoTW

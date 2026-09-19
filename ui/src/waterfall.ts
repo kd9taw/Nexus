@@ -962,6 +962,15 @@ export function isSymmetricMode(mode: string): boolean {
 
 /** Sideband sign for mapping audio-offset Hz onto RF: +1 = USB-side (USB/CW-U — a higher
  * pitch sits ABOVE the carrier), -1 = LSB-side (LSB/CW-L/CW-R — below). FM/unknown → +1. */
+/** The CW scope's sideband SIGN for click/box math. For the SOUNDCARD keyer it is the band rule
+ * `rig_mode` actually commands — PKTLSB below 10 MHz, PKTUSB above — NOT the stored sideband:
+ * `work_spot` writes "USB" on every band, so on 40 m a scope click applied the pitch the wrong way
+ * (2 × pitch, 1,200 Hz off). CAT / WinKeyer / Serial put the rig in CW and keep reading its side. */
+export function cwScopeSideSign(keyer: string, dialMhz: number, sideband: string): 1 | -1 {
+  if (keyer === 'soundcard') return dialMhz < 10 ? -1 : 1
+  return sidebandSign(sideband)
+}
+
 export function sidebandSign(sideband: string): 1 | -1 {
   switch (sideband.trim().toUpperCase()) {
     case 'LSB':

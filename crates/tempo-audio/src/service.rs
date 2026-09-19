@@ -18101,26 +18101,31 @@ mod tests {
             // Double-click a CW spot on the map, same band (20 m CW segment).
             engine.lock().unwrap().work_spot("cw", 14.030, "20m");
             run(&mut state, &mut rig, &mut backend, 1_000.0);
-            let dial = seen
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|l| l.starts_with("F 14030000"));
+            let dial = seen.lock().unwrap().iter().find(|l| l.starts_with("F ")).cloned();
             let landed = live_mode.lock().unwrap().clone();
             (landed, dial)
         };
 
         let (cat_mode, cat_dial) = land_mode(tempo_app::settings::CwKeyerBackend::Cat);
-        assert!(cat_dial, "the CAT-keyer click lands the spot's dial");
+        assert!(
+            cat_dial.as_deref().is_some_and(|l| l.starts_with("F 14030000")),
+            "CONTROL: the CAT keyer lands ON the spot — the rig is in CW and pitch-referenced: {cat_dial:?}"
+        );
         assert_eq!(
             cat_mode, "CW",
             "CONTROL: with the rig's own keyer, working a CW spot puts the radio in CW"
         );
 
         let (sc_mode, sc_dial) = land_mode(tempo_app::settings::CwKeyerBackend::Soundcard);
+        // ⚠️ CORRECTED 2026-09-18. This line used to read "the dial lands either way — that half of
+        // the report is not in dispute", and pinned F 14030000 for the soundcard keyer too. It was
+        // written about the MODE word, and pinned the dial in passing at the WRONG value: soundcard
+        // CW rides DATA-U, where a 600 Hz tone radiates at dial + 600. On the spot's own dial the
+        // operator transmitted 600 Hz high and heard the DX at ~0 Hz audio (field report, FT-710).
         assert!(
-            sc_dial,
-            "the dial lands either way — that half of the report is not in dispute"
+            sc_dial.as_deref().is_some_and(|l| l.starts_with("F 14029400")),
+            "THE FIX: the soundcard keyer's dial sits one pitch BELOW the spot on the upper side, so \
+             the 600 Hz tone lands ON 14.030: {sc_dial:?}"
         );
         assert_eq!(
             sc_mode, "PKTUSB",
@@ -18129,6 +18134,56 @@ mod tests {
              switch'. This assertion is a CHARACTERISATION of deliberate behaviour, not an \
              endorsement: if the DATA submode is ever narrowed to the keyed window (the way \
              `sstv_in_flight` narrows Phone's), THIS is the test that names what changed."
+        );
+    }
+
+    /// The lower side of the 10 MHz line: soundcard CW commands PKTLSB there, where the tone
+    /// radiates at dial − pitch, so the dial sits one pitch ABOVE the spot. The sign flip is the
+    /// half a 20 m-only test cannot see. CAT is the control, and lands ON the spot in CW.
+    #[test]
+    fn the_soundcard_cw_keyer_offsets_a_40m_spot_upward_on_the_lower_side() {
+        let land = |keyer: tempo_app::settings::CwKeyerBackend| {
+            let (addr, seen, live_mode) = band_stacking_rigctld_stub(7_074_000, &[]);
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.cw_keyer = keyer;
+                e.apply_settings(s);
+                e.set_operating_mode("digital", true);
+                e.set_frequency(7.074, "40m", "USB");
+            }
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+                state
+                    .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                    .unwrap();
+            };
+            run(&mut state, &mut rig, &mut backend, 0.0);
+            seen.lock().unwrap().clear();
+            engine.lock().unwrap().work_spot("cw", 7.0292, "40m");
+            run(&mut state, &mut rig, &mut backend, 1_000.0);
+            let dial = seen.lock().unwrap().iter().find(|l| l.starts_with("F ")).cloned();
+            let landed = live_mode.lock().unwrap().clone();
+            (landed, dial)
+        };
+        let (cat_mode, cat_dial) = land(tempo_app::settings::CwKeyerBackend::Cat);
+        assert_eq!(cat_mode, "CW", "CONTROL: the CAT keyer works a 40 m CW spot in CW");
+        assert!(
+            cat_dial.as_deref().is_some_and(|l| l.starts_with("F 7029200")),
+            "CONTROL: and lands ON the spot: {cat_dial:?}"
+        );
+        let (sc_mode, sc_dial) = land(tempo_app::settings::CwKeyerBackend::Soundcard);
+        assert_eq!(sc_mode, "PKTLSB", "soundcard CW is the LOWER-side data mode below 10 MHz");
+        assert!(
+            sc_dial.as_deref().is_some_and(|l| l.starts_with("F 7029800")),
+            "THE FIX: on the lower side the dial sits one pitch ABOVE the spot, so the tone lands \
+             ON 7.0292: {sc_dial:?}"
         );
     }
 

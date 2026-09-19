@@ -79,7 +79,7 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
-import { cwScopeWindow, isRfScopeSource, sidebandSign, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
+import { cwScopeSideSign, cwScopeWindow, isRfScopeSource, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import type { MessageKey } from '../i18n'
@@ -472,7 +472,6 @@ export function CwCockpit({
   // The scope's click/box math needs a CW-CLASSIFIED mode string (settings.sideband is
   // USB/LSB here — the soundcard keyer keys through SSB): same sideband SIGN, but the
   // click zero-beats instead of carrier-snapping, and the box centers on the dial.
-  const scopeMode = sidebandSign(snap.radio.sideband || 'USB') < 0 ? 'CW-L' : 'CW'
   // RX filter width (CW wants a NARROW filter — default 500 Hz, 50-Hz steps, 50–2000 Hz span).
   const filterControl = useReceiverFilter(snap, 'cw')
   const filterHz = snap.radio.filterWidthHz ?? null
@@ -830,6 +829,9 @@ export function CwCockpit({
   const [keyer, setKeyer] = useState<'cat' | 'soundcard' | 'winkeyer' | 'serial'>(
     () => (snap.radio.cwKeyer as 'cat' | 'soundcard' | 'winkeyer' | 'serial') || 'cat',
   )
+  // The scope's click/box math needs a CW-CLASSIFIED mode string, with the SIGN of the side
+  // the rig is really on — for the soundcard keyer, the band rule (see `cwScopeSideSign`).
+  const scopeMode = cwScopeSideSign(keyer, snap.radio.dialMhz, snap.radio.sideband || 'USB') < 0 ? 'CW-L' : 'CW'
   // Keep it in sync if the backend value changes (or arrives after first render).
   useEffect(() => {
     if (snap.radio.cwKeyer) setKeyer(snap.radio.cwKeyer as 'cat' | 'soundcard' | 'winkeyer' | 'serial')
