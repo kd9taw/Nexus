@@ -180,6 +180,16 @@ export function BandStrip({
       ? { left: pct(phoneSegLo), width: pct(phoneSegHi) - pct(phoneSegLo) }
       : null
 
+  // A flag is keyed by its station and frequency, NEVER by its position (#320). The list is
+  // re-read every 15 s as fresh rows sorted by frequency, so one new station low in the band
+  // shifted the index of every flag above it and React rebuilt all of those buttons. Replaying
+  // the report minute's RBN traffic gave 618 flags on 20 m CW and 490-566 of them rebuilt per
+  // poll; at a 4x CPU throttle that update took 45 ms and the CW waterfall's worst row gap
+  // around it was 105 ms against a quiet 70-90 — the stall the operator saw — where keeping the
+  // flags makes it 29 ms and 70 ms. The spot buffer merges a station's reports within 2 kHz, so
+  // the pair is unique; a repeat still gets a key of its own rather than colliding.
+  const seen = new Map<string, number>()
+
   return (
     <div className="bandstrip">
       <div className="bandstrip-head">
@@ -230,7 +240,10 @@ export function BandStrip({
             title={t('bandStrip.shade.title')}
           />
         )}
-        {phone.map((s, i) => {
+        {phone.map((s) => {
+          const key = `${s.call}-${s.freqMhz}`
+          const repeat = seen.get(key) ?? 0
+          seen.set(key, repeat + 1)
           // Fade older spots so density + freshness read at a glance (fresh ≈ opaque, ~30 min → faint).
           const opacity = s.ageSecs < 0 ? 0.9 : Math.max(0.35, 1 - s.ageSecs / 1800)
           const cu = s.call.toUpperCase()
@@ -267,7 +280,7 @@ export function BandStrip({
             .join(' · ')
           return (
             <button
-              key={`${s.call}-${s.freqMhz}-${i}`}
+              key={repeat ? `${key}#${repeat}` : key}
               type="button"
               className="bandstrip-spot"
               style={{ left: `${pct(s.freqMhz)}%`, opacity }}
