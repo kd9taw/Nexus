@@ -16,11 +16,15 @@
  * `confirm.test.tsx` pins this primitive; `SettingsPanel.removeradio.test.tsx` pins one whole
  * path end to end, which is what would actually have caught it.
  *
- * TWO `window.confirm` CALLS REMAIN, deliberately (SetupHealth's Prove TX, SstvView's ISS
- * 145.800 guard). Both are transmit-path, so converting them is a TX-behaviour change needing
- * sign-off rather than part of a UI pass. Note what they do on macOS meanwhile: both read the
- * inert `false` as "no", so each BLOCKS its action. Safe — nothing keys — but Prove TX is a dead
- * button there, and SSTV cannot be sent on 145.800 at all.
+ * THE LAST TWO ARE NOW CONVERTED (2026-09-18, operator sign-off: "fix the macOS confirms").
+ * SetupHealth's Prove TX and SstvView's ISS 145.800 guard were held back because both are
+ * transmit-path and moving them is a TX-behaviour change, not a UI pass. They sat for 32 days,
+ * and the cost was exactly as predicted here: both read the inert `false` as "no", so each
+ * BLOCKED its action — nothing ever keyed unasked, but on macOS Prove TX was a DEAD BUTTON and
+ * SSTV could not be sent on 145.800 at all. Failing closed is what made a 32-day-old shipped
+ * defect merely useless instead of dangerous, which is the argument for this file's default.
+ * ⛔ NO `window.confirm` REMAINS in `ui/src`. Adding one back reintroduces the whole bug: it
+ * shows nothing, returns false, and the action silently does not happen.
  *
  * FAIL CLOSED. If the host is not mounted, `confirmDialog` resolves FALSE — a destructive action
  * must never proceed unconfirmed. The opposite default would turn a missing dialog into a silent

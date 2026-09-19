@@ -5879,12 +5879,43 @@ impl RadioLoop {
                             // ⚠️ THE VALUE IS A HALF-WIDTH — `take_scope_span_request` says so,
                             // and the buttons are labelled `±25k`. Print the ± or the sentence
                             // cannot be matched to the button that produced it.
-                            Err(crate::civ::engine::CivError::Nak) => Some(format!(
-                                "the radio refused a ±{:.1} kHz scope span. An Icom takes a span \
-                                 only while its scope is in Center mode — switch the scope to \
-                                 Center on the radio, then pick the span again.",
-                                f64::from(hz) / 1000.0
-                            )),
+                            // ⚠️ ASK THE RADIO WHY, DO NOT GUESS. This arm used to report every
+                            // refusal as "your scope is not in Center mode" — the most likely
+                            // cause, stated as a fact. An operator whose scope WAS in Center was
+                            // sent to check a setting that was already correct (2026-09-18,
+                            // IC-7300; their photo showed CENTER lit), and the real cause stayed
+                            // hidden behind our guess. Fixed mode is still the usual reason, so
+                            // we still say so — but only when we have READ it and it is true.
+                            Err(crate::civ::engine::CivError::Nak) => {
+                                let khz = f64::from(hz) / 1000.0;
+                                Some(match d.scope_center_mode() {
+                                    // Fixed: the usual cause, now established rather than assumed.
+                                    Some(true) => format!(
+                                        "the radio refused a ±{khz:.1} kHz scope span. Its scope is \
+                                         in Fixed mode, and an Icom takes a span only in Center \
+                                         mode — switch the scope to Center on the radio, then pick \
+                                         the span again."
+                                    ),
+                                    // Center, and it still said no. Rule the usual cause OUT
+                                    // explicitly: the whole point is not to send them back to a
+                                    // setting that is already right. The rest is offered as a
+                                    // possibility, not asserted — we have not established it.
+                                    Some(false) => format!(
+                                        "the radio refused a ±{khz:.1} kHz scope span, and its \
+                                         scope IS in Center mode — so that is not the reason. An \
+                                         Icom also refuses a span while it is transmitting or \
+                                         tuning; if the rig was on the air, try the span again \
+                                         with it back in receive."
+                                    ),
+                                    // We asked and got nothing. Say exactly that.
+                                    None => format!(
+                                        "the radio refused a ±{khz:.1} kHz scope span, and did not \
+                                         answer when asked whether its scope is in Center mode. An \
+                                         Icom takes a span only in Center mode, and refuses while \
+                                         transmitting or tuning."
+                                    ),
+                                })
+                            }
                             Err(_) => Some(
                                 "the radio didn't answer the scope-span command — the CAT link \
                                  to it may be down."

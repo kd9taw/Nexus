@@ -326,8 +326,18 @@ fn engine_loop(
             Err(_) => break, // hard I/O error — port unplugged
         };
         for f in frames {
-            // Scope waveform frames go to the assembler, never to request matching.
-            if f.cmd == 0x27 {
+            // Scope WAVEFORM frames go to the assembler, never to request matching.
+            //
+            // ⚠️ THE SUB-COMMAND IS PART OF THE TEST, and leaving it out meant NO `27`-family READ
+            // could ever resolve. `27 00` is the waveform (`parse_waveform` requires data[0]==0x00);
+            // `27 14`, `27 15` and the rest are ordinary command replies. This arm used to swallow
+            // EVERY `27` frame and `continue`, so a reply to a scope read never reached request
+            // matching and `Expect::Reply { cmd: 0x27, .. }` was unsatisfiable by construction.
+            // Nothing noticed because every `27` call in the tree writes and expects an Ack (`FB`),
+            // which is a different command byte and slipped past. Found while adding the first
+            // `27` READ — the scope centre/fixed mode, so a refused span stops being explained by
+            // a guess.
+            if f.cmd == 0x27 && f.data.first() == Some(&0x00) {
                 if let Some(sweep) = assembler.push(&f) {
                     if let Ok(mut slot) = scope_row.lock() {
                         *slot = Some(sweep); // latest wins
@@ -518,6 +528,7 @@ pub(crate) mod tests_support {
                 if self.mute {
                     continue;
                 }
+                let addr = self.addr;
                 let action = {
                     // Poison-tolerant: a test asserting under the regs lock may
                     // panic; the engine thread must not cascade after it.
@@ -624,6 +635,31 @@ pub(crate) mod tests_support {
                         // Scope CENTER/FIXED (`27 14`) — remembered so the span below can be
                         // refused. The mode is the LAST payload byte on both frame shapes
                         // (`27 14 <fixed>` single-scope, `27 14 <main_sub> <fixed>` dual).
+                        // ⚠️ READ vs WRITE, and the distinction is load-bearing. A CI-V READ is
+                        // the bare sub-command (`27 14`, len 1); a WRITE carries the mode after it
+                        // (`27 14 <fixed>`, or `27 14 <main_sub> <fixed>` on a dual-scope rig). The
+                        // arm below used to take `data.last()` unconditionally, so a READ would have
+                        // been swallowed as a write of `0x14` — setting the mode to Center and
+                        // answering nothing. A test built on that would have "passed" while the
+                        // fixture quietly rewrote the state under it.
+                        // A READ carries no mode byte; a WRITE does. Length alone cannot tell
+                        // them apart, because a dual-scope rig puts a Main/Sub selector between the
+                        // sub-command and the payload: a single-rig WRITE and a dual-rig READ are
+                        // both two bytes. So ask the SAME question the real code asks — is this
+                        // address dual — instead of guessing from the length.
+                        (0x27, Some(0x14))
+                            if f.data.len()
+                                == 1 + usize::from(crate::civ::scope::scope_is_dual(addr)) =>
+                        {
+                            Some((0x27, {
+                                let mut d = vec![0x14];
+                                if crate::civ::scope::scope_is_dual(addr) {
+                                    d.push(0x00);
+                                }
+                                d.push(u8::from(r.scope_fixed));
+                                d
+                            }))
+                        }
                         (0x27, Some(0x14)) => {
                             r.scope_fixed = f.data.last().is_some_and(|&b| b == 0x01);
                             None

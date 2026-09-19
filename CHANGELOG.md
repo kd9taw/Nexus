@@ -140,6 +140,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Icom: a refused scope span now tells you why, instead of guessing.** When an Icom refused a
+  span change, Nexus always said the scope was in Fixed mode and told you to switch it to Center —
+  even when it was already in Center, so you were sent to check a setting that was already right.
+  It now asks the radio. If the scope really is in Fixed mode it says so; if it is in Center it
+  says that plainly, and suggests the other likely cause: a span change while the radio is
+  transmitting or tuning. Nothing about how Nexus sets the span has changed.
+
+- **macOS: Prove TX now works, and SSTV can be sent on 145.800.** Two confirmation prompts asked
+  their question through the browser's own `confirm()` box, which this app's macOS webview does
+  not draw. No dialog appeared and the answer came back as "no", so on macOS **Prove TX** did
+  nothing at all — the button looked live and never keyed the radio — and **SSTV refused to
+  transmit on 145.800 MHz**, the frequency that asks you to confirm first because it is the ISS
+  downlink. Both now ask in the app's own dialog, with the same question and the same warning.
+  Nothing was ever transmitted without asking: the prompts failed in the safe direction, so what
+  was lost was the feature, not the protection. Windows and Linux were unaffected.
+
 - **Work on the Needed board now tags the park.** Working a POTA or SOTA row from the Needed
   board moved the radio but, unlike HUNT and the map, never told the logbook which park it was —
   so the contact was logged without the park reference: it earned no hunter credit, exported

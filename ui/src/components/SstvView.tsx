@@ -1449,7 +1449,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     setModeSlug(slug)
   }
 
-  const sendImage = () => {
+  const sendImage = async () => {
     if (!canControl) return
     if (!packed || sending) return
     // ⚠️ NO CALLSIGN, NO TRANSMISSION. The picture IS the identification here, so an
@@ -1478,7 +1478,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     // one decimal comma away from naming a different channel.
     const dial = snapRef.current?.radio.dialMhz
     if (dial != null && Math.abs(dial - ISS_SSTV_MHZ) <= 0.01) {
-      const ok = window.confirm(t('sstv.tx.iss.confirm', { freq: ISS_SSTV_MHZ.toFixed(3) }))
+      // ⚠️ SAME GUARD, WORKING MECHANISM. `window.confirm` is inert in this webview, so on macOS
+      // this read false every time and SSTV could not be sent on 145.800 AT ALL. It failed closed,
+      // so the downlink was never transmitted on by accident — the loss was the sanctioned ARISS
+      // uplink case, not the protection. `confirmDialog` also resolves false with no host mounted,
+      // so the refusal survives the change; the question and its frequency are untouched.
+      const ok = await confirmDialog({
+        title: t('sstv.tx.iss.confirm', { freq: ISS_SSTV_MHZ.toFixed(3) }),
+        confirmLabel: t('sstv.tx.send.label'),
+        danger: true,
+      })
       if (!ok) return
     }
     void withErrorToast(async () => {
@@ -2267,7 +2276,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           <button
             type="button"
             className="sstv-tx-send"
-            onClick={sendImage}
+            onClick={() => void sendImage()}
             disabled={!canControl || !packed || sending || !callsign}
             title={
               !packed

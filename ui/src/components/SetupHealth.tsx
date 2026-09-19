@@ -3,7 +3,10 @@
 // measurements the strip formats invariantly, and `rigDetail` is the rig's own answer, passed
 // through as a value. The one thing NOT migrated is the Prove TX control below: it keys a tune
 // carrier, so it moves with the transmit-path batch, when the stop-line sweeps are re-run.
+// (Its CONFIRM moved on 2026-09-18 off the inert `window.confirm` — see the note at the button.
+// That was the mechanism only; these strings are still English, so this paragraph still holds.)
 import type { ReactNode } from 'react'
+import { confirmDialog } from '../confirm'
 import type { CatTestResult } from '../types'
 import { t } from '../i18n'
 import { rxLevelDb } from './LevelMeter'
@@ -150,13 +153,22 @@ export function SetupHealth({
           type="button"
           className="np-chip health-prove"
           onClick={() => {
-            if (
-              window.confirm(
-                'Prove the transmit path?\n\nThis keys your transmitter for ~2 seconds at your tune ' +
-                  'power. Make sure an antenna or dummy load is connected.',
-              )
-            )
-              onProveTx()
+            // ⚠️ The consent prompt is UNCHANGED in substance — same question, same warning, same
+            // "asks first, every time". Only the MECHANISM moved: `window.confirm` is inert in
+            // this webview (wry implements no `runJavaScriptConfirmPanel`), so it returned false
+            // instantly and Prove TX was a DEAD BUTTON on macOS for 32 days. It failed closed, so
+            // nothing ever keyed unasked — the loss was the feature, not the guard.
+            // Still fail-closed: `confirmDialog` resolves false with no host mounted, and the
+            // key only happens inside the `ok` branch.
+            void confirmDialog({
+              title: 'Prove the transmit path?',
+              body:
+                'This keys your transmitter for ~2 seconds at your tune power. Make sure an ' +
+                'antenna or dummy load is connected.',
+              confirmLabel: 'Prove TX',
+            }).then((ok) => {
+              if (ok) onProveTx()
+            })
           }}
           title="Key a 2 s tune carrier to verify CAT → PTT → RF (asks first, every time)"
         >
