@@ -6095,6 +6095,14 @@ select optgroup {
   font-size: 12px;
   color: var(--text-faint);
 }
+/* "N more contacts are waiting behind this one" — the queue the popup holds back (operator
+   ruling 2026-09-19). Sits between the heading and the fields, where it is read before the
+   operator commits to this contact, and is absent entirely when nothing is queued. */
+.logconfirm-waiting {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-3);
+  font-size: 12px;
+  color: var(--text-dim);
+}
 .logconfirm-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

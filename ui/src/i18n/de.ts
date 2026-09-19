@@ -2102,6 +2102,10 @@ export const DE: PartialCatalog = {
   "logPrompt.grid.label": "Locator",
   "logPrompt.rstSent.label": "RST gesendet",
   "logPrompt.rstRcvd.label": "RST empfangen",
+  "logPrompt.waiting": {
+    "one": "{{count}} weiterer Kontakt wartet hinter diesem",
+    "other": "{{count}} weitere Kontakte warten hinter diesem"
+  },
   "logPrompt.discard": "Verwerfen",
   "logPrompt.log": "QSO loggen",
   "logbook.globe.spin.stop.title": "Langsame Rotation anhalten",

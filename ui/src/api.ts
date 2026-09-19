@@ -826,14 +826,20 @@ export async function resumeChatCq(): Promise<AppSnapshot> {
 }
 
 /** Confirm-and-log a QSO held by the prompt-to-log popup (the possibly-edited
- * record). Returns the fresh snapshot. */
+ * record). Returns the fresh snapshot.
+ *
+ * `expectedKey` is the identity of the hold the popup was SHOWING, and it goes on every
+ * transport, not only a Remote one (operator ruling 2026-09-19: completed contacts queue). The
+ * engine refuses an answer whose key is not the head's, so an edited call can never be filed
+ * onto a contact that was promoted while the operator was typing. */
 export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('confirm_pending_log', { record, ...(remoteApplicationTransport() ? { expectedKey } : {}) })
+  return invoke<AppSnapshot>('confirm_pending_log', { record, expectedKey })
 }
 
-/** Discard a QSO held by the prompt-to-log popup without logging it. */
+/** Discard a QSO held by the prompt-to-log popup without logging it. Names the hold it
+ *  answers, exactly as the confirm above does. */
 export async function discardPendingLog(expectedKey?: string | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('discard_pending_log', remoteApplicationTransport() ? { expectedKey } : {})
+  return invoke<AppSnapshot>('discard_pending_log', { expectedKey })
 }
 
 /** Open (or focus) a standalone OS window for one panel — multi-monitor tear-off. */

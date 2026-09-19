@@ -1388,6 +1388,10 @@ export const EN = {
   // RST is the signal-report format's name — it stays as it is inside the label.
   'logPrompt.rstSent.label': 'RST sent',
   'logPrompt.rstRcvd.label': 'RST rcvd',
+  'logPrompt.waiting': {
+    one: '{{count}} more contact is waiting behind this one',
+    other: '{{count}} more contacts are waiting behind this one',
+  },
   'logPrompt.discard': 'Discard',
   'logPrompt.log': 'Log QSO',
 

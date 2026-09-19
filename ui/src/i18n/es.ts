@@ -1841,6 +1841,10 @@ export const ES: PartialCatalog = {
   "logEntry.title": "Anotar este QSO",
   "logPrompt.aria": "Anotar QSO",
   "logPrompt.call.label": "Indicativo",
+  "logPrompt.waiting": {
+    "one": "{{count}} contacto más espera detrás de este",
+    "other": "{{count}} contactos más esperan detrás de este"
+  },
   "logPrompt.discard": "Descartar",
   "logPrompt.grid.label": "Locator",
   "logPrompt.log": "Anotar QSO",

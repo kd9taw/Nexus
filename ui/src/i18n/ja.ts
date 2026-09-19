@@ -950,6 +950,7 @@ export const JA: PartialCatalog = {
   "logPrompt.grid.label": "グリッド",
   "logPrompt.rstSent.label": "送信RST",
   "logPrompt.rstRcvd.label": "受信RST",
+  "logPrompt.waiting": "このあとに{{count}}件の交信が待っています",
   "logPrompt.discard": "破棄",
   "logPrompt.log": "QSOを記録",
   "roster.title": "局一覧",

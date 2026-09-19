@@ -1396,6 +1396,13 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
   }, [snap?.loggedTick, settings?.clearDxAfterLog])
 
+  // The station refused the answer (its `expectedKey` is not the head's any more) or the call
+  // failed: RE-READ rather than leave the operator looking at a hold that has moved on. Nothing
+  // is logged or discarded on this path — the engine already refused it.
+  const reloadAfterRefusal = useCallback(() => {
+    getSnapshot().then(setSnap).catch(() => {})
+  }, [])
+
   const handleConfirmLog = useCallback(
     (record: LoggedQso) => {
       void withErrorToast(() => apiConfirmPendingLog(record, snap?.pendingQsoLogKey), t('shell.log.failed')).then((s) => {
@@ -1404,17 +1411,18 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
-        }
+        } else reloadAfterRefusal()
       })
     },
-    [refreshNeeds, snap?.pendingQsoLogKey],
+    [refreshNeeds, reloadAfterRefusal, snap?.pendingQsoLogKey],
   )
 
   const handleDiscardLog = useCallback(() => {
     void withErrorToast(() => apiDiscardPendingLog(snap?.pendingQsoLogKey), t('shell.log.discard.failed')).then((s) => {
       if (s) setSnap(s)
+      else reloadAfterRefusal()
     })
-  }, [snap?.pendingQsoLogKey])
+  }, [reloadAfterRefusal, snap?.pendingQsoLogKey])
 
   const handleSend = useCallback(
     (text: string) => {
@@ -3488,10 +3496,15 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       {showGuide && <GettingStartedGuide onClose={() => setShowGuide(false)} />}
 
       {snap.pendingLog && (
+        // KEYED ON THE HOLD, on every transport (operator ruling 2026-09-19: completed contacts
+        // queue behind the popup). The fields are the popup's own state, seeded from the record
+        // it mounted with, so without this a promoted contact wore the previous one's call —
+        // and Log filed that call onto the wrong station.
         <LogConfirm
-          key={remote ? snap.pendingQsoLogKey : undefined}
+          key={snap.pendingQsoLogKey ?? undefined}
           onStop={remote ? handleHaltTx : undefined}
           record={snap.pendingLog}
+          waiting={snap.pendingLogsWaiting ?? 0}
           onConfirm={handleConfirmLog}
           onDiscard={handleDiscardLog}
         />
