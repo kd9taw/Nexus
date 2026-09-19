@@ -125,6 +125,12 @@ jobs:
       - name: Publish to the rolling `fd-rules` Release (automatic source, no secrets)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ⚠️ This job has NO checkout (by design — it runs no repo code with a write token), so
+          # `gh` has no git remote to infer the repository from and fails with "not a git
+          # repository" before it reaches GitHub. That broke every publish from e8c84be6 (the
+          # validate/publish split) until this line; the rolling release kept serving the
+          # 2026-09-12 seed. Name the repository explicitly, as publish.yml and release.yml do.
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release view fd-rules >/dev/null 2>&1 \
             || gh release create fd-rules \
