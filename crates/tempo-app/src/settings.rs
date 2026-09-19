@@ -1269,7 +1269,7 @@ pub struct Settings {
     #[serde(default)]
     pub license_class: LicenseClass,
     /// How CW is keyed (CAT `send_morse` vs soundcard tone). Also picks the CW
-    /// rig-mode: CAT → CW, Soundcard → USB (audio tone). See [`rig_mode`].
+    /// rig-mode: CAT → CW, Soundcard → a DATA submode, PKTUSB/PKTLSB (audio tone). See [`rig_mode`].
     pub cw_keyer: CwKeyerBackend,
     /// Serial port for the K1EL WinKeyer (when `cw_keyer == WinKeyer`), e.g. "COM6".
     pub winkeyer_port: String,
@@ -5110,7 +5110,7 @@ impl Settings {
     }
 
     /// The CAT mode to command the rig for the current section (the per-section policy):
-    /// Phone forces USB/LSB by band, CW forces CW (or USB/LSB for a soundcard keyer),
+    /// Phone forces USB/LSB by band, CW forces CW (or a DATA submode for a soundcard keyer),
     /// and Digital forces the DATA submode (Hamlib `PKTUSB`/`PKTLSB` → Yaesu DATA-U /
     /// Icom USB-D / Kenwood DATA) so FT8/FT4 sits in data mode. Returns "" — meaning
     /// "send NO `M` command, obey the rig" — only for Digital when the operator has

@@ -7826,7 +7826,7 @@ impl Engine {
     }
 
     /// Choose the CW keyer back-end ("cat" or "soundcard") + tone pitch (Hz; ignored
-    /// if <= 0). Soundcard flips the CW rig-mode to USB; the radio loop re-applies it.
+    /// if <= 0). Soundcard flips the CW rig-mode to a DATA submode; the radio loop re-applies it.
     pub fn set_cw_keyer(&mut self, backend: &str, pitch_hz: f32) {
         self.remote_actuation.revoke();
         use crate::settings::CwKeyerBackend;

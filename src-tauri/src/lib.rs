@@ -13135,7 +13135,7 @@ fn swap_vfo(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 }
 
 /// Choose the CW keyer back-end ("cat" = rig send_morse / "soundcard" = keyed tone)
-/// and tone pitch (Hz; <=0 keeps the current pitch). Soundcard moves the rig to USB.
+/// and tone pitch (Hz; <=0 keeps the current pitch). Soundcard moves the rig to a DATA submode.
 #[tauri::command(async)]
 fn set_cw_keyer(
     state: State<'_, SharedEngine>,

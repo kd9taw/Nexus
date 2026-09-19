@@ -469,9 +469,6 @@ export function CwCockpit({
     enabled: control && catOk && !snap.radio.txBusyReason && !snap.radio.transmitting,
     onSnap,
   })
-  // The scope's click/box math needs a CW-CLASSIFIED mode string (settings.sideband is
-  // USB/LSB here — the soundcard keyer keys through SSB): same sideband SIGN, but the
-  // click zero-beats instead of carrier-snapping, and the box centers on the dial.
   // RX filter width (CW wants a NARROW filter — default 500 Hz, 50-Hz steps, 50–2000 Hz span).
   const filterControl = useReceiverFilter(snap, 'cw')
   const filterHz = snap.radio.filterWidthHz ?? null
@@ -825,12 +822,13 @@ export function CwCockpit({
   }, [active, control])
   // Initialize the keyer toggle from the engine's ACTUAL setting (the snapshot is the source
   // of truth) — not a hard-coded 'cat'. A stale local default showed CAT while the backend was
-  // on Soundcard, so CW silently went to USB (Soundcard keying = rig in SSB) with no clue why.
+  // on Soundcard, so CW silently went to USB (Soundcard keying = rig in a DATA submode) with no clue why.
   const [keyer, setKeyer] = useState<'cat' | 'soundcard' | 'winkeyer' | 'serial'>(
     () => (snap.radio.cwKeyer as 'cat' | 'soundcard' | 'winkeyer' | 'serial') || 'cat',
   )
-  // The scope's click/box math needs a CW-CLASSIFIED mode string, with the SIGN of the side
-  // the rig is really on — for the soundcard keyer, the band rule (see `cwScopeSideSign`).
+  // The scope's click/box math needs a CW-CLASSIFIED mode string, so a click zero-beats instead
+  // of carrier-snapping and the box centres on the dial — with the SIGN of the side the rig is
+  // really on: for the soundcard keyer, the band rule (see `cwScopeSideSign`).
   const scopeMode = cwScopeSideSign(keyer, snap.radio.dialMhz, snap.radio.sideband || 'USB') < 0 ? 'CW-L' : 'CW'
   // Keep it in sync if the backend value changes (or arrives after first render).
   useEffect(() => {
