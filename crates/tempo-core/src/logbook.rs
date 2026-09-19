@@ -781,8 +781,11 @@ pub struct Logbook {
 }
 
 mod id;
+mod op;
 mod records;
 pub use id::{Minter, RecordId};
+pub use op::{Effects, LogOp, UploadService};
+pub use records::OpClass;
 use records::Records;
 
 impl Logbook {
@@ -823,10 +826,24 @@ impl Logbook {
     pub fn appended_only_since(&self, revision: u64) -> bool {
         self.records.appended_only_since(revision)
     }
-    /// Mutable access to the records (for in-place upload-state stamping). Write one through
+    /// Mutable access to the records under the [`OpClass`] the caller vouches for — the
+    /// narrower the class, the more derived state survives the write. Write a record through
     /// [`StoredRecord::write`], which copies it first if a snapshot still holds it.
-    pub fn records_mut(&mut self) -> &mut [Arc<QsoRecord>] {
-        &mut self.records
+    pub fn records_mut(&mut self, class: OpClass) -> &mut [Arc<QsoRecord>] {
+        self.records.write_as(class)
+    }
+
+    /// The revision at which each kind of change last happened — see [`OpClass`] for which
+    /// class moves which. A cache keyed on one of these survives every change that cannot
+    /// affect it.
+    pub fn index_rev(&self) -> u64 {
+        self.records.index_rev()
+    }
+    pub fn key_rev(&self) -> u64 {
+        self.records.key_rev()
+    }
+    pub fn shape_rev(&self) -> u64 {
+        self.records.shape_rev()
     }
     pub fn len(&self) -> usize {
         self.records.len()
@@ -977,7 +994,8 @@ impl Logbook {
                 if rec.when_unix % 86_400 == old.when_unix % 86_400 {
                     rec.time_known = old.time_known;
                 }
-                self.records[index] = Arc::new(rec);
+                // The same row, corrected: it stays where it is, but its keys may have moved.
+                self.records.write_as(OpClass::Key)[index] = Arc::new(rec);
                 true
             }
             None => false,
@@ -1002,7 +1020,7 @@ impl Logbook {
     ///
     /// Returns false if `index` is out of range. Pure — call [`save`](Self::save) to persist.
     pub fn mark_qsl_sent(&mut self, index: usize, via: Option<QslVia>, date_unix: u64) -> bool {
-        match self.records.get_mut(index) {
+        match self.records.write_as(OpClass::Stamp).get_mut(index) {
             Some(rec) => {
                 Arc::make_mut(rec).qsl_sent = match via {
                     Some(via) => QslSent {
@@ -1037,7 +1055,7 @@ impl Logbook {
     /// untick it. A later service sync cannot silently undo the correction either: merge ORs
     /// per source, and no service reports the card field.
     pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
-        match self.records.get_mut(index) {
+        match self.records.write_as(OpClass::Upgrade).get_mut(index) {
             Some(rec) => {
                 Arc::make_mut(rec).qsl_rcvd.card = received;
                 true
@@ -1051,7 +1069,7 @@ impl Logbook {
     /// indices must reload after a delete.
     pub fn delete(&mut self, index: usize) -> bool {
         if index < self.records.len() {
-            self.records.remove(index);
+            self.records.write_as(OpClass::Structural).remove(index);
             true
         } else {
             false
@@ -1063,7 +1081,7 @@ impl Logbook {
     /// to an empty (header-only) log.
     pub fn clear(&mut self) -> usize {
         let n = self.records.len();
-        self.records.clear();
+        self.records.write_as(OpClass::Structural).clear();
         n
     }
 
@@ -1939,7 +1957,9 @@ impl Logbook {
     pub fn stamp_qrz_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
         match self.newest_match_index(pushed) {
             Some(i) => {
-                Arc::make_mut(&mut self.records[i]).upload.qrz = Some(status);
+                Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
+                    .upload
+                    .qrz = Some(status);
                 true
             }
             None => false,
@@ -1951,7 +1971,9 @@ impl Logbook {
     pub fn stamp_clublog_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
         match self.newest_match_index(pushed) {
             Some(i) => {
-                Arc::make_mut(&mut self.records[i]).upload.clublog = Some(status);
+                Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
+                    .upload
+                    .clublog = Some(status);
                 true
             }
             None => false,
@@ -1963,7 +1985,9 @@ impl Logbook {
     pub fn stamp_eqsl_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
         match self.newest_match_index(pushed) {
             Some(i) => {
-                Arc::make_mut(&mut self.records[i]).upload.eqsl = Some(status);
+                Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
+                    .upload
+                    .eqsl = Some(status);
                 true
             }
             None => false,
@@ -3802,7 +3826,8 @@ mod tests {
             "retaining a read identity cannot change stored contacts"
         );
         let mut copy = book.clone();
-        Arc::make_mut(&mut copy.records_mut()[0]).notes = Some("different copy".into());
+        Arc::make_mut(&mut copy.records_mut(OpClass::Upgrade)[0]).notes =
+            Some("different copy".into());
         assert!(std::sync::Arc::ptr_eq(&token, &book.read_token()));
         assert!(!std::sync::Arc::ptr_eq(&token, &copy.read_token()));
         assert_eq!(book.adif(), before);
@@ -3811,7 +3836,8 @@ mod tests {
                 b.mark_qsl_card(0, true);
             }) as fn(&mut Logbook),
             |b| {
-                Arc::make_mut(&mut b.records_mut()[0]).notes = Some("new note".into());
+                Arc::make_mut(&mut b.records_mut(OpClass::Upgrade)[0]).notes =
+                    Some("new note".into());
             },
             |b| {
                 b.add(rec("K1ABC", "40m", 200));
@@ -3998,7 +4024,7 @@ mod tests {
                 assert_eq!(b.stamp_ota_refs(&adif_record(&r)).0, 1, "fixture: stamped");
             }),
             ("in-place access", |b| {
-                Arc::make_mut(&mut b.records_mut()[0]).notes = Some("note".into());
+                Arc::make_mut(&mut b.records_mut(OpClass::Upgrade)[0]).notes = Some("note".into());
             }),
             ("a delete", |b| assert!(b.delete(0))),
             ("a clear", |b| assert_eq!(b.clear(), 2)),
@@ -4242,7 +4268,9 @@ mod tests {
         // now award-confirmed + QRZ-uploaded, plus a NEW QSO Y that A logged.
         let mut mem = Logbook::new();
         mem.add(rec("DL1ABC", "20m", 1_700_000_000));
-        Arc::make_mut(&mut mem.records_mut()[0]).upload.clublog = Some(UploadStatus {
+        Arc::make_mut(&mut mem.records_mut(OpClass::Stamp)[0])
+            .upload
+            .clublog = Some(UploadStatus {
             outcome: UploadOutcome::Accepted,
             when_unix: 1_700_000_050,
             detail: None,
@@ -9019,5 +9047,300 @@ mod record_id_tests {
         };
         assert_eq!(settle(mine, theirs), theirs, "we adopt the smaller");
         assert_eq!(settle(theirs, mine), theirs, "...and so do they");
+    }
+}
+
+/// What each kind of write COSTS: the watermarks it moves, and — for the narrow classes — the
+/// promise that it left row identity alone. A class is a promise to every cache keyed on a
+/// watermark, so each promise is a test rather than a comment: naming a write narrower than it
+/// is serves a stale answer, and nothing else in the tree would notice.
+#[cfg(test)]
+mod watermark_tests {
+    use super::*;
+
+    /// A minimal record; `QsoRecord` has no `Default` and the fields that matter here are the
+    /// four that make a row's identity.
+    fn rec_of(call: &str, band: &str, when: u64) -> QsoRecord {
+        QsoRecord {
+            id: None,
+            call: call.into(),
+            grid: Some("EN37".into()),
+            country: None,
+            state: None,
+            band: band.into(),
+            freq_mhz: 14.074,
+            freq_rx_mhz: None,
+            mode: "FT8".into(),
+            rst_sent: Some("-10".into()),
+            rst_rcvd: Some("-12".into()),
+            name: None,
+            comment: None,
+            notes: None,
+            qth: None,
+            tx_power: None,
+            when_unix: when,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            my_grid: None,
+            my_rig: None,
+            station_callsign: None,
+            extra: Vec::new(),
+            contest: None,
+        }
+    }
+
+    fn seeded() -> Logbook {
+        let mut lb = Logbook::new();
+        lb.add(rec_of("W1AW", "20m", 1_700_000_000));
+        lb.add(rec_of("K5XYZ", "20m", 1_700_000_001));
+        lb
+    }
+
+    /// Everything a dupe check, a worked-before sweep or a contest dupe key reads — the row
+    /// identity `key_rev` promises to track.
+    fn keys(lb: &Logbook) -> Vec<String> {
+        lb.records()
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}|{}|{}|{}|{:?}",
+                    r.call, r.band, r.mode, r.when_unix, r.contest
+                )
+            })
+            .collect()
+    }
+
+    /// The four narrow watermarks after a write that began at `from`, in the order
+    /// `[content, index, key, shape]`. `content` is asked the way a reader asks it: are the
+    /// rows I held still held, unchanged and in order?
+    fn moved(lb: &Logbook, from: [u64; 4]) -> [bool; 4] {
+        [
+            !lb.appended_only_since(from[0]),
+            lb.index_rev() != from[1],
+            lb.key_rev() != from[2],
+            lb.shape_rev() != from[3],
+        ]
+    }
+
+    fn watermarks(lb: &Logbook) -> [u64; 4] {
+        [lb.revision(), lb.index_rev(), lb.key_rev(), lb.shape_rev()]
+    }
+
+    type Write = fn(&mut Logbook);
+
+    /// Every classified write, against the watermarks its class allows it to move — and, for
+    /// the ones that claim a key-based cache survives them, against the keys themselves.
+    #[test]
+    fn each_kind_of_write_moves_exactly_the_watermarks_its_class_claims() {
+        // (name, write, [content, index, key, shape], may move a row's identity)
+        let cases: Vec<(&str, Write, [bool; 4], bool)> = vec![
+            (
+                "an append",
+                |lb| {
+                    lb.add(rec_of("DL1ABC", "40m", 1_700_000_100));
+                },
+                [false, true, true, false],
+                true,
+            ),
+            (
+                "an upload stamp",
+                |lb| {
+                    let pushed = lb.records()[0].as_ref().clone();
+                    assert!(lb.stamp_qrz_upload(
+                        &pushed,
+                        UploadStatus {
+                            outcome: UploadOutcome::Accepted,
+                            when_unix: 1_700_000_500,
+                            detail: None,
+                        }
+                    ));
+                },
+                [true, false, false, false],
+                false,
+            ),
+            (
+                "a QSL-sent mark",
+                |lb| assert!(lb.mark_qsl_sent(0, Some(QslVia::Bureau), 1_700_000_500)),
+                [true, false, false, false],
+                false,
+            ),
+            (
+                "a QSL card arriving",
+                |lb| assert!(lb.mark_qsl_card(0, true)),
+                [true, true, false, false],
+                false,
+            ),
+            (
+                "an edit",
+                |lb| {
+                    let mut fixed = lb.records()[0].as_ref().clone();
+                    fixed.band = "15m".into();
+                    assert!(lb.update_record(0, fixed));
+                },
+                [true, true, true, true],
+                true,
+            ),
+            (
+                "a delete",
+                |lb| assert!(lb.delete(0)),
+                [true, true, true, true],
+                true,
+            ),
+            (
+                "a purge",
+                |lb| assert_eq!(lb.clear(), 2),
+                [true, true, true, true],
+                true,
+            ),
+        ];
+
+        for (name, write, claims, identity_may_move) in cases {
+            let mut lb = seeded();
+            let (before, keys_before) = (watermarks(&lb), keys(&lb));
+            write(&mut lb);
+            assert_ne!(
+                lb.revision(),
+                before[0],
+                "{name}: every write moves the revision"
+            );
+            let got = moved(&lb, before);
+            for (i, mark) in ["content", "index", "key", "shape"].iter().enumerate() {
+                assert_eq!(
+                    got[i], claims[i],
+                    "{name}: {mark}_rev moved={}, its class claims {}",
+                    got[i], claims[i]
+                );
+            }
+            if !identity_may_move {
+                assert_eq!(
+                    keys(&lb),
+                    keys_before,
+                    "{name}: its class promises a key-based cache survives it, so it must not \
+                     have touched a row's identity"
+                );
+            }
+        }
+    }
+
+    /// ⭐ THE PROPERTY EVERY NARROW CLASS RESTS ON, pinned by name. `apply_match` is the body
+    /// of every report merge, download merge and import upgrade; `stamp_ota_refs` is the
+    /// park/summit pull-back. Both take the conservative class today and both are meant to
+    /// become `Upgrade` with the store — which is sound only while they leave row IDENTITY
+    /// alone, because a cache keyed on `key_rev` (the worked-before sets, the contest DUPE
+    /// sweep) then survives them. Give either one a field that touches the call, the band, the
+    /// mode, the contact time or the contest exchange and this fails before the narrowing can
+    /// serve a stale answer.
+    #[test]
+    fn the_upgrade_paths_never_touch_a_rows_identity() {
+        // `apply_match`: an incoming row differing from ours in every identity field there is,
+        // and in every field it IS allowed to copy.
+        let mut held = rec_of("W1AW", "20m", 1_700_000_000);
+        let identity = format!(
+            "{}|{}|{}|{}|{:?}",
+            held.call, held.band, held.mode, held.when_unix, held.contest
+        );
+        let mut inc = rec_of("N0BODY", "80m", 1_700_009_999);
+        inc.mode = "SSB".into();
+        inc.contest = Some(Box::new(ContestFields {
+            session: "s".into(),
+            contest_id: "ARRL-FIELD-DAY".into(),
+            srx_string: Some("2A WI".into()),
+            ..Default::default()
+        }));
+        inc.confirmed = true;
+        inc.award_confirmed = true;
+        inc.qsl_rcvd.card = true;
+        inc.state = Some("WI".into());
+        inc.country = Some("United States".into());
+        let mut tally = crate::reconcile::ReconcileSummary::default();
+        crate::reconcile::apply_match(&mut held, &inc, &mut tally);
+        assert_eq!(
+            format!(
+                "{}|{}|{}|{}|{:?}",
+                held.call, held.band, held.mode, held.when_unix, held.contest
+            ),
+            identity,
+            "apply_match moved a row's identity"
+        );
+        assert!(
+            held.award_confirmed && held.state.is_some() && held.country.is_some(),
+            "...and it did upgrade the row, so the check above is not vacuous"
+        );
+
+        // `stamp_ota_refs`: a park the operator hunted, pulled back onto the contact.
+        let mut lb = seeded();
+        let identities = keys(&lb);
+        let mut hunted = lb.records()[0].as_ref().clone();
+        hunted.ota.their_program = Some("POTA".into());
+        hunted.ota.their_ref = Some("US-1234".into());
+        // The pull-back file is another logger's, so it carries no id of ours.
+        hunted.id = None;
+        let (stamped, _, _) =
+            lb.stamp_ota_refs(&format!("{}{}", adif_header(), adif_record(&hunted)));
+        assert_eq!(
+            stamped, 1,
+            "the park landed, so the check below is not vacuous"
+        );
+        assert_eq!(lb.records()[0].ota.their_ref.as_deref(), Some("US-1234"));
+        assert_eq!(
+            keys(&lb),
+            identities,
+            "stamp_ota_refs moved a row's identity"
+        );
+    }
+
+    /// The unclassified write — a `&mut` borrow of the records whose shape this module cannot
+    /// see — costs the WIDEST class, so nothing keyed on a watermark can be stale after it.
+    /// Narrowing any of these is a deliberate act that fails here first.
+    #[test]
+    fn a_write_whose_shape_we_cannot_see_costs_every_watermark() {
+        let cases: Vec<(&str, Write)> = vec![
+            ("a disk reconcile", |lb| {
+                let row = rec_of("ZL1ABC", "20m", 1_700_000_900);
+                lb.reconcile_disk(&format!("{}{}", adif_header(), adif_record(&row)));
+            }),
+            ("a report merge", |lb| {
+                let mut row = lb.records()[0].as_ref().clone();
+                row.award_confirmed = true;
+                lb.merge_report(&format!("{}{}", adif_header(), adif_record(&row)));
+            }),
+            ("an import that upgrades a held row", |lb| {
+                let mut row = lb.records()[0].as_ref().clone();
+                row.award_confirmed = true;
+                let (added, _, merged) =
+                    lb.import_adif(&format!("{}{}", adif_header(), adif_record(&row)));
+                assert!(added.is_empty(), "the row is already held");
+                assert_eq!(merged, 1, "...and the import upgraded it");
+            }),
+            ("an in-place borrow", |lb| {
+                Arc::make_mut(&mut lb.records_mut(OpClass::Structural)[0]).notes =
+                    Some("edited".into());
+            }),
+        ];
+        for (name, write) in cases {
+            let mut lb = seeded();
+            let before = watermarks(&lb);
+            write(&mut lb);
+            assert_ne!(lb.revision(), before[0], "{name}: the revision");
+            let got = moved(&lb, before);
+            for (i, mark) in ["content", "index", "key", "shape"].iter().enumerate() {
+                assert!(
+                    got[i],
+                    "{name}: {mark}_rev must move for a write we cannot see the shape of"
+                );
+            }
+        }
     }
 }

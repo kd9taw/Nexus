@@ -25750,6 +25750,29 @@ mod tests {
             sweeps, 0,
             "a snapshot of an unchanged log swept it {sweeps} times"
         );
+
+        // …nor is one an upload stamp changed. The sets read call, band and mode, so they are
+        // kept against the log's KEY revision, and a stamp moves no key: the upload worker
+        // marking a batch of QSOs accepted must not cost a whole-log sweep per snapshot after
+        // it. (The other direction — an edit or a delete DOES reach the next snapshot — is
+        // `worked_before_marks_follow_every_kind_of_log_change` below.)
+        let pushed = e.station.logbook.records()[0].as_ref().clone();
+        assert!(e.station.logbook.stamp_qrz_upload(
+            &pushed,
+            tempo_core::logbook::UploadStatus {
+                outcome: tempo_core::logbook::UploadOutcome::Accepted,
+                when_unix: 1_700_000_500,
+                detail: None,
+            }
+        ));
+        tempo_core::logbook::LOG_SWEEPS.with(|c| c.set(0));
+        let _after_stamp = e.snapshot();
+        let sweeps = tempo_core::logbook::LOG_SWEEPS.with(|c| c.get());
+        assert_eq!(
+            sweeps, 0,
+            "a snapshot after an upload stamp swept the log {sweeps} times — a stamp moves no \
+             key, so the worked-before sets must have stood"
+        );
     }
 
     /// The B4 sets are kept against the log's revision, so EVERY kind of change must reach the

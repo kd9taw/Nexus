@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tempo_core::logbook::{Logbook, QsoRecord, WorkedSince};
+use tempo_core::logbook::{Logbook, OpClass, QsoRecord, WorkedSince};
 
 use crate::engine::{
     now_unix_secs, LotwResolver, PendingUpload, HUNT_TTL_SECS, MAX_UPLOAD_RETRIES, SSTV_GALLERY_CAP,
@@ -76,7 +76,7 @@ fn band_key(band: &str) -> String {
 /// other inputs) it was built from. See [`StationCore::worked_sets`].
 #[derive(Default)]
 pub(crate) struct B4Cache {
-    /// `(revision, fold_mode, calls, bands)`.
+    /// `(key_rev, fold_mode, calls, bands)`.
     #[allow(clippy::type_complexity)]
     lifetime: Option<(
         u64,
@@ -84,7 +84,7 @@ pub(crate) struct B4Cache {
         Arc<HashSet<String>>,
         Arc<HashSet<(String, String)>>,
     )>,
-    /// `(revision, session start, rule, sweep)`.
+    /// `(key_rev, session start, rule, sweep)`.
     session: Option<(u64, u64, tempo_core::contest::DupeRule, Arc<WorkedSince>)>,
 }
 
@@ -383,7 +383,8 @@ impl StationCore {
             .collect();
         self.state_resolve = Some(resolve);
         if !fills.is_empty() {
-            let records = self.logbook.records_mut();
+            // An upgrade: a filled state is content a needs fold reads, and no row moves.
+            let records = self.logbook.records_mut(OpClass::Upgrade);
             for (i, st) in fills {
                 Arc::make_mut(&mut records[i]).state = Some(st);
             }
@@ -455,7 +456,8 @@ impl StationCore {
             .collect();
         self.dxcc_resolve = Some(resolve);
         if !fills.is_empty() {
-            let records = self.logbook.records_mut();
+            // Likewise: the entity index reads `country`, and no row moves.
+            let records = self.logbook.records_mut(OpClass::Upgrade);
             for (i, c) in fills {
                 Arc::make_mut(&mut records[i]).country = Some(c);
             }
@@ -564,7 +566,9 @@ impl StationCore {
         &self,
         fold_mode: bool,
     ) -> (Arc<HashSet<String>>, Arc<HashSet<(String, String)>>) {
-        let revision = self.logbook.revision();
+        // Keyed on key_rev, not the revision: these sets read call, band and mode only, so
+        // an upload stamp or a country backfill cannot move them and must not cost a sweep.
+        let revision = self.logbook.key_rev();
         let mut cache = self
             .b4_cache
             .lock()
@@ -588,7 +592,9 @@ impl StationCore {
         cutoff: u64,
         rule: &tempo_core::contest::DupeRule,
     ) -> Arc<WorkedSince> {
-        let revision = self.logbook.revision();
+        // key_rev for the same reason as `worked_sets`, with the exchange included: a dupe
+        // key is call, band, mode class and the contest exchange, all of them row identity.
+        let revision = self.logbook.key_rev();
         let mut cache = self
             .b4_cache
             .lock()
@@ -1577,8 +1583,11 @@ impl StationCore {
         // recovered records land at the end, so `indices` still address the same
         // rows.
         self.recover_external_appends();
+        // One classified write for the whole batch — a stamp nothing derived reads, and
+        // taking it per row would move the revision once per stamped record.
+        let records = self.logbook.records_mut(OpClass::Stamp);
         for &i in indices {
-            if let Some(r) = self.logbook.records_mut().get_mut(i) {
+            if let Some(r) = records.get_mut(i) {
                 Arc::make_mut(r).upload.lotw = Some(tempo_core::logbook::UploadStatus {
                     outcome,
                     when_unix,
