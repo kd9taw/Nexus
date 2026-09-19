@@ -385,7 +385,7 @@ impl StationCore {
         if !fills.is_empty() {
             let records = self.logbook.records_mut();
             for (i, st) in fills {
-                records[i].state = Some(st);
+                Arc::make_mut(&mut records[i]).state = Some(st);
             }
             self.save_log("backfill_state");
         }
@@ -457,7 +457,7 @@ impl StationCore {
         if !fills.is_empty() {
             let records = self.logbook.records_mut();
             for (i, c) in fills {
-                records[i].country = Some(c);
+                Arc::make_mut(&mut records[i]).country = Some(c);
             }
             self.save_log("backfill_country");
         }
@@ -842,7 +842,7 @@ impl StationCore {
                     .is_some_and(|u| u.outcome.is_sent())
             })
             .take(room)
-            .cloned()
+            .map(|r| QsoRecord::clone(r))
             .collect();
         let n = stale.len();
         for rec in stale {
@@ -1094,7 +1094,14 @@ impl StationCore {
     ) -> Option<Vec<tempo_core::logbook::LogAppendReceipt>> {
         let path = self.log_path.clone()?;
         debug_assert!(
-            self.logbook.records().ends_with(recs),
+            {
+                let held = self.logbook.records();
+                held.len() >= recs.len()
+                    && held[held.len() - recs.len()..]
+                        .iter()
+                        .zip(recs)
+                        .all(|(held, rec)| **held == *rec)
+            },
             "append_to_log: the records must already be in memory (see the contract above)"
         );
         let before = log_file_stamp(&path);
@@ -1208,7 +1215,12 @@ impl StationCore {
                 // The STORED record, not the incoming payload: `update_record` merges the
                 // fields the edit form does not carry (park refs, TIME_OFF, the split leg),
                 // and the connectors must send the whole contact, not the form's half of it.
-                if let Some(fixed) = self.logbook.records().get(index).cloned() {
+                if let Some(fixed) = self
+                    .logbook
+                    .records()
+                    .get(index)
+                    .map(|r| QsoRecord::clone(r))
+                {
                     // Every leg: every stamp was just cleared, so every connector is owed.
                     // The disabled ones are dropped by the worker's own toggle check, the
                     // same way a freshly logged contact's are.
@@ -1497,7 +1509,11 @@ impl StationCore {
 
     /// A clone of all logbook records (oldest-first / newest-last).
     pub fn get_log(&self) -> Vec<QsoRecord> {
-        self.logbook.records().to_vec()
+        self.logbook
+            .records()
+            .iter()
+            .map(|r| QsoRecord::clone(r))
+            .collect()
     }
 
     /// Run the silent match-failure diagnostics over the log (Phase 1a). `resolve`
@@ -1563,7 +1579,7 @@ impl StationCore {
         self.recover_external_appends();
         for &i in indices {
             if let Some(r) = self.logbook.records_mut().get_mut(i) {
-                r.upload.lotw = Some(tempo_core::logbook::UploadStatus {
+                Arc::make_mut(r).upload.lotw = Some(tempo_core::logbook::UploadStatus {
                     outcome,
                     when_unix,
                     detail,
@@ -1812,7 +1828,7 @@ mod grid_tests {
             let mut fresh = StationCore::new();
             fresh.set_dxcc_resolver(counting(Arc::new(AtomicUsize::new(0))));
             for r in sc.logbook.records() {
-                fresh.logbook.add(r.clone());
+                fresh.logbook.add(r.as_ref().clone());
             }
             fresh.refresh_worked_index();
             index(&fresh)

@@ -20904,8 +20904,15 @@ contact yourself."
     }
 
     /// Immutable log view for bounded read models. Does not sync, recover or write a file.
-    pub fn log_records(&self) -> &[QsoRecord] {
+    pub fn log_records(&self) -> &[std::sync::Arc<QsoRecord>] {
         self.station.logbook.records()
+    }
+
+    /// The log's revision and a copy of the pointers to its records, taken without cloning a
+    /// record. See [`tempo_core::logbook::Logbook::snapshot`]: take it under the engine lock,
+    /// then do the real work after releasing it.
+    pub fn log_snapshot(&self) -> tempo_core::logbook::LogSnapshot {
+        self.station.logbook.snapshot()
     }
 
     /// Retain across chunked reads to detect any intervening log mutation/replacement.
@@ -25780,7 +25787,7 @@ mod tests {
             "an imported call is marked; its 40m contact is not this band"
         );
 
-        let mut to_40 = e.log_records()[0].clone();
+        let mut to_40 = e.log_records()[0].as_ref().clone();
         to_40.band = "40m".into();
         assert!(e.update_qso(0, to_40));
         assert_eq!(
@@ -25788,7 +25795,7 @@ mod tests {
             (true, false),
             "an edit that moves the band moves the band mark"
         );
-        let mut busted = e.log_records()[0].clone();
+        let mut busted = e.log_records()[0].as_ref().clone();
         busted.call = "W3CCC".into();
         assert!(e.update_qso(0, busted));
         assert_eq!(
@@ -25847,6 +25854,7 @@ mod tests {
             .iter()
             .find(|r| r.call == "W3CCC")
             .unwrap()
+            .as_ref()
             .clone();
         to_cw.mode = "CW".into();
         let at = e
@@ -31060,7 +31068,7 @@ mod tests {
         e.log_qso(e.qso_record("K7ABC".into(), None, None));
         moved(&e, "a second logged contact");
 
-        let mut edited = e.log_records()[0].clone();
+        let mut edited = e.log_records()[0].as_ref().clone();
         edited.comment = Some("fixed".into());
         assert!(e.update_qso(0, edited));
         moved(&e, "an edit");
@@ -31074,7 +31082,7 @@ mod tests {
         use tempo_core::logbook::{adif_header, adif_record, UploadOutcome};
         e.import_adif(&(adif_header() + &adif_record(&qrec("N0IMP", "40m"))));
         moved(&e, "an import");
-        let pushed = e.log_records()[0].clone();
+        let pushed = e.log_records()[0].as_ref().clone();
         assert!(e.stamp_qrz_upload(&pushed, UploadOutcome::Accepted, 1, None));
         moved(&e, "an upload stamp");
         let echo = adif_record(&e.log_records()[0]);

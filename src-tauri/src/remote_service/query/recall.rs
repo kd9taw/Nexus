@@ -131,8 +131,13 @@ impl Accumulator {
             latest_note: None,
         }
     }
-    fn append(&mut self, records: &[QsoRecord], offset: usize) -> Result<(), &'static str> {
+    fn append<R: std::borrow::Borrow<QsoRecord>>(
+        &mut self,
+        records: &[R],
+        offset: usize,
+    ) -> Result<(), &'static str> {
         for (i, q) in records.iter().enumerate() {
+            let q: &QsoRecord = std::borrow::Borrow::borrow(q);
             let index = offset + i;
             if q.call.trim().to_uppercase() == self.call {
                 text(&q.band)?;
@@ -275,7 +280,7 @@ mod tests {
     fn record(call: &str, when: u64, band: &str, mode: &str) -> QsoRecord {
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
         e.import_adif(&format!("<CALL:{}>{call}<BAND:{}>{band}<MODE:{}>{mode}<QSO_DATE:8>20260909<TIME_ON:6>010000<EOR>", call.len(), band.len(), mode.len()));
-        let mut q = e.log_records()[0].clone();
+        let mut q = e.log_records()[0].as_ref().clone();
         q.when_unix = when;
         q
     }
@@ -397,7 +402,7 @@ mod tests {
                     .iter()
                     .position(|q| q.call == "W1AW")
                     .unwrap();
-                let mut changed = e.log_records()[index].clone();
+                let mut changed = e.log_records()[index].as_ref().clone();
                 changed.notes = Some("edited during recall".into());
                 assert!(e.update_qso(index, changed));
                 assert_eq!(e.log_records().len(), count);

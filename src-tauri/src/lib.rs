@@ -14141,19 +14141,20 @@ fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnaps
 /// the NEW ONE badge fire on every German/Russian contact forever).
 #[tauri::command(async)]
 fn get_log(state: State<'_, SharedEngine>) -> Result<Vec<LoggedQso>, String> {
-    // Cloned under the lock, converted after it is released: the per-row country lookup is
-    // most of the cost, and the radio loop needs this lock at every slot boundary.
-    let records = engine_lock(&state).get_log();
+    // A snapshot under the lock — pointers, no record cloned — converted after it is
+    // released: the per-row copy and country lookup are the whole cost, and the radio loop
+    // needs this lock at every slot boundary.
+    let records = engine_lock(&state).log_snapshot().records;
     Ok(logged_rows(records))
 }
 
 /// Records as the UI reads them, each with its cty.dat entity — `get_log`'s conversion, and
 /// `get_log_delta`'s, which must hand out rows identical to it.
-fn logged_rows(records: Vec<tempo_core::logbook::QsoRecord>) -> Vec<LoggedQso> {
+fn logged_rows(records: Vec<Arc<tempo_core::logbook::QsoRecord>>) -> Vec<LoggedQso> {
     records
         .into_iter()
         .map(|r| {
-            let mut q = LoggedQso::from(r);
+            let mut q = LoggedQso::from(Arc::unwrap_or_clone(r));
             q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
             q
         })
@@ -14196,8 +14197,8 @@ async fn get_log_delta(
 }
 
 fn log_delta(engine: &Mutex<Engine>, since_revision: u64, have_count: usize) -> LogDelta {
-    // The rows are cloned and the revision read under ONE lock, so they always agree; the
-    // conversion runs after it is released, as in `get_log`.
+    // The row pointers are copied and the revision read under ONE lock, so they always agree;
+    // the conversion runs after it is released, as in `get_log`.
     let (revision, full, records) = {
         let eng = engine_lock(engine);
         let log = eng.log_records();
@@ -14281,7 +14282,11 @@ const LOG_ROW_GONE: &str =
 /// The row at `index` as `get_log` would show it — what a log command hands back so a
 /// follow-up (a QSL mark from the same edit form) can key the row it just changed.
 fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
-    let r = eng.log_records().get(index).cloned().ok_or(LOG_ROW_GONE)?;
+    let r = eng
+        .log_records()
+        .get(index)
+        .map(|r| r.as_ref().clone())
+        .ok_or(LOG_ROW_GONE)?;
     let mut q = LoggedQso::from(r);
     q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
     Ok(q)
@@ -14452,21 +14457,22 @@ fn awards_kept(engine: &Mutex<Engine>, tallies: &LogTallies) -> Arc<propagation:
     if let Some(kept) = tallies.awards.get(revision, &my_call) {
         return kept;
     }
-    let records = eng.get_log();
+    let records = eng.log_snapshot().records;
     drop(eng);
     let summary = awards_for_records(&records, &my_call);
     tallies.awards.put(revision, my_call, summary)
 }
 
 /// The native award fold, also used as the reference for Remote read conformance.
-fn awards_for_records(
-    records: &[tempo_core::logbook::QsoRecord],
+fn awards_for_records<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
+    records: &[R],
     my_call: &str,
 ) -> propagation::AwardSummary {
     let mut awards = propagation::Awards::new();
     // Tell the accumulator our own entity so "First DX" counts only foreign ones.
     awards.set_home_call(my_call);
     for q in records {
+        let q: &tempo_core::logbook::QsoRecord = std::borrow::Borrow::borrow(q);
         // Award-eligible confirmation only (LoTW/paper) — eQSL doesn't count; plus
         // whether ARRL has granted DXCC-family credit (DXCC / DXCC_BAND /
         // DXCC_MODE / … — real LoTW exports use the granular codes).
@@ -14541,7 +14547,8 @@ fn journey_kept(engine: &Mutex<Engine>, tallies: &LogTallies) -> Arc<propagation
     if let Some(kept) = tallies.journey.get(revision, &key) {
         return kept;
     }
-    let qsos: Vec<propagation::JourneyQso> = eng.log_records().iter().map(journey_qso).collect();
+    let qsos: Vec<propagation::JourneyQso> =
+        eng.log_records().iter().map(|r| journey_qso(r)).collect();
     drop(eng);
     let grid = (!key.grid.is_empty()).then_some(key.grid.as_str());
     let model = propagation::journey_model(&qsos, &key.call, grid, key.power_w, key.streak);
@@ -15101,13 +15108,14 @@ async fn get_need_alerts(
 /// * only contacts since 0000Z on the station clock (`now - now % 86_400`). An earlier one can
 ///   never match a question asked now or later, and on a big log this keeps the index to the
 ///   few contacts that can.
-fn hunted_activations(
-    records: &[tempo_core::logbook::QsoRecord],
+fn hunted_activations<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
+    records: &[R],
     now: i64,
 ) -> propagation::HuntedActivations {
     // A clock before 1970 keeps every row; `needed` answers "not hunted" for it regardless.
     let today = u64::try_from(now).map_or(0, |n| n - n % 86_400);
     propagation::HuntedActivations::from_log(records.iter().filter_map(|q| {
+        let q: &tempo_core::logbook::QsoRecord = std::borrow::Borrow::borrow(q);
         if q.when_unix < today {
             return None;
         }
@@ -32682,8 +32690,8 @@ mod tests {
         let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
             tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
         ));
-        // `get_log`'s answer: the same clone and the same conversion.
-        let get_log = || super::logged_rows(engine_lock(&engine).get_log());
+        // `get_log`'s answer: the same snapshot and the same conversion.
+        let get_log = || super::logged_rows(engine_lock(&engine).log_snapshot().records);
         engine_lock(&engine).log_qso(ft8_qso("DL1ABC", 1_700_000_000));
         engine_lock(&engine).log_qso(ft8_qso("JA1XYZ", 1_700_000_100));
 
@@ -32721,7 +32729,7 @@ mod tests {
         assert_eq!(copy, get_log(), "the copy plus the delta IS get_log");
 
         // An edit rewrites a row the copy holds: the whole log, never a delta.
-        let mut edited = engine_lock(&engine).log_records()[0].clone();
+        let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
         edited.comment = Some("fixed".into());
         assert!(engine_lock(&engine).update_qso(0, edited));
         let after_edit = super::log_delta(&engine, grown.revision, copy.len());
@@ -32795,7 +32803,7 @@ mod tests {
         assert_eq!(folds(), 1, "only the Journey reads the streak setting");
 
         // A rewrite moves them all, as an append does.
-        let mut edited = engine_lock(&engine).log_records()[0].clone();
+        let mut edited = engine_lock(&engine).log_records()[0].as_ref().clone();
         edited.band = "40m".into();
         assert!(engine_lock(&engine).update_qso(0, edited));
         assert_eq!(folds(), 3, "an edit folds each tally again");

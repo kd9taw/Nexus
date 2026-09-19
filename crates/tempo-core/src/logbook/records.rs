@@ -6,8 +6,15 @@
 //! revision cannot outlive the records it was built from, and a reader holding the first `n`
 //! rows of an older revision can be told whether those rows still stand
 //! ([`Records::appended_only_since`]).
+//!
+//! Each record is held behind an `Arc`, so a SNAPSHOT of the log is a copy of pointers
+//! ([`super::Logbook::snapshot`]): a reader takes one under the lock and does its real work
+//! after releasing it, without cloning a single record. A write copies only the record it
+//! touches (`Arc::make_mut`, via [`super::StoredRecord`]), and only while a snapshot still
+//! shares it.
 use super::QsoRecord;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Where every revision comes from: ONE counter for the whole process, not one per log. A
 /// per-log count would restart when the engine's log is replaced by a fresh load, and the new
@@ -40,8 +47,8 @@ fn next_revision() -> u64 {
 /// A reader retains its Arc, so a later allocation cannot reuse that identity.
 #[derive(Debug, Clone)]
 pub(super) struct Records {
-    values: Vec<QsoRecord>,
-    token: std::sync::Arc<()>,
+    values: Vec<Arc<QsoRecord>>,
+    token: Arc<()>,
     /// Moves on every write (see the module header).
     revision: u64,
     /// The revision of the last write that was not an append at the end. Every `DerefMut`
@@ -50,7 +57,7 @@ pub(super) struct Records {
     rewritten_at: u64,
 }
 impl Records {
-    pub(super) fn read_token(&self) -> std::sync::Arc<()> {
+    pub(super) fn read_token(&self) -> Arc<()> {
         self.token.clone()
     }
     pub(super) fn revision(&self) -> u64 {
@@ -68,14 +75,14 @@ impl Records {
     /// `DerefMut`.
     pub(super) fn push(&mut self, rec: QsoRecord) {
         self.obsolete_read_token();
-        self.values.push(rec);
+        self.values.push(Arc::new(rec));
         self.revision = next_revision();
     }
     fn obsolete_read_token(&mut self) {
         // With no retained reader/clone there is no old identity to invalidate.
         // Ordinary logging therefore adds no token allocation per contact.
-        if std::sync::Arc::strong_count(&self.token) > 1 {
-            self.token = std::sync::Arc::new(());
+        if Arc::strong_count(&self.token) > 1 {
+            self.token = Arc::new(());
         }
     }
 }
@@ -90,15 +97,15 @@ impl From<Vec<QsoRecord>> for Records {
         // claim its rows.
         let revision = next_revision();
         Self {
-            values,
-            token: std::sync::Arc::new(()),
+            values: values.into_iter().map(Arc::new).collect(),
+            token: Arc::new(()),
             revision,
             rewritten_at: revision,
         }
     }
 }
 impl std::ops::Deref for Records {
-    type Target = Vec<QsoRecord>;
+    type Target = Vec<Arc<QsoRecord>>;
     fn deref(&self) -> &Self::Target {
         &self.values
     }
@@ -112,8 +119,8 @@ impl std::ops::DerefMut for Records {
     }
 }
 impl<'a> IntoIterator for &'a Records {
-    type Item = &'a QsoRecord;
-    type IntoIter = std::slice::Iter<'a, QsoRecord>;
+    type Item = &'a Arc<QsoRecord>;
+    type IntoIter = std::slice::Iter<'a, Arc<QsoRecord>>;
     fn into_iter(self) -> Self::IntoIter {
         self.values.iter()
     }

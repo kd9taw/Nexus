@@ -316,13 +316,20 @@ fn key_parts(r: &QsoRecord) -> (String, String, &'static str, u64) {
 /// Diagnose the log against the latest per-source reconcile summaries. Phase 1a:
 /// no `UploadState`. `entities[i]` is the resolved DXCC entity name for
 /// `records[i]` (for R4d's US-family gate), `None` if unresolved.
-pub fn diagnose(
-    records: &[QsoRecord],
+pub fn diagnose<R: std::borrow::Borrow<QsoRecord>>(
+    records: &[R],
     entities: &[Option<String>],
     recents: &[&ReconcileSummary],
     now: i64,
     cfg: &DiagCfg,
 ) -> DiagnosticsReport {
+    // The log hands its records out shared (`Arc`), the tests as plain records; read both
+    // through one slice of references.
+    let records: Vec<&QsoRecord> = records
+        .iter()
+        .map(|r| std::borrow::Borrow::borrow(r))
+        .collect();
+    let records = &records[..];
     // Per-record accumulated reasons, deduped by (code, source) — the source matters
     // so a record can carry, e.g., both "never uploaded to LoTW" (R1/LoTW) and "never
     // pushed to QRZ" (R1/QRZ) without the second collapsing into the first.
@@ -397,7 +404,7 @@ pub fn diagnose(
             }
             // A field-identical, award-confirmed twin?
             if let Some(&twin) = group.iter().find(|&&j| {
-                j != i && records[j].award_confirmed && field_identical(&records[i], &records[j])
+                j != i && records[j].award_confirmed && field_identical(records[i], records[j])
             }) {
                 push_reason(
                     &mut reasons,
@@ -744,7 +751,7 @@ fn field_identical(a: &QsoRecord, b: &QsoRecord) -> bool {
 /// Best exact-call R4 candidate for an orphan: among same-call unconfirmed logged
 /// QSOs, the one differing in EXACTLY ONE key dimension (band/mode/day).
 fn best_r4_candidate(
-    records: &[QsoRecord],
+    records: &[&QsoRecord],
     orphan: &OrphanConfirmation,
 ) -> Option<(usize, Reason)> {
     let o_call = orphan.call.to_ascii_uppercase();
@@ -813,7 +820,7 @@ fn best_r4_candidate(
 /// Best fuzzy-call R6 candidate: an unconfirmed logged QSO on the SAME band+mode+
 /// day whose call is within the edit-distance cap of the orphan's call.
 fn best_r6_candidate(
-    records: &[QsoRecord],
+    records: &[&QsoRecord],
     orphan: &OrphanConfirmation,
     cfg: &DiagCfg,
 ) -> Option<(usize, Reason)> {
@@ -1494,7 +1501,7 @@ mod tests {
 
     #[test]
     fn empty_log_and_no_reconcile_are_safe() {
-        let rep = diagnose(&[], &[], &[], NOW, &DiagCfg::default());
+        let rep = diagnose(&[] as &[QsoRecord], &[], &[], NOW, &DiagCfg::default());
         assert!(rep.diagnoses.is_empty() && rep.buckets.is_empty());
     }
 

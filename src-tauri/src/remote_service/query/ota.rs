@@ -426,7 +426,7 @@ mod tests {
                 if activation {
                     e.set_activation("POTA", "US-0005").unwrap();
                 } else {
-                    let mut q = e.log_records()[0].clone();
+                    let mut q = e.log_records()[0].as_ref().clone();
                     q.ota.my_ref = Some("US-0005".into());
                     assert!(e.update_qso(0, q));
                 }

@@ -53,6 +53,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 // Whole-log sweep counter, DEBUG BUILDS ONLY — instrumentation for the
 // traversal-bound test. A per-row `worked_before()` inside `snapshot()` once
@@ -738,6 +739,34 @@ impl UploadState {
     }
 }
 
+/// A record as the log stores it, readable as a [`QsoRecord`] and writable in place: the shape
+/// the merges in [`crate::reconcile`] work on. The log keeps each record behind an `Arc`, so a
+/// [`LogSnapshot`] can share it; [`StoredRecord::write`] copies a record first only while a
+/// snapshot still holds it (`Arc::make_mut`). A plain `QsoRecord` is the same thing unshared,
+/// which is what those functions' own tests hand them.
+pub trait StoredRecord: std::borrow::Borrow<QsoRecord> + From<QsoRecord> {
+    /// The record, for writing.
+    fn write(&mut self) -> &mut QsoRecord;
+}
+impl StoredRecord for QsoRecord {
+    fn write(&mut self) -> &mut QsoRecord {
+        self
+    }
+}
+impl StoredRecord for Arc<QsoRecord> {
+    fn write(&mut self) -> &mut QsoRecord {
+        Arc::make_mut(self)
+    }
+}
+
+/// The log at one revision, as [`Logbook::snapshot`] hands it out.
+#[derive(Debug, Clone)]
+pub struct LogSnapshot {
+    /// The [`Logbook::revision`] these records are the log at.
+    pub revision: u64,
+    pub records: Vec<Arc<QsoRecord>>,
+}
+
 /// An in-memory logbook backed by an ADIF file.
 #[derive(Debug, Clone, Default)]
 pub struct Logbook {
@@ -752,8 +781,18 @@ impl Logbook {
         Self::default()
     }
 
-    pub fn records(&self) -> &[QsoRecord] {
+    pub fn records(&self) -> &[Arc<QsoRecord>] {
         &self.records
+    }
+    /// The log as it stands: its revision and a copy of the POINTERS to its records, O(n) in
+    /// pointer copies with no record cloned. Take it under whatever lock guards the log, release
+    /// the lock, then iterate, serialise or fold it at leisure: a later write copies the record
+    /// it touches instead of changing the one the snapshot holds.
+    pub fn snapshot(&self) -> LogSnapshot {
+        LogSnapshot {
+            revision: self.revision(),
+            records: self.records.to_vec(),
+        }
     }
     /// Identity for a consistent, chunked immutable read. Compare with Arc::ptr_eq
     /// after each chunk and before returning; a changed token means retry the read.
@@ -775,8 +814,9 @@ impl Logbook {
     pub fn appended_only_since(&self, revision: u64) -> bool {
         self.records.appended_only_since(revision)
     }
-    /// Mutable access to the records (for in-place upload-state stamping).
-    pub fn records_mut(&mut self) -> &mut [QsoRecord] {
+    /// Mutable access to the records (for in-place upload-state stamping). Write one through
+    /// [`StoredRecord::write`], which copies it first if a snapshot still holds it.
+    pub fn records_mut(&mut self) -> &mut [Arc<QsoRecord>] {
         &mut self.records
     }
     pub fn len(&self) -> usize {
@@ -918,7 +958,7 @@ impl Logbook {
                 if rec.when_unix % 86_400 == old.when_unix % 86_400 {
                     rec.time_known = old.time_known;
                 }
-                self.records[index] = rec;
+                self.records[index] = Arc::new(rec);
                 true
             }
             None => false,
@@ -945,7 +985,7 @@ impl Logbook {
     pub fn mark_qsl_sent(&mut self, index: usize, via: Option<QslVia>, date_unix: u64) -> bool {
         match self.records.get_mut(index) {
             Some(rec) => {
-                rec.qsl_sent = match via {
+                Arc::make_mut(rec).qsl_sent = match via {
                     Some(via) => QslSent {
                         sent: true,
                         via: Some(via),
@@ -980,7 +1020,7 @@ impl Logbook {
     pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
         match self.records.get_mut(index) {
             Some(rec) => {
-                rec.qsl_rcvd.card = received;
+                Arc::make_mut(rec).qsl_rcvd.card = received;
                 true
             }
             None => false,
@@ -1083,10 +1123,10 @@ impl Logbook {
                     // into the records marks the log rewritten (see `revision`), and a
                     // re-import of rows the log already holds changes nothing, so it
                     // must stay an append-only change.
-                    let mut upgraded = self.records[i].clone();
+                    let mut upgraded = QsoRecord::clone(&self.records[i]);
                     crate::reconcile::apply_match(&mut upgraded, &rec, &mut tally);
-                    if upgraded != self.records[i] {
-                        self.records[i] = upgraded;
+                    if upgraded != *self.records[i] {
+                        self.records[i] = Arc::new(upgraded);
                         merged += 1;
                     }
                 }
@@ -1116,7 +1156,7 @@ impl Logbook {
     /// with one station inside a day — see [`crate::reconcile::merge_own_disk`].
     pub fn reconcile_disk(&mut self, text: &str) {
         let incoming = parse_adif(text);
-        crate::reconcile::merge_own_disk(&mut self.records, incoming);
+        crate::reconcile::merge_own_disk(&mut *self.records, incoming);
     }
 
     /// Stamp park/summit references from an external OTA log (pota.app hunter or
@@ -1157,18 +1197,20 @@ impl Logbook {
             });
             match hit {
                 Some(q) => {
-                    let mut did = false;
-                    if q.ota.their_ref.is_none() && row.ota.their_ref.is_some() {
-                        q.ota.their_program = row.ota.their_program.clone();
-                        q.ota.their_ref = row.ota.their_ref.clone();
-                        did = true;
-                    }
-                    if q.ota.my_ref.is_none() && row.ota.my_ref.is_some() {
-                        q.ota.my_program = row.ota.my_program.clone();
-                        q.ota.my_ref = row.ota.my_ref.clone();
-                        did = true;
-                    }
-                    if did {
+                    let theirs = q.ota.their_ref.is_none() && row.ota.their_ref.is_some();
+                    let mine = q.ota.my_ref.is_none() && row.ota.my_ref.is_some();
+                    if theirs || mine {
+                        // Written only when something is stamped: a write copies a record a
+                        // snapshot still holds.
+                        let q = Arc::make_mut(q);
+                        if theirs {
+                            q.ota.their_program = row.ota.their_program.clone();
+                            q.ota.their_ref = row.ota.their_ref.clone();
+                        }
+                        if mine {
+                            q.ota.my_program = row.ota.my_program.clone();
+                            q.ota.my_ref = row.ota.my_ref.clone();
+                        }
                         stamped += 1;
                     } else {
                         already += 1;
@@ -1785,7 +1827,7 @@ impl Logbook {
     pub fn merge_report(&mut self, text: &str) -> crate::reconcile::ReconcileSummary {
         let mut incoming = parse_adif(text);
         lotw_channel_fixup(text, &mut incoming);
-        crate::reconcile::reconcile(&mut self.records, &incoming)
+        crate::reconcile::reconcile(&mut self.records[..], &incoming)
     }
 
     /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own
@@ -1800,7 +1842,7 @@ impl Logbook {
         text: &str,
     ) -> (Vec<QsoRecord>, crate::reconcile::ReconcileSummary) {
         let incoming = parse_adif(text);
-        crate::reconcile::merge_and_add(&mut self.records, incoming)
+        crate::reconcile::merge_and_add(&mut *self.records, incoming)
     }
 
     /// Merge a LoTW **own-QSO** report (`qso_qsl=no` ADIF — your records LoTW holds
@@ -1809,7 +1851,7 @@ impl Logbook {
     /// newly promoted. Pure merge — call [`save`](Self::save) to persist.
     pub fn merge_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
         let own = parse_adif(text);
-        crate::reconcile::promote_own_echo(&mut self.records, &own, when_unix)
+        crate::reconcile::promote_own_echo(&mut self.records[..], &own, when_unix)
     }
 
     /// Index of the NEWEST logged QSO matching `pushed`'s key (call/band/mode-class/
@@ -1836,7 +1878,7 @@ impl Logbook {
     pub fn stamp_qrz_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
         match self.newest_match_index(pushed) {
             Some(i) => {
-                self.records[i].upload.qrz = Some(status);
+                Arc::make_mut(&mut self.records[i]).upload.qrz = Some(status);
                 true
             }
             None => false,
@@ -1848,7 +1890,7 @@ impl Logbook {
     pub fn stamp_clublog_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
         match self.newest_match_index(pushed) {
             Some(i) => {
-                self.records[i].upload.clublog = Some(status);
+                Arc::make_mut(&mut self.records[i]).upload.clublog = Some(status);
                 true
             }
             None => false,
@@ -1860,7 +1902,7 @@ impl Logbook {
     pub fn stamp_eqsl_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
         match self.newest_match_index(pushed) {
             Some(i) => {
-                self.records[i].upload.eqsl = Some(status);
+                Arc::make_mut(&mut self.records[i]).upload.eqsl = Some(status);
                 true
             }
             None => false,
@@ -1955,7 +1997,7 @@ impl Logbook {
         from: Option<u64>,
         to: Option<u64>,
     ) -> impl Iterator<Item = &QsoRecord> {
-        self.records.iter().filter(move |r| {
+        self.records.iter().map(|r| &**r).filter(move |r| {
             from.is_none_or(|f| r.when_unix >= f) && to.is_none_or(|t| r.when_unix <= t)
         })
     }
@@ -2119,7 +2161,7 @@ impl Logbook {
             if !my_refs(r).contains(&want) {
                 continue;
             }
-            let mut one = r.clone();
+            let mut one = QsoRecord::clone(r);
             one.ota.my_ref = Some(want.clone());
             s.push_str(&adif_record(&one));
         }
@@ -3678,7 +3720,7 @@ mod tests {
             "retaining a read identity cannot change stored contacts"
         );
         let mut copy = book.clone();
-        copy.records_mut()[0].notes = Some("different copy".into());
+        Arc::make_mut(&mut copy.records_mut()[0]).notes = Some("different copy".into());
         assert!(std::sync::Arc::ptr_eq(&token, &book.read_token()));
         assert!(!std::sync::Arc::ptr_eq(&token, &copy.read_token()));
         assert_eq!(book.adif(), before);
@@ -3687,7 +3729,7 @@ mod tests {
                 b.mark_qsl_card(0, true);
             }) as fn(&mut Logbook),
             |b| {
-                b.records_mut()[0].notes = Some("new note".into());
+                Arc::make_mut(&mut b.records_mut()[0]).notes = Some("new note".into());
             },
             |b| {
                 b.add(rec("K1ABC", "40m", 200));
@@ -3711,6 +3753,66 @@ mod tests {
             &book.read_token(),
             &replacement.read_token()
         ));
+    }
+
+    /// A snapshot is the log at one revision and stays exactly that: a later write copies the
+    /// record it touches rather than changing the one the snapshot holds. Every record the write
+    /// did NOT touch stays shared, not copied, and a record no snapshot holds is written in
+    /// place. That is what lets a reader take a snapshot under the engine lock and do its real
+    /// work after releasing it, without the log paying a copy of itself per write.
+    #[test]
+    fn a_snapshot_survives_later_writes_and_shares_every_untouched_record() {
+        let mut book = Logbook::new();
+        for (i, call) in ["W1AW", "K1ABC", "DL1ZZZ"].into_iter().enumerate() {
+            book.add(rec(call, "20m", 100 * (i as u64 + 1)));
+        }
+        let snap = book.snapshot();
+        assert_eq!(snap.revision, book.revision());
+        assert_eq!(snap.records.len(), 3);
+        let stamp = |when_unix| UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix,
+            detail: None,
+        };
+
+        let pushed = book.records()[1].as_ref().clone();
+        assert!(book.stamp_qrz_upload(&pushed, stamp(5)));
+        assert!(
+            snap.records[1].upload.qrz.is_none(),
+            "the snapshot still holds the row as it was"
+        );
+        assert!(
+            book.records()[1].upload.qrz.is_some(),
+            "the log holds the stamp"
+        );
+        assert!(
+            !Arc::ptr_eq(&snap.records[1], &book.records()[1]),
+            "the written row was copied"
+        );
+        assert!(
+            Arc::ptr_eq(&snap.records[0], &book.records()[0])
+                && Arc::ptr_eq(&snap.records[2], &book.records()[2]),
+            "the rows the write did not touch are shared, not copied"
+        );
+
+        // No snapshot holds the new row 1, so the next write to it happens in place.
+        let at = Arc::as_ptr(&book.records()[1]);
+        assert!(book.stamp_clublog_upload(&pushed, stamp(6)));
+        assert_eq!(
+            Arc::as_ptr(&book.records()[1]),
+            at,
+            "unshared, it is written in place"
+        );
+
+        // An edit and a delete leave the snapshot whole as well.
+        let mut edited = book.records()[0].as_ref().clone();
+        edited.comment = Some("fixed".into());
+        assert!(book.update_record(0, edited));
+        assert!(book.delete(2));
+        let calls: Vec<&str> = snap.records.iter().map(|r| r.call.as_str()).collect();
+        assert_eq!(calls, ["W1AW", "K1ABC", "DL1ZZZ"]);
+        assert_eq!(snap.records[0].comment, None);
+        assert_eq!(book.records()[0].comment.as_deref(), Some("fixed"));
     }
 
     /// The revision is what every whole-log cache and the UI's log delta are held against, so
@@ -3769,7 +3871,7 @@ mod tests {
         type Rewrite = (&'static str, fn(&mut Logbook));
         let rewrites: Vec<Rewrite> = vec![
             ("an edit", |b| {
-                let mut r = b.records()[0].clone();
+                let mut r = b.records()[0].as_ref().clone();
                 r.comment = Some("fixed".into());
                 assert!(b.update_record(0, r));
             }),
@@ -3778,7 +3880,7 @@ mod tests {
             }),
             ("a QSL-card mark", |b| assert!(b.mark_qsl_card(0, true))),
             ("an import that upgrades a held row", |b| {
-                let mut r = b.records()[0].clone();
+                let mut r = b.records()[0].as_ref().clone();
                 r.state = Some("VT".into());
                 let (_, _, merged) = b.import_adif(&(adif_header() + &adif_record(&r)));
                 assert_eq!(
@@ -3799,7 +3901,7 @@ mod tests {
                 b.reconcile_disk(&adif_record(&rec("VK2ABC", "20m", 600)));
             }),
             ("an upload stamp", |b| {
-                let pushed = b.records()[0].clone();
+                let pushed = b.records()[0].as_ref().clone();
                 let status = UploadStatus {
                     outcome: UploadOutcome::Accepted,
                     when_unix: 700,
@@ -3808,13 +3910,13 @@ mod tests {
                 assert!(b.stamp_qrz_upload(&pushed, status));
             }),
             ("a park stamp", |b| {
-                let mut r = b.records()[0].clone();
+                let mut r = b.records()[0].as_ref().clone();
                 r.ota.their_program = Some("POTA".into());
                 r.ota.their_ref = Some("US-0001".into());
                 assert_eq!(b.stamp_ota_refs(&adif_record(&r)).0, 1, "fixture: stamped");
             }),
             ("in-place access", |b| {
-                b.records_mut()[0].notes = Some("note".into());
+                Arc::make_mut(&mut b.records_mut()[0]).notes = Some("note".into());
             }),
             ("a delete", |b| assert!(b.delete(0))),
             ("a clear", |b| assert_eq!(b.clear(), 2)),
@@ -4057,7 +4159,7 @@ mod tests {
         // now award-confirmed + QRZ-uploaded, plus a NEW QSO Y that A logged.
         let mut mem = Logbook::new();
         mem.add(rec("DL1ABC", "20m", 1_700_000_000));
-        mem.records_mut()[0].upload.clublog = Some(UploadStatus {
+        Arc::make_mut(&mut mem.records_mut()[0]).upload.clublog = Some(UploadStatus {
             outcome: UploadOutcome::Accepted,
             when_unix: 1_700_000_050,
             detail: None,
@@ -4208,6 +4310,7 @@ mod tests {
         let with = |rst: &str| -> Vec<&QsoRecord> {
             mem.records()
                 .iter()
+                .map(|r| &**r)
                 .filter(|r| r.rst_sent.as_deref() == Some(rst))
                 .collect()
         };
@@ -4742,7 +4845,7 @@ mod tests {
         r.my_rig = Some("IC-705".into());
         lb.add(r);
 
-        let mut edited = lb.records()[0].clone();
+        let mut edited = lb.records()[0].as_ref().clone();
         edited.name = Some("Hiram".into());
         edited.my_grid = None;
         edited.my_rig = None;
@@ -4753,7 +4856,7 @@ mod tests {
         assert_eq!(r.my_rig.as_deref(), Some("IC-705"));
 
         // An edit that sets a new value takes it.
-        let mut changed = lb.records()[0].clone();
+        let mut changed = lb.records()[0].as_ref().clone();
         changed.my_rig = Some("FT-991A".into());
         assert!(lb.update_record(0, changed));
         assert_eq!(lb.records()[0].my_rig.as_deref(), Some("FT-991A"));
@@ -5146,7 +5249,7 @@ mod tests {
         lb.add(split);
 
         // The edit form sends the record back with a corrected name and no receive leg.
-        let mut edited = lb.records()[0].clone();
+        let mut edited = lb.records()[0].as_ref().clone();
         edited.name = Some("Hiram".into());
         edited.freq_rx_mhz = None;
         assert!(lb.update_record(0, edited));
@@ -5390,7 +5493,7 @@ mod tests {
             lb.records()[0].upload.lotw.is_some(),
             "precondition: imported as already-sent"
         );
-        let mut fixed = lb.records()[0].clone();
+        let mut fixed = lb.records()[0].as_ref().clone();
         fixed.call = "W1AW".into();
         fixed.extra = Vec::new(); // the edit payload always arrives with extra empty
         assert!(lb.update_record(0, fixed));

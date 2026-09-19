@@ -7,7 +7,8 @@
 //! reports confirmations that match **no** logged QSO (the "why is this missing?"
 //! diagnostic). Pure: no network, no DXCC resolution, never fabricates or revokes.
 
-use crate::logbook::{datetime_utc, QsoRecord};
+use crate::logbook::{datetime_utc, QsoRecord, StoredRecord};
+use std::borrow::Borrow;
 use std::collections::HashMap;
 
 /// A confirmation in the report with no matching logged QSO — a log gap, callsign
@@ -181,15 +182,18 @@ fn same_contact(a: &QsoRecord, b: &QsoRecord) -> bool {
 ///   folds one contact's confirmation onto another and drops the row we never held.
 ///   A row we cannot recognise is a row we do not have, which is exactly what the
 ///   recovery appends.
-fn take_own_disk(
+fn take_own_disk<R: Borrow<QsoRecord>>(
     buckets: &mut HashMap<Key, Vec<usize>>,
-    local: &[QsoRecord],
+    local: &[R],
     inc: &QsoRecord,
 ) -> Option<usize> {
     let bucket = buckets.get_mut(&exact_key(inc))?;
     // Buckets are reversed, so scanning from the BACK consumes oldest-first, the
     // same order `pop()` does.
-    if let Some(pos) = bucket.iter().rposition(|&i| same_contact(&local[i], inc)) {
+    if let Some(pos) = bucket
+        .iter()
+        .rposition(|&i| same_contact(local[i].borrow(), inc))
+    {
         return Some(bucket.remove(pos));
     }
     if inc.time_known {
@@ -201,13 +205,13 @@ fn take_own_disk(
 
 /// Index local QSOs by `key_of`; each bucket reversed so `pop()` consumes in log
 /// order (oldest first), so two same-key contacts reconcile against distinct rows.
-fn build_buckets_by(
-    local: &[QsoRecord],
+fn build_buckets_by<R: Borrow<QsoRecord>>(
+    local: &[R],
     key_of: impl Fn(&QsoRecord) -> Key,
 ) -> HashMap<Key, Vec<usize>> {
     let mut buckets: HashMap<Key, Vec<usize>> = HashMap::new();
     for (i, r) in local.iter().enumerate() {
-        buckets.entry(key_of(r)).or_default().push(i);
+        buckets.entry(key_of(r.borrow())).or_default().push(i);
     }
     for v in buckets.values_mut() {
         v.reverse();
@@ -216,7 +220,7 @@ fn build_buckets_by(
 }
 
 /// Index local QSOs by the fuzzy report key ([`key`]).
-fn build_buckets(local: &[QsoRecord]) -> HashMap<Key, Vec<usize>> {
+fn build_buckets<R: Borrow<QsoRecord>>(local: &[R]) -> HashMap<Key, Vec<usize>> {
     build_buckets_by(local, key)
 }
 
@@ -298,12 +302,12 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
 /// confirmations become orphans (a "why is this missing?" diagnostic) — they are
 /// NOT added, because a LoTW/eQSL confirmation of a QSO we never logged is a gap to
 /// surface, not a contact to fabricate.
-pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSummary {
+pub fn reconcile<R: StoredRecord>(local: &mut [R], incoming: &[QsoRecord]) -> ReconcileSummary {
     let mut buckets = build_buckets(local);
     let mut sum = ReconcileSummary::default();
     for inc in incoming {
         match take_match(&mut buckets, inc) {
-            Some(i) => apply_match(&mut local[i], inc, &mut sum),
+            Some(i) => apply_match(local[i].write(), inc, &mut sum),
             // Only a row that actually carries a confirmation/credit is a
             // meaningful "missing" diagnostic; a plain unconfirmed QSO row is not.
             None if inc.confirmed
@@ -342,8 +346,8 @@ pub fn reconcile(local: &mut [QsoRecord], incoming: &[QsoRecord]) -> ReconcileSu
 /// mode spelling differs (local `SSB` vs a re-uploaded `USB`, `FT4` vs `MFSK`), which
 /// double-logs the contact. Returns the newly-added records (so the caller persists
 /// exactly those) plus the reconcile summary.
-pub fn merge_and_add(
-    local: &mut Vec<QsoRecord>,
+pub fn merge_and_add<R: StoredRecord>(
+    local: &mut Vec<R>,
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut buckets = build_buckets(local);
@@ -388,8 +392,8 @@ pub fn merge_and_add(
 /// The same applies to an edit that keeps the key and changes a field the merge does
 /// not own (a `COMMENT`, a `NAME`): the rows still pair, and OUR copy — the older
 /// text — is what the rewrite writes back.
-pub fn merge_own_disk(
-    local: &mut Vec<QsoRecord>,
+pub fn merge_own_disk<R: StoredRecord>(
+    local: &mut Vec<R>,
     incoming: Vec<QsoRecord>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut buckets = build_buckets_by(local, exact_key);
@@ -399,17 +403,17 @@ pub fn merge_own_disk(
 /// The shared body of the two-way merges: each incoming row consumes at most one local
 /// QSO via `take` and upgrades it monotonically, or is appended as new. `take` is the
 /// whole difference between them — a fuzzy report key vs. our own exact identity.
-fn merge_pass(
-    local: &mut Vec<QsoRecord>,
+fn merge_pass<R: StoredRecord>(
+    local: &mut Vec<R>,
     incoming: Vec<QsoRecord>,
     buckets: &mut HashMap<Key, Vec<usize>>,
-    take: impl Fn(&mut HashMap<Key, Vec<usize>>, &[QsoRecord], &QsoRecord) -> Option<usize>,
+    take: impl Fn(&mut HashMap<Key, Vec<usize>>, &[R], &QsoRecord) -> Option<usize>,
 ) -> (Vec<QsoRecord>, ReconcileSummary) {
     let mut sum = ReconcileSummary::default();
     let mut added = Vec::new();
     for inc in incoming {
         match take(buckets, local, &inc) {
-            Some(i) => apply_match(&mut local[i], &inc, &mut sum),
+            Some(i) => apply_match(local[i].write(), &inc, &mut sum),
             None => {
                 // New contact from the download — append it. Do NOT re-index it into the
                 // consume-once bucket: a later same-key row in this batch is a DISTINCT QSO
@@ -419,7 +423,7 @@ fn merge_pass(
                 // the buckets are rebuilt from the grown log next sync, each row then pops
                 // its own match and nothing re-adds.
                 added.push(inc.clone());
-                local.push(inc);
+                local.push(R::from(inc));
             }
         }
     }
@@ -438,13 +442,18 @@ fn merge_pass(
 /// and `qso_qsl=no` would not list them anyway). Idempotent: an already-Accepted/
 /// Duplicate QSO is re-stamped harmlessly and not counted. Returns the number
 /// *newly* promoted.
-pub fn promote_own_echo(local: &mut [QsoRecord], own: &[QsoRecord], when_unix: i64) -> usize {
+pub fn promote_own_echo<R: StoredRecord>(
+    local: &mut [R],
+    own: &[QsoRecord],
+    when_unix: i64,
+) -> usize {
     use crate::logbook::{UploadOutcome, UploadStatus};
 
     // Index award-unconfirmed local QSOs by match key; reversed so pop() consumes
     // in log order (oldest first), mirroring `reconcile`.
     let mut buckets: HashMap<Key, Vec<usize>> = HashMap::new();
     for (i, r) in local.iter().enumerate() {
+        let r: &QsoRecord = r.borrow();
         if !r.award_confirmed {
             buckets.entry(key(r)).or_default().push(i);
         }
@@ -470,10 +479,10 @@ pub fn promote_own_echo(local: &mut [QsoRecord], own: &[QsoRecord], when_unix: i
         }
         if let Some(i) = idx {
             let already_on_file = matches!(
-                local[i].upload.lotw.as_ref().map(|s| s.outcome),
+                local[i].borrow().upload.lotw.as_ref().map(|s| s.outcome),
                 Some(UploadOutcome::Accepted) | Some(UploadOutcome::Duplicate)
             );
-            local[i].upload.lotw = Some(UploadStatus {
+            local[i].write().upload.lotw = Some(UploadStatus {
                 outcome: UploadOutcome::Accepted,
                 when_unix,
                 detail: None,

@@ -172,7 +172,7 @@ mod tests {
         e.js8_load_journal(&journal.to_string());
         assert_eq!(e.js8_heard().len(), 2);
         e.import_adif("<CALL:4>W1AW<BAND:3>40m<MODE:3>SSB<QSO_DATE:8>20260908<TIME_ON:6>010000<GRIDSQUARE:4>FN31<NAME:3>OLD<COMMENT:3>OLD<EOR>");
-        let base = e.log_records()[0].clone();
+        let base = e.log_records()[0].as_ref().clone();
         let adif: String = (1..2302)
             .map(|i| {
                 let mut q = base.clone();
@@ -226,7 +226,7 @@ mod tests {
                 .max_by_key(|(_, q)| q.when_unix)
                 .unwrap()
                 .0;
-            let mut q = e.log_records()[index].clone();
+            let mut q = e.log_records()[index].as_ref().clone();
             q.comment = Some("CURRENT".into());
             assert!(e.update_qso(index, q));
         }
@@ -241,7 +241,7 @@ mod tests {
         let result = Cache::default().read_chunks(&engine, |offset| {
             if offset == 0 {
                 let mut e = engine.lock().unwrap();
-                let mut q = e.log_records()[0].clone();
+                let mut q = e.log_records()[0].as_ref().clone();
                 q.comment = Some("CHANGED".into());
                 assert!(e.update_qso(0, q));
             }
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(result.unwrap_err(), "applicationBusy");
         {
             let mut e = engine.lock().unwrap();
-            let mut q = e.log_records()[0].clone();
+            let mut q = e.log_records()[0].as_ref().clone();
             q.comment = Some("x".repeat(1025));
             assert!(e.update_qso(0, q));
         }

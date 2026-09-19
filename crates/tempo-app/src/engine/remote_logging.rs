@@ -460,7 +460,7 @@ mod tests {
             for receipt in receipts {
                 receipt.sync().unwrap();
             }
-            let mut expected = native.engine.station.logbook.records()[0].clone();
+            let mut expected = native.engine.station.logbook.records()[0].as_ref().clone();
             let actual = &remote.engine.station.logbook.records()[0];
             assert!(
                 expected
@@ -470,7 +470,7 @@ mod tests {
                     <= 2
             );
             expected.time_off_unix = actual.time_off_unix;
-            assert_eq!(&expected, actual);
+            assert_eq!(&expected, actual.as_ref());
             assert_eq!(actual.when_unix, 1_700_000_000);
             assert!(actual.freq_mhz > remote.engine.settings.dial_mhz);
             assert_eq!(actual.rst_rcvd.as_deref(), Some("-10"));
