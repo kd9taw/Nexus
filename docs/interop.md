@@ -202,9 +202,10 @@ datagram WSJT-X sends.
 Nexus connects to DX cluster nodes over Telnet and ingests RBN skimmer spots to power
 the Needed board and the "who's on the air" intelligence.
 
-- The default human cluster node is **`ve7cc.net:23`** (`cluster_hosts`); RBN CW and
-  digital spots are wired automatically, so you get skimmer coverage without extra
-  setup.
+- By default Nexus chooses the human cluster nodes itself (`cluster_nodes_auto`),
+  keeping two connected from eight built into the release; your own list
+  (`cluster_hosts`) is used instead when you choose it. RBN CW and digital spots are
+  wired automatically, so you get skimmer coverage without extra setup.
 - Cluster **split** comments ("UP 2") are parsed and can set the rig split for you
   when you jump to work a station.
 
@@ -232,7 +233,7 @@ ClubLog, eQSL, and HRDLog.net).
 | N3FJP contact push | Nexus → N3FJP | `:1100` (TCP) | `n3fjp_host` / `n3fjp_port` | no |
 | HRD Logbook forwarding | Nexus → HRD | `127.0.0.1:2333` (UDP) | `hrd_logging` / `hrd_udp_addr` | no |
 | PSK Reporter | Nexus → PSKR | `report.pskreporter.info:4739` (UDP) | `pskreporter` | **yes** |
-| DX cluster / RBN | node → Nexus | `ve7cc.net:23` (Telnet) | `cluster_hosts` | seeded |
+| DX cluster / RBN | node → Nexus | two of eight built-in nodes (Telnet) | `cluster_nodes_auto` / `cluster_hosts` | **yes** |
 
 ## Logbook format
 

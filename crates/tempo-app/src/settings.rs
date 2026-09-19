@@ -206,9 +206,15 @@ pub enum SatUplinkOffer {
 /// other way.
 pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 
-/// The human DX-cluster nodes a fresh install connects to — the SSB/phone source (the RBN CW
-/// and digital skimmer feeds are wired automatically and carry no phone; `load` strips any
-/// RBN endpoint from this list). Diverse in HOST, in PORT and in SOFTWARE, on purpose: a
+/// The human DX-cluster node list a fresh install starts with under **Use my list** — the
+/// SSB/phone source (the RBN CW and digital skimmer feeds are wired automatically and carry no
+/// phone; `load` strips any RBN endpoint from this list). A fresh install does not connect to it:
+/// it starts on automatic node choice ([`Settings::cluster_nodes_auto`]), which picks from the
+/// nodes built into the release (`tempo_net::cluster::pool::NODES`) and never reads this list.
+/// This list, and the pair before it, are what the upgrade migration recognises as "shipped,
+/// never chosen" ([`Settings::choose_cluster_nodes_for_old_settings`]).
+///
+/// Diverse in HOST, in PORT and in SOFTWARE, on purpose: a
 /// default that is one node is one outage away from an empty Phone board, and a default that
 /// is all on port 23 is one hotel firewall away from it — networks that block outbound telnet
 /// still pass RBN on 7000/7001, so phone dies there SILENTLY while CW keeps flowing.
@@ -229,7 +235,7 @@ pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 /// were down at once — ve7cc accepted TCP and never sent a login prompt, wa9pie refused — and
 /// every default-config install had no phone source at all; that is the whole reason the list
 /// grew. The migration recognises exactly that shipped pair and appends the rest; the operator
-/// edits the list in Settings ▸ Connections.
+/// edits the list in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources.
 ///
 /// ⚠️ **"Accepts TCP" is not "is a working node", and this comment previously got that wrong.**
 /// It claimed ve7cc "was answering again by 2026-09-17" on the strength of a connect check,
@@ -1611,11 +1617,12 @@ pub struct Settings {
     /// upgrade (and for back-compat). `cluster_hosts` is the live source of truth.
     pub cluster_host: String,
     /// The human DX-cluster node LIST — the SSB/phone aggregator. Each entry is a
-    /// DXSpider/CC-Cluster telnet endpoint ("host:port"); we connect to ALL of them and
-    /// union their human spots (the RBN CW/digital skimmer feeds are wired automatically, so
-    /// RBN endpoints are ignored here). More nodes = wider phone coverage. Empty = RBN only
-    /// (no phone). `#[serde(default)]` (empty) so an OLD config missing this field is detected
-    /// in `load` and seeded from `cluster_host`; the Default impl seeds the community node.
+    /// DXSpider/CC-Cluster telnet endpoint ("host:port"); while [`Settings::cluster_nodes_auto`]
+    /// is off we connect to ALL of them and union their human spots (the RBN CW/digital skimmer
+    /// feeds are wired automatically, so RBN endpoints are ignored here). More nodes = wider phone
+    /// coverage. Empty = RBN only (no phone). Automatic node choice does not read it.
+    /// `#[serde(default)]` (empty) so an OLD config missing this field is detected in `load` and
+    /// seeded from `cluster_host`; the Default impl seeds the community node.
     #[serde(default)]
     pub cluster_hosts: Vec<String>,
     /// The SSID appended to `mycall` when logging into a cluster node ("2" → `W9XYZ-2`),
@@ -1641,6 +1648,18 @@ pub struct Settings {
     /// after a dropped link is precisely what the node's bump-the-older rule is good for.
     #[serde(default)]
     pub cluster_ssid: String,
+    /// Let Nexus choose the human DX-cluster nodes (`true`), or connect to exactly the ones in
+    /// [`Settings::cluster_hosts`] (`false`).
+    ///
+    /// **Automatic** keeps two nodes connected from the list built into each release
+    /// (`tempo_net::cluster::pool::NODES`), moves off one that stops working, and orders the nodes
+    /// by callsign so installs spread across them. **The operator's list** is connected as
+    /// written and never switched; Settings only shows how each of its nodes is doing.
+    ///
+    /// A fresh install starts automatic. A file from before this setting existed chooses by its
+    /// list — see [`Settings::choose_cluster_nodes_for_old_settings`] — and a file that has it is
+    /// never overruled.
+    pub cluster_nodes_auto: bool,
 
     // --- APRS-IS (the internet side of APRS) ---
     /// Connect to APRS-IS and plot internet-reported stations alongside the ones our own antenna
@@ -4001,6 +4020,8 @@ impl Default for Settings {
             cluster_hosts: DEFAULT_CLUSTER_HOSTS.map(str::to_string).to_vec(),
             // Empty: the operator's to choose, never ours — see the field's doc comment.
             cluster_ssid: String::new(),
+            // A fresh install has chosen no node, so Nexus chooses — see the field's doc comment.
+            cluster_nodes_auto: true,
             // APRS-IS is OFF until the operator asks for it: it is an outbound connection to a
             // public service under their callsign, which is theirs to opt into. The uplink is a
             // second, separate opt-in for the same reason, doubly so — it publishes.
@@ -4158,6 +4179,29 @@ impl Settings {
     /// the operator still copies CW — just without the model's help.
     pub fn ai_cw_active(&self) -> bool {
         self.ai_cw_enabled && !self.unassisted_mode
+    }
+
+    /// Choose [`Settings::cluster_nodes_auto`] for settings written before it existed: automatic
+    /// when [`Settings::cluster_hosts`] is still a list Nexus shipped — the 1.13.0 pair, or the
+    /// four that replaced it — because nobody chose those nodes; the operator's own list
+    /// otherwise, including an empty one, which is a choice too (RBN only). The list itself is
+    /// never touched, and neither is the login SSID.
+    ///
+    /// Called by [`Settings::load`] for a file without the key, and by the backup restore for a
+    /// backup without it: the restore deserialises directly and runs none of `load`'s migrations,
+    /// so without this the field's default would quietly switch a restored list of the operator's
+    /// own to automatic.
+    pub fn choose_cluster_nodes_for_old_settings(&mut self) {
+        let shipped = |list: &[&str]| {
+            self.cluster_hosts.len() == list.len()
+                && self
+                    .cluster_hosts
+                    .iter()
+                    .zip(list)
+                    .all(|(host, shipped)| host.trim().eq_ignore_ascii_case(shipped))
+        };
+        let auto = shipped(&DEFAULT_CLUSTER_HOSTS[..2]) || shipped(&DEFAULT_CLUSTER_HOSTS);
+        self.cluster_nodes_auto = auto;
     }
 
     /// Is DX cluster / RBN spot ingestion EFFECTIVELY on? Cluster and RBN spots are
@@ -4720,6 +4764,10 @@ impl Settings {
         // particular it must never seed `sat_doppler_off`, or the polarity
         // flip would reach nobody.
         let mut legacy_sat_doppler: Option<bool> = None;
+        // Whether the file says how cluster nodes are chosen. Read from the raw text for the same
+        // reason as `satDoppler`: once parsed, the field's default cannot be told from a saved
+        // `true`, and a file without the key is one from before the choice existed.
+        let mut node_choice_saved = false;
         let mut s: Settings = match std::fs::read_to_string(path) {
             // Missing file: a normal first run.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
@@ -4745,6 +4793,15 @@ impl Settings {
                     legacy_sat_doppler = serde_json::from_str::<LegacyDoppler>(&text)
                         .ok()
                         .and_then(|l| l.sat_doppler);
+                    #[derive(Deserialize)]
+                    struct NodeChoice {
+                        #[serde(rename = "clusterNodesAuto")]
+                        auto: Option<bool>,
+                    }
+                    node_choice_saved = serde_json::from_str::<NodeChoice>(&text)
+                        .ok()
+                        .and_then(|c| c.auto)
+                        .is_some();
                     s
                 }
                 Err(e) => {
@@ -4844,12 +4901,21 @@ impl Settings {
                     && seen.insert(h.to_ascii_lowercase())
             })
             .collect();
+        // Migration (2026-09-17): how cluster nodes are chosen. A file from before the choice
+        // gets one by its list — see `choose_cluster_nodes_for_old_settings`. A file that has the
+        // key wrote its own choice and is never overruled.
+        if !node_choice_saved {
+            s.choose_cluster_nodes_for_old_settings();
+        }
         // Migration (2026-09-16): the default list was the ve7cc + wa9pie PAIR, and both died
         // on the same day — every default-config install lost its only SSB/phone sources at
         // once. A list that is still exactly that pair is the shipped default, not a choice,
         // so it gains the nodes added since; any other list is the operator's and is kept.
+        // Only in a file from before the node choice: after it, a list that is exactly the pair
+        // is one the operator kept under "Use my list", and it stays byte for byte.
         let shipped_pair = &DEFAULT_CLUSTER_HOSTS[..2];
-        if s.cluster_hosts.len() == shipped_pair.len()
+        if !node_choice_saved
+            && s.cluster_hosts.len() == shipped_pair.len()
             && s.cluster_hosts
                 .iter()
                 .zip(shipped_pair)
@@ -8984,7 +9050,7 @@ mod tests {
         let path = scratch_dir("thirdnode").join("settings.json");
         let mut s = Settings::default();
         s.cluster_hosts = vec!["ve7cc.net:23".into(), "dxc.wa9pie.net:8000".into()];
-        s.save(&path).unwrap();
+        save_without_node_choice(&s, &path);
         let back = Settings::load(&path);
         assert_eq!(
             back.cluster_hosts,
@@ -9014,7 +9080,7 @@ mod tests {
         // The CONTROL: a list the operator curated is not the shipped pair and stays as it is.
         let mut s = Settings::default();
         s.cluster_hosts = vec!["ve7cc.net:23".into(), "dxc.example.net:7300".into()];
-        s.save(&path).unwrap();
+        save_without_node_choice(&s, &path);
         let back = Settings::load(&path);
         assert_eq!(
             back.cluster_hosts,
@@ -9044,6 +9110,150 @@ mod tests {
             "a deliberately-disabled modern config stays disabled"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Write `s` the way a build from before the cluster node choice did: without
+    /// `clusterNodesAuto`. `save` cannot — every file it writes now carries the choice.
+    fn save_without_node_choice(s: &Settings, path: &Path) {
+        let mut v = serde_json::to_value(s).unwrap();
+        assert!(
+            v.as_object_mut()
+                .unwrap()
+                .remove("clusterNodesAuto")
+                .is_some(),
+            "the key was there to remove — otherwise this writes a current file and proves nothing"
+        );
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    }
+
+    /// T10. A file from before the node choice gets one by its list (operator decision D4).
+    #[test]
+    fn a_file_from_before_the_node_choice_is_automatic_only_on_a_list_nexus_shipped() {
+        let path = scratch_dir("nodechoice").join("settings.json");
+        let load = |hosts: &[&str]| {
+            let mut s = Settings::default();
+            s.cluster_hosts = hosts.iter().map(|h| h.to_string()).collect();
+            // What a Save writes beside the list (`apply_and_persist`), so an emptied list stays
+            // empty rather than being re-seeded from the legacy single host.
+            s.cluster_host = s.cluster_hosts.first().cloned().unwrap_or_default();
+            save_without_node_choice(&s, &path);
+            Settings::load(&path)
+        };
+
+        // The pair every install shipped with up to 1.13.0: nobody chose it.
+        let back = load(&["ve7cc.net:23", "dxc.wa9pie.net:8000"]);
+        assert!(back.cluster_nodes_auto, "the 1.13.0 pair");
+        // The four that replaced it.
+        let back = load(&DEFAULT_CLUSTER_HOSTS);
+        assert!(back.cluster_nodes_auto, "the current four");
+        assert_eq!(
+            back.cluster_hosts,
+            DEFAULT_CLUSTER_HOSTS.map(str::to_string).to_vec(),
+            "and the list itself is not touched"
+        );
+
+        // A list the operator wrote stays theirs, exactly as written (D4, D5).
+        let mine = ["dx.example.net:7300", "ve7cc.net:23"];
+        let back = load(&mine);
+        assert!(!back.cluster_nodes_auto, "a hand-edited list");
+        assert_eq!(back.cluster_hosts, mine.map(str::to_string).to_vec());
+        // Byte for byte through a second save, too.
+        let before = std::fs::read_to_string(&path).unwrap();
+        back.save(&path).unwrap();
+        let hosts_json = |text: &str| {
+            serde_json::from_str::<serde_json::Value>(text).unwrap()["clusterHosts"].to_string()
+        };
+        assert_eq!(
+            hosts_json(&std::fs::read_to_string(&path).unwrap()),
+            hosts_json(&before)
+        );
+
+        // An empty list is a choice too: RBN only.
+        let back = load(&[]);
+        assert!(!back.cluster_nodes_auto, "an emptied list");
+        assert!(back.cluster_hosts.is_empty());
+
+        // The login SSID is never touched by any of it.
+        for hosts in [
+            &["ve7cc.net:23", "dxc.wa9pie.net:8000"][..],
+            &mine[..],
+            &[][..],
+        ] {
+            assert_eq!(load(hosts).cluster_ssid, "", "{hosts:?}");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// T10, the other direction: a saved choice is the operator's, whatever the list.
+    #[test]
+    fn a_saved_node_choice_is_never_overruled() {
+        let path = scratch_dir("nodechoicekept").join("settings.json");
+
+        // Off, on a list Nexus shipped — and still off after a second save.
+        let mut s = Settings::default();
+        s.cluster_nodes_auto = false;
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert!(!back.cluster_nodes_auto);
+        back.save(&path).unwrap();
+        assert!(
+            !Settings::load(&path).cluster_nodes_auto,
+            "a reload does not flip it back"
+        );
+
+        // On, with a list of the operator's own.
+        s.cluster_nodes_auto = true;
+        s.cluster_hosts = vec!["dx.example.net:7300".into()];
+        s.save(&path).unwrap();
+        assert!(Settings::load(&path).cluster_nodes_auto);
+
+        // "Use my list" holding exactly the old pair is the operator keeping it: the 2026-09-16
+        // top-up that turns a SHIPPED pair into four must not touch it.
+        s.cluster_nodes_auto = false;
+        s.cluster_hosts = vec!["ve7cc.net:23".into(), "dxc.wa9pie.net:8000".into()];
+        s.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).cluster_hosts,
+            vec![
+                "ve7cc.net:23".to_string(),
+                "dxc.wa9pie.net:8000".to_string()
+            ]
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// T10: a fresh install is automatic.
+    #[test]
+    fn a_fresh_install_chooses_nodes_automatically() {
+        let path = scratch_dir("nodechoicefresh")
+            .join("never-written")
+            .join("settings.json");
+        assert!(!path.exists());
+        let s = Settings::load(&path);
+        assert!(s.cluster_nodes_auto);
+        assert_eq!(s.cluster_ssid, "");
+        assert!(Settings::default().cluster_nodes_auto);
+    }
+
+    /// The rule itself, as a restored backup reaches it: `import_settings_bundle` deserialises
+    /// directly, so it runs none of `load`'s migrations and calls this instead.
+    #[test]
+    fn old_settings_choose_nodes_by_their_list_wherever_they_come_from() {
+        let mut s = Settings {
+            cluster_nodes_auto: true,
+            cluster_hosts: vec!["dx.example.net:7300".into()],
+            ..Settings::default()
+        };
+        s.choose_cluster_nodes_for_old_settings();
+        assert!(!s.cluster_nodes_auto, "a list of their own");
+        s.cluster_hosts = vec![" VE7CC.NET:23 ".into(), "dxc.wa9pie.net:8000".into()];
+        s.choose_cluster_nodes_for_old_settings();
+        assert!(
+            s.cluster_nodes_auto,
+            "the shipped pair, however it was typed"
+        );
+        assert_eq!(s.cluster_hosts[0], " VE7CC.NET:23 ", "and never rewritten");
     }
 
     #[test]

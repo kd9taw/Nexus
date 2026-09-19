@@ -6292,7 +6292,26 @@ export const EN = {
   'settings.integrations.clusterNodes.addCustom.title': 'Add a custom node row',
   'settings.integrations.clusterNodes.addCustom.action': '+ Custom',
   'settings.integrations.clusterNodes.hint':
-    'We connect to ALL listed nodes and union their human SSB/phone spots — more nodes = wider phone coverage (RBN CW + digital connect automatically; RBN endpoints are ignored here). An added node connects on the next Save; removing one takes effect on restart.',
+    'We connect to ALL listed nodes and union their human SSB/phone spots — more nodes = wider phone coverage (RBN CW + digital connect automatically; RBN endpoints are ignored here). Nexus never changes this list for you. An added node connects, and a removed one disconnects, on the next Save.',
+  'settings.integrations.clusterNodes.mode.auto': 'Pick working nodes automatically (recommended)',
+  'settings.integrations.clusterNodes.mode.manual': 'Use my list',
+  'settings.integrations.clusterNodes.autoHint':
+    'Nexus keeps two of these nodes connected for SSB/phone spots and spreads operators across them. A node that stops answering for five minutes, while your other spot feeds are working, is skipped for a day and another takes its place. A quiet band never counts against a node. RBN CW + digital connect automatically either way. Takes effect on the next Save.',
+  // How one node is doing. `{{reason}}` is one of the clusterNodes.reason.* phrases below, and
+  // `{{time}}` a clock time in the operator's own time zone.
+  'settings.integrations.clusterNodes.status.inUse': 'In use',
+  'settings.integrations.clusterNodes.status.connecting': 'Connecting…',
+  'settings.integrations.clusterNodes.status.standby': 'Standby',
+  'settings.integrations.clusterNodes.status.failing': 'Not answering ({{reason}})',
+  'settings.integrations.clusterNodes.status.skipped':
+    'Not answering ({{reason}}), skipped until {{time}}',
+  'settings.integrations.clusterNodes.reason.unreachable': "can't be reached",
+  'settings.integrations.clusterNodes.reason.noGreeting': 'sends nothing',
+  'settings.integrations.clusterNodes.reason.noPrompt': 'no login prompt',
+  'settings.integrations.clusterNodes.reason.droppedAfterLogin': 'drops the login',
+  // A known-node preset. `{{callsign}}` is the node's callsign, `{{software}}` its software (a
+  // product name: DXSpider, CC Cluster) and `{{port}}` a port number — all invariant.
+  'settings.integrations.clusterNodes.preset': '{{callsign}} — {{software}}, port {{port}}',
   'settings.integrations.clusterSsid.label': 'Cluster login SSID',
   'settings.integrations.clusterSsid.hint':
     'Added to your callsign at login (2 = W9XYZ-2). A node allows one session per callsign and drops the older one, so a second Nexus — or another cluster program on the same call — knocks this one off unless each uses a different SSID. 1-99, or leave it empty to log in with your bare call. Your spots still reach the network under your plain callsign. On a node that requires registration, register the suffixed call there too or it will not let you post spots. Takes effect on the next Save.',

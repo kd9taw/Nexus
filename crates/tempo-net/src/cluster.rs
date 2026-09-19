@@ -5,6 +5,8 @@
 //! need-scorer. The session/buffer/`pump` logic is fully unit-tested (no socket);
 //! `run` is the thin live-socket wrapper.
 
+pub mod pool;
+
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -302,17 +304,29 @@ impl ClusterSession {
         let mut out = Vec::new();
         // Extract complete lines; the trailing partial stays buffered. Pre-login
         // these are banner lines (parse_dx_spot ignores them).
+        //
+        // The last one is kept, because a prompt is not always left waiting: k1ttt.net:7373
+        // (AR-Cluster, measured 2026-09-17) ends its greeting with "Please enter your call: "
+        // and a CR/LF, then says nothing. That prompt was drained here as an ordinary line and
+        // never answered, so Nexus held the socket open for good without ever logging in.
+        let mut last_line = String::new();
         while let Some(nl) = self.buf.find('\n') {
             let line: String = self.buf.drain(..=nl).collect();
             if let Some(spot) = parse_dx_spot(line.trim_end_matches(['\r', '\n'])) {
                 out.push(Action::Spot(spot));
             }
+            last_line = line;
         }
-        // A login prompt as the trailing (newline-less) line — answer it EVERY time
-        // it appears, not just once: some DXSpider/RBN hosts keep the socket open
-        // and RE-prompt after a rejected/unregistered call, and answering only the
-        // first prompt wedged the session forever (open TCP, no spots, no retry).
-        if is_login_prompt(&self.buf) {
+        // THE RULE: a login prompt is answered when it is the LAST thing the node has sent —
+        // left waiting at the end of the input (telnet's usual way), or as the final line of
+        // what just arrived. A prompt-shaped line with more text behind it is MOTD, and
+        // answering that would send the callsign into a banner.
+        //
+        // Answered EVERY time it appears, not just once: some DXSpider/RBN hosts keep the socket
+        // open and RE-prompt after a rejected/unregistered call, and answering only the first
+        // prompt wedged the session forever (open TCP, no spots, no retry).
+        let ended_with_prompt = self.buf.trim_end().is_empty() && is_login_prompt(&last_line);
+        if is_login_prompt(&self.buf) || ended_with_prompt {
             out.push(Action::Send(format!("{}\r\n", self.call)));
             self.logged_in = true;
             self.buf.clear(); // discard the prompt/banner
@@ -325,15 +339,20 @@ impl ClusterSession {
     }
 }
 
-/// Is the buffer's TRAILING (incomplete) line a login prompt? Telnet prompts
-/// arrive without a newline, so we look only at the text after the last `\n` and
-/// require a prompt-terminal pattern — so MOTD/help body lines that merely mention
-/// "login"/"callsign" can't trigger a premature, session-wedging login.
+/// Is the LAST line of `s` a login prompt? Telnet prompts usually arrive without a newline, so
+/// the caller passes the trailing incomplete line; but a node may also end its greeting with a
+/// prompt and a CR/LF (k1ttt.net:7373 does), so trailing whitespace and line endings are trimmed
+/// FIRST and the last line is read out of what remains.
+///
+/// A prompt-terminal pattern is still required, so MOTD/help body lines that merely mention
+/// "login"/"callsign" can't trigger a premature, session-wedging login — and the caller is what
+/// decides that a line-ended prompt counts only while nothing has followed it.
 fn is_login_prompt(s: &str) -> bool {
-    let tail = s
+    let trimmed = s.trim_end();
+    let tail = trimmed
         .rsplit('\n')
         .next()
-        .unwrap_or(s)
+        .unwrap_or(trimmed)
         .trim_end()
         .to_ascii_lowercase();
     tail.ends_with("login:")
@@ -539,10 +558,43 @@ impl Default for SpotBuffer {
     }
 }
 
+/// What happened inside one [`pump`] session — what [`run`] needs, once the session is over, to
+/// say what the attempt came to.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Session {
+    /// The node sent at least one byte. Separates a node that never spoke from one that spoke
+    /// and never prompted — different faults, and the operator is told which.
+    heard: bool,
+    /// A login was answered and the session then proved itself — see [`SESSION_PROOF`].
+    proved: bool,
+}
+
+/// The two clocks a [`pump`] session runs on. Arguments rather than constants only so a test
+/// can run them in milliseconds; [`run`] always passes [`LIVE_TIMING`].
+#[derive(Debug, Clone, Copy)]
+struct SessionTiming {
+    /// See [`GREETING_DEADLINE`].
+    greeting_deadline: Duration,
+    /// See [`SESSION_PROOF`].
+    proof_after: Duration,
+}
+
+/// The timing every live session runs on.
+const LIVE_TIMING: SessionTiming = SessionTiming {
+    greeting_deadline: GREETING_DEADLINE,
+    proof_after: SESSION_PROOF,
+};
+
 /// Drive a [`ClusterSession`] over a connected duplex until EOF, `stop`, or a peer that
 /// never speaks (see `greeting_deadline`). Pure over any Read/Write, so it's unit-testable
 /// without a socket — including the silent peer, which is the one case a live socket makes
 /// hardest to reproduce.
+///
+/// Returns what the session amounted to. An I/O error ends a session exactly as EOF does:
+/// `run` never told the two apart, and what it does need — whether the node spoke, whether a
+/// login held — is what the session saw BEFORE the error, which an `Err` would have thrown
+/// away. `on_proved` is called once, the moment a logged-in session proves itself, while it
+/// is still up: a working session can last for days, and that is too long to wait to say so.
 // One private caller, and every parameter is a distinct collaborator rather than a bag of
 // options — grouping them into a struct would hide the wiring this function exists to show.
 #[allow(clippy::too_many_arguments)]
@@ -554,19 +606,39 @@ fn pump<R: Read, W: Write>(
     stop: &AtomicBool,
     connected: &AtomicBool,
     outbox: &Mutex<VecDeque<String>>,
-    greeting_deadline: Duration,
-) -> std::io::Result<()> {
+    timing: SessionTiming,
+    on_proved: &mut dyn FnMut(),
+) -> Session {
     let mut session = ClusterSession::new(call);
     let mut buf = [0u8; 4096];
     let opened = Instant::now();
-    // Disarmed by the node's FIRST byte and never re-armed — see [`GREETING_DEADLINE`].
-    // Bounding the greeting rather than the login is what makes "a quiet band drops the
-    // session" unrepresentable instead of merely guarded: an established session has by
-    // definition already received bytes, and a slow MOTD is itself bytes.
-    let mut heard_from_node = false;
+    let mut trace = Session::default();
+    // When the LATEST login prompt was answered. A node that refuses a call commonly asks again,
+    // and an answer it asked for again was not accepted — so every answer restarts the clock.
+    let mut answered: Option<Instant> = None;
+    let mut prove = |trace: &mut Session| {
+        if !trace.proved {
+            trace.proved = true;
+            on_proved();
+        }
+    };
     loop {
         if stop.load(Ordering::Relaxed) {
-            return Ok(());
+            return trace;
+        }
+        // THE HANDSHAKE DEADLINE, and the whole of it: until a login prompt has been ANSWERED,
+        // the session has until `greeting_deadline` to get there — see [`GREETING_DEADLINE`].
+        // Checked on every pass rather than only on a read timeout, so a node that chats without
+        // ever prompting is bounded too. After the answer nothing here ends a session, which is
+        // what keeps "a quiet band drops the session" unrepresentable rather than merely guarded:
+        // a logged-in session on a dead band legitimately sends nothing for hours.
+        if answered.is_none() && opened.elapsed() >= timing.greeting_deadline {
+            return trace;
+        }
+        // Checked on every wake-up, which the live socket's read timeout guarantees even on a
+        // silent session. An observation only: nothing here ends a session.
+        if answered.is_some_and(|at| at.elapsed() >= timing.proof_after) {
+            prove(&mut trace);
         }
         // Flush any operator-queued outbound commands (e.g. a posted DX spot),
         // but ONLY after login: the callsign must reach the node first, or it
@@ -581,11 +653,13 @@ fn pump<R: Read, W: Write>(
                 q.drain(..).collect()
             };
             for line in queued {
-                writer.write_all(line.as_bytes())?;
+                if writer.write_all(line.as_bytes()).is_err() {
+                    return trace;
+                }
             }
         }
         let n = match reader.read(&mut buf) {
-            Ok(0) => return Ok(()), // connection closed
+            Ok(0) => return trace, // connection closed
             Ok(n) => n,
             // A read timeout lets the loop re-check `stop` (the live socket sets one).
             Err(e)
@@ -594,29 +668,53 @@ fn pump<R: Read, W: Write>(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                // On a peer that never speaks this timeout is the ONLY thing that ever
-                // fires, so without this the loop spins here for the life of the process.
-                // Ending the session is what hands it back to `run`'s reconnect backoff.
-                if !heard_from_node && opened.elapsed() >= greeting_deadline {
-                    return Ok(());
-                }
+                // On a peer that never speaks this timeout is the ONLY thing that ever fires, so
+                // the loop would spin here for the life of the process. The deadline at the top
+                // is what ends it, and hands the session back to `run`'s reconnect backoff.
                 continue;
             }
-            Err(e) => return Err(e),
+            Err(_) => return trace,
         };
-        heard_from_node = true;
+        trace.heard = true;
         let chunk = String::from_utf8_lossy(&buf[..n]);
         for action in session.feed(&chunk) {
             match action {
                 Action::Send(s) => {
-                    writer.write_all(s.as_bytes())?;
+                    if writer.write_all(s.as_bytes()).is_err() {
+                        return trace;
+                    }
                     // The login prompt was answered — the session is genuinely up.
                     // (NOT on bare TCP-establish: a host that prompts and rejects
                     // must not read as "connected" before we've even logged in.)
                     connected.store(true, Ordering::Relaxed);
+                    answered = Some(Instant::now());
                 }
-                Action::Spot(sp) => on_spot(&sp),
+                Action::Spot(sp) => {
+                    on_spot(&sp);
+                    // A spot proves a login only once one was answered: a `DX de` line in a
+                    // banner says nothing about whether the node will take our call.
+                    if answered.is_some() {
+                        prove(&mut trace);
+                    }
+                }
             }
+        }
+    }
+}
+
+impl Session {
+    /// What a finished session came to, or `None` when there is nothing left to report: a
+    /// session that proved itself already said so, through `on_proved`, while it was up.
+    /// `logged_in` is whether a login prompt was answered.
+    fn outcome(self, logged_in: bool) -> Option<Outcome> {
+        if self.proved {
+            None
+        } else if logged_in {
+            Some(Outcome::DroppedAfterLogin)
+        } else if self.heard {
+            Some(Outcome::NoPrompt)
+        } else {
+            Some(Outcome::NoGreeting)
         }
     }
 }
@@ -628,14 +726,12 @@ fn pump<R: Read, W: Write>(
 /// is up) so the UI can tell "connected but quiet" from "can't connect" — a
 /// spotless session previously read as an indistinguishable-from-broken "waiting".
 ///
-/// `on_reach_error` reports the two ways a node fails to become a session, both of which
-/// were previously silent — which is the whole reason they were invisible to the operator:
-/// none of its addresses could be reached (the reason names every one tried), or it
-/// ACCEPTED the connection and never sent a login prompt. The second is not a connect
-/// error — the port answers — so nothing else in this path would ever mention it.
-/// Called only when the reason CHANGES, and cleared only by a session that actually logs
-/// in: the sink is a small ring shared with every other connector, and a node that is down
-/// the same way for an hour is one fact, not sixty.
+/// `on_attempt` is told what EVERY attempt came to — see [`Outcome`] — and a working session
+/// is reported the moment it proves itself rather than when it ends. Nothing is filtered here:
+/// the connection log keeps its own repeat filter ([`LogFilter`]), and a node pool needs every
+/// failure to count them. Two things are never reported, because neither says anything about
+/// the node: an attempt that `stop` cut short (the operator's save, or a pool that no longer
+/// wants this node), and a socket this process could not duplicate.
 pub fn run(
     addr: &str,
     call: &str,
@@ -643,23 +739,17 @@ pub fn run(
     stop: &AtomicBool,
     connected: &AtomicBool,
     outbox: &Mutex<VecDeque<String>>,
-    mut on_reach_error: impl FnMut(&str),
+    mut on_attempt: impl FnMut(&Outcome),
 ) {
     let mut backoff = BACKOFF_BASE;
-    // The last failure reported, so an unchanged one isn't re-reported every backoff.
-    // Cleared by a session that actually LOGGED IN — never by a bare TCP connect, which a
-    // mute node succeeds at on every retry — so a node that breaks again after genuinely
-    // coming back is reported afresh rather than swallowed as a repeat.
-    let mut reported: Option<String> = None;
     while !stop.load(Ordering::Relaxed) {
         let started = Instant::now();
-        let mut outcome = Attempt::Unreachable;
-        match connect(addr) {
-            Ok(stream) => {
-                if let Ok(reader) = stream.try_clone() {
+        let (attempt, outcome) = match connect(addr) {
+            Ok(stream) => match stream.try_clone() {
+                Ok(reader) => {
                     // `connected` flips true inside pump when the login prompt is
                     // ANSWERED (not on bare TCP-establish), and clears on session end.
-                    let _ = pump(
+                    let session = pump(
                         reader,
                         stream,
                         call,
@@ -667,46 +757,30 @@ pub fn run(
                         stop,
                         connected,
                         outbox,
-                        GREETING_DEADLINE,
+                        LIVE_TIMING,
+                        &mut || on_attempt(&Outcome::LoggedIn),
                     );
                     // `connected` is true here iff a login prompt was ANSWERED — pump only
                     // ever sets it and this is the only place it is cleared, so the swap
                     // both reads the outcome and does the clearing.
                     let logged_in = connected.swap(false, Ordering::Relaxed);
-                    outcome = if logged_in {
+                    let attempt = if logged_in {
                         Attempt::LoggedIn
                     } else {
                         Attempt::NoLogin
                     };
-                    if logged_in {
-                        // A REAL session happened, so whatever goes wrong next is news
-                        // again. Cleared here and not on a bare TCP connect: a node that
-                        // accepts and stays mute connects successfully every retry, so
-                        // clearing on connect would re-report it for as long as it is down.
-                        reported = None;
-                    } else if !stop.load(Ordering::Relaxed) {
-                        // A session that ended without ever logging in is the INVISIBLE
-                        // failure: the port answered, so it is not a connect error and
-                        // nothing above reports it, leaving the operator an honest "not
-                        // connected" with no reason. A shipped default node sat in exactly
-                        // this state, and this silence is why nobody could see it.
-                        let why =
-                            format!("{addr} accepted the connection but never sent a login prompt");
-                        if reported.as_deref() != Some(why.as_str()) {
-                            on_reach_error(&why);
-                            reported = Some(why);
-                        }
-                    }
+                    (attempt, session.outcome(logged_in))
                 }
-            }
-            Err(why) => {
-                if reported.as_deref() != Some(why.as_str()) {
-                    on_reach_error(&why);
-                    reported = Some(why);
-                }
+                Err(_) => (Attempt::Unreachable, None),
+            },
+            Err(why) => (Attempt::Unreachable, Some(Outcome::Unreachable(why))),
+        };
+        if let Some(outcome) = outcome {
+            if !stop.load(Ordering::Relaxed) {
+                on_attempt(&outcome);
             }
         }
-        backoff = next_backoff(backoff, started.elapsed(), outcome);
+        backoff = next_backoff(backoff, started.elapsed(), attempt);
         if !sleep_interruptible(backoff, stop) {
             return;
         }
@@ -723,6 +797,71 @@ fn sleep_interruptible(dur: Duration, stop: &AtomicBool) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     true
+}
+
+/// What one attempt to reach a node came to, as [`run`] reports it through `on_attempt`: the
+/// evidence a node is judged working or failing on, and what the connection log says.
+///
+/// **Silence is never an outcome.** A logged-in session on a dead band sends nothing for hours
+/// and never returns from [`pump`], so it produces no report at all — which is what keeps a
+/// quiet band from ever counting against a node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// No session at all: the name did not resolve, or every address refused, was unreachable
+    /// or timed out. The text is [`connect`]'s, and names the node and every address tried.
+    Unreachable(String),
+    /// The node accepted the connection and sent nothing at all before [`GREETING_DEADLINE`],
+    /// or closed without a byte. ve7cc.net:23 was measured in exactly this state.
+    NoGreeting,
+    /// The node sent something, but never a login prompt.
+    NoPrompt,
+    /// A login prompt was answered, and the session ended before it proved itself: a call the
+    /// node refused, a node that disconnects a second session on the same call, a node at its
+    /// connection limit. Answering the prompt is not the node accepting the login — nothing
+    /// reads its reply — so a login only counts once it has lasted.
+    DroppedAfterLogin,
+    /// A login prompt was answered and the session proved itself: it delivered a spot, or
+    /// stayed up for [`SESSION_PROOF`]. Reported the moment that is true, while the session is
+    /// still up, and once per session.
+    LoggedIn,
+}
+
+/// The connection log's view of one feed's attempts: which of them are worth a line.
+///
+/// The log is a small ring shared with every other connector, and a node that is down the same
+/// way for an hour is one fact, not sixty. So a failure is written when it differs from the
+/// last one written, and only a session that proved itself makes the next failure news again —
+/// never a bare TCP connect, which a mute node succeeds at on every retry.
+#[derive(Debug, Default)]
+pub struct LogFilter {
+    last: Option<String>,
+}
+
+impl LogFilter {
+    /// The log line for `outcome` on `addr`, or `None` when there is nothing to write.
+    pub fn line(&mut self, addr: &str, outcome: &Outcome) -> Option<String> {
+        let line = match outcome {
+            Outcome::LoggedIn => {
+                self.last = None;
+                return None;
+            }
+            Outcome::Unreachable(why) => why.clone(),
+            // Both prompt failures keep the words "never sent a login prompt": that is the
+            // sentence the changelog tells operators to look for.
+            Outcome::NoGreeting => {
+                format!("{addr} accepted the connection but never sent a login prompt (it sent nothing at all)")
+            }
+            Outcome::NoPrompt => format!("{addr} answered but never sent a login prompt"),
+            Outcome::DroppedAfterLogin => {
+                format!("{addr} ended the session straight after the login")
+            }
+        };
+        if self.last.as_deref() == Some(line.as_str()) {
+            return None;
+        }
+        self.last = Some(line.clone());
+        Some(line)
+    }
 }
 
 /// What one pass through [`run`]'s loop came to — the input to [`next_backoff`].
@@ -767,22 +906,36 @@ fn next_backoff(prev: Duration, took: Duration, outcome: Attempt) -> Duration {
 /// How long ONE resolved address gets to answer.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// How long a node has to send ANYTHING before the session is abandoned to [`run`]'s
-/// reconnect backoff.
+/// How long a node has to ASK FOR THE CALLSIGN before the session is abandoned to [`run`]'s
+/// reconnect backoff. A HANDSHAKE deadline, and only that: it is disarmed the moment a login
+/// prompt is answered, and an established session is never bounded by time.
 ///
-/// This bounds the socket that ACCEPTS and then never speaks. `ve7cc.net:23` — a
-/// SHIPPED default node — was measured in exactly that state: connection accepted,
-/// not one byte in 22 seconds. Such a peer makes every read time out, so [`pump`]
-/// spins forever and never returns; the backoff never runs, the caller's per-host
-/// start latch stays taken, and that feed slot is dead for the life of the process
-/// while the operator sees an honest "not connected" with nothing retrying behind it.
+/// This bounds two kinds of socket, both measured on real nodes, and both of which used to hold
+/// their slot for the life of the process — no outcome, so nothing could even skip them:
+/// - **accepts and never speaks.** `ve7cc.net:23`, a SHIPPED default node, was measured in
+///   exactly that state: connection accepted, not one byte in 22 seconds.
+/// - **speaks and never prompts.** Every read then returns data or times out, so [`pump`] spins
+///   forever. Bounding only the first byte left this one open, which is how a node that greets
+///   and stops could not be told from a working one.
 ///
-/// **Measured, not guessed.** Every reachable node greets inside the FIRST read
-/// (DXSpider and CC Cluster both send a banner ending `login:`; RBN sends
-/// `Please enter your call:`), and DXSpider's own server-side login timeout is 60 s.
-/// 30 s therefore sits far above any healthy greeting and well inside the node's own
-/// limit.
+/// **Measured, not guessed.** Every reachable node checked on 2026-09-17 sent its whole greeting,
+/// prompt included, inside the first read (0.04–0.17 s to the first byte), and DXSpider's own
+/// server-side login timeout is 60 s. 30 s therefore sits far above any healthy handshake and
+/// well inside the node's own limit.
+///
+/// ⚠️ What it still does NOT bound: a node that answers a prompt and then RE-PROMPTS for ever.
+/// That has answered, so the deadline is off, and it never proves itself either (each answer
+/// restarts [`SESSION_PROOF`]), so it reports nothing at all. No node has been seen doing it.
 const GREETING_DEADLINE: Duration = Duration::from_secs(30);
+
+/// How long a logged-in session must stay up, with no spot, to count as working — see
+/// [`Outcome::LoggedIn`]. An OBSERVATION, never a deadline: nothing ends a session on it.
+///
+/// Above DXSpider's 60 s login timeout (see [`GREETING_DEADLINE`]) on purpose: a node that has
+/// not accepted a login may hold the socket until a timer like that runs out, and a proof set at
+/// the same 60 s would race the close and could call a refused login working. Most working
+/// sessions prove themselves long before this anyway, with their first spot.
+const SESSION_PROOF: Duration = Duration::from_secs(90);
 
 /// The socket read timeout — not a protocol deadline, it just wakes the pump loop
 /// often enough to observe `stop`.
@@ -1045,6 +1198,53 @@ mod tests {
         // only the trailing prompt does.
         assert!(s.feed("Type HELP for login commands.\r\n").is_empty());
         // Still not logged in → the real trailing prompt now triggers it.
+        assert_eq!(
+            s.feed("login: "),
+            vec![Action::Send("W9XYZ\r\n".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_prompt_that_ends_the_greeting_is_answered_even_with_a_newline_after_it() {
+        // MEASURED on a real node (k1ttt.net:7373, AR-Cluster, 2026-09-17): it greets with
+        // "Please enter your call: " terminated by CR/LF and then says nothing at all. Answering
+        // only a prompt left waiting at the END of the input meant Nexus never logged in there —
+        // the prompt was drained as a complete line and the session sat open for good.
+        let mut s = ClusterSession::new("W9XYZ");
+        let acts = s.feed(
+            "Welcome to the K1TTT AR-Cluster Telnet Server\r\n\
+             At the login prompt please enter your amateur radio callsign.\r\n\
+             Please enter your call: \r\n",
+        );
+        assert!(
+            matches!(&acts[..], [Action::Send(c)] if c == "W9XYZ\r\n"),
+            "a prompt that ends the greeting must be answered, got {acts:?}"
+        );
+    }
+
+    #[test]
+    fn a_prompt_with_more_text_after_it_is_a_banner_and_is_not_answered() {
+        // POSITIVE CONTROL for the test above, and the reason it is worded "the LAST thing the
+        // node sent": a line that merely READS like a prompt, with more text behind it, is MOTD.
+        // Answering it would send the callsign into a banner and wedge the session.
+        let mut s = ClusterSession::new("W9XYZ");
+        assert!(
+            s.feed("login: \r\nType HELP for login commands.\r\n")
+                .is_empty(),
+            "a prompt-shaped line with a line of text after it is a banner"
+        );
+        assert!(s
+            .feed("your call: is your identity here\r\nmore\r\n")
+            .is_empty());
+        // AND the case the "last thing sent" wording is really about: text after the prompt that
+        // has not ended in a newline yet. Without it this test passes whether or not the rule
+        // looks past the drained lines at all — measured: it did.
+        let mut unfinished = ClusterSession::new("W9XYZ");
+        assert!(
+            unfinished.feed("login: \r\nType HELP for").is_empty(),
+            "the prompt is not the last thing the node sent"
+        );
+        // …and the real prompt, whichever shape it arrives in, is still answered.
         assert_eq!(
             s.feed("login: "),
             vec![Action::Send("W9XYZ\r\n".to_string())]
@@ -1391,9 +1591,9 @@ mod tests {
             &stop,
             &connected,
             &outbox,
-            GREETING_DEADLINE,
-        )
-        .unwrap();
+            LIVE_TIMING,
+            &mut || {},
+        );
         assert_eq!(writer, b"W9XYZ\r\n", "the callsign was sent at the prompt");
         assert!(
             connected.load(Ordering::Relaxed),
@@ -1422,9 +1622,9 @@ mod tests {
             &stop,
             &connected,
             &outbox,
-            GREETING_DEADLINE,
-        )
-        .unwrap();
+            LIVE_TIMING,
+            &mut || {},
+        );
         assert!(writer.is_empty());
         assert!(
             !connected.load(Ordering::Relaxed),
@@ -1494,9 +1694,9 @@ mod tests {
             &stop,
             &connected,
             &outbox,
-            GREETING_DEADLINE,
-        )
-        .unwrap();
+            LIVE_TIMING,
+            &mut || {},
+        );
         assert_eq!(
             writer, b"W9XYZ\r\nDX 14074 3Y0J FT8\r\n",
             "login is sent first, then the queued spot flushes after it"
@@ -1530,9 +1730,9 @@ mod tests {
             &stop,
             &connected,
             &outbox,
-            GREETING_DEADLINE,
-        )
-        .unwrap();
+            LIVE_TIMING,
+            &mut || {},
+        );
         assert!(writer.is_empty(), "nothing sent before login");
         assert_eq!(
             outbox.lock().unwrap().len(),
@@ -1656,7 +1856,7 @@ mod tests {
         std::thread::scope(|s| {
             let (tx, rx) = std::sync::mpsc::channel();
             s.spawn(move || {
-                let r = pump(
+                pump(
                     SilentPeer,
                     Vec::new(),
                     "W9XYZ",
@@ -1664,9 +1864,13 @@ mod tests {
                     stop_ref,
                     connected_ref,
                     outbox_ref,
-                    deadline,
+                    SessionTiming {
+                        greeting_deadline: deadline,
+                        ..LIVE_TIMING
+                    },
+                    &mut || {},
                 );
-                let _ = tx.send(r.is_ok());
+                let _ = tx.send(());
             });
             let finished = rx.recv_timeout(Duration::from_secs(5));
             // Release the worker BEFORE asserting: on failure it is still looping, and
@@ -1681,6 +1885,73 @@ mod tests {
         assert!(
             !connected.load(Ordering::Relaxed),
             "a peer that never prompted is never a connected session"
+        );
+    }
+
+    /// Sends a banner once — no login prompt — then behaves like a peer that never speaks again.
+    struct TalksThenQuiet {
+        reads: usize,
+    }
+    impl Read for TalksThenQuiet {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            if self.reads == 1 {
+                let banner = b"Welcome to the node\r\nPlease wait\r\n";
+                buf[..banner.len()].copy_from_slice(banner);
+                return Ok(banner.len());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+        }
+    }
+
+    #[test]
+    fn a_node_that_talks_and_never_prompts_ends_at_the_deadline() {
+        // THE GAP THIS CLOSES, measured in the wild: a node that SPEAKS and never asks for a
+        // callsign used to hold its slot for the life of the process. The first byte disarmed the
+        // deadline, the session never logged in, and nothing else ever ended it — no outcome, so
+        // it could not even be skipped. The deadline is armed until a prompt is ANSWERED.
+        let deadline = Duration::from_millis(200);
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        let (stop_ref, connected_ref, outbox_ref) = (&stop, &connected, &outbox);
+        // On its own thread, so "never returns" is a bounded failure with a name.
+        std::thread::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            s.spawn(move || {
+                let session = pump(
+                    TalksThenQuiet { reads: 0 },
+                    Vec::new(),
+                    "W9XYZ",
+                    &mut |_| {},
+                    stop_ref,
+                    connected_ref,
+                    outbox_ref,
+                    SessionTiming {
+                        greeting_deadline: deadline,
+                        ..LIVE_TIMING
+                    },
+                    &mut || {},
+                );
+                let _ = tx.send(session);
+            });
+            let finished = rx.recv_timeout(Duration::from_secs(5));
+            stop.store(true, Ordering::Relaxed); // release the worker before asserting
+            let session = finished.expect(
+                "pump must END a node that talks and never prompts, handing it back to run's \
+                 backoff — it is still looping",
+            );
+            assert!(session.heard, "it did speak");
+            assert_eq!(
+                session.outcome(false),
+                Some(Outcome::NoPrompt),
+                "…and that is what the operator is told"
+            );
+        });
+        assert!(
+            !connected.load(Ordering::Relaxed),
+            "a node that never prompted is never a connected session"
         );
     }
 
@@ -1709,9 +1980,12 @@ mod tests {
             &stop,
             &connected,
             &outbox,
-            deadline,
-        )
-        .unwrap();
+            SessionTiming {
+                greeting_deadline: deadline,
+                ..LIVE_TIMING
+            },
+            &mut || {},
+        );
         // The session ended because STOP was set, not because the deadline cut it: the
         // reader only sets stop after being quiet for far longer than the deadline, so
         // a deadline that survived the greeting would have returned first.
@@ -1881,13 +2155,310 @@ mod tests {
             &stop,
             &connected,
             &outbox,
-            GREETING_DEADLINE,
-        )
-        .unwrap();
+            LIVE_TIMING,
+            &mut || {},
+        );
         assert!(writer.is_empty(), "nothing to answer, nothing sent");
         assert!(
             !connected.load(Ordering::Relaxed),
             "TCP accepted + chatter but no login prompt is NOT a connected session"
+        );
+    }
+    // ---- What each attempt came to --------------------------------------------------------------
+
+    /// A one-connection loopback "node" that plays `script` against the first client, then
+    /// closes. Loopback only: no test here touches the real network.
+    fn scripted_node(script: fn(std::net::TcpStream)) -> String {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                script(stream);
+            }
+        });
+        addr
+    }
+
+    /// Read what the client sends until its line ends, or it closes.
+    fn read_line(stream: &mut std::net::TcpStream) {
+        let mut byte = [0u8; 1];
+        while let Ok(1) = stream.read(&mut byte) {
+            if byte[0] == b'\n' {
+                return;
+            }
+        }
+    }
+
+    /// Everything [`run`] reports against `addr` before `until` passes or it reports once. The
+    /// callback raises `stop`, so `run` ends instead of redialling; `run` itself is on a scoped
+    /// thread, so a `run` that never reports is a failure with a name, not a hung binary.
+    fn outcomes_from(addr: &str, until: Duration) -> Vec<Outcome> {
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        let seen: Mutex<Vec<Outcome>> = Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                run(
+                    addr,
+                    "W9XYZ",
+                    |_| {},
+                    &stop,
+                    &connected,
+                    &outbox,
+                    |o| {
+                        seen.lock().unwrap().push(o.clone());
+                        stop.store(true, Ordering::Relaxed);
+                    },
+                )
+            });
+            let started = Instant::now();
+            while !stop.load(Ordering::Relaxed) && started.elapsed() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            stop.store(true, Ordering::Relaxed);
+        });
+        seen.into_inner().unwrap()
+    }
+
+    #[test]
+    fn a_node_that_closes_without_a_word_is_reported_as_no_greeting() {
+        let addr = scripted_node(drop);
+        assert_eq!(
+            outcomes_from(&addr, Duration::from_secs(5)),
+            vec![Outcome::NoGreeting]
+        );
+    }
+
+    #[test]
+    fn a_node_that_talks_but_never_prompts_is_reported_as_no_prompt() {
+        // THE DISTINCTION this reporting exists for: a node that says something and never asks
+        // for a callsign is a different fault from one that says nothing, and until now both
+        // read "never sent a login prompt".
+        let addr = scripted_node(|mut stream| {
+            let _ = stream.write_all(b"Welcome to the node\r\nPlease wait\r\n");
+        });
+        assert_eq!(
+            outcomes_from(&addr, Duration::from_secs(5)),
+            vec![Outcome::NoPrompt]
+        );
+    }
+
+    #[test]
+    fn a_login_the_node_drops_at_once_is_reported_as_dropped_after_login() {
+        // A rejected call, a node that bumps us, a node at its connection limit: the prompt was
+        // answered, so this used to count as a working session and report nothing at all.
+        let addr = scripted_node(|mut stream| {
+            let _ = stream.write_all(b"login: ");
+            read_line(&mut stream);
+        });
+        assert_eq!(
+            outcomes_from(&addr, Duration::from_secs(5)),
+            vec![Outcome::DroppedAfterLogin]
+        );
+    }
+
+    #[test]
+    fn a_login_that_delivers_a_spot_is_reported_while_the_session_is_still_up() {
+        // The node keeps the session open for ten seconds and the test waits three, so the only
+        // way to see `LoggedIn` here is for it to be reported the moment the session proves
+        // itself — not when it ends, which for a working node can be days later.
+        let addr = scripted_node(|mut stream| {
+            let _ = stream.write_all(b"login: ");
+            read_line(&mut stream);
+            let _ = stream.write_all(b"DX de W3LPL:     14025.0  UA9CDC       CW 599  1234Z\r\n");
+            read_line(&mut stream); // holds the session until the client closes, or 10 s
+        });
+        assert_eq!(
+            outcomes_from(&addr, Duration::from_secs(3)),
+            vec![Outcome::LoggedIn]
+        );
+    }
+
+    #[test]
+    fn an_unreachable_node_is_reported_with_the_addresses_tried() {
+        let addr = format!("127.0.0.1:{}", dead_port());
+        let seen = outcomes_from(&addr, Duration::from_secs(5));
+        assert!(
+            matches!(&seen[..], [Outcome::Unreachable(why)] if why.contains(&addr)),
+            "got {seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_session_we_stopped_says_nothing_about_the_node() {
+        // POSITIVE CONTROL for the no-greeting report above: a node that has not spoken YET when
+        // the operator's save (or the pool) stops the feed has not failed, and blaming it would
+        // count our own stop toward skipping it.
+        let addr = scripted_node(|mut stream| read_line(&mut stream));
+        assert_eq!(
+            outcomes_from(&addr, Duration::from_millis(300)),
+            Vec::<Outcome>::new()
+        );
+    }
+
+    /// Answers every read with a fresh login prompt, the way a node re-prompts after refusing a
+    /// call, until `limit` reads — then closes.
+    struct RepromptsEveryRead {
+        reads: usize,
+        limit: usize,
+    }
+    impl Read for RepromptsEveryRead {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            if self.reads > self.limit {
+                return Ok(0);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            let prompt = b"sorry, unknown call\r\nlogin: ";
+            buf[..prompt.len()].copy_from_slice(prompt);
+            Ok(prompt.len())
+        }
+    }
+
+    /// Millisecond clocks for the proof tests. The proof clock is 100 ms rather than something
+    /// tighter so a test thread preempted between an answer and the next check on a loaded runner
+    /// cannot see the clock run out where the node never let it.
+    const QUICK: SessionTiming = SessionTiming {
+        greeting_deadline: Duration::from_millis(50),
+        proof_after: Duration::from_millis(100),
+    };
+
+    #[test]
+    fn a_quiet_session_proves_itself_by_staying_up() {
+        // A dead band sends nothing after the login, and that is a working session.
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        let mut proofs = 0;
+        // ~80 quiet reads at 5 ms: four times the proof clock.
+        let reader = GreetsThenQuiet {
+            reads: 0,
+            quiet_reads_before_stop: 80,
+            stop: &stop,
+        };
+        let session = pump(
+            reader,
+            Vec::new(),
+            "W9XYZ",
+            &mut |_| {},
+            &stop,
+            &connected,
+            &outbox,
+            QUICK,
+            &mut || proofs += 1,
+        );
+        assert!(session.proved, "{session:?}");
+        assert_eq!(proofs, 1, "reported once, not on every wake-up");
+    }
+
+    #[test]
+    fn a_node_that_keeps_prompting_is_never_proved_by_the_clock() {
+        // A node that refuses the call and asks again has not accepted the login, however long
+        // it keeps the socket open. Each answer restarts the clock.
+        let stop = AtomicBool::new(false);
+        let connected = AtomicBool::new(false);
+        let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+        let mut proofs = 0;
+        let session = pump(
+            // ~80 prompts at 5 ms: four times the proof clock, restarted by every answer.
+            RepromptsEveryRead {
+                reads: 0,
+                limit: 80,
+            },
+            Vec::new(),
+            "W9XYZ",
+            &mut |_| {},
+            &stop,
+            &connected,
+            &outbox,
+            QUICK,
+            &mut || proofs += 1,
+        );
+        assert_eq!((session.proved, proofs), (false, 0), "{session:?}");
+        assert!(session.heard);
+    }
+
+    #[test]
+    fn a_spot_proves_a_session_only_after_the_login() {
+        let run_script = |chunks: Vec<&[u8]>| {
+            let stop = AtomicBool::new(false);
+            let connected = AtomicBool::new(false);
+            let outbox: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+            let mut proofs = 0;
+            let session = pump(
+                ScriptReader {
+                    chunks: chunks.into_iter().map(<[u8]>::to_vec).collect(),
+                },
+                Vec::new(),
+                "W9XYZ",
+                &mut |_| {},
+                &stop,
+                &connected,
+                &outbox,
+                LIVE_TIMING,
+                &mut || proofs += 1,
+            );
+            (session.proved, proofs)
+        };
+        let spot: &[u8] = b"DX de W3LPL: 14025.0 UA9CDC CW 599 1234Z\r\n";
+        assert_eq!(
+            run_script(vec![b"login: ", spot]),
+            (true, 1),
+            "a spot after the login proves it"
+        );
+        assert_eq!(
+            run_script(vec![spot, b"login: "]),
+            (false, 0),
+            "a spot in the banner proves nothing about a login that came later"
+        );
+    }
+
+    #[test]
+    fn the_log_writes_a_failure_once_until_the_node_works_again() {
+        let mut log = LogFilter::default();
+        let addr = "dx.example.net:7300";
+        assert!(log.line(addr, &Outcome::NoGreeting).is_some(), "news");
+        assert_eq!(
+            log.line(addr, &Outcome::NoGreeting),
+            None,
+            "the same failure again is not news"
+        );
+        assert!(
+            log.line(addr, &Outcome::NoPrompt).is_some(),
+            "a different failure is"
+        );
+        assert_eq!(log.line(addr, &Outcome::LoggedIn), None);
+        assert!(
+            log.line(addr, &Outcome::NoPrompt).is_some(),
+            "a working session makes the next failure news again"
+        );
+    }
+
+    #[test]
+    fn each_way_a_node_fails_reads_differently_in_the_log() {
+        let addr = "dx.example.net:7300";
+        let line = |o: Outcome| LogFilter::default().line(addr, &o).unwrap();
+        let lines = [
+            line(Outcome::NoGreeting),
+            line(Outcome::NoPrompt),
+            line(Outcome::DroppedAfterLogin),
+        ];
+        for (i, a) in lines.iter().enumerate() {
+            assert!(a.contains(addr), "{a}");
+            for b in &lines[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+        assert_eq!(
+            line(Outcome::Unreachable(
+                "cannot reach dx.example.net:7300: refused".into()
+            )),
+            "cannot reach dx.example.net:7300: refused",
+            "connect()'s own words already name the node and every address"
         );
     }
 }

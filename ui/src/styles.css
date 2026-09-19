@@ -10669,6 +10669,49 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .cluster-node-empty {
   font-style: italic;
 }
+/* How cluster nodes are chosen, and each node's standing (Settings ▸ Spot Sources). */
+.cluster-node-mode {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+.cluster-node-mode label {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.cluster-node-list {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+}
+.cluster-node-list .cluster-node-row {
+  flex-wrap: wrap;
+}
+.cluster-node-host {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cluster-node-mark,
+.cluster-node-standing {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+.cluster-node-mark.good,
+.cluster-node-standing.good {
+  color: var(--state-good);
+}
+.cluster-node-mark.bad,
+.cluster-node-standing.bad {
+  color: var(--alert-critical);
+}
+.cluster-node-mark.pending,
+.cluster-node-standing.pending {
+  color: var(--state-pending);
+}
 .settings-refresh {
   flex: 0 0 auto;
   border: 1px solid var(--border);

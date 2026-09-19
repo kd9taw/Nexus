@@ -83,6 +83,7 @@ const MIGRATED = [
   // PARTIAL for its stop controls; nothing here stops a transmission.
   'components/RttyMacroEditor.tsx',
   'features/rttyMacros.ts',
+  'components/SettingsClusterNodes.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
   'components/RevealNudge.tsx',

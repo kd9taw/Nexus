@@ -23,8 +23,9 @@ are looking at. Beside it sit the hint "every spot on the air — single-click t
 work it", the search box, and the **Filter** button, which reads **Filtered**
 while any chip filter is set.
 
-**What feeds it.** Two RBN skimmer firehoses — CW and digital — plus *every*
-human DX-cluster node you list in
+**What feeds it.** Two RBN skimmer firehoses — CW and digital — plus the human
+DX-cluster nodes you are connected to — the two Nexus picks, or every node in your
+own list — set in
 [Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds),
 unioned into one buffer. RBN carries CW and digital only, so phone rows come
 from the human nodes: with no node configured this board is nearly all CW and
@@ -196,7 +197,7 @@ arrive."
 - **Cluster and RBN only.** PSK Reporter reception reports and your own radio's
   decodes never appear here, however good the path they prove. And since RBN
   skimmers only spot CW and digital, phone coverage is exactly as wide as the
-  human cluster nodes you have configured.
+  human cluster nodes you are connected to.
 - **The Mode column is a judgement about frequency**, except where an RBN skimmer
   named the mode. A DX SSB station parked below the US phone edge on 40 or 80 m
   (7.085, say) falls in the data window and reads Digital. That is deliberate: the

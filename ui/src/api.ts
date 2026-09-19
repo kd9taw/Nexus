@@ -1206,6 +1206,12 @@ export async function getFeedHealth(): Promise<FeedHealth> {
   return invoke<FeedHealth>('get_feed_health')
 }
 
+/** Each human DX-cluster node's standing, for Settings ▸ Spot Sources. Desktop only: nothing on
+ *  the Remote page reads it, and the Remote transport does not carry it. */
+export async function getClusterNodes(): Promise<import('./types').ClusterNodes> {
+  return invoke('get_cluster_nodes')
+}
+
 /** Export the general logbook as ADIF or CSV text. Optional `from`/`to` are UTC
  *  "YYYY-MM-DD" dates bounding the QSO time inclusively (#98); empty/absent = all. */
 export async function exportGeneralLog(

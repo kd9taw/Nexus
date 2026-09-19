@@ -1367,19 +1367,30 @@ the decode-log switches continue to the right.*
 
 ![The Spot sources group: PSK Reporter on, DX Cluster / RBN spots on, and a Phone/SSB cluster nodes list holding three nodes, each with a remove button, above an "Add a known node…" picker and a "+ Custom" button.](../img/manual/settings-spot-sources.webp)
 
-*Spot sources in Nexus 1.10.3. Which nodes you list is a matter of coverage, not
-correctness — Nexus connects to all of them and merges what they report.*
+*Spot sources in Nexus 1.10.3, before cluster nodes were chosen automatically. On
+your own list, which nodes you list is a matter of coverage, not correctness —
+Nexus connects to all of them and merges what they report.*
 
 - **PSK Reporter** — "upload spots to the global map."
 - **DX Cluster / RBN spots** — "Surface 'new ones' from the Reverse Beacon
   Network on the Needed board + Connect." Takes effect on restart.
 - **Phone/SSB cluster nodes** — human DX-cluster nodes for SSB/phone spots, since
-  RBN only carries CW and digital. "We connect to ALL listed nodes and union
-  their human SSB/phone spots — more nodes = wider phone coverage." Add from the
-  **+ Add a known node…** presets (VE7CC-1 recommended; WA9PIE-2 on port 8000 if
-  23 is blocked; W1NR phone-rich; W3LPL the skimmer-heavy firehose) or
-  **+ Custom**. An added node connects on the next Save; removing one takes
-  effect on restart.
+  RBN only carries CW and digital. Two choices:
+  - **Pick working nodes automatically (recommended)**, the default. "Nexus keeps
+    two of these nodes connected for SSB/phone spots and spreads operators across
+    them. A node that stops answering for five minutes, while your other spot
+    feeds are working, is skipped for a day and another takes its place." The
+    eight nodes built into the release are listed read-only, each **In use**,
+    **Connecting…**, **Standby** or **Not answering** with the reason — and, while
+    it is skipped, until when.
+  - **Use my list**. "We connect to ALL listed nodes and union their human
+    SSB/phone spots"; "Nexus never changes this list for you." Add from the
+    **+ Add a known node…** presets — the built-in nodes — or **+ Custom**, and
+    each row shows how its node is doing. An added node connects, and a removed
+    one disconnects, on the next Save.
+
+  An install still on a node list Nexus shipped starts on automatic; a list you
+  edited yourself stays yours.
 - **Cluster login SSID** — added to your callsign at login (`2` → `W9XYZ-2`).
   A node allows one session per callsign and drops the older one, so a second
   Nexus, or another cluster program on the same call, knocks this one off unless

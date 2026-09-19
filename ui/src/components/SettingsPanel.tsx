@@ -163,6 +163,9 @@ import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { AssistanceEvent, ConnEvent, CredStatus, FieldDayStatus } from '../types'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
 import { SettingsStation } from './SettingsStation'
+import { SettingsClusterNodes } from './SettingsClusterNodes'
+import { getClusterNodes } from '../api'
+import type { ClusterNodes } from '../types'
 import { SetupHealth } from './SetupHealth'
 import { ThemeSwitcher } from './ThemeSwitcher'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
@@ -753,18 +756,6 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
   }
 }
 
-// Public human DX-cluster nodes (SSB/phone + human spots) — the RBN CW + digital skimmer
-// feeds connect automatically, so these are for the phone/human spots RBN doesn't carry.
-// Researched, community-trusted, callsign-only login. (NOT RBN ports — those are wired
-// separately; the global human-spot mesh means any well-connected node has the same spots.)
-const CLUSTER_PRESETS: { label: string; host: string }[] = [
-  { label: 'VE7CC-1 — human SSB/CW, clean (recommended)', host: 've7cc.net:23' },
-  { label: 'WA9PIE-2 — port 8000 (use if port 23 is blocked)', host: 'dxc.wa9pie.net:8000' },
-  { label: 'W1NR — DXSpider, phone-rich', host: 'dx.w1nr.net:23' },
-  { label: 'AE5E — CC Cluster, port 7300 (use if port 23 is blocked)', host: 'dxspots.com:7300' },
-  { label: 'W3LPL — firehose (skimmer-heavy)', host: 'w3lpl.net:7373' },
-]
-
 /**
  * The example network addresses the Logging & Connectors fields show INSIDE a placeholder.
  *
@@ -1295,6 +1286,9 @@ export function SettingsPanel({
     return () => window.clearTimeout(id)
   }, [status])
   const [connLog, setConnLog] = useState<ConnEvent[]>([])
+  // Each DX-cluster node's standing for Spot Sources. Live like the logs — a node connects or
+  // fails while the operator watches — so it rides the same timer.
+  const [clusterNodes, setClusterNodes] = useState<ClusterNodes | null>(null)
   // The assistance journal is the operator's EVIDENCE of what was running during an event, so
   // it is shown next to the switch rather than hidden in a file. Same poll as the conn log.
   const [assistLog, setAssistLog] = useState<AssistanceEvent[]>([])
@@ -1304,6 +1298,7 @@ export function SettingsPanel({
     let live = true
     const load = () => {
       getConnectionLog().then((l) => live && setConnLog(l)).catch(() => {})
+      getClusterNodes().then((n) => live && setClusterNodes(n)).catch(() => {})
       getAssistanceJournal().then((l) => live && setAssistLog(l ?? [])).catch(() => {})
     }
     load()
@@ -9082,81 +9077,15 @@ export function SettingsPanel({
                   </span>
                 </div>
 
-                <div className="settings-field">
-                  <span className="settings-label">
-                    {t('settings.integrations.clusterNodes.label')}
-                  </span>
-                  {(form.clusterHosts ?? []).length === 0 ? (
-                    <span className="settings-hint cluster-node-empty">
-                      {t('settings.integrations.clusterNodes.empty')}
-                    </span>
-                  ) : (
-                    (form.clusterHosts ?? []).map((host, i) => (
-                      <div key={i} className="cluster-node-row">
-                        <input disabled={remote}
-                          className="settings-input"
-                          value={host}
-                          onChange={(e) =>
-                            mutateClusterHosts((hs) => hs.map((h, j) => (j === i ? e.target.value : h)))
-                          }
-                          placeholder={LOGGER_EXAMPLES.clusterNode}
-                          spellCheck={false}
-                        />
-                        <button disabled={remote}
-                          type="button"
-                          className="cluster-node-remove"
-                          title={t('settings.integrations.clusterNodes.remove.title')}
-                          aria-label={
-                            host
-                              ? t('settings.integrations.clusterNodes.remove.aria', { host })
-                              : t('settings.integrations.clusterNodes.remove.ariaBlank')
-                          }
-                          onClick={() => mutateClusterHosts((hs) => hs.filter((_, j) => j !== i))}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))
-                  )}
-                  <div className="cluster-node-add">
-                    <select disabled={remote}
-                      className="settings-input"
-                      value=""
-                      onChange={(e) => {
-                        const host = e.target.value
-                        if (!host) return
-                        mutateClusterHosts((hs) =>
-                          hs.some((h) => h.trim().toLowerCase() === host.toLowerCase())
-                            ? hs
-                            : [...hs, host],
-                        )
-                      }}
-                    >
-                      <option value="">
-                        {t('settings.integrations.clusterNodes.add.option')}
-                      </option>
-                      {/* Each preset LABEL names a real node (its callsign, its port and why
-                          you would pick it) — data about the cluster mesh, invariant, and it
-                          lives in CLUSTER_PRESETS above. */}
-                      {CLUSTER_PRESETS.map((p) => (
-                        <option key={p.host} value={p.host}>
-                          {p.label}
-                        </option>
-                      ))}
-                    </select>
-                    <button disabled={remote}
-                      type="button"
-                      className="cluster-node-add-blank"
-                      title={t('settings.integrations.clusterNodes.addCustom.title')}
-                      onClick={() => mutateClusterHosts((hs) => [...hs, ''])}
-                    >
-                      {t('settings.integrations.clusterNodes.addCustom.action')}
-                    </button>
-                  </div>
-                  <span className="settings-hint">
-                    {t('settings.integrations.clusterNodes.hint')}
-                  </span>
-                </div>
+                <SettingsClusterNodes
+                  auto={form.clusterNodesAuto ?? true}
+                  onAutoChange={(auto) => updateBool('clusterNodesAuto', auto)}
+                  hosts={form.clusterHosts ?? []}
+                  onHostsChange={mutateClusterHosts}
+                  standings={clusterNodes}
+                  disabled={remote}
+                  placeholder={LOGGER_EXAMPLES.clusterNode}
+                />
                 <label className="settings-field">
                   <span className="settings-label">
                     {t('settings.integrations.clusterSsid.label')}

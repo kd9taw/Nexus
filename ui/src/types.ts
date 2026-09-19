@@ -2368,6 +2368,33 @@ export interface CredStatus {
   paused: boolean
 }
 
+/** Why a DX-cluster node is not working — a code from the backend's node pool. */
+export type ClusterNodeFailure = 'unreachable' | 'noGreeting' | 'noPrompt' | 'droppedAfterLogin'
+
+/** One human DX-cluster node's standing (`get_cluster_nodes`), for Settings ▸ Spot Sources. */
+export interface ClusterNode {
+  host: string
+  /** The node's own callsign — set only for a node built into this release. */
+  callsign?: string
+  /** Its software — set only for a node built into this release. */
+  software?: 'dxSpider' | 'ccCluster'
+  /** A feed is running for it now. */
+  running: boolean
+  /** Logged in now. */
+  connected: boolean
+  /** Its latest failure, if it has failed since it last worked. */
+  failure?: ClusterNodeFailure
+  /** While automatic choice skips it: when the skip ends (Unix seconds). */
+  skippedUntilUnix?: number
+}
+
+/** Every cluster node Settings can show: the built-in nodes in shipped order, then the operator's own. */
+export interface ClusterNodes {
+  /** The SAVED choice — the form may hold an unsaved one. */
+  auto: boolean
+  nodes: ClusterNode[]
+}
+
 /** Liveness of the background live feeds (DX cluster/RBN + PSK Reporter MQTT). */
 export interface FeedHealth {
   cluster: FeedStatus
@@ -2376,8 +2403,8 @@ export interface FeedHealth {
    * (which the RBN CW/digital firehose keeps green on its own). `enabled: false` when
    * no human node is configured (RBN-only operator). */
   phoneCluster: FeedStatus
-  /** The configured human DX-cluster host (e.g. "ve7cc.net:23") for the phone-source
-   * label; null when no human node is configured. */
+  /** The phone-source label: the human DX-cluster nodes logged in right now ("host" or
+   * "host +N"), or while none is, the ones being tried; null when no node is running. */
   phoneClusterHost: string | null
   /** PHONE-classed spots received from human nodes this session — for the Needed board's
    * "N SSB spots" diagnostic (0 = SSB not arriving; >0 with no phone rows = arriving but
@@ -2939,6 +2966,10 @@ export interface Settings {
    * (or another cluster client) on the same call does not knock this one off. 1-99, digits
    * only; empty = log in with the bare call. */
   clusterSsid?: string
+  /** Let Nexus choose the human DX-cluster nodes (true: two kept connected from the list built
+   * into the release, moving off one that stops working), or connect to exactly `clusterHosts`
+   * (false: never switched). New installs and installs still on a shipped list start true. */
+  clusterNodesAuto?: boolean
   /** Connect to APRS-IS and plot internet-reported stations beside the ones your antenna hears.
    * Independent of the APRS RF decoder's arm state: the feed costs no RF resource and can key
    * nothing, and internet stations arriving while the RF side stays silent is the diagnostic
