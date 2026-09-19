@@ -38,7 +38,6 @@ import {
   getPropagation,
   getSettings,
   getAllSpots,
-  getLog,
   selectPeer,
   archiveConversation,
   setFrequency,
@@ -69,6 +68,7 @@ import {
   setSidebandOverride,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
+import { useSharedLog } from './features/logStore'
 import { bandLabelForMhz } from './band'
 import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
@@ -241,13 +241,21 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // Band-map pop-out only: the live spot feed + which calls are in the log (worked).
   const isBandMap = panel === 'bandmapPhone' || panel === 'bandmapCw'
   const [allSpots, setAllSpots] = useState<SpotRow[]>([])
-  const [workedCalls, setWorkedCalls] = useState<Set<string>>(() => new Set())
   // Selection mirrors the shared engine (snap.activePeer), so a station picked in the main
   // window — or in this one — highlights consistently across every window.
   const selected = snap?.activePeer ?? null
 
   // Live snapshot (decodes, stations, radio) — same 300 ms cadence as the main window.
   useEffect(() => subscribeSnapshot(setSnap), [])
+
+  // Band-map pop-out: the worked set is this window's shared copy of the log, which follows
+  // this window's own snapshot `logTick` — one row per logged contact, not the whole log every
+  // 15 s.
+  const bandMapLog = useSharedLog(snap?.logTick, isBandMap)
+  const workedCalls = useMemo(
+    () => new Set((bandMapLog ?? []).map((q) => q.call.toUpperCase())),
+    [bandMapLog],
+  )
 
   // Refetch the band plan when the tier changes — FT8/FT4 use different dial frequencies
   // (14.074 vs 14.080), so a detached Operate window's QSY targets must follow the mode.
@@ -290,15 +298,12 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     }
   }, [])
 
-  // Band-map pop-out: poll the live spot feed + refresh the worked-set (log calls) alongside it.
+  // Band-map pop-out: poll the live spot feed. (The worked set follows the log above.)
   useEffect(() => {
     if (!isBandMap) return
     let live = true
     const load = () => {
       getAllSpots().then((s) => live && setAllSpots(s)).catch(() => {})
-      getLog()
-        .then((log) => live && setWorkedCalls(new Set(log.map((q) => q.call.toUpperCase()))))
-        .catch(() => {})
     }
     load()
     const id = setInterval(load, 15_000)

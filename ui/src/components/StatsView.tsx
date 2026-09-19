@@ -4,11 +4,12 @@
 // these cards slice (data), and the three names in SERVICE_LABELS below — LoTW and eQSL are the
 // services' own names and DX is ham shorthand, all invariant tokens (see `i18n/index.ts`).
 
-import { useEffect, useState } from 'react'
-import { getLog, getLogStats } from '../api'
+import { useEffect, useMemo, useState } from 'react'
+import { getLogStats } from '../api'
 import { t } from '../i18n'
 import type { LoggedQso, GeoLogStats } from '../types'
 import { computeLogStats, type LogStats, type Tally } from '../features/logStats'
+import { loadSharedLog } from '../features/logStore'
 
 /** Service names and ham shorthand — the same letters in every language. */
 const SERVICE_LABELS = { lotw: 'LoTW', eqsl: 'eQSL', dx: 'DX' }
@@ -44,7 +45,7 @@ function BarList({ title, items, max }: { title: string; items: Tally[]; max?: n
 /**
  * Logbook statistics — a descriptive "my ham life" dashboard (QSOs by band/mode/year/hour, top
  * DXCC entities, WAS states, confirmations). Deliberately distinct from Journey (gamified goals)
- * and Awards (official credit): this is just the operator's log, sliced, from getLog(). Continent /
+ * and Awards (official credit): this is just the operator's log, sliced. Continent /
  * CQ-zone / POTA breakdowns need the cty.dat resolver on the Rust side (a later get_log_stats add).
  */
 export function StatsView({ observation }: { observation?: { statistics: LogStats; geography: GeoLogStats } } = {}) {
@@ -57,7 +58,7 @@ export function StatsView({ observation }: { observation?: { statistics: LogStat
   useEffect(() => {
     if (observation) return
     let live = true
-    void getLog()
+    void loadSharedLog()
       .then(value => { if (live) setLog(value) })
       .catch(() => { if (live) setFailed(true) })
     void getLogStats()
@@ -65,6 +66,9 @@ export function StatsView({ observation }: { observation?: { statistics: LogStat
       .catch(() => { if (live) setGeo(null) })
     return () => { live = false }
   }, [observation])
+  // Once per log, not once per render: six passes over the whole log, and this view re-renders
+  // on every snapshot. Declared above the early returns, as a hook must be.
+  const nativeStats = useMemo(() => (log ? computeLogStats(log) : null), [log])
 
   if (!observation && failed) {
     return (
@@ -81,7 +85,7 @@ export function StatsView({ observation }: { observation?: { statistics: LogStat
       </main>
     )
   }
-  const s = observation?.statistics ?? computeLogStats(log!)
+  const s = observation?.statistics ?? nativeStats!
   if (s.total === 0) {
     return (
       <main className="layout single stats-view">

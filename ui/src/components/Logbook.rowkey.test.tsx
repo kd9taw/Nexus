@@ -26,8 +26,12 @@ beforeAll(() => {
 
 vi.mock('../api', () => {
   const noop = () => vi.fn()
+  const getLog = vi.fn()
   return {
-    getLog: vi.fn(),
+    getLog,
+    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
+    // the whole log (a valid answer), stocked through `getLog` as before.
+    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
     deleteQso: vi.fn(() => Promise.resolve({})),
     editQso: vi.fn(() => Promise.resolve({ call: 'K1ABC', whenUnix: 1_700_000_100 })),
     exportGeneralLog: noop(), importAdif: noop(),

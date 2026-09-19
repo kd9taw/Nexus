@@ -10,6 +10,7 @@ vi.mock('../api', () =>
       'fdLogManual',
       'logQso',
       'getLog',
+      'getLogDelta',
       'lookupPark',
       'lookupParkLive',
       'qrzLookup',

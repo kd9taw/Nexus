@@ -14,8 +14,9 @@ import type {
   LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestIMoved, contestLogManual, contestZoneHint, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
+import { contestIMoved, contestLogManual, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
+import { NO_LOG, useSharedLog } from '../features/logStore'
 import {
   domainSuggestions,
   inDomain,
@@ -460,7 +461,10 @@ export function LogEntry({
   const [parkDetail, setParkDetail] = useState<Park | null>(null)
   const [parkDetailLive, setParkDetailLive] = useState(false)
   const [qrzBusy, setQrzBusy] = useState(false)
-  const [allLog, setAllLog] = useState<LoggedQso[]>([])
+  // The general logbook behind the B4/dupe badges and the recall card: the window's one shared
+  // copy (features/logStore), which follows the engine's logTick. Not read in FD mode — the
+  // contest log does the dupe checking there — and never in remote mode.
+  const allLog = useSharedLog(snap.logTick, !fdActive && !remoteMode) ?? NO_LOG
   // Opt-in manual override (standard-log path only) for a contact made on a radio NOT
   // connected to Nexus — e.g. a V/UHF rig. CLOSED = log the live rig + now, byte-identical
   // to before this existed. OPEN = the operator sets band / freq / mode / UTC time by hand,
@@ -738,13 +742,6 @@ export function LogEntry({
       clearTimeout(id)
     }
   }, [logParkRef, logParkProgram, asksForPark, remoteMode, remoteParks])
-
-  const refreshLog = () => !remoteMode && void getLog().then(setAllLog).catch(() => {})
-  useEffect(() => {
-    // In FD mode we don't use the general logbook for dupe checking, so skip the fetch.
-    if (fdActive || remoteMode) return
-    refreshLog()
-  }, [fdActive, remoteMode])
 
   // Click-to-work prefill: land the call + drop focus on RST so the operator types the report
   // and hits Enter. Keyed on `ts` to refire on re-click of the same call.
@@ -1213,7 +1210,6 @@ export function LogEntry({
     if (r) {
       pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
       reset()
-      refreshLog()
     }
   }
 

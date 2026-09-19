@@ -21,7 +21,6 @@ import type {
   AppSnapshot,
   BandChannel,
   ModeRequest,
-  LoggedQso,
   NeedAlert,
   NeedTag,
   QrzLookup,
@@ -32,6 +31,7 @@ import type {
 import { isRxOnly, isBeacon } from '../types'
 import type { NeedBandScopes } from '../features/needs'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
+import { NO_LOG, useSharedLog } from '../features/logStore'
 import { bandLabelForMhz } from '../band'
 import {
   clampOffsetHz,
@@ -48,7 +48,7 @@ import { FdAdvisories } from './FdAdvisories'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
-import { getLog, qrzLookup, resolveEntity } from '../api'
+import { qrzLookup, resolveEntity } from '../api'
 import { pushToast } from '../toast'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
@@ -1690,16 +1690,17 @@ export function OperateCockpit({
  * here only ever armed the Spot button.
  *
  * This is therefore the assembly LogEntry does inline, with the log FORM left out: read the
- * logbook, resolve the award entity, ask the callbook, hand the result over. Three
- * deliberate differences from LogEntry, each because this cockpit is not a log strip:
+ * logbook, resolve the award entity, ask the callbook, hand the result over. The logbook is
+ * the window's shared copy (features/logStore), which follows `logTick` — every change to the
+ * log, by any writer. That matters more here than in a strip: Operate logs in the BACKGROUND
+ * (the sequencer files a contact the moment the exchange completes, with no click), so a
+ * once-per-mount read would show a stale "previous contacts" list for the rest of the session
+ * and tell an operator they had never worked a station they worked ten minutes ago. This card
+ * used to re-read the whole log on every selection and every logged contact for that reason;
+ * now a roster click costs no read, and a logged contact moves one row.
  *
- *   · THE LOGBOOK IS RE-READ ON EVERY SELECTION. LogEntry reads once per mount and again
- *     after it logs, which is complete for a strip that is the only thing writing. Operate
- *     logs in the BACKGROUND — the sequencer files a contact the moment the exchange
- *     completes, with no click — so a once-per-mount read would show a stale "previous
- *     contacts" list for the rest of the session, and would tell an operator they had never
- *     worked a station they worked ten minutes ago. A roster click is an operator action,
- *     not a poll.
+ * Two deliberate differences from LogEntry, each because this cockpit is not a log strip:
+ *
  *   · THE DECODED GRID SEEDS THE CARD. The station is on screen because we decoded it, and
  *     an FT8 frame carries a square. Using it when the callbook has none is what puts a
  *     distance and a bearing on the card for an operator with no QRZ subscription at all —
@@ -1731,24 +1732,12 @@ function OperateRecall({
   onShowCall?: (call: string) => void
 }) {
   const cu = call.trim().toUpperCase()
-  const [log, setLog] = useState<LoggedQso[]>([])
+  // Follows `logTick` (#282): the sequencer logs in the background with the SAME station still
+  // on the card, and a card that read the log only on a call change left "New DXCC!" standing
+  // over a contact that was already in the log until the operator clicked someone else.
+  const log = useSharedLog(snap.logTick) ?? NO_LOG
   const [book, setBook] = useState<QrzLookup | null>(null)
   const [entity, setEntity] = useState<string | null>(null)
-
-  // Re-read on a call change AND on `loggedTick` (#282): the sequencer logs in the background
-  // with the SAME station still on the card, so a call-only trigger left "New DXCC!" standing
-  // over a contact that was already in the log until the operator clicked someone else.
-  useEffect(() => {
-    let stale = false
-    void getLog()
-      .then((l) => {
-        if (!stale) setLog(l)
-      })
-      .catch(() => {})
-    return () => {
-      stale = true
-    }
-  }, [cu, snap.loggedTick])
 
   // The award identity comes from cty.dat via the CALL — never the callbook's country
   // string, which spells entities differently enough ("Germany" vs "Fed. Rep. of Germany")

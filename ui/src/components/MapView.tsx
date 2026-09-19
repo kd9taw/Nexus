@@ -44,7 +44,8 @@ import type {
 import { MapInsightRail } from './prop/MapInsightRail'
 import { MapLayersPanel } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
-import { getAurora, getDeclination, getPca, getSatellites, getLog, getLogStats, getOtaMapSpots } from '../api'
+import { getAurora, getDeclination, getPca, getSatellites, getLogStats, getOtaMapSpots } from '../api'
+import { loadSharedLog } from '../features/logStore'
 // CQ-zone boundaries (HB9HIL hamradio-zones-geojson, MIT — see NOTICE): bundled
 // as a raw asset and fetched lazily so the 2.7 MB never loads until toggled on.
 import cqzonesUrl from '../data/cqzones.geojson?url'
@@ -1283,7 +1284,7 @@ export function MapView({
     if(remoteMap)return
     if (!coverageOn || coverageDim !== 'grids' || workedGrids) return
     let live = true
-    getLog()
+    loadSharedLog()
       .then((log) => {
         if (!live) return
         setWorkedGrids(workedGridSet(log))

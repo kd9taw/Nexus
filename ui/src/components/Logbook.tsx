@@ -13,6 +13,8 @@ import type { LoggedActivation, LoggedQso } from '../types'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import { modeKey } from '../features/callHistory'
+import { NO_LOG, refreshSharedLog, useSharedLog } from '../features/logStore'
+import { lotwBacklog } from '../features/lotwBacklog'
 import { SpotDialog } from './SpotDialog'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
@@ -28,7 +30,6 @@ import {
   exportLogForActivation,
   logOperators,
   logActivations,
-  getLog,
   importAdif,
   logQso,
   markLotwUploaded,
@@ -308,7 +309,14 @@ export function Logbook({
   const canEdit = useLogChange('logEdit')
   const canLog = useLogChange('log.manual')
   const canQsl = useLogChange('qslMarks')
-  const [log, setLog] = useState<LoggedQso[]>([])
+  // The desktop reads the window's one shared copy of the log (features/logStore). It follows
+  // `logTick`, so the list reloads when the log changes under this view — a Remote browser's
+  // delete or edit, another instance's contact, a connector stamp. The rows are addressed by
+  // key, so a stale list is refused rather than acted on; following the tick is what keeps that
+  // refusal rare. A Remote browser shows the page of rows the station sent (below).
+  const sharedLog = useSharedLog(logTick, control)
+  const [observedLog, setLog] = useState<LoggedQso[]>([])
+  const log = control ? (sharedLog ?? NO_LOG) : observedLog
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
     call: '',
@@ -458,29 +466,10 @@ export function Logbook({
     }
   }
 
+  // After this view's own write: bring the shared copy up to date now, not on the next tick.
   const load = useCallback(() => {
-    if (!control) return
-    getLog()
-      .then(setLog)
-      .catch(() => {})
+    if (control) refreshSharedLog()
   }, [control])
-
-  useEffect(() => {
-    load()
-  }, [load])
-
-  // Reload when the log changes under this view — a Remote browser's delete or edit, another
-  // instance's contact, a connector stamp. The rows are addressed by key, so a stale list is
-  // refused rather than acted on; this is what keeps that refusal rare. The mount value is
-  // adopted, not acted on (the load above already ran), and a burst of stamps after one logged
-  // contact coalesces into a single fetch.
-  const seenLogTick = useRef(logTick)
-  useEffect(() => {
-    if (logTick === seenLogTick.current) return
-    seenLogTick.current = logTick
-    const timer = setTimeout(load, 300)
-    return () => clearTimeout(timer)
-  }, [logTick, load])
 
   // Import an external ADIF logbook → real "needs" + B4. Read the file in the
   // browser/WebView (no fs plugin), hand the text to the engine.
@@ -543,16 +532,9 @@ export function Logbook({
     }
   }
 
-  // QSOs not yet sent to LoTW: award-unconfirmed + never uploaded or a prior bounce.
-  // Mirrors the backend batch builder (lotw_unsent_indices): award-unconfirmed,
-  // never-sent-or-bounced, AND the time of day is known — LoTW matches on time,
-  // so a date-only import can never confirm and is excluded, with the count
-  // shown separately so the operator learns why instead of wondering.
-  const lotwEligible = (q: LoggedQso) =>
-    !q.awardConfirmed &&
-    (!q.upload?.lotw || ['rejected', 'authfail'].includes(q.upload.lotw.outcome))
-  const unsentLotw = log.filter((q) => lotwEligible(q) && q.timeKnown !== false).length
-  const timelessLotw = log.filter((q) => lotwEligible(q) && q.timeKnown === false).length
+  // QSOs not yet sent to LoTW, and the date-only ones LoTW can never match (features/
+  // lotwBacklog). Once per log, not once per render: this view re-renders on every snapshot.
+  const { unsent: unsentLotw, timeless: timelessLotw } = useMemo(() => lotwBacklog(log), [log])
 
   // Sign + upload the unsent batch to LoTW via the operator's TQSL.
   const onUploadLotw = async () => {
