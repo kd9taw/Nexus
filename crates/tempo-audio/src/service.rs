@@ -6825,6 +6825,13 @@ impl RadioLoop {
                                 // refused would key on a later tick the operator didn't ask for.
                                 // They press it again if they want it again.
                                 crate::civ::diag::note(&format!("ATU: the rig refused it: {e}"));
+                            } else {
+                                // ⭐ #322 / review R4: THE RADIO TOOK IT, so the Digital section
+                                // stands down (`Engine::note_atu_tune_started`). Here and not at
+                                // the drain above, because a press this block cannot send — the
+                                // `may_key()` beside it — and one the rig refuses are both
+                                // dropped, and the operator's QSO must survive either.
+                                engine_lock(engine).note_atu_tune_started();
                             }
                         }
                         // Apply pending RIT/XIT/VFO clarifier requests (CAT-panel controls). Drain
@@ -21151,6 +21158,15 @@ mod tests {
     /// (tuner present and in-line) and `RPRT 0` to everything else, so the ATU probe finds a
     /// tuner and every command the loop sends is on the record.
     fn mock_rigctld_with_atu(dial_hz: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        mock_rigctld_with_atu_answering(dial_hz, "RPRT 0\n")
+    }
+
+    /// The same stub, with the answer to the TUNE-UP itself under the test's control: a radio
+    /// that refuses `U TUNER 2` answers `RPRT -1`, and the operator's QSO must survive it (R4).
+    fn mock_rigctld_with_atu_answering(
+        dial_hz: u64,
+        tune_reply: &'static str,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -21177,6 +21193,8 @@ mod tests {
                         dial.as_str()
                     } else if l == "u TUNER" {
                         "1\n"
+                    } else if l == "U TUNER 2" {
+                        tune_reply
                     } else {
                         "RPRT 0\n"
                     };
@@ -21357,6 +21375,49 @@ mod tests {
         // CONTROL: an unkey IS logged in exactly that spelling, so the absence above is real.
         rig.ptt(false).unwrap();
         assert!(log.lock().unwrap().iter().any(|l| l == "T 0"));
+    }
+
+    /// ⭐ R4 (operator review, 2026-09-19) — AN ATU PRESS THE RADIO REFUSES LEAVES THE QSO ALONE.
+    /// The stand-down used to happen when the loop DRAINED the press, so a refused `U TUNER 2`
+    /// — which is never re-queued — cost an operator mid-QSO their TX and their sequencer with
+    /// nothing tuned. Operator ruling: only a tune-up the radio accepts ends the QSO.
+    ///
+    /// The other way a press never becomes a tune-up is this block's own `may_key()` (a deferred
+    /// radio handoff, the Test-CAT port hold), where nothing reaches the wire at all. That half
+    /// is pinned in the engine, by `an_atu_press_that_never_tunes_leaves_the_qso_alone`: draining
+    /// the press stands nothing down, and only `note_atu_tune_started` does.
+    #[test]
+    fn an_atu_press_the_radio_refuses_leaves_transmit_armed() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_frequency(14.074, "20m", "USB");
+            e.set_tx_enabled(true);
+            assert!(
+                e.settings().operating_mode == tempo_app::settings::OperatingMode::Digital
+                    && e.tx_enabled()
+                    && e.tx_allowed(),
+                "scene guard: the Digital section, armed + legal"
+            );
+        }
+        let (addr, log) = mock_rigctld_with_atu_answering(14_074_000, "RPRT -1\n");
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+
+        engine.lock().unwrap().atu_tune().expect("the gate passes");
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "U TUNER 2"),
+            "control: the press did reach the radio — saw {:?}",
+            log.lock().unwrap()
+        );
+        assert!(
+            engine.lock().unwrap().tx_enabled(),
+            "the radio refused it, so nothing tuned and the QSO stays armed"
+        );
     }
 
     /// An engine parked on the 2 m SSTV calling channel in FM — the tester's exact setup

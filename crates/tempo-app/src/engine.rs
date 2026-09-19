@@ -8567,33 +8567,39 @@ impl Engine {
     ///    and still a transmission nobody asked for at that moment. An ATU tune-up is a
     ///    here-and-now act, not a standing order to key later.
     ///
-    /// In the Digital section a tune-up that fires also stands transmit down, as a Tune release
-    /// does (#322) — so the latch is DOWN when this returns `true` there.
+    /// The stand-down belongs to [`Self::note_atu_tune_started`], not here: draining a press is
+    /// not a tune-up (#322 / review R4).
     pub fn take_atu_tune(&mut self) -> bool {
-        self.take_atu_tune_with_reset(modes::reset_ft8_a7)
-    }
-
-    fn take_atu_tune_with_reset(&mut self, reset: impl FnOnce()) -> bool {
         let Some(at) = self.pending_atu_tune.take() else {
             return false;
         };
-        let fire = now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
-            && self.atu_tune_gate().is_ok();
-        // ⭐ #322 — IN THE DIGITAL SECTION THE RIG'S TUNE-UP ENDS LIKE A TUNE (operator ruling,
-        // 2026-09-19): the sequencer is disarmed and the a7 table dropped, exactly as a Tune
-        // release does in `set_tune_with_reset`. The FTdx10 report on 1.13.0: TX On, then ATU,
-        // and Nexus called the station of the last incomplete QSO.
-        //
-        // AT THE COMMAND, because the tune-up is one rig command whose end Nexus never sees.
-        // And AFTER the gate above, never at the press: the stand-down drops the TX latch, and
-        // the gate refuses a tune-up with the latch down, so a stand-down at the press would
-        // have stopped the ATU ever running in this section. Other sections are untouched, for
-        // the reasons given at the Tune release.
-        if fire && self.settings.operating_mode == crate::settings::OperatingMode::Digital {
-            self.halt_tx_for_context_change("ATU tune-up");
-            reset();
+        now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
+            && self.atu_tune_gate().is_ok()
+    }
+
+    /// ⭐ #322 — THE RADIO TOOK THE TUNE-UP, so in the Digital section the sequencer stands down
+    /// and the a7 table goes, exactly as a Tune release does in `set_tune_with_reset`. The FTdx10
+    /// report on 1.13.0: TX On, then ATU, and Nexus called the station of the last incomplete QSO.
+    ///
+    /// ⚠️ ONLY ON A REAL TUNE (operator ruling, 2026-09-19, after the review found the other
+    /// half): "TX drops and the QSO clears only after the tune-up command actually goes to the
+    /// radio and it accepts it. A press that can't tune leaves your QSO alone." So the radio loop
+    /// calls this AFTER its own `may_key()` and an Ok from the rig — [`Self::take_atu_tune`]
+    /// draining the press is not enough, because the loop still drops a tune-up it cannot send
+    /// and the rig can refuse the one it does, and neither is re-queued.
+    ///
+    /// Still at the command rather than at its end: the tune-up is one rig command whose end
+    /// Nexus never sees. Other sections are untouched, for the reasons given at the Tune release.
+    pub fn note_atu_tune_started(&mut self) {
+        self.note_atu_tune_started_with_reset(modes::reset_ft8_a7);
+    }
+
+    fn note_atu_tune_started_with_reset(&mut self, reset: impl FnOnce()) {
+        if self.settings.operating_mode != crate::settings::OperatingMode::Digital {
+            return;
         }
-        fire
+        self.halt_tx_for_context_change("ATU tune-up");
+        reset();
     }
 
     /// Adopt the rig's RX passband width (Hz) from the poll. `None` (a split `m` read) keeps the
@@ -44999,8 +45005,9 @@ mod tests {
 
         e.atu_tune()
             .expect("an armed, idle rig with a tuner may run it");
-        // The gate at the wire runs BEFORE the stand-down, so the tune-up still goes out.
+        // The loop drains the press, sends it, and tells the engine the radio took it.
         assert!(e.take_atu_tune(), "the tune-up must still reach the radio");
+        e.note_atu_tune_started();
         assert!(
             !e.tx_enabled(),
             "an ATU tune-up must disarm the sequencer, as a Tune release does"
@@ -45035,12 +45042,47 @@ mod tests {
             e.atu_tune()
                 .unwrap_or_else(|why| panic!("{mode:?}: precondition — ATU accepted: {why}"));
             assert!(
-                e.take_atu_tune_with_reset(|| hits.set(hits.get() + 1)),
+                e.take_atu_tune(),
                 "{mode:?}: the tune-up must still reach the radio"
             );
+            e.note_atu_tune_started_with_reset(|| hits.set(hits.get() + 1));
             assert_eq!(e.tx_enabled(), keeps_tx, "{mode:?}: arm state after ATU");
             assert_eq!(hits.get(), resets, "{mode:?}: a7 table resets");
         }
+    }
+
+    /// ⭐ R4 (operator review, 2026-09-19) — A PRESS IS NOT A TUNE-UP. The stand-down used to
+    /// fire when the loop DRAINED the press, but the loop still drops a tune-up it cannot send
+    /// (a radio handoff in flight, the Test-CAT hold) and the rig can refuse the one it does,
+    /// and neither is re-queued: the QSO ended with nothing tuned. Operator ruling: "TX drops
+    /// and the QSO clears only after the tune-up command actually goes to the radio and it
+    /// accepts it. A press that can't tune leaves your QSO alone."
+    #[test]
+    fn an_atu_press_that_never_tunes_leaves_the_qso_alone() {
+        use std::cell::Cell;
+        let hits = Cell::new(0u32);
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tx_enabled(true);
+        e.observe_rig_tuner(Some(true));
+        e.atu_tune().expect("an armed, idle rig with a tuner");
+
+        assert!(
+            e.take_atu_tune(),
+            "the press is drained for the loop to send"
+        );
+        assert!(
+            e.tx_enabled(),
+            "a press the loop cannot send, or the rig refuses, must leave the QSO alone"
+        );
+        assert_eq!(hits.get(), 0, "and the a7 table with it");
+
+        // …and the radio taking it is what ends the QSO.
+        e.note_atu_tune_started_with_reset(|| hits.set(hits.get() + 1));
+        assert!(
+            !e.tx_enabled(),
+            "an accepted tune-up stands the sequencer down"
+        );
+        assert_eq!(hits.get(), 1, "…and drops the a7 table");
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════
