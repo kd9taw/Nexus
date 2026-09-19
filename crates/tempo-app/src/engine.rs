@@ -25822,6 +25822,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Companion mode imports one ADIF record per contact WSJT-X logs (`LoggedAdif`, in the
+    /// radio loop, under the engine lock), and that import must stay an APPEND. It was a
+    /// rewrite every time: the country backfill after it took a mutable borrow of the whole
+    /// log and filled the new row's COUNTRY in place (WSJT-X writes none) — a full reload for
+    /// every log view, and a whole-log save of log.adi, per contact.
+    #[test]
+    fn a_companion_import_of_one_contact_is_an_append() {
+        use tempo_core::logbook::adif_record;
+        let dir =
+            std::env::temp_dir().join(format!("nexus-companion-append-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.adi");
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_log_path(path.clone());
+        // Places every call by its first two letters — except a call starting with Q, which
+        // leaves a row the backfill looks at on every import and can never fill.
+        e.set_dxcc_resolver(|call| (!call.starts_with('Q')).then(|| call[..2].to_string()));
+        e.log_qso(qrec("W1AAA", "20m"));
+        e.log_qso(qrec("Q0QQQ", "20m"));
+        assert_eq!(
+            e.log_records()[1].country,
+            None,
+            "fixture: an unplaceable row"
+        );
+        // Steady state first: the first check of the shared file after a load can re-read it
+        // once (a load records no fingerprint, so an unaccountable file is never trusted).
+        e.sync_shared_log_if_changed();
+
+        let mut wsjtx = qrec("DL1ABC", "20m");
+        wsjtx.when_unix = 60;
+        let text = adif_record(&wsjtx);
+        assert!(
+            !text.contains("COUNTRY"),
+            "fixture: WSJT-X writes no COUNTRY"
+        );
+        let before = e.log_revision();
+        e.import_adif(&text);
+        assert!(
+            e.log_appended_only_since(before),
+            "one imported contact is an append"
+        );
+        assert_eq!(e.log_records().len(), 3);
+        assert_eq!(
+            e.log_records()[2].country.as_deref(),
+            Some("DL"),
+            "…and it arrives with its country"
+        );
+        assert_eq!(
+            Logbook::load(&path).records()[2].country.as_deref(),
+            Some("DL"),
+            "…in the file as well as in memory"
+        );
+
+        // WSJT-X sends the same contact again: nothing changes, so nothing moves.
+        let settled = e.log_revision();
+        e.import_adif(&text);
+        assert_eq!(
+            e.log_revision(),
+            settled,
+            "a re-sent contact is not a write"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn ft8_tx_requires_callsign_and_grid() {
         // The reported bug: a standard FT8 message must NEVER go on the air without the

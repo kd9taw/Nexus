@@ -197,6 +197,10 @@ pub struct StationCore {
     /// QSO. Drives the Spots panel's "worked within this window". Rebuilt with the rest of
     /// this index, so an edit, a delete or another instance's append moves it too.
     pub(crate) last_worked: HashMap<String, u64>,
+    /// The log revision and row count the index above was last built at, so a log that only
+    /// grew since is extended rather than rebuilt (see [`Self::refresh_worked_index`]). `None`
+    /// forces a rebuild.
+    pub(crate) worked_index_at: Option<(u64, usize)>,
     /// Park references the operator imported from their POTA "Hunted Parks.CSV"
     /// (uppercased). Unioned into `park_worked` so hunts made on CW — where the
     /// park ref is never in the exchange, so the log can't know it — still count
@@ -262,6 +266,7 @@ impl StationCore {
             worked_grids: HashSet::new(),
             worked_parks: HashSet::new(),
             last_worked: HashMap::new(),
+            worked_index_at: None,
             hunted_parks_import: HashSet::new(),
             pending_hunt: None,
             session_salt: now_unix_secs() as u32,
@@ -320,6 +325,8 @@ impl StationCore {
     ) {
         self.dxcc_resolve = Some(Box::new(resolve));
         self.backfill_country();
+        // Every row's entity comes from the resolver, so a new one rebuilds the index.
+        self.worked_index_at = None;
         self.refresh_worked_index();
     }
 
@@ -357,17 +364,21 @@ impl StationCore {
         // instance appended BEFORE the full-log rewrite below, or this silently drops them
         // (the M18 data-loss class). Doing it first also backfills the recovered records.
         self.recover_external_appends();
-        let mut changed = false;
-        for r in self.logbook.records_mut() {
-            if r.state.is_none() {
-                if let Some(st) = resolve(&r.call, r.grid.as_deref()) {
-                    r.state = Some(st);
-                    changed = true;
-                }
-            }
-        }
+        // Resolved first, written only if something resolved — see `backfill_country`.
+        let fills: Vec<(usize, String)> = self
+            .logbook
+            .records()
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.state.is_none())
+            .filter_map(|(i, r)| resolve(&r.call, r.grid.as_deref()).map(|st| (i, st)))
+            .collect();
         self.state_resolve = Some(resolve);
-        if changed {
+        if !fills.is_empty() {
+            let records = self.logbook.records_mut();
+            for (i, st) in fills {
+                records[i].state = Some(st);
+            }
             self.save_log("backfill_state");
         }
     }
@@ -421,17 +432,25 @@ impl StationCore {
         // rewrite below, so backfill can't silently drop them (the M18 data-loss
         // class). Doing it before the loop also backfills the recovered records.
         self.recover_external_appends();
-        let mut changed = false;
-        for r in self.logbook.records_mut() {
-            if r.country.is_none() {
-                if let Some(c) = resolve(&r.call) {
-                    r.country = Some(c);
-                    changed = true;
-                }
-            }
-        }
+        // Resolved first, written only if something resolved. A mutable borrow of the records
+        // marks the log REWRITTEN (`Logbook::revision`), which sends every log view a full
+        // reload, and this runs after every import — in companion mode, once per contact
+        // WSJT-X logs — where it usually has nothing to fill. A row the resolver cannot place
+        // stays empty and is looked up again next time, as before.
+        let fills: Vec<(usize, String)> = self
+            .logbook
+            .records()
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.country.is_none())
+            .filter_map(|(i, r)| resolve(&r.call).map(|c| (i, c)))
+            .collect();
         self.dxcc_resolve = Some(resolve);
-        if changed {
+        if !fills.is_empty() {
+            let records = self.logbook.records_mut();
+            for (i, c) in fills {
+                records[i].country = Some(c);
+            }
             self.save_log("backfill_country");
         }
     }
@@ -576,15 +595,32 @@ impl StationCore {
         sweep
     }
 
-    /// Recompute the worked-entity and worked-grid sets from the logbook. Cheap
-    /// (a few hundred records); run on log load and after each log mutation.
+    /// Recompute the worked-entity and worked-grid sets from the logbook; run on log load and
+    /// after each log mutation.
+    ///
+    /// When the log only GREW since the last run — a logged contact, the common case, once per
+    /// QSO and under the engine lock — only the new rows are indexed. Every set here is a union
+    /// over the records and `last_worked` a maximum, so the old index plus the appended rows IS
+    /// the rebuild, without a pass over the whole log and a DXCC lookup per row on every
+    /// contact. Anything else — an edit, delete, merge, reload or a new resolver — rebuilds.
     pub(crate) fn refresh_worked_index(&mut self) {
-        self.worked_grids.clear();
-        self.worked_entities.clear();
-        self.confirmed_entities.clear();
-        self.worked_parks.clear();
-        self.last_worked.clear();
-        for r in self.logbook.records() {
+        let from = match self.worked_index_at {
+            Some((revision, rows))
+                if self.logbook.appended_only_since(revision) && rows <= self.logbook.len() =>
+            {
+                rows
+            }
+            _ => {
+                self.worked_grids.clear();
+                self.worked_entities.clear();
+                self.confirmed_entities.clear();
+                self.worked_parks.clear();
+                self.last_worked.clear();
+                0
+            }
+        };
+        self.worked_index_at = Some((self.logbook.revision(), self.logbook.len()));
+        for r in &self.logbook.records()[from..] {
             // Any band, any mode: "worked recently" is about the station, not an award slot.
             let base = tempo_core::message::base_call(&r.call);
             if !base.is_empty() {
@@ -1222,9 +1258,20 @@ impl StationCore {
     /// and the merge — looking at a log that does not contain it yet — reads the same
     /// row as a brand-new contact and logs it a second time. So the late order costs
     /// a duplicate and a lost confirmation even though it saves the file.
+    ///
+    /// A new row's COUNTRY is resolved BEFORE it joins the log, so it is appended complete.
+    /// Companion mode imports one record per contact WSJT-X logs, and WSJT-X writes no
+    /// COUNTRY: filled afterwards by the backfill, every such contact was an in-place write —
+    /// a rewrite of the log's revision (a full reload for every log view) and a whole-log
+    /// `save` of log.adi, fsync included, per contact.
     pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
         self.recover_external_appends();
-        let (added, skipped, merged) = self.logbook.import_adif(text);
+        let resolve = self.dxcc_resolve.as_ref();
+        let (added, skipped, merged) = self.logbook.import_adif_with(text, |r| {
+            if r.country.is_none() {
+                r.country = resolve.and_then(|resolve| resolve(&r.call));
+            }
+        });
         if merged > 0 {
             self.save_log("import_adif"); // rewrites the whole log, `added` included
         } else {
@@ -1678,6 +1725,93 @@ mod grid_tests {
             extra: Vec::new(),
             contest: None,
         }
+    }
+
+    /// The worked index is EXTENDED, not rebuilt, when the log only grew: one DXCC lookup per
+    /// logged contact instead of one per row of the whole log, under the engine lock, on every
+    /// contact. The extended index must equal a rebuild from scratch, and anything but an
+    /// append must still rebuild — or a NEW DXCC / NEW GRID / NEW PARK badge lies.
+    #[test]
+    fn an_appended_contact_extends_the_worked_index_to_exactly_a_rebuild() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        fn counting(
+            lookups: Arc<AtomicUsize>,
+        ) -> impl Fn(&str) -> Option<String> + Send + Sync + 'static {
+            move |call| {
+                lookups.fetch_add(1, Ordering::Relaxed);
+                call.get(..2).map(str::to_string)
+            }
+        }
+        type Index = (
+            HashSet<(String, String)>,
+            HashSet<(String, String)>,
+            HashSet<(String, String)>,
+            HashSet<String>,
+            HashMap<String, u64>,
+        );
+        fn index(sc: &StationCore) -> Index {
+            (
+                sc.worked_grids.clone(),
+                sc.worked_entities.clone(),
+                sc.confirmed_entities.clone(),
+                sc.worked_parks.clone(),
+                sc.last_worked.clone(),
+            )
+        }
+        fn rebuilt(sc: &StationCore) -> Index {
+            let mut fresh = StationCore::new();
+            fresh.set_dxcc_resolver(counting(Arc::new(AtomicUsize::new(0))));
+            for r in sc.logbook.records() {
+                fresh.logbook.add(r.clone());
+            }
+            fresh.refresh_worked_index();
+            index(&fresh)
+        }
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let mut sc = StationCore::new();
+        sc.set_dxcc_resolver(counting(lookups.clone()));
+
+        let mut confirmed = rec("DL1ABC", "20m", "JO31");
+        confirmed.award_confirmed = true;
+        let mut park = rec("K1ABC", "40m", "FN42");
+        park.ota.their_ref = Some("US-0001".into());
+        park.when_unix += 60;
+        let rows = [
+            rec("W1AW", "20m", "FN31PR"),
+            confirmed,
+            park,
+            rec("W1AW", "40m", "FN31"),
+        ];
+        for (i, r) in rows.into_iter().enumerate() {
+            let before = lookups.load(Ordering::Relaxed);
+            sc.logbook.add(r);
+            sc.refresh_worked_index();
+            assert_eq!(
+                lookups.load(Ordering::Relaxed) - before,
+                1,
+                "row {i}: one lookup for one appended row"
+            );
+            assert_eq!(
+                index(&sc),
+                rebuilt(&sc),
+                "row {i}: the extended index IS the rebuild"
+            );
+        }
+
+        // A rewrite rebuilds: a deleted row's slots leave the index.
+        assert!(sc.logbook.delete(1));
+        let before = lookups.load(Ordering::Relaxed);
+        sc.refresh_worked_index();
+        assert_eq!(
+            lookups.load(Ordering::Relaxed) - before,
+            3,
+            "a delete re-indexes every row"
+        );
+        assert_eq!(index(&sc), rebuilt(&sc));
+        assert!(
+            sc.confirmed_entities.is_empty(),
+            "the deleted row was the only confirmation"
+        );
     }
 
     #[test]
