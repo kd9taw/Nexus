@@ -1,3 +1,5 @@
+import { afterEach } from 'vitest'
+
 /** Vitest setup — runs before every test file.
  *
  * WHY THIS EXISTS. Node 25 ships a built-in `localStorage` global. It is only functional
@@ -96,3 +98,18 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
     })
   }
 }
+
+/** MODULE CACHES DO NOT OUTLIVE A TEST. A module that holds state across renders
+ *  (features/logStore — the window's one copy of the log) registers its reset in this set
+ *  when it loads, and every test ends by running them. Without it, the log one test loaded
+ *  answers the next test's first read, and whether a test sees its own fixture depends on
+ *  which test ran before it.
+ *
+ *  The module announces itself because this file cannot import it: Vitest does not mock a
+ *  module a setup file has already imported, so the store would keep the REAL api module
+ *  under every test file's `vi.mock`. */
+const moduleResets = new Set<() => void>()
+;(globalThis as { __nexusTestResets?: Set<() => void> }).__nexusTestResets = moduleResets
+afterEach(() => {
+  for (const reset of moduleResets) reset()
+})
