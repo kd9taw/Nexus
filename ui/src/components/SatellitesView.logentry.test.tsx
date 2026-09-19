@@ -484,7 +484,7 @@ describe('Satellites — logging the contact you just made', () => {
     expect(rec.satName ?? null).toBeNull()
   })
 
-  it('says plainly, in the section, that the contact is not tagged as a satellite QSO', async () => {
+  it('says plainly, in the section, when a contact is tagged as a satellite QSO — and when it is not', async () => {
     // Operator-facing honesty: nobody should wait months for LoTW satellite
     // credit that was never requested. If this line goes, the panel starts
     // lying by omission.
@@ -492,7 +492,13 @@ describe('Satellites — logging the contact you just made', () => {
     await screen.findByPlaceholderText('Call')
     const note = document.querySelector('.sats-log-note')!
     expect(note, 'the honesty line is gone').not.toBeNull()
-    expect(note.textContent).toMatch(/not.*tagged as a satellite QSO/i)
+    // 1.14.0: Nexus TAGS a contact on the downlink of a satellite LoTW lists, including after
+    // the bird sets. The note used to say it never tagged at all — false since 2026-08-10.
+    // It must also still say when a contact is NOT tagged (a bird LoTW does not list — RS-44,
+    // the one rendered here, is exactly that case — or a contact off the downlink).
+    expect(note.textContent).toMatch(/tags it for you/i)
+    expect(note.textContent).toMatch(/downlink of a satellite LoTW lists/i)
+    expect(note.textContent).toMatch(/ordinary contact/i)
     expect(note.textContent).toMatch(/PROP_MODE/)
     expect(note.textContent).toMatch(/SAT_NAME/)
     // AND that the cost is not only an upload one. Nexus decides "satellite
