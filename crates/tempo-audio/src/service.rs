@@ -21314,6 +21314,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_digital_section_tune_up_still_reaches_the_wire_and_nothing_unkeys_it() {
+        // #322: in the Digital section the tune-up stands transmit down as it goes out, as a
+        // Tune release does. That must not cost the tune-up itself: `U TUNER 2` still reaches
+        // the radio, and no unkey follows it onto the wire while the rig runs its own carrier.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_frequency(14.074, "20m", "USB");
+            e.set_tx_enabled(true);
+            assert!(
+                e.settings().operating_mode == tempo_app::settings::OperatingMode::Digital
+                    && e.tx_enabled()
+                    && e.tx_allowed(),
+                "scene guard: the Digital section, armed + legal"
+            );
+        }
+        let (addr, log) = mock_rigctld_with_atu(14_074_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+
+        engine.lock().unwrap().atu_tune().expect("the gate passes");
+        run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+        let sent = log.lock().unwrap().clone();
+        let at = sent
+            .iter()
+            .position(|l| l == "U TUNER 2")
+            .unwrap_or_else(|| panic!("the tune-up must reach the radio — saw {sent:?}"));
+        assert!(
+            !sent[at..].iter().any(|l| l == "T 0"),
+            "nothing may unkey the rig while its tune-up runs — saw {:?}",
+            &sent[at..]
+        );
+        assert!(
+            !engine.lock().unwrap().tx_enabled(),
+            "…and the sequencer is disarmed"
+        );
+
+        // CONTROL: an unkey IS logged in exactly that spelling, so the absence above is real.
+        rig.ptt(false).unwrap();
+        assert!(log.lock().unwrap().iter().any(|l| l == "T 0"));
+    }
+
     /// An engine parked on the 2 m SSTV calling channel in FM — the tester's exact setup
     /// (`sstv_tune` is what the channel pick calls). NO image queued: the send is a separate
     /// operator act in both tests below, made AFTER a settling tick, because that is the real
