@@ -221,7 +221,8 @@ recognises a satellite QSO by two ADIF fields:
   `AO7`).
 
 **Nexus writes both, automatically, when the contact was really through the
-bird.** Log a QSO while a transponder is held **and the record's frequency
+bird.** Log a QSO while a transponder is held — or after the bird sets, until you
+pick another transponder or restart Nexus — **and the record's frequency
 sits in that bird's downlink passband** — half the passband width either side
 of centre, plus 20 kHz for residual Doppler and FM fine-tuning — and the
 record gets `PROP_MODE=SAT` plus the LoTW-spelled designator (`SO-50`, parsed
@@ -238,11 +239,11 @@ It is the same stamp wherever the contact is logged from, because every log
 path in Nexus runs through one writer. Working a bird on the mic from the
 Phone cockpit with the transponder held gets the same pair.
 
-**The one bird that stays untagged: the ISS.** Its catalog name (`ISS
-(ZARYA)`) carries no designator Nexus can safely derive, and a `SAT_NAME` LoTW
-does not recognise gets the whole record rejected — so ISS contacts are logged
-untagged, and if you want credit for one, add both fields yourself before you
-sign.
+**The ISS is tagged as `ARISS`**, the name LoTW lists it under. Its catalog name
+(`ISS (ZARYA)`) carries no designator, so Nexus carries LoTW's spelling for it as a
+known fact rather than deriving one. A bird whose name LoTW does not list is still
+logged untagged — a `SAT_NAME` LoTW does not recognise gets the whole record
+rejected at signing.
 
 ⚠️ **The note printed under the log strip in 1.10.3 is out of date.** It still
 reads "Nexus does not write the ADIF PROP_MODE and SAT_NAME fields yet" and

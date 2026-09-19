@@ -2328,6 +2328,12 @@ pub struct Engine {
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
     sat_tune: Option<SatTune>,
+    /// The last bird whose transponder was HELD — kept through the LOS handback, the operator's
+    /// "None" and a track stop, so a contact written up after the bird sets still earns its
+    /// satellite tag (`log_qso`'s PROP_MODE/SAT_NAME stamp falls back to it). One slot, replaced
+    /// by the next pick, never persisted. The stamp still demands the logged frequency sit in
+    /// THIS bird's downlink passband and a name LoTW accepts, so it cannot tag an ordinary QSO.
+    sat_last_worked: Option<SatTune>,
     /// Set while a satellite pass OWNS the dial: `(satellite|transponder,
     /// operator passband offset Hz)`. Its presence is what tells the TX gate to
     /// judge tuning IDENTITY rather than the dial number — see [`TxGateStamp`].
@@ -4419,6 +4425,7 @@ impl Engine {
             remote_selection_host_ready: false,
             remote_transmit: None,
             sat_tune: None,
+            sat_last_worked: None,
             sat_dial_owner: None,
             sat_last_rate: None,
             sat_binding: None,
@@ -10022,7 +10029,9 @@ impl Engine {
         // docs/guide/satellites.md and the CHANGELOG no longer tell the operator to edit
         // ADIF by hand; the Sat VUCC card's caveat line is gone with them.
         if rec.prop_mode.is_none() && rec.sat_name.is_none() {
-            if let Some(st) = &self.sat_tune {
+            // A HELD transponder first; after LOS/"None"/a track stop, the bird last worked —
+            // the guide's promise that you can log once your hands are free.
+            if let Some(st) = self.sat_tune.as_ref().or(self.sat_last_worked.as_ref()) {
                 if let Some(name) = Self::lotw_sat_name(&st.label) {
                     let f_hz = if rec.freq_mhz > 0.0 {
                         (rec.freq_mhz * 1e6) as i64
@@ -12428,6 +12437,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     state: tempo_core::doppler::DopplerState::default(),
                     sent: tempo_core::doppler::SentTuning::default(),
                 });
+                // Remembered past this hold's release — see `sat_last_worked`.
+                self.sat_last_worked = self.sat_tune.clone();
                 if self.sat_pass_engaged {
                     self.sat_row_pin = Some((index, t));
                 }
@@ -40250,6 +40261,73 @@ mod tests {
         let r = &e.get_log()[1];
         assert_eq!(r.sat_name.as_deref(), Some("SO-50"));
         assert_eq!(r.prop_mode.as_deref(), Some("SAT"));
+    }
+
+    /// A satellite contact written up AFTER the bird sets keeps its tag. The stamp read only the
+    /// LIVE hold, and `set_sat_transponder(None)` — the LOS handback, the operator's "None" and a
+    /// track stop all reach it — cleared that hold, so a contact logged once your hands were free
+    /// got no PROP_MODE/SAT_NAME: no LoTW satellite credit, and a 2 m contact counted toward
+    /// terrestrial VUCC instead. docs/guide/satellites.md promised the opposite. No test logged
+    /// after a release (seven logged with the hold live), which is how it survived.
+    #[test]
+    fn a_satellite_contact_logged_after_the_bird_sets_keeps_its_tag() {
+        use tempo_core::doppler::Transponder;
+        let so50 = || {
+            (
+                "SAUDISAT 1C (SO-50)|FM Voice Repeater".to_string(),
+                0,
+                Transponder::channel(145_850_000, 436_795_000),
+            )
+        };
+        // 1. The fix: hold SO-50, the bird sets, THEN log on its downlink.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_sat_transponder(Some(so50()));
+        e.set_sat_transponder(None);
+        let mut after = qrec("W1AW", "70cm");
+        after.freq_mhz = 436.795;
+        e.log_qso(after);
+        assert_eq!(e.get_log()[0].prop_mode.as_deref(), Some("SAT"), "logged after LOS: no satellite tag");
+        assert_eq!(e.get_log()[0].sat_name.as_deref(), Some("SO-50"));
+
+        // 2. GUARD — the passband still decides: an HF contact after LOS stays ordinary.
+        e.log_qso(qrec("K1ABC", "20m"));
+        assert_eq!(e.get_log()[1].prop_mode, None, "a remembered bird tagged a 20 m contact");
+        assert_eq!(e.get_log()[1].sat_name, None);
+
+        // 3. GUARD — the next pick REPLACES the memory: after AO-91, SO-50's downlink is untagged.
+        let mut e2 = Engine::new("KD9TAW", "EN52", 0);
+        e2.set_sat_transponder(Some(so50()));
+        e2.set_sat_transponder(Some((
+            "AO-91|FM".into(),
+            0,
+            Transponder::channel(435_250_000, 145_960_000),
+        )));
+        e2.set_sat_transponder(None);
+        let mut on_so50 = qrec("W1AW", "70cm");
+        on_so50.freq_mhz = 436.795;
+        e2.log_qso(on_so50);
+        assert_eq!(e2.get_log()[0].prop_mode, None, "a REPLACED bird still tagged a contact");
+
+        // 4. GUARD — nothing ever held, nothing tagged.
+        let mut e3 = Engine::new("KD9TAW", "EN52", 0);
+        let mut cold = qrec("W1AW", "70cm");
+        cold.freq_mhz = 436.795;
+        e3.log_qso(cold);
+        assert_eq!(e3.get_log()[0].prop_mode, None, "a fresh engine tagged a contact");
+
+        // 5. GUARD — a bird LoTW refuses stays refused after LOS: never a lone PROP_MODE.
+        let mut e4 = Engine::new("KD9TAW", "EN52", 0);
+        e4.set_sat_transponder(Some((
+            "CUBY-1|linear".into(),
+            0,
+            Transponder::channel(145_990_000, 437_800_000),
+        )));
+        e4.set_sat_transponder(None);
+        let mut cuby = qrec("N0CALL", "70cm");
+        cuby.freq_mhz = 437.800;
+        e4.log_qso(cuby);
+        assert_eq!(e4.get_log()[0].prop_mode, None);
+        assert_eq!(e4.get_log()[0].sat_name, None);
     }
 
     #[test]

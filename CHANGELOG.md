@@ -156,6 +156,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A satellite contact you log after the bird sets now keeps its satellite tag.** The guide says you
+  can log a contact once your hands are free, but a contact logged after the pass ended — or after
+  choosing "None" or stopping the track — lost `PROP_MODE` and `SAT_NAME`, so it earned no LoTW
+  satellite credit and a 2 m contact counted toward terrestrial VUCC instead. Nexus now remembers the
+  last satellite you worked until you pick another transponder or restart, and still tags a contact
+  only when its frequency is on that satellite's downlink, so an ordinary contact is never tagged.
+
 - **Icom: a refused scope span now tells you why, instead of guessing.** When an Icom refused a
   span change, Nexus always said the scope was in Fixed mode and told you to switch it to Center —
   even when it was already in Center, so you were sent to check a setting that was already right.
