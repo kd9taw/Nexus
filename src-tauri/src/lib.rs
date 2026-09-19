@@ -14085,23 +14085,45 @@ fn log_current_qso(state: State<'_, SharedEngine>) -> Result<LogQsoOutcome, Stri
     })
 }
 
-/// Confirm-and-log a QSO held by the prompt-to-log popup. `record` is the
-/// (possibly edited) contact. Returns the refreshed snapshot.
+/// What a confirm or discard is told when its key is not the held contact's — the popup is
+/// showing a contact that has already been logged, discarded, or overtaken by the queue.
+const PENDING_LOG_MOVED_ON: &str =
+    "this popup is showing a contact that is no longer the one waiting — nothing was logged";
+
+/// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
+/// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
+/// shown with. Returns the refreshed snapshot, whose `pendingLog` is the next held contact.
 #[tauri::command(async)]
 fn confirm_pending_log(
     state: State<'_, SharedEngine>,
     record: LoggedQso,
+    expected_key: Option<String>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.confirm_pending_log(record.into());
+    // No key is a refusal, not a free pass: a caller that cannot say WHICH contact it is
+    // confirming cannot be allowed to log one (review R2).
+    let key = expected_key.unwrap_or_default();
+    if !eng.confirm_pending_log(&key, record.into()) {
+        return Err(PENDING_LOG_MOVED_ON.into());
+    }
     Ok(eng.snapshot())
 }
 
-/// Discard a QSO held by the prompt-to-log popup without logging it.
+/// Discard the contact the prompt-to-log popup is showing without logging it. Same key rule.
 #[tauri::command(async)]
-fn discard_pending_log(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+fn discard_pending_log(
+    state: State<'_, SharedEngine>,
+    expected_key: Option<String>,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    eng.discard_pending_log();
+    let key = expected_key.unwrap_or_default();
+    if !eng.discard_pending_log(&key) {
+        return Err(
+            "this popup is showing a contact that is no longer the one waiting — nothing was \
+             discarded"
+                .into(),
+        );
+    }
     Ok(eng.snapshot())
 }
 

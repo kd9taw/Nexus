@@ -37,12 +37,35 @@ struct PendingRecord {
     freq_rx_mhz: Option<f64>,
 }
 
-pub(super) fn pending_qso_json(record: &QsoRecord) -> serde_json::Result<String> {
-    serde_json::to_string(&PendingRecord {
+fn pending_record(record: &QsoRecord) -> PendingRecord {
+    PendingRecord {
         record: record.clone().into(),
         time_off_unix: record.time_off_unix,
         freq_rx_mhz: record.freq_rx_mhz,
-    })
+    }
+}
+
+impl PendingRecord {
+    fn into_qso(self) -> QsoRecord {
+        let mut record: QsoRecord = self.record.into();
+        record.time_off_unix = self.time_off_unix;
+        record.freq_rx_mhz = self.freq_rx_mhz;
+        record
+    }
+}
+
+pub(super) fn pending_qso_json(record: &QsoRecord) -> serde_json::Result<String> {
+    serde_json::to_string(&pending_record(record))
+}
+
+/// The WHOLE confirm-before-log queue, oldest first — what the desktop journals on every hold
+/// change. A journal written by an older build holds one record and not an array;
+/// [`Engine::load_pending_qso_json`] reads both.
+pub(super) fn pending_qso_queue_json(
+    records: &std::collections::VecDeque<QsoRecord>,
+) -> serde_json::Result<String> {
+    let queue: Vec<PendingRecord> = records.iter().map(pending_record).collect();
+    serde_json::to_string(&queue)
 }
 
 /// An exact hold, including its incarnation. Replacing a hold with an identical
@@ -235,8 +258,17 @@ impl PendingLogConfirmation {
 }
 
 impl Engine {
+    /// Install `record` as the hold the popup is showing, or (with `None`) drop that hold and
+    /// promote whatever was waiting behind it. Either way the front's identity is fresh, so a
+    /// confirm or discard issued against the old front is refused.
     pub(super) fn replace_pending_log(&mut self, record: Option<QsoRecord>) {
-        self.pending_log = record;
+        match record {
+            Some(record) if self.pending_logs.is_empty() => self.pending_logs.push_back(record),
+            Some(record) => self.pending_logs[0] = record,
+            None => {
+                self.pending_logs.pop_front();
+            }
+        }
         self.pending_log_identity = Arc::new(());
         self.pending_log_epoch = next_identity();
     }
@@ -262,15 +294,14 @@ impl Engine {
     }
 
     pub fn pending_qso_log_key(&self) -> Option<String> {
-        self.pending_log
-            .as_ref()
+        self.pending_log()
             .and_then(|_| identity_key(self.pending_log_epoch))
     }
 
     pub fn pending_log_identity(&self) -> Option<PendingLogIdentity> {
         Some(PendingLogIdentity {
             identity: self.pending_log_identity.clone(),
-            record: Arc::new(self.pending_log.clone()?),
+            record: Arc::new(self.pending_log()?.clone()),
             path: self.station.pending_qso_path.clone(),
             epoch: self.pending_log_epoch,
         })
@@ -278,16 +309,18 @@ impl Engine {
 
     fn matches_pending_log(&self, pending: &PendingLogIdentity) -> bool {
         Arc::ptr_eq(&self.pending_log_identity, &pending.identity)
-            && self.pending_log.as_ref() == Some(pending.record())
+            && self.pending_log() == Some(pending.record())
             && self.station.pending_qso_path == pending.path
     }
 
+    /// Restore the journal: this build's queue, or the single record older builds wrote.
     pub fn load_pending_qso_json(&mut self, text: &str) {
-        if let Ok(pending) = serde_json::from_str::<PendingRecord>(text) {
-            let mut record: QsoRecord = pending.record.into();
-            record.time_off_unix = pending.time_off_unix;
-            record.freq_rx_mhz = pending.freq_rx_mhz;
-            self.load_pending_qso(record);
+        if let Ok(queue) = serde_json::from_str::<Vec<PendingRecord>>(text) {
+            for pending in queue {
+                self.load_pending_qso(pending.into_qso());
+            }
+        } else if let Ok(pending) = serde_json::from_str::<PendingRecord>(text) {
+            self.load_pending_qso(pending.into_qso());
         }
     }
 
@@ -295,7 +328,7 @@ impl Engine {
     /// before calling. Eligibility and write-once behavior are shared with the
     /// local button. An existing confirmation is never replaced by this action.
     pub fn log_current_qso_for_sync(&mut self) -> CurrentQsoLogOutcome {
-        if self.pending_log.is_some() {
+        if self.pending_log().is_some() {
             return CurrentQsoLogOutcome::PendingExists;
         }
         let Some(record) = self.take_current_qso_record() else {
@@ -329,6 +362,13 @@ impl Engine {
                 .ok_or(LogFailure::PersistenceUnconfirmed)?,
         )
         .map_err(|_| LogFailure::PersistenceUnconfirmed)?;
+        // The temporary file holds the ONE contact this publication prepared, which was the
+        // whole queue when it started (`log_current_qso_for_sync` refuses while a hold exists).
+        // A local completion can have joined the queue since — the rename would then leave those
+        // out of the journal — so rewrite it from the live queue.
+        if self.pending_logs_waiting() > 0 {
+            self.persist_pending_qso();
+        }
         Ok(JournalSync {
             parent: prepared.parent.take(),
         })
@@ -541,7 +581,7 @@ mod tests {
         fixture.engine.pending_log_epoch = u64::MAX;
         assert!(fixture.engine.current_qso_log_key().is_none());
         assert!(fixture.engine.pending_qso_log_key().is_none());
-        assert!(fixture.engine.pending_log.is_some());
+        assert!(fixture.engine.pending_log().is_some());
     }
 
     #[test]
@@ -564,7 +604,7 @@ mod tests {
         let CurrentQsoLogOutcome::Pending(_) = fixture.engine.log_current_qso_for_sync() else {
             panic!("hold")
         };
-        let mut original = fixture.engine.pending_log.clone().unwrap();
+        let mut original = fixture.engine.pending_log().cloned().unwrap();
         original.freq_rx_mhz = Some(14.0755);
         original.time_off_unix = Some(1_700_000_123);
         original.ota.their_program = Some("POTA".into());
@@ -588,7 +628,7 @@ mod tests {
         let text = std::fs::read_to_string(fixture.dir.join("pending.json")).unwrap();
         let mut restored = Engine::new("K2DEF", "FN31", 0);
         restored.load_pending_qso_json(&text);
-        assert_eq!(restored.pending_log, Some(original.clone()));
+        assert_eq!(restored.pending_log(), Some(&original));
         let mut changed = edits(&identity);
         changed.grid = Some("EN38".into());
         changed.rst_rcvd = Some("-09".into());
@@ -597,8 +637,8 @@ mod tests {
             .confirm_pending_log_for_sync(identity.clone(), changed)
             .unwrap();
         assert_eq!(
-            fixture.engine.pending_log,
-            Some(original.clone()),
+            fixture.engine.pending_log(),
+            Some(&original),
             "hold stays until sync"
         );
         assert_eq!(
@@ -612,7 +652,7 @@ mod tests {
             .unwrap()
             .sync()
             .unwrap();
-        assert!(fixture.engine.pending_log.is_none());
+        assert!(fixture.engine.pending_log().is_none());
         assert!(!fixture.dir.join("pending.json").exists());
         let saved = &fixture.engine.station.logbook.records()[0];
         assert_eq!(saved.freq_rx_mhz, original.freq_rx_mhz);
@@ -691,7 +731,7 @@ mod tests {
             LogFailure::StalePending
         );
         assert!(fixture.dir.join("pending.json").exists());
-        assert!(fixture.engine.pending_log.is_some());
+        assert!(fixture.engine.pending_log().is_some());
         let current = fixture.engine.pending_log_identity().unwrap();
         fixture
             .engine
@@ -700,7 +740,7 @@ mod tests {
             .sync()
             .unwrap();
         assert!(!fixture.dir.join("pending.json").exists());
-        assert!(fixture.engine.pending_log.is_none());
+        assert!(fixture.engine.pending_log().is_none());
     }
 
     #[test]
@@ -709,10 +749,11 @@ mod tests {
         let CurrentQsoLogOutcome::Pending(write) = fixture.engine.log_current_qso_for_sync() else {
             panic!("hold")
         };
-        let original = fixture.engine.pending_log.clone().unwrap();
+        let original = fixture.engine.pending_log().cloned().unwrap();
         let prepared = write.prepare().unwrap();
         let temporary = prepared.temporary.clone();
-        fixture.engine.discard_pending_log();
+        let key = fixture.engine.pending_qso_log_key().unwrap_or_default();
+        assert!(fixture.engine.discard_pending_log(&key));
         fixture.engine.load_pending_qso(original);
         fixture.engine.persist_pending_qso();
         let before = std::fs::read(fixture.dir.join("pending.json")).unwrap();
@@ -754,8 +795,8 @@ mod tests {
         let legacy = serde_json::to_string(&dto).unwrap();
         let mut restored = Engine::new("K2DEF", "FN31", 0);
         restored.load_pending_qso_json(&legacy);
-        assert_eq!(restored.pending_log.as_ref().unwrap().call, "W9XYZ");
-        assert_eq!(restored.pending_log.as_ref().unwrap().time_off_unix, None);
+        assert_eq!(restored.pending_log().unwrap().call, "W9XYZ");
+        assert_eq!(restored.pending_log().unwrap().time_off_unix, None);
         fixture.engine.load_pending_qso_json(&legacy);
         assert!(fixture.engine.matches_pending_log(&identity));
     }

@@ -176,7 +176,8 @@ fn replacing_a_hold_with_identical_fields_refuses_both_old_gestures() {
         let new_key = {
             let mut e = f.engine.lock().unwrap();
             let record = e.pending_log_identity().unwrap().record().clone();
-            e.discard_pending_log();
+            let key = e.pending_qso_log_key().unwrap_or_default();
+            assert!(e.discard_pending_log(&key));
             e.load_pending_qso(record);
             e.persist_pending_qso();
             e.pending_qso_log_key().unwrap()
@@ -221,7 +222,8 @@ fn confirmation_sync_releases_engine_and_never_clears_a_newer_hold() {
             .try_lock()
             .expect("disk wait must release the engine");
         let record = e.pending_log_identity().unwrap().record().clone();
-        e.discard_pending_log();
+        let key = e.pending_qso_log_key().unwrap_or_default();
+        assert!(e.discard_pending_log(&key));
         e.load_pending_qso(record);
         e.persist_pending_qso();
     }));

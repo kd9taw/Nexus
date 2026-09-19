@@ -957,6 +957,8 @@ impl AppState {
             harq_rescues: 0,
             // Filled by the engine when a QSO awaits confirm-before-log; None here.
             pending_log: None,
+            pending_qso_log_key: None,
+            pending_logs_waiting: 0,
             // Filled by the engine from its last connector-upload note; empty here.
             upload_note: None,
             upload_ok: false,

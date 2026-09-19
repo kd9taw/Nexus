@@ -1669,6 +1669,14 @@ pub fn upload_backoff_secs(attempts: u8) -> i64 {
 /// worker tick / 2 s), so a permanently-down service eventually stops retrying.
 pub const MAX_UPLOAD_RETRIES: u8 = 20;
 
+/// How many contacts the confirm-before-log queue holds (see `Engine::pending_logs`).
+///
+/// An FT8 contact takes about a minute, so 64 is about an hour of completions with nobody
+/// answering the popup — far past any real "I'll confirm these in a moment", and about 64 kB
+/// of held records. Past it the oldest WAITING contact is logged rather than dropped: the
+/// ruling is that no contact is lost.
+pub const PENDING_LOG_QUEUE_CAP: usize = 64;
+
 /// How many callbook names a session remembers for the log (#293) — a busy FT8 hour
 /// looks up a few dozen stations; the oldest answer is dropped first.
 const CALLBOOK_NAMES_CAP: usize = 64;
@@ -2119,10 +2127,20 @@ pub struct Engine {
     /// ONE more over (#170, #153) — see [`RecentPartner`] for the three bounds. Session-only,
     /// one deep, and dropped the moment it is spent or expires.
     recent_partner: Option<RecentPartner>,
-    /// A completed QSO held for the operator to confirm before it is logged
-    /// (WSJT-X "Prompt me to log QSO"). `Some` only while `prompt_to_log` is on
-    /// and a finished contact is awaiting confirm/discard.
-    pending_log: Option<QsoRecord>,
+    /// Completed QSOs held for the operator to confirm before they are logged (WSJT-X
+    /// "Prompt me to log QSO"), oldest first. Non-empty only while `prompt_to_log` is on.
+    ///
+    /// ⭐ A QUEUE, NOT A SLOT (operator ruling, 2026-09-19, from the review's R2). A contact
+    /// that finished while the popup was open used to REPLACE the held one: the popup kept the
+    /// first station's call and reports, the confirm logged them onto the second contact's date,
+    /// time, frequency and country, and the second contact was never logged. The FRONT is the
+    /// contact the popup is showing; a later completion waits behind it. Stock WSJT-X refuses
+    /// the second contact outright (`LogQSO::initLogQSO` returns while its dialog is open), which
+    /// loses it; the operator asked for it to be queued instead.
+    pending_logs: VecDeque<QsoRecord>,
+    /// The identity of the hold at the FRONT — a fresh `Arc` and epoch every time that
+    /// changes, so a confirm or discard for a hold that has moved on is refused rather than
+    /// applied to the contact now showing.
     pending_log_identity: std::sync::Arc<()>,
     pending_log_epoch: u64,
     qso_log_epoch: u64,
@@ -4365,7 +4383,7 @@ impl Engine {
             qso_report_sent: None,
             stalled_qso: None,
             recent_partner: None,
-            pending_log: None,
+            pending_logs: VecDeque::new(),
             pending_log_identity: std::sync::Arc::new(()),
             pending_log_epoch: 0,
             qso_log_epoch: remote_logging::next_identity(),
@@ -9029,11 +9047,13 @@ impl Engine {
         let Some(path) = &self.station.pending_qso_path else {
             return;
         };
-        let Some(rec) = &self.pending_log else {
+        if self.pending_logs.is_empty() {
             let _ = std::fs::remove_file(path);
             return;
-        };
-        let Ok(text) = remote_logging::pending_qso_json(rec) else {
+        }
+        // THE WHOLE QUEUE, not just the contact the popup is showing: everything waiting
+        // behind it is a finished contact too, and a crash must not take any of them.
+        let Ok(text) = remote_logging::pending_qso_queue_json(&self.pending_logs) else {
             return;
         };
         if let Some(dir) = path.parent() {
@@ -9053,12 +9073,51 @@ impl Engine {
 
     /// Restore a QSO left in the prompt-to-log popup by a previous session (crash, power
     /// loss, or a quit with the popup open) so the operator can still log it. Called by the
-    /// shell at startup AFTER [`Self::set_pending_qso_path`]. Ignored if a QSO is already
-    /// held — a live hold outranks a restored one.
+    /// shell at startup AFTER [`Self::set_pending_qso_path`], once per restored contact, in
+    /// the order they were held; each joins the back of the queue.
     pub fn load_pending_qso(&mut self, rec: QsoRecord) {
-        if self.pending_log.is_none() {
+        self.hold_pending_log(rec);
+    }
+
+    /// The contact the confirm-before-log popup is showing — the front of the queue.
+    pub(crate) fn pending_log(&self) -> Option<&QsoRecord> {
+        self.pending_logs.front()
+    }
+
+    /// How many contacts are waiting BEHIND the one the popup is showing.
+    pub(crate) fn pending_logs_waiting(&self) -> usize {
+        self.pending_logs.len().saturating_sub(1)
+    }
+
+    /// Hold a completed contact for the operator's confirm: it becomes the popup's contact when
+    /// nothing is held, and waits behind the open popup otherwise (the R2 ruling on
+    /// [`Self::pending_logs`]). Journals the queue, as every hold change does.
+    ///
+    /// ⚠️ AT THE CAP the OLDEST WAITING contact is LOGGED as it stands, never dropped — the
+    /// ruling is that no contact is lost, and a queue this deep means nobody is at the radio to
+    /// answer the popup. The one the popup is showing is never the one taken: the operator is
+    /// looking at it. [`PENDING_LOG_QUEUE_CAP`] is about an hour of unattended FT8 completions.
+    pub(crate) fn hold_pending_log(&mut self, rec: QsoRecord) {
+        if self.pending_logs.is_empty() {
             self.replace_pending_log(Some(rec));
+            self.persist_pending_qso();
+            return;
         }
+        if self.pending_logs.len() >= PENDING_LOG_QUEUE_CAP {
+            if let Some(overflow) = self.pending_logs.remove(1) {
+                tempo_core::applog::warn(
+                    "logbook",
+                    &format!(
+                        "confirm-before-log queue full ({PENDING_LOG_QUEUE_CAP}) — logged the QSO \
+                         with {} without asking",
+                        overflow.call
+                    ),
+                );
+                self.log_qso(overflow);
+            }
+        }
+        self.pending_logs.push_back(rec);
+        self.persist_pending_qso();
     }
 
     /// Flush the in-memory Field Day contest log to `fd_log_path` as ADIF
@@ -11180,33 +11239,44 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .map(|(_, m, snr, slot)| (m, snr, slot))
     }
 
-    /// Confirm-and-log a QSO held by the prompt-to-log popup. `rec` is the
-    /// (possibly operator-edited) record; logs it and clears the pending hold.
+    /// Confirm-and-log the contact the prompt-to-log popup is showing. `rec` is the
+    /// (possibly operator-edited) record; the next held contact is promoted behind it.
+    ///
+    /// `expected_key` is the [`Self::pending_qso_log_key`] the popup was shown with. A key for
+    /// a hold that has moved on — or none at all — is REFUSED (`false`, nothing logged), which
+    /// is the R2 ruling's other half: the popup's contact must never be logged onto whichever
+    /// contact happens to be held now. Remote has always checked this (`matches_pending_log`).
     ///
     /// #329: what is logged is the HELD record, with only the popup's four editable fields
     /// taken from `rec` — the Remote confirm's rule (`confirm_pending_log_for_sync`). `rec`
     /// arrives through the UI's `LoggedQso`, which carries neither TIME_OFF nor the split
     /// FREQ_RX, so logging it as sent dropped both from every confirmed contact.
-    pub fn confirm_pending_log(&mut self, rec: QsoRecord) {
-        let rec = match self.pending_log.take() {
-            Some(mut held) => {
-                held.call = rec.call;
-                held.grid = rec.grid;
-                held.rst_sent = rec.rst_sent;
-                held.rst_rcvd = rec.rst_rcvd;
-                held
-            }
-            None => rec,
+    pub fn confirm_pending_log(&mut self, expected_key: &str, rec: QsoRecord) -> bool {
+        if self.pending_qso_log_key().as_deref() != Some(expected_key) {
+            return false;
+        }
+        let Some(mut held) = self.pending_logs.front().cloned() else {
+            return false;
         };
-        self.replace_pending_log(None);
-        self.persist_pending_qso(); // clears the journal — it's in the log now
-        self.log_qso(rec);
+        held.call = rec.call;
+        held.grid = rec.grid;
+        held.rst_sent = rec.rst_sent;
+        held.rst_rcvd = rec.rst_rcvd;
+        self.replace_pending_log(None); // pops it, promoting whatever was waiting
+        self.persist_pending_qso(); // journals what is left — this one is in the log now
+        self.log_qso(held);
+        true
     }
 
-    /// Discard a QSO held by the prompt-to-log popup without logging it.
-    pub fn discard_pending_log(&mut self) {
+    /// Discard the contact the popup is showing without logging it, promoting the next.
+    /// `expected_key` is checked exactly as [`Self::confirm_pending_log`] checks it.
+    pub fn discard_pending_log(&mut self, expected_key: &str) -> bool {
+        if self.pending_qso_log_key().as_deref() != Some(expected_key) {
+            return false;
+        }
         self.replace_pending_log(None);
-        self.persist_pending_qso(); // clears the journal — the operator said no
+        self.persist_pending_qso(); // journals what is left — the operator said no to this one
+        true
     }
 
     /// Operator "Resend": re-arm the current QSO message so a stalled (or just
@@ -11229,8 +11299,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         };
         // Respect prompt-to-log just like auto-log.
         if self.settings.prompt_to_log {
-            self.replace_pending_log(Some(rec));
-            self.persist_pending_qso();
+            self.hold_pending_log(rec);
         } else {
             self.log_qso(rec);
         }
@@ -16209,9 +16278,9 @@ contact yourself."
                 if self.settings.auto_log {
                     let rec = self.rtty_qso_record(&call, &exchange);
                     if self.settings.prompt_to_log {
-                        // Hold for the operator's confirm-before-log popup.
-                        self.replace_pending_log(Some(rec));
-                        self.persist_pending_qso(); // journal before the popup waits
+                        // Hold for the operator's confirm-before-log popup — behind whatever
+                        // it is already showing, never over it.
+                        self.hold_pending_log(rec);
                     } else {
                         self.log_qso(rec);
                     }
@@ -18137,7 +18206,9 @@ contact yourself."
         s.upload_ok = self.station.upload_ok;
         s.upload_tick = self.station.upload_tick;
         s.log_tick = self.station.log_tick();
-        s.pending_log = self.pending_log.clone().map(Into::into);
+        s.pending_log = self.pending_log().cloned().map(Into::into);
+        s.pending_qso_log_key = self.pending_qso_log_key();
+        s.pending_logs_waiting = self.pending_logs_waiting() as u32;
         s
     }
 
@@ -19973,10 +20044,9 @@ contact yourself."
             if self.settings.auto_log {
                 let rec = self.qso_record(dxcall, dxgrid, rx_report);
                 if self.settings.prompt_to_log {
-                    // Hold for the operator's confirm-before-log popup instead of
-                    // writing it silently.
-                    self.replace_pending_log(Some(rec));
-                    self.persist_pending_qso(); // journal before the popup waits
+                    // Hold for the operator's confirm-before-log popup instead of writing it
+                    // silently — behind whatever it is already showing, never over it.
+                    self.hold_pending_log(rec);
                 } else {
                     self.log_qso(rec);
                 }
@@ -34519,6 +34589,182 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Work a station to completion with auto-log on, exactly as `prompt_to_log_holds_then_confirms`
+    /// does: answer, report, RR73.
+    fn complete_a_contact(e: &mut Engine, call: &str, slot: u64) {
+        e.call_station(call);
+        e.ingest_decodes_for_test(&[dec_snr(&format!("K2DEF {call} -10"), -7)], slot);
+        e.ingest_decodes_for_test(&[dec_snr(&format!("K2DEF {call} RR73"), -7)], slot + 2);
+    }
+
+    /// ⭐ R2 (operator review, 2026-09-19) — A SECOND COMPLETED QSO NEVER REWRITES THE HELD ONE.
+    /// With "Prompt before logging" on, a contact that finished while the popup was open used to
+    /// REPLACE the held one. The popup seeds its fields from the first contact once, so the
+    /// confirm then logged the FIRST station's call, grid and reports onto the SECOND contact's
+    /// date, time, frequency, country and name — and the second contact was never logged.
+    /// Operator ruling: "Queue them. The open popup keeps the first contact; the second pops up
+    /// right after you log or discard it. No contact is lost or mixed."
+    #[test]
+    fn a_second_completed_qso_never_rewrites_the_held_one() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let first_key = e.pending_qso_log_key().expect("the first contact is held");
+        complete_a_contact(&mut e, "K1ABC", 5);
+
+        let snap = e.snapshot();
+        let shown = snap.pending_log.clone().expect("a contact is held");
+        assert_eq!(
+            shown.call, "W9XYZ",
+            "the popup keeps the contact it is showing"
+        );
+        assert_eq!(
+            snap.pending_qso_log_key.as_deref(),
+            Some(first_key.as_str()),
+            "…and its identity, so the open popup's confirm is still the right one"
+        );
+        assert_eq!(snap.pending_logs_waiting, 1, "the second waits its turn");
+        assert!(e.get_log().is_empty(), "neither is logged yet");
+
+        // Confirming the shown contact logs THAT one and promotes the one behind it.
+        assert!(confirm_held(&mut e, shown.into()));
+        let snap = e.snapshot();
+        assert_eq!(e.get_log().len(), 1);
+        assert_eq!(e.get_log()[0].call, "W9XYZ", "the contact the operator saw");
+        assert_eq!(
+            snap.pending_log.as_ref().map(|q| q.call.as_str()),
+            Some("K1ABC"),
+            "the second contact pops up next"
+        );
+        assert_eq!(snap.pending_logs_waiting, 0);
+        assert_ne!(
+            snap.pending_qso_log_key.as_deref(),
+            Some(first_key.as_str()),
+            "a different contact is a different identity"
+        );
+
+        // …and discarding the promoted one empties the queue without logging it.
+        assert!(discard_held(&mut e));
+        assert!(e.snapshot().pending_log.is_none());
+        assert_eq!(e.get_log().len(), 1, "a discard logs nothing");
+    }
+
+    /// The other half of R2: the confirm must name the contact it is confirming. A popup whose
+    /// contact has been logged, discarded or overtaken sends a key that is no longer the held
+    /// one, and logging its edits onto whatever is held now is exactly the mix the queue exists
+    /// to prevent. Remote has always checked this; the desktop command did not.
+    #[test]
+    fn a_confirm_or_discard_whose_contact_has_moved_on_is_refused() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let shown = e.snapshot().pending_log.expect("held");
+        let stale_key = e.pending_qso_log_key().expect("held");
+
+        // The contact is logged from somewhere else (the Remote confirm, or a second click).
+        assert!(confirm_held(&mut e, shown.clone().into()));
+        complete_a_contact(&mut e, "K1ABC", 5);
+
+        // The popup is still showing the first contact.
+        assert!(
+            !e.confirm_pending_log(&stale_key, shown.clone().into()),
+            "a confirm for a contact that has moved on must log nothing"
+        );
+        assert!(
+            !e.discard_pending_log(&stale_key),
+            "…and a discard must drop nothing"
+        );
+        assert!(
+            !e.confirm_pending_log("", shown.into()),
+            "…nor may a caller with no key at all log the held contact"
+        );
+        assert_eq!(e.get_log().len(), 1, "only the contact actually confirmed");
+        assert_eq!(e.get_log()[0].call, "W9XYZ");
+        assert_eq!(
+            e.snapshot().pending_log.map(|q| q.call),
+            Some("K1ABC".to_string()),
+            "the held contact is untouched"
+        );
+    }
+
+    #[test]
+    fn the_journal_brings_back_every_held_contact() {
+        let dir = std::env::temp_dir().join(format!("nexus-pendingq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("pending_qso.json");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.set_pending_qso_path(path.clone());
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        complete_a_contact(&mut e, "K1ABC", 5);
+        assert_eq!(e.snapshot().pending_logs_waiting, 1);
+
+        // The crash: this engine vanishes, nothing is flushed.
+        drop(e);
+        let text = std::fs::read_to_string(&path).expect("journal readable after the crash");
+        let mut relaunched = Engine::new("K2DEF", "FN31", 0);
+        relaunched.set_pending_qso_path(path.clone());
+        relaunched.load_pending_qso_json(&text);
+
+        let snap = relaunched.snapshot();
+        assert_eq!(
+            snap.pending_log.map(|q| q.call),
+            Some("W9XYZ".to_string()),
+            "the contact the popup was showing comes back first"
+        );
+        assert_eq!(
+            snap.pending_logs_waiting, 1,
+            "and the one behind it with it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_full_hold_queue_logs_the_oldest_waiting_contact_rather_than_losing_it() {
+        // The bound exists so an operator who walked away cannot grow the queue without limit.
+        // What it must never do is drop a real contact, and it must never take the one the
+        // popup is showing out from under them.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        for i in 0..PENDING_LOG_QUEUE_CAP {
+            e.hold_pending_log(e.qso_record(format!("W9A{i}"), None, None));
+        }
+        assert_eq!(e.pending_logs_waiting(), PENDING_LOG_QUEUE_CAP - 1);
+        assert!(e.get_log().is_empty(), "the queue is holding, not logging");
+
+        e.hold_pending_log(e.qso_record("K1NEW".into(), None, None));
+        assert_eq!(
+            e.pending_log().map(|q| q.call.as_str()),
+            Some("W9A0"),
+            "the contact the popup is showing is never the one taken"
+        );
+        assert_eq!(
+            e.get_log()
+                .iter()
+                .map(|q| q.call.as_str())
+                .collect::<Vec<_>>(),
+            ["W9A1"],
+            "the oldest WAITING contact is logged rather than lost"
+        );
+        assert_eq!(
+            e.pending_logs_waiting(),
+            PENDING_LOG_QUEUE_CAP - 1,
+            "and the queue stays bounded"
+        );
+    }
+
+    /// Confirm the popup's contact the way the desktop does: with the key the snapshot showed.
+    fn confirm_held(e: &mut Engine, rec: QsoRecord) -> bool {
+        let key = e.pending_qso_log_key().unwrap_or_default();
+        e.confirm_pending_log(&key, rec)
+    }
+
+    /// Discard it the same way.
+    fn discard_held(e: &mut Engine) -> bool {
+        let key = e.pending_qso_log_key().unwrap_or_default();
+        e.discard_pending_log(&key)
+    }
+
     #[test]
     fn prompt_to_log_holds_then_confirms() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
@@ -34540,7 +34786,7 @@ mod tests {
         );
 
         // Confirm logs it and clears the hold.
-        e.confirm_pending_log(pending.into());
+        assert!(confirm_held(&mut e, pending.into()));
         assert_eq!(e.get_log().len(), 1, "confirm writes exactly one record");
         assert!(
             e.snapshot().pending_log.is_none(),
@@ -34559,7 +34805,7 @@ mod tests {
         e.call_station_with_grid("W9XYZ", Some("en37"));
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
-        let held = e.pending_log.clone().expect("held for confirm");
+        let held = e.pending_log().cloned().expect("held for confirm");
         assert!(
             held.time_off_unix.is_some() && held.freq_rx_mhz.is_some(),
             "precondition: the hold carries an end time and a split RX leg"
@@ -34569,7 +34815,7 @@ mod tests {
         let mut sent = e.snapshot().pending_log.expect("a QSO awaits confirm");
         sent.grid = Some("EN38".into());
         sent.rst_rcvd = Some("-09".into());
-        e.confirm_pending_log(sent.into());
+        assert!(confirm_held(&mut e, sent.into()));
 
         let saved = &e.station.logbook.records()[0];
         assert_eq!(saved.time_off_unix, held.time_off_unix, "TIME_OFF survives");
@@ -34606,8 +34852,9 @@ mod tests {
         let mut relaunched = Engine::new("K2DEF", "FN31", 0);
         relaunched.set_pending_qso_path(path.clone());
         let text = std::fs::read_to_string(&path).expect("journal readable after the crash");
-        let q: crate::dto::LoggedQso = serde_json::from_str(&text).expect("journal parses");
-        relaunched.load_pending_qso(q.into());
+        // Through the SHELL's own restore path (lib.rs calls this at startup), so the journal
+        // format and the reader cannot drift apart under this test.
+        relaunched.load_pending_qso_json(&text);
         let pending = relaunched
             .snapshot()
             .pending_log
@@ -34615,7 +34862,7 @@ mod tests {
         assert_eq!(pending.call, "W9XYZ", "the SAME station, not a blank hold");
 
         // Confirming logs it and clears the journal, so it cannot resurrect next launch.
-        relaunched.confirm_pending_log(pending.into());
+        assert!(confirm_held(&mut relaunched, pending.into()));
         assert_eq!(relaunched.get_log().len(), 1, "logged exactly once");
         assert!(
             !path.exists(),
@@ -34637,7 +34884,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
         assert!(path.exists(), "journalled while held");
-        e.discard_pending_log();
+        assert!(discard_held(&mut e));
         assert!(
             !path.exists(),
             "a discarded QSO must not be restored on the next launch"
@@ -34653,7 +34900,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
         assert!(e.snapshot().pending_log.is_some());
-        e.discard_pending_log();
+        assert!(discard_held(&mut e));
         assert!(e.get_log().is_empty(), "discard logs nothing");
         assert!(e.snapshot().pending_log.is_none());
     }
@@ -35287,7 +35534,7 @@ mod tests {
             "prompt-to-log holds the manual log too"
         );
         let pending = e.snapshot().pending_log.expect("a QSO awaits confirm");
-        e.confirm_pending_log(pending.into());
+        assert!(confirm_held(&mut e, pending.into()));
         assert_eq!(e.get_log().len(), 1);
     }
 
