@@ -777,7 +777,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   const record={call:'W1AW',grid:'FN31',country:null,state:null,band:'20m',freqMhz:14.25,mode:'SSB',rstSent:'59',rstRcvd:'57',name:'Joe',qth:'Newington',comment:'Cloud/native append test',notes:'Do not duplicate',whenUnix:Math.floor(Date.now()/1000),confirmed:false,awardConfirmed:false}
   const heartbeat=()=>allowed(()=>operation({type:'heartbeat',leaseId:state.leaseId}))
   const logRequest=s=>({type:'logManual',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,record})
-  const logged=await allowed(()=>operation(logRequest(state)),async()=>operation(logRequest((await heartbeat()).response.value)));assert.equal(logged.response.value.outcome,'applied');assert.equal(logged.response.value.evidence,'fileSynced')
+  const logged=await allowed(()=>operation(logRequest(state)),async()=>operation(logRequest((await heartbeat()).response.value)));assert.equal(logged.response.value?.outcome,'applied');assert.equal(logged.response.value?.evidence,'fileSynced')
   let evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.match(evidence.adif,/Do not duplicate/);assert.equal(evidence.txEnabled,false)
   await delay(270);socket.send(envelope(logged.request));const replay=await socket.take(v=>v.type==='operationResponse'&&v.requestId===logged.request.requestId);assert.deepEqual(replay,logged.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
   if(operationVersion===4){
@@ -797,7 +797,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const write=build=>allowed(async()=>operation(build(await fresh())),async()=>operation(build(await fresh())))
    const changeRequest=(s,change)=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change})
    const second={...record,call:'K1ABC',comment:'Second contact',notes:null,whenUnix:record.whenUnix-60}
-   assert.equal((await write(s=>({...logRequest(s),record:second}))).response.value.outcome,'applied')
+   assert.equal((await write(s=>({...logRequest(s),record:second}))).response.value?.outcome,'applied')
    const capable=await fresh();assert.ok(capable.controls.capabilities.includes('logEdit'));assert.deepEqual(capable.actions,['log.manual'])
    const before=await rowFor('K1ABC',()=>true)
    const edited=await write(s=>changeRequest(s,{kind:'edit',target:target(before),record:{...second,comment:'Edited from the browser'}}))
@@ -806,13 +806,13 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    await delay(270);socket.send(envelope(edited.request));assert.deepEqual(await labeled(socket,'edit replay',v=>v.type==='operationResponse'&&v.requestId===edited.request.requestId),edited.response);assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
    // Positive control: the pre-edit row is stale now, so a delete aimed at it changes nothing.
    const stale=await write(s=>changeRequest(s,{kind:'delete',target:target(before)}))
-   assert.equal(stale.response.value?.outcome,'rejected',JSON.stringify(stale.response));assert.equal(stale.response.value.reason,'contextChanged');assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
+   assert.equal(stale.response.value?.outcome,'rejected',JSON.stringify(stale.response));assert.equal(stale.response.value?.reason,'contextChanged');assert.deepEqual(await probe.send({type:'loggingEvidence'}),afterEdit)
    const edit=await rowFor('K1ABC',row=>row.comment==='Edited from the browser')
    const carded=await write(s=>changeRequest(s,{kind:'qslCard',target:target(edit),received:true}))
-   assert.equal(carded.response.value.outcome,'applied',JSON.stringify(carded.response));assert.equal(carded.response.value.evidence,'fileSynced')
+   assert.equal(carded.response.value?.outcome,'applied',JSON.stringify(carded.response));assert.equal(carded.response.value?.evidence,'fileSynced')
    const current=await rowFor('K1ABC',row=>row.qslRcvd?.card===true)
    const removed=await write(s=>changeRequest(s,{kind:'delete',target:target(current)}))
-   assert.equal(removed.response.value.outcome,'applied',JSON.stringify(removed.response))
+   assert.equal(removed.response.value?.outcome,'applied',JSON.stringify(removed.response))
    evidence=await probe.send({type:'loggingEvidence'});assert.equal(evidence.count,1);assert.match(evidence.adif,/W1AW/);assert.doesNotMatch(evidence.adif,/K1ABC/)
    // A hunt tags the station's next contact with that call; it is station state, not a log write.
    const hunted=await write(s=>({type:'logChange',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,change:{kind:'hunt',call:'K2ABC',program:'POTA',reference:'US-0004'}}))
@@ -825,7 +825,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    // One activation's ADIF, read back in chunks through the relay: the station's own file, digest checked,
    // holding the activation's contact and none of the rest of the log.
    const activeContact={...record,call:'K3ACT',comment:'Activation contact',notes:null,whenUnix:record.whenUnix-120}
-   assert.equal((await write(s=>({...logRequest(s),record:activeContact}))).response.value.outcome,'applied')
+   assert.equal((await write(s=>({...logRequest(s),record:activeContact}))).response.value?.outcome,'applied')
    assert.ok((await fresh()).controls.capabilities.includes('activationExport'))
    const readExport=async(selection,index)=>{const s=await fresh();const {response}=await allowed(()=>operation({type:'activationExport',stationBootId:s.stationBootId,leaseId:s.leaseId,selection,index}));assert.ok(response.value,JSON.stringify(response));return response.value}
    const listed=await readExport(null,0),mine=listed.activations.find(a=>a.reference==='US-0001');assert.ok(mine,JSON.stringify(listed))
@@ -836,7 +836,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.match(exported.toString(),/K3ACT/);assert.doesNotMatch(exported.toString(),/W1AW/)
    // Leave the log as the rest of this run expects it: remove the activation contact by its row key.
    const activeRow=await rowFor('K3ACT',()=>true)
-   assert.equal((await write(s=>changeRequest(s,{kind:'delete',target:target(activeRow)}))).response.value.outcome,'applied')
+   assert.equal((await write(s=>changeRequest(s,{kind:'delete',target:target(activeRow)}))).response.value?.outcome,'applied')
    evidence=await probe.send({type:'loggingEvidence'});assert.doesNotMatch(evidence.adif,/K3ACT/);assert.equal(evidence.txEnabled,false)
    // A logging preference under the logging grant: confirmed by the station and saved to its settings file. The TX
    // latch and the dial do not move, the revision it was made against is stale afterwards, and a station preference
@@ -848,7 +848,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.equal(savedPrefs.autoLog,!shownPrefs.autoLog);assert.equal(savedPrefs.savedAutoLog,!shownPrefs.autoLog)
    assert.equal(savedPrefs.txEnabled,false);assert.equal(savedPrefs.dialHz,shownPrefs.dialHz)
    const stalePref=await write(s=>changeRequest(s,{kind:'settings',revision:shownPrefs.revision,values:{autoLog:shownPrefs.autoLog}}))
-   assert.equal(stalePref.response.value.outcome,'rejected');assert.equal(stalePref.response.value.reason,'contextChanged')
+   assert.equal(stalePref.response.value?.outcome,'rejected');assert.equal(stalePref.response.value?.reason,'contextChanged')
    const noControl=await allowed(async()=>operation(changeRequest(await fresh(),{kind:'settings',revision:savedPrefs.revision,values:{contestCheck:'73'}})))
    assert.equal(noControl.response.error,'localPermissionRequired')
    // Rendering the channel list to a file is station control too, and this browser holds only the
@@ -856,9 +856,9 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    const noProgram=await allowed(async()=>{const s=await fresh();return operation({type:'programExport',stationBootId:s.stationBootId,leaseId:s.leaseId,format:'csv',nameCap:7,index:0})})
    assert.equal(noProgram.response.error,'localPermissionRequired')
    const restored=await write(s=>changeRequest(s,{kind:'settings',revision:savedPrefs.revision,values:{autoLog:shownPrefs.autoLog}}))
-   assert.equal(restored.response.value.evidence,'settingsSaved',JSON.stringify(restored.response));assert.equal((await probe.send({type:'settingsEvidence'})).autoLog,shownPrefs.autoLog)
+   assert.equal(restored.response.value?.evidence,'settingsSaved',JSON.stringify(restored.response));assert.equal((await probe.send({type:'settingsEvidence'})).autoLog,shownPrefs.autoLog)
    const ended=await write(s=>context(s,{kind:'clearActivation'}))
-   assert.equal(ended.response.value.evidence,'stationState',JSON.stringify(ended.response));assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
+   assert.equal(ended.response.value?.evidence,'stationState',JSON.stringify(ended.response));assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    // Closing the page socket ends the lease, as any departure does. Wait for that, then take it again.
    leaving(pages)
    for(let i=0;i<50&&(await allowed(()=>operation({type:'state'}))).response.value?.phase==='controlling';i++)await delay(100)
@@ -870,7 +870,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
    assert.deepEqual(controls.controls.capabilities,operationVersion>=3?['decoder','amplifier','frequency','mode','tier','ampFollowBand','workspace','decoderSettings','receiverSettings','receiverGain','bandSelection','receiverFilter','receiverDsp','phoneMode','workSpot','radioLevels','radioSelection','fmTuning','fmReceiver','aiCw','redecode','splitTuning','ritTuning','workDigitalSpot','repeaterTuning','memoryRecall','aprsTuning','rotator','rigScope','workRttySpot','sstvGallery','satellite',...(operationVersion===4?['qsoLogging','logEdit','qslMarks','otaHunt','otaActivation','activationExport','settingsLogging','selfSpot','settingsControl','postSpot','programExport','programEdit','audioListen']:[])]:['decoder','amplifier'])
    const clearRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'decoder.clear',receiver:'cw'}})
    const cleared=await allowed(()=>operation(clearRequest(controls)),async()=>operation(clearRequest((await heartbeat()).response.value)))
-   assert.equal(cleared.response.value.outcome,'applied');assert.equal(cleared.response.value.evidence,'receiverState')
+   assert.equal(cleared.response.value?.outcome,'applied');assert.equal(cleared.response.value?.evidence,'receiverState')
    assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    if(operationVersion===4){
     // Program, both halves, over the real relay and the real station — ONE state read shared by
@@ -888,7 +888,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
     assert.deepEqual(exported.response.value,{operation:'programExport',refused:'notFound'},JSON.stringify(exported.response))
     const curate=await allowed(()=>operation({type:'logChange',stationBootId:s4.stationBootId,leaseId:s4.leaseId,expectedRevision:s4.revision,commandWindowId:s4.commandWindowId,clientSequence:s4.nextSequence,change:{kind:'programEdit',revision:'a'.repeat(64),edit:{action:'clear'}}}))
     assert.equal(curate.response.value?.outcome,'rejected',JSON.stringify(curate.response))
-    assert.equal(curate.response.value.reason,'contextChanged')
+    assert.equal(curate.response.value?.reason,'contextChanged')
    }
    if(operationVersion>=3){
     // FT8/FT4 Work is its own v3 action. It must cross the real relay and native parser without
@@ -898,8 +898,8 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
     const workRequest=s=>({type:'stationControl',stationBootId:s.stationBootId,leaseId:s.leaseId,expectedRevision:s.revision,commandWindowId:s.commandWindowId,clientSequence:s.nextSequence,context:s.controls.context,action:{action:'radio.workDigitalSpot',tier:'FT4',dialMhz:14.0815,band:'40m',call:'JA2DEF'}})
     const worked=await allowed(async()=>operation(workRequest((await heartbeat()).response.value)),async()=>operation(workRequest((await heartbeat()).response.value)))
     assert.equal(worked.response.value?.operation,'stationControl',JSON.stringify(worked.response))
-    assert.equal(worked.response.value.outcome,'rejected')
-    assert.equal((await heartbeat()).response.value.phase,'controlling')
+    assert.equal(worked.response.value?.outcome,'rejected')
+    assert.equal((await heartbeat()).response.value?.phase,'controlling')
     assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    }
    if (operationVersion === 4) {
@@ -1069,7 +1069,7 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   }else assert.equal(Object.hasOwn(state,'controls'),false)
   const current=(await heartbeat()).response.value;assert.equal(current.phase,'controlling')
   assert.equal((await probe.send({type:'takeOverLogging'})).ok,true);const refused=await operation({...logged.request,requestId:crypto.randomUUID(),expectedRevision:current.revision,commandWindowId:current.commandWindowId,clientSequence:current.nextSequence,record:{...record,call:'K2ABC'}});assert.equal(refused.response.error,'localPermissionRequired');assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
-  await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal((await allowed(()=>operation({type:'result',operationId:logged.request.requestId}))).response.value.outcome,'applied')
+  await probe.send({type:'loggingPermission',deviceId:device.deviceId,allow:true});assert.equal((await allowed(()=>operation({type:'result',operationId:logged.request.requestId}))).response.value?.outcome,'applied')
   leaving(socket);socket=null
   // Remote remembers being on (operator decision 2026-09-13), and since the one-approval decision the
   // same day, FT8/FT4 transmit is remembered too. Restarting the actual native controller turns Remote
