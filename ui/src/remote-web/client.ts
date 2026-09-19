@@ -452,13 +452,20 @@ export class HostedConnection {
             const parsed=parseFrame(message.frame,'native')
             // A wall-clock correction can invalidate the HTTP-to-monotonic
             // mapping without invalidating this socket's application replies.
-            // Hide observation until authenticated renewal establishes a new
-            // anchor. ACK only the structurally validated receipt, never data
-            // shown as current. No clock tolerance weakens the freshness gate.
+            // A reading that looks as though it arrived before it was sent is
+            // never shown, and authenticated renewal establishes a new anchor.
+            // ACK only the structurally validated receipt, never data shown as
+            // current. No clock tolerance weakens the freshness gate.
             // Delivered at or past the freshness limit (a slow link or a stalled page): hide it, which
             // the stale display handles, and still ACK the valid receipt so the relay keeps delivering.
+            // ⚠️ The two failures differ, and so do their answers (operator ruling 2026-09-19). A LATE
+            // reading says the link or the page stalled, so what is on screen may be old: blank it. A
+            // reading from the FUTURE says only that a wall clock stepped; the reading already held was
+            // accepted on a good anchor and ages on the monotonic clock, which the step does not move,
+            // so it stays until the monitor retires it at STALE_MS. Blanking it too flashed every
+            // reading-gated Remote control off on each step (23 times in 15 runs on a WSL2 box).
             if(transit>=STALE_MS)this.latest=null
-            else if(transit<0){this.latest=null;if(this.sessionId)void this.renew(socket,true);else socket.close(1000,'clockUnavailable')}
+            else if(transit<0){if(this.sessionId)void this.renew(socket,true);else socket.close(1000,'clockUnavailable')}
             else {this.latest={frame:ageFrame(parsed,transit),at:received};this.proved(true);this.clockFailures=0}
             const frame=parsed
             const ack = JSON.stringify({ type: 'ack', epoch: frame.epoch, sequence: frame.sequence })

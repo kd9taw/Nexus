@@ -339,6 +339,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A slow moment at the station no longer stops the instrument feed for good.** A late credit
   on the live feed dropped the station's whole connection, taking every browser with it. The
   feed now waits for the credit and picks up where it left off.
+- **Remote: the amplifier, DSP and decode-depth controls no longer blink off when a clock is
+  corrected.** When a wall clock stepped at either end, the next station reading looked as though
+  it had arrived before it was sent, and the browser threw away the good reading it already held
+  along with it, so every control that depends on the radio's live readings (the amplifier
+  buttons, the Phone DSP buttons, the FT decode-depth chips, the RX offset box) went blank until
+  the next one came in. The odd reading is still never shown and the clock is still re-synced,
+  but the reading already held now stays until it is three seconds old. A reading that arrives
+  late still blanks them at once, because a late reading means the link has stalled.
 - **A delete or edit from a Remote browser could make the shack's Logbook delete or overwrite the
   wrong contact.** The shack's list loaded once and remembered each row by its position; when the
   browser deleted a contact above it, every later row moved up one, and the next Delete or Edit at

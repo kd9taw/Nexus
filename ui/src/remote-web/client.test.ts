@@ -284,7 +284,9 @@ it('recalibrates negative clock drift without displaying it or dropping independ
  expect(await remote.source.read(new AbortController().signal)).toBeTruthy()
  post.mockResolvedValueOnce({ticket:'unused',serverNow:1120})
  socket.receive(publication(2,'native',1120))
- await expect(remote.source.read(new AbortController().signal)).rejects.toThrow()
+ // The reading from the future is never displayed; the one already held stays (operator ruling
+ // 2026-09-19 — it was accepted on a good anchor and ages on the monotonic clock).
+ await expect(remote.source.read(new AbortController().signal)).resolves.toMatchObject({sequence:1})
  await vi.advanceTimersByTimeAsync(0)
  expect(socket.readyState).toBe(1);expect(disconnected).not.toHaveBeenCalled()
  expect(post.mock.calls[post.mock.calls.length-1][0]).toMatch(/renew$/)
@@ -375,6 +377,31 @@ it('shows a late observation as stale but keeps the session, the control lease a
     socket.receive(publication(3, 'native', 1000 + performance.now()))
     await vi.advanceTimersByTimeAsync(POLL_MS)
     expect(lastOf(statuses)).toBe('current')
+  } finally { stopMonitor(); remote.stop() }
+})
+
+// A READING FROM THE FUTURE IS SET ASIDE, NOT A REASON TO BLANK THE ONE ALREADY HELD (operator
+// ruling 2026-09-19). A wall-clock step at either end makes the next reading look as though it
+// arrived before it was sent. The anchor is still renewed and that reading is never shown, but the
+// held reading was accepted on a good anchor and ages on the monotonic clock, which a wall-clock
+// step does not move. Blanking it made every reading-gated control flash off: measured 23 times in
+// 15 runs of the compiled suite on a WSL2 box whose wall clock steps ~90 ms every 30 s. A LATE
+// reading still blanks at once (the test above): lateness means the link or the page stalled.
+it('sets aside a reading stamped in the future without blanking the fresh one already held', async () => {
+  const { remote, socket } = await controlled()
+  const statuses: string[] = []
+  const stopMonitor = startMonitor(remote.source, next => statuses.push(next.status))
+  try {
+    socket.receive(publication(1, 'native', 1000 + performance.now()))
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(lastOf(statuses)).toBe('current')
+    // Stamped 90 ms after it arrived: the far end's wall clock stepped forward.
+    socket.receive(publication(2, 'native', 1000 + performance.now() + 90))
+    // The held reading is still what a read returns; the future one is never exposed.
+    await expect(remote.source.read(new AbortController().signal), 'the held reading survives a future-stamped one')
+      .resolves.toMatchObject({ sequence: 1 })
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(lastOf(statuses), 'the display stays current on the reading already held').toBe('current')
   } finally { stopMonitor(); remote.stop() }
 })
 
