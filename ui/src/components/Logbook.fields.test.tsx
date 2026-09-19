@@ -29,8 +29,12 @@ const written = vi.hoisted(() => ({
 }))
 vi.mock('../api', () => {
   const noop = () => vi.fn()
+  const getLog = vi.fn()
   return {
-    getLog: vi.fn(),
+    getLog,
+    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
+    // the whole log (a valid answer), stocked through `getLog` as before.
+    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
     deleteQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
     // Each write returns the row it wrote — the key the next write in the same form uses.
     editQso: vi.fn(() => Promise.resolve(written.edited)),

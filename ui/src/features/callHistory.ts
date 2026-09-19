@@ -1,6 +1,6 @@
 // Pure prior-QSO summary for a callsign — no React, no IO, fully node-testable. The cockpit
-// log strip loads the full log once (getLog) and feeds it here per typed call to answer the
-// DXer questions: have I worked them, on this band (dupe), when last, how confirmed.
+// log strip feeds the window's copy of the log (features/logStore) here per typed call to answer
+// the DXer questions: have I worked them, on this band (dupe), when last, how confirmed.
 
 import type { LoggedQso } from '../types'
 import { bandLabelForMhz, bandRangeForLabel } from '../band'

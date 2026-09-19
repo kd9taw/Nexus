@@ -46,7 +46,8 @@ import {
   rangeRing,
   sectorRing,
 } from '../mapGeo'
-import { getAurora, getPca, getSatellites, getSatTrackStatus, getLog } from '../api'
+import { getAurora, getPca, getSatellites, getSatTrackStatus } from '../api'
+import { loadSharedLog } from '../features/logStore'
 import cqzonesUrl from '../data/cqzones.geojson?url'
 import { spotTooltip } from '../propViz'
 import { txPaths, rxPaths } from '../features/mapPaths'
@@ -1444,7 +1445,7 @@ export default function Globe3D({
       return
     }
     let live = true
-    getLog()
+    loadSharedLog()
       .then((log) => {
         if (!live) return
         const grids = workedGridSet(log)

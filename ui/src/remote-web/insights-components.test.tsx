@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AwardsJourney } from '../components/AwardsJourney'
 import { StatsView } from '../components/StatsView'
-import { getAwards, getConfirmationDiagnostics, getLog, getLogStats, uploadLotwReport } from '../api'
+import { getAwards, getConfirmationDiagnostics, getLog, getLogDelta, getLogStats, uploadLotwReport } from '../api'
 import type { DiagnosticsReport } from '../types'
 import fixture from './__fixtures__/insights.json'
 
@@ -11,6 +11,7 @@ vi.mock('../api', () => ({
   getAwards: vi.fn(async () => fixture.awards),
   getConfirmationDiagnostics: vi.fn(async (): Promise<DiagnosticsReport | null> => null),
   getLog: vi.fn(async () => []), getLogStats: vi.fn(async () => fixture.geography),
+  getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: [] })),
   getJourney: vi.fn(async () => { throw new Error('unsupported') }),
   uploadLotwReport: vi.fn(), qrzPushQso: vi.fn(), clublogPushQso: vi.fn(), eqslPushQso: vi.fn(),
 }))
@@ -22,6 +23,7 @@ it('renders the existing official award cards and chase filters from a remote su
   expect(getAwards).not.toHaveBeenCalled()
   expect(getConfirmationDiagnostics).not.toHaveBeenCalled()
   expect(getLog).not.toHaveBeenCalled()
+  expect(getLogDelta).not.toHaveBeenCalled()
   const journey = screen.getByRole('tab', { name: 'Journey' }) as HTMLButtonElement
   expect(journey.disabled).toBe(true)
   expect(screen.getByRole('tab', { name: 'Official Awards' }).getAttribute('aria-selected')).toBe('true')
@@ -34,6 +36,7 @@ it('renders full-log Statistics using the supplied totals and the existing chart
   const { container } = render(<StatsView observation={{ statistics: fixture.statistics, geography: fixture.geography }} />)
   expect((await screen.findAllByText('2301')).length).toBeGreaterThan(0)
   expect(getLog).not.toHaveBeenCalled()
+  expect(getLogDelta).not.toHaveBeenCalled()
   expect(getLogStats).not.toHaveBeenCalled()
   expect(container.querySelectorAll('.stats-bar-fill').length).toBeGreaterThan(5)
   expect(screen.getByText('2012')).toBeTruthy()
@@ -43,11 +46,16 @@ it('preserves the native award and statistics read paths', async () => {
   const view = render(<AwardsJourney showGamification={false} />)
   await waitFor(() => expect(getAwards).toHaveBeenCalledOnce())
   expect(getConfirmationDiagnostics).toHaveBeenCalledOnce()
-  expect(getLog).toHaveBeenCalledOnce()
+  // Both read the log through the window's shared copy (features/logStore): the first read is
+  // the whole log, and the second view's is only what is new since that copy.
+  await waitFor(() => expect(getLogDelta).toHaveBeenCalledOnce())
+  expect(getLogDelta).toHaveBeenCalledWith(0, 0)
   view.unmount()
   render(<StatsView />)
   await waitFor(() => expect(getLogStats).toHaveBeenCalledOnce())
-  expect(getLog).toHaveBeenCalledTimes(2)
+  await waitFor(() => expect(getLogDelta).toHaveBeenCalledTimes(2))
+  expect(getLogDelta).toHaveBeenLastCalledWith(1, 0)
+  expect(getLog).not.toHaveBeenCalled()
 })
 
 it('renders station diagnostics beside an observed summary with every action as guidance, not a button', async () => {
@@ -67,6 +75,7 @@ it('renders station diagnostics beside an observed summary with every action as 
   expect(screen.getByText('12')).toBeTruthy()
   expect(getConfirmationDiagnostics).not.toHaveBeenCalled()
   expect(getLog).not.toHaveBeenCalled()
+  expect(getLogDelta).not.toHaveBeenCalled()
   expect(uploadLotwReport).not.toHaveBeenCalled()
   // Control: the same report on the desktop path renders the live LoTW and sign-in buttons.
   view.unmount()

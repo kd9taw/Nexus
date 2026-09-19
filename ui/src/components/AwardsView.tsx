@@ -12,12 +12,12 @@ import {
   getAwards,
   getConfirmationDiagnostics,
   uploadLotwReport,
-  getLog,
   qrzPushQso,
   clublogPushQso,
   eqslPushQso,
 } from '../api'
 import { t } from '../i18n'
+import { loadSharedLog } from '../features/logStore'
 import { StateBlock } from './StateBlock'
 
 /** The programmes' own names. Award names are invariant tokens — DXCC is DXCC in every
@@ -320,7 +320,8 @@ export function AwardsView({
     getConfirmationDiagnostics()
       .then((d) => live && setDiag(d))
       .catch(() => {}) // diagnostics are a best-effort add-on; never block the dashboard
-    getLog()
+    // The window's shared copy, read once beside the diagnosis whose indices point into it.
+    loadSharedLog()
       .then((l) => live && setLog(l))
       .catch(() => {}) // without it the push buttons degrade to guidance chips
     return () => {

@@ -27,12 +27,14 @@ function mount(source: { page: (args: QueryArgs) => Promise<QueryPage> }) {
 }
 it('renders the existing log table with explicit pages and no full-log fetch or write controls', async () => {
   const full = vi.spyOn(api, 'getLog')
+  const delta = vi.spyOn(api, 'getLogDelta')
   const source = { page: vi.fn(async (args: QueryArgs) => args.cursor ? page(['K1LAST'], 2) : page(['W1AW', 'K1ABC'])) }
   mount(source)
   await screen.findByText('W1AW')
   expect(screen.getByText('Contacts 1–2 · Matches: 3')).toBeTruthy()
   expect(document.querySelectorAll('.log-rowactions button, .log-rowactions select, .log-actions').length).toBe(0)
   expect(full).not.toHaveBeenCalled()
+  expect(delta).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Next' }))
   await screen.findByText('K1LAST')
   expect(screen.getByText('Contacts 3–3 · Matches: 3')).toBeTruthy()

@@ -91,6 +91,8 @@ vi.mock('../api', async (importOriginal) => {
     js8Enter: vi.fn(async () => state.current),
     js8Arm: vi.fn(async () => state.current),
     getLog: vi.fn(async () => log.current),
+    // The roster reads the shared log store, which asks get_log_delta: the whole log, every time.
+    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: log.current })),
     getLicensedBandPlan: vi.fn(async () => []),
     setRxOffset: vi.fn(async () => ({})),
     haltTx: vi.fn(async () => ({})),

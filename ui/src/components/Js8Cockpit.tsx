@@ -12,7 +12,7 @@ import { useDecoderSettings } from '../remote-web/useDecoderSettings'
 import { useReceiverSettings } from '../remote-web/useReceiverSettings'
 import { js8DisplayNow } from '../remote-web/js8'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
-import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch, LoggedQso } from '../types'
+import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PanelsMenu } from './PanelsMenu'
@@ -25,7 +25,6 @@ import { useRegionCols, type RegionCols } from '../useRegionCols'
 import {
   atuTune,
   getJs8State,
-  getLog,
   getLicensedBandPlan,
   haltTx,
   js8Arm,
@@ -46,6 +45,7 @@ import {
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { callHistory } from '../features/callHistory'
+import { NO_LOG, useSharedLog } from '../features/logStore'
 import { loadJs8Pins, saveJs8Pins, sortPinnedFirst, toggleJs8Pin } from '../features/js8Pins'
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useUnits } from '../units'
@@ -230,15 +230,11 @@ export function Js8Cockpit({
   }, [remote])
 
   // THE LOGBOOK JOIN behind the roster's ✓ / Name / Comment columns. The log strip and the
-  // Operate cockpit answer "have I worked this call" exactly this way — one getLog() into
-  // features/callHistory — and this is that path, not a second one. Re-read on the view-entry
-  // edge so a QSO logged in another section shows up without a relaunch; the roster is a
-  // display join, so a stale-by-one-view read is the right cost for not polling the log.
-  const [log, setLog] = useState<LoggedQso[]>([])
-  useEffect(() => {
-    if (!active || remote) return
-    void getLog().then(setLog).catch(() => {})
-  }, [active, remote])
+  // Operate cockpit answer "have I worked this call" exactly this way — the window's shared
+  // copy of the log (features/logStore) into features/callHistory — and this is that path, not
+  // a second one. Read only while this is the visible view: the join scans the log once per
+  // heard station, and a hidden roster has no business paying that on every logged contact.
+  const log = useSharedLog(snap?.logTick, active && !remote) ?? NO_LOG
 
   // ★ PINS — an operator hold on a roster that re-sorts under him. Held in state so a write
   // that localStorage refuses still applies for the session (features/js8Pins).

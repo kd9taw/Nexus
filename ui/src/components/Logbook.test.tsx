@@ -20,8 +20,12 @@ beforeAll(() => {
 
 vi.mock('../api', () => {
   const noop = () => vi.fn()
+  const getLog = vi.fn()
   return {
-    getLog: vi.fn(),
+    getLog,
+    // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
+    // the whole log (a valid answer), stocked through `getLog` as before.
+    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
     deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
     // #25 per-operator export: the Logbook asks on mount, so the mock must answer.
     // A vi.fn WITH a default implementation: the Logbook calls this on its own during render,

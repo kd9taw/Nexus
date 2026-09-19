@@ -13,6 +13,7 @@ import type { LoggedActivation, LoggedQso } from '../types'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import { modeKey } from '../features/callHistory'
+import { NO_LOG, refreshSharedLog, useSharedLog } from '../features/logStore'
 import { SpotDialog } from './SpotDialog'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
@@ -28,7 +29,6 @@ import {
   exportLogForActivation,
   logOperators,
   logActivations,
-  getLog,
   importAdif,
   logQso,
   markLotwUploaded,
@@ -308,7 +308,14 @@ export function Logbook({
   const canEdit = useLogChange('logEdit')
   const canLog = useLogChange('log.manual')
   const canQsl = useLogChange('qslMarks')
-  const [log, setLog] = useState<LoggedQso[]>([])
+  // The desktop reads the window's one shared copy of the log (features/logStore). It follows
+  // `logTick`, so the list reloads when the log changes under this view — a Remote browser's
+  // delete or edit, another instance's contact, a connector stamp. The rows are addressed by
+  // key, so a stale list is refused rather than acted on; following the tick is what keeps that
+  // refusal rare. A Remote browser shows the page of rows the station sent (below).
+  const sharedLog = useSharedLog(logTick, control)
+  const [observedLog, setLog] = useState<LoggedQso[]>([])
+  const log = control ? (sharedLog ?? NO_LOG) : observedLog
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<DraftQso>(() => ({
     call: '',
@@ -458,29 +465,10 @@ export function Logbook({
     }
   }
 
+  // After this view's own write: bring the shared copy up to date now, not on the next tick.
   const load = useCallback(() => {
-    if (!control) return
-    getLog()
-      .then(setLog)
-      .catch(() => {})
+    if (control) refreshSharedLog()
   }, [control])
-
-  useEffect(() => {
-    load()
-  }, [load])
-
-  // Reload when the log changes under this view — a Remote browser's delete or edit, another
-  // instance's contact, a connector stamp. The rows are addressed by key, so a stale list is
-  // refused rather than acted on; this is what keeps that refusal rare. The mount value is
-  // adopted, not acted on (the load above already ran), and a burst of stamps after one logged
-  // contact coalesces into a single fetch.
-  const seenLogTick = useRef(logTick)
-  useEffect(() => {
-    if (logTick === seenLogTick.current) return
-    seenLogTick.current = logTick
-    const timer = setTimeout(load, 300)
-    return () => clearTimeout(timer)
-  }, [logTick, load])
 
   // Import an external ADIF logbook → real "needs" + B4. Read the file in the
   // browser/WebView (no fs plugin), hand the text to the engine.

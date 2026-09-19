@@ -105,6 +105,8 @@ vi.mock('../api', async (importOriginal) => {
     contestLogManual: vi.fn(async () => ({})),
     logQso: vi.fn(async () => ({})),
     getLog: vi.fn(async () => priorQsos),
+    // …read through the shared log store, which asks get_log_delta: the whole log, every time.
+    getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: priorQsos })),
     lookupPark: vi.fn(async () => null),
     lookupParkLive: vi.fn(async () => null),
     qrzLookup: vi.fn(async () => resolved),

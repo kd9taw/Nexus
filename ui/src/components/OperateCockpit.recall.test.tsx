@@ -87,6 +87,9 @@ const getLog = vi.fn(async () => priorQsos)
 // the call site — `resolveEntity` learned that the hard way in CockpitRecall.test.tsx.
 vi.mock('../api', () => ({
   getLog: (...a: unknown[]) => getLog(...(a as [])),
+  // The card reads the shared log store, which asks get_log_delta. Every answer here is the
+  // whole log (a valid answer), from `getLog` — so its call count is the store's read count.
+  getLogDelta: async () => ({ revision: 1, full: true, rows: await getLog() }),
   qrzLookup: (...a: unknown[]) => qrzLookup(...(a as [])),
   resolveEntity: vi.fn(async () => 'United States'),
   getSettings: vi.fn(() => Promise.resolve({})),
@@ -125,6 +128,8 @@ function makeSnap(dxcall: string | null = null, loggedTick = 0): AppSnapshot {
   return {
     mycall: 'KD9TAW',
     loggedTick,
+    // A logged contact moves the log's own tick too, as the engine does; the card follows it.
+    logTick: loggedTick,
     mygrid: MY_GRID,
     // The station is on screen because we decoded it, and the frame carried a square.
     stations: [
@@ -387,18 +392,37 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
     ).toBe(false)
   })
 
-  it('re-reads the logbook on each selection — the sequencer logs behind the operator', async () => {
-    // The one deliberate difference from LogEntry, and it is not tidiness: Operate files a
-    // contact the moment the exchange completes, with no click. A read-once card would tell
-    // an operator they had never worked a station they worked ten minutes ago.
+  it('a card opened after the sequencer logged behind the operator shows that contact', async () => {
+    // Operate files a contact the moment the exchange completes, with no click. A read-once card
+    // would tell an operator they had never worked a station they worked ten minutes ago. The
+    // card used to re-read the whole log on every selection for that; it now reads the window's
+    // shared copy, which follows the engine's tick — so a selection alone reads nothing, and the
+    // background contact still reaches the next card opened.
     const { rerender } = renderCockpit('W1ABC')
     await card()
     const first = getLog.mock.calls.length
     expect(first).toBeGreaterThan(0)
-    rerender(<div />) // unmount path is irrelevant here; the count is what is asserted
-    cleanup()
-    renderCockpit('K9XYZ')
-    await waitFor(() => expect(getLog.mock.calls.length).toBeGreaterThan(first))
+
+    // The sequencer works and logs K9XYZ with W1ABC still on the card; the tick moves.
+    const k9xyz = { ...priorQsos[0], call: 'K9XYZ', notes: undefined } as unknown as LoggedQso
+    getLog.mockImplementation(async () => [...priorQsos, k9xyz])
+    try {
+      rerender(cockpit('W1ABC', 'classic', null, 1))
+      await waitFor(() => expect(getLog.mock.calls.length).toBeGreaterThan(first))
+      const afterLog = getLog.mock.calls.length
+
+      // The operator clicks K9XYZ: its card lists the contact, and the click itself read nothing.
+      rerender(cockpit('K9XYZ', 'classic', null, 1))
+      await waitFor(() =>
+        expect(
+          within(document.querySelector('.recall-log-list') as HTMLElement).getAllByRole('listitem'),
+          'the card never showed the contact the sequencer logged',
+        ).toHaveLength(1),
+      )
+      expect(getLog.mock.calls.length, 'a selection re-read the log').toBe(afterLog)
+    } finally {
+      getLog.mockImplementation(async () => priorQsos)
+    }
   })
 
   it('re-reads the logbook when a QSO is logged with the SAME station still on the card (#282)', async () => {
