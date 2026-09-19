@@ -17474,13 +17474,14 @@ contact yourself."
             return None;
         }
         let rule = station.log.dupe_rule();
+        // The general log's half, kept against the log's revision; the copies below are
+        // bounded by the session, not by the log.
         let since = self
             .station
-            .logbook
-            .worked_keys_since(station.log.session.start_unix, &rule);
-        let mut exact = since.exact;
+            .worked_since(station.log.session.start_unix, &rule);
+        let mut exact = since.exact.clone();
         exact.extend(station.log.worked_keys().iter().cloned());
-        let mut calls = since.worked_this_session;
+        let mut calls = since.worked_this_session.clone();
         calls.extend(
             station
                 .log
@@ -17524,14 +17525,17 @@ contact yourself."
         // (O(roster × log)). This snapshot runs under the engine mutex on the 300 ms UI poll and
         // again every slot boundary; the old multiplicative sweep held the lock long enough to
         // stall the waterfall's spectrum fetch (which needs the same lock) for 1–2 s at low CPU.
-        let worked = self.station.logbook.worked_call_set();
+        // And not even once per call: one sweep per snapshot is still the whole log under this
+        // lock, so the sets are kept against the log's revision and an unchanged log costs none
+        // (`StationCore::worked_sets`).
+        //
         // The band-scope B4 index, built in the SAME single sweep discipline (a per-row
         // logbook probe under the engine mutex is the 1-2 s waterfall stall). WSJT-X shows
         // both scopes at once (Call and CallBand highlights); mode folds in only when the
         // operator asked (`b4_match_mode`, default off — its HighlightByMode).
         let fold_mode = self.settings.b4_match_mode;
         s.b4_match_mode = fold_mode;
-        let worked_band_set = self.station.logbook.worked_band_set(fold_mode);
+        let (worked, worked_band_set) = self.station.worked_sets(fold_mode);
         let cur_band_key = tempo_core::logbook::Logbook::band_key(
             &self.settings.band,
             self.adif_mode_for_tier(),
@@ -17541,7 +17545,7 @@ contact yourself."
         // The lifetime index says "you worked this station once, some year"; during a
         // contest the operator needs "is this a dupe in THIS session, under THIS
         // sponsor's rule", and a station worked at last year's Field Day is not one.
-        // One extra sweep, bounded by the session start, beside the two above.
+        // One extra sweep, bounded by the session start, kept like the two above.
         let session_b4 = self.session_b4();
         for st in &mut s.stations {
             let up = st.call.to_ascii_uppercase();
@@ -18090,7 +18094,7 @@ contact yourself."
         s.upload_note = self.station.upload_note.clone();
         s.upload_ok = self.station.upload_ok;
         s.upload_tick = self.station.upload_tick;
-        s.log_tick = self.station.log_tick;
+        s.log_tick = self.station.log_tick();
         s.pending_log = self.pending_log.clone().map(Into::into);
         s
     }
@@ -20866,6 +20870,18 @@ contact yourself."
     /// Retain across chunked reads to detect any intervening log mutation/replacement.
     pub fn log_read_token(&self) -> std::sync::Arc<()> {
         self.station.logbook.read_token()
+    }
+
+    /// The log's revision — the key a whole-log result is cached against. See
+    /// [`tempo_core::logbook::Logbook::revision`].
+    pub fn log_revision(&self) -> u64 {
+        self.station.logbook.revision()
+    }
+
+    /// Whether the log only grew since it stood at `revision`. See
+    /// [`tempo_core::logbook::Logbook::appended_only_since`].
+    pub fn log_appended_only_since(&self, revision: u64) -> bool {
+        self.station.logbook.appended_only_since(revision)
     }
 
     /// See [`StationCore::get_log`].
@@ -25650,6 +25666,160 @@ mod tests {
             "snapshot() swept the logbook {sweeps} times for 40 decode rows — \
              a per-row sweep has regrown (use the prebuilt worked set)"
         );
+
+        // …and an UNCHANGED log is not swept at all. One sweep per snapshot is still the whole
+        // log under the engine lock, on every 300 ms poll and every slot boundary: at 150k QSOs
+        // that was the big-log report's stall. The sets are kept against the log's revision.
+        tempo_core::logbook::LOG_SWEEPS.with(|c| c.set(0));
+        let _again = e.snapshot();
+        let sweeps = tempo_core::logbook::LOG_SWEEPS.with(|c| c.get());
+        assert_eq!(
+            sweeps, 0,
+            "a snapshot of an unchanged log swept it {sweeps} times"
+        );
+    }
+
+    /// The B4 sets are kept against the log's revision, so EVERY kind of change must reach the
+    /// very next snapshot: a newly logged call is marked, an edited or deleted one is not — on
+    /// the decode feed and the roster, in the call scope and the band scope. A cache that missed
+    /// one of these writes would paint a B4 the log no longer holds, or hide one it does.
+    #[test]
+    fn worked_before_marks_follow_every_kind_of_log_change() {
+        use tempo_core::logbook::{adif_header, adif_record};
+        let dir = std::env::temp_dir().join(format!("nexus-b4-revision-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.adi");
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_log_path(path.clone());
+        assert_eq!(e.settings.band, "20m", "fixture: the band scope is 20m");
+        let calls = ["W1AAA", "W2BBB", "W3CCC", "W4DDD", "W5EEE"];
+        let rows: Vec<modes::Decode> = calls
+            .iter()
+            .map(|c| dec_snr(&format!("CQ {c} FN31"), -8))
+            .collect();
+        e.ingest_decodes_for_test(&rows, 2);
+        // (worked, worked_band) as the next snapshot paints `call` — the feed and the roster
+        // must agree, so one answer stands for both.
+        let marks = |e: &Engine, call: &str| -> (bool, bool) {
+            let snap = e.snapshot();
+            let row = snap
+                .recent_decodes
+                .iter()
+                .find(|d| d.from.as_deref() == Some(call))
+                .expect("a decode row for the call");
+            let st = snap
+                .stations
+                .iter()
+                .find(|s| s.call == call)
+                .expect("a roster row for the call");
+            assert_eq!(
+                (st.worked, st.worked_band),
+                (row.worked, row.worked_band),
+                "{call}: the roster and the feed disagree"
+            );
+            (row.worked, row.worked_band)
+        };
+        for c in calls {
+            assert_eq!(marks(&e, c), (false, false), "{c}: nothing is logged yet");
+        }
+
+        e.log_qso(qrec("W1AAA", "20m"));
+        assert_eq!(
+            marks(&e, "W1AAA"),
+            (true, true),
+            "a logged call is marked at once"
+        );
+
+        e.import_adif(&(adif_header() + &adif_record(&qrec("W2BBB", "40m"))));
+        assert_eq!(
+            marks(&e, "W2BBB"),
+            (true, false),
+            "an imported call is marked; its 40m contact is not this band"
+        );
+
+        let mut to_40 = e.log_records()[0].clone();
+        to_40.band = "40m".into();
+        assert!(e.update_qso(0, to_40));
+        assert_eq!(
+            marks(&e, "W1AAA"),
+            (true, false),
+            "an edit that moves the band moves the band mark"
+        );
+        let mut busted = e.log_records()[0].clone();
+        busted.call = "W3CCC".into();
+        assert!(e.update_qso(0, busted));
+        assert_eq!(
+            marks(&e, "W1AAA"),
+            (false, false),
+            "a corrected call is unmarked"
+        );
+        assert_eq!(
+            marks(&e, "W3CCC"),
+            (true, false),
+            "…and the correction is marked"
+        );
+
+        let at = e
+            .log_records()
+            .iter()
+            .position(|r| r.call == "W2BBB")
+            .unwrap();
+        assert!(e.delete_qso(at));
+        assert_eq!(
+            marks(&e, "W2BBB"),
+            (false, false),
+            "a deleted call is unmarked"
+        );
+
+        // Another instance's append to the shared file, reconciled in.
+        Logbook::append(&path, &qrec("W4DDD", "20m")).unwrap();
+        assert!(
+            e.sync_shared_log_if_changed(),
+            "fixture: the disk change was seen"
+        );
+        assert_eq!(
+            marks(&e, "W4DDD"),
+            (true, true),
+            "a reconciled-in call is marked"
+        );
+
+        // A downloaded log (QRZ two-way sync) merged in.
+        e.merge_qrz_report(&adif_record(&qrec("W5EEE", "20m")));
+        assert_eq!(
+            marks(&e, "W5EEE"),
+            (true, true),
+            "a merged-in call is marked"
+        );
+
+        // The band set is kept per `b4_match_mode` too: folding the mode in re-keys it.
+        e.settings.b4_match_mode = true;
+        e.settings.band = "40m".into();
+        assert_eq!(
+            marks(&e, "W3CCC"),
+            (true, true),
+            "fixture: W3CCC is an FT8 contact on 40m"
+        );
+        let mut to_cw = e
+            .log_records()
+            .iter()
+            .find(|r| r.call == "W3CCC")
+            .unwrap()
+            .clone();
+        to_cw.mode = "CW".into();
+        let at = e
+            .log_records()
+            .iter()
+            .position(|r| r.call == "W3CCC")
+            .unwrap();
+        assert!(e.update_qso(at, to_cw));
+        assert_eq!(
+            marks(&e, "W3CCC"),
+            (true, false),
+            "under the mode fold, a CW contact is not a B4 for FT8"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -30742,6 +30912,47 @@ mod tests {
         assert!(e.delete_qso(0));
         moved(&e, "a delete");
 
+        use tempo_core::logbook::{adif_header, adif_record, UploadOutcome};
+        e.import_adif(&(adif_header() + &adif_record(&qrec("N0IMP", "40m"))));
+        moved(&e, "an import");
+        let pushed = e.log_records()[0].clone();
+        assert!(e.stamp_qrz_upload(&pushed, UploadOutcome::Accepted, 1, None));
+        moved(&e, "an upload stamp");
+        let echo = adif_record(&e.log_records()[0]);
+        assert_eq!(
+            e.merge_lotw_own_echo(&echo, 2),
+            1,
+            "fixture: the echo promotes"
+        );
+        moved(&e, "a LoTW own-QSO echo");
+        // The same echo again finds the row already on file: it re-stamps it without counting
+        // it as promoted, so nothing downstream saves — and the tick used to stay put.
+        assert_eq!(
+            e.merge_lotw_own_echo(&echo, 3),
+            0,
+            "fixture: already on file"
+        );
+        moved(&e, "a LoTW echo that re-stamps a row already on file");
+
+        let dir = std::env::temp_dir().join(format!("nexus-log-tick-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.adi");
+        std::fs::write(&path, adif_header() + &adif_record(&qrec("N0LOAD", "20m"))).unwrap();
+        e.set_log_path(path.clone());
+        assert_eq!(
+            e.log_records().len(),
+            1,
+            "fixture: the file's log replaced the old one"
+        );
+        moved(&e, "a log loaded from disk");
+        Logbook::append(&path, &qrec("N0EXT", "20m")).unwrap();
+        assert!(
+            e.sync_shared_log_if_changed(),
+            "fixture: the disk change was seen"
+        );
+        moved(&e, "another instance's append, picked up from disk");
+
         // Refused changes are not changes: nothing moved, so the view has nothing to reload.
         assert!(!e.delete_qso(99));
         assert_eq!(
@@ -30749,6 +30960,7 @@ mod tests {
             last,
             "an out-of-range delete changes nothing"
         );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -32175,6 +32387,14 @@ mod tests {
         assert!(
             sweeps <= 3,
             "a contest snapshot swept the logbook {sweeps} times for 40 decode rows"
+        );
+        // The session sweep is kept like the lifetime ones: an unchanged log costs none.
+        tempo_core::logbook::LOG_SWEEPS.with(|c| c.set(0));
+        let _ = e.snapshot();
+        let sweeps = tempo_core::logbook::LOG_SWEEPS.with(|c| c.get());
+        assert_eq!(
+            sweeps, 0,
+            "a contest snapshot of an unchanged log swept it {sweeps} times"
         );
     }
 

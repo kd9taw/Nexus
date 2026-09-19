@@ -19,8 +19,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use tempo_core::logbook::{Logbook, QsoRecord};
+use tempo_core::logbook::{Logbook, QsoRecord, WorkedSince};
 
 use crate::engine::{
     now_unix_secs, LotwResolver, PendingUpload, HUNT_TTL_SECS, MAX_UPLOAD_RETRIES, SSTV_GALLERY_CAP,
@@ -67,6 +68,22 @@ fn band_key(band: &str) -> String {
     crate::bandplan::canonical_band(band).to_ascii_lowercase()
 }
 
+/// The worked-before (B4) sweeps `Engine::snapshot` reads, each with the log revision (and the
+/// other inputs) it was built from. See [`StationCore::worked_sets`].
+#[derive(Default)]
+pub(crate) struct B4Cache {
+    /// `(revision, fold_mode, calls, bands)`.
+    #[allow(clippy::type_complexity)]
+    lifetime: Option<(
+        u64,
+        bool,
+        Arc<HashSet<String>>,
+        Arc<HashSet<(String, String)>>,
+    )>,
+    /// `(revision, session start, rule, sweep)`.
+    session: Option<(u64, u64, tempo_core::contest::DupeRule, Arc<WorkedSince>)>,
+}
+
 /// The operator's station: one log, one identity of record, one set of outbound
 /// connector queues — shared by every receive/transmit chain the app runs.
 pub struct StationCore {
@@ -107,14 +124,12 @@ pub struct StationCore {
     pub(crate) upload_note: Option<String>,
     pub(crate) upload_ok: bool,
     pub(crate) upload_tick: u32,
-    /// Bumped on EVERY change to the in-memory log — an append, a full rewrite (edit, delete,
-    /// QSL mark, import, sync, upload stamp) or another instance's appends folded in. The
-    /// desktop log view reloads on change. It exists because Remote made the log a
-    /// two-writer resource: the view used to load once and address rows by position, and a
-    /// browser's delete shifted every later row under the operator's next click.
-    pub(crate) log_tick: u32,
     /// Persistent QSO logbook (worked-before / ADIF), loaded from `log_path`.
     pub(crate) logbook: Logbook,
+    /// The B4 sweeps, kept against the log's revision (see [`Self::worked_sets`]). A `Mutex`
+    /// because the snapshot builds them through `&self`; it is only ever taken under the engine
+    /// lock, so it never waits.
+    pub(crate) b4_cache: std::sync::Mutex<B4Cache>,
     /// ADIF file the logbook is persisted to, if the shell set one.
     pub(crate) log_path: Option<PathBuf>,
     /// Last-seen (mtime, byte length) of the SHARED `log.adi` — the freshness
@@ -231,8 +246,8 @@ impl StationCore {
             upload_note: None,
             upload_ok: false,
             upload_tick: 0,
-            log_tick: 0,
             logbook: Logbook::new(),
+            b4_cache: Default::default(),
             log_path: None,
             last_log_mtime: None,
             fd_log_path: None,
@@ -489,6 +504,76 @@ impl StationCore {
     /// How many parks the operator has imported from their Hunted Parks.CSV.
     pub fn hunted_parks_import_count(&self) -> usize {
         self.hunted_parks_import.len()
+    }
+
+    /// What the snapshot reports as `log_tick`: the low 32 bits of the log's revision, so it
+    /// moves on EVERY write to the records — an append, a rewrite (edit, delete, QSL mark,
+    /// import, sync, upload stamp), another instance's appends folded in, or a load. (A write
+    /// that turns out to change nothing can move it too; that costs a reload, never a miss.)
+    /// The log views reload when it moves. It exists because Remote made the log a two-writer
+    /// resource: the view used to load once and address rows by position, and a browser's
+    /// delete shifted every later row under the operator's next click.
+    ///
+    /// It used to be a counter bumped by hand in each write path, and two paths had no bump: a
+    /// log loaded by [`Self::set_log_path`], and a LoTW own-QSO echo that re-stamps rows already
+    /// on file without counting them as promoted. Read off the revision, a write path cannot
+    /// forget it.
+    pub(crate) fn log_tick(&self) -> u32 {
+        self.logbook.revision() as u32
+    }
+
+    /// The lifetime worked-before sets — every worked call, and every `(call, band)` pair
+    /// (band·mode under `fold_mode`) — exactly as [`Logbook::worked_call_set`] and
+    /// [`Logbook::worked_band_set`] build them, kept until the log's revision or `fold_mode`
+    /// moves.
+    ///
+    /// `Engine::snapshot` reads these on every call: the UI polls it every 300 ms per window,
+    /// the radio loop calls it at every slot boundary, and it runs under the engine lock. Two
+    /// fresh sweeps per call held that lock for a time that grew with the log. The revision moves
+    /// on every write to the records — one choke point in `tempo_core::logbook` — so no write
+    /// path can leave these stale, and an unchanged log costs no sweep at all.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn worked_sets(
+        &self,
+        fold_mode: bool,
+    ) -> (Arc<HashSet<String>>, Arc<HashSet<(String, String)>>) {
+        let revision = self.logbook.revision();
+        let mut cache = self
+            .b4_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((rev, fold, calls, bands)) = &cache.lifetime {
+            if *rev == revision && *fold == fold_mode {
+                return (calls.clone(), bands.clone());
+            }
+        }
+        let calls = Arc::new(self.logbook.worked_call_set());
+        let bands = Arc::new(self.logbook.worked_band_set(fold_mode));
+        cache.lifetime = Some((revision, fold_mode, calls.clone(), bands.clone()));
+        (calls, bands)
+    }
+
+    /// The contest session's sweep of the general log ([`Logbook::worked_keys_since`]), kept
+    /// the same way as [`Self::worked_sets`] until the revision, the session start or the rule
+    /// moves.
+    pub(crate) fn worked_since(
+        &self,
+        cutoff: u64,
+        rule: &tempo_core::contest::DupeRule,
+    ) -> Arc<WorkedSince> {
+        let revision = self.logbook.revision();
+        let mut cache = self
+            .b4_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((rev, at, held, sweep)) = &cache.session {
+            if *rev == revision && *at == cutoff && held == rule {
+                return sweep.clone();
+            }
+        }
+        let sweep = Arc::new(self.logbook.worked_keys_since(cutoff, rule));
+        cache.session = Some((revision, cutoff, *rule, sweep.clone()));
+        sweep
     }
 
     /// Recompute the worked-entity and worked-grid sets from the logbook. Cheap
@@ -866,7 +951,6 @@ impl StationCore {
             self.logbook.reconcile_disk(&disk);
         }
         self.last_log_mtime = stamp;
-        self.log_tick = self.log_tick.wrapping_add(1);
         true
     }
 
@@ -922,9 +1006,6 @@ impl StationCore {
         recs: &[QsoRecord],
         receipt: bool,
     ) -> Option<Vec<tempo_core::logbook::LogAppendReceipt>> {
-        // The records are in memory already (the contract above), so the log HAS changed
-        // whether or not a file exists to append to.
-        self.log_tick = self.log_tick.wrapping_add(1);
         let path = self.log_path.clone()?;
         debug_assert!(
             self.logbook.records().ends_with(recs),
@@ -965,9 +1046,6 @@ impl StationCore {
     /// so the recovery gate above doesn't re-parse our own write on the next
     /// stamp. Every full-log rewrite in this file funnels through here.
     fn save_log(&mut self, context: &str) {
-        // Memory changed before the caller got here; the view must reload even when there is
-        // no file, or the write fails.
-        self.log_tick = self.log_tick.wrapping_add(1);
         let Some(path) = self.log_path.clone() else {
             return;
         };
