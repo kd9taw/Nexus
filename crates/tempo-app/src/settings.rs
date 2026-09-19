@@ -4426,6 +4426,16 @@ impl Settings {
             return (rule.radio != self.active_radio).then_some(rule.radio);
         }
         self.radio_for_band(band).or_else(|| {
+            // ⚠️ THE DEFAULT IS THE NET FOR BANDS THE ACTIVE RADIO DOES NOT COVER. `radio_for_band`
+            // answers None both when nobody covers the band AND when the active radio does, and
+            // reading the second as "fall to the default" moved an FT-890 onto a Hermes on every
+            // frequency change. Covered = listed, or no band list at all (a catch-all).
+            let active_covers = self.active_profile().is_some_and(|p| {
+                p.bands.is_empty() || p.bands.iter().any(|b| b.eq_ignore_ascii_case(band))
+            });
+            if active_covers {
+                return None;
+            }
             self.default_radio
                 .filter(|id| usable(*id) && *id != self.active_radio)
         })
@@ -6710,6 +6720,46 @@ mod tests {
             s.route_radio("20m", RouteMode::Ssb),
             Some(ft991a),
             "the trailing catch-all now claims what nothing else did"
+        );
+    }
+
+    /// A default radio is the net for bands the ACTIVE radio does not cover — never a reason to
+    /// leave one it does. `radio_for_band` answers None both when nobody covers the band AND when
+    /// the active radio covers it, and `route_radio` read both as "fall to the default", so a
+    /// default took over on every frequency change. Field report: FT-890 + Hermes Lite on OmniRig
+    /// RIG1/RIG2, the FT-890 "after a while" handed itself to the Hermes while transmitting.
+    #[test]
+    fn a_default_radio_never_takes_a_band_the_active_radio_covers() {
+        let mut s = three_radio_shack();
+        s.routing_rules.clear();
+        // Only the active radio may touch 40 m, so tier 2 cannot decide and tier 3 is isolated.
+        for p in s.radios.iter_mut() {
+            p.bands = match p.id {
+                1 => vec!["2m".into(), "70cm".into()],
+                2 => vec!["2m".into()],
+                _ => vec![],
+            };
+        }
+        s.active_radio = 0;
+        s.default_radio = Some(2);
+        // 1. An active radio with NO band list covers everything — the likely reporter setup.
+        assert_eq!(
+            s.route_radio("40m", RouteMode::Digital),
+            None,
+            "the default stole a band the active radio covers"
+        );
+        // 2. An active radio that LISTS the band.
+        s.radios.iter_mut().find(|p| p.id == 0).unwrap().bands = vec!["40m".into()];
+        assert_eq!(
+            s.route_radio("40m", RouteMode::Digital),
+            None,
+            "the default stole a band the active radio lists"
+        );
+        // 3. CONTROL — a band the active radio does NOT cover still falls to the default.
+        assert_eq!(
+            s.route_radio("6m", RouteMode::Digital),
+            Some(2),
+            "the net must still catch uncovered bands"
         );
     }
 

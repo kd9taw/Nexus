@@ -156,6 +156,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two radios: a default radio no longer takes over the one you are using.** With a "default
+  radio" set for everything else, changing frequency on your active radio could hand control to the
+  default one — even on a band the active radio covers. Tuning, a spot click, or another program
+  setting the frequency through Nexus's CAT sharing (WSJT-X or JTDX split, for example) could all do
+  it, so a radio could switch away mid-session. The default radio now only takes bands the active
+  radio does not cover.
+
+- **Two radios: switching radios never leaves the old one transmitting.** When you switch radios
+  while one is transmitting, Nexus unkeys it first. If that unkey did not go through, the switch
+  went ahead anyway and left the old radio keyed in the background, where nothing could unkey it.
+  The switch now waits until the old radio has really stopped transmitting, and keeps trying to
+  unkey it until it does. Nexus also now writes to its log which audio device it opened after a
+  switch, or why it could not, so a radio that loses its audio can be diagnosed.
+
 - **CW with the soundcard keyer: clicking a spot now puts you on the spot.** The soundcard keyer
   sends CW as an audio tone in the radio's data mode, where the tone goes out a pitch above the dial
   (below it on 80 and 40 m). Clicking a spot tuned the dial straight to the spot, so you transmitted

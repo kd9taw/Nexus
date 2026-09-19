@@ -2313,6 +2313,24 @@ fn handoff_if_switched(
             k.clear();
         }
     }
+    // ⚠️ NEVER SWAP A STILL-KEYED RIG INTO THE BACKGROUND. The unkey above is one best-effort try,
+    // and `Rig::ptt` clears `keyed` only on a SUCCESSFUL unkey — so `rig.keyed` still true here
+    // means it failed. Swapping now would demote a keyed radio into the read-only pool, where it is
+    // put in VOX (PTT becomes a no-op), the per-tick self-heal no longer runs on it, and nothing can
+    // unkey it: the 1.10.2 stuck-TX class, which stranded a Yaesu keyed. HOLD the switch instead.
+    // This radio stays active, and with `tx_until_ms` cleared above and `keyed` still true the
+    // self-heal fires every tick; the swap lands on the first tick the rig is genuinely down. The
+    // Remote path already refuses a keyed switch (`remote_selection.rs`) — the same rule.
+    if rig.keyed {
+        if !state.handoff_deferred {
+            tempo_core::applog::info(
+                "radio",
+                "switch held: the outgoing radio did not unkey — retrying until it does",
+            );
+        }
+        state.handoff_deferred = true;
+        return;
+    }
     let mut p = match pool.try_lock() {
         Ok(p) => p,
         // FIX #4: recover a poisoned pool (like poll/reconcile do) — else every future switch would be
@@ -5650,6 +5668,16 @@ impl RadioLoop {
                             *backend = b;
                         }
                         audio_rebuilt = true;
+                        // ⚠️ NAME THE DEVICE IN THE LOG. A rebuild used to say nothing, so a report of
+                        // "FT decode died after switching radios" could not be told apart from a wrong
+                        // device, a silent one, or a failed open (field report: FT-890 + Hermes Lite).
+                        tempo_core::applog::info(
+                            "audio",
+                            &format!(
+                                "capture opened on {:?} (radio {remote_want_radio})",
+                                want.audio_in
+                            ),
+                        );
                         // New stream, new ring: republish so the producer rebuilds its resampler
                         // and clears its window rather than smearing two sample rates together.
                         if let Some((ring, rate)) = backend.spectrum_tap() {
@@ -5688,6 +5716,12 @@ impl RadioLoop {
                         self.voice_mic_open = false;
                     }
                     Err(e) => {
+                        // The banner alone never reached the log, so a failed open after a radio
+                        // switch left no trace for anyone reading it afterwards.
+                        tempo_core::applog::info(
+                            "audio",
+                            &format!("capture FAILED to open on {:?}: {e}", want.audio_in),
+                        );
                         {
                             let mut eng = engine_lock(engine);
                             eng.set_audio_error(Some(format!("Audio device failed to open: {e}")));
@@ -19135,6 +19169,90 @@ mod tests {
         assert!(!state.manual_ptt_applied, "manual PTT cleared on handoff");
         assert!(!state.tuning_keyed);
         assert_eq!(last_active, r1, "still completed the switch");
+    }
+
+    /// TX-SAFETY — the failure half the VOX test above cannot reach, because a VOX unkey always
+    /// succeeds. When the outgoing rig's unkey FAILS, the switch must be HELD: swapping would demote a
+    /// still-keyed radio into the read-only pool, where nothing can unkey it (the 1.10.2 stuck-TX
+    /// class). Field report: FT-890 + Hermes Lite on OmniRig. The VOX test above is the control — a
+    /// successful unkey still completes the switch.
+    #[test]
+    fn a_switch_is_held_while_the_outgoing_rig_will_not_unkey() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (r1, r1_transport) = {
+            let mut e = engine.lock().unwrap();
+            let r1 = e.add_radio();
+            let p = e
+                .settings()
+                .radios
+                .iter()
+                .find(|p| p.id == r1)
+                .unwrap()
+                .clone();
+            (r1, Transport::from_profile(&p))
+        };
+        let mut state = loop_state();
+        state.applied = cat_transport(4532, None);
+        state.tx_until_ms = Some(now_unix_ms() + 5000.0);
+        // A CAT-keyed rig on a DEAD link: bind a port and drop it so nothing listens. The unkey is
+        // refused, and `Rig::ptt` leaves `keyed` true — exactly a failed unkey.
+        let dead = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        // SCENE, proved on its own and BEFORE the handoff: a swap REPLACES `rig` with the incoming
+        // radio's fresh, unkeyed rig, so `rig.keyed` read afterwards cannot tell a failed unkey from
+        // a completed swap. A probe on the same dead link must refuse the unkey and stay keyed.
+        let mut probe = Rig::with_control(Some(dead.to_string()), PttMode::Cat);
+        probe.keyed = true;
+        assert!(
+            probe.ptt(false).is_err(),
+            "scene: the dead link must refuse the unkey"
+        );
+        assert!(
+            probe.keyed,
+            "scene: a refused unkey must leave the rig keyed"
+        );
+        let mut rig = Rig::with_control(Some(dead.to_string()), PttMode::Cat);
+        rig.keyed = true;
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
+            id: r1,
+            rig: Rig::with_control(
+                Some(format!("127.0.0.1:{}", r1_transport.rigctld_port)),
+                PttMode::Vox,
+            ),
+            transport: r1_transport,
+            rigctld_proc: None,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        }]));
+        let mut last_active = 0u32;
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        engine.lock().unwrap().set_active_radio(r1);
+        handoff_if_switched(
+            &engine,
+            &pool,
+            &mut rig,
+            &mut state,
+            &mut last_active,
+            &pending,
+        );
+        assert_eq!(
+            last_active, 0,
+            "THE FIX: a still-keyed rig must never be swapped into the background"
+        );
+        assert!(
+            state.handoff_deferred,
+            "the switch is HELD, not dropped — it lands once the rig unkeys"
+        );
+        assert!(
+            rig.keyed,
+            "and the radio still active is the keyed one, where the self-heal keeps unkeying it"
+        );
     }
 
     #[test]
