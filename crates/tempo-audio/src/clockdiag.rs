@@ -49,9 +49,12 @@ const THIRD_PARTY_CLIENTS: [(&str, &str); 5] = [
     ("d4.exe", "Dimension 4"),
     ("chronyd.exe", "chrony"),
     // Reported 2026-09-17: an operator's waterfall froze intermittently alongside this program's
-    // "Invalid Server Time! Server: time.nist.gov" dialog. Nexus never asks a time server, so the
-    // dialog was never ours — but a client that fails and retries steps the clock more often than
-    // a healthy one, and a step is what stalls a wall-clock-driven decode. Image confirmed as
+    // "Invalid Server Time! Server: time.nist.gov" dialog. The dialog is that program's own window,
+    // never Nexus's — but Nexus's clock probe DOES ask time.nist.gov too (`CLOCK_SERVERS` in
+    // service.rs), and NIST refuses a client that asks more than once every 4 s, so two programs
+    // asking from one address can make one of them see a refusal. A client that fails and retries
+    // steps the clock more often than a healthy one, and a step is what stalls a wall-clock-driven
+    // decode. Image confirmed as
     // `timesync.exe` in `C:\Program Files (x86)\VOVSOFT\Time Sync`.
     // ⚠️ Catches it only while it is RESIDENT. The vendor documents neither a service nor a tray
     // mode, so a scheduled run that steps the clock and exits is invisible to `tasklist` and this
@@ -1157,8 +1160,9 @@ TimeSync.exe                  9112 Console                    1     12,480 K
 ";
 
     /// An operator reported an intermittently freezing waterfall alongside VOVSOFT Time Sync's
-    /// "Invalid Server Time!" dialog (2026-09-17). Nexus never asks a time server, so that dialog
-    /// was never ours — but the program owns the clock while it runs, and guard 8 has to see it.
+    /// "Invalid Server Time!" dialog (2026-09-17). That dialog is the program's own window, not
+    /// Nexus's (Nexus's clock probe asks time.nist.gov too, but shows no such dialog) — and the
+    /// program owns the clock while it runs, so guard 8 has to see it.
     ///
     /// ⚠️ THE CASING IN THIS FIXTURE IS THE POINT. `tasklist` prints the image as it is named on
     /// disk, and the vendor ships `timesync.exe` while a repackage or a rename can just as easily
