@@ -5423,6 +5423,7 @@ export const FR: PartialCatalog = {
   "shell.lane.txPowerZero.detail": "La radio annonce 0% de puissance alors que l'émission est armée — elle passera en émission sans rien mettre sur l'air. Vérifiez le curseur Pwr, et la puissance propre à CE mode sur la radio : les Yaesu gardent un niveau distinct pour SSB, DATA, CW et AM.",
   "shell.lane.txPowerZero.message": "AUCUNE PUISSANCE HF",
   "shell.loading": "Connexion à Nexus…",
+  "shell.log.movedOn": "Ce contact avait déjà été enregistré ou abandonné : rien n'a été enregistré, et celui qui attendait s'affiche maintenant.",
   "shell.log.discard.failed": "Impossible d'abandonner le QSO",
   "shell.log.failed": "Impossible d'enregistrer le QSO",
   "shell.message.failed": "Le message n'a pas pu être envoyé",

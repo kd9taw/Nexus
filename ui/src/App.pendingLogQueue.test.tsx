@@ -14,6 +14,8 @@
 // it a record directly and would pass either way.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/react'
+import { pushToast } from './toast'
+import { EN } from './i18n/en'
 import type { AppSnapshot, LoggedQso } from './types'
 
 const qso = (call: string): LoggedQso =>
@@ -61,7 +63,8 @@ vi.mock('./api', async (importOriginal) => {
     confirmPendingLog: vi.fn(async (...args: unknown[]) => {
       state.confirmCalls.push(args)
       const next = state.confirm
-      if (next instanceof Error) throw next
+      // A Tauri command returning `Err(String)` rejects with the bare string, not an Error.
+      if (next instanceof Error || typeof next === 'string') throw next
       return next
     }),
     discardPendingLog: vi.fn(async () => state.confirm),
@@ -155,7 +158,8 @@ describe('the prompt-to-log popup and the queue behind it', () => {
   })
 
   it('re-reads the station and logs nothing when the answer is refused', async () => {
-    state.confirm = new Error('pendingLogChanged')
+    // The engine's refusal is a CODE (a Tauri `Err(String)` arrives as a bare string).
+    state.confirm = 'pendingLogMovedOn'
     await openApp()
     const readsBefore = state.snapshotReads
     fireEvent.click(screen.getByRole('button', { name: 'Log QSO' }))
@@ -163,5 +167,20 @@ describe('the prompt-to-log popup and the queue behind it', () => {
     // the station rather than leave a stale popup, and log nothing.
     await waitFor(() => expect(state.snapshotReads).toBeGreaterThan(readsBefore))
     expect(document.querySelector('.logconfirm'), 'the popup vanished on a refusal').not.toBeNull()
+    // …and the operator is told in words, from the catalog. The raw code must never reach the
+    // screen: it would read the same in every language and say nothing to anyone.
+    const said = vi.mocked(pushToast).mock.calls.map((c) => String(c[0]))
+    expect(said).toContain(EN['shell.log.movedOn'])
+    expect(said.join(' ')).not.toMatch(/pendingLogMovedOn/)
+  })
+
+  it('still shows an unknown failure as itself, rather than dressing it up', async () => {
+    state.confirm = new Error('diskFull')
+    await openApp()
+    fireEvent.click(screen.getByRole('button', { name: 'Log QSO' }))
+    await waitFor(() => expect(vi.mocked(pushToast).mock.calls.length).toBeGreaterThan(0))
+    const said = vi.mocked(pushToast).mock.calls.map((c) => String(c[0])).join(' ')
+    expect(said).toContain(EN['shell.log.failed'])
+    expect(said, 'an unknown failure was reported as the queue refusal').toContain('diskFull')
   })
 })

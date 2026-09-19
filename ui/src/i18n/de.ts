@@ -5502,6 +5502,7 @@ export const DE: PartialCatalog = {
   "shell.work.here": "▶ {{call}} — {{band}} {{freq}} MHz",
   "shell.pounce.qsy.failed": "QSY zu {{call}} fehlgeschlagen",
   "shell.log.failed": "QSO konnte nicht geloggt werden",
+  "shell.log.movedOn": "Dieser Kontakt war bereits geloggt oder verworfen — es wurde nichts geloggt, und der wartende Kontakt wird jetzt angezeigt.",
   "shell.log.discard.failed": "QSO konnte nicht verworfen werden",
   "shell.toast.logged": "QSO geloggt",
   "shell.toast.nothingToLog": "Nichts zu loggen — das QSO ist bereits abgeschlossen oder es wurde kein Rapport getauscht",

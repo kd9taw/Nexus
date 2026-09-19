@@ -1403,26 +1403,43 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     getSnapshot().then(setSnap).catch(() => {})
   }, [])
 
+  // The engine refuses an answer that names a hold which is no longer the head with a CODE, not
+  // a sentence — and the wording is OURS. `withErrorToast` appends the backend's text raw after
+  // the translated fallback, so a sentence written in Rust would reach a German or Japanese
+  // operator in English, and would exist in two places at once. Same shape as the Remote
+  // refusals (`remoteBusy`, `staleContext`). Anything else keeps the generic toast, with
+  // whatever the backend said, because an unknown failure must not be dressed up as a known one.
+  const toastPendingLogError = useCallback((err: unknown, fallback: string) => {
+    const code = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+    if (code === 'pendingLogMovedOn') pushToast(t('shell.log.movedOn'), 'error')
+    else pushToast(code ? `${fallback}: ${code}` : fallback, 'error')
+  }, [])
+
   const handleConfirmLog = useCallback(
     (record: LoggedQso) => {
-      void withErrorToast(() => apiConfirmPendingLog(record, snap?.pendingQsoLogKey), t('shell.log.failed')).then((s) => {
-        if (s) {
+      void apiConfirmPendingLog(record, snap?.pendingQsoLogKey)
+        .then((s) => {
           setSnap(s)
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
-        } else reloadAfterRefusal()
-      })
+        })
+        .catch((err: unknown) => {
+          toastPendingLogError(err, t('shell.log.failed'))
+          reloadAfterRefusal()
+        })
     },
-    [refreshNeeds, reloadAfterRefusal, snap?.pendingQsoLogKey],
+    [refreshNeeds, reloadAfterRefusal, toastPendingLogError, snap?.pendingQsoLogKey],
   )
 
   const handleDiscardLog = useCallback(() => {
-    void withErrorToast(() => apiDiscardPendingLog(snap?.pendingQsoLogKey), t('shell.log.discard.failed')).then((s) => {
-      if (s) setSnap(s)
-      else reloadAfterRefusal()
-    })
-  }, [reloadAfterRefusal, snap?.pendingQsoLogKey])
+    void apiDiscardPendingLog(snap?.pendingQsoLogKey)
+      .then(setSnap)
+      .catch((err: unknown) => {
+        toastPendingLogError(err, t('shell.log.discard.failed'))
+        reloadAfterRefusal()
+      })
+  }, [reloadAfterRefusal, toastPendingLogError, snap?.pendingQsoLogKey])
 
   const handleSend = useCallback(
     (text: string) => {

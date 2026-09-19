@@ -8777,6 +8777,10 @@ export const EN = {
   'shell.pounce.qsy.failed': 'Could not QSY to {{call}}',
   'shell.log.failed': 'Could not log QSO',
   'shell.log.discard.failed': 'Could not discard QSO',
+  // The engine's refusal when the popup answered a contact that is no longer the one held (it
+  // was logged or discarded elsewhere, or replaced). The wording lives here, not in Rust.
+  'shell.log.movedOn':
+    'That contact had already been logged or discarded — nothing was logged, and the one waiting is shown now.',
   'shell.toast.logged': 'Logged QSO',
   'shell.toast.nothingToLog':
     'Nothing to log — the QSO already closed or no report was exchanged',

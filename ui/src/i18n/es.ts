@@ -5423,6 +5423,7 @@ export const ES: PartialCatalog = {
   "shell.lane.txPowerZero.detail": "El equipo indica 0% de potencia y la transmisión está armada — activará el PTT y no saldrá nada al aire. Revisa el deslizador Pwr y la potencia del propio equipo para ESTE modo: los Yaesu guardan un nivel distinto para SSB, DATA, CW y AM.",
   "shell.lane.txPowerZero.message": "SIN POTENCIA RF",
   "shell.loading": "Conectando con Nexus…",
+  "shell.log.movedOn": "Ese contacto ya se había anotado o descartado: no se anotó nada y ahora se muestra el que estaba esperando.",
   "shell.log.discard.failed": "No se pudo descartar el QSO",
   "shell.log.failed": "No se pudo anotar el QSO",
   "shell.message.failed": "No se pudo enviar el mensaje",

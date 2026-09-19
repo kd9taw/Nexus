@@ -5427,6 +5427,7 @@ export const JA: PartialCatalog = {
   "shell.work.here": "▶ {{call}} — {{band}} {{freq}} MHz",
   "shell.pounce.qsy.failed": "{{call}}へQSYできませんでした",
   "shell.log.failed": "QSOを記録できませんでした",
+  "shell.log.movedOn": "その交信はすでに記録または破棄されていました。ここでは何も記録せず、待機中の交信を表示します。",
   "shell.log.discard.failed": "QSOを破棄できませんでした",
   "shell.toast.logged": "QSOを記録しました",
   "shell.toast.nothingToLog": "記録するものがありません — QSOは既に終了しているか、レポートが交換されていません",
