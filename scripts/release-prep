@@ -66,6 +66,9 @@ fi
 sed -i "0,/^version = \"[^\"]*\"/s//version = \"$NEW\"/" src-tauri/Cargo.toml
 sed -i "0,/\"version\": *\"[^\"]*\"/s//\"version\": \"$NEW\"/" src-tauri/tauri.conf.json
 npm version --prefix ui --no-git-tag-version --allow-same-version "$NEW" >/dev/null
+# CITATION.cff sat at 0.21.5 for twenty-one releases because nothing here wrote it; it is the
+# file academic citations resolve against, so it moves with the rest.
+sed -i "0,/^version: .*/s//version: $NEW/" CITATION.cff
 
 # 2. Tracked lockfile follows the manifest.
 cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/null 2>&1 \

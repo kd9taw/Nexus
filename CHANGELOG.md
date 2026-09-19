@@ -30,50 +30,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those boxes logs the contact. A word that could be two things, or one Nexus has no list of
   values for, is left for you to type.
 
-- **Cluster login SSID — stop two stations on one callsign knocking each other off.** A cluster
-  node allows one session per callsign and disconnects the older one, so running a second Nexus,
-  or Nexus beside another cluster program on the same call, made the two bump each other
-  indefinitely: a cluster connection that flapped with no explanation on screen. Under
-  **Settings › Logging & Connectors › Integrations & Feeds › Spot Sources › Cluster login SSID**
-  you can now give each one its own SSID (`2` logs in as `W9XYZ-2`), which the node treats as a
-  separate user, and both stay connected.
-  **Nexus does not choose one for you** — it is empty by default and logs in exactly as before,
-  because a node that requires registration treats the suffixed call as a different, unregistered
-  user and will not let it post spots, and because an SSID picked for you could collide with the
-  one you already use in the other program. Your spots still reach the network under your plain
-  callsign either way; nodes relaying them strip the suffix.
-- **Nexus now picks working DX-cluster nodes for you, and shows how each node is doing.** Phone
-  spots on the Needed board and in the Spots panel come from human-run DX-cluster nodes, and a
-  node can stop working without warning: both nodes Nexus 1.13.0 shipped with did, on the same
-  day. Nexus now keeps two nodes connected, chosen from eight nodes built into this release, each
-  checked before it went in. A node that stops answering for five minutes while your other spot
-  feeds keep working is skipped for a day and another node takes its place, and the connection
-  log says which node and why. A quiet band never counts against a node: once a node has logged
-  you in, it stays in use however long the band is silent. Operators are spread across the nodes
-  by callsign, so everyone does not end up on the same two. **Settings › Logging & Connectors ›
-  Integrations & Feeds › Spot Sources** shows each node as In use, Standby, or Not answering and
-  why. If your install still had the node list Nexus shipped, it switches to this by itself. If
-  you edited the list yourself, it stays exactly as you left it and nothing is switched for you:
-  Spot Sources shows how each of your nodes is doing, and **Pick working nodes automatically** is
-  there when you want it. A node you remove from your own list now disconnects when you save,
-  instead of at the next restart.
+- **CQ World-Wide RTTY DX Contest.** Pick it under **Settings › Contesting › Contest** and the log
+  strip takes its exchange: RST, your CQ zone and, for stations in the continental USA and Canada,
+  a state or Canadian call area, using the sponsor's own codes (NWT, NF, LB and PEI among them).
+  Contacts score the way the sponsor counts them: 3 points between continents, 2 within a
+  continent, 1 within your own country, with zones, countries and W/VE QTHs each counted once per
+  band. The strip tells you when the rig is on a band the contest does not use (it runs on 80, 40,
+  20, 15 and 10 m) and still logs the contact. The Cabrillo export follows the sponsor's template:
+  a two-digit zone, DX where a station sent no QTH, the LOCATION spelling the sponsor's list uses,
+  and the category, claimed-score, name and email headers. The email comes from a new optional
+  **Email for contest logs** setting; leave it blank and the line is left out. If your callsign is
+  in the US or Canada but your contest state is blank or not on the sponsor's list, you would send
+  the DX exchange with no QTH, so Nexus warns you in Settings, on the log strip and when the
+  contest starts, and suggests the code a section means (EMA is MA). It never stops you, because
+  operating from outside the US and Canada really is DX. Typing NT or PE is read as NWT or PEI.
 
-- **Stations you have already worked now step aside on the POTA/SOTA board and the Spots panel.**
-  Both are **on by default**, and each says how many rows it is hiding.
-  - **POTA/SOTA board — Hide worked today.** An activator you logged at their park since 0000Z
-    (UTC) is hidden, so the board lists the activations you still need today. It comes back at
-    0000Z, or as soon as that activator is spotted at a different park. Only a contact logged
-    **with the park** counts: HUNT, double-clicking a park on the Connect map and Work on the
-    Needed board all add it for you, but a contact logged without the park reference hides
-    nothing.
-  - **Spots panel — Hide worked.** A station you logged is hidden on every band, for the rest of
-    the UTC day. The picker beside the chip changes that window to 1 hour, 4 hours, 24 hours or
-    7 days — for 13 Colonies, Route 66 and other events where one callsign is on the air all
-    week. A station you still need on the band and mode it was spotted on always stays.
-  - **To see everything again,** click the chip — **Hide worked today · 3** on the board,
-    **Hide worked · 12** on the Spots panel. Every row comes back marked **WORKED TODAY** or
-    **worked 2h ago**. The board remembers your choice per window; the Spots panel until you
-    close Nexus.
 - **Illinois QSO Party.** Pick it under **Settings › Contesting › Contest** and the workspace runs
   the Western Illinois ARC's own rules: 1700Z Sunday of the third full weekend of October for eight
   hours, 160 through 2 m without the WARC bands, phone 1 point and CW or digital 2. Illinois
@@ -92,26 +63,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CONTEST: ILLINOIS QSO PARTY` and an `IL-COUNTY:` header for an Illinois entry, exactly as the
   sponsor's sample log does.
 
-- **CQ World-Wide RTTY DX Contest.** Pick it under **Settings › Contesting › Contest** and the log
-  strip takes its exchange: RST, your CQ zone and, for stations in the continental USA and Canada,
-  a state or Canadian call area, using the sponsor's own codes (NWT, NF, LB and PEI among them).
-  Contacts score the way the sponsor counts them: 3 points between continents, 2 within a
-  continent, 1 within your own country, with zones, countries and W/VE QTHs each counted once per
-  band. The strip tells you when the rig is on a band the contest does not use (it runs on 80, 40,
-  20, 15 and 10 m) and still logs the contact. The Cabrillo export follows the sponsor's template:
-  a two-digit zone, DX where a station sent no QTH, the LOCATION spelling the sponsor's list uses,
-  and the category, claimed-score, name and email headers. The email comes from a new optional
-  **Email for contest logs** setting; leave it blank and the line is left out. If your callsign is
-  in the US or Canada but your contest state is blank or not on the sponsor's list, you would send
-  the DX exchange with no QTH, so Nexus warns you in Settings, on the log strip and when the
-  contest starts, and suggests the code a section means (EMA is MA). It never stops you, because
-  operating from outside the US and Canada really is DX. Typing NT or PE is read as NWT or PEI.
-
 - **The contest strip suggests a CQ zone and flags a missing QTH.** Type a call in a contest that
   exchanges CQ zones and the zone box shows the zone the country file gives that call as a faint
   hint — it never fills the box, because a station outside its prefix's zone sends its own. And
   when a USA or Canada station is about to be logged without a QTH in a contest where they send
   one, the strip says so; you can still log it.
+
+- **Nexus now picks working DX-cluster nodes for you, and shows how each node is doing.** Phone
+  spots on the Needed board and in the Spots panel come from human-run DX-cluster nodes, and a
+  node can stop working without warning: both nodes Nexus 1.13.0 shipped with did, on the same
+  day. Nexus now keeps two nodes connected, chosen from eight nodes built into this release, each
+  checked before it went in. A node that stops answering for five minutes while your other spot
+  feeds keep working is skipped for a day and another node takes its place, and the connection
+  log says which node and why. A quiet band never counts against a node: once a node has logged
+  you in, it stays in use however long the band is silent. Operators are spread across the nodes
+  by callsign, so everyone does not end up on the same two. **Settings › Logging & Connectors ›
+  Integrations & Feeds › Spot Sources** shows each node as In use, Standby, or Not answering and
+  why. If your install still had the node list Nexus shipped, it switches to this by itself. If
+  you edited the list yourself, it stays exactly as you left it and nothing is switched for you:
+  Spot Sources shows how each of your nodes is doing, and **Pick working nodes automatically** is
+  there when you want it. A node you remove from your own list now disconnects when you save,
+  instead of at the next restart.
+
+- **Cluster login SSID — stop two stations on one callsign knocking each other off.** A cluster
+  node allows one session per callsign and disconnects the older one, so running a second Nexus,
+  or Nexus beside another cluster program on the same call, made the two bump each other
+  indefinitely: a cluster connection that flapped with no explanation on screen. Under
+  **Settings › Logging & Connectors › Integrations & Feeds › Spot Sources › Cluster login SSID**
+  you can now give each one its own SSID (`2` logs in as `W9XYZ-2`), which the node treats as a
+  separate user, and both stay connected.
+  **Nexus does not choose one for you** — it is empty by default and logs in exactly as before,
+  because a node that requires registration treats the suffixed call as a different, unregistered
+  user and will not let it post spots, and because an SSID picked for you could collide with the
+  one you already use in the other program. Your spots still reach the network under your plain
+  callsign either way; nodes relaying them strip the suffix.
+
+- **Stations you have already worked now step aside on the POTA/SOTA board and the Spots panel.**
+  Both are **on by default**, and each says how many rows it is hiding.
+  - **POTA/SOTA board — Hide worked today.** An activator you logged at their park since 0000Z
+    (UTC) is hidden, so the board lists the activations you still need today. It comes back at
+    0000Z, or as soon as that activator is spotted at a different park. Only a contact logged
+    **with the park** counts: HUNT, double-clicking a park on the Connect map and Work on the
+    Needed board all add it for you, but a contact logged without the park reference hides
+    nothing.
+  - **Spots panel — Hide worked.** A station you logged is hidden on every band, for the rest of
+    the UTC day. The picker beside the chip changes that window to 1 hour, 4 hours, 24 hours or
+    7 days — for 13 Colonies, Route 66 and other events where one callsign is on the air all
+    week. A station you still need on the band and mode it was spotted on always stays.
+  - **To see everything again,** click the chip — **Hide worked today · 3** on the board,
+    **Hide worked · 12** on the Spots panel. Every row comes back marked **WORKED TODAY** or
+    **worked 2h ago**. The board remembers your choice per window; the Spots panel until you
+    close Nexus.
+
+- **Remote: a responsiveness check you can run on your own link.** In the browser's Awards view,
+  *Responsiveness → Run check* makes ten small dial steps, changes band and back, and sends one Stop
+  while the radio is idle, then reports how long the screen took to respond, how long the radio took
+  to confirm, how far the readout trailed, and how often controls went off by themselves — and
+  whether each confirmation came by the station's own push or by polling — with a copy-as-text
+  button so a result can be pasted into a report. It changes nothing while it is not
+  running. It is the yardstick every later Remote responsiveness change is measured against; the
+  same check runs in CI against a scripted station on 100 ms and 400 ms links.
 
 ### Changed
 
@@ -121,17 +132,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Field Day logs are unchanged.
 
 - **Remote: the dial follows the wheel, and it stops swallowing your corrections.** Spinning the
-  readout digits over a remote link used to ignore every notch made while a command was still out
-  — on a 100 ms link four of ten notches reached the radio, on a 400 ms link three — and the
-  digits themselves did not move until the burst went out a fifth of a second later. Every notch
-  now counts: a step made while the radio is still working joins the next command and is sent from
-  the dial the station read back, so ten notches move the dial ten notches. The digits move on the
-  gesture itself rather than when the radio answers, shown dimmed with a trailing "…" until the
-  station's own reading confirms them. A value the station never confirms is never left standing —
-  after two and a half seconds the digits go back to the station's dial and say the tune was not
-  confirmed. Only the dial digits are shown ahead of the radio; the band, the mode, the sideband,
-  the privilege shading, the S-meter and every transmit control keep reading the station and
-  nothing else.
+  readout digits over a remote link used to ignore every notch made while a command was still out —
+  on a 100 ms link four of ten notches reached the radio, on a 400 ms link three — and the digits
+  themselves did not move until the station read the new frequency back. Every notch now counts: a
+  step made while the radio is still working joins the next command and is sent from the dial the
+  station read back, so ten notches move the dial ten notches. The digits move on the gesture
+  itself rather than when the radio answers, shown dimmed with a trailing "…" until the station's
+  own reading confirms them. A value the station never confirms is never left standing — after two
+  and a half seconds the digits go back to the station's dial and say the tune was not confirmed.
+  Only the dial digits are shown ahead of the radio; the band, the mode, the sideband, the
+  privilege shading, the S-meter and every transmit control keep reading the station and nothing
+  else.
 
 - **Remote: a tune, band or mode change confirms the moment the radio does it.** Until now every
   rig-touching control was answered "pending" and the browser found out it had landed by asking —
@@ -206,31 +217,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Nothing was ever transmitted without asking: the prompts failed in the safe direction, so what
   was lost was the feature, not the protection. Windows and Linux were unaffected.
 
-- **Work on the Needed board now tags the park.** Working a POTA or SOTA row from the Needed
-  board moved the radio but, unlike HUNT and the map, never told the logbook which park it was —
-  so the contact was logged without the park reference: it earned no hunter credit, exported
-  without `SIG`/`SIG_INFO`, and pota.app could not match it. The next contact with that activator
-  is now tagged with the park, exactly as HUNT does it.
+- **Work on the Needed board now tags the park.** Working a POTA or SOTA row from the Needed board
+  moved the radio but, unlike HUNT and the map, never told the logbook which park it was — so the
+  contact was logged without the park reference: it earned no hunter credit, exported without
+  `SIG`/`SIG_INFO`, and pota.app could not match it. The next contact with that activator is now
+  tagged with the park, exactly as HUNT does it, and a reference Nexus cannot read is reported
+  instead of dropped. A row with more than one activation live — a summit that is also a park,
+  spotted to both programmes — tags nothing and names them, **2 activations live (POTA US-0001,
+  SOTA W7A/MN-001)**, so you can pick the one you worked on the POTA/SOTA board; a SOTA spot from
+  hours ago does not count as live.
 
 - **A contact logged at two parks at once counts for both of them.** A two-fer — one QSO at a
   site where two park boundaries overlap, logged as `US-0001,US-0002` — matched neither park, so
   both kept their NEW PARK badge and the Needed board went on offering both activations after you
   had worked them.
 
-- **CW macros no longer call "CQ FD" in another contest.** The cockpit had two built-in macro
-  sets, casual and Field Day, and used the Field Day one in every contest — so `F1` in the
-  Illinois QSO Party or CQ WW CW called `CQ FD DE …`, Field Day's own call, on the air. There is
-  now a contest set with the same cadence and `CQ TEST`; Field Day keeps `CQ FD`, and a macro
-  profile of your own still wins over both.
-- **A banned-mode warning names the contest you are in.** It read every contest except Winter
-  Field Day as ARRL Field Day, so a contest that bans a mode would have blamed Field Day's rules.
-- **A mistyped QTH or section no longer counts as a multiplier.** In a contest with a list of
-  QTHs or sections (CQ WW RTTY's states and provinces, Sweepstakes' sections), a received value
-  that is not on the list, such as an ARRL section typed where a state belongs, counted as a
-  multiplier of its own. The contact is still logged; the value just counts for nothing.
+- **CW macros no longer call "CQ FD" in another contest.** The cockpit had two built-in macro sets,
+  casual and Field Day, and used the Field Day one in every contest — so `F1` in CQ WW CW or a
+  state QSO party called `CQ FD DE …`, Field Day's own call, on the air. There is now a contest set
+  with the same cadence and `CQ TEST`; Field Day keeps `CQ FD`, and a macro profile of your own
+  still wins over both.
+- **A mistyped Sweepstakes section no longer counts as a multiplier.** A received section that is
+  not on the list counted as a multiplier of its own. The contact is still logged; the section just
+  counts for nothing.
 - **Remote shows the contest screen for every contest.** Through Remote, the contest screen was
-  blank for any contest except ARRL Field Day and Winter Field Day, because the browser refused
-  the contest's rules as unknown. It now shows for all of them, CQ WW RTTY included.
+  blank for any contest except ARRL Field Day and Winter Field Day, because the browser refused the
+  contest's rules as unknown. It now shows for all of them — CQ WW, Sweepstakes and the state QSO
+  parties included.
 - **A contest other than Field Day comes back after a restart.** If you left a QSO party or
   another contest running and restarted Nexus, it came back in Chat unless a Field Day class and
   section happened to be filled in, and the contacts you had logged stayed out of view. Nexus now
@@ -247,11 +260,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Winter Field Day it now refuses to turn on and says why: send your exchange with the macros and
   log each contact yourself. Outside a contest, and in both Field Days, Auto works as before.
 - **The contest log strip works for contests other than Field Day.** In a contest whose exchange
-  includes a signal report, the report box came back blank after every contact; it now goes back
-  to 599 (59 on phone). A CQ zone has to be a number from 1 to 40, and the strip says so while
-  you type. A box the contest does not require — the QTH a DX station never sends in CQ WW RTTY —
-  can be left blank. The strip's label, hint and button now say "contest log" instead of Field
-  Day, and the zone box is captioned Zone. Field Day's strip is unchanged.
+  includes a signal report, the report box came back blank after every contact; it now goes back to
+  599 (59 on phone). A CQ zone has to be a number from 1 to 40, and the strip says so while you
+  type. The strip's label, hint and button now say "contest log" instead of Field Day, and the zone
+  box is captioned Zone. Field Day's strip is unchanged.
 - **The contest screen names the contest you are running.** Outside Field Day the banner still
   read "ARRL Field Day", the header showed an empty class and section, the log table's columns were
   Class and Section (blank on every row), the Score Summary printed a station class, a power
@@ -259,17 +271,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and header now name the contest and show what you are sending, the log table has one column
   per field that contest exchanges, the Score Summary shows QSO points × multipliers, and the
   bonus checklist appears only in Field Day. Field Day's screen is unchanged.
-- **A cluster node that accepts a connection and then goes silent no longer kills that feed
-  slot for the rest of the session.** Some nodes accept the connection and never send a login
-  prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it
-  forever: it never logged in, never gave up, and never retried, so that node stayed dead
-  until you restarted the app, and nothing on screen said why. Nexus now gives a node 30
-  seconds to say anything at all, then disconnects and tries again later, waiting longer after
-  each silent try, up to ten minutes, so a node that never answers is not called over and over.
-  **Settings › Connections** records that the node accepted the connection but never
-  prompted. A node that has greeted you is never dropped for being quiet afterwards — a
-  cluster on a dead band can be silent for a long time and that is not a fault.
-
 - **A cluster node that never asks for your callsign no longer kills that feed slot for the
   rest of the session.** Some nodes accept the connection and never send a login prompt — one
   of the nodes Nexus ships with was doing exactly that — and some send a prompt Nexus could not
@@ -300,25 +301,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Phone source line on the Needed board named the first node Nexus had started, whether or not
   it was connected, so "live" could sit beside the name of a dead node. They now name only the
   nodes you are logged in to, or, while none is, the nodes being tried.
-- **Remote: the Awards list no longer gets squeezed off a phone screen.** In the hosted browser
-  the Awards view carries a status line above the summary and, since the responsiveness check was
-  added, a strip below it. On a phone-sized window with the text enlarged there was no height left
-  for the summary between the two: it collapsed to nothing, and the strip drew over the award
-  cards, so a tap landed on the strip instead of the card under it. The summary now keeps a
-  minimum height of its own whatever the window does — a card scroller worth using — and anything
-  that will not fit scrolls with the column instead of being cut off at the bottom. Windows at
-  1024×768 and above look exactly as they did.
-- **SSB/phone spots stopped arriving, and the Spots panel showed no Phone chip.** Both of the
-  human DX-cluster nodes Nexus shipped with, `ve7cc.net:23` and `dxc.wa9pie.net:8000`, went
-  down on the same day, and every install that still had the default list had no phone source
-  left — RBN kept CW and the digital modes flowing, which is why only Phone (and the mode chip
-  the Spots panel builds from what it is actually receiving) vanished. Two more nodes are now
-  in the default list — `dx.w1nr.net:23` (DXSpider) and `dxspots.com:7300` (CC Cluster, on a
-  high port for networks that block telnet port 23) — and an install still on the original
-  pair gains both on the next launch; a list you edited yourself is left alone. Until you
-  upgrade, add either one under **Settings › Logging & Connectors › Integrations & Feeds ›
-  Spot Sources**: `dx.w1nr.net:23` is in the **+ Add a known node…** presets, and
-  `dxspots.com:7300` goes in with **+ Custom**. Phone spots return at once.
+- **Remote: the bottom of the Awards view is no longer cut off on a phone screen.** On a
+  phone-sized window with the text enlarged, the last part of the hosted Awards view was cut off
+  with no way to reach it; anything that does not fit now scrolls with the column instead. Windows
+  at 1024×768 and above look exactly as they did.
+- **SSB/phone spots stopped arriving, and the Spots panel showed no Phone chip.** Both of the human
+  DX-cluster nodes Nexus shipped with, `ve7cc.net:23` and `dxc.wa9pie.net:8000`, went down on the
+  same day, and every install that still had the default list had no phone source left — RBN kept
+  CW and the digital modes flowing, which is why only Phone (and the mode chip the Spots panel
+  builds from what it is actually receiving) vanished. Two more nodes are now in the default list —
+  `dx.w1nr.net:23` (DXSpider) and `dxspots.com:7300` (CC Cluster, on a high port for networks that
+  block telnet port 23) — and an install still on the nodes Nexus shipped now picks working nodes
+  for itself on the next launch (see the DX-cluster entry under Added); a list you edited yourself
+  is left alone. Until you upgrade, add either one under **Settings › Logging & Connectors ›
+  Integrations & Feeds › Spot Sources**: `dx.w1nr.net:23` is in the **+ Add a known node…**
+  presets, and `dxspots.com:7300` goes in with **+ Custom**. Phone spots return at once.
 - **The Listen button in the Remote browser did nothing.** Opening the workspace replaced the
   connecting page with the operating one, and that swap permanently closed the audio channel
   before the button you could see was ever wired to it — so it looked enabled and sent nothing,
@@ -339,14 +336,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A slow moment at the station no longer stops the instrument feed for good.** A late credit
   on the live feed dropped the station's whole connection, taking every browser with it. The
   feed now waits for the credit and picks up where it left off.
-- **A delete or edit from a Remote browser could make the shack's Logbook delete or overwrite
-  the wrong contact.** The shack's list loaded once and remembered each row by its position;
-  when the browser deleted a contact above it, every later row moved up one, and the next
-  Delete or Edit at the shack went to the contact now sitting at that position — deleted, or
-  rewritten with another contact's details — while the message on screen named the one you
-  meant. Both sides now identify a contact by what it is, not where it sits: an action from the
-  shack is refused with a "reload the log" message if that exact contact is no longer there,
-  and the list refreshes itself whenever the log changes, so that refusal is rare.
+- **A delete or edit from a Remote browser could make the shack's Logbook delete or overwrite the
+  wrong contact.** The shack's list loaded once and remembered each row by its position; when the
+  browser deleted a contact above it, every later row moved up one, and the next Delete or Edit at
+  the shack went to the contact now sitting at that position — deleted, or rewritten with another
+  contact's details — while the message on screen named the one you meant. The shack now identifies
+  a contact by what it is, as the browser already did, not where it sits: an action from the shack
+  is refused with a "reload the log" message if that exact contact is no longer there, and the list
+  refreshes itself whenever the log changes, so that refusal is rare.
 - **Editing a WWFF contact from a Remote browser no longer turns its park into a POTA one.** The
   hosted edit form only knew POTA and SOTA, so saving any correction — a grid, a name — rewrote
   the park's program to POTA. The program now rides through exactly as the log holds it, as it
@@ -365,45 +362,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remembered for that station. The feed never pauses while your browser can still stop a
   transmission, and coming back from a pause says so.
 - **A Remote browser that lost its station stopped hammering at it once a second.** When the
-  connection dropped after the service had already answered, the browser retried exactly once
-  every second, forever — a station that was off, or a shack PC mid-reboot, was called a
-  thousand times an hour for nothing. It now waits longer between tries the longer the trouble
-  lasts, up to half a minute, and goes straight back to trying the moment you look at the tab.
-  That wait only builds up while the station has really gone quiet: one that is still sending you
-  data reconnects straight away. This matters because the browser itself sometimes drops the link
-  after a slow reply, and a station that was answering the whole time should not be the one made
-  to wait for it.
-- **An activator on two parks at once no longer gets you tagged with the wrong one.** Work on the
-  Needed board tags the contact with the activation the row names, and the row picked whichever
-  spot came to hand first — so an operator on a summit that is also a park, self-spotted to both
-  programmes, could be tagged with either, and it could change between one refresh and the next. A
-  wrong reference costs you the hunt outright: the activator's log names the other park, so the
-  two never match and POTA credits nothing. A row with more than one activation live now tags
-  nothing and says which ones it could not choose between — **2 activations live (POTA US-0001,
-  SOTA W7A/MN-001)** — and you pick the one you worked on the POTA/SOTA board. A row with a single
-  activation still tags it for you, as before. A summit spotted hours ago no longer counts as live
-  either: SOTA's feed hands back its last spots by count rather than by recency, so one from the
-  morning could ride along on a perfectly fresh fetch and take the tag off a park that really was.
-- **A hunt that could not be set now says so** — on the Needed board and on the Connect map, in
-  the main window and in a torn-off one. When the feed's spelling of a reference was one Nexus
-  could not read, Work went ahead with the QSY in silence and the contact was logged with no park
-  at all — the only sign was its absence, hours later. It now tells you, and still works the
-  station so you can add the reference by hand. A spot Nexus has nowhere to QSY to no longer arms
-  a hunt at all: it used to leave a four-hour tag waiting to land on the next contact with that
-  callsign, whatever band it was made on.
+  connection dropped after the service had already answered, the browser retried exactly once every
+  second, forever — a station that was off, or a shack PC mid-reboot, was called thousands of times
+  an hour for nothing. It now waits longer between tries the longer the trouble lasts, up to half a
+  minute, and goes straight back to trying the moment you look at the tab. That wait only builds up
+  while the station has really gone quiet: one that is still sending you data reconnects straight
+  away. This matters because the browser itself sometimes drops the link after a slow reply, and a
+  station that was answering the whole time should not be the one made to wait for it.
+- **A hunt that could not be set now says so** — on the Connect map, in the main window and in a
+  torn-off one. When the feed's spelling of a reference was one Nexus could not read, Work went
+  ahead with the QSY in silence and the contact was logged with no park at all — the only sign was
+  its absence, hours later. It now tells you, and still works the station so you can add the
+  reference by hand.
 
 ## [1.13.0] — 2026-09-16
 
 ### Added
 
-- **Remote: a responsiveness check you can run on your own link.** In the browser's Awards view,
-  *Responsiveness → Run check* makes ten small dial steps, changes band and back, and sends one Stop
-  while the radio is idle, then reports how long the screen took to respond, how long the radio took
-  to confirm, how far the readout trailed, and how often controls went off by themselves — and
-  whether each confirmation came by the station's own push or by polling — with a copy-as-text
-  button so a result can be pasted into a report. It changes nothing while it is not
-  running. It is the yardstick every later Remote responsiveness change is measured against; the
-  same check runs in CI against a scripted station on 100 ms and 400 ms links.
 - **Nexus Remote grew from watching the station to operating it.** Over this release the hosted
   browser stopped being a window onto the shack and became a way to work it. The individual pieces
   are listed separately below where they stand on their own; this is the shape of the whole.
