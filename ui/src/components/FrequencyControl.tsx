@@ -44,10 +44,20 @@ function channelText(c: BandChannel): string {
   return `${c.label} · ${c.dialMhz.toFixed(4)} · ${c.mode}`
 }
 
+/** The mode a DATA submode modulates: Hamlib's PKTUSB / PKTLSB / PKTFM are USB / LSB / FM for
+ *  matching a band-plan channel. A rig on FT8 answers PKTUSB over CAT, and a radio switch adopts
+ *  what the monitored radio answered — so a radio on its FT8 channel read "80m (custom)" (#334).
+ *  Every other mode is itself: CW or AM on an FT8 dial still matches no USB channel. */
+function baseMode(mode: string): string {
+  const m = mode.trim().toUpperCase()
+  return m.startsWith('PKT') ? m.slice(3) : m
+}
+
 function findActive(channels: BandChannel[], dialMhz: number, mode: string): BandChannel | null {
+  const base = baseMode(mode)
   return (
     channels.find(
-      (c) => Math.abs(c.dialMhz - dialMhz) < MATCH_EPS && c.mode === mode,
+      (c) => Math.abs(c.dialMhz - dialMhz) < MATCH_EPS && baseMode(c.mode) === base,
     ) ?? null
   )
 }
