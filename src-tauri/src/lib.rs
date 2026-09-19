@@ -15441,6 +15441,44 @@ fn upload_give_up_lines(failed: u8, retries: u8, qso: &GivenUpQso) -> Vec<(&'sta
     lines
 }
 
+/// #290: one connection-log line per connector that is ON and was still owed an upload the full
+/// queue dropped (`StationCore::enqueue_upload`), naming the QSO. A connector that is off gets no
+/// line — nothing was going to be sent to it — so with every connector off, when the queue only
+/// holds the session's contacts in case one is turned on, nothing is said.
+fn upload_dropped_lines(
+    dropped: &[tempo_app::engine::PendingUpload],
+    on: u8,
+) -> Vec<(&'static str, String)> {
+    use tempo_app::engine::upload_legs as legs;
+    const CONNECTORS: [(u8, &str); 7] = [
+        (legs::QRZ, "QRZ Logbook"),
+        (legs::CLUBLOG, "ClubLog"),
+        (legs::EQSL, "eQSL"),
+        (legs::HRDLOG, "HRDLog.net"),
+        (legs::N3FJP, "N3FJP"),
+        (legs::CLOUDLOG, "Cloudlog"),
+        (legs::WRL, "World Radio League"),
+    ];
+    let mut lines = Vec::new();
+    for p in dropped {
+        let (y, mo, d, h, mi, _) = tempo_core::logbook::datetime_utc(p.rec.when_unix);
+        for (leg, service) in CONNECTORS {
+            if p.legs & on & leg != 0 {
+                lines.push((
+                    service,
+                    format!(
+                        "upload queue full — dropped the QSO with {} ({} {}, \
+                         {y:04}-{mo:02}-{d:02} {h:02}:{mi:02}Z) before it was sent to {service}; \
+                         it is still in your log",
+                        p.rec.call, p.rec.band, p.rec.mode
+                    ),
+                ));
+            }
+        }
+    }
+    lines
+}
+
 /// Session-level kill-switch for ClubLog auto-push: set on a 403 (bad creds) so we
 /// stop re-POSTing every QSO (ClubLog IP-blocks repeated auth failures); reset when
 /// the operator changes a ClubLog credential.
@@ -23298,6 +23336,7 @@ pub fn run() {
             std::thread::sleep(std::time::Duration::from_secs(2));
             let (
                 recs,
+                dropped,
                 qrz_on,
                 clublog_on,
                 eqsl_on,
@@ -23353,6 +23392,9 @@ pub fn run() {
                 // connector whose drain lives below must appear in this gate.
                 // ⚠️ w (WRL) IS IN THIS GATE — the comment above records two connectors
                 // shipping without it, each silently draining nothing.
+                // #290: what the full queue dropped, taken EVERY tick — before the return
+                // below, so it cannot pile up while nothing is on.
+                let dropped = eng.take_dropped_uploads();
                 if !(q || c || e || h || w || hrd || n || cl || dxk.is_some()) {
                     // Nothing enabled: LEAVE the queue intact (bounded at 256) so
                     // flipping a toggle on later still uploads this session's
@@ -23361,6 +23403,7 @@ pub fn run() {
                 }
                 (
                     eng.take_pending_uploads(),
+                    dropped,
                     q,
                     c,
                     e,
@@ -23373,6 +23416,24 @@ pub fn run() {
                     cl_key,
                 )
             };
+            {
+                use tempo_app::engine::upload_legs as legs;
+                let on = [
+                    (qrz_on, legs::QRZ),
+                    (clublog_on, legs::CLUBLOG),
+                    (eqsl_on, legs::EQSL),
+                    (hrdlog_on, legs::HRDLOG),
+                    (n3fjp_on, legs::N3FJP),
+                    (cloudlog_on, legs::CLOUDLOG),
+                    (wrl_on, legs::WRL),
+                ]
+                .into_iter()
+                .filter(|&(is_on, _)| is_on)
+                .fold(0, |mask, (_, leg)| mask | leg);
+                for (service, line) in upload_dropped_lines(&dropped, on) {
+                    conn_log(service, "error", line);
+                }
+            }
             // ClubLog suspended (403 latch): skip that leg instead of erroring
             // per QSO — the suspension was announced once; re-push covers later.
             //
@@ -25429,6 +25490,48 @@ mod tests {
 
         // A failure that owes neither leg says nothing, even at the limit.
         assert!(super::upload_give_up_lines(legs::CLUBLOG, MAX_UPLOAD_RETRIES, &qso).is_empty());
+    }
+
+    /// #290: an upload the full queue dropped is named in the Connections log, once per
+    /// connector that is on and was still owed it.
+    #[test]
+    fn an_upload_the_full_queue_drops_is_named_per_connector_that_is_on() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        let mut rec = pass_qso("F4MQS/P", "JN18", "20m", 14.074);
+        rec.mode = "FT8".into();
+        rec.when_unix = 1_789_389_296; // 2026-09-14 12:34:56 UTC
+        let dropped = [PendingUpload {
+            rec,
+            origin: UploadOrigin::Live,
+            legs: legs::ALL,
+            attempts: 0,
+            retry_after_unix: 0,
+        }];
+
+        let lines = super::upload_dropped_lines(&dropped, legs::QRZ | legs::CLUBLOG);
+        let services: Vec<&str> = lines.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            services,
+            ["QRZ Logbook", "ClubLog"],
+            "only the connectors that are on"
+        );
+        for (service, line) in &lines {
+            assert!(
+                line.contains("F4MQS/P")
+                    && line.contains("20m FT8")
+                    && line.contains("2026-09-14 12:34Z")
+                    && line.contains(service),
+                "{service}: the line must name the QSO and the connector — {line}"
+            );
+        }
+
+        // Owed only to connectors that are off — nothing was going to be sent — says nothing.
+        assert!(super::upload_dropped_lines(&dropped, 0).is_empty());
+        let clublog_only = [PendingUpload {
+            legs: legs::CLUBLOG,
+            ..dropped[0].clone()
+        }];
+        assert!(super::upload_dropped_lines(&clublog_only, legs::QRZ).is_empty());
     }
 
     /// #174: a spot's voices become de-duplicated continents and countries, spotter first, and

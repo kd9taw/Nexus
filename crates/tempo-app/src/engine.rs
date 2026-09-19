@@ -10251,11 +10251,9 @@ impl Engine {
         // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
         // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
         // Logbook entries all pass through here, so the Settings auto-upload
-        // toggles can never be dead for one path again.
-        if self.station.pending_uploads.len() >= 256 {
-            self.station.pending_uploads.pop_front();
-        }
-        self.station.pending_uploads.push_back(PendingUpload {
+        // toggles can never be dead for one path again. The queue's own door decides
+        // what a full queue drops, and reports it (#290).
+        self.station.enqueue_upload(PendingUpload {
             rec,
             // LIVE, and it must stay that way: this is the contact at the key, and the
             // catch-up pacing added for #193 deliberately does not touch it.
@@ -20705,6 +20703,11 @@ contact yourself."
         self.station.take_pending_uploads()
     }
 
+    /// See [`StationCore::take_dropped_uploads`].
+    pub fn take_dropped_uploads(&mut self) -> Vec<PendingUpload> {
+        self.station.take_dropped_uploads()
+    }
+
     /// See [`StationCore::requeue_upload`].
     pub fn requeue_upload(&mut self, rec: tempo_core::logbook::QsoRecord, legs: u8, attempts: u8) {
         self.station.requeue_upload(rec, legs, attempts)
@@ -30724,6 +30727,59 @@ mod tests {
                 "tick {tick}: a re-queued record keeps the slot it already had"
             );
         }
+    }
+
+    #[test]
+    fn a_catch_up_never_costs_a_live_upload_its_place_in_the_full_queue() {
+        // #290: at 256 the queue dropped its OLDEST entry, whatever it was, so a ClubLog
+        // catch-up over a big log pushed out the live contacts still waiting on a retry.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..300 {
+            let rec = e.qso_record(format!("W9A{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads(); // this is about what is waiting BELOW the catch-up
+        for i in 0..10 {
+            let rec = e.qso_record(format!("K1L{i}"), None, None);
+            e.requeue_upload(rec, upload_legs::QRZ, 1); // live contacts waiting on a retry
+        }
+        e.requeue_failed_clublog(); // 300 contacts ClubLog never took
+        let rec = e.qso_record("K1NEW".into(), None, None);
+        e.log_qso(rec); // and a contact at the key, arriving at a full queue
+
+        let queued = e.take_pending_uploads();
+        let live: Vec<&str> = queued
+            .iter()
+            .filter(|p| p.origin == UploadOrigin::Live)
+            .map(|p| p.rec.call.as_str())
+            .collect();
+        assert_eq!(
+            live.len(),
+            11,
+            "every live upload keeps its place: {live:?}"
+        );
+        assert!(live.contains(&"K1NEW"), "…the newest included: {live:?}");
+        assert_eq!(queued.len(), 256, "and the queue stays bounded");
+    }
+
+    #[test]
+    fn an_upload_the_full_queue_drops_is_handed_over_to_be_reported() {
+        // #290: the cap dropped an upload without a word. What it drops now goes to the
+        // connector worker, which names it in the Connections log.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..257 {
+            let rec = e.qso_record(format!("W9A{i}"), None, None);
+            e.log_qso(rec);
+        }
+        let dropped = e.take_dropped_uploads();
+        let calls: Vec<&str> = dropped.iter().map(|p| p.rec.call.as_str()).collect();
+        assert_eq!(
+            calls,
+            ["W9A0"],
+            "one over the cap drops the oldest, and says so"
+        );
+        assert_eq!(e.take_pending_uploads().len(), 256);
+        assert!(e.take_dropped_uploads().is_empty(), "handed over once");
     }
 
     /// #210: the frontend's "clear DX call after logging" wipe rides `logged_tick`, and the
