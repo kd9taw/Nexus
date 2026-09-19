@@ -366,6 +366,12 @@ pub struct DurableGrants {
     pub control: Vec<String>,
     pub transmit: Vec<String>,
 }
+/// A grant a local revoke removes without waiting for Core (#318). Transmit has its own queue.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Grant {
+    Logging,
+    Station,
+}
 #[derive(Default)]
 pub struct Authority {
     spots: Option<crate::SharedSpots>,
@@ -377,6 +383,9 @@ pub struct Authority {
     transmit: TransmitAuthority,
     stop_owner: Mutex<Option<transmit_stop::Owner>>,
     transmit_revocations: Mutex<BTreeSet<String>>,
+    /// Logging and station-control revokes, queued as `transmit_revocations` is; see
+    /// `revoke_grant_device`.
+    grant_revocations: Mutex<BTreeSet<(Grant, String)>>,
     /// Where a settled control's notice goes (see `CompletionNotice`): the live transport's
     /// bounded queue, set per socket. None, or a full queue, means the browser polls as it did
     /// before operation v5 — this is never load-bearing.
@@ -538,6 +547,33 @@ impl Authority {
                 self.transmit.revoke();
             }
         }
+        // Logging and station control the same way (#318). A revoked controller loses its
+        // lease here, as it always has when Core was free.
+        let grants_revoked = std::mem::take(
+            &mut *self
+                .grant_revocations
+                .lock()
+                .map_err(|_| "authorityUnavailable")?,
+        );
+        let mut controller_revoked = false;
+        for (grant, device) in grants_revoked {
+            match grant {
+                Grant::Logging => {
+                    c.grants.remove(&device);
+                }
+                Grant::Station => {
+                    c.control_grants.remove(&device);
+                    c.transmit_grants.remove(&device);
+                }
+            }
+            controller_revoked |= c.lease.as_ref().is_some_and(|l| l.device == device);
+        }
+        if controller_revoked {
+            self.revoke_execution();
+            c.lease = None;
+            c.windows.clear();
+            self.advance(c)?;
+        }
         if c.lease.as_ref().is_some_and(|l| now >= l.until) {
             self.revoke_execution();
             c.lease = None;
@@ -696,49 +732,50 @@ impl Authority {
         self.sync_stop_owner(&c, Instant::now());
         Ok(true)
     }
+    /// A revoke never waits for Core (#318): it is queued for `reconcile`, which applies it
+    /// before anything else consumes Core, as `permit_transmit` does. A grant may still be
+    /// refused `remoteBusy`.
     pub fn permit(&self, device: &str, allow: bool) -> Result<(), &'static str> {
         if !identifier(device) {
             return Err("invalidRequest");
         }
-        let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
+        if !allow {
+            self.revoke_grant_device(Grant::Logging, device)?;
+        }
+        let mut c = match self.core.try_lock() {
+            Ok(c) => c,
+            Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
+            Err(_) => return Err("remoteBusy"),
+        };
         self.reconcile(&mut c, Instant::now())?;
         if allow {
             if c.grants.len() >= 16 && !c.grants.contains(device) {
                 return Err("remoteBusy");
             }
             c.grants.insert(device.to_string());
-        } else {
-            c.grants.remove(device);
-            if c.lease.as_ref().is_some_and(|l| l.device == device) {
-                self.revoke_execution();
-                c.lease = None;
-                c.windows.clear();
-                self.advance(&mut c)?;
-            }
         }
         self.sync_stop_owner(&c, Instant::now());
         Ok(())
     }
+    /// Revoking station control revokes transmit with it; like `permit`, a revoke never waits.
     pub fn permit_station(&self, device: &str, allow: bool) -> Result<(), &'static str> {
         if !identifier(device) {
             return Err("invalidRequest");
         }
-        let mut c = self.core.try_lock().map_err(|_| "remoteBusy")?;
+        if !allow {
+            self.revoke_grant_device(Grant::Station, device)?;
+        }
+        let mut c = match self.core.try_lock() {
+            Ok(c) => c,
+            Err(std::sync::TryLockError::WouldBlock) if !allow => return Ok(()),
+            Err(_) => return Err("remoteBusy"),
+        };
         self.reconcile(&mut c, Instant::now())?;
         if allow {
             if c.control_grants.len() >= 16 && !c.control_grants.contains(device) {
                 return Err("remoteBusy");
             }
             c.control_grants.insert(device.to_string());
-        } else {
-            c.control_grants.remove(device);
-            c.transmit_grants.remove(device);
-            if c.lease.as_ref().is_some_and(|l| l.device == device) {
-                self.revoke_execution();
-                c.lease = None;
-                c.windows.clear();
-                self.advance(&mut c)?;
-            }
         }
         self.sync_stop_owner(&c, Instant::now());
         Ok(())

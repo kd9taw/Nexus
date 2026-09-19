@@ -62,6 +62,34 @@ impl Authority {
         Ok(())
     }
 
+    /// The same for a logging or station-control revoke (#318). `reconcile` removes the grant,
+    /// and ends the device's lease if it holds one, before any later request consumes Core.
+    pub(super) fn revoke_grant_device(
+        &self,
+        grant: Grant,
+        device: &str,
+    ) -> Result<(), &'static str> {
+        {
+            let mut pending = self
+                .grant_revocations
+                .lock()
+                .map_err(|_| "authorityUnavailable")?;
+            let entry = (grant, device.to_owned());
+            // Bounded like the transmit queue, and for the same reason.
+            if pending.len() >= 64 && !pending.contains(&entry) {
+                return Err("remoteBusy");
+            }
+            pending.insert(entry);
+        }
+        let owner = self.stop_owner.lock().map_err(|_| "authorityUnavailable")?;
+        if owner.as_ref().is_some_and(|o| o.device == device) {
+            // The controller's in-flight hardware and transmit permits end at once, as they do
+            // when Core is free; the lease itself goes at the next reconcile.
+            self.revoke_execution();
+        }
+        Ok(())
+    }
+
     /// The browser that may stop right now, recomputed under Core.
     ///
     /// ⚠️ AN EXPIRED LEASE KEEPS ITS STOP TOKEN (operator ruling, 2026-09-15). `reconcile` drops the
