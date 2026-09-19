@@ -15401,16 +15401,51 @@ struct GivenUpQso<'a> {
     when_unix: u64,
 }
 
-/// #290: one connection-log line per QRZ / eQSL leg that this failure takes past the shared
-/// retry budget, naming the QSO and how to push it again.
+/// #290: one connection-log line per connector leg that this failure takes past the shared
+/// retry budget, naming the QSO and the way to send it again.
 ///
 /// `retries` is the attempt count the worker is about to re-queue with. The queue drops a
 /// record once that reaches [`MAX_UPLOAD_RETRIES`](tempo_app::engine::MAX_UPLOAD_RETRIES)
 /// (`StationCore::requeue_upload_at`) and says nothing, so this line is the only way an
-/// operator learns a contact never reached the service. The HRDLog leg has its own shorter
-/// budget and its own line; ClubLog has a catch-up sweep, so neither is repeated here.
+/// operator learns a contact never reached the service. Every retried connector has one; the
+/// HRDLog leg gives up earlier, on its own shorter budget and with its own line
+/// (`cap_hrdlog_retries`), so it never reaches this one.
 fn upload_give_up_lines(failed: u8, retries: u8, qso: &GivenUpQso) -> Vec<(&'static str, String)> {
     use tempo_app::engine::{upload_legs as legs, MAX_UPLOAD_RETRIES};
+    // Each connector, and the way back for a contact it gave up on. N3FJP and Cloudlog have no
+    // push of their own from the app, so theirs is the ADIF export.
+    const WAY_BACK: [(u8, &str, &str); 6] = [
+        (
+            legs::QRZ,
+            "QRZ Logbook",
+            "push it again from the Logbook with the QRZ button on its row",
+        ),
+        (
+            legs::CLUBLOG,
+            "ClubLog",
+            "push it again from the Logbook with the CL button on its row",
+        ),
+        (
+            legs::EQSL,
+            "eQSL",
+            "push it again from Awards ▸ Confirmations with Push to eQSL on its row",
+        ),
+        (
+            legs::WRL,
+            "World Radio League",
+            "push it again from the Logbook with the WRL button on its row",
+        ),
+        (
+            legs::N3FJP,
+            "N3FJP",
+            "to add it, use Logbook ▸ Export ADIF and import the file into N3FJP",
+        ),
+        (
+            legs::CLOUDLOG,
+            "Cloudlog",
+            "to add it, use Logbook ▸ Export ADIF and import the file into Wavelog or Cloudlog",
+        ),
+    ];
     if retries < MAX_UPLOAD_RETRIES {
         return Vec::new();
     }
@@ -15419,24 +15454,55 @@ fn upload_give_up_lines(failed: u8, retries: u8, qso: &GivenUpQso) -> Vec<(&'sta
         "{} ({} {}, {y:04}-{mo:02}-{d:02} {h:02}:{mi:02}Z)",
         qso.call, qso.band, qso.mode
     );
+    WAY_BACK
+        .into_iter()
+        .filter(|&(leg, _, _)| failed & leg != 0)
+        .map(|(_, service, way_back)| {
+            (
+                service,
+                format!(
+                    "gave up on the QSO with {what} after {MAX_UPLOAD_RETRIES} retries — \
+                     {way_back}"
+                ),
+            )
+        })
+        .collect()
+}
+
+/// #290: one connection-log line per connector that is ON and was still owed an upload the full
+/// queue dropped (`StationCore::enqueue_upload`), naming the QSO. A connector that is off gets no
+/// line — nothing was going to be sent to it — so with every connector off, when the queue only
+/// holds the session's contacts in case one is turned on, nothing is said.
+fn upload_dropped_lines(
+    dropped: &[tempo_app::engine::PendingUpload],
+    on: u8,
+) -> Vec<(&'static str, String)> {
+    use tempo_app::engine::upload_legs as legs;
+    const CONNECTORS: [(u8, &str); 7] = [
+        (legs::QRZ, "QRZ Logbook"),
+        (legs::CLUBLOG, "ClubLog"),
+        (legs::EQSL, "eQSL"),
+        (legs::HRDLOG, "HRDLog.net"),
+        (legs::N3FJP, "N3FJP"),
+        (legs::CLOUDLOG, "Cloudlog"),
+        (legs::WRL, "World Radio League"),
+    ];
     let mut lines = Vec::new();
-    if failed & legs::QRZ != 0 {
-        lines.push((
-            "QRZ Logbook",
-            format!(
-                "gave up on the QSO with {what} after {MAX_UPLOAD_RETRIES} retries — push it \
-                 again from the Logbook with the QRZ button on its row"
-            ),
-        ));
-    }
-    if failed & legs::EQSL != 0 {
-        lines.push((
-            "eQSL",
-            format!(
-                "gave up on the QSO with {what} after {MAX_UPLOAD_RETRIES} retries — push it \
-                 again from Awards ▸ Confirmations with Push to eQSL on its row"
-            ),
-        ));
+    for p in dropped {
+        let (y, mo, d, h, mi, _) = tempo_core::logbook::datetime_utc(p.rec.when_unix);
+        for (leg, service) in CONNECTORS {
+            if p.legs & on & leg != 0 {
+                lines.push((
+                    service,
+                    format!(
+                        "upload queue full — dropped the QSO with {} ({} {}, \
+                         {y:04}-{mo:02}-{d:02} {h:02}:{mi:02}Z) before it was sent to {service}; \
+                         it is still in your log",
+                        p.rec.call, p.rec.band, p.rec.mode
+                    ),
+                ));
+            }
+        }
     }
     lines
 }
@@ -23298,6 +23364,7 @@ pub fn run() {
             std::thread::sleep(std::time::Duration::from_secs(2));
             let (
                 recs,
+                dropped,
                 qrz_on,
                 clublog_on,
                 eqsl_on,
@@ -23353,6 +23420,9 @@ pub fn run() {
                 // connector whose drain lives below must appear in this gate.
                 // ⚠️ w (WRL) IS IN THIS GATE — the comment above records two connectors
                 // shipping without it, each silently draining nothing.
+                // #290: what the full queue dropped, taken EVERY tick — before the return
+                // below, so it cannot pile up while nothing is on.
+                let dropped = eng.take_dropped_uploads();
                 if !(q || c || e || h || w || hrd || n || cl || dxk.is_some()) {
                     // Nothing enabled: LEAVE the queue intact (bounded at 256) so
                     // flipping a toggle on later still uploads this session's
@@ -23361,6 +23431,7 @@ pub fn run() {
                 }
                 (
                     eng.take_pending_uploads(),
+                    dropped,
                     q,
                     c,
                     e,
@@ -23373,6 +23444,24 @@ pub fn run() {
                     cl_key,
                 )
             };
+            {
+                use tempo_app::engine::upload_legs as legs;
+                let on = [
+                    (qrz_on, legs::QRZ),
+                    (clublog_on, legs::CLUBLOG),
+                    (eqsl_on, legs::EQSL),
+                    (hrdlog_on, legs::HRDLOG),
+                    (n3fjp_on, legs::N3FJP),
+                    (cloudlog_on, legs::CLOUDLOG),
+                    (wrl_on, legs::WRL),
+                ]
+                .into_iter()
+                .filter(|&(is_on, _)| is_on)
+                .fold(0, |mask, (_, leg)| mask | leg);
+                for (service, line) in upload_dropped_lines(&dropped, on) {
+                    conn_log(service, "error", line);
+                }
+            }
             // ClubLog suspended (403 latch): skip that leg instead of erroring
             // per QSO — the suspension was announced once; re-push covers later.
             //
@@ -25392,7 +25481,7 @@ mod tests {
             // 2026-09-14 12:34:56 UTC
             when_unix: 1_789_389_296,
         };
-        let failed = legs::QRZ | legs::EQSL | legs::CLUBLOG;
+        let failed = legs::QRZ | legs::EQSL;
 
         // Budget not yet spent: the record goes back on the queue, nothing to announce.
         assert!(super::upload_give_up_lines(failed, MAX_UPLOAD_RETRIES - 1, &qso).is_empty());
@@ -25402,7 +25491,7 @@ mod tests {
         assert_eq!(
             services,
             ["QRZ Logbook", "eQSL"],
-            "one line per given-up QRZ/eQSL leg, and ClubLog keeps its own catch-up path"
+            "one line per given-up leg"
         );
         for (service, line) in &lines {
             assert!(
@@ -25427,8 +25516,97 @@ mod tests {
             lines[1].1
         );
 
-        // A failure that owes neither leg says nothing, even at the limit.
-        assert!(super::upload_give_up_lines(legs::CLUBLOG, MAX_UPLOAD_RETRIES, &qso).is_empty());
+        // A failure owing only HRDLog.net says nothing here, even at the limit: that leg gives
+        // up on its own shorter budget, with its own line.
+        assert!(super::upload_give_up_lines(legs::HRDLOG, MAX_UPLOAD_RETRIES, &qso).is_empty());
+    }
+
+    /// #290: a retry give-up is never silent, whatever the connector — one line each, under
+    /// that connector's own name in the Connections log, naming the QSO and the way back.
+    /// HRDLog.net gives up on its own shorter budget with its own line (`cap_hrdlog_retries`),
+    /// so it never reaches this one.
+    #[test]
+    fn every_connector_names_a_retry_give_up() {
+        use tempo_app::engine::{upload_legs as legs, MAX_UPLOAD_RETRIES};
+        let qso = super::GivenUpQso {
+            call: "F4MQS/P",
+            band: "20m",
+            mode: "FT8",
+            when_unix: 1_789_389_296, // 2026-09-14 12:34:56 UTC
+        };
+        let connectors = [
+            (legs::QRZ, "QRZ Logbook", "QRZ button"),
+            (legs::CLUBLOG, "ClubLog", "CL button"),
+            (legs::EQSL, "eQSL", "Push to eQSL"),
+            (legs::WRL, "World Radio League", "WRL button"),
+            (legs::N3FJP, "N3FJP", "Export ADIF"),
+            (legs::CLOUDLOG, "Cloudlog", "Export ADIF"),
+        ];
+        let silent: Vec<&str> = connectors
+            .iter()
+            .filter(|(leg, _, _)| {
+                super::upload_give_up_lines(*leg, MAX_UPLOAD_RETRIES, &qso).is_empty()
+            })
+            .map(|(_, service, _)| *service)
+            .collect();
+        assert!(silent.is_empty(), "these give up in silence: {silent:?}");
+        for (leg, service, way_back) in connectors {
+            let spent = super::upload_give_up_lines(leg, MAX_UPLOAD_RETRIES - 1, &qso);
+            assert!(spent.is_empty(), "{service}: the budget is not spent yet");
+            let lines = super::upload_give_up_lines(leg, MAX_UPLOAD_RETRIES, &qso);
+            assert_eq!(lines.len(), 1, "{service}: one line — {lines:?}");
+            let (named, line) = &lines[0];
+            assert_eq!(*named, service);
+            assert!(
+                line.contains("F4MQS/P")
+                    && line.contains("20m FT8")
+                    && line.contains("2026-09-14 12:34Z"),
+                "{service}: the line must name the QSO — {line}"
+            );
+            assert!(line.contains(way_back), "{service}: the way back — {line}");
+        }
+    }
+
+    /// #290: an upload the full queue dropped is named in the Connections log, once per
+    /// connector that is on and was still owed it.
+    #[test]
+    fn an_upload_the_full_queue_drops_is_named_per_connector_that_is_on() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        let mut rec = pass_qso("F4MQS/P", "JN18", "20m", 14.074);
+        rec.mode = "FT8".into();
+        rec.when_unix = 1_789_389_296; // 2026-09-14 12:34:56 UTC
+        let dropped = [PendingUpload {
+            rec,
+            origin: UploadOrigin::Live,
+            legs: legs::ALL,
+            attempts: 0,
+            retry_after_unix: 0,
+        }];
+
+        let lines = super::upload_dropped_lines(&dropped, legs::QRZ | legs::CLUBLOG);
+        let services: Vec<&str> = lines.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            services,
+            ["QRZ Logbook", "ClubLog"],
+            "only the connectors that are on"
+        );
+        for (service, line) in &lines {
+            assert!(
+                line.contains("F4MQS/P")
+                    && line.contains("20m FT8")
+                    && line.contains("2026-09-14 12:34Z")
+                    && line.contains(service),
+                "{service}: the line must name the QSO and the connector — {line}"
+            );
+        }
+
+        // Owed only to connectors that are off — nothing was going to be sent — says nothing.
+        assert!(super::upload_dropped_lines(&dropped, 0).is_empty());
+        let clublog_only = [PendingUpload {
+            legs: legs::CLUBLOG,
+            ..dropped[0].clone()
+        }];
+        assert!(super::upload_dropped_lines(&clublog_only, legs::QRZ).is_empty());
     }
 
     /// #174: a spot's voices become de-duplicated continents and countries, spotter first, and

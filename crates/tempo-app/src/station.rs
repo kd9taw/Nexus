@@ -26,6 +26,10 @@ use crate::engine::{
     now_unix_secs, LotwResolver, PendingUpload, HUNT_TTL_SECS, MAX_UPLOAD_RETRIES, SSTV_GALLERY_CAP,
 };
 
+/// How many uploads the connector queue holds. See [`StationCore::enqueue_upload`] for what
+/// goes when it is full.
+const UPLOAD_QUEUE_CAP: usize = 256;
+
 /// The shared `log.adi`'s freshness fingerprint — `(mtime, byte length)`, or `None`
 /// if it cannot be statted. See [`StationCore::last_log_mtime`] for why the length
 /// rides along; `None` never gates anything, because the recovery must never skip on
@@ -94,6 +98,9 @@ pub struct StationCore {
     /// happen for any log path. Drained by [`Self::take_pending_uploads`];
     /// bounded so a worker outage can't grow it without limit.
     pub(crate) pending_uploads: VecDeque<PendingUpload>,
+    /// Uploads the full queue dropped (#290), held for the connector worker to report — see
+    /// [`Self::enqueue_upload`]. Bounded like the queue.
+    pub(crate) dropped_uploads: Vec<PendingUpload>,
     /// Earliest wall-clock second the NEXT catch-up upload may go out — the pacing slot
     /// allocator for [`UploadOrigin::CatchUp`] (#193). Bumped by
     /// [`CATCHUP_UPLOAD_SPACING_SECS`] every time a catch-up record is queued, so a scan
@@ -227,6 +234,7 @@ impl StationCore {
             clock_owner_note: String::new(),
             all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
+            dropped_uploads: Vec::new(),
             catchup_slot_unix: 0,
             upload_note: None,
             upload_ok: false,
@@ -596,6 +604,49 @@ impl StationCore {
         self.pending_uploads.drain(..).collect()
     }
 
+    /// THE QUEUE'S ONE DOOR (#290). Every upload enters here — a live contact from
+    /// `log_qso`, a catch-up record, a retry — so the cap has one rule and nothing it drops
+    /// goes unreported.
+    ///
+    /// When the queue is full, what goes is the oldest CATCH-UP entry, the arriving one
+    /// included; a live entry only when no catch-up entry is left. Catch-up is history that
+    /// stays unsent in the log for the next sweep, and live is the contact at the key, so a
+    /// catch-up can never cost a live contact its place.
+    ///
+    /// What is dropped waits in [`Self::take_dropped_uploads`] for the connector worker to
+    /// name it in the Connections log.
+    pub(crate) fn enqueue_upload(&mut self, upload: PendingUpload) {
+        self.pending_uploads.push_back(upload);
+        if self.pending_uploads.len() <= UPLOAD_QUEUE_CAP {
+            return;
+        }
+        let oldest_catchup = self
+            .pending_uploads
+            .iter()
+            .position(|u| u.origin == crate::engine::UploadOrigin::CatchUp);
+        let Some(dropped) = self.pending_uploads.remove(oldest_catchup.unwrap_or(0)) else {
+            return;
+        };
+        if self.dropped_uploads.len() < UPLOAD_QUEUE_CAP {
+            self.dropped_uploads.push(dropped);
+        } else {
+            // A whole queue's worth of reports that nothing has collected: say it where it
+            // can still be read, rather than hold more.
+            tempo_core::applog::error(
+                "upload",
+                &format!(
+                    "upload queue full — dropped the QSO with {} without sending it",
+                    dropped.rec.call
+                ),
+            );
+        }
+    }
+
+    /// Drain the uploads [`Self::enqueue_upload`] dropped since the last call.
+    pub fn take_dropped_uploads(&mut self) -> Vec<PendingUpload> {
+        std::mem::take(&mut self.dropped_uploads)
+    }
+
     /// Re-queue an upload for ONLY the legs that transiently failed (network down,
     /// service busy), so the worker retries them without re-pushing the legs that
     /// already succeeded — a permanently-rejected or successful leg is never in
@@ -639,17 +690,13 @@ impl StationCore {
         } else {
             retry_after_unix
         };
-        if self.pending_uploads.len() >= 256 {
-            self.pending_uploads.pop_front();
-        }
-        self.pending_uploads
-            .push_back(crate::engine::PendingUpload {
-                rec,
-                origin,
-                legs,
-                attempts,
-                retry_after_unix: due,
-            });
+        self.enqueue_upload(crate::engine::PendingUpload {
+            rec,
+            origin,
+            legs,
+            attempts,
+            retry_after_unix: due,
+        });
     }
 
     /// Re-queue the CLUBLOG leg of every logged QSO whose ClubLog upload has NOT succeeded
@@ -660,6 +707,9 @@ impl StationCore {
     /// history arriving through the realtime endpoint in a burst (#193). Returns how many
     /// were queued.
     pub fn requeue_failed_clublog(&mut self) -> usize {
+        // Into FREE space only (#290): past the cap a catch-up record would only be dropped
+        // again, and what is not queued stays unsent in the log for the next sweep.
+        let room = UPLOAD_QUEUE_CAP.saturating_sub(self.pending_uploads.len());
         let stale: Vec<tempo_core::logbook::QsoRecord> = self
             .logbook
             .records()
@@ -670,7 +720,7 @@ impl StationCore {
                     .as_ref()
                     .is_some_and(|u| u.outcome.is_sent())
             })
-            .take(256)
+            .take(room)
             .cloned()
             .collect();
         let n = stale.len();

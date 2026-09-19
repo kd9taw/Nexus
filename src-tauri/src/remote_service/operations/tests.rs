@@ -1107,6 +1107,62 @@ fn a_revoked_device_gets_local_permission_required_even_while_the_engine_is_busy
         assert!(f.engine.lock().unwrap().log_records().is_empty());
     }
 }
+/// #318: a logging or station-control revoke must not fail because Core is busy — it used to
+/// return `remoteBusy` and leave the grant standing. The transmit revoke already queued itself
+/// (`transmit_local_revocation_does_not_wait_for_a_pending_durable_write`).
+#[test]
+fn a_logging_or_station_revoke_does_not_wait_for_a_busy_core() {
+    for grant in ["logging", "station"] {
+        let f = Fixture::new();
+        let now = Instant::now();
+        let (state, command) = if grant == "logging" {
+            let state = f.acquire(now);
+            let command = f.command(&state);
+            (state, command)
+        } else {
+            let state = acquire_controls(&f, now);
+            let arm = json!({"action":"decoder.arm","receiver":"rtty","on":true});
+            (state.clone(), control_request(&state, arm))
+        };
+        assert_eq!(state["phase"], "controlling", "{grant}: holds the lease");
+        let hardware = f.authority.hardware.permit(now + LEASE).unwrap();
+
+        let core = f.authority.core.lock().unwrap(); // an operation in flight
+        let revoke = match grant {
+            "logging" => f.authority.permit(DEVICE, false),
+            _ => f.authority.permit_station(DEVICE, false),
+        };
+        assert_eq!(revoke, Ok(()), "{grant}: revoke must not fail");
+        // A grant still may, and must not widen anything.
+        assert_eq!(f.authority.permit(OTHER, true), Err("remoteBusy"));
+        if grant == "station" {
+            assert!(
+                !hardware.valid(now),
+                "the controller's in-flight hardware permit ends at once"
+            );
+        }
+        drop(core);
+
+        // The device's next command is refused, and its lease is gone.
+        let version = if grant == "logging" { 1 } else { 2 };
+        let result = f.authority.handle_version(
+            (f.connection, version),
+            SESSION,
+            DEVICE,
+            &command,
+            &f.engine,
+            now,
+        );
+        assert_eq!(result, Err("localPermissionRequired"), "{grant}");
+        assert!(!f.engine.lock().unwrap().rtty_armed(), "{grant}");
+        assert!(f.engine.lock().unwrap().log_records().is_empty(), "{grant}");
+        let status = f.authority.local_status();
+        assert_eq!(status["controller"], Value::Null, "{grant}: lease ended");
+        assert_eq!(status["devices"], json!([]), "{grant}: OTHER not granted");
+        assert!(!hardware.valid(now), "{grant}");
+    }
+}
+
 #[test]
 fn manual_logging_refuses_busy_engine_instead_of_queueing_and_counter_wrap() {
     let f = Fixture::new();

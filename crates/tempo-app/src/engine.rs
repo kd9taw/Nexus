@@ -8566,12 +8566,34 @@ impl Engine {
     ///    before the operator keyed the mic would fire when they unkeyed — legal by every gate,
     ///    and still a transmission nobody asked for at that moment. An ATU tune-up is a
     ///    here-and-now act, not a standing order to key later.
+    ///
+    /// In the Digital section a tune-up that fires also stands transmit down, as a Tune release
+    /// does (#322) — so the latch is DOWN when this returns `true` there.
     pub fn take_atu_tune(&mut self) -> bool {
+        self.take_atu_tune_with_reset(modes::reset_ft8_a7)
+    }
+
+    fn take_atu_tune_with_reset(&mut self, reset: impl FnOnce()) -> bool {
         let Some(at) = self.pending_atu_tune.take() else {
             return false;
         };
-        now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
-            && self.atu_tune_gate().is_ok()
+        let fire = now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
+            && self.atu_tune_gate().is_ok();
+        // ⭐ #322 — IN THE DIGITAL SECTION THE RIG'S TUNE-UP ENDS LIKE A TUNE (operator ruling,
+        // 2026-09-19): the sequencer is disarmed and the a7 table dropped, exactly as a Tune
+        // release does in `set_tune_with_reset`. The FTdx10 report on 1.13.0: TX On, then ATU,
+        // and Nexus called the station of the last incomplete QSO.
+        //
+        // AT THE COMMAND, because the tune-up is one rig command whose end Nexus never sees.
+        // And AFTER the gate above, never at the press: the stand-down drops the TX latch, and
+        // the gate refuses a tune-up with the latch down, so a stand-down at the press would
+        // have stopped the ATU ever running in this section. Other sections are untouched, for
+        // the reasons given at the Tune release.
+        if fire && self.settings.operating_mode == crate::settings::OperatingMode::Digital {
+            self.halt_tx_for_context_change("ATU tune-up");
+            reset();
+        }
+        fire
     }
 
     /// Adopt the rig's RX passband width (Hz) from the poll. `None` (a split `m` read) keeps the
@@ -10229,11 +10251,9 @@ impl Engine {
         // Queue for the shell's connector auto-upload worker (QRZ/ClubLog/eQSL).
         // This is THE funnel: auto-logged FT8 QSOs, cockpit logs, and manual
         // Logbook entries all pass through here, so the Settings auto-upload
-        // toggles can never be dead for one path again.
-        if self.station.pending_uploads.len() >= 256 {
-            self.station.pending_uploads.pop_front();
-        }
-        self.station.pending_uploads.push_back(PendingUpload {
+        // toggles can never be dead for one path again. The queue's own door decides
+        // what a full queue drops, and reports it (#290).
+        self.station.enqueue_upload(PendingUpload {
             rec,
             // LIVE, and it must stay that way: this is the contact at the key, and the
             // catch-up pacing added for #193 deliberately does not touch it.
@@ -11156,7 +11176,22 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// Confirm-and-log a QSO held by the prompt-to-log popup. `rec` is the
     /// (possibly operator-edited) record; logs it and clears the pending hold.
+    ///
+    /// #329: what is logged is the HELD record, with only the popup's four editable fields
+    /// taken from `rec` — the Remote confirm's rule (`confirm_pending_log_for_sync`). `rec`
+    /// arrives through the UI's `LoggedQso`, which carries neither TIME_OFF nor the split
+    /// FREQ_RX, so logging it as sent dropped both from every confirmed contact.
     pub fn confirm_pending_log(&mut self, rec: QsoRecord) {
+        let rec = match self.pending_log.take() {
+            Some(mut held) => {
+                held.call = rec.call;
+                held.grid = rec.grid;
+                held.rst_sent = rec.rst_sent;
+                held.rst_rcvd = rec.rst_rcvd;
+                held
+            }
+            None => rec,
+        };
         self.replace_pending_log(None);
         self.persist_pending_qso(); // clears the journal — it's in the log now
         self.log_qso(rec);
@@ -13937,8 +13972,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // stop-line census does not list. Measured, not assumed:
         // `poll_sstv_tx_holds_the_job_while_a_gate_is_down` went red on the unscoped version.
         //
-        // NOT the rig's own ATU tune-up: `atu_tune` does not come through here, matching
-        // upstream's `m_tuneup` exemption at mainwindow.cpp:8790.
+        // The rig's own ATU tune-up is exempt upstream (`m_tuneup`, mainwindow.cpp:8790) and is
+        // NOT exempt here: the operator ruled on 2026-09-19 (#322) that it ends like Tune, and
+        // `take_atu_tune` applies this same stand-down when the tune-up goes to the rig.
         if self.settings.operating_mode == crate::settings::OperatingMode::Digital {
             self.halt_tx_for_context_change("tune ended");
         }
@@ -20665,6 +20701,11 @@ contact yourself."
     /// See [`StationCore::take_pending_uploads`].
     pub fn take_pending_uploads(&mut self) -> Vec<PendingUpload> {
         self.station.take_pending_uploads()
+    }
+
+    /// See [`StationCore::take_dropped_uploads`].
+    pub fn take_dropped_uploads(&mut self) -> Vec<PendingUpload> {
+        self.station.take_dropped_uploads()
     }
 
     /// See [`StationCore::requeue_upload`].
@@ -30688,6 +30729,59 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_catch_up_never_costs_a_live_upload_its_place_in_the_full_queue() {
+        // #290: at 256 the queue dropped its OLDEST entry, whatever it was, so a ClubLog
+        // catch-up over a big log pushed out the live contacts still waiting on a retry.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..300 {
+            let rec = e.qso_record(format!("W9A{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads(); // this is about what is waiting BELOW the catch-up
+        for i in 0..10 {
+            let rec = e.qso_record(format!("K1L{i}"), None, None);
+            e.requeue_upload(rec, upload_legs::QRZ, 1); // live contacts waiting on a retry
+        }
+        e.requeue_failed_clublog(); // 300 contacts ClubLog never took
+        let rec = e.qso_record("K1NEW".into(), None, None);
+        e.log_qso(rec); // and a contact at the key, arriving at a full queue
+
+        let queued = e.take_pending_uploads();
+        let live: Vec<&str> = queued
+            .iter()
+            .filter(|p| p.origin == UploadOrigin::Live)
+            .map(|p| p.rec.call.as_str())
+            .collect();
+        assert_eq!(
+            live.len(),
+            11,
+            "every live upload keeps its place: {live:?}"
+        );
+        assert!(live.contains(&"K1NEW"), "…the newest included: {live:?}");
+        assert_eq!(queued.len(), 256, "and the queue stays bounded");
+    }
+
+    #[test]
+    fn an_upload_the_full_queue_drops_is_handed_over_to_be_reported() {
+        // #290: the cap dropped an upload without a word. What it drops now goes to the
+        // connector worker, which names it in the Connections log.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..257 {
+            let rec = e.qso_record(format!("W9A{i}"), None, None);
+            e.log_qso(rec);
+        }
+        let dropped = e.take_dropped_uploads();
+        let calls: Vec<&str> = dropped.iter().map(|p| p.rec.call.as_str()).collect();
+        assert_eq!(
+            calls,
+            ["W9A0"],
+            "one over the cap drops the oldest, and says so"
+        );
+        assert_eq!(e.take_pending_uploads().len(), 256);
+        assert!(e.take_dropped_uploads().is_empty(), "handed over once");
+    }
+
     /// #210: the frontend's "clear DX call after logging" wipe rides `logged_tick`, and the
     /// whole point is that it advances on EVERY log — including a backend auto-log the UI never
     /// initiated. `log_qso` is the single funnel, so one bump here proves every path is covered.
@@ -34161,6 +34255,36 @@ mod tests {
             e.snapshot().pending_log.is_none(),
             "hold cleared after confirm"
         );
+    }
+
+    #[test]
+    fn confirming_a_held_qso_keeps_its_end_time_and_split_leg() {
+        // #329: the popup sends the record back through the UI's `LoggedQso`, which carries
+        // neither TIME_OFF nor FREQ_RX — so a confirmed contact lost both (HRD showed 00:00).
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        let dial = e.settings.dial_mhz;
+        e.split_tx_mhz = Some(dial + 0.002); // same-band split, so the hold carries FREQ_RX
+        e.call_station_with_grid("W9XYZ", Some("en37"));
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        let held = e.pending_log.clone().expect("held for confirm");
+        assert!(
+            held.time_off_unix.is_some() && held.freq_rx_mhz.is_some(),
+            "precondition: the hold carries an end time and a split RX leg"
+        );
+
+        // Exactly what the popup sends: the snapshot's record, with the operator's edits.
+        let mut sent = e.snapshot().pending_log.expect("a QSO awaits confirm");
+        sent.grid = Some("EN38".into());
+        sent.rst_rcvd = Some("-09".into());
+        e.confirm_pending_log(sent.into());
+
+        let saved = &e.station.logbook.records()[0];
+        assert_eq!(saved.time_off_unix, held.time_off_unix, "TIME_OFF survives");
+        assert_eq!(saved.freq_rx_mhz, held.freq_rx_mhz, "FREQ_RX survives");
+        assert_eq!(saved.grid.as_deref(), Some("EN38"), "grid edit lands");
+        assert_eq!(saved.rst_rcvd.as_deref(), Some("-09"), "RST edit lands");
     }
 
     #[test]
@@ -44440,8 +44564,8 @@ mod tests {
     //    `on_stopTxButton_clicked()` (8762), which is `auto_tx_mode(false)` + `m_bAutoReply =
     //    false` + `m_btxok = false` (8787-8797). Stock's Tune therefore CANNOT extend an
     //    armed QSO: releasing it disarms the sequencer. Nexus's did not — that is the gap.
-    //    (The rig's own ATU tune-up is exempt upstream, `m_tuneup` at 8790, and is exempt
-    //    here too: `atu_tune` does not go through `set_tune`.)
+    //    (The rig's own ATU tune-up is exempt upstream, `m_tuneup` at 8790. It is NOT exempt
+    //    here: the operator ruled on 2026-09-19 (#322) that it ends like Tune.)
     //  * The watchdog reset on Tune is PARITY and stays: any click or keystroke anywhere in
     //    WSJT-X's window zeroes m_idleMinutes (mainwindow.cpp:2823-2827), the Tune button
     //    included. Upstream's bound on an idle QSO is the tune-release auto-off above, not
@@ -44571,6 +44695,67 @@ mod tests {
         // A release with no tune held is not a release.
         e.set_tune_with_reset(false, || hits.set(hits.get() + 1));
         assert_eq!(hits.get(), 1, "a no-op release must not reset anything");
+    }
+
+    /// #322 (operator ruling 2026-09-19, "ATU ends like Tune"): the FTdx10 report on 1.13.0 —
+    /// TX On, ATU, and Nexus called the station of the last incomplete QSO. The scene of
+    /// `tune_does_not_extend_an_armed_qso`, with the rig's own tune-up in place of Tune.
+    #[test]
+    fn an_atu_tune_up_does_not_extend_an_armed_qso() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut s = e.settings().clone();
+        s.directed_max_calls = Some(2);
+        s.tx_watchdog_min = 6;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.call_station("W9XYZ");
+        let slot = cap_a_directed_call(&mut e, 2);
+        e.observe_rig_tuner(Some(true));
+
+        e.atu_tune()
+            .expect("an armed, idle rig with a tuner may run it");
+        // The gate at the wire runs BEFORE the stand-down, so the tune-up still goes out.
+        assert!(e.take_atu_tune(), "the tune-up must still reach the radio");
+        assert!(
+            !e.tx_enabled(),
+            "an ATU tune-up must disarm the sequencer, as a Tune release does"
+        );
+
+        e.ingest_decodes_for_test(&[dec_ap("K2DEF W9XYZ RRR", -5, 7)], slot + 1);
+        for s in slot + 2..slot + 8 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "Nexus keyed a station it had given up calling, after an ATU tune-up"
+            );
+        }
+    }
+
+    #[test]
+    fn an_atu_tune_up_ends_like_a_tune_in_the_digital_section_only() {
+        // The Tune release's scope, for the same reasons: in the manual sections the latch is
+        // the operator's PTT enable. Both directions, like the Tune tests above.
+        use crate::settings::OperatingMode;
+        use std::cell::Cell;
+        for (mode, keeps_tx, resets) in [
+            (OperatingMode::Digital, false, 1),
+            (OperatingMode::Phone, true, 0),
+            (OperatingMode::Cw, true, 0),
+            (OperatingMode::Rtty, true, 0),
+        ] {
+            let hits = Cell::new(0u32);
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.operating_mode = mode;
+            e.set_tx_enabled(true);
+            e.observe_rig_tuner(Some(true));
+            e.atu_tune()
+                .unwrap_or_else(|why| panic!("{mode:?}: precondition — ATU accepted: {why}"));
+            assert!(
+                e.take_atu_tune_with_reset(|| hits.set(hits.get() + 1)),
+                "{mode:?}: the tune-up must still reach the radio"
+            );
+            assert_eq!(e.tx_enabled(), keeps_tx, "{mode:?}: arm state after ATU");
+            assert_eq!(hits.get(), resets, "{mode:?}: a7 table resets");
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════
