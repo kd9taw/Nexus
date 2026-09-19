@@ -16,6 +16,7 @@ import type {
 import { t } from '../i18n'
 import { contestIMoved, contestLogManual, contestZoneHint, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
+import { UTC_TIME_FORMATS, parseUtcTime, utcDateTimeToUnix } from '../features/utcLog'
 import {
   domainSuggestions,
   inDomain,
@@ -235,17 +236,6 @@ const PARK_PROGRAMS = ['POTA', 'SOTA'] as const
 function utcNowParts(): { date: string; time: string } {
   const iso = new Date().toISOString()
   return { date: iso.slice(0, 10), time: iso.slice(11, 16) }
-}
-
-/** Parse the UTC date + time inputs to Unix seconds, or null when either is malformed.
- * Amateur logs are UTC: parsing via Date.UTC keeps the browser's local zone out of it — a
- * naive `datetime-local` read as UTC would silently log hours off. */
-function utcPartsToUnix(date: string, time: string): number | null {
-  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
-  const t = /^(\d{1,2}):(\d{2})$/.exec(time)
-  if (!d || !t) return null
-  const ms = Date.UTC(+d[1], +d[2] - 1, +d[3], +t[1], +t[2], 0)
-  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null
 }
 
 interface Props {
@@ -1091,7 +1081,13 @@ export function LogEntry({
   // logging is BLOCKED until the freq is valid or the override is closed (`overrideBlocked`).
   const ovFreqNum = Number(ovFreq)
   const ovFreqOk = overrideOpen && Number.isFinite(ovFreqNum) && ovFreqNum > 0
-  const overrideBlocked = overrideOpen && !ovFreqOk
+  // …and the same for its UTC instant (#280). The time is a plain 24-hour box now, so a typo is
+  // possible where the native control made one impossible; a date + time that is not a real one
+  // holds Log like a bad frequency does, never quietly replaced by "now".
+  const ovWhen = overrideOpen ? utcDateTimeToUnix(ovDate, ovTime) : null
+  const ovTimeBad = parseUtcTime(ovTime) === null
+  const ovFreqBlocked = overrideOpen && !ovFreqOk
+  const overrideBlocked = ovFreqBlocked || (overrideOpen && ovWhen === null)
   // Remote drafts survive navigation and other operators' QSYs. Keep their
   // captured contact context; the explicit other-radio override still wins.
   const draftContext = remoteMode ? remoteDraftContext : null
@@ -1110,7 +1106,10 @@ export function LogEntry({
     const call = logCall.trim().toUpperCase()
     if (!call) return
     if (overrideBlocked) {
-      pushToast(t('logEntry.override.blocked'), 'error')
+      pushToast(
+        ovFreqBlocked ? t('logEntry.override.blocked') : t('logEntry.override.timeBlocked', UTC_TIME_FORMATS),
+        'error',
+      )
       return
     }
     if (gridBlocked) {
@@ -1164,11 +1163,9 @@ export function LogEntry({
     // Standard logbook path.
     const rstSent = logRstSent.trim() || defaultRst
     const rstRcvd = logRstRcvd.trim() || defaultRst
-    // Override open → the hand-entered UTC instant (falling back to now if a field was
-    // cleared to something unparseable); closed → now, exactly as before.
-    const whenUnix = overrideOpen
-      ? (utcPartsToUnix(ovDate, ovTime) ?? Math.floor(Date.now() / 1000))
-      : Math.floor(Date.now() / 1000)
+    // Override open → the hand-entered UTC instant (one that is not a real date and time held
+    // Log above); closed → now, exactly as before.
+    const whenUnix = overrideOpen && ovWhen !== null ? ovWhen : Math.floor(Date.now() / 1000)
     const rec: LoggedQso = {
       call,
       grid: logGrid.trim() || null,
@@ -1918,11 +1915,16 @@ export function LogEntry({
             </label>
             <label className="le-ov-field">
               <span className="le-rst-cap">{t('logEntry.override.time.label')}</span>
+              {/* 24-hour UTC as typed — a native time control would draw it in the OS locale (#280). */}
               <input
-                type="time"
-                className="settings-input le-ov-time"
+                className={`settings-input mono le-ov-time${ovTimeBad ? ' invalid' : ''}`}
                 value={ovTime}
                 onChange={(e) => setOvTime(e.target.value)}
+                placeholder={UTC_TIME_FORMATS.short}
+                maxLength={8}
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={ovTimeBad}
               />
             </label>
             <label className="le-ov-field">
@@ -1979,7 +1981,11 @@ export function LogEntry({
 
       <span className="le-hint">
         {overrideBlocked ? (
-          <span className="le-ov-warn">{t('logEntry.override.blockedHint')}</span>
+          <span className="le-ov-warn">
+            {ovFreqBlocked
+              ? t('logEntry.override.blockedHint')
+              : t('logEntry.override.timeBlockedHint', UTC_TIME_FORMATS)}
+          </span>
         ) : gridBlocked ? (
           // Why Log went dead, in the place that otherwise states what will be
           // written. `role="alert"` because it is the only explanation of a
@@ -2034,11 +2040,13 @@ export function LogEntry({
           onClick={logIt}
           disabled={!logCall.trim() || overrideBlocked || gridBlocked || (remote != null && (!remote.canSubmit || remote.busy || remote.pending))}
           title={
-            overrideBlocked
+            ovFreqBlocked
               ? t('logEntry.override.blocked')
-              : gridBlocked
-                ? t('logEntry.grid.blockedTitle')
-                : undefined
+              : overrideBlocked
+                ? t('logEntry.override.timeBlocked', UTC_TIME_FORMATS)
+                : gridBlocked
+                  ? t('logEntry.grid.blockedTitle')
+                  : undefined
           }
         >
           {t('logEntry.log')}
