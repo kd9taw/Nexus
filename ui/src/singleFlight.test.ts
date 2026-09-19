@@ -71,6 +71,19 @@ describe('pollSingleFlight', () => {
     await vi.advanceTimersByTimeAsync(2000)
   })
 
+  it('a slow poller waits four of its own intervals before giving a call up', async () => {
+    // At 15 s a flat 10 s limit would give the stalled call up at EVERY tick, stacking reads as
+    // fast as a bare interval did — the limit scales with the cadence instead.
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const poll = vi.fn(() => new Promise<void>(() => {}))
+    const stop = pollSingleFlight('t', 15_000, poll)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(poll, 'given up before four intervals').toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(poll).toHaveBeenCalledTimes(2)
+    stop()
+  })
+
   it('gives up a call that never settles after POLL_STUCK_MS, and only then', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const poll = vi.fn(() => new Promise<void>(() => {}))

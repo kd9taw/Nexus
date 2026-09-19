@@ -26,6 +26,9 @@
  *   per tick (about 33 per 10 s for the snapshot).
  * - Short enough to be the recovery it exists for: a call that never settles at all (a lost IPC
  *   reply) costs the display ten seconds, then the poll resumes on its own.
+ *
+ * It is the FLOOR: `pollSingleFlight` waits at least four of a poller's own intervals, so a slow
+ * poller is not given up at its very next tick (see there).
  */
 export const POLL_STUCK_MS = 10_000
 
@@ -117,12 +120,20 @@ export class SingleFlightLatch {
  * several calls should return them all (e.g. `Promise.allSettled`).
  *
  * `leading` (default true) runs the first poll now rather than one interval from now.
+ *
+ * `stuckMs` defaults to `POLL_STUCK_MS` or four intervals, whichever is longer. A call is only
+ * presumed lost once it has missed four of its own ticks: at a 15 s cadence a 10 s limit would
+ * give up the stalled call at every tick, and the poll would stack exactly as fast as it did on a
+ * bare interval.
  */
 export function pollSingleFlight(
   label: string,
   everyMs: number,
   poll: (owns: () => boolean) => Promise<unknown>,
-  { leading = true, stuckMs = POLL_STUCK_MS }: { leading?: boolean; stuckMs?: number } = {},
+  {
+    leading = true,
+    stuckMs = Math.max(POLL_STUCK_MS, 4 * everyMs),
+  }: { leading?: boolean; stuckMs?: number } = {},
 ): () => void {
   const latch = new SingleFlightLatch(label, stuckMs)
   let stopped = false
