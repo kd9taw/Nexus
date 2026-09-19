@@ -77,9 +77,9 @@ pub use gridrarity::{grid_rarity, GridRarity};
 pub use gridstate::state_for_grid;
 pub use insight::{generate_insights, Insight, InsightKind, InsightLevel};
 pub use journey::{
-    compute as compute_journey, Cell as JourneyCell, Collection as JourneyCollection, Feat, First,
-    JourneyQso, JourneySummary, Ladder, NextMilestone, PersonalBest, Rung, Streak,
-    Tier as JourneyTier,
+    compute as compute_journey, model as journey_model, Cell as JourneyCell,
+    Collection as JourneyCollection, Feat, First, JourneyModel, JourneyQso, JourneySummary, Ladder,
+    NextMilestone, PersonalBest, Rung, Streak, Tier as JourneyTier,
 };
 pub use kc2g::MufStation;
 pub use kpforecast::{parse_kp_forecast, KpForecast, KpKind, KpPoint};

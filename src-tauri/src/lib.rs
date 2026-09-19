@@ -103,6 +103,119 @@ struct PropContext {
     grid: String,
     log: Arc<()>,
 }
+
+/// A whole-log result, kept with the log revision it was built from and `K`, whatever else it
+/// was built from. The revision moves on every write to the log's records (one choke point,
+/// `tempo_core::logbook`), so a kept value can never outlive the log it describes.
+///
+/// It exists for the periodic commands (propagation, awards, Journey). Each folded the whole
+/// log on every poll, under the engine lock the radio loop needs at every slot boundary,
+/// whether or not the log had changed — at 150k QSOs, a large part of what made the app
+/// erratic.
+struct Tally<K, V>(Mutex<Option<(u64, K, Arc<V>)>>);
+
+impl<K, V> Default for Tally<K, V> {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
+impl<K: PartialEq, V> Tally<K, V> {
+    /// The kept value, if it was built at `revision` from `key`.
+    fn get(&self, revision: u64, key: &K) -> Option<Arc<V>> {
+        let slot = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.as_ref()
+            .filter(|(at, from, _)| *at == revision && from == key)
+            .map(|(_, _, value)| value.clone())
+    }
+
+    /// Keep `value`, built at `revision` from `key`, and hand it back.
+    fn put(&self, revision: u64, key: K, value: V) -> Arc<V> {
+        note_log_tally();
+        let value = Arc::new(value);
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((revision, key, value.clone()));
+        value
+    }
+}
+
+/// The kept whole-log tallies. Managed state, so every window's polls share one of each.
+#[derive(Default)]
+struct LogTallies {
+    /// The needs model a propagation refetch hands the live feeds.
+    needs: Tally<(), propagation::LogNeeds>,
+    /// The award summary, per operator call.
+    awards: Tally<String, propagation::AwardSummary>,
+    /// The Journey model, per the settings it reads.
+    journey: Tally<JourneyKey, propagation::JourneyModel>,
+}
+
+// Whole-log fold counter, DEBUG BUILDS ONLY: the command layer's twin of
+// `tempo_core::logbook::LOG_SWEEPS`, for the tests that pin "an unchanged log is not
+// folded again". Every `Tally` build ends in `put`, which counts it. Per thread, like
+// LOG_SWEEPS, because the test harness runs tests in parallel. (Plain comments: doc
+// comments can't attach through the thread_local! macro.)
+#[cfg(debug_assertions)]
+thread_local! {
+    static LOG_TALLIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn note_log_tally() {
+    #[cfg(debug_assertions)]
+    LOG_TALLIES.with(|c| c.set(c.get() + 1));
+}
+
+/// The award-needs model of the whole log, rebuilt only when the log's revision moves, with
+/// the log's read identity taken under the same lock (see [`PropContext`]). The scoring fields
+/// are copied under the lock and folded after it is released.
+fn needs_kept(
+    engine: &Mutex<Engine>,
+    tallies: &LogTallies,
+) -> (Arc<propagation::LogNeeds>, Arc<()>) {
+    let eng = engine_lock(engine);
+    let (revision, log) = (eng.log_revision(), eng.log_read_token());
+    if let Some(kept) = tallies.needs.get(revision, &()) {
+        return (kept, log);
+    }
+    let contacts: Vec<_> = eng
+        .log_records()
+        .iter()
+        .map(|q| {
+            (
+                q.call.clone(),
+                q.band.clone(),
+                q.mode.clone(),
+                q.grid.clone(),
+                q.state.clone(),
+                q.award_confirmed,
+                qso_is_sat(q.prop_mode.as_deref()),
+            )
+        })
+        .collect();
+    drop(eng);
+    let mut needs = propagation::LogNeeds::new();
+    for (call, band, mode, grid, state, confirmed, satellite) in contacts {
+        // A "needs confirmation" must be award-grade (LoTW/paper), not eQSL.
+        needs.add_qso(
+            &call,
+            &band,
+            &mode,
+            grid.as_deref(),
+            state.as_deref(),
+            confirmed,
+            satellite,
+        );
+    }
+    (tallies.needs.put(revision, (), needs), log)
+}
+
 /// TTL cache for the OVATION aurora oval (distinct payload type from PropCache, so
 /// a distinct TypeId for `.manage()`).
 type AuroraCache = Arc<
@@ -3365,6 +3478,7 @@ fn set_source(state: State<'_, SharedEngine>, kind: String) -> Result<AppSnapsho
 /// (then an honest, empty `offline` snapshot — never fabricated data) if a fetch
 /// fails or the operator hasn't set a real callsign.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // one per managed state it reads
 async fn get_propagation(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
@@ -3373,25 +3487,11 @@ async fn get_propagation(
     opening_tracker: State<'_, SharedOpeningTracker>,
     spots: State<'_, SharedSpots>,
     wx_history: State<'_, SharedWxHistory>,
+    tallies: State<'_, LogTallies>,
 ) -> Result<propagation::PropagationSnapshot, String> {
-    let (mycall, mygrid, needs, local_spots, context) = with_engine(&state, |eng| {
+    let (mycall, mygrid, local_spots) = with_engine(&state, |eng| {
         let s = eng.settings();
         let (mycall, mygrid) = (s.mycall.clone(), s.mygrid.clone());
-        // Derive the operator's needs from the ADIF logbook (cty.dat-resolved).
-        // Empty log → every active DXpedition shows as an ATNO candidate.
-        let mut needs = propagation::LogNeeds::new();
-        for q in eng.get_log() {
-            // A "needs confirmation" must be award-grade (LoTW/paper), not eQSL.
-            needs.add_qso(
-                &q.call,
-                &q.band,
-                &q.mode,
-                q.grid.as_deref(),
-                q.state.as_deref(),
-                q.award_confirmed,
-                qso_is_sat(q.prop_mode.as_deref()),
-            );
-        }
         // The operator's OWN decoded roster on the current band → "I heard X"
         // PathSpots. This feeds the opening detector + advisor from MONITORING
         // alone — a band the operator can SEE open in their decode window now lights
@@ -3413,12 +3513,7 @@ async fn get_propagation(
                 );
             }
         }
-        let context = PropContext {
-            call: mycall.clone(),
-            grid: mygrid.clone(),
-            log: eng.log_read_token(),
-        };
-        (mycall, mygrid, needs, local_spots, context)
+        (mycall, mygrid, local_spots)
     })
     .await?;
 
@@ -3477,16 +3572,30 @@ async fn get_propagation(
                 .lock()
                 .map(|b| b.recent(now, 1800))
                 .unwrap_or_default();
+            // Derive the operator's needs from the ADIF logbook (cty.dat-resolved).
+            // Empty log → every active DXpedition shows as an ATNO candidate.
+            //
+            // Only HERE, where a refetch will use them — never on the cache-hit polls in
+            // between — and kept against the log's revision, so a refetch over an unchanged
+            // log does not fold it again. The context's log identity is taken in the same
+            // lock, so Remote labels the board with the log the needs were built from.
+            let (needs, log) = needs_kept(&state, &tallies);
+            let context = PropContext {
+                call: mycall.clone(),
+                grid: mygrid.clone(),
+                log,
+            };
             let (mc, mg) = (mycall.clone(), mygrid.clone());
             tauri::async_runtime::spawn_blocking(move || {
-                propagation::live::snapshot_with_spots(&mc, &mg, 1800, &needs, &extra)
+                propagation::live::snapshot_with_spots(&mc, &mg, 1800, &*needs, &extra)
+                    .map(|snap| (snap, context))
             })
             .await
             .map_err(|e| e.to_string())?
         };
 
         match live {
-            Ok(snap) => {
+            Ok((snap, context)) => {
                 if let Ok(mut guard) = cache.lock() {
                     *guard = Some((std::time::Instant::now(), snap.clone(), context));
                 }
@@ -14032,16 +14141,68 @@ fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnaps
 /// the NEW ONE badge fire on every German/Russian contact forever).
 #[tauri::command(async)]
 fn get_log(state: State<'_, SharedEngine>) -> Result<Vec<LoggedQso>, String> {
-    let eng = engine_lock(&state);
-    Ok(eng
-        .get_log()
+    // Cloned under the lock, converted after it is released: the per-row country lookup is
+    // most of the cost, and the radio loop needs this lock at every slot boundary.
+    let records = engine_lock(&state).get_log();
+    Ok(logged_rows(records))
+}
+
+/// Records as the UI reads them, each with its cty.dat entity — `get_log`'s conversion, and
+/// `get_log_delta`'s, which must hand out rows identical to it.
+fn logged_rows(records: Vec<tempo_core::logbook::QsoRecord>) -> Vec<LoggedQso> {
+    records
         .into_iter()
         .map(|r| {
             let mut q = LoggedQso::from(r);
             q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
             q
         })
-        .collect())
+        .collect()
+}
+
+/// [`get_log_delta`]'s answer.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogDelta {
+    /// The log's revision these rows bring the UI's copy to.
+    revision: u64,
+    /// `rows` is the whole log (the copy is replaced), not just its new end.
+    full: bool,
+    rows: Vec<tempo_app::dto::LoggedQso>,
+}
+
+/// The log since the UI's copy, which stood at `since_revision` holding `have_count` rows.
+///
+/// One logged QSO used to cost the whole log over IPC — ~100 MB of JSON at 150k QSOs — once
+/// per window that holds a copy. When every change since `since_revision` was an append and
+/// the copy is no longer than the log, `rows` is just `records[have_count..]`. After anything
+/// else — an edit, a delete, an import that changed a held row, a sync, an upload stamp, a
+/// reload, or a revision this log never held — `full` is set and `rows` is the whole log,
+/// exactly as [`get_log`] returns it. Rows are converted exactly as `get_log`'s are.
+#[tauri::command(async)]
+fn get_log_delta(
+    state: State<'_, SharedEngine>,
+    since_revision: u64,
+    have_count: usize,
+) -> Result<LogDelta, String> {
+    Ok(log_delta(&state, since_revision, have_count))
+}
+
+fn log_delta(engine: &Mutex<Engine>, since_revision: u64, have_count: usize) -> LogDelta {
+    // The rows are cloned and the revision read under ONE lock, so they always agree; the
+    // conversion runs after it is released, as in `get_log`.
+    let (revision, full, records) = {
+        let eng = engine_lock(engine);
+        let log = eng.log_records();
+        let grew = eng.log_appended_only_since(since_revision) && have_count <= log.len();
+        let rows = if grew { &log[have_count..] } else { log };
+        (eng.log_revision(), !grew, rows.to_vec())
+    };
+    LogDelta {
+        revision,
+        full,
+        rows: logged_rows(records),
+    }
 }
 
 /// The cty.dat-resolved DXCC entity for a callsign, or null — the log-entry
@@ -14268,9 +14429,26 @@ fn qso_is_sat(prop_mode: Option<&str>) -> bool {
 /// the worked-but-unconfirmed "new one" chase. Pure/offline — online LoTW/eQSL/
 /// QRZ/ClubLog sync (which would flip `confirmed`) is a later increment.
 #[tauri::command(async)]
-fn get_awards(state: State<'_, SharedEngine>) -> Result<propagation::AwardSummary, String> {
-    let eng = engine_lock(&state);
-    Ok(awards_for_records(&eng.get_log(), &eng.settings().mycall))
+fn get_awards(
+    state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
+) -> Result<propagation::AwardSummary, String> {
+    Ok(awards_kept(&state, &tallies).as_ref().clone())
+}
+
+/// `get_awards`'s summary, folded again only when the log's revision or the operator's call
+/// (the home entity "First DX" is judged against) has moved. The main window polls it twice a
+/// minute; the records are cloned under the lock and folded after it.
+fn awards_kept(engine: &Mutex<Engine>, tallies: &LogTallies) -> Arc<propagation::AwardSummary> {
+    let eng = engine_lock(engine);
+    let (revision, my_call) = (eng.log_revision(), eng.settings().mycall.clone());
+    if let Some(kept) = tallies.awards.get(revision, &my_call) {
+        return kept;
+    }
+    let records = eng.get_log();
+    drop(eng);
+    let summary = awards_for_records(&records, &my_call);
+    tallies.awards.put(revision, my_call, summary)
 }
 
 /// The native award fold, also used as the reference for Remote read conformance.
@@ -14325,74 +14503,86 @@ fn get_log_stats(state: State<'_, SharedEngine>) -> Result<propagation::LogStats
 #[tauri::command]
 async fn get_journey(
     state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
 ) -> Result<propagation::JourneySummary, String> {
-    use propagation::model::{Band, ModeClass};
-    let eng = engine_lock(&state);
+    Ok(journey_kept(&state, &tallies).summary(now_unix()))
+}
+
+/// What `get_journey`'s model is built from besides the log.
+#[derive(PartialEq)]
+struct JourneyKey {
+    call: String,
+    grid: String,
+    power_w: Option<f64>,
+    streak: bool,
+}
+
+/// `get_journey`'s model of the log, rebuilt only when the log's revision or a setting it
+/// reads has moved. The clock is NOT part of the key: the model finishes the weekly streak and
+/// the annual marathon for whatever time it is asked about (`propagation::JourneyModel`), so
+/// a kept model answers each once-a-minute poll exactly as a fresh computation would.
+fn journey_kept(engine: &Mutex<Engine>, tallies: &LogTallies) -> Arc<propagation::JourneyModel> {
+    let eng = engine_lock(engine);
     let s = eng.settings();
-    let qsos: Vec<propagation::JourneyQso> = eng
-        .get_log()
-        .into_iter()
-        .map(|r| propagation::JourneyQso {
-            call: r.call,
-            grid: r.grid,
-            state: r.state,
-            band: Band::from_label(&r.band),
-            mode: ModeClass::from_adif(&r.mode),
-            when_unix: r.when_unix as i64,
-            // Award-eligible confirmation (LoTW/paper — not eQSL), matching the
-            // awards + "first confirmation" semantics.
-            confirmed: r.award_confirmed,
-            // The Journey "strongest signal" stat is a digital dB SNR concept; parse
-            // the numeric report only for DIGITAL QSOs (a phone "59"/CW "599" isn't dB).
-            rst_rcvd: if ModeClass::from_adif(&r.mode) == ModeClass::Digital {
-                r.rst_rcvd
-                    .as_deref()
-                    .and_then(|s| s.trim().parse::<i32>().ok())
-            } else {
-                None
-            },
-            pota: r
-                .ota
-                .their_program
+    let key = JourneyKey {
+        call: s.mycall.clone(),
+        grid: s.mygrid.clone(),
+        power_w: s.station_power_w,
+        streak: s.journey_streak_enabled,
+    };
+    let revision = eng.log_revision();
+    if let Some(kept) = tallies.journey.get(revision, &key) {
+        return kept;
+    }
+    let qsos: Vec<propagation::JourneyQso> = eng.log_records().iter().map(journey_qso).collect();
+    drop(eng);
+    let grid = (!key.grid.is_empty()).then_some(key.grid.as_str());
+    let model = propagation::journey_model(&qsos, &key.call, grid, key.power_w, key.streak);
+    tallies.journey.put(revision, key, model)
+}
+
+/// One logged record as the Journey reads it.
+fn journey_qso(r: &tempo_core::logbook::QsoRecord) -> propagation::JourneyQso {
+    use propagation::model::{Band, ModeClass};
+    let program = |name: &str| {
+        r.ota
+            .their_program
+            .as_deref()
+            .is_some_and(|p| p.eq_ignore_ascii_case(name))
+    };
+    propagation::JourneyQso {
+        call: r.call.clone(),
+        grid: r.grid.clone(),
+        state: r.state.clone(),
+        band: Band::from_label(&r.band),
+        mode: ModeClass::from_adif(&r.mode),
+        when_unix: r.when_unix as i64,
+        // Award-eligible confirmation (LoTW/paper — not eQSL), matching the
+        // awards + "first confirmation" semantics.
+        confirmed: r.award_confirmed,
+        // The Journey "strongest signal" stat is a digital dB SNR concept; parse
+        // the numeric report only for DIGITAL QSOs (a phone "59"/CW "599" isn't dB).
+        rst_rcvd: if ModeClass::from_adif(&r.mode) == ModeClass::Digital {
+            r.rst_rcvd
                 .as_deref()
-                .is_some_and(|p| p.eq_ignore_ascii_case("POTA")),
-            sota: r
-                .ota
-                .their_program
-                .as_deref()
-                .is_some_and(|p| p.eq_ignore_ascii_case("SOTA")),
-            // Hunter ladders count DISTINCT park/summit references.
-            pota_ref: if r
-                .ota
-                .their_program
-                .as_deref()
-                .is_some_and(|p| p.eq_ignore_ascii_case("POTA"))
-            {
-                r.ota.their_ref.clone()
-            } else {
-                None
-            },
-            sota_ref: if r
-                .ota
-                .their_program
-                .as_deref()
-                .is_some_and(|p| p.eq_ignore_ascii_case("SOTA"))
-            {
-                r.ota.their_ref.clone()
-            } else {
-                None
-            },
-        })
-        .collect();
-    let grid = (!s.mygrid.is_empty()).then_some(s.mygrid.as_str());
-    Ok(propagation::compute_journey(
-        &qsos,
-        &s.mycall,
-        grid,
-        s.station_power_w,
-        s.journey_streak_enabled,
-        now_unix(),
-    ))
+                .and_then(|s| s.trim().parse::<i32>().ok())
+        } else {
+            None
+        },
+        pota: program("POTA"),
+        sota: program("SOTA"),
+        // Hunter ladders count DISTINCT park/summit references.
+        pota_ref: if program("POTA") {
+            r.ota.their_ref.clone()
+        } else {
+            None
+        },
+        sota_ref: if program("SOTA") {
+            r.ota.their_ref.clone()
+        } else {
+            None
+        },
+    }
 }
 
 /// Silent match-failure diagnostics: per-QSO "why isn't this confirmed, and what's
@@ -20213,6 +20403,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
                 app.state(),
                 app.state(),
                 app.state(),
+                app.state(),
             )
             .await),
             "get_kc2g_muf" => ok(get_kc2g_muf(app.state()).await),
@@ -24361,6 +24552,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(d.connect_web)
         .manage(SharedOpeningTracker::default())
         .manage(SharedWxHistory::default())
+        .manage(LogTallies::default())
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .manage(BetaUpdateState::default())
@@ -24639,6 +24831,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             discard_pending_log,
             log_qso,
             get_log,
+            get_log_delta,
             resolve_entity,
             contest_zone_hint,
             edit_qso,
@@ -32462,5 +32655,142 @@ mod tests {
             "a finished session blocked the next connect"
         );
         super::winlink_release();
+    }
+
+    /// An FT8 contact as `log_qso` receives it.
+    fn ft8_qso(call: &str, when: u64) -> tempo_core::logbook::QsoRecord {
+        let mut r = pass_qso(call, "JO31", "20m", 14.074);
+        r.mode = "FT8".into();
+        r.when_unix = when;
+        r
+    }
+
+    /// A logged QSO moves ONE row over IPC instead of the whole log (~100 MB of JSON at 150k
+    /// QSOs, once per window holding a copy). `get_log_delta` may send "just these rows" only
+    /// while the UI's copy is still a prefix of the log: after an edit or a delete it must
+    /// answer `full`, or the UI keeps showing a contact the log no longer holds. Its rows must
+    /// be `get_log`'s rows exactly, entity included.
+    #[test]
+    fn the_log_delta_sends_appended_rows_and_the_whole_log_after_anything_else() {
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        // `get_log`'s answer: the same clone and the same conversion.
+        let get_log = || super::logged_rows(engine_lock(&engine).get_log());
+        engine_lock(&engine).log_qso(ft8_qso("DL1ABC", 1_700_000_000));
+        engine_lock(&engine).log_qso(ft8_qso("JA1XYZ", 1_700_000_100));
+
+        // The UI's first ask holds nothing, at no revision: the whole log.
+        let first = super::log_delta(&engine, 0, 0);
+        assert!(
+            first.full,
+            "a revision the log never held gets the whole log"
+        );
+        assert_eq!(first.rows, get_log());
+        assert!(
+            first.rows[0].entity.is_some(),
+            "fixture: rows carry the cty.dat entity"
+        );
+
+        // Nothing changed: nothing to send.
+        let idle = super::log_delta(&engine, first.revision, first.rows.len());
+        assert!(
+            !idle.full && idle.rows.is_empty(),
+            "an unchanged log sends nothing"
+        );
+        assert_eq!(idle.revision, first.revision);
+
+        // A logged contact and an import that only adds rows: exactly the new rows.
+        engine_lock(&engine).log_qso(ft8_qso("VK2AAA", 1_700_000_200));
+        engine_lock(&engine).import_adif(
+            "<CALL:6>ZL1ABC<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20231114<TIME_ON:6>230000<EOR>",
+        );
+        let grown = super::log_delta(&engine, first.revision, first.rows.len());
+        assert!(!grown.full, "appends only: just the new rows");
+        assert_eq!(grown.rows.len(), 2);
+        assert_ne!(grown.revision, first.revision);
+        let mut copy = first.rows.clone();
+        copy.extend(grown.rows.iter().cloned());
+        assert_eq!(copy, get_log(), "the copy plus the delta IS get_log");
+
+        // An edit rewrites a row the copy holds: the whole log, never a delta.
+        let mut edited = engine_lock(&engine).log_records()[0].clone();
+        edited.comment = Some("fixed".into());
+        assert!(engine_lock(&engine).update_qso(0, edited));
+        let after_edit = super::log_delta(&engine, grown.revision, copy.len());
+        assert!(after_edit.full, "an edit is not an append");
+        assert_eq!(after_edit.rows, get_log());
+        assert_eq!(after_edit.rows[0].comment.as_deref(), Some("fixed"));
+
+        // A delete likewise.
+        assert!(engine_lock(&engine).delete_qso(0));
+        let after_delete = super::log_delta(&engine, after_edit.revision, after_edit.rows.len());
+        assert!(after_delete.full, "a delete is not an append");
+        assert_eq!(after_delete.rows, get_log());
+
+        // A copy longer than the log, or a revision from the log's future, is never trusted…
+        let (now, held) = (after_delete.revision, after_delete.rows.len());
+        assert!(super::log_delta(&engine, now, held + 1).full);
+        assert!(super::log_delta(&engine, now + 1, held).full);
+        // …while the same copy at its true length and revision is simply current.
+        let current = super::log_delta(&engine, now, held);
+        assert!(!current.full && current.rows.is_empty());
+    }
+
+    /// The periodic whole-log tallies — a propagation refetch's needs, the award summary, the
+    /// Journey — are kept against the log's revision. An unchanged log must not be folded again
+    /// (each fold was a pass over the whole log under the engine lock, on every poll of every
+    /// window), and a changed one must be: a kept answer that outlived a logged contact would
+    /// be a wrong award count.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn the_whole_log_tallies_are_folded_once_per_log_revision() {
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        let tallies = super::LogTallies::default();
+        let folds = || {
+            super::LOG_TALLIES.with(|c| c.set(0));
+            let _ = super::needs_kept(&engine, &tallies);
+            let _ = super::awards_kept(&engine, &tallies);
+            let _ = super::journey_kept(&engine, &tallies);
+            super::LOG_TALLIES.with(|c| c.get())
+        };
+        assert_eq!(folds(), 3, "the first ask folds each tally once");
+        assert_eq!(folds(), 0, "an unchanged log is not folded again");
+
+        // A logged contact moves every tally, and the kept answers are the fresh ones.
+        let empty = super::awards_kept(&engine, &tallies);
+        engine_lock(&engine).log_qso(ft8_qso("DL1ABC", 1_700_000_000));
+        assert_eq!(folds(), 3, "a logged contact folds each tally again");
+        let awards = super::awards_kept(&engine, &tallies);
+        assert_ne!(*awards, *empty, "fixture: the contact counts");
+        assert_eq!(
+            *awards,
+            super::awards_for_records(&engine_lock(&engine).get_log(), "KD9TAW"),
+            "the kept summary is the fresh fold"
+        );
+        assert_eq!(
+            super::journey_kept(&engine, &tallies)
+                .summary(super::now_unix())
+                .total_qsos,
+            1
+        );
+        assert_eq!(folds(), 0);
+
+        // A setting moves only the tally that reads it.
+        {
+            let mut e = engine_lock(&engine);
+            let mut s = e.settings().clone();
+            s.journey_streak_enabled = !s.journey_streak_enabled;
+            e.apply_settings(s);
+        }
+        assert_eq!(folds(), 1, "only the Journey reads the streak setting");
+
+        // A rewrite moves them all, as an append does.
+        let mut edited = engine_lock(&engine).log_records()[0].clone();
+        edited.band = "40m".into();
+        assert!(engine_lock(&engine).update_qso(0, edited));
+        assert_eq!(folds(), 3, "an edit folds each tally again");
     }
 }

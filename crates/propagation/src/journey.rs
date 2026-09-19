@@ -365,6 +365,46 @@ pub fn compute(
     streak_enabled: bool,
     now_unix: i64,
 ) -> JourneySummary {
+    model(qsos, my_call, my_grid, power_w, streak_enabled).summary(now_unix)
+}
+
+/// [`compute`] split at the clock.
+///
+/// The Journey is a pass over the whole log, and only two of its parts read the time: the
+/// weekly streak and the annual marathon. [`model`] makes the pass once and keeps what those
+/// two need — every QSO's start time and a per-year tally — and [`JourneyModel::summary`]
+/// finishes them for any `now`. A caller can therefore keep one model for as long as the log
+/// is unchanged and still answer every poll with the current week and year, exactly as
+/// [`compute`] would.
+#[derive(Debug, Clone)]
+pub struct JourneyModel {
+    /// Everything but `streak` and `marathon`, which [`Self::summary`] fills in.
+    base: JourneySummary,
+    /// Every QSO's start time, sorted — the streak's whole input.
+    times: Vec<i64>,
+    /// Year → (distinct DXCC entities, distinct CQ zones) worked that year — the marathon's.
+    years: HashMap<i32, (u32, u32)>,
+}
+
+impl JourneyModel {
+    /// The Journey as of `now_unix`. No pass over the log: the streak is a few binary searches
+    /// and the marathon a lookup.
+    pub fn summary(&self, now_unix: i64) -> JourneySummary {
+        let mut s = self.base.clone();
+        s.streak = compute_streak(&self.times, s.streak.enabled, now_unix);
+        s.marathon = compute_marathon(&self.years, now_unix);
+        s
+    }
+}
+
+/// Everything in [`compute`] the log decides — see [`JourneyModel`].
+pub fn model(
+    qsos: &[JourneyQso],
+    my_call: &str,
+    my_grid: Option<&str>,
+    power_w: Option<f64>,
+    streak_enabled: bool,
+) -> JourneyModel {
     let my_entity = dxcc::resolve(my_call).map(|i| i.entity);
     let my_ll = my_grid.and_then(maidenhead_to_latlon);
     let d = derive(qsos, my_entity, my_ll);
@@ -525,8 +565,10 @@ pub fn compute(
     );
     let feats = compute_feats(&d, &worked_band, &worked_mode, power_w);
     let bests = compute_bests(&d, power_w);
-    let streak = compute_streak(&d, streak_enabled, now_unix);
-    let marathon = compute_marathon(&d, now_unix);
+    // The two parts that read the clock, kept as their inputs (see `JourneyModel`).
+    let mut times: Vec<i64> = d.iter().map(|x| x.q.when_unix).collect();
+    times.sort_unstable();
+    let years = marathon_years(&d);
     let next_milestone = nearest_milestone(&ladders);
 
     let xp = total_qsos as u64 * 10
@@ -540,20 +582,29 @@ pub fn compute(
         + feats.iter().filter(|f| f.unlocked).count() as u64 * 200;
     let (level, xp_into_level, xp_for_level) = level_for_xp(xp);
 
-    JourneySummary {
-        level,
-        xp,
-        xp_into_level,
-        xp_for_level,
-        total_qsos,
-        next_milestone,
-        firsts,
-        ladders,
-        collections,
-        feats,
-        bests,
-        streak,
-        marathon,
+    JourneyModel {
+        base: JourneySummary {
+            level,
+            xp,
+            xp_into_level,
+            xp_for_level,
+            total_qsos,
+            next_milestone,
+            firsts,
+            ladders,
+            collections,
+            feats,
+            bests,
+            // Placeholders: `JourneyModel::summary` computes both for the clock it is given.
+            streak: Streak {
+                enabled: streak_enabled,
+                weeks: 0,
+                active_this_week: false,
+            },
+            marathon: compute_marathon(&HashMap::new(), 0),
+        },
+        times,
+        years,
     }
 }
 
@@ -1260,24 +1311,25 @@ fn fmt_day(day_index: i64) -> String {
 
 // ----- streak -----
 
-fn compute_streak(d: &[Derived], enabled: bool, now_unix: i64) -> Streak {
+/// `times` is every QSO's start time, sorted.
+fn compute_streak(times: &[i64], enabled: bool, now_unix: i64) -> Streak {
     const WEEK: i64 = 7 * 86_400;
-    // Which 7-day window (counting back from now) each QSO falls in: 0 = current
-    // week, 1 = last week, … A week is "active" if it holds ≥1 QSO.
-    let mut active: HashSet<i64> = HashSet::new();
-    for x in d {
-        let age = now_unix - x.q.when_unix;
-        if age >= 0 {
-            active.insert(age / WEEK);
-        }
-    }
+    // Which 7-day window (counting back from now) a QSO falls in: 0 = current week,
+    // 1 = last week, … — `(now - t) / WEEK`, and a QSO dated after now is in none. A week
+    // is "active" if it holds ≥1 QSO: some `t` in `(now - (w+1)·WEEK, now - w·WEEK]`,
+    // found by a binary search rather than a pass over the log.
+    let active = |w: i64| {
+        let newest = now_unix - w * WEEK;
+        let first_inside = times.partition_point(|&t| t <= newest - WEEK);
+        times.get(first_inside).is_some_and(|&t| t <= newest)
+    };
     // Count consecutive active weeks starting from the current one. If the current
     // week is empty but last week is active, the streak still stands (you have until
     // the week is out) — start the count from week 1 in that case.
-    let active_this_week = active.contains(&0);
+    let active_this_week = active(0);
     let mut weeks = 0u32;
     let mut w = if active_this_week { 0 } else { 1 };
-    while active.contains(&w) {
+    while active(w) {
         weeks += 1;
         w += 1;
     }
@@ -1290,13 +1342,13 @@ fn compute_streak(d: &[Derived], enabled: bool, now_unix: i64) -> Streak {
 
 // ----- marathon -----
 
-/// Personal annual marathon: distinct DXCC entities + CQ zones worked in the current
-/// UTC year (an on-air race, so worked — not confirmed), plus the best year on record.
-fn compute_marathon(d: &[Derived], now_unix: i64) -> Marathon {
-    let year_of = |t: i64| civil_from_days(t.div_euclid(86_400)).0 as i32;
-    let current_year = year_of(now_unix);
+fn year_of(t: i64) -> i32 {
+    civil_from_days(t.div_euclid(86_400)).0 as i32
+}
 
-    // year → (distinct DXCC entities, distinct CQ zones) worked that year.
+/// year → (distinct DXCC entities, distinct CQ zones) worked that year: the marathon's whole
+/// input, so the current year is a lookup rather than a pass over the log.
+fn marathon_years(d: &[Derived]) -> HashMap<i32, (u32, u32)> {
     let mut by_year: HashMap<i32, (HashSet<&str>, HashSet<u8>)> = HashMap::new();
     for x in d {
         let e = by_year.entry(year_of(x.q.when_unix)).or_default();
@@ -1309,18 +1361,23 @@ fn compute_marathon(d: &[Derived], now_unix: i64) -> Marathon {
             e.1.insert(x.zone);
         }
     }
-    let score_of = |ez: &(HashSet<&str>, HashSet<u8>)| (ez.0.len() + ez.1.len()) as u32;
+    by_year
+        .into_iter()
+        .map(|(y, (entities, zones))| (y, (entities.len() as u32, zones.len() as u32)))
+        .collect()
+}
 
-    let (entities, zones) = by_year
-        .get(&current_year)
-        .map(|ez| (ez.0.len() as u32, ez.1.len() as u32))
-        .unwrap_or((0, 0));
+/// Personal annual marathon: distinct DXCC entities + CQ zones worked in the current
+/// UTC year (an on-air race, so worked — not confirmed), plus the best year on record.
+fn compute_marathon(by_year: &HashMap<i32, (u32, u32)>, now_unix: i64) -> Marathon {
+    let current_year = year_of(now_unix);
+    let (entities, zones) = by_year.get(&current_year).copied().unwrap_or((0, 0));
 
     // Best (year, score) across all years; ties go to the later year (so the current
     // year wins a tie against an older one — it "counts even if it's also the best").
     let (best_year, best_score) = match by_year
         .iter()
-        .map(|(y, ez)| (*y, score_of(ez)))
+        .map(|(y, (entities, zones))| (*y, entities + zones))
         .max_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)))
     {
         Some((y, s)) => (Some(y), s),
@@ -1518,6 +1575,64 @@ mod tests {
         assert!(s.enabled);
         assert!(s.active_this_week);
         assert_eq!(s.weeks, 3, "weeks 0,1,2 active; week 3 gap breaks it");
+    }
+
+    /// The streak is a binary search over sorted times now, so a kept [`JourneyModel`] can
+    /// answer it without a pass over the log. It must still say exactly what the week-by-week
+    /// definition says, at every window edge where an off-by-one would live. `by_definition`
+    /// is the pass it replaced.
+    #[test]
+    fn the_searched_streak_matches_the_week_by_week_definition() {
+        const WEEK: i64 = 7 * 86_400;
+        fn by_definition(times: &[i64], now: i64) -> (u32, bool) {
+            let mut active: HashSet<i64> = HashSet::new();
+            for &t in times {
+                let age = now - t;
+                if age >= 0 {
+                    active.insert(age / WEEK);
+                }
+            }
+            let this_week = active.contains(&0);
+            let mut weeks = 0u32;
+            let mut w = if this_week { 0 } else { 1 };
+            while active.contains(&w) {
+                weeks += 1;
+                w += 1;
+            }
+            (weeks, this_week)
+        }
+        let base = 3_000 * WEEK;
+        // A run, a gap, QSOs on and beside window edges, and one dated in the future.
+        let mut times = vec![
+            base,
+            base - 1,
+            base - WEEK,
+            base - WEEK + 1,
+            base - 2 * WEEK,
+            base - 4 * WEEK - 7,
+            base - 9 * WEEK,
+            base + 3600,
+        ];
+        times.sort_unstable();
+        let edges = times
+            .iter()
+            .flat_map(|&t| (0..12).map(move |w| t + w * WEEK))
+            .flat_map(|at| [at - 1, at, at + 1]);
+        let sweep = (base - 11 * WEEK..=base + 2 * WEEK).step_by(3600);
+        let mut checked = 0;
+        for now in edges.chain(sweep) {
+            let s = compute_streak(&times, true, now);
+            assert_eq!(
+                (s.weeks, s.active_this_week),
+                by_definition(&times, now),
+                "now = {now}"
+            );
+            checked += 1;
+        }
+        assert!(checked > 2_000, "fixture: the sweep ran");
+        // Positive control: the fixture does produce streaks of different lengths.
+        assert_eq!(by_definition(&times, base), (3, true));
+        assert_eq!(by_definition(&times, base + 5 * WEEK), (0, false));
     }
 
     #[test]
