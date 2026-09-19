@@ -126,6 +126,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Large logbooks are much faster.** With a 150,000-contact log, Nexus had become slow enough to
+  stop working: every status update re-scanned the whole log, and logging one contact sent the whole
+  log (about 100 MB) to every window. Now an unchanged log costs the status update nothing, a logged
+  contact sends just that contact to each window, each window keeps one copy of the log instead of
+  three or four, and awards, needs and Journey are counted once per change to the log instead of on
+  every refresh. Reading the log no longer holds up the radio while it converts, and a contact
+  WSJT-X logs in companion mode is added to the end of the log instead of rewriting the whole file.
 - **Contest Cabrillo logs record the frequency you were on.** Outside Field Day, each QSO line now
   carries the dial the contact was logged on instead of the band's lower edge, which sponsors
   such as CQ WW ask award entrants for. Contacts logged before this update keep the band edge.
@@ -170,6 +177,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The waterfall no longer freezes a few minutes into a session.** While the radio was slow to
+  answer (a CAT read on a slow link, a log save), each Nexus window kept asking for its next update
+  several times a second without waiting for the last one, and those waiting requests could take
+  every thread the waterfall and meters are drawn from. Each screen now waits for its answer before
+  asking again, and the waiting happens where it cannot hold up the waterfall. (#335)
+- **Contact times in the Logbook's edit form and in "Log a contact from another radio" are always
+  24-hour UTC.** Those time boxes followed the Windows clock format, so on a PC set to a 12-hour
+  clock a contact at 00:58 UTC showed as "12:58 AM", and changing it to 00 put it straight back to
+  12. Contacts that were right got "corrected" by 12 hours. You now type the time as HH:MM or
+  HH:MM:SS. A time that can't be right, such as 25:00, is refused with a message rather than saved
+  or replaced with the current time. An edit that doesn't touch the time now keeps it to the
+  second. The times Nexus stored were always correct. (#280)
+- **Confirming a contact with Prompt before logging keeps its end time** and, on a split contact,
+  its receive frequency. Ham Radio Deluxe no longer shows 00:00 as the end time. (#329)
+- **Digital section: running the radio's ATU now ends like Tune.** TX switches off, and Nexus no
+  longer goes back to calling the station of an unfinished QSO. (#322)
+- **Uploads are never dropped silently.** When the upload queue fills, the Connections log names
+  each dropped contact and the service it never reached, and a ClubLog catch-up can no longer push
+  out contacts you just made. Every upload service now says so in the Connections log when it gives
+  up on a contact after its retries — ClubLog, World Radio League, N3FJP and Cloudlog/Wavelog as
+  well as QRZ and eQSL — naming the contact and how to send it again. (#290)
+- **The band menu outlines the band you are on.** It was a thin bar on the left edge that looked
+  like a "(". (#323)
+- **With two radios, switching back no longer shows a band as "custom".** A radio running FT8
+  reports its data mode, and the band menu didn't recognise that as its FT8 channel, so after a
+  switch 80 m read "80m (custom)" although the radio hadn't moved. (#334)
+- **Remote: revoking a browser's logging or station-control permission always takes effect**, even
+  while the station is busy. (#318)
 - **Remote: the Release button no longer flickers.** It greyed out on every heartbeat — about once a
   second — so a click could land while it was disabled and do nothing. It now stays lit, and a Release
   clicked while the station is answering waits for that answer and then releases the station, once.
