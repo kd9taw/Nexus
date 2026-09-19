@@ -60,6 +60,8 @@ export type OperationView = {
   error: string | null
   controlPending: PendingControl | null
   controlSending: boolean
+  /** An automatic read (heartbeat/state) is the request in flight — Release waits it out. */
+  reading: boolean
   controlResult: ControlOutcome | null
   controlError: ControlFailure | null
   controlRefreshing?: boolean
@@ -111,6 +113,7 @@ export class OperationClient {
     error: null,
     controlPending: null,
     controlSending: false,
+    reading: false,
     controlResult: null,
     controlError: null,
     retainedState: null,
@@ -187,6 +190,7 @@ export class OperationClient {
       ...value,
       requestReady: (value.connected ?? this.view.connected) && this.requestCount() < OPERATION_RATE_LIMIT,
       controlSending: this.pending?.request.type === 'stationControl',
+      reading: this.automaticReadInFlight(),
       stopSending: !!this.pendingStop,
       stopAvailable: this.operationVersion >= 4 && !!this.stopTarget && (value.connected ?? this.view.connected),
       ...((value.error || value.connected === false || value.state) ? { controlRefreshing: false } : {}),
@@ -665,7 +669,33 @@ export class OperationClient {
       stationBootId: s.stationBootId
     })
   }
+  private automaticReadInFlight(): boolean {
+    const type = this.pending?.request.type
+    return type === 'heartbeat' || type === 'state'
+  }
+  /** Resolves once no automatic read is in flight. Bounded: a reply, an error, the request's own
+   * timeout or a disconnect all clear `pending` and notify, exactly as `waitForHeartbeat` relies on. */
+  private settleAutomaticRead(): Promise<void> {
+    if (!this.automaticReadInFlight()) return Promise.resolve()
+    return new Promise(resolve => {
+      const unsubscribe = this.subscribe(() => {
+        if (!this.automaticReadInFlight() || !this.view.connected) {
+          unsubscribe()
+          resolve()
+        }
+      })
+    })
+  }
   async release() {
+    // ⚠️ WAIT OUT AN AUTOMATIC READ FIRST. `request()` refuses anything while another request is in
+    // flight, and the refusal is swallowed below — so a Release clicked mid-heartbeat used to clear
+    // the lease locally, send NOTHING, and let the heartbeat's reply re-arm the lease: the operator
+    // believed they had released the station and still held control. That is why the button greyed
+    // on every heartbeat (the flicker). Now it waits for the read to settle, reads the lease the
+    // reply may just have re-armed, and sends once. A second click finds the lease already taken.
+    // Only when a read IS in flight: with none, this stays synchronous up to `request()`, so the
+    // release leaves on the click exactly as before (an unconditional await deferred it a microtask).
+    if (this.automaticReadInFlight()) await this.settleAutomaticRead()
     const leaseId = this.heartbeatLeaseId
     this.heartbeatLeaseId = null
     this.leaseUntil = 0

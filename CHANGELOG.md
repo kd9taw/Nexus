@@ -156,6 +156,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Remote: the Release button no longer flickers.** It greyed out on every heartbeat — about once a
+  second — so a click could land while it was disabled and do nothing. It now stays lit, and a Release
+  clicked while the station is answering waits for that answer and then releases the station, once.
+
 - **Two radios: a default radio no longer takes over the one you are using.** With a "default
   radio" set for everything else, changing frequency on your active radio could hand control to the
   default one — even on a band the active radio covers. Tuning, a spot click, or another program

@@ -81,7 +81,7 @@ export function LoggingAuthority({ client, unavailable }: { client: OperationCli
         <button
           type="button"
           className="remote-button"
-          disabled={view.busy || !view.state}
+          disabled={(view.busy && !view.reading) || !view.state}
           onClick={() => void client.release()}
         >
           {station ? t('remote.controlRelease') : t('remote.loggingRelease')}

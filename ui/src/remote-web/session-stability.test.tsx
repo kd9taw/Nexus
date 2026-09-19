@@ -154,3 +154,47 @@ it('keeps the banner live in the re-read gap: Release sends, a gesture cannot ca
   expect(h.sent).toHaveLength(before + 1)
   expect(h.sent[h.sent.length - 1]!.request.type).toBe('release')
 })
+
+// THE RELEASE BUTTON FLICKERED — it greyed on every heartbeat (~16 toggles in 10 s), because `busy`
+// is true for ANY request in flight. The gate was not decoration: `release()` clears the lease
+// locally before sending, and `request()` refuses while another request is in flight (the refusal
+// is swallowed), so a Release clicked mid-heartbeat used to send NOTHING while the heartbeat's reply
+// re-armed the lease — the operator believed they had released the station and still held it. So
+// the fix is not "stop greying": Release waits out an automatic READ, then sends once.
+it('keeps Release enabled while an automatic heartbeat is in flight', async () => {
+  const h = fixture()
+  await h.advance(1500)
+  expect(h.sent[h.sent.length - 1]!.request.type).toBe('heartbeat')
+  expect(h.client.getSnapshot().busy, 'scene: the read really is in flight').toBe(true)
+  expect(release().disabled, 'a routine heartbeat must not grey Release').toBe(false)
+})
+
+it('a Release clicked during a heartbeat is sent once, after the read settles, and control does not come back', async () => {
+  const h = fixture()
+  await h.advance(1500)
+  const hb = h.sent[h.sent.length - 1]!.request
+  expect(hb.type, 'scene: an automatic read is in flight, unanswered').toBe('heartbeat')
+  const before = h.sent.length
+  // Twice: a double-click must still send exactly once.
+  await act(async () => { fireEvent.click(release()); fireEvent.click(release()); await Promise.resolve() })
+  expect(h.sent.length, 'nothing may leave while the read is in flight').toBe(before)
+  // The heartbeat replies with the station still controlling — the reply that used to re-arm the lease.
+  await act(async () => { h.client.receive({ type: 'operationResponse', requestId: hb.requestId, value: { ...h.state } }) })
+  await h.advance(0)
+  const releases = h.sent.slice(before).filter(x => x.request.type === 'release')
+  expect(releases, 'exactly one release, sent after the read settled').toHaveLength(1)
+  expect(releases[0]!.request.leaseId, 'with the lease the station holds').toBe(h.state.leaseId)
+  act(() => h.reply({ ...h.state, phase: 'available', leaseId: null, commandWindowId: null, nextSequence: null, leaseRemainingMs: null }))
+  await h.advance(0)
+  expect(screen.getByRole('button', { name: /take station control/i }), 'control is released and stays released').toBeTruthy()
+})
+
+it('Release stays disabled while a station command is in flight — only an automatic READ is waited out', async () => {
+  const h = fixture()
+  await act(async () => {
+    void h.client.control({ action: 'amplifier.operate', expectedOperate: false, operate: true }).catch(() => {})
+    await Promise.resolve()
+  })
+  expect(h.sent[h.sent.length - 1]!.request.type).toBe('stationControl')
+  expect(release().disabled, 'a command in flight still holds Release back').toBe(true)
+})
