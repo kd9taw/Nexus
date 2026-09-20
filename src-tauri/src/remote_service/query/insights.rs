@@ -283,7 +283,7 @@ fn read_chunks(
             }
             e.log_records()[offset..(offset + 128).min(count)]
                 .iter()
-                .map(Row::copy)
+                .map(|q| Row::copy(q))
                 .collect::<Result<Vec<_>, _>>()?
         };
         for row in rows {
@@ -383,7 +383,7 @@ mod tests {
             let changed = read_chunks(&engine, kind, |offset| {
                 if offset == 0 {
                     let mut e = engine.try_lock().unwrap();
-                    let mut q = e.log_records()[0].clone();
+                    let mut q = e.log_records()[0].as_ref().clone();
                     q.notes = Some("edited while reading".into());
                     assert!(e.update_qso(0, q));
                     assert_eq!(e.log_records().len(), 270);
@@ -407,7 +407,7 @@ mod tests {
         let engine = engine(1);
         {
             let mut e = engine.lock().unwrap();
-            let mut q = e.log_records()[0].clone();
+            let mut q = e.log_records()[0].as_ref().clone();
             q.notes = Some("contact note ".repeat(100_000));
             q.comment = Some("private comment".into());
             assert!(e.update_qso(0, q));
@@ -418,7 +418,7 @@ mod tests {
         }
         {
             let mut e = engine.lock().unwrap();
-            let mut q = e.log_records()[0].clone();
+            let mut q = e.log_records()[0].as_ref().clone();
             q.country = Some("X".repeat(TEXT_BYTES + 1));
             assert!(e.update_qso(0, q));
         }
@@ -432,7 +432,7 @@ mod tests {
         ));
         // These are inspected under the engine lock, even though only boolean
         // credit/satellite flags leave it. Bound the inspection as well as copies.
-        let original = engine.lock().unwrap().log_records()[0].clone();
+        let original = engine.lock().unwrap().log_records()[0].as_ref().clone();
         for satellite in [false, true] {
             let mut q = original.clone();
             q.country = None;

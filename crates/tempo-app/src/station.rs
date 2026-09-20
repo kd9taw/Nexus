@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tempo_core::logbook::{Logbook, QsoRecord, WorkedSince};
+use tempo_core::logbook::{Logbook, OpClass, QsoRecord, WorkedSince};
 
 use crate::engine::{
     now_unix_secs, LotwResolver, PendingUpload, HUNT_TTL_SECS, MAX_UPLOAD_RETRIES, SSTV_GALLERY_CAP,
@@ -76,7 +76,7 @@ fn band_key(band: &str) -> String {
 /// other inputs) it was built from. See [`StationCore::worked_sets`].
 #[derive(Default)]
 pub(crate) struct B4Cache {
-    /// `(revision, fold_mode, calls, bands)`.
+    /// `(key_rev, fold_mode, calls, bands)`.
     #[allow(clippy::type_complexity)]
     lifetime: Option<(
         u64,
@@ -84,7 +84,7 @@ pub(crate) struct B4Cache {
         Arc<HashSet<String>>,
         Arc<HashSet<(String, String)>>,
     )>,
-    /// `(revision, session start, rule, sweep)`.
+    /// `(key_rev, session start, rule, sweep)`.
     session: Option<(u64, u64, tempo_core::contest::DupeRule, Arc<WorkedSince>)>,
 }
 
@@ -383,9 +383,10 @@ impl StationCore {
             .collect();
         self.state_resolve = Some(resolve);
         if !fills.is_empty() {
-            let records = self.logbook.records_mut();
+            // An upgrade: a filled state is content a needs fold reads, and no row moves.
+            let records = self.logbook.records_mut(OpClass::Upgrade);
             for (i, st) in fills {
-                records[i].state = Some(st);
+                Arc::make_mut(&mut records[i]).state = Some(st);
             }
             self.save_log("backfill_state");
         }
@@ -455,9 +456,10 @@ impl StationCore {
             .collect();
         self.dxcc_resolve = Some(resolve);
         if !fills.is_empty() {
-            let records = self.logbook.records_mut();
+            // Likewise: the entity index reads `country`, and no row moves.
+            let records = self.logbook.records_mut(OpClass::Upgrade);
             for (i, c) in fills {
-                records[i].country = Some(c);
+                Arc::make_mut(&mut records[i]).country = Some(c);
             }
             self.save_log("backfill_country");
         }
@@ -564,7 +566,9 @@ impl StationCore {
         &self,
         fold_mode: bool,
     ) -> (Arc<HashSet<String>>, Arc<HashSet<(String, String)>>) {
-        let revision = self.logbook.revision();
+        // Keyed on key_rev, not the revision: these sets read call, band and mode only, so
+        // an upload stamp or a country backfill cannot move them and must not cost a sweep.
+        let revision = self.logbook.key_rev();
         let mut cache = self
             .b4_cache
             .lock()
@@ -588,7 +592,9 @@ impl StationCore {
         cutoff: u64,
         rule: &tempo_core::contest::DupeRule,
     ) -> Arc<WorkedSince> {
-        let revision = self.logbook.revision();
+        // key_rev for the same reason as `worked_sets`, with the exchange included: a dupe
+        // key is call, band, mode class and the contest exchange, all of them row identity.
+        let revision = self.logbook.key_rev();
         let mut cache = self
             .b4_cache
             .lock()
@@ -842,7 +848,7 @@ impl StationCore {
                     .is_some_and(|u| u.outcome.is_sent())
             })
             .take(room)
-            .cloned()
+            .map(|r| QsoRecord::clone(r))
             .collect();
         let n = stale.len();
         for rec in stale {
@@ -1094,7 +1100,14 @@ impl StationCore {
     ) -> Option<Vec<tempo_core::logbook::LogAppendReceipt>> {
         let path = self.log_path.clone()?;
         debug_assert!(
-            self.logbook.records().ends_with(recs),
+            {
+                let held = self.logbook.records();
+                held.len() >= recs.len()
+                    && held[held.len() - recs.len()..]
+                        .iter()
+                        .zip(recs)
+                        .all(|(held, rec)| **held == *rec)
+            },
             "append_to_log: the records must already be in memory (see the contract above)"
         );
         let before = log_file_stamp(&path);
@@ -1208,7 +1221,12 @@ impl StationCore {
                 // The STORED record, not the incoming payload: `update_record` merges the
                 // fields the edit form does not carry (park refs, TIME_OFF, the split leg),
                 // and the connectors must send the whole contact, not the form's half of it.
-                if let Some(fixed) = self.logbook.records().get(index).cloned() {
+                if let Some(fixed) = self
+                    .logbook
+                    .records()
+                    .get(index)
+                    .map(|r| QsoRecord::clone(r))
+                {
                     // Every leg: every stamp was just cleared, so every connector is owed.
                     // The disabled ones are dropped by the worker's own toggle check, the
                     // same way a freshly logged contact's are.
@@ -1497,7 +1515,11 @@ impl StationCore {
 
     /// A clone of all logbook records (oldest-first / newest-last).
     pub fn get_log(&self) -> Vec<QsoRecord> {
-        self.logbook.records().to_vec()
+        self.logbook
+            .records()
+            .iter()
+            .map(|r| QsoRecord::clone(r))
+            .collect()
     }
 
     /// Run the silent match-failure diagnostics over the log (Phase 1a). `resolve`
@@ -1561,9 +1583,12 @@ impl StationCore {
         // recovered records land at the end, so `indices` still address the same
         // rows.
         self.recover_external_appends();
+        // One classified write for the whole batch — a stamp nothing derived reads, and
+        // taking it per row would move the revision once per stamped record.
+        let records = self.logbook.records_mut(OpClass::Stamp);
         for &i in indices {
-            if let Some(r) = self.logbook.records_mut().get_mut(i) {
-                r.upload.lotw = Some(tempo_core::logbook::UploadStatus {
+            if let Some(r) = records.get_mut(i) {
+                Arc::make_mut(r).upload.lotw = Some(tempo_core::logbook::UploadStatus {
                     outcome,
                     when_unix,
                     detail,
@@ -1739,6 +1764,7 @@ mod grid_tests {
 
     fn rec(call: &str, band: &str, grid: &str) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: Some(grid.into()),
             country: None,
@@ -1812,7 +1838,7 @@ mod grid_tests {
             let mut fresh = StationCore::new();
             fresh.set_dxcc_resolver(counting(Arc::new(AtomicUsize::new(0))));
             for r in sc.logbook.records() {
-                fresh.logbook.add(r.clone());
+                fresh.logbook.add(r.as_ref().clone());
             }
             fresh.refresh_worked_index();
             index(&fresh)
@@ -2032,9 +2058,10 @@ mod grid_tests {
         // Instance A appends a contact we never see in memory.
         Logbook::append(&path, &rec("W3CCC", "40m", "IO91")).unwrap();
 
-        // We log our own contact — memory first, then the file, as log_qso does.
-        let k = rec("K5XYZ", "20m", "FN31");
-        sc.logbook.add(k.clone());
+        // We log our own contact — memory first, then the file, as log_qso does, carrying the
+        // minted id back onto the copy we hand the writer so the two are the same record.
+        let mut k = rec("K5XYZ", "20m", "FN31");
+        k.id = Some(sc.logbook.add(k.clone()));
         sc.append_to_log(std::slice::from_ref(&k));
         assert!(
             sc.last_log_mtime.is_none(),

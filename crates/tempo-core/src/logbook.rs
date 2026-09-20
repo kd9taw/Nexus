@@ -53,6 +53,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 // Whole-log sweep counter, DEBUG BUILDS ONLY — instrumentation for the
 // traversal-bound test. A per-row `worked_before()` inside `snapshot()` once
@@ -102,6 +103,11 @@ pub struct WorkedSince {
 /// One logged contact.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QsoRecord {
+    /// The record's stable identity, `APP_NEXUS_ID` (see [`RecordId`]). Every record the log
+    /// HOLDS carries one; `None` only on a record not yet in a log (a form's row, an imported
+    /// row before it joins), which the log assigns when it adds it. Round-trips via ADIF, and
+    /// never part of what makes two records "the same contact" (dedup and reconcile ignore it).
+    pub id: Option<RecordId>,
     pub call: String,
     pub grid: Option<String>,
     /// DXCC entity name (ADIF `COUNTRY`), resolved from the callsign at log time.
@@ -738,13 +744,48 @@ impl UploadState {
     }
 }
 
+/// A record as the log stores it, readable as a [`QsoRecord`] and writable in place: the shape
+/// the merges in [`crate::reconcile`] work on. The log keeps each record behind an `Arc`, so a
+/// [`LogSnapshot`] can share it; [`StoredRecord::write`] copies a record first only while a
+/// snapshot still holds it (`Arc::make_mut`). A plain `QsoRecord` is the same thing unshared,
+/// which is what those functions' own tests hand them.
+pub trait StoredRecord: std::borrow::Borrow<QsoRecord> + From<QsoRecord> {
+    /// The record, for writing.
+    fn write(&mut self) -> &mut QsoRecord;
+}
+impl StoredRecord for QsoRecord {
+    fn write(&mut self) -> &mut QsoRecord {
+        self
+    }
+}
+impl StoredRecord for Arc<QsoRecord> {
+    fn write(&mut self) -> &mut QsoRecord {
+        Arc::make_mut(self)
+    }
+}
+
+/// The log at one revision, as [`Logbook::snapshot`] hands it out.
+#[derive(Debug, Clone)]
+pub struct LogSnapshot {
+    /// The [`Logbook::revision`] these records are the log at.
+    pub revision: u64,
+    pub records: Vec<Arc<QsoRecord>>,
+}
+
 /// An in-memory logbook backed by an ADIF file.
 #[derive(Debug, Clone, Default)]
 pub struct Logbook {
     records: Records,
+    /// Mints the ids of the rows this log creates.
+    minter: Minter,
 }
 
+mod id;
+mod op;
 mod records;
+pub use id::{Minter, RecordId};
+pub use op::{Effects, LogOp, UploadService};
+pub use records::OpClass;
 use records::Records;
 
 impl Logbook {
@@ -752,8 +793,18 @@ impl Logbook {
         Self::default()
     }
 
-    pub fn records(&self) -> &[QsoRecord] {
+    pub fn records(&self) -> &[Arc<QsoRecord>] {
         &self.records
+    }
+    /// The log as it stands: its revision and a copy of the POINTERS to its records, O(n) in
+    /// pointer copies with no record cloned. Take it under whatever lock guards the log, release
+    /// the lock, then iterate, serialise or fold it at leisure: a later write copies the record
+    /// it touches instead of changing the one the snapshot holds.
+    pub fn snapshot(&self) -> LogSnapshot {
+        LogSnapshot {
+            revision: self.revision(),
+            records: self.records.to_vec(),
+        }
     }
     /// Identity for a consistent, chunked immutable read. Compare with Arc::ptr_eq
     /// after each chunk and before returning; a changed token means retry the read.
@@ -775,9 +826,24 @@ impl Logbook {
     pub fn appended_only_since(&self, revision: u64) -> bool {
         self.records.appended_only_since(revision)
     }
-    /// Mutable access to the records (for in-place upload-state stamping).
-    pub fn records_mut(&mut self) -> &mut [QsoRecord] {
-        &mut self.records
+    /// Mutable access to the records under the [`OpClass`] the caller vouches for — the
+    /// narrower the class, the more derived state survives the write. Write a record through
+    /// [`StoredRecord::write`], which copies it first if a snapshot still holds it.
+    pub fn records_mut(&mut self, class: OpClass) -> &mut [Arc<QsoRecord>] {
+        self.records.write_as(class)
+    }
+
+    /// The revision at which each kind of change last happened — see [`OpClass`] for which
+    /// class moves which. A cache keyed on one of these survives every change that cannot
+    /// affect it.
+    pub fn index_rev(&self) -> u64 {
+        self.records.index_rev()
+    }
+    pub fn key_rev(&self) -> u64 {
+        self.records.key_rev()
+    }
+    pub fn shape_rev(&self) -> u64 {
+        self.records.shape_rev()
     }
     pub fn len(&self) -> usize {
         self.records.len()
@@ -786,9 +852,17 @@ impl Logbook {
         self.records.is_empty()
     }
 
-    /// Add a record in memory.
-    pub fn add(&mut self, rec: QsoRecord) {
+    /// Add a record in memory, and return its id: the one it carries, or one minted now.
+    pub fn add(&mut self, mut rec: QsoRecord) -> RecordId {
+        let id = *rec.id.get_or_insert_with(|| self.minter.mint());
         self.records.push(rec);
+        id
+    }
+
+    /// The station's position id, which the ids this log mints from now on carry (see
+    /// [`RecordId`]); 0 until the profile has one.
+    pub fn set_posid(&mut self, posid: u32) {
+        self.minter.set_posid(posid);
     }
 
     /// Replace the human-entered fields of the record at `index` (a correction —
@@ -799,6 +873,8 @@ impl Logbook {
     pub fn update_record(&mut self, index: usize, mut rec: QsoRecord) -> bool {
         match self.records.get(index) {
             Some(old) => {
+                // An edit is the same row, corrected: it keeps the row's identity.
+                rec.id = old.id;
                 // A field-edit must not wipe an operator-declared QSL-sent mark —
                 // only `mark_qsl_sent` mutates it. (Kept even on a call fix: the
                 // card WAS mailed; that's history, not credit.)
@@ -918,7 +994,8 @@ impl Logbook {
                 if rec.when_unix % 86_400 == old.when_unix % 86_400 {
                     rec.time_known = old.time_known;
                 }
-                self.records[index] = rec;
+                // The same row, corrected: it stays where it is, but its keys may have moved.
+                self.records.write_as(OpClass::Key)[index] = Arc::new(rec);
                 true
             }
             None => false,
@@ -943,9 +1020,9 @@ impl Logbook {
     ///
     /// Returns false if `index` is out of range. Pure — call [`save`](Self::save) to persist.
     pub fn mark_qsl_sent(&mut self, index: usize, via: Option<QslVia>, date_unix: u64) -> bool {
-        match self.records.get_mut(index) {
+        match self.records.write_as(OpClass::Stamp).get_mut(index) {
             Some(rec) => {
-                rec.qsl_sent = match via {
+                Arc::make_mut(rec).qsl_sent = match via {
                     Some(via) => QslSent {
                         sent: true,
                         via: Some(via),
@@ -978,9 +1055,9 @@ impl Logbook {
     /// untick it. A later service sync cannot silently undo the correction either: merge ORs
     /// per source, and no service reports the card field.
     pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
-        match self.records.get_mut(index) {
+        match self.records.write_as(OpClass::Upgrade).get_mut(index) {
             Some(rec) => {
-                rec.qsl_rcvd.card = received;
+                Arc::make_mut(rec).qsl_rcvd.card = received;
                 true
             }
             None => false,
@@ -992,7 +1069,7 @@ impl Logbook {
     /// indices must reload after a delete.
     pub fn delete(&mut self, index: usize) -> bool {
         if index < self.records.len() {
-            self.records.remove(index);
+            self.records.write_as(OpClass::Structural).remove(index);
             true
         } else {
             false
@@ -1004,7 +1081,7 @@ impl Logbook {
     /// to an empty (header-only) log.
     pub fn clear(&mut self) -> usize {
         let n = self.records.len();
-        self.records.clear();
+        self.records.write_as(OpClass::Structural).clear();
         n
     }
 
@@ -1050,6 +1127,8 @@ impl Logbook {
         for (i, r) in self.records.iter().enumerate() {
             held.entry(dedup_key(r)).or_insert(i);
         }
+        let mut held_ids: std::collections::HashSet<RecordId> =
+            self.records.iter().filter_map(|r| r.id).collect();
         let mut added = Vec::new();
         let mut skipped = 0usize;
         let mut merged = 0usize;
@@ -1083,15 +1162,23 @@ impl Logbook {
                     // into the records marks the log rewritten (see `revision`), and a
                     // re-import of rows the log already holds changes nothing, so it
                     // must stay an append-only change.
-                    let mut upgraded = self.records[i].clone();
+                    let mut upgraded = QsoRecord::clone(&self.records[i]);
                     crate::reconcile::apply_match(&mut upgraded, &rec, &mut tally);
-                    if upgraded != self.records[i] {
-                        self.records[i] = upgraded;
+                    if upgraded != *self.records[i] {
+                        self.records[i] = Arc::new(upgraded);
                         merged += 1;
                     }
                 }
                 None => {
                     let mut rec = rec;
+                    // A row keeps the id it brings (a Nexus export, re-imported) unless the log
+                    // already holds that id; otherwise this log mints one.
+                    let id = match rec.id {
+                        Some(id) if !held_ids.contains(&id) => id,
+                        _ => self.minter.mint(),
+                    };
+                    held_ids.insert(id);
+                    rec.id = Some(id);
                     prepare(&mut rec);
                     held.insert(key, self.records.len());
                     added.push(rec.clone());
@@ -1115,8 +1202,32 @@ impl Logbook {
     /// so both sides carry the same timestamp, and the day key mis-paired two contacts
     /// with one station inside a day — see [`crate::reconcile::merge_own_disk`].
     pub fn reconcile_disk(&mut self, text: &str) {
-        let incoming = parse_adif(text);
-        crate::reconcile::merge_own_disk(&mut self.records, incoming);
+        // The ids a load of this file would give its rows: their own, or provisional from
+        // their text, so two instances reading one file agree on every row's id.
+        let mut rows = parse_adif_spans(text);
+        id::settle_file_ids(rows.iter_mut().map(|(r, span)| (&mut r.id, *span)));
+        let incoming = rows.into_iter().map(|(r, _)| r).collect();
+        let before = self.records.len();
+        crate::reconcile::merge_own_disk(&mut *self.records, incoming);
+        self.settle_new_ids(before);
+    }
+
+    /// Give every row from `from` on an id no other row holds: the one it arrived with if that
+    /// is free, a minted one otherwise. For the rows a merge appended.
+    fn settle_new_ids(&mut self, from: usize) {
+        let mut held: std::collections::HashSet<RecordId> =
+            self.records[..from].iter().filter_map(|r| r.id).collect();
+        let mut needs = Vec::new();
+        for (i, r) in self.records.iter().enumerate().skip(from) {
+            match r.id {
+                Some(id) if held.insert(id) => {}
+                _ => needs.push(i),
+            }
+        }
+        for i in needs {
+            let id = self.minter.mint();
+            Arc::make_mut(&mut self.records[i]).id = Some(id);
+        }
     }
 
     /// Stamp park/summit references from an external OTA log (pota.app hunter or
@@ -1157,18 +1268,20 @@ impl Logbook {
             });
             match hit {
                 Some(q) => {
-                    let mut did = false;
-                    if q.ota.their_ref.is_none() && row.ota.their_ref.is_some() {
-                        q.ota.their_program = row.ota.their_program.clone();
-                        q.ota.their_ref = row.ota.their_ref.clone();
-                        did = true;
-                    }
-                    if q.ota.my_ref.is_none() && row.ota.my_ref.is_some() {
-                        q.ota.my_program = row.ota.my_program.clone();
-                        q.ota.my_ref = row.ota.my_ref.clone();
-                        did = true;
-                    }
-                    if did {
+                    let theirs = q.ota.their_ref.is_none() && row.ota.their_ref.is_some();
+                    let mine = q.ota.my_ref.is_none() && row.ota.my_ref.is_some();
+                    if theirs || mine {
+                        // Written only when something is stamped: a write copies a record a
+                        // snapshot still holds.
+                        let q = Arc::make_mut(q);
+                        if theirs {
+                            q.ota.their_program = row.ota.their_program.clone();
+                            q.ota.their_ref = row.ota.their_ref.clone();
+                        }
+                        if mine {
+                            q.ota.my_program = row.ota.my_program.clone();
+                            q.ota.my_ref = row.ota.my_ref.clone();
+                        }
                         stamped += 1;
                     } else {
                         already += 1;
@@ -1358,9 +1471,14 @@ impl Logbook {
         if let Some(clean) = &clean {
             Self::scrub_log_in_place(path, bytes.len(), clean);
         }
+        // Every row leaves here with an id: its own if it carries one no earlier row holds, a
+        // provisional one from its own text otherwise (see `id`). Assigning writes nothing.
+        let text = String::from_utf8_lossy(clean.as_deref().unwrap_or(&bytes));
+        let mut rows = parse_adif_spans(&text);
+        let nonces = id::settle_file_ids(rows.iter_mut().map(|(r, span)| (&mut r.id, *span)));
         Self {
-            records: parse_adif(&String::from_utf8_lossy(clean.as_deref().unwrap_or(&bytes)))
-                .into(),
+            records: rows.into_iter().map(|(r, _)| r).collect::<Vec<_>>().into(),
+            minter: Minter::new(0, &nonces),
         }
     }
 
@@ -1785,7 +1903,7 @@ impl Logbook {
     pub fn merge_report(&mut self, text: &str) -> crate::reconcile::ReconcileSummary {
         let mut incoming = parse_adif(text);
         lotw_channel_fixup(text, &mut incoming);
-        crate::reconcile::reconcile(&mut self.records, &incoming)
+        crate::reconcile::reconcile(&mut self.records[..], &incoming)
     }
 
     /// Two-way merge of a DOWNLOADED logbook (a QRZ Logbook FETCH — the operator's own
@@ -1800,7 +1918,10 @@ impl Logbook {
         text: &str,
     ) -> (Vec<QsoRecord>, crate::reconcile::ReconcileSummary) {
         let incoming = parse_adif(text);
-        crate::reconcile::merge_and_add(&mut self.records, incoming)
+        let before = self.records.len();
+        let merged = crate::reconcile::merge_and_add(&mut *self.records, incoming);
+        self.settle_new_ids(before);
+        merged
     }
 
     /// Merge a LoTW **own-QSO** report (`qso_qsl=no` ADIF — your records LoTW holds
@@ -1809,7 +1930,7 @@ impl Logbook {
     /// newly promoted. Pure merge — call [`save`](Self::save) to persist.
     pub fn merge_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
         let own = parse_adif(text);
-        crate::reconcile::promote_own_echo(&mut self.records, &own, when_unix)
+        crate::reconcile::promote_own_echo(&mut self.records[..], &own, when_unix)
     }
 
     /// Index of the NEWEST logged QSO matching `pushed`'s key (call/band/mode-class/
@@ -1836,7 +1957,9 @@ impl Logbook {
     pub fn stamp_qrz_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
         match self.newest_match_index(pushed) {
             Some(i) => {
-                self.records[i].upload.qrz = Some(status);
+                Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
+                    .upload
+                    .qrz = Some(status);
                 true
             }
             None => false,
@@ -1848,7 +1971,9 @@ impl Logbook {
     pub fn stamp_clublog_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
         match self.newest_match_index(pushed) {
             Some(i) => {
-                self.records[i].upload.clublog = Some(status);
+                Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
+                    .upload
+                    .clublog = Some(status);
                 true
             }
             None => false,
@@ -1860,7 +1985,9 @@ impl Logbook {
     pub fn stamp_eqsl_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
         match self.newest_match_index(pushed) {
             Some(i) => {
-                self.records[i].upload.eqsl = Some(status);
+                Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
+                    .upload
+                    .eqsl = Some(status);
                 true
             }
             None => false,
@@ -1955,7 +2082,7 @@ impl Logbook {
         from: Option<u64>,
         to: Option<u64>,
     ) -> impl Iterator<Item = &QsoRecord> {
-        self.records.iter().filter(move |r| {
+        self.records.iter().map(|r| &**r).filter(move |r| {
             from.is_none_or(|f| r.when_unix >= f) && to.is_none_or(|t| r.when_unix <= t)
         })
     }
@@ -2119,7 +2246,7 @@ impl Logbook {
             if !my_refs(r).contains(&want) {
                 continue;
             }
-            let mut one = r.clone();
+            let mut one = QsoRecord::clone(r);
             one.ota.my_ref = Some(want.clone());
             s.push_str(&adif_record(&one));
         }
@@ -2423,6 +2550,11 @@ pub fn adif_record(r: &QsoRecord) -> String {
     // whatever is emitted here is consumed by `parse_record`'s contest block, which is
     // what keeps `extra` free of a tag this build models.
     out.push_str(&contest_fields(r.contest.as_deref()));
+    // The record's identity (APP_-namespaced; other loggers ignore it, and one that drops it
+    // hands back a row the next load gives a provisional id).
+    if let Some(id) = &r.id {
+        out.push_str(&field("APP_NEXUS_ID", &id.to_string()));
+    }
     // Fields this build does not model, preserved from import verbatim — see
     // [`QsoRecord::extra`]. Emitted last so modelled fields always lead.
     for (k, v) in &r.extra {
@@ -2863,6 +2995,15 @@ fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
 }
 
 fn parse_adif(text: &str) -> Vec<QsoRecord> {
+    parse_adif_spans(text)
+        .into_iter()
+        .map(|(rec, _)| rec)
+        .collect()
+}
+
+/// [`parse_adif`], with each record's own text beside it: after the previous `<EOR>` (or the
+/// header) through this record's `<EOR>`. A provisional id hashes that span (see `id`).
+fn parse_adif_spans(text: &str) -> Vec<(QsoRecord, &str)> {
     let body = match text.to_ascii_uppercase().find("<EOH>") {
         Some(i) => &text[i + 5..],
         None => text,
@@ -2871,6 +3012,9 @@ fn parse_adif(text: &str) -> Vec<QsoRecord> {
     let mut cur: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let bytes = body.as_bytes();
     let mut i = 0;
+    // Where the current record's text begins: always just after an ASCII `>`, so a char
+    // boundary.
+    let mut start = 0;
     while i < bytes.len() {
         if bytes[i] != b'<' {
             i += 1;
@@ -2885,8 +3029,9 @@ fn parse_adif(text: &str) -> Vec<QsoRecord> {
         let upper = tag.to_ascii_uppercase();
         if upper == "EOR" {
             if let Some(rec) = record_from(std::mem::take(&mut cur)) {
-                records.push(rec);
+                records.push((rec, &body[start..i]));
             }
+            start = i;
             continue;
         }
         // NAME:len or NAME:len:type
@@ -3424,6 +3569,9 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
         f.insert("SUBMODE".to_string(), sub);
     }
     let rec = QsoRecord {
+        // Consumed before the `extra` drain like every modelled field. Only the canonical
+        // text parses; anything else is a row without an id, which the loader gives one.
+        id: f.remove("APP_NEXUS_ID").and_then(|s| s.trim().parse().ok()),
         call,
         grid: f.remove("GRIDSQUARE"),
         country: f
@@ -3678,7 +3826,8 @@ mod tests {
             "retaining a read identity cannot change stored contacts"
         );
         let mut copy = book.clone();
-        copy.records_mut()[0].notes = Some("different copy".into());
+        Arc::make_mut(&mut copy.records_mut(OpClass::Upgrade)[0]).notes =
+            Some("different copy".into());
         assert!(std::sync::Arc::ptr_eq(&token, &book.read_token()));
         assert!(!std::sync::Arc::ptr_eq(&token, &copy.read_token()));
         assert_eq!(book.adif(), before);
@@ -3687,7 +3836,8 @@ mod tests {
                 b.mark_qsl_card(0, true);
             }) as fn(&mut Logbook),
             |b| {
-                b.records_mut()[0].notes = Some("new note".into());
+                Arc::make_mut(&mut b.records_mut(OpClass::Upgrade)[0]).notes =
+                    Some("new note".into());
             },
             |b| {
                 b.add(rec("K1ABC", "40m", 200));
@@ -3711,6 +3861,66 @@ mod tests {
             &book.read_token(),
             &replacement.read_token()
         ));
+    }
+
+    /// A snapshot is the log at one revision and stays exactly that: a later write copies the
+    /// record it touches rather than changing the one the snapshot holds. Every record the write
+    /// did NOT touch stays shared, not copied, and a record no snapshot holds is written in
+    /// place. That is what lets a reader take a snapshot under the engine lock and do its real
+    /// work after releasing it, without the log paying a copy of itself per write.
+    #[test]
+    fn a_snapshot_survives_later_writes_and_shares_every_untouched_record() {
+        let mut book = Logbook::new();
+        for (i, call) in ["W1AW", "K1ABC", "DL1ZZZ"].into_iter().enumerate() {
+            book.add(rec(call, "20m", 100 * (i as u64 + 1)));
+        }
+        let snap = book.snapshot();
+        assert_eq!(snap.revision, book.revision());
+        assert_eq!(snap.records.len(), 3);
+        let stamp = |when_unix| UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix,
+            detail: None,
+        };
+
+        let pushed = book.records()[1].as_ref().clone();
+        assert!(book.stamp_qrz_upload(&pushed, stamp(5)));
+        assert!(
+            snap.records[1].upload.qrz.is_none(),
+            "the snapshot still holds the row as it was"
+        );
+        assert!(
+            book.records()[1].upload.qrz.is_some(),
+            "the log holds the stamp"
+        );
+        assert!(
+            !Arc::ptr_eq(&snap.records[1], &book.records()[1]),
+            "the written row was copied"
+        );
+        assert!(
+            Arc::ptr_eq(&snap.records[0], &book.records()[0])
+                && Arc::ptr_eq(&snap.records[2], &book.records()[2]),
+            "the rows the write did not touch are shared, not copied"
+        );
+
+        // No snapshot holds the new row 1, so the next write to it happens in place.
+        let at = Arc::as_ptr(&book.records()[1]);
+        assert!(book.stamp_clublog_upload(&pushed, stamp(6)));
+        assert_eq!(
+            Arc::as_ptr(&book.records()[1]),
+            at,
+            "unshared, it is written in place"
+        );
+
+        // An edit and a delete leave the snapshot whole as well.
+        let mut edited = book.records()[0].as_ref().clone();
+        edited.comment = Some("fixed".into());
+        assert!(book.update_record(0, edited));
+        assert!(book.delete(2));
+        let calls: Vec<&str> = snap.records.iter().map(|r| r.call.as_str()).collect();
+        assert_eq!(calls, ["W1AW", "K1ABC", "DL1ZZZ"]);
+        assert_eq!(snap.records[0].comment, None);
+        assert_eq!(book.records()[0].comment.as_deref(), Some("fixed"));
     }
 
     /// The revision is what every whole-log cache and the UI's log delta are held against, so
@@ -3769,7 +3979,7 @@ mod tests {
         type Rewrite = (&'static str, fn(&mut Logbook));
         let rewrites: Vec<Rewrite> = vec![
             ("an edit", |b| {
-                let mut r = b.records()[0].clone();
+                let mut r = b.records()[0].as_ref().clone();
                 r.comment = Some("fixed".into());
                 assert!(b.update_record(0, r));
             }),
@@ -3778,7 +3988,7 @@ mod tests {
             }),
             ("a QSL-card mark", |b| assert!(b.mark_qsl_card(0, true))),
             ("an import that upgrades a held row", |b| {
-                let mut r = b.records()[0].clone();
+                let mut r = b.records()[0].as_ref().clone();
                 r.state = Some("VT".into());
                 let (_, _, merged) = b.import_adif(&(adif_header() + &adif_record(&r)));
                 assert_eq!(
@@ -3799,7 +4009,7 @@ mod tests {
                 b.reconcile_disk(&adif_record(&rec("VK2ABC", "20m", 600)));
             }),
             ("an upload stamp", |b| {
-                let pushed = b.records()[0].clone();
+                let pushed = b.records()[0].as_ref().clone();
                 let status = UploadStatus {
                     outcome: UploadOutcome::Accepted,
                     when_unix: 700,
@@ -3808,13 +4018,13 @@ mod tests {
                 assert!(b.stamp_qrz_upload(&pushed, status));
             }),
             ("a park stamp", |b| {
-                let mut r = b.records()[0].clone();
+                let mut r = b.records()[0].as_ref().clone();
                 r.ota.their_program = Some("POTA".into());
                 r.ota.their_ref = Some("US-0001".into());
                 assert_eq!(b.stamp_ota_refs(&adif_record(&r)).0, 1, "fixture: stamped");
             }),
             ("in-place access", |b| {
-                b.records_mut()[0].notes = Some("note".into());
+                Arc::make_mut(&mut b.records_mut(OpClass::Upgrade)[0]).notes = Some("note".into());
             }),
             ("a delete", |b| assert!(b.delete(0))),
             ("a clear", |b| assert_eq!(b.clear(), 2)),
@@ -3909,6 +4119,7 @@ mod tests {
 
     fn rec(call: &str, band: &str, when: u64) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: Some("EN37".into()),
             country: None,
@@ -4057,7 +4268,9 @@ mod tests {
         // now award-confirmed + QRZ-uploaded, plus a NEW QSO Y that A logged.
         let mut mem = Logbook::new();
         mem.add(rec("DL1ABC", "20m", 1_700_000_000));
-        mem.records_mut()[0].upload.clublog = Some(UploadStatus {
+        Arc::make_mut(&mut mem.records_mut(OpClass::Stamp)[0])
+            .upload
+            .clublog = Some(UploadStatus {
             outcome: UploadOutcome::Accepted,
             when_unix: 1_700_000_050,
             detail: None,
@@ -4208,6 +4421,7 @@ mod tests {
         let with = |rst: &str| -> Vec<&QsoRecord> {
             mem.records()
                 .iter()
+                .map(|r| &**r)
                 .filter(|r| r.rst_sent.as_deref() == Some(rst))
                 .collect()
         };
@@ -4742,7 +4956,7 @@ mod tests {
         r.my_rig = Some("IC-705".into());
         lb.add(r);
 
-        let mut edited = lb.records()[0].clone();
+        let mut edited = lb.records()[0].as_ref().clone();
         edited.name = Some("Hiram".into());
         edited.my_grid = None;
         edited.my_rig = None;
@@ -4753,7 +4967,7 @@ mod tests {
         assert_eq!(r.my_rig.as_deref(), Some("IC-705"));
 
         // An edit that sets a new value takes it.
-        let mut changed = lb.records()[0].clone();
+        let mut changed = lb.records()[0].as_ref().clone();
         changed.my_rig = Some("FT-991A".into());
         assert!(lb.update_record(0, changed));
         assert_eq!(lb.records()[0].my_rig.as_deref(), Some("FT-991A"));
@@ -4810,7 +5024,10 @@ mod tests {
     ///
     /// 768 → 816 (#239): `my_grid` and `my_rig`, two `Option<String>` at 24 bytes each — modelled
     /// ADIF fields the log shows and edits, not a contest block inlined.
-    const QSO_RECORD_SIZE: usize = 816;
+    ///
+    /// 816 → 840 (SPEC-1 C2): `id`, the record's stable identity — 24 bytes, and the price of
+    /// being able to address a change to THE row instead of to a position.
+    const QSO_RECORD_SIZE: usize = 840;
 
     #[test]
     fn tempodeep_gets_its_own_submode_not_tempofasts() {
@@ -5146,7 +5363,7 @@ mod tests {
         lb.add(split);
 
         // The edit form sends the record back with a corrected name and no receive leg.
-        let mut edited = lb.records()[0].clone();
+        let mut edited = lb.records()[0].as_ref().clone();
         edited.name = Some("Hiram".into());
         edited.freq_rx_mhz = None;
         assert!(lb.update_record(0, edited));
@@ -5390,7 +5607,7 @@ mod tests {
             lb.records()[0].upload.lotw.is_some(),
             "precondition: imported as already-sent"
         );
-        let mut fixed = lb.records()[0].clone();
+        let mut fixed = lb.records()[0].as_ref().clone();
         fixed.call = "W1AW".into();
         fixed.extra = Vec::new(); // the edit payload always arrives with extra empty
         assert!(lb.update_record(0, fixed));
@@ -5873,11 +6090,16 @@ mod tests {
         let path = dir.join("log.adi");
         let mut raw = adif_header();
         for i in 0..n {
-            raw.push_str(&adif_record(&rec(
-                &format!("W{i}AAA"),
-                "20m",
-                1_700_000_000 + i as u64,
-            )));
+            let mut r = rec(&format!("W{i}AAA"), "20m", 1_700_000_000 + i as u64);
+            // The seed carries ids, like any file this build has already written. Giving a row
+            // its first id IS a change to the bytes, and the ring tests below are about what a
+            // save does when nothing changed.
+            r.id = Some(RecordId::Minted {
+                posid: 0,
+                nonce: 0x5eed,
+                seq: i as u32 + 1,
+            });
+            raw.push_str(&adif_record(&r));
         }
         std::fs::write(&path, &raw).unwrap();
         let lb = Logbook::load(&path);
@@ -7827,6 +8049,7 @@ mod operator_split_tests {
 
     fn rec(call: &str, operator: Option<&str>) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: None,
             country: None,
@@ -7870,6 +8093,7 @@ mod operator_split_tests {
     #[test]
     fn operators_lists_each_distinct_operator_once() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 rec("W9AAA", Some("W1ABC")),
                 rec("W9BBB", Some("G0PQR")),
@@ -7889,6 +8113,7 @@ mod operator_split_tests {
     #[test]
     fn operators_invents_no_bucket_for_unstamped_contacts() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![rec("W9AAA", None), rec("W9BBB", Some("  "))].into(),
         };
         assert!(lb.operators().is_empty());
@@ -7897,6 +8122,7 @@ mod operator_split_tests {
     #[test]
     fn an_operators_export_carries_only_their_contacts() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 rec("W9AAA", Some("W1ABC")),
                 rec("W9BBB", Some("G0PQR")),
@@ -7920,6 +8146,7 @@ mod operator_split_tests {
     #[test]
     fn matching_an_operator_ignores_case_and_stray_spaces() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![rec("W9AAA", Some(" w1abc "))].into(),
         };
         assert!(lb.adif_for_operator("W1ABC").contains("W9AAA"));
@@ -7932,6 +8159,7 @@ mod operator_split_tests {
     #[test]
     fn an_operator_with_no_contacts_gets_an_empty_file_not_everyone_elses() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![rec("W9AAA", Some("W1ABC"))].into(),
         };
         let out = lb.adif_for_operator("K9NOBODY");
@@ -7951,6 +8179,7 @@ mod qsl_card_tests {
     /// what these tests are about — the two QSL fields.
     fn rec() -> QsoRecord {
         QsoRecord {
+            id: None,
             call: "K1ABC".into(),
             grid: None,
             country: None,
@@ -8077,6 +8306,7 @@ mod activation_split_tests {
     /// A contact at `when`, activating `my_ref` (None = not activating), signed `call_used`.
     fn act(call: &str, when: u64, my_ref: Option<&str>, call_used: Option<&str>) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: None,
             country: None,
@@ -8148,6 +8378,7 @@ mod activation_split_tests {
         records.push(act("K1HOME", d + 2 * 3600, None, Some("KD9TAW")));
         records.push(act("K2HOME", d + 3 * 3600, None, Some("KD9TAW")));
         let lb = Logbook {
+            minter: Default::default(),
             records: records.into(),
         };
 
@@ -8171,6 +8402,7 @@ mod activation_split_tests {
     fn two_parks_in_one_utc_day_are_two_activations_and_two_files() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW")),
                 act("W9BBB", d + 15 * 3600, Some("US-1234"), Some("KD9TAW")),
@@ -8203,6 +8435,7 @@ mod activation_split_tests {
         let first = day("2026-09-09");
         let second = day("2026-09-10");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 act(
                     "W9AAA",
@@ -8237,6 +8470,7 @@ mod activation_split_tests {
         hunted.ota.their_program = Some("POTA".into());
         hunted.ota.their_ref = Some("US-9999".into());
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 hunted,
                 act("W9AAA", d + 17 * 3600, Some("US-1234"), Some("KD9TAW")),
@@ -8264,6 +8498,7 @@ mod activation_split_tests {
     fn a_short_activation_is_listed_with_the_count_that_falls_short() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: (0..4)
                 .map(|i| {
                     act(
@@ -8289,6 +8524,7 @@ mod activation_split_tests {
     fn a_two_fer_exports_one_file_per_park_each_naming_only_its_own() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act(
                 "W9AAA",
                 d + 16 * 3600,
@@ -8322,6 +8558,7 @@ mod activation_split_tests {
     fn two_callsigns_at_one_park_on_one_day_are_two_activations() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW")),
                 act("W9BBB", d + 15 * 3600, Some("US-1234"), Some("KD9TAW/P")),
@@ -8347,6 +8584,7 @@ mod activation_split_tests {
         r.operator = Some("w1abc".into());
         let unstamped = act("W9BBB", d + 15 * 3600, Some("US-1234"), None);
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![r, unstamped].into(),
         };
         let acts = lb.activations();
@@ -8366,6 +8604,7 @@ mod activation_split_tests {
     fn matching_a_reference_ignores_case_and_stray_spaces() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act(
                 "W9AAA",
                 d + 14 * 3600,
@@ -8387,6 +8626,7 @@ mod activation_split_tests {
     fn any_second_within_the_day_selects_that_days_activation() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))].into(),
         };
         assert_eq!(
@@ -8401,6 +8641,7 @@ mod activation_split_tests {
     fn an_unknown_activation_gets_an_empty_file_not_the_whole_log() {
         let d = day("2026-09-09");
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act("W9AAA", d + 14 * 3600, Some("US-1234"), Some("KD9TAW"))].into(),
         };
         for out in [
@@ -8421,6 +8662,7 @@ mod activation_split_tests {
         let d = day("2026-09-09");
         assert!(Logbook::default().activations().is_empty());
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![act("W9AAA", d, None, Some("KD9TAW"))].into(),
         };
         assert!(lb.activations().is_empty());
@@ -8430,6 +8672,7 @@ mod activation_split_tests {
     #[test]
     fn activations_list_newest_first() {
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![
                 act(
                     "W9AAA",
@@ -8465,10 +8708,639 @@ mod activation_split_tests {
         let mut r = act("W9AAA", d + 3600, Some("W7A/MN-001"), Some("KD9TAW"));
         r.ota.my_program = Some("SOTA".into());
         let lb = Logbook {
+            minter: Default::default(),
             records: vec![r].into(),
         };
         let acts = lb.activations();
         assert_eq!(acts[0].program.as_deref(), Some("SOTA"));
         assert_eq!(acts[0].reference, "W7A/MN-001");
+    }
+}
+
+/// The record-identity proofs (`APP_NEXUS_ID`, see [`id`]). The property that matters to the
+/// operator is that a row's id is the SAME on every instance and every load, without the two
+/// instances talking and without opening the log writing anything — an id is how a change is
+/// addressed to THE row, so an id that moves is a change landing on the wrong contact.
+#[cfg(test)]
+mod record_id_tests {
+    use super::*;
+
+    /// A unique scratch directory under the OS temp dir; a static counter keeps concurrent
+    /// runs of this module apart (each test wants its own `log.adi` beside its own backups).
+    fn scratch_dir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("tempo_logid_{}_{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A minimal record. `QsoRecord` has no `Default` and spelling every field per test would
+    /// bury what these are about — the id.
+    fn rec(call: &str, when: u64) -> QsoRecord {
+        QsoRecord {
+            id: None,
+            call: call.into(),
+            grid: None,
+            country: None,
+            state: None,
+            band: "20m".into(),
+            freq_mhz: 14.074,
+            freq_rx_mhz: None,
+            mode: "FT8".into(),
+            rst_sent: Some("-10".into()),
+            rst_rcvd: Some("-12".into()),
+            name: None,
+            comment: None,
+            notes: None,
+            qth: None,
+            tx_power: None,
+            when_unix: when,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            my_grid: None,
+            my_rig: None,
+            station_callsign: None,
+            extra: Vec::new(),
+            contest: None,
+        }
+    }
+
+    /// A pre-1.14 log: real rows, no `APP_NEXUS_ID` anywhere.
+    fn legacy(path: &Path, calls: &[&str]) {
+        let mut raw = adif_header();
+        for (i, c) in calls.iter().enumerate() {
+            raw.push_str(&adif_record(&rec(c, 1_700_000_000 + i as u64)));
+        }
+        assert!(!raw.contains("APP_NEXUS_ID"), "the fixture is a legacy log");
+        std::fs::write(path, raw).unwrap();
+    }
+
+    fn ids(lb: &Logbook) -> Vec<RecordId> {
+        lb.records().iter().map(|r| r.id.unwrap()).collect()
+    }
+
+    /// ★ Opening a log WRITES NOTHING — the ids a load assigns live in memory only. A legacy
+    /// log on a read-only stick, or one the operator opens and closes, must come back byte for
+    /// byte as it was: id assignment is not a reason to rewrite the operator's file.
+    #[test]
+    fn opening_a_log_assigns_every_id_and_writes_none_of_them() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        legacy(&path, &["W1AW", "K5XYZ", "DL1ABC"]);
+        let before = std::fs::read(&path).unwrap();
+
+        let lb = Logbook::load(&path);
+        assert_eq!(lb.records().len(), 3);
+        assert!(
+            lb.records().iter().all(|r| r.id.is_some()),
+            "every row leaves the loader with an id"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "...and the file is untouched"
+        );
+    }
+
+    /// R2. The provisional id is a function of the FILE, so every load of one file agrees —
+    /// which is the whole point: two instances holding one log name the same row the same way
+    /// without talking to each other.
+    #[test]
+    fn every_load_of_one_file_settles_on_the_same_ids() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        legacy(&path, &["W1AW", "K5XYZ", "DL1ABC"]);
+
+        let first = ids(&Logbook::load(&path));
+        let second = ids(&Logbook::load(&path));
+        assert_eq!(first, second, "one file, one set of ids");
+        assert!(
+            first
+                .iter()
+                .all(|id| matches!(id, RecordId::Provisional { .. })),
+            "a legacy row is provisional: {first:?}"
+        );
+        assert_eq!(
+            first.iter().collect::<std::collections::HashSet<_>>().len(),
+            3,
+            "and distinct within the file"
+        );
+    }
+
+    /// R2. A provisional id hashes the row's text AS THE FILE HOLDS IT, never a re-serialization
+    /// of the parsed record — so changing what `adif_record` emits (a new field, a different
+    /// order) cannot move the id of a row that was never rewritten.
+    #[test]
+    fn a_provisional_id_is_the_files_own_text_not_our_serializers() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        // Another logger's spelling of one contact: different field order, upper-case band,
+        // tags we keep in `extra`. Our own emitter would write none of it this way.
+        let row = "<CALL:4>W1AW<QSO_DATE:8>20241101<TIME_ON:6>120000<BAND:3>20M\
+                   <MODE:3>FT8<PROGRAMID:5>OTHER<EOR>\n";
+        std::fs::write(&path, format!("{}{row}", adif_header())).unwrap();
+
+        let lb = Logbook::load(&path);
+        assert_eq!(
+            lb.records()[0].id,
+            Some(RecordId::Provisional {
+                hash: id::fnv1a64(row.trim().as_bytes()),
+                ordinal: 0
+            }),
+            "the id is the file's bytes"
+        );
+        assert_ne!(
+            lb.records()[0].id,
+            Some(RecordId::Provisional {
+                hash: id::fnv1a64(adif_record(&lb.records()[0]).trim().as_bytes()),
+                ordinal: 0
+            }),
+            "...and this fixture proves it, because our own emitter differs"
+        );
+    }
+
+    /// The decode is lossy but DETERMINISTIC, so a log carrying bytes that are not UTF-8 — a
+    /// note pasted from a Windows-1252 editor is the usual way — still has the same ids at
+    /// every load. (The caveat the module header records is the other half: a change to the
+    /// DECODER would move an id that was never persisted.)
+    #[test]
+    fn a_non_utf8_log_settles_on_the_same_ids_at_every_load() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        let mut raw = adif_header().into_bytes();
+        raw.extend_from_slice(
+            b"<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20241101<COMMENT:5>caf\xe9!<EOR>\n",
+        );
+        raw.extend_from_slice(b"<CALL:5>K5XYZ<BAND:3>40m<MODE:3>FT8<QSO_DATE:8>20241102<EOR>\n");
+        std::fs::write(&path, &raw).unwrap();
+        assert!(
+            std::str::from_utf8(&raw).is_err(),
+            "the fixture is not UTF-8"
+        );
+
+        let first = ids(&Logbook::load(&path));
+        assert_eq!(first.len(), 2);
+        assert_eq!(first, ids(&Logbook::load(&path)), "stable across loads");
+    }
+
+    /// R2. A stamp is an in-memory change; if the process ends before anything rewrites the
+    /// file, the file is as it was, so the reload settles on exactly the same ids. Only the
+    /// stamp is lost, and a stamp is re-derivable.
+    #[test]
+    fn a_stamp_that_never_reached_the_file_leaves_the_ids_where_they_were() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        legacy(&path, &["W1AW", "K5XYZ"]);
+
+        let before = ids(&Logbook::load(&path));
+        let mut lb = Logbook::load(&path);
+        assert!(lb.mark_qsl_sent(0, None, 1_700_100_000));
+        drop(lb); // ...and the process ends here: nothing was saved.
+        assert_eq!(ids(&Logbook::load(&path)), before);
+    }
+
+    /// R2. The first rewrite persists every id AS IT IS — a provisional id is written, read
+    /// back and kept, never converted to a minted one. From then on the id no longer depends
+    /// on the row's text, so an edit cannot move it.
+    #[test]
+    fn the_first_rewrite_persists_every_id_and_later_loads_read_it_back() {
+        let dir = scratch_dir();
+        let path = dir.join("log.adi");
+        legacy(&path, &["W1AW", "K5XYZ"]);
+
+        let lb = Logbook::load(&path);
+        let settled = ids(&lb);
+        lb.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        for id in &settled {
+            assert!(
+                text.contains(&format!("<APP_NEXUS_ID:{}>{id}", id.to_string().len())),
+                "the rewrite carries {id}"
+            );
+        }
+        let reloaded = Logbook::load(&path);
+        assert_eq!(ids(&reloaded), settled, "read back, not re-derived");
+        assert!(
+            settled
+                .iter()
+                .all(|id| matches!(id, RecordId::Provisional { .. })),
+            "still provisional — a persisted id is never converted"
+        );
+
+        // Persisted, the id no longer tracks the text: correct the call and it stays put.
+        let mut lb = reloaded;
+        let mut fixed = QsoRecord::clone(&lb.records()[0]);
+        fixed.call = "W1AWX".into();
+        assert!(lb.update_record(0, fixed));
+        assert_eq!(lb.records()[0].id, Some(settled[0]), "an edit keeps the id");
+        assert_eq!(lb.records()[0].call, "W1AWX");
+    }
+
+    /// An import keeps the id a row brings — that is what makes a Nexus export round trip —
+    /// unless this log already holds that id, in which case the arriving row is a DIFFERENT
+    /// contact and gets one of its own. An id is unique within a log or it addresses nothing.
+    #[test]
+    fn an_import_keeps_a_free_id_and_re_mints_one_the_log_already_holds() {
+        let mut lb = Logbook::new();
+        let held = lb.add(rec("W1AW", 1_700_000_000));
+
+        // One arriving row claims the id we already gave W1AW; the other brings a free one.
+        let mut clash = rec("K5XYZ", 1_700_000_100);
+        clash.id = Some(held);
+        let free = RecordId::Minted {
+            posid: 9,
+            nonce: 0xabc,
+            seq: 4,
+        };
+        let mut brought = rec("DL1ABC", 1_700_000_200);
+        brought.id = Some(free);
+        let text = format!(
+            "{}{}{}",
+            adif_header(),
+            adif_record(&clash),
+            adif_record(&brought)
+        );
+        let (added, _, _) = lb.import_adif(&text);
+        assert_eq!(added.len(), 2, "two new contacts");
+
+        let by = |c: &str| {
+            lb.records()
+                .iter()
+                .find(|r| r.call == c)
+                .unwrap()
+                .id
+                .unwrap()
+        };
+        assert_eq!(by("W1AW"), held, "the row that had it keeps it");
+        assert_ne!(by("K5XYZ"), held, "the clash is re-minted");
+        assert_eq!(by("DL1ABC"), free, "a free id survives the import");
+        assert_eq!(
+            lb.records()
+                .iter()
+                .filter_map(|r| r.id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3,
+            "every id unique in the log"
+        );
+    }
+
+    /// Export → import round trip: a log written out and read into an empty one carries every
+    /// row's id through unchanged.
+    #[test]
+    fn an_export_then_import_round_trips_every_id() {
+        let mut lb = Logbook::new();
+        for (i, c) in ["W1AW", "K5XYZ", "DL1ABC"].iter().enumerate() {
+            lb.add(rec(c, 1_700_000_000 + i as u64));
+        }
+        let exported = lb.adif();
+
+        let mut fresh = Logbook::new();
+        fresh.import_adif(&exported);
+        assert_eq!(ids(&fresh), ids(&lb), "the ids came across");
+    }
+
+    /// Two instances each gave one row an id of its own (both opened a log that had none, and
+    /// one of them rewrote it). Reconciling with the file converges on the smaller id from
+    /// either side, so the two instances agree without talking.
+    #[test]
+    fn two_instances_converge_on_one_id_for_one_row() {
+        let mine = RecordId::Minted {
+            posid: 1,
+            nonce: 2,
+            seq: 3,
+        };
+        let theirs = RecordId::Minted {
+            posid: 1,
+            nonce: 1,
+            seq: 9,
+        };
+        assert_eq!(RecordId::adopt(mine, theirs), theirs, "theirs is smaller");
+
+        let settle = |ours: RecordId, disk: RecordId| {
+            let mut r = rec("W1AW", 1_700_000_000);
+            r.id = Some(ours);
+            let mut lb = Logbook {
+                minter: Default::default(),
+                records: vec![r.clone()].into(),
+            };
+            let mut on_disk = r;
+            on_disk.id = Some(disk);
+            lb.reconcile_disk(&format!("{}{}", adif_header(), adif_record(&on_disk)));
+            assert_eq!(lb.records().len(), 1, "one contact, not two");
+            lb.records()[0].id.unwrap()
+        };
+        assert_eq!(settle(mine, theirs), theirs, "we adopt the smaller");
+        assert_eq!(settle(theirs, mine), theirs, "...and so do they");
+    }
+}
+
+/// What each kind of write COSTS: the watermarks it moves, and — for the narrow classes — the
+/// promise that it left row identity alone. A class is a promise to every cache keyed on a
+/// watermark, so each promise is a test rather than a comment: naming a write narrower than it
+/// is serves a stale answer, and nothing else in the tree would notice.
+#[cfg(test)]
+mod watermark_tests {
+    use super::*;
+
+    /// A minimal record; `QsoRecord` has no `Default` and the fields that matter here are the
+    /// four that make a row's identity.
+    fn rec_of(call: &str, band: &str, when: u64) -> QsoRecord {
+        QsoRecord {
+            id: None,
+            call: call.into(),
+            grid: Some("EN37".into()),
+            country: None,
+            state: None,
+            band: band.into(),
+            freq_mhz: 14.074,
+            freq_rx_mhz: None,
+            mode: "FT8".into(),
+            rst_sent: Some("-10".into()),
+            rst_rcvd: Some("-12".into()),
+            name: None,
+            comment: None,
+            notes: None,
+            qth: None,
+            tx_power: None,
+            when_unix: when,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            my_grid: None,
+            my_rig: None,
+            station_callsign: None,
+            extra: Vec::new(),
+            contest: None,
+        }
+    }
+
+    fn seeded() -> Logbook {
+        let mut lb = Logbook::new();
+        lb.add(rec_of("W1AW", "20m", 1_700_000_000));
+        lb.add(rec_of("K5XYZ", "20m", 1_700_000_001));
+        lb
+    }
+
+    /// Everything a dupe check, a worked-before sweep or a contest dupe key reads — the row
+    /// identity `key_rev` promises to track.
+    fn keys(lb: &Logbook) -> Vec<String> {
+        lb.records()
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}|{}|{}|{}|{:?}",
+                    r.call, r.band, r.mode, r.when_unix, r.contest
+                )
+            })
+            .collect()
+    }
+
+    /// The four narrow watermarks after a write that began at `from`, in the order
+    /// `[content, index, key, shape]`. `content` is asked the way a reader asks it: are the
+    /// rows I held still held, unchanged and in order?
+    fn moved(lb: &Logbook, from: [u64; 4]) -> [bool; 4] {
+        [
+            !lb.appended_only_since(from[0]),
+            lb.index_rev() != from[1],
+            lb.key_rev() != from[2],
+            lb.shape_rev() != from[3],
+        ]
+    }
+
+    fn watermarks(lb: &Logbook) -> [u64; 4] {
+        [lb.revision(), lb.index_rev(), lb.key_rev(), lb.shape_rev()]
+    }
+
+    type Write = fn(&mut Logbook);
+
+    /// Every classified write, against the watermarks its class allows it to move — and, for
+    /// the ones that claim a key-based cache survives them, against the keys themselves.
+    #[test]
+    fn each_kind_of_write_moves_exactly_the_watermarks_its_class_claims() {
+        // (name, write, [content, index, key, shape], may move a row's identity)
+        let cases: Vec<(&str, Write, [bool; 4], bool)> = vec![
+            (
+                "an append",
+                |lb| {
+                    lb.add(rec_of("DL1ABC", "40m", 1_700_000_100));
+                },
+                [false, true, true, false],
+                true,
+            ),
+            (
+                "an upload stamp",
+                |lb| {
+                    let pushed = lb.records()[0].as_ref().clone();
+                    assert!(lb.stamp_qrz_upload(
+                        &pushed,
+                        UploadStatus {
+                            outcome: UploadOutcome::Accepted,
+                            when_unix: 1_700_000_500,
+                            detail: None,
+                        }
+                    ));
+                },
+                [true, false, false, false],
+                false,
+            ),
+            (
+                "a QSL-sent mark",
+                |lb| assert!(lb.mark_qsl_sent(0, Some(QslVia::Bureau), 1_700_000_500)),
+                [true, false, false, false],
+                false,
+            ),
+            (
+                "a QSL card arriving",
+                |lb| assert!(lb.mark_qsl_card(0, true)),
+                [true, true, false, false],
+                false,
+            ),
+            (
+                "an edit",
+                |lb| {
+                    let mut fixed = lb.records()[0].as_ref().clone();
+                    fixed.band = "15m".into();
+                    assert!(lb.update_record(0, fixed));
+                },
+                [true, true, true, true],
+                true,
+            ),
+            (
+                "a delete",
+                |lb| assert!(lb.delete(0)),
+                [true, true, true, true],
+                true,
+            ),
+            (
+                "a purge",
+                |lb| assert_eq!(lb.clear(), 2),
+                [true, true, true, true],
+                true,
+            ),
+        ];
+
+        for (name, write, claims, identity_may_move) in cases {
+            let mut lb = seeded();
+            let (before, keys_before) = (watermarks(&lb), keys(&lb));
+            write(&mut lb);
+            assert_ne!(
+                lb.revision(),
+                before[0],
+                "{name}: every write moves the revision"
+            );
+            let got = moved(&lb, before);
+            for (i, mark) in ["content", "index", "key", "shape"].iter().enumerate() {
+                assert_eq!(
+                    got[i], claims[i],
+                    "{name}: {mark}_rev moved={}, its class claims {}",
+                    got[i], claims[i]
+                );
+            }
+            if !identity_may_move {
+                assert_eq!(
+                    keys(&lb),
+                    keys_before,
+                    "{name}: its class promises a key-based cache survives it, so it must not \
+                     have touched a row's identity"
+                );
+            }
+        }
+    }
+
+    /// ⭐ THE PROPERTY EVERY NARROW CLASS RESTS ON, pinned by name. `apply_match` is the body
+    /// of every report merge, download merge and import upgrade; `stamp_ota_refs` is the
+    /// park/summit pull-back. Both take the conservative class today and both are meant to
+    /// become `Upgrade` with the store — which is sound only while they leave row IDENTITY
+    /// alone, because a cache keyed on `key_rev` (the worked-before sets, the contest DUPE
+    /// sweep) then survives them. Give either one a field that touches the call, the band, the
+    /// mode, the contact time or the contest exchange and this fails before the narrowing can
+    /// serve a stale answer.
+    #[test]
+    fn the_upgrade_paths_never_touch_a_rows_identity() {
+        // `apply_match`: an incoming row differing from ours in every identity field there is,
+        // and in every field it IS allowed to copy.
+        let mut held = rec_of("W1AW", "20m", 1_700_000_000);
+        let identity = format!(
+            "{}|{}|{}|{}|{:?}",
+            held.call, held.band, held.mode, held.when_unix, held.contest
+        );
+        let mut inc = rec_of("N0BODY", "80m", 1_700_009_999);
+        inc.mode = "SSB".into();
+        inc.contest = Some(Box::new(ContestFields {
+            session: "s".into(),
+            contest_id: "ARRL-FIELD-DAY".into(),
+            srx_string: Some("2A WI".into()),
+            ..Default::default()
+        }));
+        inc.confirmed = true;
+        inc.award_confirmed = true;
+        inc.qsl_rcvd.card = true;
+        inc.state = Some("WI".into());
+        inc.country = Some("United States".into());
+        let mut tally = crate::reconcile::ReconcileSummary::default();
+        crate::reconcile::apply_match(&mut held, &inc, &mut tally);
+        assert_eq!(
+            format!(
+                "{}|{}|{}|{}|{:?}",
+                held.call, held.band, held.mode, held.when_unix, held.contest
+            ),
+            identity,
+            "apply_match moved a row's identity"
+        );
+        assert!(
+            held.award_confirmed && held.state.is_some() && held.country.is_some(),
+            "...and it did upgrade the row, so the check above is not vacuous"
+        );
+
+        // `stamp_ota_refs`: a park the operator hunted, pulled back onto the contact.
+        let mut lb = seeded();
+        let identities = keys(&lb);
+        let mut hunted = lb.records()[0].as_ref().clone();
+        hunted.ota.their_program = Some("POTA".into());
+        hunted.ota.their_ref = Some("US-1234".into());
+        // The pull-back file is another logger's, so it carries no id of ours.
+        hunted.id = None;
+        let (stamped, _, _) =
+            lb.stamp_ota_refs(&format!("{}{}", adif_header(), adif_record(&hunted)));
+        assert_eq!(
+            stamped, 1,
+            "the park landed, so the check below is not vacuous"
+        );
+        assert_eq!(lb.records()[0].ota.their_ref.as_deref(), Some("US-1234"));
+        assert_eq!(
+            keys(&lb),
+            identities,
+            "stamp_ota_refs moved a row's identity"
+        );
+    }
+
+    /// The unclassified write — a `&mut` borrow of the records whose shape this module cannot
+    /// see — costs the WIDEST class, so nothing keyed on a watermark can be stale after it.
+    /// Narrowing any of these is a deliberate act that fails here first.
+    #[test]
+    fn a_write_whose_shape_we_cannot_see_costs_every_watermark() {
+        let cases: Vec<(&str, Write)> = vec![
+            ("a disk reconcile", |lb| {
+                let row = rec_of("ZL1ABC", "20m", 1_700_000_900);
+                lb.reconcile_disk(&format!("{}{}", adif_header(), adif_record(&row)));
+            }),
+            ("a report merge", |lb| {
+                let mut row = lb.records()[0].as_ref().clone();
+                row.award_confirmed = true;
+                lb.merge_report(&format!("{}{}", adif_header(), adif_record(&row)));
+            }),
+            ("an import that upgrades a held row", |lb| {
+                let mut row = lb.records()[0].as_ref().clone();
+                row.award_confirmed = true;
+                let (added, _, merged) =
+                    lb.import_adif(&format!("{}{}", adif_header(), adif_record(&row)));
+                assert!(added.is_empty(), "the row is already held");
+                assert_eq!(merged, 1, "...and the import upgraded it");
+            }),
+            ("an in-place borrow", |lb| {
+                Arc::make_mut(&mut lb.records_mut(OpClass::Structural)[0]).notes =
+                    Some("edited".into());
+            }),
+        ];
+        for (name, write) in cases {
+            let mut lb = seeded();
+            let before = watermarks(&lb);
+            write(&mut lb);
+            assert_ne!(lb.revision(), before[0], "{name}: the revision");
+            let got = moved(&lb, before);
+            for (i, mark) in ["content", "index", "key", "shape"].iter().enumerate() {
+                assert!(
+                    got[i],
+                    "{name}: {mark}_rev must move for a write we cannot see the shape of"
+                );
+            }
+        }
     }
 }

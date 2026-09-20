@@ -626,8 +626,8 @@ impl Publisher {
 
 // Scan the whole station log, retain only the newest matching window. No full
 // log clone or serialization under the engine lock, and no positional write API.
-fn log_window(
-    records: &[tempo_core::logbook::QsoRecord],
+fn log_window<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
+    records: &[R],
     search: &str,
     unconfirmed: bool,
 ) -> (Vec<tempo_core::logbook::QsoRecord>, usize) {
@@ -635,6 +635,7 @@ fn log_window(
     let mut selected = BinaryHeap::new();
     let mut total = 0;
     for (i, q) in records.iter().enumerate() {
+        let q: &tempo_core::logbook::QsoRecord = std::borrow::Borrow::borrow(q);
         if unconfirmed && q.award_confirmed {
             continue;
         }
@@ -663,7 +664,9 @@ fn log_window(
     (
         selected
             .into_iter()
-            .map(|(_, i)| records[i].clone())
+            .map(|(_, i)| {
+                std::borrow::Borrow::<tempo_core::logbook::QsoRecord>::borrow(&records[i]).clone()
+            })
             .collect(),
         total,
     )

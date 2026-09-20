@@ -616,8 +616,8 @@ pub(super) fn prepare_change(
     }
     let t = change.target().ok_or(ChangeReason::ContextChanged)?;
     let index = locate(engine, t).ok_or(ChangeReason::ContextChanged)?;
-    let stored = engine.log_records()[index].clone();
-    let copies = |records: &[QsoRecord], of: &QsoRecord, text: &str| {
+    let stored = engine.log_records()[index].as_ref().clone();
+    let copies = |records: &[std::sync::Arc<QsoRecord>], of: &QsoRecord, text: &str| {
         records
             .iter()
             .filter(|r| r.call == of.call && r.when_unix == of.when_unix && adif_record(r) == text)

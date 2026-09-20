@@ -50,6 +50,7 @@ fn qso(call: &str, band: &str, mode: &str, when: u64) -> QsoRecord {
     // field keeps the fixture pinned if a new field is added (it becomes a compile error
     // here, which is the point of a golden harness).
     QsoRecord {
+        id: None,
         call: call.into(),
         grid: Some("FN31".into()),
         country: None,

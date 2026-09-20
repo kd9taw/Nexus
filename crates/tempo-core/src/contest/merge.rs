@@ -91,8 +91,9 @@ pub fn merge_into_general(log: &FieldDayLog, posid: &str, into: &mut Logbook) ->
         // means by "already there", and a set that only knew about the log it started
         // with would be true of the first duplicate and false of the second.
         seen.insert(qid.clone());
-        let rec = record_for(log, q, qid);
-        into.add(rec.clone());
+        let mut rec = record_for(log, q, qid);
+        // The log mints the row's id; the copy reported as written carries it too.
+        rec.id = Some(into.add(rec.clone()));
         report.written.push(rec);
     }
     report
@@ -128,6 +129,7 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
         qid,
     };
     QsoRecord {
+        id: None,
         call: q.call.clone(),
         grid: None,
         country: q.entity.clone(),

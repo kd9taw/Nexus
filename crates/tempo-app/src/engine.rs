@@ -864,6 +864,13 @@ pub fn engine_lock(m: &std::sync::Mutex<Engine>) -> std::sync::MutexGuard<'_, En
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The station's position id as the ids the log mints carry (`RecordId::Minted`): the
+/// profile's `fd_position_id`, eight hex digits, or 0 while the profile has none. Provenance
+/// only — what makes a minted id unique is the nonce and sequence beside it.
+fn log_posid(settings: &Settings) -> u32 {
+    u32::from_str_radix(settings.fd_position_id.trim(), 16).unwrap_or(0)
+}
+
 /// Which CAT daemon is serving the radio RIGHT NOW, as the radio loop sees the
 /// socket it owns. The engine owns the satellite mapping POLICY but cannot see
 /// the wire, so the loop hands it this fact every split apply
@@ -4342,8 +4349,12 @@ impl Engine {
         };
         Self {
             app,
+            station: {
+                let mut station = StationCore::new();
+                station.logbook.set_posid(log_posid(&settings));
+                station
+            },
             settings,
-            station: StationCore::new(),
             tx_offset_hz,
             rx_offset_hz,
             hold_tx_freq,
@@ -4942,6 +4953,8 @@ impl Engine {
             s.active_radio
         };
         self.settings = s;
+        // A settings save can carry a new position id.
+        self.sync_log_posid();
         // Restore the engine-owned pending Cloudlog key captured above (see that comment). Prefer a
         // NON-empty incoming value — that can only be a legacy first-load carrying its own plaintext
         // key, never the frontend — but keep the live pending key whenever `s` carries none, which is
@@ -9492,6 +9505,7 @@ impl Engine {
         self.settings.mycall.hash(&mut h);
         let id = format!("{:08x}", (h.finish() & 0xffff_ffff) as u32);
         self.settings.fd_position_id = id.clone();
+        self.sync_log_posid();
         (id, true)
     }
 
@@ -10327,7 +10341,9 @@ impl Engine {
         // is false until the end of this function, and an unwind inside it (the two
         // `spawn`s below are the live candidates) leaves the contact on disk, out of
         // memory and unrecoverable — the next rewrite deletes it.
-        self.station.logbook.add(rec.clone());
+        // The log mints the row's id; this copy, which the append and every queue below
+        // carry, carries it too.
+        rec.id = Some(self.station.logbook.add(rec.clone()));
         // Through the station's append (not a bare `Logbook::append`) so the shared
         // log's freshness fingerprint moves with the file. Skip it and the recovery
         // gate misses on the next upload stamp / Needed-board poll and re-parses the
@@ -16434,6 +16450,7 @@ contact yourself."
         let comment = (!extras.is_empty()).then(|| extras.join(" "));
         let now = now_unix_secs();
         QsoRecord {
+            id: None,
             call: call.to_string(),
             grid: None,
             country,
@@ -20542,6 +20559,7 @@ contact yourself."
         // moves `dxcall` into the record.
         let callbook_name = self.callbook_name_for(&dxcall);
         QsoRecord {
+            id: None,
             call: dxcall,
             grid,
             country,
@@ -20791,7 +20809,14 @@ contact yourself."
 
     /// See [`StationCore::set_log_path`].
     pub fn set_log_path(&mut self, path: PathBuf) {
-        self.station.set_log_path(path)
+        self.station.set_log_path(path);
+        // A load opens a fresh log, whose ids start without the position id.
+        self.sync_log_posid();
+    }
+
+    /// Hand the log the position id its minted ids carry (see [`log_posid`]).
+    fn sync_log_posid(&mut self) {
+        self.station.logbook.set_posid(log_posid(&self.settings));
     }
 
     /// The general logbook file, when one is configured. Read-only: Remote re-reads it after a
@@ -21086,8 +21111,15 @@ contact yourself."
     }
 
     /// Immutable log view for bounded read models. Does not sync, recover or write a file.
-    pub fn log_records(&self) -> &[QsoRecord] {
+    pub fn log_records(&self) -> &[std::sync::Arc<QsoRecord>] {
         self.station.logbook.records()
+    }
+
+    /// The log's revision and a copy of the pointers to its records, taken without cloning a
+    /// record. See [`tempo_core::logbook::Logbook::snapshot`]: take it under the engine lock,
+    /// then do the real work after releasing it.
+    pub fn log_snapshot(&self) -> tempo_core::logbook::LogSnapshot {
+        self.station.logbook.snapshot()
     }
 
     /// Retain across chunked reads to detect any intervening log mutation/replacement.
@@ -25900,6 +25932,29 @@ mod tests {
             sweeps, 0,
             "a snapshot of an unchanged log swept it {sweeps} times"
         );
+
+        // …nor is one an upload stamp changed. The sets read call, band and mode, so they are
+        // kept against the log's KEY revision, and a stamp moves no key: the upload worker
+        // marking a batch of QSOs accepted must not cost a whole-log sweep per snapshot after
+        // it. (The other direction — an edit or a delete DOES reach the next snapshot — is
+        // `worked_before_marks_follow_every_kind_of_log_change` below.)
+        let pushed = e.station.logbook.records()[0].as_ref().clone();
+        assert!(e.station.logbook.stamp_qrz_upload(
+            &pushed,
+            tempo_core::logbook::UploadStatus {
+                outcome: tempo_core::logbook::UploadOutcome::Accepted,
+                when_unix: 1_700_000_500,
+                detail: None,
+            }
+        ));
+        tempo_core::logbook::LOG_SWEEPS.with(|c| c.set(0));
+        let _after_stamp = e.snapshot();
+        let sweeps = tempo_core::logbook::LOG_SWEEPS.with(|c| c.get());
+        assert_eq!(
+            sweeps, 0,
+            "a snapshot after an upload stamp swept the log {sweeps} times — a stamp moves no \
+             key, so the worked-before sets must have stood"
+        );
     }
 
     /// The B4 sets are kept against the log's revision, so EVERY kind of change must reach the
@@ -25962,7 +26017,7 @@ mod tests {
             "an imported call is marked; its 40m contact is not this band"
         );
 
-        let mut to_40 = e.log_records()[0].clone();
+        let mut to_40 = e.log_records()[0].as_ref().clone();
         to_40.band = "40m".into();
         assert!(e.update_qso(0, to_40));
         assert_eq!(
@@ -25970,7 +26025,7 @@ mod tests {
             (true, false),
             "an edit that moves the band moves the band mark"
         );
-        let mut busted = e.log_records()[0].clone();
+        let mut busted = e.log_records()[0].as_ref().clone();
         busted.call = "W3CCC".into();
         assert!(e.update_qso(0, busted));
         assert_eq!(
@@ -26029,6 +26084,7 @@ mod tests {
             .iter()
             .find(|r| r.call == "W3CCC")
             .unwrap()
+            .as_ref()
             .clone();
         to_cw.mode = "CW".into();
         let at = e
@@ -31242,7 +31298,7 @@ mod tests {
         e.log_qso(e.qso_record("K7ABC".into(), None, None));
         moved(&e, "a second logged contact");
 
-        let mut edited = e.log_records()[0].clone();
+        let mut edited = e.log_records()[0].as_ref().clone();
         edited.comment = Some("fixed".into());
         assert!(e.update_qso(0, edited));
         moved(&e, "an edit");
@@ -31256,7 +31312,7 @@ mod tests {
         use tempo_core::logbook::{adif_header, adif_record, UploadOutcome};
         e.import_adif(&(adif_header() + &adif_record(&qrec("N0IMP", "40m"))));
         moved(&e, "an import");
-        let pushed = e.log_records()[0].clone();
+        let pushed = e.log_records()[0].as_ref().clone();
         assert!(e.stamp_qrz_upload(&pushed, UploadOutcome::Accepted, 1, None));
         moved(&e, "an upload stamp");
         let echo = adif_record(&e.log_records()[0]);
@@ -32125,6 +32181,7 @@ mod tests {
 
         // Manual log path queues too.
         e.log_qso(QsoRecord {
+            id: None,
             call: "N0CALL".into(),
             grid: Some("EN52".into()),
             country: None,
@@ -33108,6 +33165,7 @@ mod tests {
     /// `Default`; only call+band vary here).
     fn qrec(call: &str, band: &str) -> QsoRecord {
         QsoRecord {
+            id: None,
             call: call.into(),
             grid: None,
             country: None,
@@ -35325,6 +35383,7 @@ mod tests {
 
         // Log a contact with W9XYZ in grid EN37 → entity "W" and grid EN37 worked.
         e.log_qso(QsoRecord {
+            id: None,
             call: "W9XYZ".into(),
             grid: Some("EN37".into()),
             country: None,

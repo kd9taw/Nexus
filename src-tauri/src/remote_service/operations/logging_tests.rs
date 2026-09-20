@@ -439,7 +439,7 @@ fn a_change_against_a_row_that_changed_at_the_station_is_refused_and_writes_noth
             .iter()
             .position(|r| r.call == "W1AW")
             .unwrap();
-        let mut local = e.log_records()[index].clone();
+        let mut local = e.log_records()[index].as_ref().clone();
         local.comment = Some("changed at the shack".into());
         assert!(e.update_qso(index, local));
     }
@@ -1398,7 +1398,7 @@ fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
             "key":super::super::logging::row_key(&e.log_records()[0])}),
     )
     .unwrap();
-    let mut changed = e.log_records()[0].clone();
+    let mut changed = e.log_records()[0].as_ref().clone();
     changed.comment = Some("changed at the browser".into());
     assert!(e.update_qso(0, changed));
     assert_eq!(super::super::logging::locate(&mut e, &survivor_key), None);
@@ -1538,7 +1538,7 @@ fn the_shacks_echoed_row_keys_to_the_stations_own_key() {
         (0..3)
             .map(|index| {
                 (
-                    e.log_records()[index].clone(),
+                    e.log_records()[index].as_ref().clone(),
                     crate::log_row(&e, index).unwrap(),
                 )
             })
