@@ -9933,6 +9933,9 @@ impl Engine {
             skew_secs: m.skew_secs,
             last_error: m.last_error.clone(),
             dupes,
+            // Filled by the caller in `engine/field_day_display.rs`, which owns the rest
+            // of this DTO's dupe data; the mirror's unprojected keys need no work here.
+            dkeys: Vec::new(),
             board,
         })
     }

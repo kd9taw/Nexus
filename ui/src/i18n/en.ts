@@ -3193,7 +3193,7 @@ export const EN = {
   'fieldDay.log.column.band': 'Band',
   'fieldDay.log.column.mode': 'Mode',
   'fieldDay.log.empty': 'No contacts logged yet.',
-  'fieldDay.log.dupe.title': 'Duplicate callsign',
+  'fieldDay.log.dupe.title': 'Duplicate — kept in the log and worth no points',
   'fieldDay.log.mult.title': 'New section — multiplier',
   'fieldDay.log.mult': 'Mult!',
 
@@ -4518,6 +4518,8 @@ export const EN = {
   'recall.contestDupe.label': 'Contest dupe',
   'recall.contestDupe.title':
     'Already in the contest log on {{band}} — logging this again will be refused as a dupe.',
+  'recall.contestDupe.titleLogged':
+    'Already in the contest log on {{band}} — work and log it anyway: this contest keeps duplicates and scores them zero. Leaving it out costs the other station its credit.',
   'recall.clubDupe.label': 'Club dupe',
   'recall.clubDupe.title':
     'Another position already worked them on {{band}} — logging is allowed but adds no points.',

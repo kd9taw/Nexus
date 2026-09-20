@@ -106,3 +106,83 @@ describe('contestDupe — when there is nothing to say', () => {
     expect(contestDupe({} as unknown as FieldDayStatus, 'W1AW', '20m', 'PH')).toBe('none')
   })
 })
+
+// ---------------------------------------------------------------------------
+// THE RULESET'S OWN KEY, not a hardcoded triple.
+//
+// `contestDupe` compared (call, band, mode class) whatever contest was running. That is the
+// key for TWO of the seventeen shipped rulesets — both Field Days. Counted from
+// fd_rules.seed.json: eight key on an exchange slot as well (five QSO parties on QTH, three
+// ARRL VHF runnings on GRID), and seven more drop a component (Sweepstakes keys on the CALL
+// ALONE, rule 2.2; CQ WW and WPX drop the mode class).
+//
+// The two directions are NOT symmetric, and `contest/dupe.rs` says which one hurts:
+// "Under-reporting a dupe costs one duplicate contact that scores zero; over-reporting
+// refuses a legal contact." So a rule this helper cannot evaluate answers 'none' rather than
+// guessing — exactly as `FieldDayLog::worked_key` does on the Rust side for the same reason.
+// ---------------------------------------------------------------------------
+const ruled = (
+  rule: Partial<{
+    byCall: boolean; byBand: boolean; byModeClass: boolean
+    byFields: string[]; bySentFields: string[]; modeClassGroups: string[][]
+  }>,
+  over: Partial<FieldDayStatus> = {},
+): FieldDayStatus =>
+  fd({
+    dupeRule: {
+      byCall: true, byBand: true, byModeClass: true,
+      byFields: [], bySentFields: [], modeClassGroups: [],
+      ...rule,
+    },
+    ...over,
+  } as unknown as Partial<FieldDayStatus>)
+
+describe('contestDupe — the rule decides which components are the key', () => {
+  // ⭐ THE REPORTED DEFECT. An ARRL VHF running keys on the GRID as well, in both
+  // directions. A rover reappears from a new grid — a LEGAL, scoring contact — and the card
+  // said already-worked, so the operator skipped it. This helper is not given the grid, so
+  // it must decline rather than answer from a prefix of the key.
+  it('declines a rule that keys on a received exchange slot it was not given', () => {
+    const vhf = ruled({ byFields: ['GRID'], bySentFields: ['GRID'] })
+    expect(contestDupe(vhf, 'W1AW', '20m', 'PH')).toBe('none')
+  })
+
+  it('declines a rule that keys on a SENT slot too — being the mobile, the other direction', () => {
+    const qsoParty = ruled({ byFields: ['QTH'], bySentFields: ['QTH'] })
+    expect(contestDupe(qsoParty, 'W1AW', '20m', 'PH')).toBe('none')
+  })
+
+  // CONTROL for both of the above: the SAME contact under a rule that names no slot is
+  // still a dupe. Without this, "declines" could be the function simply never firing.
+  it('still fires for a rule that names no exchange slot at all', () => {
+    expect(contestDupe(ruled({}), 'W1AW', '20m', 'PH')).toBe('own')
+  })
+
+  // ⭐ THE OTHER DIRECTION, and it was wrong too. Sweepstakes works a station ONCE, period:
+  // band and mode class are not in its key, so the same call on any band is a dupe. The
+  // triple said 'none' and the log would then refuse the contact after the over.
+  it('fires across bands and modes when the rule keys on the call alone (Sweepstakes)', () => {
+    const ss = ruled({ byBand: false, byModeClass: false })
+    expect(contestDupe(ss, 'W1AW', '40m', 'CW')).toBe('own')
+    expect(contestDupe(ss, 'W1AW', '20m', 'PH')).toBe('own')
+  })
+
+  it('…and still clears for a call Sweepstakes has never worked', () => {
+    expect(contestDupe(ruled({ byBand: false, byModeClass: false }), 'K9XYZ', '20m', 'PH')).toBe('none')
+  })
+
+  // CQ WW and WPX: one band, either mode class.
+  it('ignores the mode class when the rule does (CQ WW), but still honours the band', () => {
+    const cqww = ruled({ byModeClass: false })
+    expect(contestDupe(cqww, 'W1AW', '20m', 'CW')).toBe('own')
+    expect(contestDupe(cqww, 'W1AW', '40m', 'CW')).toBe('none')
+  })
+
+  // A station older than the field sends no rule. What that build meant is the triple every
+  // surface hardcoded, so absence must behave exactly as before rather than declining.
+  it('falls back to the legacy triple when the station sends no rule', () => {
+    expect(contestDupe(fd(), 'W1AW', '20m', 'PH')).toBe('own')
+    expect(contestDupe(fd(), 'W1AW', '40m', 'PH')).toBe('none')
+    expect(contestDupe(fd(), 'W1AW', '20m', 'CW')).toBe('none')
+  })
+})

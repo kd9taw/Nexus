@@ -2,25 +2,47 @@ import { describe, it, expect } from 'vitest'
 import { annotate, buildSummaryText } from './ContestView'
 import type { FieldDayQso } from '../types'
 
-function qso(call: string, band: string, mode: string): FieldDayQso {
-  return { call, class: '1A', section: 'IL', band, mode }
+function qso(call: string, band: string, mode: string, dupe?: boolean): FieldDayQso {
+  return { call, class: '1A', section: 'IL', band, mode, ...(dupe === undefined ? {} : { dupe }) }
 }
 
-describe('annotate() FD dupe detection', () => {
-  it('does NOT flag the same call worked on two different bands as a dupe', () => {
-    // FD permits working the same station once per band per mode.
+// ⭐ THE ENGINE DECIDES WHICH ROW IS A DUPE, and the table reports its answer.
+//
+// `annotate` used to re-derive the verdict from a fourth copy of the dupe key
+// (`call|band|mode`, counted, >1 = dupe). Three things were wrong with that, and the first
+// two are the ones an operator sees:
+//
+//   * COUNTING marks the ORIGINAL as well as the duplicate — a real, scoring contact was
+//     styled as a dupe purely because the call came back later;
+//   * the triple is the key for two of the seventeen shipped rulesets. Sweepstakes works a
+//     station once on ANY band, so its cross-band dupe went unmarked; a QSO party counts a
+//     new county as a new contact, so two legal contacts were both marked;
+//   * it could not see a row the ENGINE logged as a dupe, which is the only thing that
+//     actually determines whether the row scores.
+//
+// Now that the cross-checked contests LOG a dupe rather than refusing it, the log contains
+// zero-scoring rows and guessing at them is no longer merely imprecise.
+describe('annotate() reports the engine\'s dupe flag, and never guesses one', () => {
+  it('marks the row the engine flagged, and only that row', () => {
+    const rows = annotate([qso('W1AW', '20m', 'CW'), qso('W1AW', '20m', 'CW', true)])
+    expect(rows.map((r) => r.isDupe)).toEqual([false, true])
+  })
+
+  it('marks nothing when the engine flagged nothing, however the calls repeat', () => {
+    // Under Sweepstakes' own rule these two would BOTH be one contact and the second a
+    // dupe — but that is the engine's call, and here it has said neither is.
     const rows = annotate([qso('W1AW', '20m', 'CW'), qso('W1AW', '40m', 'CW')])
     expect(rows.map((r) => r.isDupe)).toEqual([false, false])
   })
 
-  it('does NOT flag the same call worked in two different modes on one band', () => {
-    const rows = annotate([qso('W1AW', '20m', 'CW'), qso('W1AW', '20m', 'DIG')])
-    expect(rows.map((r) => r.isDupe)).toEqual([false, false])
+  it('marks a cross-band dupe the old triple could never see (Sweepstakes)', () => {
+    const rows = annotate([qso('W1AW', '20m', 'CW'), qso('W1AW', '40m', 'PH', true)])
+    expect(rows.map((r) => r.isDupe)).toEqual([false, true])
   })
 
-  it('flags an exact (call, band, mode) repeat as a dupe', () => {
+  it('treats an absent flag as false, so a build older than the field marks nothing', () => {
     const rows = annotate([qso('W1AW', '20m', 'CW'), qso('W1AW', '20m', 'CW')])
-    expect(rows.map((r) => r.isDupe)).toEqual([true, true])
+    expect(rows.map((r) => r.isDupe)).toEqual([false, false])
   })
 })
 

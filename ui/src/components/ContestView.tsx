@@ -163,7 +163,7 @@ interface LogRowMeta {
   qso: FieldDayQso
   /** first appearance of this section in the log = a new multiplier */
   isNewSection: boolean
-  /** the same (call, band, mode) appears more than once in the log = a rule dupe */
+  /** the ENGINE logged this row as a duplicate, scored zero — never re-derived here */
   isDupe: boolean
 }
 
@@ -178,24 +178,34 @@ const EXT: Record<ExportFormat, string> = {
 }
 
 /**
- * Annotate each log entry with multiplier / dupe state. Sections are marked the
- * first time they appear (scanning oldest -> newest). A QSO is a dupe only when
- * the same station is worked twice on the same band AND mode — matching the Rust
- * FD dupe key (call, band, mode class), which permits the same call once per
- * band per mode (e.g. W1AW on 20m and 40m are two legal contacts).
+ * Annotate each log entry with multiplier / dupe state. Sections are marked the first time
+ * they appear (scanning oldest -> newest).
+ *
+ * ⚠️ **THE DUPE VERDICT IS THE ENGINE'S, READ OFF THE ROW.** This counted `call|band|mode`
+ * occurrences and called anything seen twice a dupe — a fourth copy of the dupe key, and
+ * wrong three ways. Counting marked the ORIGINAL as well as the duplicate, so a real
+ * scoring contact was styled as a dupe for being worked again later. The triple is the key
+ * for two of the seventeen shipped rulesets: Sweepstakes works a station once on ANY band
+ * (rule 2.2), so its cross-band dupe went unmarked, while a QSO party counts a new county
+ * as a new contact, so two legal contacts were both marked. And it could not see what
+ * actually decides whether a row scores — whether the ENGINE logged it as a dupe.
+ *
+ * That last one stopped being academic when the seven cross-checked contests began LOGGING
+ * a duplicate instead of refusing it (`DupeRule::log_dupes`): the log now holds rows worth
+ * zero, and an operator checking the sponsor's math needs to know which.
+ *
+ * Absent means false — the flag is skipped on the wire for ordinary rows, and a station
+ * older than the field sends none at all, which correctly marks nothing.
  */
 export function annotate(log: FieldDayQso[]): LogRowMeta[] {
   const seenSections = new Set<string>()
-  const dupeKey = (q: FieldDayQso) => `${q.call}|${q.band}|${q.mode ?? ''}`
-  const dupeCounts = new Map<string, number>()
-  for (const q of log) dupeCounts.set(dupeKey(q), (dupeCounts.get(dupeKey(q)) ?? 0) + 1)
   return log.map((q) => {
     const isNewSection = !seenSections.has(q.section)
     seenSections.add(q.section)
     return {
       qso: q,
       isNewSection,
-      isDupe: (dupeCounts.get(dupeKey(q)) ?? 0) > 1,
+      isDupe: q.dupe === true,
     }
   })
 }
