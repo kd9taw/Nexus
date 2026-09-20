@@ -5168,6 +5168,10 @@ impl Engine {
             // that is still going.
             self.cq_running = false;
         }
+        // …and the RTTY auto-sequencer is reconciled with the SAME switch, for the same
+        // reason the mode is: it caches the exchange it was armed with, so the master
+        // moving under it left the wrong grammar on the air. Idle-only; see the method.
+        self.rtty_reconcile_auto_exchange();
         // A save carries a `band` field; now that the Field Day log survives a
         // save (above), keep its frozen band in step with the saved band —
         // otherwise a QSY that reaches settings.band via a save (e.g. the FD
@@ -16313,6 +16317,54 @@ Pick the one you operate from on the Contesting tab in Settings.",
         Ok(())
     }
 
+    /// ⭐ **Re-arm an armed RTTY auto-sequencer from the settings a save just applied.**
+    ///
+    /// [`set_rtty_auto`](Self::set_rtty_auto) builds the machine from `fd_active`,
+    /// `fd_event` and the exchange values, and the machine then OWNS that copy —
+    /// nothing in it ever re-reads the settings it was built from. So moving the Field
+    /// Day master switch under an armed sequencer left it sending the exchange it was
+    /// armed with on **every subsequent over**, not merely the contact in flight:
+    /// Field Day off and it still keyed `CQ FD CQ FD DE …` and `2A WI`; Field Day on
+    /// and it still keyed the casual `UR RST 599 …`, whose contacts also missed the
+    /// contest log. The two initiate doors re-check
+    /// [`rtty_auto_contest_gate`](Self::rtty_auto_contest_gate), but that gate asks
+    /// only whether the CONTEST is workable, so neither direction of the master switch
+    /// trips it.
+    ///
+    /// ⚠️ **Only while IDLE.** A contact on the air finishes under the grammar it
+    /// started with — the peer copied that exchange and is answering it, and
+    /// [`RttySeq::spec`] exists so the row it logs is resolved against the same one. A
+    /// save mid-QSO changes nothing here and the next idle save re-arms.
+    ///
+    /// ⚠️ **The armed check comes FIRST, and that ordering is load-bearing.**
+    /// [`contest::field_day`](tempo_core::contest::field_day) loads the rules table,
+    /// and its own header forbids reaching it before the startup `fd_rules::install_from`
+    /// or the bundled seed is locked in for the session. A sequencer can only be armed
+    /// by `set_rtty_auto(true)` — an operator action that has already called it — so
+    /// getting past this line is itself the proof that the table is loaded.
+    ///
+    /// Rebuilt rather than compared, because every input is cached, not just the
+    /// exchange's identity: a section corrected in Settings is as wrong on the air as a
+    /// Field Day class sent in a casual QSO.
+    ///
+    /// ⚠️ **A contest Auto cannot work leaves the machine ALONE, and that is
+    /// deliberate.** `set_rtty_auto` refuses it here for the same reason the two
+    /// initiate doors do, and the doors' refusal NAMES what Auto can work — which is
+    /// the answer the operator needs, and is what
+    /// `rtty_auto_refuses_a_contest_that_is_not_field_day` pins. Disarming instead
+    /// would silently move a control the operator set and replace that sentence with
+    /// "Turn on Auto first". Nothing can key meanwhile: both doors ask the question
+    /// again before they transmit.
+    fn rtty_reconcile_auto_exchange(&mut self) {
+        let Some(seq) = self.rtty_seq.as_ref() else {
+            return; // Auto is off — nothing armed, and nothing may touch the rules table.
+        };
+        if seq.state() != tempo_core::rtty::SeqState::Idle {
+            return;
+        }
+        let _ = self.set_rtty_auto(true);
+    }
+
     /// ⭐ **The contests the RTTY auto-sequencer can work: Field Day's two, and none.**
     ///
     /// It has exactly two exchanges — `contest::field_day()` while the contest switch is
@@ -22965,6 +23017,102 @@ mod tests {
         assert_eq!(e.poll_rtty_one(), None);
         // ...but the CQ IS surfaced for the operator to click.
         assert_eq!(s.heard_cq.as_deref(), Some("W1AW"));
+    }
+
+    /// An engine in the RTTY section with the Field Day master ON, class 2A / WI.
+    fn rtty_fd_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_event = "arrlfd".into();
+        s.fd_class = "2A".into();
+        s.fd_section = "WI".into();
+        s.op_name = "ALEX".into();
+        s.op_state = "MADISON".into();
+        e.apply_settings(s);
+        e
+    }
+
+    /// The master switch, moved on an engine that is already built.
+    fn set_fd_master(e: &mut Engine, on: bool) {
+        let mut s = e.settings().clone();
+        s.fd_active = on;
+        e.apply_settings(s);
+    }
+
+    /// The CQ the sequencer actually keys, as text off the TX queue.
+    fn auto_cq_text(e: &mut Engine) -> String {
+        e.set_operating_mode("rtty", false); // a save can leave FD mode; re-arm the gate
+        e.rtty_auto_cq().expect("the initiate door is open");
+        let text = e.poll_rtty_one().expect("a CQ is queued");
+        e.rtty_auto_abort();
+        text
+    }
+
+    /// ⭐ **Moving the Field Day master switch re-arms the sequencer's exchange.**
+    ///
+    /// `set_rtty_auto` is the only thing that builds the machine, and the machine then
+    /// owns its copy of the exchange. Nothing re-read the settings, and `apply_settings`
+    /// did not touch `rtty_seq` at all — so the switch moved and the sequencer went on
+    /// keying the grammar it was armed with, on EVERY later over. Not a stale contact:
+    /// `CQ FD` hours after Field Day ended, and casual QSOs all through Field Day that
+    /// also missed the contest log.
+    #[test]
+    fn moving_the_field_day_master_switch_re_arms_the_auto_sequencer() {
+        let mut e = rtty_fd_engine();
+        e.set_rtty_auto(true).expect("Auto arms in Field Day");
+        assert!(
+            auto_cq_text(&mut e).contains("CQ FD"),
+            "armed in Field Day, it should call CQ FD"
+        );
+
+        // Field Day ends.
+        set_fd_master(&mut e, false);
+        let after = auto_cq_text(&mut e);
+        assert!(
+            !after.contains("CQ FD"),
+            "still calling CQ FD after the master went off: {after}"
+        );
+
+        // …and back on, so the fix is a re-arm and not a one-way disarm.
+        set_fd_master(&mut e, true);
+        let back = auto_cq_text(&mut e);
+        assert!(
+            back.contains("CQ FD"),
+            "the master went back on and the exchange did not follow: {back}"
+        );
+    }
+
+    /// POSITIVE CONTROL for the idle guard — **a save mid-contact changes nothing.**
+    ///
+    /// The peer copied the exchange that is on the air and is answering it, so the
+    /// contact must finish under the grammar it started with. This is also what proves
+    /// the re-arm above is CONDITIONAL: an unconditional rebuild would pass that test
+    /// and fail this one, taking the contact in flight with it.
+    #[test]
+    fn a_save_mid_contact_leaves_the_grammar_the_peer_is_answering() {
+        let mut e = rtty_fd_engine();
+        e.set_rtty_auto(true).expect("Auto arms in Field Day");
+        e.rtty_auto_answer("W1AW").expect("the S&P door is open");
+        assert_eq!(e.rtty_state().seq_state, "answering");
+        let _ = e.poll_rtty_one();
+
+        // The master goes off with a contact on the air.
+        set_fd_master(&mut e, false);
+        assert_eq!(
+            e.rtty_state().seq_state,
+            "answering",
+            "the save tore down the contact in flight"
+        );
+
+        // The runner sends his Field Day exchange; ours goes back in the same grammar.
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW 3A EMA 3A EMA K\n"), 0.0, true);
+        let ours = e.poll_rtty_one().expect("our exchange is queued");
+        assert!(
+            ours.contains("2A WI"),
+            "the contact in flight changed exchange under the peer: {ours}"
+        );
     }
 
     #[test]
