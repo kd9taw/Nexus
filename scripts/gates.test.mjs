@@ -73,6 +73,37 @@ jobs:
 // The derivation property, with its control.
 // ---------------------------------------------------------------------------
 
+// The compiled-browser sweep is sharded across a matrix, and the shard COUNT is stated
+// twice in ci.yml: once as the matrix length, once as the NEXUS_BROWSER_SHARDS the job
+// passes to the suite. It has to be stated twice — `strategy.job-total` would derive it,
+// but this script cannot expand a runtime context, so using it marked the step BLOCKED and
+// the sweep stopped running here at all.
+//
+// Two statements of one number is a desync waiting to happen, and the failure is silent in
+// the worst direction: say the matrix grows to four shards while the env still says three,
+// and every scenario with index % 4 == 3 runs in NO job while all four go green. So the
+// two are pinned against each other here rather than trusted to stay in step.
+test('the browser shard matrix and the shard count it passes agree', () => {
+  const yaml = fs.readFileSync(CI, 'utf8');
+  const job = yaml.slice(yaml.indexOf('\n  remote-browser:'));
+  const matrix = job.match(/shard:\s*\[([^\]]*)\]/);
+  assert.ok(matrix, 'remote-browser must declare a `shard:` matrix');
+  const shards = matrix[1].split(',').map(v => Number(v.trim()));
+  const declared = job.match(/NEXUS_BROWSER_SHARDS:\s*"?(\d+)"?/);
+  assert.ok(declared, 'remote-browser must pass NEXUS_BROWSER_SHARDS');
+  assert.equal(
+    shards.length,
+    Number(declared[1]),
+    `the matrix declares ${shards.length} shard(s) but passes NEXUS_BROWSER_SHARDS=${declared[1]} — ` +
+      'scenarios would run in no job at all, with every shard green',
+  );
+  assert.deepEqual(
+    shards,
+    shards.map((_, index) => index),
+    'shards must be 0..n-1 with no gaps: the suite partitions by `index % SHARDS === SHARD`',
+  );
+});
+
 test('a step added to the workflow appears in --list, with no edit to the script', () => {
   const original = fs.readFileSync(CI, 'utf8');
 

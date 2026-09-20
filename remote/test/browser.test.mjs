@@ -58,7 +58,30 @@ const APPLICATION_VERSIONS = (await readFile(new URL('../../ui/src/remote-web/ap
   .match(/export const APPLICATION_VERSIONS = \[([^\]]*)\]/)[1].split(',').map(v => Number(v.trim()))
 if (!APPLICATION_VERSIONS.length || APPLICATION_VERSIONS.some(Number.isNaN)) throw new Error('could not read APPLICATION_VERSIONS')
 const NEWEST_APPLICATION_VERSION = Math.max(...APPLICATION_VERSIONS)
-for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating} of [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true}]) test(`compiled hosted browser ${ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
+// Every scenario this suite runs. Extracted from the `for` head on 2026-09-20 so CI can
+// shard it: 17 application versions plus 11 feature scenarios is 28 full compiled-browser
+// runs — PKCE, device approval, observation and viewport checks each — and in series that
+// was 47.7 of the Remote job's 50 minutes, which made it the workflow's critical path.
+const SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true}]
+
+// Shard selection. Unset means shard 0 of 1 — i.e. EVERYTHING — so a local run,
+// `npm --prefix remote run test:browser` and `scripts/gates` all keep full coverage. CI
+// sets these from a one-dimensional matrix, where the total comes from `strategy.job-total`
+// rather than a second hard-coded number: the count of shards IS the count of jobs, so a
+// shard cannot be added or removed without the partition following it.
+//
+// Refuse loudly on anything unparseable. A shard that silently selects nothing is the
+// failure this guards — it would go green having run no browser test at all.
+const SHARD  = Number(process.env.NEXUS_BROWSER_SHARD ?? 0)
+const SHARDS = Number(process.env.NEXUS_BROWSER_SHARDS ?? 1)
+if (!Number.isInteger(SHARDS) || SHARDS < 1) throw new Error(`NEXUS_BROWSER_SHARDS must be a positive integer, got ${process.env.NEXUS_BROWSER_SHARDS}`)
+if (!Number.isInteger(SHARD) || SHARD < 0 || SHARD >= SHARDS) throw new Error(`NEXUS_BROWSER_SHARD must be 0..${SHARDS - 1}, got ${process.env.NEXUS_BROWSER_SHARD}`)
+if (!SCENARIOS.length) throw new Error('the scenario list is empty — the extraction above broke')
+const SHARD_SCENARIOS = SCENARIOS.filter((_, index) => index % SHARDS === SHARD)
+if (SHARDS === 1 && SHARD_SCENARIOS.length !== SCENARIOS.length) throw new Error('unsharded run must select every scenario')
+console.log(`# browser shard ${SHARD} of ${SHARDS}: running ${SHARD_SCENARIOS.length} of ${SCENARIOS.length} scenarios`)
+
+for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='phone',contactContinuity,workSpot,radioSelection,routedTier,routedWorkspace,ftOperating} of SHARD_SCENARIOS) test(`compiled hosted browser ${ftOperating?'FT operating':routedWorkspace?'routed workspace':routedTier?'routed decoder':radioSelection?'radio selection':workSpot?'DX work':contactContinuity?'contact continuity':quickLayout?`quick layout${quickMode==='cw'?' CW':''}`:sessionLayout?'session layout':operating?'operations':`v${applicationVersion}`} completes PKCE, local device approval, observation and viewport checks`, { timeout: applicationVersion >= 14 ? 540000 : applicationVersion >= 13 ? 420000 : 180000 }, async context => {
   const app=await runtime(), artifacts=process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS ? join(process.env.NEXUS_REMOTE_BROWSER_ARTIFACTS, ftOperating?'ft-operating':routedWorkspace?'routed-workspace':routedTier?'routed-decoder':radioSelection?'radio-selection':workSpot?'dx-work':contactContinuity?'contact-continuity':quickLayout?`quick-layout${quickMode==='cw'?'-cw':''}`:sessionLayout?'session-layout':operating?'operations':`v${applicationVersion}`) : undefined
   let browser, station, producing=true, pauseObservations=false, observationReadingAgeMs=0, observationPtt=true, producer, applicationProducer
   const results=[]

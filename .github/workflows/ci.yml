@@ -39,6 +39,20 @@ jobs:
   # Job 1 — Rust workspace: build the Fortran/C/C++ libtempo modem (via the
   # tempo-fast-sys build.rs CMake project) and run the headless modem/engine/net/TempoDeep
   # round-trip tests, then clippy across the whole workspace.
+  # The Rust gates were ONE job until 2026-09-20, and it was the whole workflow's
+  # critical path: 57 minutes, of which `cargo test --workspace` was 32 and
+  # `cargo test tempo-audio --features device,serial` was 10, run in series behind
+  # one setup. The three jobs below run the SAME commands, unchanged, in parallel.
+  # Measured 57 min -> ~37, and ~37 is then the floor for this family because the
+  # workspace run alone is 32.
+  #
+  # Clippy was NOT the bottleneck and was deliberately not split out: all three
+  # clippy steps together were 1.1 of the 57 minutes. Split on the slow TESTS.
+  #
+  # Nothing was removed. The proof is mechanical, not a claim: `scripts/gates --list`
+  # yields an identical command set before and after this split. Re-run that diff if
+  # you move a step between these jobs.
+
   test:
     name: Rust tests + clippy
     runs-on: ubuntu-latest
@@ -82,11 +96,13 @@ jobs:
       # real Hamlib dummy rig (-m 1). Without rigctld those tests self-skip,
       # so dropping the package silently removes the coverage — keep it.
 
+
       - name: Set up Rust 1.93.1 toolchain (pinned — see header)
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.93.1
           components: clippy, rustfmt
+
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v6
@@ -98,6 +114,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
 
       - name: cargo fmt --check
         run: cargo fmt --all --check
@@ -155,6 +172,73 @@ jobs:
       - name: cargo clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # The feature-gated crates, which a plain `--workspace` run does not build:
+  # tempo-audio's service.rs is `#[cfg(feature = "device")]` and propagation's
+  # fetchers are behind `live`, so the default pass silently skips both. The
+  # 10-minute step is `cargo test tempo-audio` — its tail is one rigctl-per-model
+  # test, not a hang.
+
+  test-features:
+    name: Rust feature-gated crates (tempo-audio, propagation)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The SAME system-dependency list as the `test` job — see there for why each
+      # package is present. The three Rust jobs must keep identical lists: they share
+      # one cargo cache key and one libtempo build, so a package added to only one of
+      # them goes red in the other two on a build unrelated to the change that added it.
+      # (A composite action would state this once, but `scripts/gates` reports a local
+      # `uses: ./…` as UNKNOWN, which costs every local gate run its full-coverage
+      # claim — a worse trade than duplication. Teaching the tool to resolve local
+      # composite actions would fix that, and is the right follow-up.)
+      - name: Install libtempo build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran \
+            libfftw3-dev \
+            libboost-dev \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libasound2-dev \
+            libudev-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libsoup-3.0-dev \
+            libhamlib-utils
+
+      # libhamlib-utils above ships `rigctld`: the tempo-audio integration
+      # suite (tests/rigctld_dummy.rs) drives the REAL CAT client against a
+      # real Hamlib dummy rig (-m 1). Without rigctld those tests self-skip,
+      # so dropping the package silently removes the coverage — keep it.
+
+
+      - name: Set up Rust 1.93.1 toolchain (pinned — see header)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          components: clippy, rustfmt
+
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+
       # The real-radio path (cpal audio + serial PTT) is feature-gated out of the
       # default build. Lint AND run its tests here — the Transport reconfig
       # decisions, the WSJT-X/PSK emit builders, and the rigctld round-trip — so
@@ -181,6 +265,72 @@ jobs:
       # documented silent-lobotomy trap in the release runbook).
       - name: cargo check tempo-audio --features device,serial,ai-cw
         run: cargo check -p tempo-audio --features device,serial,ai-cw --all-targets
+
+  # src-tauri and the native Remote controller. src-tauri declares its OWN
+  # `[workspace]`, so `cargo test --workspace` and `cargo fmt --all` never reach it.
+  # That boundary is exactly why these are separate commands, and why moving them to
+  # their own job changes nothing about what is covered.
+
+  test-tauri:
+    name: Rust src-tauri + native Remote
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The SAME system-dependency list as the `test` job — see there for why each
+      # package is present. The three Rust jobs must keep identical lists: they share
+      # one cargo cache key and one libtempo build, so a package added to only one of
+      # them goes red in the other two on a build unrelated to the change that added it.
+      # (A composite action would state this once, but `scripts/gates` reports a local
+      # `uses: ./…` as UNKNOWN, which costs every local gate run its full-coverage
+      # claim — a worse trade than duplication. Teaching the tool to resolve local
+      # composite actions would fix that, and is the right follow-up.)
+      - name: Install libtempo build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran \
+            libfftw3-dev \
+            libboost-dev \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libasound2-dev \
+            libudev-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libsoup-3.0-dev \
+            libhamlib-utils
+
+      # libhamlib-utils above ships `rigctld`: the tempo-audio integration
+      # suite (tests/rigctld_dummy.rs) drives the REAL CAT client against a
+      # real Hamlib dummy rig (-m 1). Without rigctld those tests self-skip,
+      # so dropping the package silently removes the coverage — keep it.
+
+
+      - name: Set up Rust 1.93.1 toolchain (pinned — see header)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          components: clippy, rustfmt
+
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
 
       # src-tauri is its OWN workspace root (empty `[workspace]` table in its
       # Cargo.toml), so `--workspace` above does NOT reach it — verified by
@@ -273,12 +423,69 @@ jobs:
         run: npm --prefix remote test
       - name: Remote staging scope, artifact integrity and deployment checks
         run: npm --prefix remote run test:staging
+      - name: Remote dependency advisories
+        run: npm --prefix remote audit --audit-level=moderate
+
+  # The compiled-browser sweep, split out of `remote-web` and SHARDED on 2026-09-20.
+  #
+  # It was one step of 47.7 minutes inside a 50-minute job, which made `remote-web` the
+  # workflow's second-longest job and, once the Rust job was split, would have been its
+  # critical path. The suite is 28 independent full-browser scenarios — 17 application
+  # versions plus 11 feature scenarios, each doing PKCE, local device approval,
+  # observation and viewport checks — and node:test runs tests within a file in series.
+  #
+  # Nothing is skipped and no scenario was deleted. The shards PARTITION the same 28.
+  #
+  # The count is stated LITERALLY below and must equal the matrix length. `strategy.job-total`
+  # would derive it and was tried first, but `scripts/gates` cannot expand a runtime context,
+  # so it marked the step BLOCKED and the sweep stopped running locally altogether. A literal
+  # keeps it runnable here: gates expands `matrix.shard`, lists all three shards, and together
+  # they still run all 28 scenarios on this box.
+  #
+  # Stating it twice is a desync risk, so it is GUARDED, not trusted:
+  # `scripts/gates.test.mjs` asserts the matrix length equals the NEXUS_BROWSER_SHARDS this
+  # job passes, and that test is itself a gate in this workflow. Change one, the test names
+  # the other.
+  #
+  # Unset env means shard 0 of 1, i.e. everything, so a local run and `scripts/gates`
+  # keep full coverage; the test file refuses loudly rather than selecting nothing.
+  #
+  # `fail-fast: false` for the same reason `--no-fail-fast` is on every cargo test here:
+  # a red run must name every failing scenario once, not stop at the first shard and
+  # leave the others to be discovered on the next push.
+  #
+  # NOT path-filtered, deliberately. Once sharded this job is ~18 minutes against the
+  # Rust job's ~37, so it is no longer the critical path, and the repository is public
+  # so Actions minutes are free. A filter would buy no wall-clock time and no money,
+  # and would add a way for the sweep to be silently skipped.
+  remote-browser:
+    name: Compiled browser (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install Remote dependencies
+        run: |
+          npm --prefix ui ci
+          npm --prefix remote ci
+      - name: Build the hosted browser
+        run: npm --prefix ui run build:remote
       - name: Compiled browser sign-in, approval, observation and responsive layouts
+        env:
+          NEXUS_BROWSER_SHARD: ${{ matrix.shard }}
+          NEXUS_BROWSER_SHARDS: "3"   # must equal the matrix length above — guarded by scripts/gates.test.mjs
         run: |
           google-chrome --version
           npm --prefix remote run test:browser
-      - name: Remote dependency advisories
-        run: npm --prefix remote audit --audit-level=moderate
+
 
   # Job 2 — Web UI (Vite + React + TypeScript). `npm run build` is `tsc -b &&
   # vite build`, so this also type-checks the DTO contract that mirrors
