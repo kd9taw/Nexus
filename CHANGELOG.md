@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **During a contest, the Operate cockpit now tells you whether you have worked a station *in this
+  contest*.** The callsign card's `Dupe 20m` badge has always meant "worked on this band, ever",
+  which is what you want day to day but not mid-contest — a contact from years ago lit it even
+  though the station was a fresh one to work. A second badge now appears beside it while a contest
+  is running: **Contest dupe** if this contest's own log already has them, and an amber **Club
+  dupe** if another position at your club has. The lifetime badge is unchanged and still means what
+  it always did, so the two can be read at a glance without either one changing under you.
+
 - **RTTY: double-click a callsign to grab it, and F1–F8 you can edit.** Double-click a call in
   RTTY's Decoded text and it fills the Their call box and the log strip's callsign together —
   a portable or compound call such as VE3/K1ABC comes across whole, and a call garbled by a
