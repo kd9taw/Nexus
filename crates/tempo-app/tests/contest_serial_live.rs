@@ -169,15 +169,20 @@ fn a_restart_continues_the_run_from_the_journal() {
     assert_eq!(e.contest_sent_exchange().as_deref(), Some("4"));
     drop(e);
 
-    // The shell's startup order, on a machine that has just come back up.
-    let mut back = Engine::new("W9XYZ", "EN61", 0);
-    let mut s = back.settings().clone();
+    // ⚠️ The shell's startup order, and it has to be THIS order — `Engine::with_settings`
+    // (which launches in `Mode::Chat`), then the journal path, then the restore. Building
+    // it with `apply_settings` instead tests nothing: that call reconciles the mode with
+    // the master switch and enters Field Day on the spot, with no journal path set yet, so
+    // the `restore_field_day_if_enabled` below is a silent no-op — it refuses to rebuild a
+    // live FD log. `src-tauri`'s launch does it in the order copied here.
+    let mut s = Engine::new("W9XYZ", "EN61", 0).settings().clone();
+    s.mycall = "W9XYZ".into();
     s.fd_active = true;
     s.fd_event = "cqwpx_cw".into();
     s.contest_category_power = "LOW".into();
     s.contest_category_assisted = "NON-ASSISTED".into();
     s.contest_qth_state = "WI".into();
-    back.apply_settings(s);
+    let mut back = Engine::with_settings(s);
     back.set_fd_log_path(journal.clone());
     back.restore_field_day_if_enabled();
 
