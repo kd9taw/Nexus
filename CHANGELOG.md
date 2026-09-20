@@ -199,6 +199,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The contest dupe warning now follows the contest's own rule instead of Field Day's, and it was
+  wrong in both directions.** While you type a callsign, the log strip and the Operate callsign
+  card tell you whether this contest has already worked that station. That check asked Field Day's
+  question — same call, same band, same mode class — whatever contest was running, and **only the
+  two Field Days actually work that way**. The other fifteen were wrong, seven of them one way and
+  eight the other. **In Sweepstakes you work a station once, on any band and any mode**, so someone
+  you had already worked on 40m CW showed as new on 20m phone and you called them and were refused
+  at the log, after the over. **CQ WW and CQ WPX count one contact per band in either mode**, so
+  the same thing happened across a mode change. The other eight went wrong the opposite way: in
+  **the five QSO parties and the three ARRL VHF contests**, working a mobile again from a new
+  county — or a rover from a new grid — is a fresh contact worth points, and the warning said
+  "already worked", so you passed over a station you should have called. Where a contest's rule
+  depends on an exchange you have not copied yet, the warning now says nothing rather than
+  guessing: being told nothing costs you a duplicate that scores zero, while a wrong "already
+  worked" costs you the contact.
+
+- **A duplicate in the contest log table is marked as the duplicate — and the real contact beside
+  it no longer is.** Now that a duplicate is kept in the log rather than refused (see above), the
+  table has rows that are worth nothing, and you need to see which when you check your score
+  against the sponsor's. It had been working its own dupes out by looking for a callsign that
+  turned up twice on the same band and mode, which went wrong two ways: it marked **both** rows,
+  so your first, real, scoring contact was flagged as a duplicate for the crime of being worked
+  again later; and it used Field Day's rule everywhere, so a Sweepstakes duplicate on another band
+  was not marked at all, while two perfectly legal QSO-party contacts with a mobile in two
+  different counties were both marked. The table now shows what the log itself recorded.
+
 - **A Field Day exchange copied by the RTTY sequencer now reaches the log as fields, not just as a
   note.** If Auto was running in Field Day and you switched Field Day off while a contact was still
   on the air, that contact finished under the Field Day exchange but no longer had a contest log to

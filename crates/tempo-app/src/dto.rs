@@ -1400,6 +1400,14 @@ pub struct FieldDayQso {
     /// QSO party (`by_sent_fields`), and a row's sent exchange reaches the UI only as
     /// the rendered [`mex`](Self::mex) string, which cannot be split back into slots
     /// without guessing. The strip compares its typed candidate against these.
+    ///
+    /// ⚠️ **NOT DEAD CODE — the consumer is not written yet, and this says so on purpose.**
+    /// `features/contestDupe.ts` today reads [`FieldDayStatus::dupe_rule`] and *declines* when
+    /// the rule names a slot, which is the safe half of the answer and all a caller holding no
+    /// exchange can give. The EXACT verdict wants a caller that has one — the log strip's typed
+    /// boxes — comparing a key it builds against these and against
+    /// [`FdClubDto::dkeys`](crate::dto::FdClubDto::dkeys). Both ride the snapshot so that work
+    /// needs no further engine change; deleting either as unused would silently re-block it.
     #[serde(default)]
     pub dkey: Vec<String>,
     /// ⭐ **This row is a DUPLICATE the ruleset asked us to log anyway**, scored zero.
