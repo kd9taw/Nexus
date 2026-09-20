@@ -328,6 +328,11 @@ impl Engine {
             Some(held) => self.pending_logs[0] = held,
             None => {
                 self.pending_logs.pop_front();
+                // ⭐ R3 — ANSWERING THE POPUP IS THE ACKNOWLEDGEMENT. Every confirm and every
+                // discard, desktop and Remote, reaches this one arm, so the unreviewed count
+                // the popup shows clears here and nowhere else. A count that never cleared
+                // would leave the warning up forever after one cap event.
+                self.pending_logs_auto_logged = 0;
             }
         }
         self.pending_log_identity = Arc::new(());

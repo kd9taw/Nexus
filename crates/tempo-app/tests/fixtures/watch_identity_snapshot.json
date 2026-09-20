@@ -30,6 +30,7 @@
   "mycall": "W9XYZ",
   "mygrid": "EN37",
   "pendingLog": null,
+  "pendingLogsAutoLogged": 0,
   "pendingLogsWaiting": 0,
   "pendingQsoLogKey": null,
   "qso": null,

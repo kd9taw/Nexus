@@ -2823,6 +2823,16 @@ pub struct AppSnapshot {
     /// own turn in the popup. `0` when the one shown is the only one.
     #[serde(default)]
     pub pending_logs_waiting: u32,
+    /// ⭐ R3 — how many contacts have been logged WITHOUT the operator's confirmation since
+    /// they last answered the popup, because the confirm-before-log queue was full. The popup
+    /// shows it; the Connections log carries the same event with the call, band, mode and time.
+    ///
+    /// Answering the popup — confirm OR discard — resets it to 0. It is NOT a session total:
+    /// a number that never cleared would leave a warning on screen forever after one cap
+    /// event, which is how an operator learns to read past it. Session-scoped, so a relaunch
+    /// shows 0 even when the journal brings the queue back.
+    #[serde(default)]
+    pub pending_logs_auto_logged: u32,
     /// Last connector auto-upload outcome (QRZ/ClubLog/eQSL) — operator-facing
     /// toast text; `upload_tick` bumps on each new outcome so the UI toasts it.
     #[serde(default)]
