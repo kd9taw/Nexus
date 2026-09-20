@@ -2685,6 +2685,41 @@ export interface FieldDayQso {
    *  that order: the contest log table's columns. Absent for Field Day, whose two slots
    *  are `class` and `section`, and on a build older than the field. */
   rcvd?: string[]
+  /** ⭐ This row's dupe key under the running ruleset's own rule, built in Rust by the
+   *  one builder the engine's refusal also uses.
+   *
+   *  It is on the row because the UI CANNOT build it: every QSO party's rule names SENT
+   *  slots, and a row's sent exchange arrives here only as the rendered `mex` string,
+   *  which cannot be split back into slots without guessing. Compare a typed candidate
+   *  key (built with `dupeRule`) against these. Absent on a build older than the field. */
+  dkey?: string[]
+}
+
+/** ⭐ The running ruleset's DUPE RULE — what makes a contact count again.
+ *
+ *  The entry strip's while-typing badge must build the same key the engine will refuse
+ *  on. It used to hardcode `(call, band, mode class)`, which is the rule for two of the
+ *  seventeen shipped rulesets: Sweepstakes keys on the CALL ALONE, CQ WW and ARRL VHF
+ *  drop the mode class, and every QSO party adds the county in both directions. For the
+ *  QSO parties the hardcoded triple was wrong in the expensive direction — it showed
+ *  DUPE for a legal contact with a mobile in a new county.
+ *
+ *  ⚠️ The ENGINE remains the authority at log time. This exists so the badge stops
+ *  contradicting it before the over, not as a second place to decide dupes.
+ *
+ *  Absent on a build older than the field; what that build meant is the triple
+ *  (`byCall`/`byBand`/`byModeClass` all true, both lists empty). */
+export interface DupeRule {
+  byCall: boolean
+  byBand: boolean
+  byModeClass: boolean
+  /** RECEIVED slot ids — working someone else's mobile. */
+  byFields: string[]
+  /** SENT slot ids — being the mobile. */
+  bySentFields: string[]
+  /** Mode classes this ruleset counts as ONE. Same data as
+   *  `FieldDayStatus.dupeModeGroups`, which predates this block and still ships. */
+  modeClassGroups: string[][]
 }
 
 /** Field Day operating + scoring status. */
@@ -2775,6 +2810,10 @@ export interface FieldDayStatus {
    *  it so it asks the same question the engine will answer at log time. Absent for every
    *  contest that counts its three classes separately. */
   dupeModeGroups?: string[][]
+  /** ⭐ The WHOLE dupe rule — see [`DupeRule`]. `dupeModeGroups` above is one of its six
+   *  components and keeps shipping on its own for the readers that already take it;
+   *  everything else about the rule was unreachable from the UI until this. */
+  dupeRule?: DupeRule
   /** ⭐ This station's call is in the USA or Canada, and the contest state it was given would
    *  send the DX exchange (no QTH) — a WARNING the strip shows, never a refusal. Absent when it
    *  does not apply. Worded by `features/contestLocation.ts`. */
@@ -2917,6 +2956,15 @@ export interface FdClubStatus {
   /** Club dupe keys [call, band, modeClass] NOT already in the own log —
    *  the entry-field warning checks own ∪ these. */
   dupes: [string, string, string][]
+  /** ⭐ The club keys under the running ruleset's OWN rule — what the strip should
+   *  actually compare against. `dupes` above is the legacy `(call, band, mode class)`
+   *  projection of the same contacts, which is the right key for Field Day and the
+   *  wrong one for the other fifteen rulesets.
+   *
+   *  Club-only like `dupes`, each list dropping what the own log already carries — but
+   *  each under ITS OWN key, so the two are not row-for-row equal outside Field Day.
+   *  Absent on a build older than the field. */
+  dkeys?: string[][]
   board: FdClubBoardRow[]
 }
 

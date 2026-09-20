@@ -1391,6 +1391,67 @@ pub struct FieldDayQso {
     /// its bound already.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rcvd: Vec<String>,
+    /// ⭐ **This row's dupe key under the running ruleset's own rule**, built by
+    /// [`DupeRule::key`](tempo_core::contest::DupeRule::key) — the same builder the
+    /// engine's refusal uses, because the module that owns it says four sites in two
+    /// languages must build the identical key.
+    ///
+    /// It is here because the UI cannot build it: the rule names SENT slots for every
+    /// QSO party (`by_sent_fields`), and a row's sent exchange reaches the UI only as
+    /// the rendered [`mex`](Self::mex) string, which cannot be split back into slots
+    /// without guessing. The strip compares its typed candidate against these.
+    #[serde(default)]
+    pub dkey: Vec<String>,
+}
+
+/// ⭐ **The running ruleset's dupe rule, as data** — mirrors
+/// [`DupeRule`](tempo_core::contest::DupeRule) so the while-typing badge can build the
+/// same key the engine will refuse on.
+///
+/// The strip used to hardcode `(call, band, mode class)`. That is the rule for exactly
+/// two of the seventeen shipped rulesets (both Field Days): Sweepstakes keys on the call
+/// alone, CQ WW and ARRL VHF drop the mode class, and every QSO party adds the county in
+/// both directions. The badge was therefore wrong in fifteen of seventeen, and for the
+/// QSO parties it was wrong in the expensive direction — `contest::dupe` puts it plainly:
+/// *"Under-reporting a dupe costs one duplicate contact that scores zero; over-reporting
+/// refuses a legal contact."*
+///
+/// ⚠️ **The engine remains the authority at log time.** This is what the strip needs to
+/// stop CONTRADICTING it before the over, not a second place to decide dupes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DupeRuleDto {
+    pub by_call: bool,
+    pub by_band: bool,
+    pub by_mode_class: bool,
+    /// RECEIVED slot ids — working someone else's mobile.
+    pub by_fields: Vec<String>,
+    /// SENT slot ids — being the mobile.
+    pub by_sent_fields: Vec<String>,
+    /// Mode classes this ruleset counts as ONE. Same data as
+    /// [`FieldDayStatus::dupe_mode_groups`], which predates this block and still ships
+    /// for the readers that already consume it — the `dupes`/`dkeys` pattern on the club
+    /// wire, where the narrower field is the older one's projection.
+    pub mode_class_groups: Vec<Vec<String>>,
+}
+
+/// ⚠️ **NOT `derive(Default)`, and the difference is a silent wrong answer.** Derived,
+/// every flag would be `false` — a rule keying on NOTHING, under which every contact is
+/// a dupe of every other. This default is only ever reached by deserialising a snapshot
+/// from a build older than the field (Remote reading an older station), and what that
+/// build meant is the `(call, band, mode class)` triple every surface hardcoded then. So
+/// the default IS that triple: an old station keeps exactly the behaviour it had.
+impl Default for DupeRuleDto {
+    fn default() -> Self {
+        Self {
+            by_call: true,
+            by_band: true,
+            by_mode_class: true,
+            by_fields: Vec::new(),
+            by_sent_fields: Vec::new(),
+            mode_class_groups: Vec::new(),
+        }
+    }
 }
 
 /// Field Day mode status: my exchange, the log, score and multipliers.
@@ -1522,6 +1583,11 @@ pub struct FieldDayStatus {
     /// the engine remains the authority at log time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dupe_mode_groups: Vec<Vec<String>>,
+    /// ⭐ **The whole dupe rule** — see [`DupeRuleDto`]. `dupe_mode_groups` above is one
+    /// of its six components and keeps shipping on its own for the readers that already
+    /// read it; everything else about the rule was unreachable from the UI until this.
+    #[serde(default)]
+    pub dupe_rule: DupeRuleDto,
     /// ⭐ **This station's call is in the USA or Canada, and it is about to send the DX
     /// exchange** (no QTH) because the contest state it was given is blank or not listed —
     /// a WARNING the strip shows, never a refusal. `None` for every other session. Data,
@@ -1794,6 +1860,17 @@ pub struct FdClubDto {
     /// the entry fields' while-typing warning checks own ∪ these. Club-only
     /// keys keep the list small (the own log already ships in `log`).
     pub dupes: Vec<(String, String, String)>,
+    /// ⭐ **The club keys under the running ruleset's own rule** — what the strip
+    /// actually compares against. [`dupes`](Self::dupes) above is the legacy
+    /// `(call, band, mode class)` projection of the same contacts, exactly as `fdsync`
+    /// documents the pair on the wire they arrive on; that projection is the right key
+    /// for Field Day and the wrong one for the other fifteen rulesets, which is why the
+    /// unprojected list has to come this far too.
+    ///
+    /// ⚠️ Club-only like `dupes`, each dropping what the own log already carries — but
+    /// each under ITS OWN key, so outside Field Day the two are not row-for-row equal.
+    #[serde(default)]
+    pub dkeys: Vec<Vec<String>>,
     pub board: Vec<FdClubBoardRow>,
 }
 

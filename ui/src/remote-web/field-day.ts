@@ -17,6 +17,23 @@ function object(v: unknown, keys: string[], optional: string[] = []): Record<str
     Object.keys(v).some(k => !keys.includes(k) && !optional.includes(k))) throw new Error('invalidFieldDay')
   return v as Record<string, unknown>
 }
+// The running ruleset's dupe rule. The strip builds the key the engine will refuse on from
+// this, so a malformed one must be refused rather than half-read: a rule missing `byFields`
+// silently becomes a narrower key, which is the over-permissive direction and shows "new" for
+// a contact the log then rejects. A rule names at most five received and five sent slots (the
+// rules validator's cap on a role), plus call/band/mode class.
+const DUPE_KEY_MAX = 16
+function dupeRule(v: unknown): boolean {
+  try {
+    const r = object(v, ['byCall','byBand','byModeClass','byFields','bySentFields','modeClassGroups'])
+    return [r.byCall,r.byBand,r.byModeClass].every(b => typeof b === 'boolean') &&
+      texts(r.byFields,8) && texts(r.bySentFields,8) &&
+      Array.isArray(r.modeClassGroups) && r.modeClassGroups.length <= 8 &&
+      r.modeClassGroups.every(g => texts(g,8))
+  } catch {
+    return false
+  }
+}
 function locationWarning(v: unknown): boolean {
   try {
     const w = object(v, ['typed','hints'])
@@ -37,7 +54,7 @@ function status(v: unknown): void {
   const f = object(v, ['running','state','dxcall','qsoCount','sections','workedSections','points','event',
     'poweredPoints','bonusPoints','totalScore','eventStartUnix','eventEndUnix','rulesYear','rulesGenerated',
     'assistanceOn','log'],
-    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','bands','locationWarning','dupeModeGroups'])
+    ['club','multCount','scoreNoteKey','upload','receives','composing','role','boards','myClass','mySection','sentExchange','bands','locationWarning','dupeModeGroups','dupeRule'])
   if (![f.state,f.rulesGenerated].every(text) || (f.dxcall !== null && !text(f.dxcall)) ||
     (f.myClass !== undefined && !text(f.myClass)) || (f.mySection !== undefined && !text(f.mySection)) ||
     // What {EXCH} keys next (the macros read it). A string, bounded like every other.
@@ -47,6 +64,7 @@ function status(v: unknown): void {
     // The dupe rule's mode grouping: a short list of short lists of mode classes.
     (f.dupeModeGroups !== undefined && (!Array.isArray(f.dupeModeGroups) || f.dupeModeGroups.length > 8 ||
       !f.dupeModeGroups.every(g => texts(g,8)))) ||
+    (f.dupeRule !== undefined && !dupeRule(f.dupeRule)) ||
     // A W/VE call about to send the DX exchange: what was typed, and the codes it likely means.
     (f.locationWarning !== undefined && !locationWarning(f.locationWarning)) ||
     (f.scoreNoteKey !== undefined && !text(f.scoreNoteKey)) || (f.role !== undefined && !text(f.role)) ||
@@ -66,16 +84,25 @@ function status(v: unknown): void {
     // written by an older station still validates.
     // `rcvd` is what a contest that is not Field Day received on the row, one value per
     // received slot (the rules validator caps a role at five).
-    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd'])
+    // `dkey` is the row's dupe key under the running ruleset's own rule, built in Rust by the
+    // same builder the engine refuses on — the strip compares against it rather than
+    // rebuilding a key it cannot (a row's SENT exchange only reaches here as rendered `mex`).
+    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd','dkey'])
     if (![q.call,q.class,q.section,q.band,q.submode].every(text) || !['CW','PH','DIG'].includes(String(q.mode)) || !integer(q.whenUnix) ||
+      (q.dkey !== undefined && !texts(q.dkey,DUPE_KEY_MAX)) ||
       (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
   }
   if (f.club !== undefined && f.club !== null) {
-    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError'])
+    const c = object(f.club,['syncState','queued','offlineSinceUnix','hosting','event','hostCall','score','qsos','sections','skewSecs','dupes','board'],['lastError','dkeys'])
     if (!['disabled','offline','behind','synced'].includes(String(c.syncState)) || typeof c.hosting !== 'boolean' || ![c.event,c.hostCall].every(text) ||
       ![c.queued,c.offlineSinceUnix,c.score,c.qsos,c.sections].every(integer) || !Number.isSafeInteger(c.skewSecs) ||
       (c.lastError !== undefined && c.lastError !== null && !text(c.lastError)) || !Array.isArray(c.dupes) || c.dupes.length > 4096 ||
-      !c.dupes.every(d => Array.isArray(d) && d.length === 3 && d.every(text)) || !Array.isArray(c.board) || c.board.length > 128) throw new Error('invalidFieldDay')
+      !c.dupes.every(d => Array.isArray(d) && d.length === 3 && d.every(text)) ||
+      // The same contacts under the ruleset's own rule. Bounded like `dupes`, and each key
+      // like a row's `dkey` — the engine measures both before a capture leaves the station.
+      (c.dkeys !== undefined && (!Array.isArray(c.dkeys) || c.dkeys.length > 4096 ||
+        !c.dkeys.every(k => texts(k,DUPE_KEY_MAX)))) ||
+      !Array.isArray(c.board) || c.board.length > 128) throw new Error('invalidFieldDay')
     for (const raw of c.board) {
       const r = object(raw,['posid','posName','band','mode','operator','qsos','rate','lastSeenSecs'])
       if (![r.posid,r.posName,r.band,r.mode,r.operator].every(text) || ![r.qsos,r.rate,r.lastSeenSecs].every(integer)) throw new Error('invalidFieldDay')

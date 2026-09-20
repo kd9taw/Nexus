@@ -39,6 +39,40 @@ it('accepts the sent exchange a newer station sends, and still bounds it',()=>{
  expect(()=>parseFieldDay(page)).toThrow('invalidFieldDay')
 })
 
+// The ruleset's DUPE RULE, each row's key under it, and the club's generalised keys. The strip
+// builds the key the ENGINE will refuse on instead of the (call, band, mode class) triple it
+// hardcoded — the rule for two of the seventeen shipped rulesets. This validator refuses keys it
+// does not know, so all three had to be taught here or a station sending them goes blank through
+// Remote, which is the defect this file's own header records happening twice before.
+it('accepts the ruleset dupe rule and the keys built from it, and bounds all three',()=>{
+ type Src={source:{fieldDay:Record<string,unknown>}}
+ const page=(mutate:(fd:Record<string,unknown>)=>void)=>{
+  const p=fieldDayPage()
+  const fd=(p.meta as Src).source.fieldDay
+  fd.dupeRule={byCall:true,byBand:true,byModeClass:true,byFields:['QTH'],bySentFields:['QTH'],modeClassGroups:[['CW','DIG']]}
+  ;(fd.log as Record<string,unknown>[])[0].dkey=['W8XYZ','20M','CW','CUYA','MI']
+  ;(fd.club as Record<string,unknown>).dkeys=[['K9CLUB','20M','CW']]
+  mutate(fd)
+  return p
+ }
+ expect(()=>parseFieldDay(page(()=>{}))).not.toThrow()
+ // Negative controls, one per field and one per way of being wrong — a validator that only
+ // ever accepts is half a test, and the half that matters here is the refusal: a rule read
+ // with a component missing silently becomes a NARROWER key, which shows "new" for a contact
+ // the log is about to reject.
+ for(const [name,mutate] of [
+  ['a flag that is not a boolean',(fd:Record<string,unknown>)=>{(fd.dupeRule as Record<string,unknown>).byCall='yes'}],
+  ['a rule missing a component',(fd:Record<string,unknown>)=>{delete (fd.dupeRule as Record<string,unknown>).byFields}],
+  ['a slot list that is not strings',(fd:Record<string,unknown>)=>{(fd.dupeRule as Record<string,unknown>).bySentFields=[7]}],
+  ['a row key wider than any rule can build',(fd:Record<string,unknown>)=>{(fd.log as Record<string,unknown>[])[0].dkey=Array(17).fill('X')}],
+  ['a row key component over the string bound',(fd:Record<string,unknown>)=>{(fd.log as Record<string,unknown>[])[0].dkey=['x'.repeat(1025)]}],
+  ['a club key over the string bound',(fd:Record<string,unknown>)=>{(fd.club as Record<string,unknown>).dkeys=[['x'.repeat(1025)]]}],
+  ['a club key that is not an array',(fd:Record<string,unknown>)=>{(fd.club as Record<string,unknown>).dkeys=['K9CLUB']}],
+ ] as [string,(fd:Record<string,unknown>)=>void][]) {
+  expect(()=>parseFieldDay(page(mutate)),name).toThrow('invalidFieldDay')
+ }
+})
+
 // A contest that is not Field Day carries each row's received values (`rcvd`) for the log
 // table's columns. Same refusal hazard as above for an unknown key, and still bounded.
 it('accepts a row\'s received values, and still bounds them',()=>{
