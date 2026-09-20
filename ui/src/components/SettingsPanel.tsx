@@ -6059,7 +6059,24 @@ export function SettingsPanel({
                 would unkey that operator's transmitter on every over. Absent `radio` (the
                 setup wizard, the Remote projection) reads as unverified, which is the safe
                 direction for a control that stops transmissions. The engine refuses it
-                independently — this is the explanation, not the guard. */}
+                independently — this is the explanation, not the guard.
+
+                ⚠️ AND A THIRD STATE, which is the one that was lying (2026-09-20). A Flex's
+                scale IS on the allow-list, but the only thing that PRODUCES it is the native
+                VITA meter worker, which runs only under the native panadapter — off by
+                default. So the stock Flex station read "verified" while nothing was
+                measuring. `radio.flexMeterStream` is that worker, observed from the object
+                rather than from `flexNativePan` (the toggle stands with no radio address, or
+                with a start that failed).
+
+                LEFT ENABLED, NOT DISABLED, deliberately. Disabled here means "this radio can
+                never do this" (#292, a bench fact the operator cannot change); this is
+                temporary and self-serviceable, and greying the control out would hide it at
+                the moment they are trying to make it work, while the stored preference stays
+                live in the engine and would take effect the instant the worker came up. The
+                warning REPLACES the reassuring text rather than sitting beside it, so the
+                false all-clear is gone either way, and it names the control that fixes it —
+                which a disabled toggle cannot. */}
             <div className="settings-field">
               <label className="settings-toggle">
                 <span className="settings-label">{t('settings.transmit.swrStop.label')}</span>
@@ -6087,9 +6104,11 @@ export function SettingsPanel({
                 <span className="settings-power-cap-unit">:1</span>
               </label>
               <span className="settings-hint">
-                {radio?.swrScaleVerified
-                  ? t('settings.transmit.swrStop.hint')
-                  : t('settings.transmit.swrStop.unverified')}
+                {!radio?.swrScaleVerified
+                  ? t('settings.transmit.swrStop.unverified')
+                  : [2036, 23005].includes(form.rigModel) && radio?.flexMeterStream !== true
+                    ? t('settings.transmit.swrStop.noMeterStream')
+                    : t('settings.transmit.swrStop.hint')}
               </span>
             </div>
 

@@ -86,8 +86,23 @@ const features: FeaturesApi = {
 } as unknown as FeaturesApi
 
 /** The live radio status the panel reads the verdict from. `undefined` is the wizard's case. */
-function radioStatus(swrScaleVerified: boolean): RadioStatus {
-  return { swrScaleVerified } as unknown as RadioStatus
+function radioStatus(swrScaleVerified: boolean, flexMeterStream?: boolean): RadioStatus {
+  return { swrScaleVerified, flexMeterStream } as unknown as RadioStatus
+}
+
+/** A FLEX-6xxx over the network — a model on the SWR allow-list, so `swrScaleVerified` is true
+ *  for it while the thing that actually produces the scaled number may or may not be running. */
+function flexSettingsDoc() {
+  const doc = settingsDoc() as unknown as Record<string, unknown>
+  const radio = {
+    ...(doc.radios as Record<string, unknown>[])[0],
+    rigModel: 2036,
+    rigModelName: 'FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)',
+    rigConn: 'network',
+    rigAddr: '192.0.2.10:5002',
+    icomNativeCat: false,
+  }
+  return { ...doc, ...radio, radios: [radio] } as never
 }
 
 function renderPanel(radio?: RadioStatus) {
@@ -171,5 +186,56 @@ describe('the high-SWR cutoff is offered only where the number can be trusted', 
     // The setup wizard and the Remote projection both render this panel with no `radio`.
     const sw = await openRadioTab(undefined)
     expect(off(sw)).toBe(true)
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// ⚠️ THE THIRD STATE: VERIFIED SCALE, NO PRODUCER (2026-09-20).
+//
+// A Flex is on the allow-list, so `swrScaleVerified` is true for it — but that flag answers
+// from the MODEL and the TRANSPORT and cannot see whether anything is measuring. The only
+// producer of a FlexLib-scaled SWR is the native VITA meter worker, which runs solely under
+// the native panadapter, and that ships OFF. So the stock Flex station was shown the
+// reassuring "verified" hint for a cutoff that was not operating.
+//
+// The cure is the CLAIM, not the mechanism: the engine's cutoff is untouched (it is already
+// fail-safe on a missing reading, and a gate in front of it could suppress a real halt).
+describe('a Flex whose meter worker is not running is told so', () => {
+  beforeEach(() => {
+    api.get('getSettings').mockImplementation(() => Promise.resolve(flexSettingsDoc()))
+  })
+
+  const hintOf = (sw: Element) =>
+    sw.closest('.settings-field')!.querySelector('.settings-hint')!.textContent ?? ''
+
+  it('replaces the verified hint with a warning naming the control that fixes it', async () => {
+    const sw = await openRadioTab(radioStatus(true, false))
+    const hint = hintOf(sw)
+    expect(hint, 'the operator is told plainly that nothing will stop a transmission').toContain(
+      'will not stop anything',
+    )
+    expect(hint, 'and which control starts the meter').toContain('Flex native panadapter')
+    // ⚠️ THE POINT OF THE FIX: the reassuring line must be GONE, not merely accompanied.
+    expect(hint, 'the false all-clear must not still be on screen').not.toContain(
+      'exactly as Stop TX does',
+    )
+  })
+
+  it('and stays ENABLED, because this one the operator can fix', async () => {
+    // Unlike the #292 case above — a bench fact about the radio that no setting changes —
+    // this state is self-serviceable, so greying the control out would hide it at exactly the
+    // moment they are trying to make it work. The warning carries the safety, not the greying.
+    const sw = await openRadioTab(radioStatus(true, false))
+    expect(off(sw)).toBe(false)
+  })
+
+  it('POSITIVE CONTROL — with the worker running it reads as an ordinary verified radio', async () => {
+    // Without this the test above is a sentence: it would pass on a panel that showed the
+    // warning unconditionally, or ignored `flexMeterStream` and keyed off the model alone.
+    const sw = await openRadioTab(radioStatus(true, true))
+    const hint = hintOf(sw)
+    expect(hint, 'the normal hint is back').toContain('exactly as Stop TX does')
+    expect(hint, 'and the warning is gone').not.toContain('will not stop anything')
+    expect(off(sw)).toBe(false)
   })
 })

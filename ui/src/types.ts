@@ -1215,6 +1215,14 @@ export interface RadioStatus {
    * modulator takes DAX and the physical microphone is disconnected — radio-wide, on every
    * slice and in every program. Display-only; the Phone cockpit warns on it. */
   flexDaxTx?: boolean
+  /** The Flex VITA **meter** worker is running — on a Flex the only producer of a
+   * FlexLib-scaled SWR. Observed from the worker, never read from `flexNativePan` (the toggle
+   * stands with no radio address, or with a start that failed). Read it WITH
+   * `swrScaleVerified`: that says the SCALE is one Nexus can stand behind, this says whether
+   * anything is producing it. On a Flex with the native panadapter off — the shipped default
+   * — the first is true and this is false, which is a cutoff the operator was told they had
+   * and does not; Settings warns on exactly that pair. Display-only; it gates nothing. */
+  flexMeterStream?: boolean
   /** Transient Phone mode override ("USB"/"LSB"/"FM"), or null/absent = AUTO (band-derived). */
   sidebandOverride?: string | null
   /** The operator's phone (SSB) sub-band on the current band as [lo, hi) MHz, per license class

@@ -1085,6 +1085,15 @@ pub struct RadioStatus {
     /// slice, every client. The Phone cockpit says so; see `Engine::observe_flex_dax_tx`.
     #[serde(default)]
     pub flex_dax_tx: bool,
+    /// The Flex VITA **meter** worker is running, which on a Flex is the only producer of a
+    /// FlexLib-scaled SWR. OBSERVED from the worker, never read from `flex_native_pan` — see
+    /// `Engine::observe_flex_meter_stream`. Read it with [`Self::swr_scale_verified`]: that
+    /// flag says the SCALE is one Nexus can stand behind, this one says whether anything is
+    /// actually producing it, and on a Flex with the native pan off (the shipped default)
+    /// the first is true while this is false — a cutoff the operator was told they had and
+    /// does not. Settings warns on exactly that pair. Display-only; it gates nothing.
+    #[serde(default)]
+    pub flex_meter_stream: bool,
 }
 
 /// serde default helper: TX drive defaults to 0.9.

@@ -4287,6 +4287,20 @@ impl RadioLoop {
                 )
                 .ok();
             }
+            // ⚠️ AND TELL THE ENGINE, because this worker is also the high-SWR CUTOFF's only
+            // supply on a Flex. `route_meters` in there is the sole producer of a
+            // FlexLib-scaled SWR; `settings::swr_scale_verified` answers from the model and
+            // the transport alone and cannot see it, so with the native pan off — the
+            // shipped default — Settings told the operator their cutoff ran on a verified
+            // scale while nothing ever put a number on the wire.
+            //
+            // From the OBJECT, not from `flex_enabled`: the toggle can be on with no radio
+            // address or with a `start` that returned `Err` (`.ok()` above), and both leave
+            // `spectrum_src` None. Same reasoning as the DAX tee below. Pushed here only,
+            // which is already the transition — this block runs on a key change, not per
+            // tick. Settings renders it; NOTHING GATES ON IT, and the cutoff itself is
+            // untouched (it is already fail-safe on a missing reading).
+            engine_lock(engine).observe_flex_meter_stream(self.spectrum_src.is_some());
         }
         // DAX RX audio worker: same tear-down/restart (Drop removes the DAX stream).
         if dax_key != self.dax_src_key {
