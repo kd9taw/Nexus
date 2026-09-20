@@ -195,6 +195,7 @@ impl Engine {
                     .iter()
                     .map(|g| g.iter().map(|m| m.to_string()).collect())
                     .collect(),
+                log_dupes: rs.dupe_rule.log_dupes,
             },
             location_warning: log
                 .session
@@ -517,6 +518,9 @@ mod tests {
         assert_eq!(wire["dupeRule"]["byFields"], serde_json::json!([]));
         assert_eq!(wire["dupeRule"]["bySentFields"], serde_json::json!([]));
         assert_eq!(wire["log"][0]["dkey"].as_array().unwrap().len(), 3);
+        // …and Field Day REFUSES a dupe rather than logging one, which is what the card's
+        // wording turns on: telling this operator the contact would be refused is true here.
+        assert_eq!(wire["dupeRule"]["logDupes"], false);
 
         // CONTROL 2 — Sweepstakes, the other direction: the band and the mode class are
         // NOT in the key, so a station worked on 40m CW is a dupe on 20m SSB.
@@ -538,6 +542,10 @@ mod tests {
         assert_eq!(wire["dupeRule"]["byCall"], true);
         assert_eq!(wire["dupeRule"]["byBand"], false, "SS rule 2.2");
         assert_eq!(wire["dupeRule"]["byModeClass"], false, "SS rule 2.2");
+        // ⭐ …and Sweepstakes KEEPS a dupe, scored zero. The card must not tell this operator
+        // the contact "will be refused": CQ and ARRL both ask entrants NOT to drop the row,
+        // because a contact missing from your log costs the other station its credit.
+        assert_eq!(wire["dupeRule"]["logDupes"], true, "SS cross-checks");
     }
 
     /// ⭐ **The club half was truncated at the last hop.** `fdsync` has shipped the

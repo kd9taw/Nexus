@@ -25,8 +25,12 @@ function object(v: unknown, keys: string[], optional: string[] = []): Record<str
 const DUPE_KEY_MAX = 16
 function dupeRule(v: unknown): boolean {
   try {
-    const r = object(v, ['byCall','byBand','byModeClass','byFields','bySentFields','modeClassGroups'])
-    return [r.byCall,r.byBand,r.byModeClass].every(b => typeof b === 'boolean') &&
+    // Every component is REQUIRED once `dupeRule` is present. A station either sends the whole
+    // rule or (being older than the field) sends none, and a half-read rule is the dangerous
+    // shape: a missing component silently narrows the key, which is the over-permissive
+    // direction. The absent case is handled by the caller, not by defaults here.
+    const r = object(v, ['byCall','byBand','byModeClass','byFields','bySentFields','modeClassGroups','logDupes'])
+    return [r.byCall,r.byBand,r.byModeClass,r.logDupes].every(b => typeof b === 'boolean') &&
       texts(r.byFields,8) && texts(r.bySentFields,8) &&
       Array.isArray(r.modeClassGroups) && r.modeClassGroups.length <= 8 &&
       r.modeClassGroups.every(g => texts(g,8))

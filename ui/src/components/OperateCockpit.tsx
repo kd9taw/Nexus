@@ -1832,6 +1832,7 @@ function OperateRecall({
       myGrid={snap.mygrid}
       hist={hist}
       contestDupe={fdDupe}
+      contestLogsDupes={snap.fieldDay?.dupeRule?.logDupes === true}
       newEntity={newEntity}
       newBandSlot={newBandSlot}
       newModeSlot={newModeSlot}

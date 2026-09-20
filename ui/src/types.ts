@@ -2730,6 +2730,14 @@ export interface DupeRule {
   /** Mode classes this ruleset counts as ONE. Same data as
    *  `FieldDayStatus.dupeModeGroups`, which predates this block and still ships. */
   modeClassGroups: string[][]
+  /** ⭐ This sponsor wants a duplicate LOGGED and scored zero rather than refused.
+   *
+   *  A dupe warning has to say the right thing here, and the wrong thing is worse than
+   *  imprecise: CQ asks entrants NOT to drop a duplicate, because a contact missing from
+   *  your log costs the station that worked you its credit — a Not-In-Log penalty worth
+   *  twice the contact. So a card must not tell an operator in one of these seven contests
+   *  that the contact "will be refused"; that advises the one thing the sponsor forbids. */
+  logDupes: boolean
 }
 
 /** Field Day operating + scoring status. */

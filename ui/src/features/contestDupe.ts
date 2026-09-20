@@ -20,6 +20,8 @@ const LEGACY_TRIPLE: DupeRule = {
   byFields: [],
   bySentFields: [],
   modeClassGroups: [],
+  // A build that old predates dupe logging entirely — every contest refused one then.
+  logDupes: false,
 }
 
 /** What the contest log says about one call on one band in one mode class.

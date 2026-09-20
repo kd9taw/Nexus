@@ -1464,6 +1464,19 @@ pub struct DupeRuleDto {
     /// for the readers that already consume it — the `dupes`/`dkeys` pattern on the club
     /// wire, where the narrower field is the older one's projection.
     pub mode_class_groups: Vec<Vec<String>>,
+    /// ⭐ **This sponsor wants a duplicate LOGGED and scored zero, not refused.**
+    ///
+    /// It is on the wire because a dupe warning has to say the right thing, and the wrong
+    /// thing here is worse than imprecise. CQ's instruction to entrants is *"please do not
+    /// remove any QSOs from your log! This will cause the other station that worked you to
+    /// lose credit for the contact"* — a missing row is a Not-In-Log penalty for THEM, worth
+    /// twice the contact at CQ. A card that says "logging this again will be refused" in one
+    /// of these seven contests advises the operator to do the one thing the sponsor asks
+    /// them not to, so the UI picks its wording off this flag.
+    ///
+    /// False for both Field Days and for the QSO parties and VHF runnings, where a duplicate
+    /// still is refused and nothing is written.
+    pub log_dupes: bool,
 }
 
 /// ⚠️ **NOT `derive(Default)`, and the difference is a silent wrong answer.** Derived,
@@ -1481,6 +1494,9 @@ impl Default for DupeRuleDto {
             by_fields: Vec::new(),
             by_sent_fields: Vec::new(),
             mode_class_groups: Vec::new(),
+            // A build older than this field predates dupe logging entirely: every contest
+            // REFUSED a duplicate then, so false is what that build meant.
+            log_dupes: false,
         }
     }
 }
