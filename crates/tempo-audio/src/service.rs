@@ -12756,6 +12756,13 @@ mod tests {
             when_unix,
             mex: mex.into(),
             rcvd: Vec::new(),
+            // Neither is read by anything this helper feeds: these rows drive the WSJT-X
+            // datagram and N1MM XML emitter tests, which assert on the wire bytes, and
+            // `tempo-audio` reads `dkey`/`dupe` nowhere. Left empty and false rather than
+            // given a key this fixture never derived -- a fixture that claims a dupe
+            // verdict it did not compute is asserting something it does not model.
+            dkey: Vec::new(),
+            dupe: false,
         }
     }
 
