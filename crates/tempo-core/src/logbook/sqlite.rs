@@ -50,12 +50,13 @@
 //! The report that accompanies this commit states each one in full.
 
 use super::{
-    ContestFields, Ota, QslRcvd, QslSent, QslVia, QsoRecord, RecordId, UploadDetail, UploadOutcome,
-    UploadState, UploadStatus,
+    ContestFields, Logbook, Ota, QslRcvd, QslSent, QslVia, QsoRecord, RecordId, UploadDetail,
+    UploadOutcome, UploadState, UploadStatus,
 };
 use rusqlite::{params, params_from_iter, Connection};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 /// The schema this build writes, recorded in `log_meta`. Bump it only alongside a migration:
 /// [`LogDb::open`] refuses a database stamped with any other version rather than reading it
@@ -326,6 +327,16 @@ pub enum Error {
         /// What this build writes.
         expected: i64,
     },
+    /// A `u64` that will not fit SQLite's SIGNED INTEGER. `as i64` would WRAP it — `u64::MAX`
+    /// becomes −1 — so the value is refused instead of being stored as a different number.
+    /// The record columns answer this with NULL (see `stamp`); a watermark cannot, because a
+    /// watermark that reads back smaller than it was written is a cache key that lies.
+    OutOfRange {
+        /// Which value.
+        what: &'static str,
+        /// What it was.
+        value: u64,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -339,6 +350,12 @@ impl std::fmt::Display for Error {
                 f,
                 "logbook database is schema version {found}, this build writes {expected}"
             ),
+            Error::OutOfRange { what, value } => {
+                write!(
+                    f,
+                    "logbook database: {what} ({value}) will not fit an INTEGER"
+                )
+            }
         }
     }
 }
@@ -375,6 +392,130 @@ pub struct Resolved<'a> {
     pub entity: Option<&'a str>,
     /// cty.dat's CQ zone, for WAZ.
     pub cq_zone: Option<u8>,
+}
+
+/// One row on its way to the store: the record AS IT NOW STANDS, plus the two values
+/// tempo-core cannot derive for itself (see [`Resolved`], which is the borrowing form this
+/// owns).
+///
+/// It owns its record and its resolution because it outlives the caller's lock — it goes on
+/// the writer's queue, and the caller returns to the radio loop. The record is an
+/// `Arc<QsoRecord>`, which is the pointer the log already holds, so putting a row on that
+/// queue copies a pointer and not 840 bytes.
+#[derive(Debug, Clone)]
+pub struct RowWrite {
+    /// The record, exactly as the log holds it after the change.
+    pub rec: Arc<QsoRecord>,
+    /// cty.dat's entity NAME. **The award identity** — never the stored `COUNTRY` text.
+    pub entity: Option<String>,
+    /// cty.dat's CQ zone.
+    pub cq_zone: Option<u8>,
+}
+
+impl RowWrite {
+    /// A row whose entity and zone are not resolved. Honest, not lossy: an unresolved entity
+    /// is NULL, never a guess from the `COUNTRY` text.
+    pub fn new(rec: Arc<QsoRecord>) -> RowWrite {
+        RowWrite {
+            rec,
+            entity: None,
+            cq_zone: None,
+        }
+    }
+
+    /// A row with cty.dat's answer attached.
+    pub fn resolved(rec: Arc<QsoRecord>, r: Resolved<'_>) -> RowWrite {
+        RowWrite {
+            rec,
+            entity: r.entity.map(str::to_string),
+            cq_zone: r.cq_zone,
+        }
+    }
+
+    /// The row's id, or the refusal it is written under. Every record the log HOLDS carries
+    /// one; a row without one could never be addressed again.
+    pub fn id(&self) -> Result<RecordId> {
+        self.rec.id.ok_or_else(|| Error::Unidentified {
+            call: self.rec.call.clone(),
+        })
+    }
+
+    fn resolution(&self) -> Resolved<'_> {
+        Resolved {
+            entity: self.entity.as_deref(),
+            cq_zone: self.cq_zone,
+        }
+    }
+}
+
+/// The five watermarks, as `log_meta` holds them.
+///
+/// They survive into SQLite rather than being replaced by a bare "the table changed" because
+/// every cache over the log keys on one of them — see [`super::OpClass`] for which class moves
+/// which. Written in the SAME transaction as the rows they describe, so a watermark read back
+/// out of the database names the state the database is actually in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Watermarks {
+    /// Moves on every change.
+    pub revision: u64,
+    /// The last change that was not an append at the end.
+    pub content_rev: u64,
+    /// The last change a derived index over the rows' content must be rebuilt for.
+    pub index_rev: u64,
+    /// The last change that moved a row's identifying fields.
+    pub key_rev: u64,
+    /// The last change a plan built on an earlier snapshot cannot be rebased over.
+    pub shape_rev: u64,
+}
+
+impl Watermarks {
+    /// The log's watermarks as they stand. Take it under whatever lock guards the log, in the
+    /// same breath as the change it describes.
+    pub fn of(log: &Logbook) -> Watermarks {
+        Watermarks {
+            revision: log.revision(),
+            content_rev: log.content_rev(),
+            index_rev: log.index_rev(),
+            key_rev: log.key_rev(),
+            shape_rev: log.shape_rev(),
+        }
+    }
+
+    /// The `log_meta` keys, in a fixed order so a stored database always reads the same way.
+    fn pairs(&self) -> [(&'static str, u64); 5] {
+        [
+            ("revision", self.revision),
+            ("content_rev", self.content_rev),
+            ("index_rev", self.index_rev),
+            ("key_rev", self.key_rev),
+            ("shape_rev", self.shape_rev),
+        ]
+    }
+}
+
+/// ONE transaction's worth of change, in the order the statements run: the clear, then the
+/// removals, then the rows as they now stand, then the watermarks.
+///
+/// ⚠️ **A batch is a CHUNK, never a whole import.** §v3.13/R8 condition 1 is binding: one
+/// transaction spanning a 150,000-row import holds SQLite's write lock for the length of that
+/// import, and a contest QSO logged in the middle of it would wait there. The caller splits
+/// its work into batches; [`super::writer::LogWriter`] is the caller that does so and the one
+/// that owns the connection.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Batch<'a> {
+    /// Drop every row FIRST. `LogOp::Clear` is one statement, not 150,000 deletes.
+    pub clear: bool,
+    /// Rows to drop, by id. Their passthrough, stamps and exchange go with them
+    /// (`ON DELETE CASCADE`, which the `foreign_keys` pragma makes real).
+    pub remove: &'a [RecordId],
+    /// Rows as they NOW stand: inserted if the store does not hold the id, replaced if it
+    /// does. ONE path for both, because a store that branches on "is this new?" is a store
+    /// whose two branches can disagree.
+    pub upsert: &'a [RowWrite],
+    /// The watermarks this batch leaves the store at, or `None` for a chunk that does not
+    /// finish its change. A watermark must never run AHEAD of the rows — a cache keyed on one
+    /// that does serves a stale answer, where one that lags only costs a rebuild.
+    pub marks: Option<Watermarks>,
 }
 
 /// The logbook's database.
@@ -488,39 +629,72 @@ impl LogDb {
                     })?
                     .to_string();
                 qso.execute(params_from_iter(bind_qso(&id, rec, resolved)))?;
-                // Sorted on the way in only because it is sorted on the record; the read side
-                // re-sorts with ORDER BY name and does not trust insertion order.
-                for (name, value) in &rec.extra {
-                    extra.execute(params![&id, name, value])?;
+                bind_children(&mut extra, &mut upload, &mut exch, &id, rec)?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Apply one [`Batch`] in ONE transaction: all of it lands, or none of it does.
+    ///
+    /// This is the statement half of the writer thread ([`super::writer`]) and the only write
+    /// path that can CHANGE or REMOVE a row — [`LogDb::insert_all`] is the bulk load, and its
+    /// plain `INSERT` is deliberately the one that fails on a duplicate id.
+    ///
+    /// **An upsert replaces the row and all three of its child tables.** It has to: a record's
+    /// passthrough, stamps and exchange are lists, and a list is changed by being rewritten,
+    /// not by having a row updated. The three deletes are index probes that find nothing for a
+    /// row being inserted for the first time, which is why one path serves both cases.
+    pub fn apply(&mut self, b: Batch<'_>) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            if b.clear {
+                // One statement. The children go with it — `ON DELETE CASCADE` fires on a
+                // parent row deleted by any means, and `foreign_keys` is ON.
+                tx.execute("DELETE FROM qso", [])?;
+            }
+            if !b.remove.is_empty() {
+                let mut del = tx.prepare("DELETE FROM qso WHERE id = ?1")?;
+                for id in b.remove {
+                    del.execute([id.to_string()])?;
                 }
-                for (service, st) in upload_states(&rec.upload) {
-                    if let Some(st) = st {
-                        upload.execute(params![
-                            &id,
-                            service,
-                            st.outcome.code(),
-                            st.when_unix,
-                            st.detail.map(UploadDetail::code)
-                        ])?;
-                    }
+            }
+            if !b.upsert.is_empty() {
+                let mut qso = tx.prepare(&upsert_sql())?;
+                let mut drop_extra = tx.prepare("DELETE FROM qso_extra WHERE qso_id = ?1")?;
+                let mut drop_upload = tx.prepare("DELETE FROM qso_upload WHERE qso_id = ?1")?;
+                let mut drop_exch = tx.prepare("DELETE FROM contest_exchange WHERE qso_id = ?1")?;
+                let mut extra =
+                    tx.prepare("INSERT INTO qso_extra (qso_id, name, value) VALUES (?1, ?2, ?3)")?;
+                let mut upload = tx.prepare(
+                    "INSERT INTO qso_upload (qso_id, service, outcome, when_unix, detail)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )?;
+                let mut exch = tx.prepare(
+                    "INSERT INTO contest_exchange (qso_id, contest_id, side, ord, slot, domain, raw)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                )?;
+                for w in b.upsert {
+                    let id = w.id()?.to_string();
+                    qso.execute(params_from_iter(bind_qso(&id, &w.rec, w.resolution())))?;
+                    drop_extra.execute([&id])?;
+                    drop_upload.execute([&id])?;
+                    drop_exch.execute([&id])?;
+                    bind_children(&mut extra, &mut upload, &mut exch, &id, &w.rec)?;
                 }
-                if let Some(c) = rec.contest.as_deref() {
-                    for (side, pairs) in [("tx", &c.sent), ("rx", &c.rcvd)] {
-                        for (ord, (slot, raw)) in pairs.iter().enumerate() {
-                            // `domain` is NULL: the general log's exchange is PAIRS, not the
-                            // contest journal's triples, and a matched domain has no ADIF
-                            // representation to have arrived through.
-                            exch.execute(params![
-                                &id,
-                                &c.contest_id,
-                                side,
-                                ord as i64,
-                                slot,
-                                None::<&str>,
-                                raw
-                            ])?;
-                        }
-                    }
+            }
+            if let Some(m) = b.marks {
+                let mut set = tx.prepare(
+                    "INSERT INTO log_meta (k, v) VALUES (?1, ?2)
+                     ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                )?;
+                for (k, v) in m.pairs() {
+                    let v = i64::try_from(v).map_err(|_| Error::OutOfRange {
+                        what: "watermark",
+                        value: v,
+                    })?;
+                    set.execute(params![k, v])?;
                 }
             }
         }
@@ -653,6 +827,76 @@ fn insert_sql() -> String {
         QSO_COLUMNS.join(", "),
         places.join(", ")
     )
+}
+
+/// `INSERT … ON CONFLICT(id) DO UPDATE SET …` over every column but the key, built from
+/// [`QSO_COLUMNS`] so neither half can drift from the column list.
+///
+/// One statement rather than an `INSERT` and an `UPDATE` chosen between: the choice would need
+/// a "does the store hold this id?" question whose two answers are two code paths, and the
+/// only way those stay in step is by there being one of them.
+fn upsert_sql() -> String {
+    let places: Vec<String> = (1..=QSO_COLUMNS.len()).map(|i| format!("?{i}")).collect();
+    let set: Vec<String> = QSO_COLUMNS
+        .iter()
+        .skip(1) // `id` is the conflict target, and an upsert never moves a row's identity.
+        .map(|c| format!("{c} = excluded.{c}"))
+        .collect();
+    format!(
+        "INSERT INTO qso ({}) VALUES ({}) ON CONFLICT(id) DO UPDATE SET {}",
+        QSO_COLUMNS.join(", "),
+        places.join(", "),
+        set.join(", ")
+    )
+}
+
+/// One record's three child tables. Shared by the bulk load and the writer so a tag that
+/// survives one path cannot be dropped by the other.
+///
+/// The caller has already removed any rows this id held — [`LogDb::insert_all`] because the
+/// row is new, [`LogDb::apply`] because it deletes them first.
+fn bind_children(
+    extra: &mut rusqlite::Statement<'_>,
+    upload: &mut rusqlite::Statement<'_>,
+    exch: &mut rusqlite::Statement<'_>,
+    id: &str,
+    rec: &QsoRecord,
+) -> Result<()> {
+    // Sorted on the way in only because it is sorted on the record; the read side re-sorts
+    // with ORDER BY name and does not trust insertion order.
+    for (name, value) in &rec.extra {
+        extra.execute(params![id, name, value])?;
+    }
+    for (service, st) in upload_states(&rec.upload) {
+        if let Some(st) = st {
+            upload.execute(params![
+                id,
+                service,
+                st.outcome.code(),
+                st.when_unix,
+                st.detail.map(UploadDetail::code)
+            ])?;
+        }
+    }
+    if let Some(c) = rec.contest.as_deref() {
+        for (side, pairs) in [("tx", &c.sent), ("rx", &c.rcvd)] {
+            for (ord, (slot, raw)) in pairs.iter().enumerate() {
+                // `domain` is NULL: the general log's exchange is PAIRS, not the contest
+                // journal's triples, and a matched domain has no ADIF representation to have
+                // arrived through.
+                exch.execute(params![
+                    id,
+                    &c.contest_id,
+                    side,
+                    ord as i64,
+                    slot,
+                    None::<&str>,
+                    raw
+                ])?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The four connectors that leave a per-QSO stamp, and the token each is stored under.

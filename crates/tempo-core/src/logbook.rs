@@ -784,6 +784,7 @@ mod id;
 mod op;
 mod records;
 pub mod sqlite;
+pub mod writer;
 pub use id::{Minter, RecordId};
 pub use op::{Effects, LogOp, UploadService};
 pub use records::OpClass;
@@ -837,6 +838,13 @@ impl Logbook {
     /// The revision at which each kind of change last happened — see [`OpClass`] for which
     /// class moves which. A cache keyed on one of these survives every change that cannot
     /// affect it.
+    ///
+    /// [`Self::content_rev`] is the one [`Self::appended_only_since`] reads; it is exposed in
+    /// its own right so the five can be stored together ([`sqlite::Watermarks`]), which is
+    /// what lets a watermark be durable alongside the rows it describes.
+    pub fn content_rev(&self) -> u64 {
+        self.records.content_rev()
+    }
     pub fn index_rev(&self) -> u64 {
         self.records.index_rev()
     }

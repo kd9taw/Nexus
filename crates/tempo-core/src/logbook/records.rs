@@ -117,6 +117,9 @@ impl Records {
     pub(super) fn revision(&self) -> u64 {
         self.revision
     }
+    pub(super) fn content_rev(&self) -> u64 {
+        self.content_rev
+    }
     pub(super) fn index_rev(&self) -> u64 {
         self.index_rev
     }
