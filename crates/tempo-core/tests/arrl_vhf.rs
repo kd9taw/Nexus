@@ -140,12 +140,17 @@ fn arrl_vhf_june_from_wisconsin_end_to_end() {
     // qualifier, so the same station on the same band on phone is still a dupe.
     let start = log.ruleset().event_window(2026).start_unix;
     assert!(
-        !work(&mut log, "6m", "K2DEF", "FN31", "PH", start + 3600),
+        work(&mut log, "6m", "K2DEF", "FN31", "PH", start + 3600),
+        "an ARRL contest reports its duplicates — LGCK.1, the checker removes them"
+    );
+    assert!(
+        log.qsos().last().expect("the dupe row").dupe,
         "same call, same band, same grid — a dupe whatever the mode"
     );
     // POSITIVE CONTROL: the same station on a DIFFERENT band is a legal contact, so the
-    // refusal above is the key and not a log that stopped accepting.
+    // mark above is the key talking and not every row the log takes.
     assert!(work(&mut log, "2m", "W1ABC", "FN42", "CW", start + 3660));
+    assert!(!log.qsos().last().expect("the new row").dupe);
 
     // THE SCORE. §5.2's table over the eight rows: 6 m 1 + 1, 2 m 1 + 1, 222 MHz 2,
     // 432 MHz 2, 1296 MHz 3, 2.3 GHz 4 = 15 QSO points.
@@ -345,9 +350,12 @@ fn a_grid_square_counts_once_on_every_band_it_is_worked_on() {
 fn a_rover_that_moves_is_a_new_contact_and_a_new_multiplier() {
     let mut log = FieldDayLog::new("W9XYZ", select("arrlvhf_jun", &station("EN52")), "2m");
     assert!(work(&mut log, "2m", "K2DEF", "FN31", "CW", 100));
-    // Same call, same band, same grid — VCAT.5.1.4, *"only one contact is counted"*.
+    // Same call, same band, same grid — VCAT.5.1.4, *"only one contact is counted"*. It
+    // is reported and marked rather than refused (LGCK.1), and "only one is counted" is
+    // the score below: two contacts, not three.
+    assert!(work(&mut log, "2m", "K2DEF", "FN31", "CW", 110));
     assert!(
-        !work(&mut log, "2m", "K2DEF", "FN31", "CW", 110),
+        log.qsos().last().expect("the dupe row").dupe,
         "the rover has not moved yet"
     );
     // …and the moment they cross into FN32 they are a new station.
@@ -372,9 +380,10 @@ fn being_the_rover_moves_the_key_and_never_relabels_a_row_already_logged() {
     let mut s = select("arrlvhf_jun", &station("EN52"));
     let mut log = FieldDayLog::new("W9XYZ/R", s.clone(), "2m");
     assert!(work(&mut log, "2m", "K2DEF", "FN31", "CW", 100));
+    assert!(work(&mut log, "2m", "K2DEF", "FN31", "CW", 110));
     assert!(
-        !work(&mut log, "2m", "K2DEF", "FN31", "CW", 110),
-        "I have not moved yet — a dupe"
+        log.qsos()[1].dupe,
+        "I have not moved yet — a dupe, reported and marked"
     );
 
     // ⭐ "I moved." §6.3 forbids a FIXED station changing location; a rover is the
@@ -388,9 +397,16 @@ fn being_the_rover_moves_the_key_and_never_relabels_a_row_already_logged() {
         "a new grid on MY side is a new contact — nothing on theirs changed"
     );
 
-    // ⭐ THE PROVENANCE. The first row still says EN53's predecessor.
+    // ⭐ THE PROVENANCE. The rows worked before the move still say EN53's predecessor —
+    // and that now includes the DUPE at index 1, which was also worked from EN52 and is
+    // in the submitted file. Index 2 is the contact made after the move.
     assert_eq!(log.qsos()[0].sent("GRID"), "EN52");
-    assert_eq!(log.qsos()[1].sent("GRID"), "EN53");
+    assert_eq!(
+        log.qsos()[1].sent("GRID"),
+        "EN52",
+        "the dupe was worked from EN52 too"
+    );
+    assert_eq!(log.qsos()[2].sent("GRID"), "EN53");
     let cab = log.cabrillo(144_200).expect("one entry");
     assert!(
         cab.contains("W9XYZ/R EN52 K2DEF FN31\n"),
@@ -409,7 +425,7 @@ fn being_the_rover_moves_the_key_and_never_relabels_a_row_already_logged() {
     // from the LOG's session, never from this one.
     assert_eq!(s.field("GRID"), "EN52");
     s.move_to(&[("GRID", "EN60")]).expect("a legal grid");
-    assert_eq!(log.qsos()[1].sent("GRID"), "EN53", "a row is never re-read");
+    assert_eq!(log.qsos()[2].sent("GRID"), "EN53", "a row is never re-read");
 }
 
 // ---------------------------------------------------------------------------
