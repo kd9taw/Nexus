@@ -293,13 +293,38 @@ pub fn rig_model_name(model: u32) -> Option<&'static str> {
 ///    straight through, so 2 becomes `AC002` — a real tune-up. This is the backend #322 was
 ///    reported and fixed on.
 ///
-/// Keyed on the catalog NAME rather than the Hamlib backend number, deliberately: `2xxx` is
-/// the Kenwood backend but also Elecraft, whose rigs answer `AC` in their own dialect and are
-/// not something this machine can test. An unknown model answers `true` — the pre-1.14
-/// behaviour — because a button wrongly disabled is worse than one that was already a no-op.
+/// ⚠️ KEYED ON THE BACKEND NUMBER, NOT THE DISPLAY NAME (transmit review R4, 2026-09-19).
+/// The name test shipped in this function's first form and was WRONG: Hamlib's model number
+/// is `backend * 1000 + model`, and the Icom backend carries five rigs whose name does not
+/// start with "Icom" — the **Xiegu** G90, X6100, X6200, X5105 and X108G, all of which have an
+/// internal ATU. `rigs/icom/xiegu.c` gives every one of them `.set_func = icom_set_func`, so
+/// they take the clamp above and answer `RPRT 0` to a tune-up that never runs. What decides
+/// this question is which backend COMPOSES THE COMMAND, so that is what it asks.
+///
+/// The two overrides inside those backends, both read from 4.7.1 rather than assumed:
+///  * **Elecraft** (`rigs/kenwood/k3.c`) does override `set_func`, and its `RIG_FUNC_TUNER`
+///    arm sends `SWT16` — a front-panel button TAP, ignoring the value entirely. It never
+///    runs: `RIG_FUNC_TUNER` is not in `K3_FUNC_ALL`/`K4_FUNC_ALL`, and `rig_set_func`
+///    (`src/settings.c:515`) refuses on the capability mask before reaching the backend. The
+///    same mask guards `rig_get_func`, so an Elecraft reports no tuner and is offered no ATU
+///    button at all. (Their real start-tune is a VFO op — `SWT19`/`SWT20`/`SWT44`/`SW40` in
+///    `k3_vfo_op` — which is the door to knock on if we ever add them.)
+///  * **PowerSDR / Thetis** (`rigs/kenwood/flex6xxx.c`) passes the value through as
+///    `ZZTU<status>`. WHAT `ZZTU2` MEANS THERE IS NOT SETTLED — PowerSDR's CAT reference is
+///    not something this machine has — so it keeps the safe answer rather than a guess.
+///    (The FLEX-6xxx entry beside it, model 2036, declares `has_set_func = RIG_FUNC_NONE` and
+///    has no `set_func` at all, so it never shows the button either way.)
+///
+/// An unknown model answers `true` — the pre-1.14 behaviour. The asymmetry is deliberate in
+/// the other direction too: where this is wrong the operator loses a button and uses the one
+/// on the radio, and where the OLD answer was wrong the sequencer stood a live QSO down for a
+/// tune-up that never happened.
 pub fn hamlib_atu_start_tune_reaches(model: u32) -> bool {
-    !matches!(rig_model_name(model), Some(name)
-        if name.starts_with("Icom ") || name.starts_with("Kenwood "))
+    /// `rigs/icom/*` — `icom_set_func` clamps the status to 0/1.
+    const ICOM_BACKEND: u32 = 3;
+    /// `rigs/kenwood/*` — `kenwood_set_func`'s `AC1x0` has no tune-start digit.
+    const KENWOOD_BACKEND: u32 = 2;
+    !matches!(model / 1000, ICOM_BACKEND | KENWOOD_BACKEND)
 }
 
 /// Catalog entries where **the program is the rig**: CAT is served by an application on a PC
@@ -1217,10 +1242,39 @@ mod tests {
                 "model {model} must keep the behaviour it had"
             );
         }
-        // Elecraft rides the Kenwood BACKEND NUMBER but answers `AC` in its own dialect, so
-        // the catalogue name — not `model / 1000` — is what this question is keyed on.
+
+        // ⭐ R4 (transmit review, 2026-09-19) — THE FIVE RIGS A NAME TEST LET THROUGH. Every
+        // Xiegu is on the ICOM backend (`rigs/icom/xiegu.c`, `.set_func = icom_set_func`) and
+        // all four HF ones carry an internal ATU, so the clamp applies to them exactly as it
+        // does to an IC-7300 — while not one of their names begins with "Icom".
+        for model in [3088, 3087, 3091, 3089, 3076] {
+            let name = rig_model_name(model).unwrap();
+            assert!(
+                name.starts_with("Xiegu"),
+                "{model} is the Xiegu this guards ({name})"
+            );
+            assert!(
+                !hamlib_atu_start_tune_reaches(model),
+                "{name} is on the Icom backend, so `icom_set_func` clamps its tune-up"
+            );
+        }
+
+        // Elecraft rides the Kenwood backend and so answers the same way here. It is moot in
+        // practice — `RIG_FUNC_TUNER` is not in `K3_FUNC_ALL`, so `rig_set_func` refuses on
+        // the capability mask and the rig reports no tuner — but the answer must not depend
+        // on that, and a name test gave the opposite one.
         assert!(rig_model_name(2029).unwrap().starts_with("Elecraft"));
-        assert!(hamlib_atu_start_tune_reaches(2029));
+        assert!(!hamlib_atu_start_tune_reaches(2029));
+
+        // The question is WHICH BACKEND COMPOSES THE COMMAND, which is the model number's
+        // own arithmetic — not how the catalogue happens to spell the rig.
+        for (model, backend) in [(3073, 3), (3088, 3), (2031, 2), (2029, 2), (1042, 1)] {
+            assert_eq!(
+                model / 1000,
+                backend,
+                "model {model} decodes to backend {backend}"
+            );
+        }
     }
 
     #[test]
