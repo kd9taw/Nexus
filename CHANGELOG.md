@@ -177,6 +177,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Field Day exchange copied by the RTTY sequencer now reaches the log as fields, not just as a
+  note.** If Auto was running in Field Day and you switched Field Day off while a contact was still
+  on the air, that contact finished under the Field Day exchange but no longer had a contest log to
+  go to. Its class and section landed in the record's comment as plain text — `2A EMA` — and
+  nowhere else, so they were not in the ADIF you exported and no other program could read them back
+  as an exchange. They are now written to their proper ADIF fields as well, and the comment still
+  reads the same as before. Contacts made the ordinary way were never affected.
+
 - **Editing a contest contact no longer wipes its exchange.** Correcting anything on a contest QSO —
   a busted call, a report, a grid — silently dropped the contest data from the record: the contest
   name, the serials you sent and received, and both exchanges, none of which the edit form shows you
