@@ -6865,7 +6865,8 @@
         ],
         "by_sent_fields": [
           "GRID"
-        ]
+        ],
+        "log_dupes": true
       },
       "domains": [],
       "exchange": {
@@ -6986,7 +6987,8 @@
         ],
         "by_sent_fields": [
           "GRID"
-        ]
+        ],
+        "log_dupes": true
       },
       "domains": [],
       "exchange": {
@@ -7107,7 +7109,8 @@
         ],
         "by_sent_fields": [
           "GRID"
-        ]
+        ],
+        "log_dupes": true
       },
       "domains": [],
       "exchange": {

@@ -353,3 +353,130 @@ fn a_logged_dupe_spends_the_serial_it_sent_and_does_not_re_issue_it() {
         "three stations copied three different numbers; none may be issued twice"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The policy table — which contests report their duplicates, and which refuse
+// ---------------------------------------------------------------------------
+
+/// ⭐ **THE WHOLE RULING, one line per shipped ruleset.** A contest is here because a
+/// sponsor's own words put it here, and the two tests below hold the data to it from
+/// both ends: one reads it back through the loader, one reads the seed FILE, so a flip,
+/// an addition or a removal is a red test rather than a silent rescore.
+const DUPE_POLICY: &[(&str, bool)] = &[
+    // ⚠️ NO LOG CHECKING AT ALL — no cross-check, no NIL, and "Complete station logs are
+    // NOT required for submission, and ARRL does not use the logs." Nothing is spared by
+    // keeping the row, and the deliverable wants RAW NON-DUPE counts. Refuse, as shipped.
+    ("arrlfd", false),
+    ("wfd", false),
+    // ⚠️ FIVE SEPARATE SPONSORS, AND EVIDENCE FROM NONE OF THEM. ARRL's and CQ's
+    // reasoning is not theirs to inherit; applying it to a sponsor who never stated it
+    // is a guess about someone else's rules. These stay at the shipped behaviour until
+    // somebody reads the actual rule and changes this line on purpose.
+    ("tnqp", false),
+    ("ohqp", false),
+    ("cqp", false),
+    ("txqp", false),
+    ("ilqp", false),
+    // ARRL LGCK.1 — "Duplicate contacts are removed with no additional penalty." It is
+    // written for ARRL contests generally, which is why the VHF three are here beside
+    // Sweepstakes; Field Day is the exception above, and it is an exception because it
+    // is not checked at all.
+    ("arrlss_cw", true),
+    ("arrlss_ssb", true),
+    ("arrlvhf_jan", true),
+    ("arrlvhf_jun", true),
+    ("arrlvhf_sep", true),
+    // CQ XII.E.1 — the same sentence, plus an entrant instruction in as many words:
+    // "please do not remove any QSOs from your log! This will cause the other station
+    // that worked you to lose credit for the contact."
+    ("cqww_cw", true),
+    ("cqww_ssb", true),
+    ("cqww_rtty", true),
+    ("cqwpx_cw", true),
+    ("cqwpx_ssb", true),
+];
+
+/// The policy reaches `DupeRule` — the LOADER end. A key in the seed that never arrives
+/// on the rule would leave the sponsor's ruling written down and not applied.
+#[test]
+fn every_shipped_ruleset_carries_the_dupe_policy_the_sponsor_backs() {
+    for &(id, expected) in DUPE_POLICY {
+        let rs = ruleset_by_id(id, CURRENT_RULES_YEAR)
+            .unwrap_or_else(|| panic!("{id} is a shipped ruleset"));
+        assert_eq!(
+            rs.dupe_rule.log_dupes, expected,
+            "{id}: log_dupes should be {expected} — see the sponsor note in DUPE_POLICY"
+        );
+    }
+}
+
+/// …and the seed declares it for EVERY contest and no others — the DATA end, read from
+/// the file the crate actually ships rather than from the table's own list of ids.
+///
+/// ⚠️ This is the half that catches an ADDED contest. The loader test above walks the
+/// table, so a new ruleset that nobody made a decision about is invisible to it and
+/// would quietly take the `#[serde(default)]`. Here the two sets must match exactly, so
+/// adding, removing or flipping a ruleset all land as the same red.
+#[test]
+fn the_seed_declares_a_dupe_policy_for_every_contest_and_no_others() {
+    let seed: serde_json::Value = serde_json::from_str(include_str!("../src/fd_rules.seed.json"))
+        .expect("the bundled seed is valid JSON");
+    let mut in_seed: Vec<(String, bool)> = seed["rulesets"]
+        .as_array()
+        .expect("rulesets is a list")
+        .iter()
+        .map(|r| {
+            let id = r["event"].as_str().expect("every ruleset names its event");
+            // Absent is a DECISION, not a hole: it means refuse, which is what every
+            // contest written before this key existed meant.
+            let logs = r["dupe"]
+                .get("log_dupes")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            (id.to_string(), logs)
+        })
+        .collect();
+    in_seed.sort();
+
+    let mut expected: Vec<(String, bool)> = DUPE_POLICY
+        .iter()
+        .map(|&(id, b)| (id.to_string(), b))
+        .collect();
+    expected.sort();
+
+    assert_eq!(
+        in_seed, expected,
+        "the seed and the ruling disagree — a contest was added, removed or flipped \
+         without a line in DUPE_POLICY saying which sponsor's words justify it"
+    );
+}
+
+/// ⚠️ **THE CLUB DUPE SHEET READS THE LOG'S RETURN BOOL AS "UNIQUE"**
+/// (`tempo-app/src/fd_scoreboard.rs`, the replay that fills `unique[i]`), and that
+/// reading is only true while the ruleset REFUSES duplicates — under a reporting
+/// ruleset the bool means "written", which is a different question.
+///
+/// It holds, and it holds STRUCTURALLY rather than by the current seed: that replay
+/// builds its log from `ContestSession::field_day(FdEvent, ..)`, so the rulesets it can
+/// reach are exactly the arms of [`FdEvent`], and neither of them reports. The `match`
+/// below is the tripwire — it is exhaustive, so adding an arm for a contest that
+/// reports its dupes is a COMPILE error here rather than a silently wrong dupe sheet
+/// over there.
+#[test]
+fn the_club_dupe_sheet_replay_can_only_reach_a_refusing_ruleset() {
+    fn refuses_by_construction(e: FdEvent) -> bool {
+        match e {
+            // ⚠️ Adding an arm? The club dupe sheet's `unique[i]` assumes every event
+            // here refuses duplicates. Check fd_scoreboard.rs before extending this.
+            FdEvent::ArrlFd | FdEvent::WinterFd => true,
+        }
+    }
+    for event in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+        assert!(refuses_by_construction(event));
+        let log = FieldDayLog::new("W9XYZ", ContestSession::field_day(event, "2A", "WI"), "20m");
+        assert!(
+            !log.dupe_rule().log_dupes,
+            "{event:?} is reachable from the club replay and must refuse duplicates"
+        );
+    }
+}
