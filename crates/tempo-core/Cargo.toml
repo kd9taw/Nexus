@@ -32,6 +32,28 @@ serde_json = "1"
 # Pinned to the head of the stable 0.10 line (digest 0.10); 0.11 moves to digest 0.11 and is not
 # taken here.
 md-5 = "0.10.6"
+# SQLite, as the logbook's real storage (operator ruling 2026-09-20: "SQLite now, ADIF
+# mirror"). It lives HERE, beside `QsoRecord` and the ADIF parser, because the schema is a
+# mapping of that type — the connection itself is owned by the writer thread in tempo-app,
+# and no I/O may happen under the Engine lock.
+#
+# `bundled` compiles the SQLite C amalgamation through `cc`; there is no pkg-config, no system
+# libsqlite3, no submodule and no build-time download. Every one of the six shipped artifacts
+# already has a C compiler for its target — `ring`, `openssl-sys` and `tract-linalg` compile C
+# the same way on all six today — so this adds volume, not a new mechanism.
+#
+# Licences, verified per file rather than from the repo claim (2026-09-20): rusqlite MIT,
+# libsqlite3-sys MIT, and SQLite itself PUBLIC DOMAIN — 129 of the amalgamation's 137 sections
+# carry the author's disclaimer, `printf.c` self-declares, and five generated files are public
+# domain by inheritance, which the NOTICE records as an inference rather than a fact. The
+# crate also ships a BSD-3-Clause SQLCipher tree and a session extension; neither is enabled,
+# so neither is compiled. ⚠️ cargo-deny reads only the crate-level `license = "MIT"` and never
+# walks `sqlite3/`, so NOTICE is the ONLY place SQLite's public-domain status is recorded.
+#
+# Brings hashlink, hashbrown, fallible-iterator and fallible-streaming-iterator newly into the
+# tree — all MIT or MIT OR Apache-2.0, all already on deny.toml's allow-list. bitflags, smallvec
+# and the `cc` build-script crate were already here at compatible versions.
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 
 [dev-dependencies]
 # (serde_json is a real dependency above since the fd_rules data loader — the

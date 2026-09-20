@@ -591,6 +591,89 @@ but not in `COPYING`), which is a second reason not to hand-write a summary of i
 > Broadcom Corporation:
 > https://datatracker.ietf.org/ipr/1526/
 
+### SQLite (bundled amalgamation) — D. Richard Hipp and the SQLite developers
+License: **public domain** — see below. <https://sqlite.org/>
+
+The logbook's storage is SQLite, statically linked as **SQLite 3.50.2** (`SQLITE_SOURCE_ID`
+`2025-06-28 14:00:48 2af157d77fb1304a74176eaee7fbc7c7e932d946bf25325e9c26c91db19e3079`). The C
+amalgamation ships inside the `libsqlite3-sys` Rust crate and is compiled as part of the Nexus
+build — there is no `pkg-config`, no system libsqlite3, no submodule and no build-time download,
+the same arrangement as libopus above. ADIF is still written alongside the database as a
+plain-text mirror, so an operator's log stays readable without Nexus and without SQLite.
+
+Rust bindings: **`rusqlite` 0.37.0** (MIT, (c) 2014 The rusqlite developers,
+<https://github.com/rusqlite/rusqlite>) over **`libsqlite3-sys` 0.35.0** (MIT, same authors and
+repository), whose `bundled` feature carries the amalgamation. `hashlink`, `hashbrown`,
+`fallible-iterator` and `fallible-streaming-iterator` (all MIT or MIT/Apache-2.0) arrive with
+rusqlite; `bitflags`, `smallvec` and the `cc` build-script crate were already in the tree.
+
+**SQLite is not licensed — it is dedicated to the public domain.** In place of a legal notice
+each source file carries the author's disclaimer and blessing:
+
+> The author disclaims copyright to this source code.  In place of
+> a legal notice, here is a blessing:
+>
+>    May you do good and not evil.
+>    May you find forgiveness for yourself and forgive others.
+>    May you share freely, never taking more than you give.
+
+A per-file header walk of the exact tree that ships (`libsqlite3-sys` 0.35.0 -> `sqlite3/` ->
+`sqlite3.c`, `sqlite3.h`, `sqlite3ext.h`) found **no copyright assertion, no "all rights
+reserved", no redistribution clause and no SPDX identifier anywhere**. 129 of the
+amalgamation's 137 constituent source files carry the disclaimer above. Of the eight that do
+not:
+
+- `printf.c` carries its own explicit statement instead — "The 'printf' code that follows
+  dates from the 1980's. It is in the public domain."
+- `parse.h`, `opcodes.h`, `opcodes.c`, `pragma.h` and `keywordhash.h` are **generated**, each
+  naming its generator in-file (`tool/mkopcodeh.tcl`, `tool/mkopcodec.tcl`,
+  `tool/mkpragmatab.tcl`, `tool/mkkeywordhash.c`; `parse.h` is Lemon output). These five reach
+  the binary and are **assessed as public domain by inheritance from the SQLite source tree —
+  an inference, not a header read**.
+- `sqlite3session.h` and `sqlite3session.c` are wrapped in `#if defined(SQLITE_ENABLE_SESSION)`.
+  Nexus does not enable that feature, so both ship inside the crate and **neither is compiled**.
+
+Public-domain material carries no condition of any kind, so it combines into the GPLv3 whole
+with nothing to satisfy; the disclaimer is reproduced here because a reader is entitled to see
+why, not because SQLite asks for it. Note that the machine gate cannot corroborate any of this:
+cargo-deny adjudicates the crate-level SPDX expression, which is `MIT` for the whole of
+`libsqlite3-sys`, and never inspects `sqlite3/`. This section is the only record.
+
+The crate also carries a **SQLCipher** amalgamation at `libsqlite3-sys/sqlcipher/`
+(BSD-3-Clause, (c) 2008-2020 Zetetic LLC). It ships inside the crate source but **is not
+compiled**: Nexus does not enable `bundled-sqlcipher`, so none of it is linked or shipped. It
+is named here only because a source audit of the crate will find it and should not have to
+guess.
+
+`rusqlite` and `libsqlite3-sys` are MIT, and MIT requires its notice to travel with the binary.
+Verbatim from the `LICENSE` file both crates ship:
+
+> Copyright (c) 2014 The rusqlite developers
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in
+> all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+> THE SOFTWARE.
+
+That notice travels in every installer: NOTICE is bundled as an app resource
+(`tauri.conf.json` -> `bundle.resources` -> `"../NOTICE": "NOTICE"`). No separate license file is
+staged for SQLite, because the public domain asks for none and the MIT notice is reproduced in
+full above — the same treatment libopus's `COPYING` gets, and deliberately not OpenSSL's, whose
+Apache-2.0 section 4 does require a copy of the License to accompany the redistributed library.
+
 ---
 
 ## Rig-control protocol interoperability (no vendor code bundled)
@@ -751,6 +834,13 @@ principal third-party components, not a substitute for that gate:
 - **hound** (voice-keyer WAV read/write) — Apache-2.0 OR MIT OR Zlib.
 - **socket2** (shared-UDP socket options for radio sharing) — MIT OR Apache-2.0.
 - **serde** / **serde_json** (serialization) — MIT OR Apache-2.0.
+- **rusqlite** / **libsqlite3-sys** (the logbook's SQLite storage; `libsqlite3-sys`'s `bundled`
+  feature carries and statically links the SQLite C amalgamation) — MIT, and MIT. It arrives
+  with **hashlink**, **hashbrown**, **fallible-iterator** and **fallible-streaming-iterator** —
+  MIT OR Apache-2.0, all already on deny.toml's allow-list; `bitflags`, `smallvec` and the
+  **cc** build-script crate were already in the tree at compatible versions. SQLite itself is
+  public domain and is covered in full under *Linked native libraries* above, including the
+  per-file walk and why no license file is staged. ADIF remains the on-disk mirror.
 - **tract-onnx** and its `tract-core` / `tract-hir` / `tract-linalg` / `tract-data` /
   `tract-nnef` companions (the pure-Rust neural-network inference engine that runs the DeepCW
   model — see the DeepCW section at the end of this file for the model's own, different,
@@ -878,6 +968,13 @@ The bundled and linked components combine into the GPLv3 whole:
   redistribution under GPLv3.
 - MPL-2.0 (serialport) is GPL-compatible; its source-disclosure obligations
   apply per-file to that component.
+- Public domain (the bundled SQLite amalgamation, statically linked) imposes no condition at
+  all, so it combines into the GPLv3 whole with nothing to satisfy; the MIT `rusqlite` and
+  `libsqlite3-sys` bindings that carry it require only notice retention, which GPLv3 section 7
+  permits and which this file discharges by reproducing their notice verbatim. Five generated
+  files in the amalgamation carry no header and are taken as public domain by inheritance — an
+  inference, recorded as one above. SQLCipher's BSD-3-Clause tree and SQLite's session
+  extension both travel inside the crate but are never enabled, compiled or shipped.
 - Apache-2.0 (OpenSSL 3, linked on Linux and bundled in the AppImage) is
   compatible with GPLv3, though not with GPLv2; Nexus is GPL-3.0-only, so it
   combines into the GPLv3 whole. OpenSSL 3 no longer carries the old

@@ -783,6 +783,7 @@ pub struct Logbook {
 mod id;
 mod op;
 mod records;
+pub mod sqlite;
 pub use id::{Minter, RecordId};
 pub use op::{Effects, LogOp, UploadService};
 pub use records::OpClass;
