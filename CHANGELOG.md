@@ -134,6 +134,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Duplicate contacts are now kept in the log for the contests that cross-check, and still
+  refused in Field Day.** Work a station you have already worked in **CQ WW (CW, SSB or RTTY),
+  CQ WPX (CW or SSB) or ARRL Sweepstakes (CW or SSB)** and the contact is logged instead of
+  turned away. It is marked as a duplicate, it is worth no points and no multiplier, and your
+  QSO count and claimed score do not include it. It goes into your Cabrillo as an ordinary QSO
+  line. This is what both sponsors ask for: their log checkers remove duplicates with no
+  penalty, and CQ asks entrants not to delete them, because a contact missing from your log
+  becomes a Not-In-Log penalty for the station that worked you — worth twice the contact at CQ.
+  **ARRL and Winter Field Day are unchanged**: a duplicate there is still refused and nothing is
+  written, because Field Day logs are not checked at all, so there is no penalty to spare anyone
+  and its summary sheet asks for raw non-duplicate counts. The QSO parties and the ARRL VHF
+  contests are also unchanged for now. The duplicate warning you get while typing a callsign is
+  the same as it always was; what changed is only what happens if you log the contact anyway.
+
 - **Large logbooks are much faster.** With a 150,000-contact log, Nexus had become slow enough to
   stop working: every status update re-scanned the whole log, and logging one contact sent the whole
   log (about 100 MB) to every window. Now an unchanged log costs the status update nothing, a logged

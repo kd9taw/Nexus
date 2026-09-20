@@ -4685,7 +4685,8 @@
         "by_band": false,
         "by_mode_class": false,
         "by_fields": [],
-        "by_sent_fields": []
+        "by_sent_fields": [],
+        "log_dupes": true
       },
       "domains": [
         {
@@ -5190,7 +5191,8 @@
         "by_band": false,
         "by_mode_class": false,
         "by_fields": [],
-        "by_sent_fields": []
+        "by_sent_fields": [],
+        "log_dupes": true
       },
       "domains": [
         {
@@ -5721,7 +5723,8 @@
         "by_band": true,
         "by_mode_class": false,
         "by_fields": [],
-        "by_sent_fields": []
+        "by_sent_fields": [],
+        "log_dupes": true
       },
       "domains": [],
       "exchange": {
@@ -5854,7 +5857,8 @@
         "by_band": true,
         "by_mode_class": false,
         "by_fields": [],
-        "by_sent_fields": []
+        "by_sent_fields": [],
+        "log_dupes": true
       },
       "domains": [],
       "exchange": {
@@ -5995,7 +5999,8 @@
         "by_band": true,
         "by_mode_class": false,
         "by_fields": [],
-        "by_sent_fields": []
+        "by_sent_fields": [],
+        "log_dupes": true
       },
       "domains": [
         {
@@ -6561,7 +6566,8 @@
         "by_band": true,
         "by_mode_class": false,
         "by_fields": [],
-        "by_sent_fields": []
+        "by_sent_fields": [],
+        "log_dupes": true
       },
       "domains": [],
       "exchange": {
@@ -6721,7 +6727,8 @@
         "by_band": true,
         "by_mode_class": false,
         "by_fields": [],
-        "by_sent_fields": []
+        "by_sent_fields": [],
+        "log_dupes": true
       },
       "domains": [],
       "exchange": {

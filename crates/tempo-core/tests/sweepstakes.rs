@@ -161,12 +161,14 @@ fn sweepstakes_cw_from_wisconsin_end_to_end() {
     ));
 
     // ⭐ **THE NO-BAND DUPE KEY.** *"Each station may be contacted only once, regardless
-    // of band."* — so the SAME station on a DIFFERENT band is refused, which is the
-    // whole difference from every other contest in the shipped set. No exchange is
-    // composed for it: the refusal happens before a serial would be spent.
+    // of band."* — so the SAME station on a DIFFERENT band is a DUPLICATE, which is the
+    // whole difference from every other contest in the shipped set. ARRL LGCK.1
+    // *"Duplicate contacts are removed with no additional penalty"* puts the removal on
+    // the checker, so the row is logged and marked and scores nothing — the point and
+    // multiplier totals below count three contacts, not four.
     log.band = "40m".into();
     assert!(
-        !log.log_fields_at(
+        log.log_fields_at(
             "K2DEF",
             &fields(&[
                 ("NR", "40"),
@@ -180,10 +182,14 @@ fn sweepstakes_cw_from_wisconsin_end_to_end() {
             0,
             SAT + 120
         ),
-        "SS dupes across the whole contest: a second contact on 40m is not a contact"
+        "SS dupes across the whole contest, and a duplicate is REPORTED, not dropped"
     );
-    // POSITIVE CONTROL: a DIFFERENT station on that same new band logs, so the refusal
-    // above is the callsign component of the key and not a log that stopped accepting.
+    assert!(
+        log.qsos().last().expect("the dupe row").dupe,
+        "…marked, on a key that ignores the band entirely"
+    );
+    // POSITIVE CONTROL: a DIFFERENT station on that same new band is a NEW contact, so
+    // the mark above is the callsign component of the key and not every row it takes.
     log.session.clear_in_flight();
     log.session.compose_for("N0GHI", SAT + 150);
     assert!(log.log_fields_at(
@@ -258,7 +264,21 @@ fn sweepstakes_cw_from_wisconsin_end_to_end() {
     for line in cab.lines().filter(|l| l.starts_with("QSO:")) {
         assert_eq!(line.matches("W9XYZ").count(), 1, "{line}");
     }
-    assert_eq!(cab.matches("K2DEF").count(), 1, "{cab}");
+    // The same control for the worked side, PER LINE — K2DEF now has two of them,
+    // because the duplicate is reported, and the property being guarded is about one
+    // line's shape rather than about how many lines a station has.
+    let k2def: Vec<&str> = cab
+        .lines()
+        .filter(|l| l.starts_with("QSO:") && l.contains("K2DEF"))
+        .collect();
+    assert_eq!(
+        k2def.len(),
+        2,
+        "the contact and the reported duplicate: {cab}"
+    );
+    for line in &k2def {
+        assert_eq!(line.matches("K2DEF").count(), 1, "{line}");
+    }
 }
 
 /// ⭐ **The Phone weekend is a SEPARATE contest**, with its own token and its own
