@@ -943,6 +943,22 @@ impl FieldDayLog {
             .filter(|&v| v > 0)
             .unwrap_or(self.next_seq);
         self.next_seq = self.next_seq.max(seq + 1);
+        // ⭐ **THE SERIAL RUN, advanced past this row exactly as `next_seq` is above —
+        // and this is the half that goes ON THE AIR.** A re-used `seq` collides with a
+        // club host's merged rows; a re-issued SERIAL is copied by the other operator
+        // and lands in their log, so two of my QSO lines claim a number the checker can
+        // only match to one of them.
+        //
+        // ⚠️ **RE-DERIVED from the rows, never persisted beside them**, and the reason
+        // is that the issued number is ALREADY on the row (`APP_NEXUS_MYEX`, written
+        // whenever the sent exchange moves — which a serial makes true on the first
+        // contact). A counter stored next to the history it numbers is a second source
+        // of truth for one fact, and the two come apart exactly where it matters: a
+        // journal that lost rows to `min_when_unix`, a partial restore, an operator who
+        // edited the file. Reading the rows cannot drift from the rows.
+        if let Some(n) = issued_serial(spec, &tx) {
+            self.session.next_serial = self.session.next_serial.max(n + 1);
+        }
         // Resolved on the RESTORE path too, and from the call the row carries — a
         // journal reload or an ADIF merge must score identically to the live log, and a
         // row restored with no entity would drop a country multiplier the operator
@@ -1270,6 +1286,36 @@ fn rx_from_standard(
     standard_rcvd_slots(spec, role)
         .filter_map(|(key, tag)| spec.value(key, &get(tag)?))
         .collect()
+}
+
+/// The serial a row was SENT under — the number
+/// [`ContestSession::compose_for`](crate::contest::ContestSession::compose_for) issued
+/// onto it, read back off the row's own sent exchange.
+///
+/// ⭐ **The slot is found by KIND, not by name.** Sweepstakes calls it `NR`, CQ WPX and
+/// the California QSO Party call it `SERIAL`, and a rules file is free to call it
+/// something else again — a name list here would silently stop finding the slot on the
+/// sixth contest that ships, which is precisely the failure the restore must not have.
+///
+/// `None` when the exchange declares no serial at all (both Field Day events, the QSO
+/// parties that send a county), when the row carries no value for the slot, or when
+/// that value will not parse — a journal is a file on disk and the slot can hold
+/// anything. **Zero is `None` too**: `"0"` is the template placeholder
+/// (`session::sent_value`'s `"serial"` arm), so a row logged without a compose carries
+/// it and numbers nothing.
+fn issued_serial(
+    spec: &'static crate::contest::ExchangeSpec,
+    tx: &[crate::contest::FieldValue],
+) -> Option<u32> {
+    tx.iter()
+        .find(|v| {
+            matches!(
+                spec.field(v.key).map(|f| f.kind),
+                Some(crate::contest::FieldKind::Serial { .. })
+            )
+        })
+        .and_then(|v| v.raw.trim().parse::<u32>().ok())
+        .filter(|&n| n > 0)
 }
 
 fn now_unix() -> u64 {
