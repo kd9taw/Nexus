@@ -72,7 +72,8 @@ you.
 Every change went through the full local gate, and CI built and tested every commit on Linux,
 Windows and macOS (compile check) and for the Raspberry Pi.
 
-On the air, the 1.14.0 test build passed its on-air test list on 2026-09-19, including:
+On the air, an earlier 1.14.0 test build passed its on-air test list on 2026-09-19 — **before the
+contest-logging work below landed** — including:
 - RTTY F1–F8, macro editing and persistence, and a CQ WW RTTY practice session checked against the
   sponsor's Cabrillo example;
 - soundcard-CW spot clicks on 20 m and 40 m, and a 40 m scope click;
@@ -81,6 +82,12 @@ On the air, the 1.14.0 test build passed its on-air test list on 2026-09-19, inc
 - the Remote browser on a phone and a desktop.
 
 Not run on real hardware for this release:
+- ⚠️ **The contest-logging changes** — duplicates kept and scored zero, the serial sent and bound
+  to its station, the corrected already-worked warning, and the RTTY sequencer following the
+  Field Day switch. These landed after the 19 September on-air session, so they are covered by
+  tests and the full gate but have not been worked on the air. The serial and the RTTY
+  sequencer change **what your radio transmits**, so if you are running a serial contest or
+  RTTY Auto, check the first few contacts against what you expect before trusting a run.
 - **The macOS fixes** (the Prove TX and SSTV-on-145.800 confirmation dialogs) are covered by tests
   and the macOS compile check. No Mac test build was made, so they have not been tried on a Mac.
 - The Remote fix for controls that blinked off after a clock correction is covered by tests.
