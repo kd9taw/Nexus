@@ -33,6 +33,26 @@ import { RemoteCollections, RemoteCollectionsContext } from './collections'
 import type { ApplicationClient } from './application-client'
 import type { QueryPage } from './application-query-protocol'
 
+// ⏱ THE PER-TEST DEADLINE, and why it is not vitest's default 5 s.
+//
+// Every test in this file mounts the WHOLE Remote browser application — two of them twice, one of
+// those over a 1,200-channel programming project — and then sweeps hundreds of controls for
+// disabled state and for commands that must never be sent. That is real work, and it is the
+// point: the breadth is what catches a control that went live on an observer page.
+//
+// The deadline is the only thing about it that was arbitrary. On a quiet box the heaviest test
+// here runs in ~2.5 s and the two "connects the actual … section" ones in 0.27 s and 0.85 s; the
+// file is ~20 s for 22 tests. Under the full suite's own parallelism PLUS another agent's build
+// on this shared machine, "connects the actual program section" crossed 5 s twice in one day —
+// both times on the deadline, never on an assertion. A gate whose verdict depends on who else is
+// using the machine will eventually be read as a real red, and the next reader has no way to tell
+// the two apart.
+//
+// 30 s is ~12x the slowest measured run here, so it still does the one job a per-test deadline
+// has — catching a render that HANGS — while no longer doubling as a load meter. If a test in
+// this file ever legitimately approaches it, the fixture is what to cut, not this number.
+vi.setConfig({ testTimeout: 30_000 })
+
 const snapshot = {
   mycall: 'N0CALL', mygrid: 'AA00', mode: 'Normal',
   radio: { dialMhz: 3.573, band: '80m', catOk: true, sideband: 'USB', operatingMode: 'digital',
@@ -647,7 +667,7 @@ it.each(['settings','program'] as const)('connects the actual %s section with sa
     expect(container.querySelector('input[type="password"]')).toBeNull()
     expect(container.textContent).not.toContain('must-not-leave-station')
   }else{
-    await waitFor(()=>expect(container.querySelector<HTMLInputElement>('.rp-chan-row:last-child .rp-chan-name')?.value).toBe('CH1199'),{timeout:4000})
+    await waitFor(()=>expect(container.querySelector<HTMLInputElement>('.rp-chan-row:last-child .rp-chan-name')?.value).toBe('CH1199'),{timeout:15_000}) // under the test deadline above, and no longer the first thing to trip under load
     expect(container.querySelectorAll('.radioprog')).toHaveLength(1)
     const controls=container.querySelectorAll<HTMLButtonElement>('.radioprog button')
     expect(controls.length).toBeGreaterThan(10)
