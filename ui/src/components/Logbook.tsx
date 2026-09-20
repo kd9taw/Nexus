@@ -578,9 +578,12 @@ export function Logbook({
   // The same for the date box — a day that does not exist (2026-02-30) is refused, not rolled
   // forward, and the operator keeps what they typed instead of watching the box blank itself.
   const whenDateBad = draft.whenDate.trim() !== '' && parseUtcDate(draft.whenDate) === null
-  // …and for the export range below. A bound that is not a date HOLDS the export: the backend
-  // reads an unparseable bound as no bound, so running anyway would hand over the whole log
-  // where a slice was meant — for a file that goes to an awards submission or an upload.
+  // …and for the export range below. A bound that is not a date HOLDS the export. The backend
+  // refuses one (`export_general_log`: "bad export date … (expected YYYY-MM-DD)"), so the cost
+  // of running anyway is a toasted error, not a wrong file — but the NATIVE control this
+  // replaced never let that refusal happen: it emptied whatever it could not parse, an empty
+  // bound means unbounded, and the export silently widened from a slice to the whole log. The
+  // box keeps what was typed now, so saying no here is what keeps that quiet widening dead.
   const exportFromBad = exportFrom.trim() !== '' && parseUtcDate(exportFrom) === null
   const exportToBad = exportTo.trim() !== '' && parseUtcDate(exportTo) === null
   const exportRangeBad = exportFromBad || exportToBad
