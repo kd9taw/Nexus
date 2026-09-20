@@ -3,7 +3,10 @@
 The headline is contest operating, in time for the CQ World-Wide RTTY DX Contest (0000Z Saturday
 26 September). The RTTY cockpit has eight F-key macros you can edit, a double-click grabs a callsign
 (and, in a contest, the exchange), and CQ WW RTTY and the Illinois QSO Party are both built in, with
-the sponsors' own exchange, scoring and Cabrillo. **47 changes since 1.13.0.**
+the sponsors' own exchange, scoring and Cabrillo. Contest logging got the same attention:
+duplicates are now kept and scored zero where the sponsor asks for that, serial numbers
+actually go out and are tied to the station that copied them, and the already-worked warning
+follows each contest's own rule instead of Field Day's. **72 changes since 1.13.0.**
 
 If you don't contest, these are the changes most likely to matter to you. CW spots worked with the
 soundcard keyer now land on the spot instead of 600 Hz off. A satellite contact you log after the
@@ -13,6 +16,23 @@ you.
 
 ## The short version
 
+- **Duplicates are kept in the contests that cross-check, and scored zero.** In CQ WW (including
+  RTTY), CQ WPX, ARRL Sweepstakes and the three ARRL VHF contests, working someone twice now logs
+  the contact and scores it nothing, instead of refusing it. That is what both sponsors ask for:
+  CQ's own instruction is not to remove duplicates, because deleting one costs *the other station*
+  its credit. The log table marks the duplicate — and no longer marks your first, real contact
+  beside it. Field Day is unchanged, because ARRL does not check Field Day logs.
+- **The "already worked" warning now asks each contest's own question.** It had been asking Field
+  Day's — same call, same band, same mode — in every contest, and only the two Field Days work that
+  way. In Sweepstakes you work a station once on any band, so someone worked on 40m CW showed as new
+  on 20m phone and the log then refused you, after the over. In the QSO parties and on VHF, a mobile
+  from a new county or a rover from a new grid is a fresh contact worth points, and the warning said
+  "already worked", so you passed over a station you should have called.
+- **Serial numbers are sent, logged, and belong to the station that copied them.** In CQ WPX, ARRL
+  Sweepstakes and the California QSO Party, an `{EXCH}` macro used to leave the serial out entirely
+  and every logged row recorded zero. The number now goes out, and it is tied to the station you are
+  working from the moment you enter their call — so calling one station, working another, and coming
+  back no longer sends one number to both.
 - **RTTY for contests.** F1–F8 work from the keyboard, with a built-in Everyday set and a Contest
   set (CQ, exchange, TU, my call, his call, S&P exchange, AGN, B4), and every key can be edited.
   Each macro goes out on a line of its own. Double-click a call in the decoded text to grab it; in a
@@ -40,7 +60,7 @@ you.
 ## Before CQ WW RTTY
 
 - **Update to 1.14.0 first.** CQ WW RTTY's exchange, scoring and Cabrillo exist only in this
-  release.
+  release — and so does keeping duplicates in the log, which is what CQ asks entrants to do.
 - In **Settings › Contesting**, set your CQ zone. In the US or Canada, also set your contest state
   or province, or you'd send the DX exchange with no QTH. Nexus warns you if it's missing. The
   optional **Email for contest logs** goes into the Cabrillo header.
@@ -67,9 +87,17 @@ Not run on real hardware for this release:
   Its trigger was measured on a development machine whose clock steps. How often it happens in
   the field is not known.
 
-## [1.14.0] — 2026-09-19
+## [1.14.0] — 2026-09-20
 
 ### Added
+
+- **During a contest, the Operate cockpit now tells you whether you have worked a station *in this
+  contest*.** The callsign card's `Dupe 20m` badge has always meant "worked on this band, ever",
+  which is what you want day to day but not mid-contest — a contact from years ago lit it even
+  though the station was a fresh one to work. A second badge now appears beside it while a contest
+  is running: **Contest dupe** if this contest's own log already has them, and an amber **Club
+  dupe** if another position at your club has. The lifetime badge is unchanged and still means what
+  it always did, so the two can be read at a glance without either one changing under you.
 
 - **RTTY: double-click a callsign to grab it, and F1–F8 you can edit.** Double-click a call in
   RTTY's Decoded text and it fills the Their call box and the log strip's callsign together —
@@ -188,6 +216,29 @@ Not run on real hardware for this release:
 
 ### Changed
 
+- **Duplicate contacts are now kept in the log for the contests that cross-check, and still
+  refused in Field Day.** Work a station you have already worked in **CQ WW (CW, SSB or RTTY),
+  CQ WPX (CW or SSB), ARRL Sweepstakes (CW or SSB) or the ARRL VHF contests (January, June and
+  September)** and the contact is logged instead of turned away. It is marked as a duplicate, it
+  is worth no points and no multiplier, and your QSO count and claimed score do not include it.
+  It goes into your Cabrillo as an ordinary QSO line. This is what both sponsors ask for: their
+  log checkers remove duplicates with no penalty, and CQ asks entrants not to delete them,
+  because a contact missing from your log becomes a Not-In-Log penalty for the station that
+  worked you — worth twice the contact at CQ.
+  **ARRL and Winter Field Day are unchanged**: a duplicate there is still refused and nothing is
+  written, because Field Day logs are not checked at all, so there is no penalty to spare anyone
+  and its summary sheet asks for raw non-duplicate counts. The QSO parties are also unchanged —
+  they are run by five different sponsors and we have not read a rule from any of them that
+  settles it. The duplicate warning you get while typing a callsign is the same as it always
+  was; what changed is only what happens if you log the contact anyway.
+
+- **Large logbooks are much faster.** With a 150,000-contact log, Nexus had become slow enough to
+  stop working: every status update re-scanned the whole log, and logging one contact sent the whole
+  log (about 100 MB) to every window. Now an unchanged log costs the status update nothing, a logged
+  contact sends just that contact to each window, each window keeps one copy of the log instead of
+  three or four, and awards, needs and Journey are counted once per change to the log instead of on
+  every refresh. Reading the log no longer holds up the radio while it converts, and a contact
+  WSJT-X logs in companion mode is added to the end of the log instead of rewriting the whole file.
 - **Contest Cabrillo logs record the frequency you were on.** Outside Field Day, each QSO line now
   carries the dial the contact was logged on instead of the band's lower edge, which sponsors
   such as CQ WW ask award entrants for. Contacts logged before this update keep the band edge.
@@ -232,6 +283,137 @@ Not run on real hardware for this release:
 
 ### Fixed
 
+- **Your CW and RTTY macro keys now send a serial number in the contests that use one — the text
+  they transmit has changed.** In CQ WPX (CW and SSB), ARRL November Sweepstakes (CW and SSB) and
+  the California QSO Party, an `{EXCH}` macro used to leave the serial out entirely: an F-key set to
+  `{CALL} 599 {EXCH} {EXCH}` keyed `K1ABC 599` and stopped there, and Sweepstakes sent
+  `A W9XYZ 74 WI` with no number in front. The same keys now send `K1ABC 599 1 1` and
+  `1 A W9XYZ 74 WI`. The serial is counted for you: the log strip shows the number for the contact
+  you are working, and the contact is logged and exported with the number that went out. Until now
+  there was no number anywhere, and every contact was logged and exported as serial `0`, which is a
+  log a sponsor cannot check.
+- **The log strip and the phone cockpit show the number you are actually sending.** In a serial
+  contest they read the exchange straight off the session, whose serial slot is a permanent
+  placeholder, so the "Sent:" line said `599 0` while the contact was logged with the real
+  number. On SSB that is what you read aloud — and it is what the voice-keyer hint told you to
+  record into a slot — so your log would have recorded serials that never went on the air.
+  Both now show the issued number. Contests with no serial are unchanged.
+- **The number belongs to the station you are working, from the moment you enter their call.**
+  Search and pounce: call one station, get no answer, work somebody else and come back — the first
+  station is given the number they already copied, not a later one, and the number you actually
+  sent is the number that reaches your log. Correcting a busted call keeps the number too, so
+  fixing `K1ABC` to `K1ABD` does not hand them a second one. Reading the strip, previewing an
+  F-key, or sending your exchange twice never moves the run; logging the contact does, so the next
+  station gets the next number. Contests with no serial in their exchange, Field Day among them,
+  are unchanged.
+
+- **The contest dupe warning now follows the contest's own rule instead of Field Day's, and it was
+  wrong in both directions.** While you type a callsign, the log strip and the Operate callsign
+  card tell you whether this contest has already worked that station. That check asked Field Day's
+  question — same call, same band, same mode class — whatever contest was running, and **only the
+  two Field Days actually work that way**. The other fifteen were wrong, seven of them one way and
+  eight the other. **In Sweepstakes you work a station once, on any band and any mode**, so someone
+  you had already worked on 40m CW showed as new on 20m phone and you called them and were refused
+  at the log, after the over. **CQ WW and CQ WPX count one contact per band in either mode**, so
+  the same thing happened across a mode change. The other eight went wrong the opposite way: in
+  **the five QSO parties and the three ARRL VHF contests**, working a mobile again from a new
+  county — or a rover from a new grid — is a fresh contact worth points, and the warning said
+  "already worked", so you passed over a station you should have called. Where a contest's rule
+  depends on an exchange you have not copied yet, the warning now says nothing rather than
+  guessing: being told nothing costs you a duplicate that scores zero, while a wrong "already
+  worked" costs you the contact.
+
+- **A duplicate in the contest log table is marked as the duplicate — and the real contact beside
+  it no longer is.** Now that a duplicate is kept in the log rather than refused (see above), the
+  table has rows that are worth nothing, and you need to see which when you check your score
+  against the sponsor's. It had been working its own dupes out by looking for a callsign that
+  turned up twice on the same band and mode, which went wrong two ways: it marked **both** rows,
+  so your first, real, scoring contact was flagged as a duplicate for the crime of being worked
+  again later; and it used Field Day's rule everywhere, so a Sweepstakes duplicate on another band
+  was not marked at all, while two perfectly legal QSO-party contacts with a mobile in two
+  different counties were both marked. The table now shows what the log itself recorded.
+
+- **Remote: the Awards list no longer gets squeezed off a phone screen.** In the hosted browser
+  the Awards view carries a status line above the summary and, since the responsiveness check was
+  added, a strip below it. On a phone-sized window with the text enlarged there was no height left
+  for the summary between the two: it collapsed to nothing, and the strip drew over the award
+  cards, so a tap landed on the strip instead of the card under it. The summary now keeps a
+  minimum height of its own whatever the window does — a card scroller worth using — and anything
+  that will not fit scrolls with the column instead of being cut off at the bottom. Windows at
+  1024×768 and above look exactly as they did.
+
+- **A Field Day exchange copied by the RTTY sequencer now reaches the log as fields, not just as a
+  note.** If Auto was running in Field Day and you switched Field Day off while a contact was still
+  on the air, that contact finished under the Field Day exchange but no longer had a contest log to
+  go to. Its class and section landed in the record's comment as plain text — `2A EMA` — and
+  nowhere else, so they were not in the ADIF you exported and no other program could read them back
+  as an exchange. They are now written to their proper ADIF fields as well, and the comment still
+  reads the same as before. Contacts made the ordinary way were never affected.
+
+- **Editing a contest contact no longer wipes its exchange.** Correcting anything on a contest QSO —
+  a busted call, a report, a grid — silently dropped the contest data from the record: the contest
+  name, the serials you sent and received, and both exchanges, none of which the edit form shows you
+  in the first place. The contact stayed in your log, but its contest fields were gone from the log
+  and from every ADIF export made afterwards, so a corrected contact would not score. Editing now
+  keeps all of it, including on a callsign correction — the exchange is what went over the air, and
+  fixing the call does not change what was sent.
+- **The CW and Phone band-activity strips no longer rebuild themselves every time the spots refresh.** On a busy
+  band — a contest evening can put over 600 stations on the 20 m CW strip — one new spot made Nexus throw away and
+  redraw every flag above it, which on a slower PC was enough to stall the waterfall for a moment before the new flag
+  appeared. The flags of stations still on the air stay put now; only the spots that arrived or aged out change.
+  (#320)
+- **Prompt before logging now queues contacts instead of replacing them.** If a second contact finished while the
+  popup was still open, the popup kept showing the first station while Nexus had moved on to the second — and logging
+  then filed the first station's call on the second contact's time and frequency. The popup now keeps the contact it
+  is showing, tells you how many are waiting, and brings up the next one as soon as you log or discard it. Nothing is
+  mixed, and no contact is lost.
+- **If the queue ever fills, Nexus says so rather than logging quietly.** Leaving an FT8 run to itself with
+  Prompt before logging on can stack up contacts; past 64 waiting, the oldest is logged as it stands rather than
+  lost. That contact is now named in the Connections log with its call, band, mode and time, and the popup says how
+  many went in without your confirmation since you last answered it — because those contacts upload to your
+  services and join the LoTW batch like any other.
+- **Correcting a callsign in that popup corrects what was looked up from the wrong one.** The country, state and a
+  name that came from the busted call are re-derived for the call you actually worked, and a grid that had only been
+  looked up is dropped — a grid the station itself sent, or one you typed, is kept. Correcting a call from Nexus
+  Remote now does the same. An edited report no longer leaves the old report behind in the comment.
+- **The ATU button says when your radio's tuner cannot be started over CAT.** On Icom and Kenwood radios connected
+  through Hamlib the command only switches the tuner in or out, so the button is greyed out and points at the TUNER
+  button on the radio — instead of quietly switching the tuner in, tuning nothing, and, in the digital section,
+  ending your QSO for a tune-up that never happened. Where a tune-up can be started, it now ends your QSO only once
+  the radio has actually accepted it. (#322)
+- **Dates you type are UTC everywhere.** The Logbook's edit form, "Log a contact from another radio" and the export
+  date range took dates through the Windows date control, which follows the PC's own calendar and silently discarded
+  a date it could not read — so an impossible date looked like a cleared one, and on the export that quietly widened
+  the range to your whole log. All three now take the date as plain UTC text, refuse a date that cannot be, and hold
+  the button rather than exporting something other than what you asked for. (#280)
+- **The waterfall no longer freezes a few minutes into a session.** While the radio was slow to
+  answer (a CAT read on a slow link, a log save), each Nexus window kept asking for its next update
+  several times a second without waiting for the last one, and those waiting requests could take
+  every thread the waterfall and meters are drawn from. Each screen now waits for its answer before
+  asking again, and the waiting happens where it cannot hold up the waterfall. (#335)
+- **Contact times in the Logbook's edit form and in "Log a contact from another radio" are always
+  24-hour UTC.** Those time boxes followed the Windows clock format, so on a PC set to a 12-hour
+  clock a contact at 00:58 UTC showed as "12:58 AM", and changing it to 00 put it straight back to
+  12. Contacts that were right got "corrected" by 12 hours. You now type the time as HH:MM or
+  HH:MM:SS. A time that can't be right, such as 25:00, is refused with a message rather than saved
+  or replaced with the current time. An edit that doesn't touch the time now keeps it to the
+  second. The times Nexus stored were always correct. (#280)
+- **Confirming a contact with Prompt before logging keeps its end time** and, on a split contact,
+  its receive frequency. Ham Radio Deluxe no longer shows 00:00 as the end time. (#329)
+- **Digital section: running the radio's ATU now ends like Tune.** TX switches off, and Nexus no
+  longer goes back to calling the station of an unfinished QSO. (#322)
+- **Uploads are never dropped silently.** When the upload queue fills, the Connections log names
+  each dropped contact and the service it never reached, and a ClubLog catch-up can no longer push
+  out contacts you just made. Every upload service now says so in the Connections log when it gives
+  up on a contact after its retries — ClubLog, World Radio League, N3FJP and Cloudlog/Wavelog as
+  well as QRZ and eQSL — naming the contact and how to send it again. (#290)
+- **The band menu outlines the band you are on.** It was a thin bar on the left edge that looked
+  like a "(". (#323)
+- **With two radios, switching back no longer shows a band as "custom".** A radio running FT8
+  reports its data mode, and the band menu didn't recognise that as its FT8 channel, so after a
+  switch 80 m read "80m (custom)" although the radio hadn't moved. (#334)
+- **Remote: revoking a browser's logging or station-control permission always takes effect**, even
+  while the station is busy. (#318)
 - **Remote: the Release button no longer flickers.** It greyed out on every heartbeat — about once a
   second — so a click could land while it was disabled and do nothing. It now stays lit, and a Release
   clicked while the station is answering waits for that answer and then releases the station, once.
