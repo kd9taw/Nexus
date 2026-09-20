@@ -952,6 +952,7 @@ export const JA: PartialCatalog = {
   "logPrompt.rstSent.label": "送信RST",
   "logPrompt.rstRcvd.label": "受信RST",
   "logPrompt.waiting": "このあとに{{count}}件の交信が待っています",
+  "logPrompt.autoLogged": "待ち行列が満杯のため、{{count}}件の交信を確認なしで記録しました。すでにログに入っており、各接続サービスへもアップロードされます。接続ログに詳細があります。",
   "logPrompt.discard": "破棄",
   "logPrompt.log": "QSOを記録",
   "roster.title": "局一覧",

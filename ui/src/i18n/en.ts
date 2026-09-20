@@ -1394,6 +1394,13 @@ export const EN = {
     one: '{{count}} more contact is waiting behind this one',
     other: '{{count}} more contacts are waiting behind this one',
   },
+  // Deliberately the same words as the Connections-log line the engine writes ("WITHOUT your
+  // confirmation"): one event, one vocabulary, so an operator reading both is not left wondering
+  // whether they are two different things.
+  'logPrompt.autoLogged': {
+    one: '{{count}} contact was logged without your confirmation — the queue was full. It is in your log and your connectors will upload it; the Connections log names it.',
+    other: '{{count}} contacts were logged without your confirmation — the queue was full. They are in your log and your connectors will upload them; the Connections log names them.',
+  },
   'logPrompt.discard': 'Discard',
   'logPrompt.log': 'Log QSO',
 

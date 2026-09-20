@@ -3522,6 +3522,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
           onStop={remote ? handleHaltTx : undefined}
           record={snap.pendingLog}
           waiting={snap.pendingLogsWaiting ?? 0}
+          autoLogged={snap.pendingLogsAutoLogged ?? 0}
           onConfirm={handleConfirmLog}
           onDiscard={handleDiscardLog}
         />

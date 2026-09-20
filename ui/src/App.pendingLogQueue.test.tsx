@@ -13,7 +13,7 @@
 // This mounts the REAL App, because the defect was in the wiring — LogConfirm's own tests pass
 // it a record directly and would pass either way.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/react'
+import { render, cleanup, waitFor, screen, fireEvent, within } from '@testing-library/react'
 import { pushToast } from './toast'
 import { EN } from './i18n/en'
 import type { AppSnapshot, LoggedQso } from './types'
@@ -36,9 +36,13 @@ const base = {
   recentDecodes: [], harqRescues: 0, logTick: 1,
 } as unknown as AppSnapshot
 
-/** The head of the queue, its identity, and how many are behind it. */
-const held = (call: string, key: string, waiting: number): AppSnapshot =>
-  ({ ...base, pendingLog: qso(call), pendingQsoLogKey: key, pendingLogsWaiting: waiting }) as AppSnapshot
+/** The head of the queue, its identity, how many are behind it, and how many were logged
+ *  unreviewed since the operator last answered this popup. */
+const held = (call: string, key: string, waiting: number, autoLogged = 0): AppSnapshot =>
+  ({
+    ...base, pendingLog: qso(call), pendingQsoLogKey: key,
+    pendingLogsWaiting: waiting, pendingLogsAutoLogged: autoLogged,
+  }) as AppSnapshot
 
 const state = vi.hoisted(() => ({
   snap: null as unknown,
@@ -155,6 +159,26 @@ describe('the prompt-to-log popup and the queue behind it', () => {
     state.snap = held('VE3ABC', 'hold-1', 0)
     await openApp()
     expect(screen.queryByText(/more contact/)).toBeNull()
+  })
+
+  it('says when contacts were logged without confirmation, and how many', async () => {
+    // The queue has a cap (64). At the cap the OLDEST waiting contact is logged as it stands —
+    // it goes into the log, uploads to QRZ/ClubLog/eQSL and joins the LoTW batch under the
+    // operator's certificate. Someone coming back to a full queue has to be told that happened
+    // here, on the popup they are looking at, not only in the Connections log.
+    state.snap = held('VE3ABC', 'hold-1', 63, 2)
+    await openApp()
+    // Announced, not merely printed: the operator may be coming back to the screen. (The app
+    // keeps a live region of its own, so scope this to the popup.)
+    const popup = document.querySelector('.logconfirm') as HTMLElement
+    const warned = within(popup).getByRole('alert').textContent ?? ''
+    expect(warned).toMatch(/without your confirmation/i)
+    expect(warned, 'the count of unreviewed contacts is missing').toMatch(/\b2\b/)
+  })
+
+  it('says nothing about unreviewed contacts when none were logged that way', async () => {
+    await openApp() // the default hold has pendingLogsAutoLogged 0
+    expect(document.querySelector('.logconfirm')?.textContent ?? '').not.toMatch(/without your confirmation/i)
   })
 
   it('re-reads the station and logs nothing when the answer is refused', async () => {
