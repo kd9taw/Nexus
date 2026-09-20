@@ -159,6 +159,26 @@ pub struct LoggedQso {
     /// disagree at a generator-powered site, so ids never derive from time.
     /// 0 = never assigned (rows built by paths that predate sync).
     pub seq: u64,
+    /// ⭐ **This contact duplicates one already in the log** — it is REPORTED to the
+    /// sponsor and worth nothing. Only ever `true` under a ruleset whose
+    /// [`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes) says the sponsor
+    /// cross-checks; Field Day refuses the contact instead, so no Field Day row ever
+    /// carries it.
+    ///
+    /// ⚠️ **It is a fact about the LOG, not about the contact**, which is why it is
+    /// RE-DERIVED by [`merge_adif`](FieldDayLog::merge_adif) from the dupe index rather
+    /// than journaled as a tag — the rule `restore_row` already applies to the serial
+    /// run, for the reason spelled out there: a flag stored beside the history that
+    /// determines it is a second source of truth for one fact, and the two come apart
+    /// exactly where it matters. A journal whose first occurrence aged out restores its
+    /// survivor as the real contact, which is the right answer and one a persisted tag
+    /// would get wrong.
+    ///
+    /// ⚠️ **It must never reach an exported Cabrillo as a marker.** Neither sponsor
+    /// asks for one, and CQ's own worked example writes the dupe as a plain `QSO:`
+    /// line; `X-QSO` means "I want this contact EXCLUDED" and carries CQ's anti-abuse
+    /// warning. This flag is for OUR scoring and display.
+    pub dupe: bool,
 }
 
 impl LoggedQso {
@@ -424,7 +444,17 @@ impl FieldDayLog {
             .contains(&self.dupe_rule().key_of(call, band, mode, rx, tx))
     }
 
-    /// Log a contact. Returns false (and logs nothing) if it's a dupe.
+    /// Log a contact.
+    ///
+    /// ⭐ **The bool is "did this contact ENTER THE LOG", which is no longer the same
+    /// question as "was it new".** Under a ruleset that reports its duplicates
+    /// ([`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes)) a dupe is written,
+    /// marked and returns `true` — and it must, because every caller uses this bool to
+    /// decide whether to JOURNAL the log, and a row that is not journaled is lost on a
+    /// restart. `false` means nothing was written, which for Field Day is still exactly
+    /// what a dupe means. A caller that wants the other question has
+    /// [`is_dupe_row`](Self::is_dupe_row) before the fact and
+    /// [`LoggedQso::dupe`] after it.
     pub fn log(&mut self, call: &str, class: &str, section: &str, slot: u64) -> bool {
         self.log_mode_at(call, class, section, "DIG", slot, now_unix())
     }
@@ -509,7 +539,14 @@ impl FieldDayLog {
         let mode = mode.to_ascii_uppercase();
         let band = self.band.clone();
         let key = self.dupe_rule().key_of(call, &band, &mode, &rx, &tx);
-        if self.worked.contains(&key) {
+        // ⭐ **THE PER-RULESET SPLIT.** A duplicate is either a row that scores zero or a
+        // contact that was never made, and which one is the SPONSOR's answer — it rides on
+        // the ruleset's own [`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes),
+        // where both sponsors' sentences are quoted. A contest that cross-checks wants the
+        // row (removing it hands the other operator a NIL); Field Day, which checks no
+        // logs at all, keeps refusing it.
+        let dupe = self.worked.contains(&key);
+        if dupe && !self.dupe_rule().log_dupes {
             return false;
         }
         self.worked.insert(key);
@@ -547,6 +584,7 @@ impl FieldDayLog {
             slot,
             when_unix,
             seq,
+            dupe,
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -602,8 +640,31 @@ impl FieldDayLog {
             .collect()
     }
 
+    /// ⭐ **The rows that COUNT** — every row except the duplicates, which are reported
+    /// to the sponsor and are worth nothing to us.
+    ///
+    /// ⚠️ **Every number the operator CLAIMS is derived through here**, and that is the
+    /// whole safety property of logging dupes at all: the row goes in the file, and no
+    /// count, point, multiplier or board cell moves. Rows are only ever marked under a
+    /// ruleset that reports them, so for Field Day this yields the whole log and every
+    /// number below is bit-identical to what it always was.
+    ///
+    /// `+ Clone` because [`score_rows`](Self::score_rows) must stay clonable — the
+    /// scorer walks its rows twice, once for points and once for multipliers.
+    fn counting(&self) -> impl Iterator<Item = &LoggedQso> + Clone {
+        self.qsos.iter().filter(|q| !q.dupe)
+    }
+
+    /// ⭐ **The RAW NON-DUPE contact count** — the number a summary sheet claims, not
+    /// the number of rows in the file.
+    ///
+    /// ⚠️ The two differ only for a contest that reports its duplicates, and keeping
+    /// them apart is the point: Field Day's own deliverable is a dupe sheet plus "raw
+    /// non-dupe" counts, so a dupe that entered this count would overstate a submitted
+    /// score. [`qsos`](Self::qsos) is the other question — every row, dupes included,
+    /// which is what an exporter and the log table want.
     pub fn qso_count(&self) -> usize {
-        self.qsos.len()
+        self.counting().count()
     }
 
     pub fn qsos(&self) -> &[LoggedQso] {
@@ -631,9 +692,15 @@ impl FieldDayLog {
     /// ⚠️ `+ Clone` is load-bearing: [`Scoring::score`](crate::contest::Scoring::score)
     /// walks these rows TWICE — once for points, once for multipliers — and a
     /// once-through iterator would force it to collect a `Vec` on every snapshot tick.
+    ///
+    /// ⭐ **Duplicates are not here.** They are rows in the log and lines in the
+    /// Cabrillo, but they earn no point and no multiplier, so the scorer is never shown
+    /// one ([`counting`](Self::counting)). Filtering at this seam rather than inside
+    /// `Scoring` is what keeps the scorer a pure function of the rows it is handed and
+    /// keeps "what a dupe is worth" a single statement in one place.
     pub fn score_rows(&self) -> impl Iterator<Item = crate::contest::ScoreRow<'_>> + Clone {
         let mine = self.session.my_call_location;
-        self.qsos.iter().map(move |q| crate::contest::ScoreRow {
+        self.counting().map(move |q| crate::contest::ScoreRow {
             mode_class: &q.mode,
             band: &q.band,
             role: &q.role,
@@ -661,7 +728,7 @@ impl FieldDayLog {
     /// every contest but the Illinois QSO Party.
     pub fn bonus_station_points(&self) -> u32 {
         self.ruleset()
-            .bonus_station_points(self.qsos.iter().map(|q| q.call.as_str()))
+            .bonus_station_points(self.counting().map(|q| q.call.as_str()))
     }
 
     /// Distinct ARRL/RAC sections worked — a DISPLAY count for the worked-sections
@@ -669,8 +736,7 @@ impl FieldDayLog {
     /// path reads this. (Said otherwise here until 2026-09-08, on the very function
     /// a reader would check.)
     pub fn sections(&self) -> usize {
-        self.qsos
-            .iter()
+        self.counting()
             .map(|q| q.section())
             .collect::<HashSet<_>>()
             .len()
@@ -681,8 +747,7 @@ impl FieldDayLog {
     /// (the worked-sections color board, spec §5).
     pub fn worked_sections(&self) -> Vec<String> {
         let mut sections: Vec<String> = self
-            .qsos
-            .iter()
+            .counting()
             .map(|q| q.section().to_string())
             .collect::<HashSet<_>>()
             .into_iter()
@@ -700,8 +765,7 @@ impl FieldDayLog {
     /// would otherwise read one too high.
     pub fn worked_values(&self, slot: &str) -> Vec<String> {
         let mut vals: Vec<String> = self
-            .qsos
-            .iter()
+            .counting()
             .map(|q| q.rcvd(slot))
             .filter(|v| !v.is_empty())
             .map(|v| v.to_string())
@@ -715,7 +779,7 @@ impl FieldDayLog {
     /// Per-mode QSO points (phone 1, CW/digital 2) — power multiplier and
     /// bonuses are applied at the score layer (engine), not here.
     pub fn qso_points(&self) -> u32 {
-        self.qsos.iter().map(|q| qso_points_for_mode(&q.mode)).sum()
+        self.counting().map(|q| qso_points_for_mode(&q.mode)).sum()
     }
 
     /// Export the log as ADIF records (one `<EOR>` per QSO).
@@ -929,8 +993,15 @@ impl FieldDayLog {
             Some(v) => crate::contest::carrier::decode(v, spec),
             None => self.session.my_exchange.clone(),
         };
+        // ⭐ **THE MARK IS RE-DERIVED HERE, never read from a tag** — the same rule the
+        // serial run below is restored by, and for the same reason: a flag stored beside
+        // the history that determines it is a second source of truth for one fact. It
+        // also gets a case a tag would get wrong — when `min_when_unix` ages out the
+        // FIRST occurrence, its survivor duplicates nothing that is still in this log and
+        // is restored as the real contact.
         let key = self.dupe_rule().key_of(call, &band, mode, &rx, &tx);
-        if self.worked.contains(&key) {
+        let dupe = self.worked.contains(&key);
+        if dupe && !self.dupe_rule().log_dupes {
             return;
         }
         self.worked.insert(key);
@@ -986,6 +1057,7 @@ impl FieldDayLog {
             slot: 0,
             when_unix,
             seq,
+            dupe,
         });
     }
 

@@ -1179,6 +1179,21 @@ struct DupeSpec {
     /// because each of them is a dupe rule that silently does something else.
     #[serde(default)]
     mode_class_groups: Vec<Vec<String>>,
+    /// ⭐ **Does this sponsor want the duplicate in the log?** `true` for the contests
+    /// that CROSS-CHECK — the dupe is logged, marked and scored zero, because removing
+    /// it turns the other operator's contact into a Not-In-Log penalty. See
+    /// [`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes) for the sponsors'
+    /// own sentences and for why both Field Day events are `false`.
+    ///
+    /// ⚠️ `#[serde(default)]`, on the `mode_class_groups` precedent directly above and
+    /// for the same reason: absent is a DECISION, not a hole. `false` is what every
+    /// contest written before this key existed means, and it is exactly what this build
+    /// already did for all of them — the default cannot express a choice its author did
+    /// not make, which is what §8(c) is protecting against. The direction matters too:
+    /// a rules file that omits the key can only ever REFUSE a dupe, never inflate a
+    /// score by admitting one.
+    #[serde(default)]
+    log_dupes: bool,
 }
 
 /// The mode classes a dupe rule may group — the vocabulary
@@ -2534,6 +2549,7 @@ fn build(spec: FileSpec) -> RulesTable {
                             .collect::<Vec<_>>()
                             .into_boxed_slice(),
                     ),
+                    log_dupes: r.dupe.log_dupes,
                 },
                 tempo_fd: r.tempo_fd,
                 banned_modes: Box::leak(

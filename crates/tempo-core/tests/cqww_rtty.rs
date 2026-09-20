@@ -308,16 +308,23 @@ fn points_and_three_per_band_multipliers_from_the_united_states() {
     assert_eq!(score(&log).0, 2 + 1 + 3, "W→JA: different continents");
 
     // THE DUPE — IV.B "Stations may be contacted once on each band." The same station on
-    // the same band is refused; the same station on another band is a new contact.
+    // the same band is a duplicate; the same station on another band is a new contact.
+    // XII.E.1 *"Duplicate contacts are removed with no additional penalty"* puts the
+    // removal on the CHECKER, so the duplicate is logged and marked and earns nothing —
+    // the unchanged point total two assertions down is what proves the "nothing".
     assert!(
-        !work(
+        work(
             &mut log,
             "20m",
             "K2DEF",
             &[("RST", "599"), ("ZN", "5"), ("QTH", "NY")],
             4
         ),
-        "same call, same band"
+        "same call, same band: REPORTED as a dupe, not dropped"
+    );
+    assert!(
+        log.qsos().last().expect("the dupe row").dupe,
+        "…and marked, which is what keeps it out of the score"
     );
     assert!(work(
         &mut log,
