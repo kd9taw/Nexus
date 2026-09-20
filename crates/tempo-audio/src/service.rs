@@ -27891,22 +27891,20 @@ mod tests {
             )
             .unwrap();
 
-        // Collect every connection the spawned pushes make: wait (bounded) for
-        // the first, then a short grace window so a buggy SECOND push (the
-        // restored row) would still be caught.
+        // Collect every connection the spawned pushes make, KEPT APART: wait
+        // (bounded) for the first, then a short grace window so a buggy SECOND
+        // push (the restored row) would still be caught.
         use std::io::Read;
-        let mut payload = String::new();
-        let mut connections = 0;
+        let mut conns: Vec<String> = Vec::new();
         let mut stop_at = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while std::time::Instant::now() < stop_at {
             match listener.accept() {
                 Ok((mut s, _)) => {
-                    connections += 1;
                     s.set_read_timeout(Some(std::time::Duration::from_millis(500)))
                         .unwrap();
                     let mut buf = String::new();
                     let _ = s.read_to_string(&mut buf); // sender closes → EOF
-                    payload.push_str(&buf);
+                    conns.push(buf);
                     stop_at = std::time::Instant::now() + std::time::Duration::from_millis(500);
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -27915,6 +27913,24 @@ mod tests {
                 Err(_) => break,
             }
         }
+        let payload = conns.concat();
+        // Count the connections that CARRIED A QSO, not the connections. This
+        // was `connections == 1` and it failed in CI with both assertions below
+        // PASSING — so the behaviour was right and a contactless connection had
+        // simply landed on this port inside the window. The port does take
+        // contactless traffic (`report_band`'s band board opens its own
+        // connection), though NOT in this fixture, where `n3fjp_report_band` is
+        // default-off; what reached it in CI was never identified, which is why
+        // the failure message below dumps every payload. Counting QSOs asserts
+        // on behaviour rather than on what else raced into the window: a QSO
+        // push names the contact on either path — the `fldCall` field
+        // (ADDDIRECT) or the TXTENTRYCALL control (the ENTER sequence, the FD
+        // default) — so a second QSO push, the regression this count is here
+        // for, still fails it.
+        let qso_pushes = conns
+            .iter()
+            .filter(|c| c.contains("<fldCall>") || c.contains("<CONTROL>TXTENTRYCALL</CONTROL>"))
+            .count();
 
         assert!(
             payload.contains("W2NEW"),
@@ -27924,7 +27940,10 @@ mod tests {
             !payload.contains("K1ABC"),
             "the restored journal row was re-pushed to the club log"
         );
-        assert_eq!(connections, 1, "exactly one push fired (the new QSO only)");
+        assert_eq!(
+            qso_pushes, 1,
+            "exactly one QSO push fired (the new QSO only); connections seen: {conns:?}"
+        );
         assert_eq!(
             station.last_fd_qsos, 2,
             "the FD cursor covers restored + new rows"
