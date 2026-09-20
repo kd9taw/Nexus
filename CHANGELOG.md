@@ -187,6 +187,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then filed the first station's call on the second contact's time and frequency. The popup now keeps the contact it
   is showing, tells you how many are waiting, and brings up the next one as soon as you log or discard it. Nothing is
   mixed, and no contact is lost.
+- **If the queue ever fills, Nexus says so rather than logging quietly.** Leaving an FT8 run to itself with
+  Prompt before logging on can stack up contacts; past 64 waiting, the oldest is logged as it stands rather than
+  lost. That contact is now named in the Connections log with its call, band, mode and time, and the popup says how
+  many went in without your confirmation since you last answered it — because those contacts upload to your
+  services and join the LoTW batch like any other.
 - **Correcting a callsign in that popup corrects what was looked up from the wrong one.** The country, state and a
   name that came from the busted call are re-derived for the call you actually worked, and a grid that had only been
   looked up is dropped — a grid the station itself sent, or one you typed, is kept. Correcting a call from Nexus
