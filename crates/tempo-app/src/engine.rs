@@ -16472,8 +16472,10 @@ contact yourself."
     /// Build a [`QsoRecord`] for an auto-sequenced RTTY contact from the peer's
     /// copied exchange + the current band/dial/settings. Mode is always "RTTY"
     /// (award eligibility). Modeled on [`Engine::qso_record`]; the casual RST/name/
-    /// QTH map to their ADIF columns, and any other exchange fields (Field Day
-    /// class/section, a contest serial) ride the comment so nothing copied is lost.
+    /// QTH map to their modelled ADIF columns, and every other exchange field
+    /// (Field Day class/section, a contest serial) lands in [`QsoRecord::extra`]
+    /// under its own received-side ADIF tag — see [`Self::rtty_exchange_columns`] —
+    /// as well as riding the comment for the operator to read.
     fn rtty_qso_record(&self, call: &str, exchange: &[(String, String)]) -> QsoRecord {
         let get = |key: &str| {
             exchange
@@ -16488,14 +16490,32 @@ contact yourself."
             .and_then(|resolve| resolve(call));
         // On-air RF, and the SPLIT receive leg when there is one — see `log_frequencies`.
         let (freq_mhz, freq_rx_mhz) = self.log_frequencies();
-        // Exchange fields with no dedicated ADIF column (CLASS/SECTION/SERIAL) →
-        // comment, so a Field Day / contest exchange survives in the log.
-        let extras: Vec<String> = exchange
+        // RST/NAME/QTH already have a modelled column on this record (`rst_rcvd`,
+        // `name`, `qth`) and `adif_record` writes each from there, so listing them
+        // again below would emit `<RST_RCVD>`/`<NAME>`/`<QTH>` twice per record.
+        // Everything ELSE the peer sent — a Field Day class and section, a contest
+        // serial — is what still needs somewhere to live, and it gets TWO homes for
+        // two different readers. One filtered list feeds both, so they cannot drift.
+        let unmodelled: Vec<(&str, &str)> = exchange
             .iter()
             .filter(|(k, _)| !matches!(k.as_str(), "RST" | "NAME" | "QTH"))
-            .map(|(_, v)| v.clone())
+            .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        let comment = (!extras.is_empty()).then(|| extras.join(" "));
+        // THE OPERATOR'S COPY — the joined comment, and deliberately unchanged now
+        // that the structured copy exists beside it. `extra` rides the DTO but no
+        // view renders it, so dropping this to tidy the file would take the copied
+        // exchange off the operator's screen — a regression traded for neatness.
+        let comment = (!unmodelled.is_empty()).then(|| {
+            unmodelled
+                .iter()
+                .map(|(_, v)| *v)
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+        // THE LOG'S COPY — the same values under their real ADIF tags, so a section
+        // is a section and not prose. `"2A EMA"` in a comment is lost to every
+        // export, every log checker and every filter the moment it is written.
+        let extra = self.rtty_exchange_columns(&unmodelled);
         let now = now_unix_secs();
         QsoRecord {
             id: None,
@@ -16536,9 +16556,72 @@ contact yourself."
             my_grid: None,
             my_rig: None,
             station_callsign: self.station_callsign_now(),
-            extra: Vec::new(),
+            extra,
+            // ⭐ **Left `None`, and that is a boundary rather than a gap.** A `Some`
+            // here CLAIMS the contact belonged to a contest (`parse_contest` says so,
+            // and `worked_keys_since` feeds it to the session-scoped B4 sweep), and
+            // every field of it — `session`, `contest_id`, the `qid` that makes the
+            // contest merge idempotent — is owned by a `ContestSession` that this path
+            // by definition does not have: a contact routed HERE is one no contest log
+            // took. Filling it from `settings.fd_event` would stamp `ARRL-FIELD-DAY` on
+            // a row logged with the master switch off, under a merge identity nothing
+            // issued. Populating it properly means plumbing the session through, which
+            // is its own change; half-populating it is worse than leaving it.
             contest: None,
         }
+    }
+
+    /// The peer's copied exchange as STANDARD ADIF columns, `(tag, value)`, for
+    /// [`QsoRecord::extra`] — where the ADIF writer emits them last and the reader
+    /// drains them back, so each round-trips exactly once.
+    ///
+    /// ⭐ **RECEIVED-side tags, which is the entire point of the tag being a pair.**
+    /// `exchange` is what the peer sent ME, so a section is `ARRL_SECT` — the
+    /// CONTACTED station's — and never `MY_ARRL_SECT`. One tag applied both ways
+    /// moves the other operator into my section on reimport; `contest::adif`'s header
+    /// documents that defect and the discipline that keeps ADIF tags out of this tree
+    /// until they have been read off adif.org's own field list.
+    ///
+    /// ⚠️ **The spec comes from the live `RttySeq`, never re-derived from
+    /// `fd_active`.** The master switch can go off with a Field Day contact still on
+    /// the air — that is precisely the state that reaches this function, since a
+    /// contact the contest log took returns before it — and a re-derivation would then
+    /// name `contest::casual()` and drop the class and section it was called to keep.
+    ///
+    /// A slot the spec gives no received-side tag contributes nothing: there is no
+    /// standard column for it that way round (Field Day's own CLASS has none on the
+    /// SENT side, for one), and inventing a name ships a field that does not exist
+    /// into other people's logbooks. Those values still ride the comment.
+    ///
+    /// ⚠️ Tags are read off the SLOT. For every exchange the sequencer can arm today
+    /// that is exact — a `FieldKind::Enum` slot takes its tags *from* its domain's
+    /// (`exchanges::field_day`), so the two cannot disagree. A `FieldKind::OneOf` slot
+    /// would break it: which arm matched decides the tag, and `peer_exchange` carries
+    /// raw pairs with no matched domain. Neither shipped exchange has one, and
+    /// `rtty_auto_contest_gate` refuses every contest that is not Field Day — a
+    /// ruleset that lifts that gate must carry the matched domain here first.
+    fn rtty_exchange_columns(&self, exchange: &[(&str, &str)]) -> Vec<(String, String)> {
+        let Some(spec) = self.rtty_seq.as_ref().map(|seq| seq.spec()) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, String)> = Vec::new();
+        for &(key, raw) in exchange {
+            let raw = raw.trim();
+            // An empty value is the malformed `<ARRL_SECT:0>` importers reject.
+            let (Some(tag), false) = (spec.field(key).and_then(|f| f.adif.rcvd), raw.is_empty())
+            else {
+                continue;
+            };
+            // First declared wins, as `contest::adif::directed_columns` has it: two
+            // slots claiming one tag is a ruleset bug, not two values to merge.
+            if !out.iter().any(|(t, _)| t == tag) {
+                out.push((tag.to_string(), raw.to_string()));
+            }
+        }
+        // Sorted, so the record in memory matches byte for byte what re-reading the
+        // exported ADIF hands back (`parse_record` sorts its drain into `extra`).
+        out.sort();
+        out
     }
 
     /// True if RTTY keys via the true-FSK serial keyline (vs the default soundcard
@@ -22909,6 +22992,17 @@ mod tests {
         assert_eq!(log[0].rst_rcvd.as_deref(), Some("599"));
         assert_eq!(log[0].name.as_deref(), Some("BOB"), "copied exchange");
         assert_eq!(log[0].qth.as_deref(), Some("BOSTON"), "copied exchange");
+        // THE CONTROL for the contest-exchange test below, which writes the copied
+        // slots into `extra` under their ADIF tags: the three casual slots have
+        // modelled columns of their own (asserted directly above) and `adif_record`
+        // writes each from there, so a second copy here would emit `<RST_RCVD>`,
+        // `<NAME>` and `<QTH>` TWICE in every exported record.
+        assert!(
+            log[0].extra.is_empty(),
+            "a modelled slot was duplicated into `extra`: {:?}",
+            log[0].extra
+        );
+        assert_eq!(log[0].comment, None, "nothing unmodelled to carry");
     }
 
     /// As [`rtty_auto_engine`], with the Field Day master switch on — which is
@@ -23021,6 +23115,77 @@ mod tests {
             e.take_pending_uploads().is_empty(),
             "the FD contact entered the general connector upload queue"
         );
+    }
+
+    /// ⭐ **A copied contest exchange must reach the general log STRUCTURALLY.**
+    ///
+    /// The Field Day route above (`Mode::FieldDay` + a class/section copy) sends the
+    /// contact to the contest log and returns. Everything else falls through to
+    /// `rtty_qso_record` — and that path flattened every slot with no dedicated
+    /// `QsoRecord` column into ONE joined comment string, discarding the slot names.
+    /// `"2A EMA"` in `comment` is not a section: no ADIF column, nothing an export,
+    /// a log checker or the operator's own filter can read.
+    ///
+    /// The state is reachable with the sequencer working exactly as designed: Auto is
+    /// armed in Field Day (so the sequencer copies against `contest::field_day()`),
+    /// the master switch goes off mid-contact — `apply_settings` leaves `Mode::FieldDay`
+    /// for `Mode::Chat` right there — and the contact in flight completes against the
+    /// FD grammar it started under, with no contest log left to take it.
+    #[test]
+    fn rtty_auto_contest_exchange_reaches_the_general_log_structurally() {
+        let mut e = rtty_auto_fd_engine();
+        e.rtty_auto_cq().unwrap();
+        assert!(e.poll_rtty_one().is_some(), "drain the CQ");
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW W1AW K\n"), 0.0, true);
+        assert_eq!(e.rtty_state().peer.as_deref(), Some("W1AW"));
+        assert!(e.poll_rtty_one().is_some(), "drain our exchange");
+
+        // The master switch goes off with the contact on the air. The sequencer keeps
+        // the Field Day exchange it was armed with; the engine leaves Mode::FieldDay.
+        let mut s = e.settings().clone();
+        s.fd_active = false;
+        e.apply_settings(s);
+        assert!(
+            !matches!(e.mode, Mode::FieldDay { .. }),
+            "the master switch off leaves Field Day"
+        );
+        assert!(e.rtty_state().auto, "the sequencer is still armed");
+
+        // His Field Day exchange comes back and the contact completes.
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW R 2A EMA K\n"), 0.0, true);
+        assert_eq!(e.rtty_state().seq_state, "confirmed", "the QSO completed");
+
+        let log = e.get_log();
+        assert_eq!(log.len(), 1, "the contact reached the general log");
+        let rec = &log[0];
+        // Each slot under its RECEIVED-side tag: his section is the CONTACTED
+        // station's (`ARRL_SECT`, never `MY_ARRL_SECT`), his class is `CLASS`.
+        // Sorted, as a re-read of the exported file gives them back.
+        assert_eq!(
+            rec.extra,
+            vec![
+                ("ARRL_SECT".to_string(), "EMA".to_string()),
+                ("CLASS".to_string(), "2A".to_string()),
+            ],
+            "the copied exchange is not in the record as an exchange"
+        );
+        // …and it REACHES THE EXPORT, which is where the loss was actually felt:
+        // a comment is not a section to any log checker or any other logger.
+        let adi = tempo_core::logbook::adif_record(rec);
+        assert!(adi.contains("<ARRL_SECT:3>EMA"), "export: {adi}");
+        assert!(adi.contains("<CLASS:2>2A"), "export: {adi}");
+
+        // The comment STAYS. It is the only place the log UI shows any of this
+        // today (`extra` rides the DTO; no view renders it), so removing it once
+        // the structured copy existed would have been its own regression.
+        assert_eq!(
+            rec.comment.as_deref(),
+            Some("2A EMA"),
+            "the operator's copy"
+        );
+        // And the contest block stays absent: a `Some` claims contest membership,
+        // and there is no session here to issue one. See `rtty_qso_record`.
+        assert!(rec.contest.is_none(), "no session issued this row");
     }
 
     #[test]
