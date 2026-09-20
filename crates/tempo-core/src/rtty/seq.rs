@@ -643,6 +643,19 @@ impl RttySeq {
         &self.peer_fields
     }
 
+    /// The exchange this session was ARMED with — the one [`peer_exchange`] was
+    /// copied against, so its slot ids are the only ones that can appear there.
+    ///
+    /// A consumer that needs to turn those slot ids back into anything (an ADIF
+    /// column, a label) must read the spec from HERE rather than re-derive it from
+    /// whatever the settings say now: a session outlives the switch that chose it,
+    /// and a re-derivation names the wrong exchange for the contact in flight.
+    ///
+    /// [`peer_exchange`]: Self::peer_exchange
+    pub fn spec(&self) -> &'static ExchangeSpec {
+        self.spec
+    }
+
     /// The rolling decoded window as text (for the UI RX pane / [`find_cq`]).
     pub fn window_text(&self) -> String {
         self.window.iter().map(|&(c, _)| c).collect()
