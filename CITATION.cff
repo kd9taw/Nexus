@@ -14,7 +14,7 @@ authors:
     website: "https://www.qrz.com/db/KD9TAW"
 repository-code: "https://github.com/kd9taw/Nexus"
 url: "https://hamradiotools.io"
-version: 1.13.0
+version: 1.14.0
 license: GPL-3.0-only
 keywords:
   - amateur radio
