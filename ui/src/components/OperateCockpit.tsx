@@ -32,6 +32,7 @@ import { isRxOnly, isBeacon } from '../types'
 import type { NeedBandScopes } from '../features/needs'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { NO_LOG, useSharedLog } from '../features/logStore'
+import { contestDupe } from '../features/contestDupe'
 import { bandLabelForMhz } from '../band'
 import {
   clampOffsetHz,
@@ -955,7 +956,7 @@ export function OperateCockpit({
     ? (snap.qso?.dxcall ?? null)
     : null
   const recallCard = shownRecallCall && shown('recall') ? (control
-    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} onShowCall={setCardCall} {...closeProps('recall')} paneTitle={labels.recall} />
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} {...closeProps('recall')} paneTitle={labels.recall} />
     : <RemoteRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} bounded {...closeProps('recall')} paneTitle={labels.recall} />
   ) : null
 
@@ -1714,6 +1715,7 @@ function OperateRecall({
   snap,
   call,
   mode,
+  fdActive,
   onOpenLog,
   onShowCall,
   onRemove,
@@ -1723,6 +1725,8 @@ function OperateRecall({
   snap: AppSnapshot
   call: string
   mode: string
+  /** Is a contest session running? The card's contest-scoped dupe badge depends on it. */
+  fdActive?: boolean
   /** The card's own ✕ — #204 made the card a ⊞ entry (`recall`); this is the same tick. */
   onRemove?: () => void
   hideNote?: string
@@ -1774,6 +1778,21 @@ function OperateRecall({
   }, [cu])
 
   const station = snap.stations.find((s) => s.call.trim().toUpperCase() === cu) ?? null
+  // ⭐ THE CONTEST-SCOPED DUPE, the second verdict on this card — and the only one that is
+  // right during a contest. `hist.dupeThisBand` below it asks the GENERAL log "ever worked on
+  // this band", which lights for a 2019 QSO that is a perfectly fresh contest contact; the
+  // contest log answers the question the operator is actually asking mid-run. Both stay: the
+  // lifetime verdict is what keeps this card agreeing with the solid B4 chip the roster and
+  // the decode feed show for the same station.
+  //
+  // Zero IPC — `snap.fieldDay` carries the whole contest log, so this costs a roster click
+  // nothing. The mode class is the literal every cockpit supplies for itself ('PH' in
+  // PhoneCockpit, 'CW' in CwCockpit, 'DIG' in the JS8/RTTY/PSK strips); this cockpit runs
+  // WSJT-X digital tiers only, so 'DIG' is its literal.
+  //
+  // Gated on `fdActive` as well as the snapshot block, so switching the contest off clears
+  // the badge on the spot rather than waiting for a snapshot that has dropped `fieldDay`.
+  const fdDupe = contestDupe(fdActive ? snap.fieldDay : null, cu, snap.radio.band, 'DIG')
   const hist = useMemo(
     () => callHistory(log, cu, snap.radio.band, mode, snap.b4MatchMode ?? false),
     [log, cu, snap.radio.band, mode, snap.b4MatchMode],
@@ -1812,6 +1831,7 @@ function OperateRecall({
       image={book?.image}
       myGrid={snap.mygrid}
       hist={hist}
+      contestDupe={fdDupe}
       newEntity={newEntity}
       newBandSlot={newBandSlot}
       newModeSlot={newModeSlot}
