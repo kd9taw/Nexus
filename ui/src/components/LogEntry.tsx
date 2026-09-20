@@ -27,6 +27,7 @@ import {
 import { composingSlot } from '../features/contestExchange'
 import { slotCaption, slotTitle } from '../features/contestSlots'
 import { locationWarningText } from '../features/contestLocation'
+import { contestDupe } from '../features/contestDupe'
 import { isFieldDay } from '../fdEvent'
 import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
@@ -1309,31 +1310,16 @@ export function LogEntry({
   // refuse (same key: call, band, mode class). CLUB dupe = another position
   // already worked them — N3FJP semantics, a WARNING only; logging proceeds
   // and the host keeps both rows.
+  //
+  // The verdict itself lives in `features/contestDupe`, because the FT cockpit's callsign
+  // card asks it too: two implementations of a dupe verdict is exactly how one cockpit ends
+  // up telling the operator to call a station this log is about to refuse. The mode-class
+  // folding that ILQP needs lives there with it.
   const fdTypedCall = logCall.trim().toUpperCase()
   const fdModeClass = fdMode ?? 'PH'
-  // ⭐ MODE CLASSES THIS CONTEST COUNTS AS ONE. ILQP works a station "once per band and
-  // mode (phone and CW/digital)", so CW and RTTY are one mode there and three separate
-  // classes everywhere else. Folding here is what keeps the badge and the engine's
-  // refusal asking the same question — without it the operator calls a station the log
-  // is about to reject, and finds out after the over.
-  const fdDupeMode = (m: string): string =>
-    (fieldDay?.dupeModeGroups ?? []).find((g) => g.includes(m))?.[0] ?? m
-  const fdOwnDupe =
-    fdActive &&
-    fdTypedCall !== '' &&
-    (fieldDay?.log ?? []).some(
-      (q) =>
-        q.call.toUpperCase() === fdTypedCall &&
-        q.band === snap.radio.band &&
-        fdDupeMode(q.mode ?? '') === fdDupeMode(fdModeClass),
-    )
-  const fdClubDupe =
-    fdActive &&
-    !fdOwnDupe &&
-    fdTypedCall !== '' &&
-    (fieldDay?.club?.dupes ?? []).some(
-      ([c, b, m]) => c === fdTypedCall && b === snap.radio.band && m === fdModeClass,
-    )
+  const fdDupe = contestDupe(fieldDay, fdTypedCall, snap.radio.band, fdModeClass)
+  const fdOwnDupe = fdDupe === 'own'
+  const fdClubDupe = fdDupe === 'club'
   // ⭐ WHICH CONTEST'S WORDS. Field Day's chip, hint and button name Field Day; every
   // other contest's contacts go to the same contest log under that contest's rules, and
   // telling a CQ WW operator their contacts go "to the Field Day log" is simply wrong.
