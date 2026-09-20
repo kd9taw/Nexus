@@ -177,6 +177,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Editing a contest contact no longer wipes its exchange.** Correcting anything on a contest QSO —
+  a busted call, a report, a grid — silently dropped the contest data from the record: the contest
+  name, the serials you sent and received, and both exchanges, none of which the edit form shows you
+  in the first place. The contact stayed in your log, but its contest fields were gone from the log
+  and from every ADIF export made afterwards, so a corrected contact would not score. Editing now
+  keeps all of it, including on a callsign correction — the exchange is what went over the air, and
+  fixing the call does not change what was sent.
 - **The CW and Phone band-activity strips no longer rebuild themselves every time the spots refresh.** On a busy
   band — a contest evening can put over 600 stations on the 20 m CW strip — one new spot made Nexus throw away and
   redraw every flag above it, which on a slower PC was enough to stall the waterfall for a moment before the new flag

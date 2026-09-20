@@ -953,6 +953,16 @@ impl Logbook {
                 if incoming_ota_empty {
                     rec.ota = old.ota.clone();
                 }
+                // Nor the contest block: the edit form carries none of it (the desktop
+                // DTO hard-sets `contest: None`), so without this an ordinary edit drops
+                // CONTEST_ID, STX/SRX, both exchange vectors and APP_NEXUS_SESSION. The
+                // last one is why this is worse than a lost column — it is the key merge
+                // idempotence is keyed on. Preserved on a CALLSIGN correction too, unlike
+                // country/state/dxcc: the exchange is what went over the air, and a busted
+                // call does not change what was sent or received.
+                if rec.contest.is_none() {
+                    rec.contest = old.contest.clone();
+                }
                 // The edit form carries none of the import-carried identity —
                 // an edit must never bleach it off the record. (dxcc is
                 // call-derived: preserved on an ordinary edit only.)
@@ -5801,6 +5811,83 @@ mod tests {
         assert_eq!(
             lb.records()[0].country.as_deref(),
             Some("Fed. Rep. of Germany")
+        );
+    }
+
+    #[test]
+    fn update_record_preserves_the_contest_block_the_edit_form_never_carries() {
+        // The edit form carries no contest block at all — the desktop DTO hard-sets
+        // `contest: None` (tempo-app `dto.rs`). Same rule as TIME_OFF, the split leg
+        // and the park refs: an edit must not bleach off what it does not carry.
+        // This one bites hardest because APP_NEXUS_QID is the merge-idempotence key.
+        let mut lb = Logbook::new();
+        let mut original = rec("K1ABC", "20m", 1_782_583_600);
+        original.contest = Some(Box::new(ContestFields {
+            session: "fd-2026".into(),
+            contest_id: "ARRL-FIELD-DAY".into(),
+            stx: Some(41),
+            srx: Some(17),
+            sent: vec![("CLASS".into(), "2A".into())],
+            rcvd: vec![("SECTION".into(), "WI".into())],
+            ..ContestFields::default()
+        }));
+        lb.add(original);
+
+        // An ORDINARY edit (fixing the received report).
+        let mut edit = rec("K1ABC", "20m", 1_782_583_600);
+        edit.rst_rcvd = Some("-08".into());
+        edit.contest = None;
+        assert!(lb.update_record(0, edit));
+
+        let c = lb.records()[0]
+            .contest
+            .as_deref()
+            .expect("an ordinary edit must not drop the contest block");
+        assert_eq!(c.contest_id, "ARRL-FIELD-DAY");
+        assert_eq!(
+            c.stx,
+            Some(41),
+            "the serial we sent is history, not a form field"
+        );
+        assert_eq!(c.srx, Some(17));
+        assert_eq!(c.sent, vec![("CLASS".to_string(), "2A".to_string())]);
+        assert_eq!(c.rcvd, vec![("SECTION".to_string(), "WI".to_string())]);
+        assert_eq!(
+            c.session, "fd-2026",
+            "APP_NEXUS_SESSION is the merge-idempotence key — losing it costs more than this row"
+        );
+        assert_eq!(
+            lb.records()[0].rst_rcvd.as_deref(),
+            Some("-08"),
+            "the edited field still took effect"
+        );
+
+        // A CALLSIGN correction too: the exchange is what went over the air, and a
+        // busted call does not change it. Unlike country/state/dxcc, it is not
+        // call-derived, so it survives the correction path as well.
+        let mut fix = rec("K1ABD", "20m", 1_782_583_600);
+        fix.contest = None;
+        assert!(lb.update_record(0, fix));
+        let c = lb.records()[0]
+            .contest
+            .as_deref()
+            .expect("a callsign correction must not drop the contest block either");
+        assert_eq!(c.contest_id, "ARRL-FIELD-DAY");
+        assert_eq!(c.stx, Some(41));
+        assert_eq!(c.session, "fd-2026");
+
+        // Positive control: an edit that DOES carry a block overrides the stored one,
+        // so this test cannot pass by the field being unwritable.
+        let mut edit3 = rec("K1ABD", "20m", 1_782_583_600);
+        edit3.contest = Some(Box::new(ContestFields {
+            contest_id: "CQ-WW-RTTY".into(),
+            ..ContestFields::default()
+        }));
+        assert!(lb.update_record(0, edit3));
+        assert_eq!(
+            lb.records()[0].contest.as_deref().unwrap().contest_id,
+            "CQ-WW-RTTY",
+            "an incoming block still wins"
         );
     }
 
