@@ -17,7 +17,7 @@ import { t } from '../i18n'
 import { contestIMoved, contestLogManual, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { NO_LOG, useSharedLog } from '../features/logStore'
-import { UTC_TIME_FORMATS, parseUtcTime, utcDateTimeToUnix } from '../features/utcLog'
+import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDateTimeToUnix } from '../features/utcLog'
 import {
   domainSuggestions,
   inDomain,
@@ -1083,6 +1083,10 @@ export function LogEntry({
   // holds Log like a bad frequency does, never quietly replaced by "now".
   const ovWhen = overrideOpen ? utcDateTimeToUnix(ovDate, ovTime) : null
   const ovTimeBad = parseUtcTime(ovTime) === null
+  // …and the date box is UTC text for the same reason: a native date control is drawn in the
+  // OS locale and its "Today" fills the LOCAL date, which after 0000Z west of Greenwich is
+  // the previous UTC day — a contact filed a whole day early.
+  const ovDateBad = parseUtcDate(ovDate) === null
   const ovFreqBlocked = overrideOpen && !ovFreqOk
   const overrideBlocked = ovFreqBlocked || (overrideOpen && ovWhen === null)
   // Remote drafts survive navigation and other operators' QSYs. Keep their
@@ -1104,7 +1108,7 @@ export function LogEntry({
     if (!call) return
     if (overrideBlocked) {
       pushToast(
-        ovFreqBlocked ? t('logEntry.override.blocked') : t('logEntry.override.timeBlocked', UTC_TIME_FORMATS),
+        ovFreqBlocked ? t('logEntry.override.blocked') : t('logEntry.override.timeBlocked', { date: UTC_DATE_FORMAT, ...UTC_TIME_FORMATS }),
         'error',
       )
       return
@@ -1902,11 +1906,16 @@ export function LogEntry({
           <div className="le-override-fields">
             <label className="le-ov-field">
               <span className="le-rst-cap">{t('logEntry.override.date.label')}</span>
+              {/* UTC as typed — see `ovDateBad`. */}
               <input
-                type="date"
-                className="settings-input le-ov-date"
+                className={`settings-input mono le-ov-date${ovDateBad ? ' invalid' : ''}`}
                 value={ovDate}
                 onChange={(e) => setOvDate(e.target.value)}
+                placeholder={UTC_DATE_FORMAT}
+                maxLength={10}
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={ovDateBad}
               />
             </label>
             <label className="le-ov-field">
@@ -1980,7 +1989,7 @@ export function LogEntry({
           <span className="le-ov-warn">
             {ovFreqBlocked
               ? t('logEntry.override.blockedHint')
-              : t('logEntry.override.timeBlockedHint', UTC_TIME_FORMATS)}
+              : t('logEntry.override.timeBlockedHint', { date: UTC_DATE_FORMAT, ...UTC_TIME_FORMATS })}
           </span>
         ) : gridBlocked ? (
           // Why Log went dead, in the place that otherwise states what will be
@@ -2039,7 +2048,7 @@ export function LogEntry({
             ovFreqBlocked
               ? t('logEntry.override.blocked')
               : overrideBlocked
-                ? t('logEntry.override.timeBlocked', UTC_TIME_FORMATS)
+                ? t('logEntry.override.timeBlocked', { date: UTC_DATE_FORMAT, ...UTC_TIME_FORMATS })
                 : gridBlocked
                   ? t('logEntry.grid.blockedTitle')
                   : undefined

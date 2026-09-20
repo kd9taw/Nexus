@@ -11,6 +11,28 @@
 /** What the time box asks for. Format tokens: the same letters in every language. */
 export const UTC_TIME_FORMATS = { short: 'HH:MM', long: 'HH:MM:SS' } as const
 
+/** What the date box asks for — ISO order, the one ADIF and every log file use. A format token
+ *  like the two above: the same letters in every language. */
+export const UTC_DATE_FORMAT = 'YYYY-MM-DD'
+
+/** A UTC calendar date as the box takes it: YYYY-MM-DD, and a day that exists. Null for
+ *  anything else — 2026-02-30, 2026-13-01, 9/14/2026, a half-typed 2026-09.
+ *
+ *  The date box is plain text for the same reason the time box is (#280, and the logging-lens
+ *  review that followed it): a native `type="date"` is drawn by WebView2 in the OS locale, and
+ *  its "Today" button fills the LOCAL date — which west of Greenwich, after 0000Z, is the
+ *  previous UTC day. A log is UTC; the operator types UTC. */
+export function parseUtcDate(v: string): { y: number; mo: number; d: number } | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v.trim())
+  if (!m) return null
+  const [y, mo, d] = [+m[1], +m[2], +m[3]]
+  // Date.UTC rolls an impossible date forward (Feb 30 → Mar 2): refuse it rather than log a day
+  // nobody typed.
+  const back = new Date(Date.UTC(y, mo - 1, d))
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d) return null
+  return { y, mo, d }
+}
+
 /** A 24-hour UTC time as the box takes it: H:MM, HH:MM or HH:MM:SS — hours 0–23, minutes and
  *  seconds 0–59. Null for anything else: 25:00, 12:60, 1:5, "12:58 AM". */
 export function parseUtcTime(v: string): { h: number; m: number; s: number | null } | null {
@@ -26,16 +48,10 @@ export function parseUtcTime(v: string): { h: number; m: number; s: number | nul
 /** Unix seconds for a UTC date (YYYY-MM-DD) and a time `parseUtcTime` takes, or null when
  *  either is not a real one. A time given without seconds is on the minute. */
 export function utcDateTimeToUnix(date: string, time: string): number | null {
-  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim())
+  const d = parseUtcDate(date)
   const t = parseUtcTime(time)
   if (!d || !t) return null
-  const [y, mo, day] = [+d[1], +d[2], +d[3]]
-  const ms = Date.UTC(y, mo - 1, day, t.h, t.m, t.s ?? 0)
-  // Date.UTC rolls an impossible date forward (Feb 30 → Mar 2): refuse it rather than log a day
-  // nobody typed.
-  const back = new Date(ms)
-  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== day) return null
-  return Math.floor(ms / 1000)
+  return Math.floor(Date.UTC(d.y, d.mo - 1, d.d, t.h, t.m, t.s ?? 0) / 1000)
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')

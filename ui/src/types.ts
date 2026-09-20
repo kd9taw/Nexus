@@ -3909,8 +3909,15 @@ export interface AppSnapshot {
   /** A completed QSO awaiting confirm-before-log (WSJT-X "Prompt me to log
    * QSO"). Present only with promptToLog on; drives the confirm popup. */
   pendingLog?: LoggedQso | null
-  /** Remote snapshot identities; native calls do not require these. */
+  /** Identifies the held contact the popup is showing — the HEAD of the queue. It changes
+   *  whenever the head does (confirm, discard, restore, replacement), and rides back with
+   *  confirm/discard on EVERY transport: the engine refuses an answer that names a different
+   *  hold, so an answer can never be applied to a contact the operator was not looking at. */
   pendingQsoLogKey?: string | null
+  /** How many MORE completed contacts are queued behind the one the popup shows (operator
+   *  ruling 2026-09-19: queue them, never replace). 0 or absent = this is the only one. */
+  pendingLogsWaiting?: number
+  /** Remote snapshot identity for the CURRENT QSO; native calls do not require it. */
   currentQsoLogKey?: string | null
   remoteFtSettings?: import('./remote-web/station-operation').FtSettingsContext | null
   remoteFtRuntime?: import('./remote-web/station-operation').FtRuntimeContext | null

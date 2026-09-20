@@ -946,6 +946,8 @@ export const EN = {
     'Export only QSOs on/after this UTC date (empty = from the beginning)',
   'logbook.export.to.label': 'to',
   'logbook.export.to.title': 'Export only QSOs on/before this UTC date (empty = to the end)',
+  'logbook.export.rangeInvalid':
+    'Enter the date range in UTC ({{date}}), or leave the boxes blank for the whole log.',
   'logbook.export.adif.label': 'Export ADIF',
   'logbook.export.adif.title': 'Save the whole logbook as an ADIF file in your Downloads folder',
   'logbook.export.adif.titleRange':
@@ -1109,7 +1111,7 @@ export const EN = {
   'logbook.field.notes.placeholder': 'Rig / antenna / weather / what you talked about…',
   'logbook.form.callRequired': 'Callsign is required.',
   'logbook.form.whenInvalid':
-    'Enter a UTC date and a 24-hour time ({{short}} or {{long}}), or leave both blank.',
+    'Enter a UTC date ({{date}}) and a 24-hour time ({{short}} or {{long}}), or leave both blank.',
   'logbook.form.editingNote':
     'Editing — confirmations and upload state are kept, unless you change the callsign: a corrected call re-sends to every service and drops confirmations matched on the old one.',
   'logbook.form.save': 'Save',
@@ -1324,9 +1326,9 @@ export const EN = {
   'logEntry.override.blockedHint': 'Enter a frequency for the override to log',
   'logEntry.override.blocked': 'Enter a valid frequency for the override, or close it',
   'logEntry.override.timeBlocked':
-    'Enter a valid UTC date and 24-hour time ({{short}} or {{long}}) for the override, or close it',
+    'Enter a valid UTC date ({{date}}) and 24-hour time ({{short}} or {{long}}) for the override, or close it',
   'logEntry.override.timeBlockedHint':
-    'Enter the UTC date and a 24-hour time ({{short}} or {{long}}) for the override to log',
+    'Enter the UTC date ({{date}}) and a 24-hour time ({{short}} or {{long}}) for the override to log',
   // Two whole sentences: a dial the band plan cannot name (QO-100 at 10 GHz) has no band
   // slot at all, and a sentence assembled around an empty slot reads as a hole.
   'logEntry.summary': 'Logs to the shared logbook as {{mode}} · {{freq}} MHz',
@@ -1388,6 +1390,10 @@ export const EN = {
   // RST is the signal-report format's name — it stays as it is inside the label.
   'logPrompt.rstSent.label': 'RST sent',
   'logPrompt.rstRcvd.label': 'RST rcvd',
+  'logPrompt.waiting': {
+    one: '{{count}} more contact is waiting behind this one',
+    other: '{{count}} more contacts are waiting behind this one',
+  },
   'logPrompt.discard': 'Discard',
   'logPrompt.log': 'Log QSO',
 
@@ -8771,6 +8777,10 @@ export const EN = {
   'shell.pounce.qsy.failed': 'Could not QSY to {{call}}',
   'shell.log.failed': 'Could not log QSO',
   'shell.log.discard.failed': 'Could not discard QSO',
+  // The engine's refusal when the popup answered a contact that is no longer the one held (it
+  // was logged or discarded elsewhere, or replaced). The wording lives here, not in Rust.
+  'shell.log.movedOn':
+    'That contact had already been logged or discarded — nothing was logged, and the one waiting is shown now.',
   'shell.toast.logged': 'Logged QSO',
   'shell.toast.nothingToLog':
     'Nothing to log — the QSO already closed or no report was exchanged',
