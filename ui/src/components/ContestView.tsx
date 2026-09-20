@@ -190,7 +190,7 @@ const EXT: Record<ExportFormat, string> = {
  * as a new contact, so two legal contacts were both marked. And it could not see what
  * actually decides whether a row scores — whether the ENGINE logged it as a dupe.
  *
- * That last one stopped being academic when the seven cross-checked contests began LOGGING
+ * That last one stopped being academic when the ten cross-checked contests began LOGGING
  * a duplicate instead of refusing it (`DupeRule::log_dupes`): the log now holds rows worth
  * zero, and an operator checking the sponsor's math needs to know which.
  *

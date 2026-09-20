@@ -1412,7 +1412,7 @@ pub struct FieldDayQso {
     pub dkey: Vec<String>,
     /// ⭐ **This row is a DUPLICATE the ruleset asked us to log anyway**, scored zero.
     ///
-    /// In the seven cross-checked contests (`DupeRule::log_dupes`) a duplicate is logged and
+    /// In the ten cross-checked contests (`DupeRule::log_dupes`) a duplicate is logged and
     /// zeroed rather than refused, because dropping the row is what costs points — the other
     /// station takes a NIL. So the log now carries rows that score nothing, and without this
     /// an operator reviewing their log cannot tell one from a real contact, cannot check the
@@ -1471,7 +1471,7 @@ pub struct DupeRuleDto {
     /// remove any QSOs from your log! This will cause the other station that worked you to
     /// lose credit for the contact"* — a missing row is a Not-In-Log penalty for THEM, worth
     /// twice the contact at CQ. A card that says "logging this again will be refused" in one
-    /// of these seven contests advises the operator to do the one thing the sponsor asks
+    /// of these ten contests advises the operator to do the one thing the sponsor asks
     /// them not to, so the UI picks its wording off this flag.
     ///
     /// False for both Field Days and for the QSO parties and VHF runnings, where a duplicate

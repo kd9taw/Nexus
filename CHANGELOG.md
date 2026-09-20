@@ -251,15 +251,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was not marked at all, while two perfectly legal QSO-party contacts with a mobile in two
   different counties were both marked. The table now shows what the log itself recorded.
 
-- **A cluster node that accepts a connection and then goes silent no longer kills that feed
-  slot for the rest of the session.** Some nodes accept the connection and never send a login
-  prompt — one of the nodes Nexus ships with was doing exactly that. Nexus waited on it
-  forever: it never logged in, never gave up, and never retried, so that node stayed dead
-  until you restarted the app, and nothing on screen said why. Nexus now gives a node 30
-  seconds to say anything at all, then disconnects and retries it on the usual backoff, and
-  **Settings › Connections** records that the node accepted the connection but never
-  prompted. A node that has greeted you is never dropped for being quiet afterwards — a
-  cluster on a dead band can be silent for a long time and that is not a fault.
 - **Remote: the Awards list no longer gets squeezed off a phone screen.** In the hosted browser
   the Awards view carries a status line above the summary and, since the responsiveness check was
   added, a strip below it. On a phone-sized window with the text enlarged there was no height left

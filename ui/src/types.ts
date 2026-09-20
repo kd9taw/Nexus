@@ -2695,7 +2695,7 @@ export interface FieldDayQso {
   dkey?: string[]
   /** ⭐ This row is a DUPLICATE the ruleset asked us to log anyway, and it scores zero.
    *
-   *  In the seven cross-checked contests a dupe is logged and zeroed rather than refused,
+   *  In the ten cross-checked contests a dupe is logged and zeroed rather than refused,
    *  so the log carries rows worth nothing. Without this an operator reviewing their log
    *  cannot tell one from a real contact, nor an intended dupe from a logging mistake.
    *
@@ -2735,7 +2735,7 @@ export interface DupeRule {
    *  A dupe warning has to say the right thing here, and the wrong thing is worse than
    *  imprecise: CQ asks entrants NOT to drop a duplicate, because a contact missing from
    *  your log costs the station that worked you its credit — a Not-In-Log penalty worth
-   *  twice the contact. So a card must not tell an operator in one of these seven contests
+   *  twice the contact. So a card must not tell an operator in one of these ten contests
    *  that the contact "will be refused"; that advises the one thing the sponsor forbids. */
   logDupes: boolean
 }

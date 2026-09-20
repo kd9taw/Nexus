@@ -592,7 +592,7 @@ mod tests {
         );
     }
 
-    /// ⭐ **A LOGGED DUPE MUST SAY SO ON THE WIRE.** In the seven cross-checked contests a
+    /// ⭐ **A LOGGED DUPE MUST SAY SO ON THE WIRE.** In the ten cross-checked contests a
     /// duplicate is now logged and scored zero rather than refused, so the contest log table
     /// gained rows that score nothing. Without a flag on the row the operator reviewing their
     /// log after the event cannot tell a zero-scoring dupe from a real contact, cannot check

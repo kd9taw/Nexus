@@ -91,7 +91,7 @@ interface Props {
    *  nothing and the card is unchanged. */
   contestDupe?: ContestDupeVerdict
   /** ⭐ This contest KEEPS a duplicate and scores it zero, rather than refusing it
-   *  (`FieldDayStatus.dupeRule.logDupes` — the seven cross-checked contests).
+   *  (`FieldDayStatus.dupeRule.logDupes` — the ten cross-checked contests).
    *
    *  It changes what the badge ADVISES, which matters more than what it describes. CQ asks
    *  entrants not to drop a duplicate, because a contact missing from your log costs the
