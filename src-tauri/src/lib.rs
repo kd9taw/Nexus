@@ -3352,9 +3352,18 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
     // then release the lock before the file append so the UI poll never waits on disk.
     with_engine(&state, |mut eng| {
         let all_txt = eng.take_all_txt_pending();
+        // ⭐ R3: the same shape as the ALL.TXT drain beside it — the engine buffers what it
+        // cannot say (the Connections log lives here, not there), the poll takes it under the
+        // lock and writes it after releasing. Deliberately NOT the connector worker the #290
+        // drop lines ride: that worker returns early when no connector is enabled, and an
+        // unreviewed contact is news whether or not anything uploads it.
+        let auto_logged = eng.take_unconfirmed_auto_logs();
         let snap = eng.snapshot();
         drop(eng);
         flush_all_txt(&all_txt);
+        for line in unconfirmed_auto_log_lines(&auto_logged) {
+            conn_log("Logbook", "error", line);
+        }
         snap
     })
     .await
@@ -15778,6 +15787,34 @@ fn upload_dropped_lines(
     lines
 }
 
+/// ⭐ R3 (logging review, 2026-09-19) — WHAT THE QUEUE CAP LOGGED WITHOUT ASKING, said where
+/// the operator actually reads things.
+///
+/// At [`PENDING_LOG_QUEUE_CAP`] the oldest WAITING contact is logged unreviewed rather than
+/// dropped (the operator's ruling: no contact is lost). The engine writes an applog line for
+/// it, but applog is a diagnostic FILE to attach to a bug report — explicitly not routine
+/// traffic — so nothing on screen said the prompt had been bypassed, while the contact went
+/// to the log and out to the connectors like any other. One line per contact, the same
+/// surface and shape as the #290 dropped-upload lines above.
+///
+/// The wording is the operator's own: "Prompt before logging" is the setting they switched
+/// on, and the upload clause is the point — this is the contact that reaches QRZ, ClubLog,
+/// eQSL and the LoTW set under their certificate without them having seen it.
+fn unconfirmed_auto_log_lines(logged: &[tempo_core::logbook::QsoRecord]) -> Vec<String> {
+    logged
+        .iter()
+        .map(|rec| {
+            let (y, mo, d, h, mi, _) = tempo_core::logbook::datetime_utc(rec.when_unix);
+            format!(
+                "Prompt-before-logging queue full — logged the QSO with {} ({} {}, \
+                 {y:04}-{mo:02}-{d:02} {h:02}:{mi:02}Z) WITHOUT your confirmation; it is in \
+                 your log, and your connectors will upload it like any other contact",
+                rec.call, rec.band, rec.mode
+            )
+        })
+        .collect()
+}
+
 /// Session-level kill-switch for ClubLog auto-push: set on a 403 (bad creds) so we
 /// stop re-POSTing every QSO (ClubLog IP-blocks repeated auth failures); reset when
 /// the operator changes a ClubLog credential.
@@ -25841,6 +25878,44 @@ mod tests {
             );
             assert!(line.contains(way_back), "{service}: the way back — {line}");
         }
+    }
+
+    /// ⭐ R3 (logging review, 2026-09-19): a contact the confirm-before-log cap logged WITHOUT
+    /// the operator's confirmation is named in the Connections log — the same surface and
+    /// shape as the dropped-upload line below, because the operator reads that panel and does
+    /// not read the applog file. The line says the four things they need to find the contact
+    /// again (call, band, mode, UTC), what happened to it, and that it uploads like any other.
+    #[test]
+    fn a_contact_the_queue_cap_logged_unreviewed_is_named_in_the_connections_log() {
+        let mut rec = pass_qso("F4MQS/P", "JN18", "20m", 14.074);
+        rec.mode = "FT8".into();
+        rec.when_unix = 1_789_389_296; // 2026-09-14 12:34:56 UTC
+
+        let lines = super::unconfirmed_auto_log_lines(std::slice::from_ref(&rec));
+        assert_eq!(lines.len(), 1, "one line per contact — {lines:?}");
+        let line = &lines[0];
+        assert!(
+            line.contains("F4MQS/P")
+                && line.contains("20m FT8")
+                && line.contains("2026-09-14 12:34Z"),
+            "the line must name the QSO — {line}"
+        );
+        assert!(
+            line.contains("WITHOUT your confirmation"),
+            "…and say plainly what bypassed the prompt — {line}"
+        );
+        assert!(
+            line.contains("Prompt-before-logging queue full"),
+            "…naming the setting the operator switched on, and why it fired — {line}"
+        );
+        assert!(
+            line.contains("upload"),
+            "…and that it goes to the connectors like any other contact — {line}"
+        );
+
+        // AND NOTHING WHEN NOTHING BYPASSED THE PROMPT. The drain runs on every snapshot
+        // poll, several times a second: an ordinary confirm must leave the panel silent.
+        assert!(super::unconfirmed_auto_log_lines(&[]).is_empty());
     }
 
     /// #290: an upload the full queue dropped is named in the Connections log, once per

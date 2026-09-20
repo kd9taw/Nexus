@@ -3909,6 +3909,16 @@ export interface AppSnapshot {
   /** A completed QSO awaiting confirm-before-log (WSJT-X "Prompt me to log
    * QSO"). Present only with promptToLog on; drives the confirm popup. */
   pendingLog?: LoggedQso | null
+  /** How many contacts have been logged WITHOUT the operator's confirmation since they last
+   * answered the popup, because the confirm-before-log queue was full (the cap logs the
+   * oldest WAITING contact rather than losing it). The popup shows this; the Connections log
+   * carries the same event with the call, band, mode and time.
+   *
+   * Answering the popup — confirm OR discard — resets it to 0, because that is the
+   * acknowledgement. NOT a session total: a number that never cleared would leave a warning
+   * on screen forever after one cap event. Absent/0 = nothing was logged unreviewed, which is
+   * also what a relaunch shows, since the count is session-scoped while the queue is not. */
+  pendingLogsAutoLogged?: number
   /** Remote snapshot identities; native calls do not require these. */
   pendingQsoLogKey?: string | null
   currentQsoLogKey?: string | null

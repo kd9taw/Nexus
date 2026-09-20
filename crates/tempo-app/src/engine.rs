@@ -2139,6 +2139,25 @@ pub struct Engine {
     /// the second contact outright (`LogQSO::initLogQSO` returns while its dialog is open), which
     /// loses it; the operator asked for it to be queued instead.
     pending_logs: VecDeque<HeldQso>,
+    /// ⭐ R3 — contacts the queue cap logged WITHOUT the operator's confirmation, waiting to be
+    /// ANNOUNCED in the Connections log. The shell drains them (`take_unconfirmed_auto_logs`)
+    /// in its snapshot poll and writes the line, because the Connections log lives there and
+    /// not in the engine. Bounded at [`PENDING_LOG_QUEUE_CAP`], for the same reason the queue
+    /// itself is: what fills it is an unattended run.
+    unconfirmed_auto_logs: Vec<QsoRecord>,
+    /// How many contacts have been logged unreviewed SINCE THE OPERATOR LAST ANSWERED THE
+    /// POPUP — the number the popup itself shows, on the desktop and on Remote.
+    ///
+    /// ⚠️ NOT a session total, deliberately: answering the popup (confirm OR discard) is the
+    /// acknowledgement, because the notice is ON that popup, and a counter that never cleared
+    /// would leave a warning on screen forever after one cap event — which teaches the
+    /// operator to read past the one thing it exists to flag. Reset in
+    /// `replace_pending_log(None)`, the one path all four confirm/discard doors go through.
+    ///
+    /// SESSION-SCOPED, unlike the queue: the queue is journalled because losing it loses a
+    /// real contact, while this is a pointer to a Connections line that dies with the process
+    /// anyway. See `take_unconfirmed_auto_logs` for what survives a restart instead.
+    pending_logs_auto_logged: u32,
     /// The identity of the hold at the FRONT — a fresh `Arc` and epoch every time that
     /// changes, so a confirm or discard for a hold that has moved on is refused rather than
     /// applied to the contact now showing.
@@ -4395,6 +4414,8 @@ impl Engine {
             stalled_qso: None,
             recent_partner: None,
             pending_logs: VecDeque::new(),
+            unconfirmed_auto_logs: Vec::new(),
+            pending_logs_auto_logged: 0,
             pending_log_identity: std::sync::Arc::new(()),
             pending_log_epoch: 0,
             qso_log_epoch: remote_logging::next_identity(),
@@ -9122,6 +9143,20 @@ impl Engine {
         self.pending_logs.len().saturating_sub(1)
     }
 
+    /// ⭐ R3 — take the overflow auto-logs the shell has not announced yet, for the
+    /// Connections-log line. Drained from the snapshot poll (the `take_all_txt_pending`
+    /// precedent) and NOT from the connector worker: this notice has to appear whether or not
+    /// a single connector is enabled.
+    ///
+    /// What survives a restart is deliberately NOT this. The Connections log is an in-memory
+    /// ring that dies with the process by its own design, so a count carried across a relaunch
+    /// would point the operator at a line that is no longer there. The durable trail is the
+    /// applog line — every overflow, with the call, in the file you attach to a bug report —
+    /// and the contacts themselves, which are in the log with their upload state.
+    pub fn take_unconfirmed_auto_logs(&mut self) -> Vec<QsoRecord> {
+        std::mem::take(&mut self.unconfirmed_auto_logs)
+    }
+
     /// Hold a completed contact for the operator's confirm: it becomes the popup's contact when
     /// nothing is held, and waits behind the open popup otherwise (the R2 ruling on
     /// [`Self::pending_logs`]). Journals the queue, as every hold change does.
@@ -9147,6 +9182,19 @@ impl Engine {
                         overflow.record.call
                     ),
                 );
+                // ⭐ R3 (logging review, 2026-09-19) — AND SAY IT WHERE THE OPERATOR READS.
+                // The applog line above is a diagnostic FILE to attach to a bug report, by
+                // its own module's rule, so on its own this bypassed the prompt in silence.
+                // Two surfaces carry it now: the shell drains this buffer into the
+                // Connections log (the #290 shape), and the count below rides the snapshot
+                // onto the popup itself, desktop and Remote alike.
+                //
+                // Bounded, because the thing that fills it is an unattended run: past the
+                // cap the applog keeps every one, which is the surface that is a file.
+                if self.unconfirmed_auto_logs.len() < PENDING_LOG_QUEUE_CAP {
+                    self.unconfirmed_auto_logs.push(overflow.record.clone());
+                }
+                self.pending_logs_auto_logged = self.pending_logs_auto_logged.saturating_add(1);
                 self.log_qso(overflow.record);
             }
         }
@@ -18308,6 +18356,7 @@ contact yourself."
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
+        s.pending_logs_auto_logged = self.pending_logs_auto_logged;
         s
     }
 
@@ -34924,6 +34973,87 @@ mod tests {
             e.pending_logs_waiting(),
             PENDING_LOG_QUEUE_CAP - 1,
             "and the queue stays bounded"
+        );
+    }
+
+    /// ⭐ R3 (logging review, 2026-09-19) — A CONTACT LOGGED WITHOUT THE CONFIRMATION THE
+    /// OPERATOR SWITCHED ON MUST SAY SO WHERE THEY READ.
+    ///
+    /// At the cap the oldest WAITING contact is logged unreviewed — the ruling, because no
+    /// contact may be lost — and it then enqueues its uploads like any other, reaching QRZ,
+    /// ClubLog, eQSL and the LoTW set under the operator's certificate. The only announcement
+    /// was an `applog::warn`, and applog is a diagnostic FILE to attach to a bug report by its
+    /// own module's rule. So: the shell takes the record for a Connections-log line, and the
+    /// snapshot carries a count for the popup itself.
+    #[test]
+    fn what_the_queue_cap_logged_unreviewed_is_announced_and_counted() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        for i in 0..PENDING_LOG_QUEUE_CAP {
+            let rec = e.qso_record(format!("W9A{i}"), None, None);
+            e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
+        }
+        assert_eq!(
+            e.snapshot().pending_logs_auto_logged,
+            0,
+            "a full queue that has not overflowed has bypassed nothing"
+        );
+        assert!(
+            e.take_unconfirmed_auto_logs().is_empty(),
+            "…and has nothing to announce"
+        );
+
+        // Two more completions, each pushing one unreviewed contact into the log.
+        for call in ["K1NEW", "K2NEW"] {
+            let rec = e.qso_record(call.into(), None, None);
+            e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
+        }
+        assert_eq!(
+            e.snapshot().pending_logs_auto_logged,
+            2,
+            "the popup's count rises with every contact the cap logged unreviewed"
+        );
+        let announce = e.take_unconfirmed_auto_logs();
+        assert_eq!(
+            announce.iter().map(|q| q.call.as_str()).collect::<Vec<_>>(),
+            ["W9A1", "W9A2"],
+            "the shell gets the contacts themselves, for a line naming each"
+        );
+        assert!(
+            e.take_unconfirmed_auto_logs().is_empty(),
+            "handed over once — a second poll must not repeat the line"
+        );
+        assert_eq!(
+            e.snapshot().pending_logs_auto_logged,
+            2,
+            "taking them for the Connections log is not the operator acknowledging them"
+        );
+
+        // ANSWERING THE POPUP is the acknowledgement — either way of answering it.
+        let shown = e.snapshot().pending_log.expect("the popup has a contact");
+        assert!(confirm_held(&mut e, shown.into()));
+        assert_eq!(
+            e.snapshot().pending_logs_auto_logged,
+            0,
+            "a confirm clears the count"
+        );
+
+        // Confirming made room, so the next contact simply queues — it takes one MORE than
+        // that to overflow again, and only that one counts.
+        for call in ["K3NEW", "K4NEW"] {
+            let rec = e.qso_record(call.into(), None, None);
+            e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
+        }
+        assert_eq!(
+            e.snapshot().pending_logs_auto_logged,
+            1,
+            "…and it re-arms: the contact that fit is not one that bypassed the prompt"
+        );
+        assert!(discard_held(&mut e));
+        assert_eq!(
+            e.snapshot().pending_logs_auto_logged,
+            0,
+            "a discard clears it too: the operator answered the popup either way"
         );
     }
 
