@@ -2098,6 +2098,10 @@ pub struct Engine {
     /// radio and the operator's MICROPHONE is disconnected. Display-only; see
     /// [`Self::observe_flex_dax_tx`].
     flex_dax_tx: bool,
+    /// The Flex VITA **meter** worker is running — the only thing that produces a
+    /// FlexLib-scaled SWR on this radio. Display-only; see
+    /// [`Self::observe_flex_meter_stream`].
+    flex_meter_stream: bool,
     /// Per-area tier memory: the structured tier (FT8/FT4) last used in the DX
     /// area and the chat tier (FT1/DX1) last used in MSG — so switching areas
     /// round-trips without losing the operator's pick (the "FT4 lost through
@@ -4416,6 +4420,7 @@ impl Engine {
             seen_decode: false,
             rig_confirmed: false,
             flex_dax_tx: false,
+            flex_meter_stream: false,
             last_dx_tier: None,
             last_msg_tier: None,
             work_tick: 0,
@@ -6260,6 +6265,30 @@ impl Engine {
     /// nothing.
     pub fn observe_flex_dax_tx(&mut self, on: bool) {
         self.flex_dax_tx = on;
+    }
+
+    /// The Flex VITA **meter** worker just started or stopped.
+    ///
+    /// ⚠️ WHY THIS IS STATE AND NOT A SETTING READ-BACK, and why it exists at all. On a Flex
+    /// the ONLY producer of a FlexLib-scaled SWR is `flexspectrum::route_meters`, inside the
+    /// `FlexSpectrum` worker. [`settings::swr_scale_verified`] does not know that: it answers
+    /// from the MODEL and the TRANSPORT alone, so a stock Flex station — `flex_native_pan`
+    /// OFF, which is the shipped default and documented tester-only — is told its high-SWR
+    /// cutoff runs on a verified scale while nothing ever puts a number on the wire.
+    ///
+    /// The `flex_native_pan` SETTING is not the same fact and must not be substituted, the
+    /// same reasoning as [`Self::observe_flex_dax_tx`] right above: the toggle can be on
+    /// while no worker exists (no `flex_radio_ip`, a start that returned `Err`), and the
+    /// worker is torn down and rebuilt whenever the source key changes. Only the worker knows.
+    ///
+    /// ⚠️ **DISPLAY-ONLY. IT GATES NOTHING AND KEYS NOTHING** — deliberately, and this is the
+    /// load-bearing part. [`Self::observe_swr_for_cutoff`] is already fail-safe: it acts only
+    /// on `swr > limit` and every other value (a `0.0`, a NaN, no reading at all) resets the
+    /// run. Gating the cutoff on this flag could SUPPRESS A LEGITIMATE HIGH-SWR HALT if the
+    /// flag were ever wrong or stale, which is weakening a transmit-path invariant to fix a
+    /// wording bug. The defect here is what the software CLAIMS, so only the claim changes.
+    pub fn observe_flex_meter_stream(&mut self, on: bool) {
+        self.flex_meter_stream = on;
     }
 
     // --- Dual-radio: per-radio live read-back from the monitor thread (NON-active radios only) ---
@@ -18118,6 +18147,7 @@ contact yourself."
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
         s.radio.flex_dax_tx = self.flex_dax_tx;
+        s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
         s.radio.cat_detail = self.cat_status.1.clone();
@@ -46501,6 +46531,80 @@ mod tests {
         assert!(
             split.tx_enabled(),
             "two readings from either side of an unkey are not consecutive"
+        );
+    }
+
+    /// ⚠️ A FLEX'S "VERIFIED" SCALE WITH NOTHING PRODUCING IT (2026-09-20).
+    ///
+    /// [`settings::swr_scale_verified`] answers a question about the MODEL and the TRANSPORT.
+    /// It never asks whether anything is putting a number on the wire. On a Flex the only
+    /// producer of the FlexLib-scaled meter is the `FlexSpectrum` worker (`route_meters`),
+    /// which starts only under `flex_native_pan` — OFF by default and documented as
+    /// tester-only. So the DEFAULT Flex station is told its cutoff is verified while no
+    /// reading ever reaches [`Engine::observe_swr_for_cutoff`].
+    ///
+    /// ⚠️ THE DEFECT IS THE CLAIM, NOT THE MECHANISM. `observe_swr_for_cutoff` is unchanged
+    /// and must stay so: it acts only on `swr > limit`, every other value resets the run, and
+    /// a gate in front of it could SUPPRESS A REAL HIGH-SWR HALT. What is added is an
+    /// OBSERVED fact carried beside the claim, so Settings can stop saying "verified".
+    #[test]
+    fn a_flex_with_no_meter_worker_does_not_claim_a_live_swr_cutoff() {
+        let mut e = swr_engine(2.5);
+        e.settings.rig_model = 2036; // FLEX-6xxx / 8xxx, SmartSDR CAT
+        e.settings.rig_conn = "network".into();
+        e.settings.rig_addr = "192.0.2.10:5002".into();
+        e.settings.icom_native_cat = false;
+        e.settings.flex_native_pan = false; // the SHIPPED default
+
+        let s = e.snapshot();
+        assert!(
+            s.radio.swr_scale_verified,
+            "precondition: the allow-list DOES call a 2036-on-network scale verified — that \
+             is the claim under test, not a bug in the fixture"
+        );
+        assert!(
+            !s.radio.flex_meter_stream,
+            "no FlexSpectrum worker has reported in, so nothing produces the scaled SWR: the \
+             operator must not be shown a cutoff that is working"
+        );
+    }
+
+    /// ⭐ THE DISCRIMINATING TEST — the `observe_flex_dax_tx` doctrine, applied.
+    ///
+    /// The tempting implementation is `settings.flex_native_pan`, and it is WRONG for exactly
+    /// the reasons that sibling records: the toggle can be on while no worker exists (no
+    /// `flex_radio_ip`, a start that returned `Err`), and the worker can be torn down while
+    /// the toggle still reads on. Only the worker knows.
+    ///
+    /// Each assertion below fails under a different wrong implementation: the first under a
+    /// setting read-back or a hardcoded `true`, the second under a hardcoded `false`, the
+    /// third if the teardown is not wired.
+    #[test]
+    fn the_flex_meter_stream_is_observed_from_the_worker_never_read_from_the_setting() {
+        let mut e = swr_engine(2.5);
+        e.settings.rig_model = 2036;
+        e.settings.rig_conn = "network".into();
+        e.settings.rig_addr = "192.0.2.10:5002".into();
+        e.settings.icom_native_cat = false;
+
+        e.settings.flex_native_pan = true; // the toggle is ON …
+        assert!(
+            !e.snapshot().radio.flex_meter_stream,
+            "… and no worker has reported in. A setting read-back would say true here: the \
+             toggle stands with no radio address, or with a start that failed"
+        );
+
+        e.observe_flex_meter_stream(true); // the worker actually started
+        assert!(
+            e.snapshot().radio.flex_meter_stream,
+            "a running worker must be visible, or the warning would be permanent and the \
+             operator could never clear it"
+        );
+
+        e.observe_flex_meter_stream(false); // torn down (address change, restart, Drop)
+        assert!(
+            !e.snapshot().radio.flex_meter_stream,
+            "a torn-down worker must stop claiming a producer"
         );
     }
 

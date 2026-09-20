@@ -59,6 +59,7 @@
     "dialMhz": 14.08,
     "filterWidthHz": null,
     "flexDaxTx": false,
+    "flexMeterStream": false,
     "holdTxFreq": false,
     "hrdLinkUp": null,
     "hrdQueued": 0,

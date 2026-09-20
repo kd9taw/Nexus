@@ -3560,6 +3560,7 @@ export const JA: PartialCatalog = {
   "settings.transmit.swrStop.threshold": "停止するしきい値",
   "settings.transmit.swrStop.hint": "この値を超える読み取りが2回続くと、Nexus は「送信停止」と同じように送信をやめ、その理由を表示します。送信を始めることは決してなく、TX を自動で入れ直すこともありません。アンテナを直したうえで、ご自分で入れ直してください。既定はオフです。1回だけの高い読み取りは無視するので、チューナーの動作や立ち上がりの過渡で切られることはありません。",
   "settings.transmit.swrStop.unverified": "この無線機の SWR 表示はまだ検証されていないため、Nexus はこれを理由に送信を止めません。Nexus がこの数値を信頼するのは、無線機自身の目盛りが分かっている場合だけです — ネイティブ CI-V の Icom と FlexRadio です。ほかの無線機では大きく外れることがあります。自身のメーターではほぼ完全な整合を示しながら、ここでは異常として報告される機種もあります。",
+  "settings.transmit.swrStop.noMeterStream": "この Flex 自身の SWR メーターを Nexus が受信していないため、SWR がどれほど高くなってもこの停止機能は何も止めません。このメーターは無線機のネイティブストリームから届きますが、それがオフになっています。設定 ▸ 無線機 ▸ Rig & CAT で「Flexネイティブパナアダプター（早期アクセス）」をオンにして開始してください。それまではこの設定は効果がありません。",
   "settings.transmit.note": "保存するとリグ設定は即時に反映されます（再起動不要）。<b>CATテスト</b>は設定を保存し、同梱の<code>rigctld</code>を起動して（WindowsではHamlibがNexusに同梱されており、別途インストール不要）、無線機の周波数を読み取ってCATを確認します。CATには<em>リグモデル</em>と<em>シリアルポート</em>の選択が必要です。シリアルRTS/DTRとVOXにはモデル指定は不要です。",
   "settings.transmit.backup.label": "設定のバックアップ",
   "settings.transmit.backup.action": "バックアップ",

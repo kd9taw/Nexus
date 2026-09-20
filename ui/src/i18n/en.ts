@@ -5635,6 +5635,12 @@ export const EN = {
     'Two readings in a row above this and Nexus stops transmitting, exactly as Stop TX does, and tells you why. It never starts a transmission and never turns TX back on — you do that once the antenna is sorted out. Off by default; a high reading on one poll is ignored, so a tuner stepping or a keyup transient will not cut you off.',
   'settings.transmit.swrStop.unverified':
     'This radio\'s SWR reading isn\'t verified yet, so Nexus won\'t stop your transmission on it. Nexus only trusts the number where it knows the radio\'s own scale — Icom over native CI-V, and FlexRadio. On other radios the figure can be far out: some show a near-perfect match on their own meter while reporting a fault here.',
+  // A Flex's scale IS verified, but the thing that produces it — the native VITA meter
+  // worker — only runs under the native panadapter, which ships off. So this radio alone can
+  // be told "verified" and still have nothing arriving. Names the exact control that starts
+  // it, because "it doesn't work" with no cure is what the `.unverified` line already says.
+  'settings.transmit.swrStop.noMeterStream':
+    'Nexus is not receiving this Flex\'s own SWR meter, so this cutoff will not stop anything, however high the SWR goes. That meter comes from the radio\'s native stream, and it is off. Turn on "Flex native panadapter (early access)" in Settings \u25b8 Radio \u25b8 Rig & CAT to start it. Until then this setting has no effect.',
 
   // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
   // `rigctld` is the daemon's own; the call site supplies the emphasis for each.
