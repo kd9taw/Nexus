@@ -177,6 +177,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The CW and Phone band-activity strips no longer rebuild themselves every time the spots refresh.** On a busy
+  band — a contest evening can put over 600 stations on the 20 m CW strip — one new spot made Nexus throw away and
+  redraw every flag above it, which on a slower PC was enough to stall the waterfall for a moment before the new flag
+  appeared. The flags of stations still on the air stay put now; only the spots that arrived or aged out change.
+  (#320)
+- **Prompt before logging now queues contacts instead of replacing them.** If a second contact finished while the
+  popup was still open, the popup kept showing the first station while Nexus had moved on to the second — and logging
+  then filed the first station's call on the second contact's time and frequency. The popup now keeps the contact it
+  is showing, tells you how many are waiting, and brings up the next one as soon as you log or discard it. Nothing is
+  mixed, and no contact is lost.
+- **Correcting a callsign in that popup corrects what was looked up from the wrong one.** The country, state and a
+  name that came from the busted call are re-derived for the call you actually worked, and a grid that had only been
+  looked up is dropped — a grid the station itself sent, or one you typed, is kept. Correcting a call from Nexus
+  Remote now does the same. An edited report no longer leaves the old report behind in the comment.
+- **The ATU button says when your radio's tuner cannot be started over CAT.** On Icom and Kenwood radios connected
+  through Hamlib the command only switches the tuner in or out, so the button is greyed out and points at the TUNER
+  button on the radio — instead of quietly switching the tuner in, tuning nothing, and, in the digital section,
+  ending your QSO for a tune-up that never happened. Where a tune-up can be started, it now ends your QSO only once
+  the radio has actually accepted it. (#322)
+- **Dates you type are UTC everywhere.** The Logbook's edit form, "Log a contact from another radio" and the export
+  date range took dates through the Windows date control, which follows the PC's own calendar and silently discarded
+  a date it could not read — so an impossible date looked like a cleared one, and on the export that quietly widened
+  the range to your whole log. All three now take the date as plain UTC text, refuse a date that cannot be, and hold
+  the button rather than exporting something other than what you asked for. (#280)
 - **The waterfall no longer freezes a few minutes into a session.** While the radio was slow to
   answer (a CAT read on a slow link, a log save), each Nexus window kept asking for its next update
   several times a second without waiting for the last one, and those waiting requests could take
