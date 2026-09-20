@@ -19,6 +19,8 @@ vi.mock('../api', () => {
   return {
     fdLogManual: vi.fn(() => Promise.resolve({})),
     contestLogManual: vi.fn(() => Promise.resolve({})),
+    contestWorking: vi.fn(() => Promise.resolve({})),
+    contestEntryReset: vi.fn(() => Promise.resolve({})),
     logQso: vi.fn(() => Promise.resolve({})),
     getLog,
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),

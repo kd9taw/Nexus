@@ -20691,6 +20691,38 @@ fn contest_log_manual(
     Ok(eng.snapshot())
 }
 
+/// ⭐ **The operator committed a callsign on the contest entry line.**
+///
+/// The door a contest serial is issued through: the number the entry strip shows, and
+/// the keyer sends, is bound to THIS station from here until the contact is logged. A
+/// station worked earlier and never logged is given back the number they already
+/// copied; a correction on the same entry moves the number rather than minting a
+/// second one.
+///
+/// ⚠️ **COMMIT ONLY — Enter, blur, a spot click. Never on every keystroke.** Bound to
+/// each edit it would mint a binding per prefix of the call and strand all but the
+/// last. [`contest_zone_hint`] is the per-keystroke endpoint; this is deliberately not.
+///
+/// A blank call is the reset — the operator cleared the box.
+#[tauri::command(async)]
+fn contest_working(state: State<'_, SharedEngine>, call: String) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.contest_working(&call)?;
+    Ok(eng.snapshot())
+}
+
+/// The contest entry line was cleared without logging (the wipe button, or moving on).
+///
+/// The number that station copied stays bound to them — come back later and they are
+/// given the same one. Only the live slot is released, so the next call committed is a
+/// new contact rather than a correction of this one.
+#[tauri::command(async)]
+fn contest_entry_reset(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.contest_entry_reset();
+    Ok(eng.snapshot())
+}
+
 /// What one merge into the general logbook did (§3.2).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24880,6 +24912,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             clear_hunt_target,
             fd_log_manual,
             contest_log_manual,
+            contest_working,
+            contest_entry_reset,
             fd_merge_to_general,
             fd_set_upload,
             contest_i_moved,

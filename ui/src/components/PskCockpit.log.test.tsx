@@ -67,6 +67,8 @@ vi.mock('../api', () => ({
   // …and the log strip's, which is the point of this file.
   logQso: (rec: LoggedQso) => logQso(rec),
   contestLogManual: (...args: unknown[]) => contestLogManual(...args),
+  contestWorking: async (..._args: unknown[]) => ({}),
+  contestEntryReset: async () => ({}),
   fdLogManual: vi.fn(async () => ({})),
   getLog: vi.fn(async () => [] as LoggedQso[]),
   qrzLookup: vi.fn(async () => null),

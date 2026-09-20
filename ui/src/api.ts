@@ -668,6 +668,40 @@ export async function contestLogManual(
   })
 }
 
+/** ⚠️ ADDING AN EXPORT HERE BREAKS TEST SUITES, AND THE SUITE WILL TELL YOU IT PASSED.
+ *
+ *  `vi.mock('../api', () => ({ … }))` factories enumerate every export they stand in for and do
+ *  NOT fall through to the real module, so the first component that calls a new export throws
+ *  inside whatever suite renders it. Adding the two below hit **twelve** test files in four
+ *  distinct mock shapes: `vi.fn(() => Promise.resolve({}))`, `vi.fn(() => Promise.resolve(true))`,
+ *  `(...args: unknown[]) => localFn(...args)`, and a renamed-local variant — so a single
+ *  find-and-replace does not cover it.
+ *
+ *  ⭐ **The part that will cost you an hour: it is an UNHANDLED ERROR, not a failing assertion.**
+ *  `npm test` printed `628 files passed, 6353 tests passed` and exited **1**. The summary line
+ *  says green while the exit code says red. Read the exit code. */
+
+/** ⭐ THE CONTEST SERIAL'S PEER DOOR — the operator has committed a callsign on the entry line.
+ *
+ *  In a contest with a serial the number shown and keyed is bound to THIS station from here
+ *  until the contact is logged: a station worked earlier and never logged gets back the number
+ *  they already copied, and correcting the call on the same entry moves the number rather than
+ *  minting a second one.
+ *
+ *  ⚠️ COMMIT ONLY — Enter, blur, a spot click. Never on every keystroke: bound to each edit it
+ *  mints a binding per prefix of the call and strands all but the last. `contestZoneHint` is the
+ *  per-keystroke endpoint; this is deliberately not. */
+export async function contestWorking(call: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('contest_working', { call })
+}
+
+/** The contest entry line was cleared without logging. The number that station copied stays
+ *  bound to them; only the live slot is released, so the next call committed is a new contact
+ *  rather than a correction of this one. */
+export async function contestEntryReset(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('contest_entry_reset')
+}
+
 export async function fdLogManual(
   call: string,
   klass: string,
