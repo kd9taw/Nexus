@@ -66,6 +66,32 @@ pub struct DupeRule {
     /// languages build this key (this module's header), and a fold applied by one of
     /// them is exactly how they come to disagree.
     pub mode_class_groups: &'static [&'static [&'static str]],
+    /// ⭐ **What a duplicate IS to this sponsor: a row that scores zero, or a contact
+    /// that was never made.** `false` — the shipped behaviour, and still Field Day's —
+    /// REFUSES the contact and writes nothing. `true` LOGS it, marks it
+    /// ([`LoggedQso::dupe`](crate::fieldday::LoggedQso::dupe)) and scores it zero.
+    ///
+    /// **Both sponsors that cross-check say the same thing.** ARRL LGCK.1 and CQ
+    /// XII.E.1: *"Duplicate contacts are removed with no additional penalty."* CQ
+    /// instructs entrants in as many words — *"Yes! Please log all contacts that you
+    /// make even if they are duplicates"*, *"No, please do not remove any QSOs from
+    /// your log! This will cause the other station that worked you to lose credit for
+    /// the contact."* Dropping the row is what costs points, and it costs them to the
+    /// OTHER operator: their contact becomes Not-In-Log, 1× extra at ARRL, 2× extra at
+    /// CQ. The checker is what zeroes a dupe; the entrant's job is to report it.
+    ///
+    /// ⚠️ **It is `false` for ARRL and Winter Field Day, and that is not an oversight.**
+    /// Field Day has no log checking at all — no cross-check, no NIL, and *"Complete
+    /// station logs are NOT required for submission, and ARRL does not use the logs."*
+    /// The whole justification above is inapplicable there, and Field Day's deliverable
+    /// is a dupe sheet plus **raw non-dupe** QSO counts. So FD keeps refusing.
+    ///
+    /// ⚠️ **Not part of the key**, deliberately: it says what to DO with a duplicate,
+    /// never what makes two contacts the same one. The four key-building sites in two
+    /// languages (this module's header) are untouched by it, and the while-typing DUPE
+    /// verdict reads the same as it always did — what changed is only what happens when
+    /// the operator commits anyway.
+    pub log_dupes: bool,
 }
 
 impl DupeRule {
@@ -210,6 +236,7 @@ mod tests {
         by_fields: &[],
         by_sent_fields: &[],
         mode_class_groups: &[],
+        log_dupes: false,
     };
 
     /// The QSO-party rule: a mobile in a new county is a new station, in BOTH
@@ -221,6 +248,7 @@ mod tests {
         by_fields: &["QTH"],
         by_sent_fields: &["QTH"],
         mode_class_groups: &[],
+        log_dupes: false,
     };
 
     fn fv(key: &'static str, raw: &str) -> FieldValue {
@@ -257,6 +285,7 @@ mod tests {
             by_fields: &["QTH"],
             by_sent_fields: &["QTH"],
             mode_class_groups: &[&["CW", "DIG"]],
+            log_dupes: false,
         };
         let rx = [fv("QTH", "COOK")];
         let tx = [fv("QTH", "COOK")];
@@ -307,6 +336,7 @@ mod tests {
             by_fields: &["QTH"],
             by_sent_fields: &[],
             mode_class_groups: &[],
+            log_dupes: false,
         };
         assert_eq!(
             ss.key_of("W1AW", "20m", "CW", &[fv("QTH", "CT")], &[]),
@@ -335,6 +365,7 @@ mod tests {
             by_fields: &["A", "B"],
             by_sent_fields: &["C"],
             mode_class_groups: &[],
+            log_dupes: false,
         };
         assert_eq!(
             r.key_of("W1AW", "", "", &[fv("B", "bee")], &[fv("C", "see")]),

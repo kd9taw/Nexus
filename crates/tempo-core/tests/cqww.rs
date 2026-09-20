@@ -238,19 +238,27 @@ fn cq_ww_cw_from_the_united_states_end_to_end() {
     ));
 
     // THE DUPE VERDICT — *"Stations may be contacted once on each band."* The same
-    // station on the same band is refused…
+    // station on the same band is a duplicate, and XII.E.1 says what becomes of one:
+    // *"Duplicate contacts are removed with no additional penalty."* The CHECKER removes
+    // it, so the entrant reports it — *"please do not remove any QSOs from your log! This
+    // will cause the other station that worked you to lose credit for the contact."* It
+    // is accepted, marked, and worth nothing; the score below is what proves the last.
     assert!(
-        !work(
+        work(
             &mut log,
             "20m",
             "DL1ABC",
             &[("RST", "599"), ("ZN", "14")],
             140
         ),
-        "same call, same band is a dupe"
+        "a CQ WW duplicate is REPORTED, not dropped"
     );
-    // …and the POSITIVE CONTROL: a DIFFERENT station on that same 20 m is accepted, so
-    // the refusal is the dupe key and not a log that stopped taking contacts.
+    assert!(
+        log.qsos().last().expect("the dupe row").dupe,
+        "…and it is marked as the duplicate it is"
+    );
+    // …and the POSITIVE CONTROL: a DIFFERENT station on that same 20 m is a NEW contact,
+    // so the mark above is the dupe key talking and not every row on a busy band.
     assert!(work(
         &mut log,
         "20m",
@@ -258,6 +266,10 @@ fn cq_ww_cw_from_the_united_states_end_to_end() {
         &[("RST", "599"), ("ZN", "14")],
         150
     ));
+    assert!(
+        !log.qsos().last().expect("the new row").dupe,
+        "a different station on the same band is not a duplicate"
+    );
 
     // ⭐ THE SCORE, arm by arm.
     // K2DEF   United States → SAME COUNTRY        → 0
@@ -295,8 +307,21 @@ fn cq_ww_cw_from_the_united_states_end_to_end() {
     );
     // ⭐ THE TRAILING TRANSMITTER COLUMN — *"Note for Column 81 (transmitter number) …
     // It must be a 0 or a 1"* — on EVERY QSO line, and it is the last thing on each.
+    //
+    // ⚠️ **SIX lines for five scoring contacts.** The duplicate is in the submitted file,
+    // as CQ asks — and as a PLAIN `QSO:` line, because `X-QSO` means "I want this
+    // contact excluded" and carries the sponsor's own anti-abuse warning. Our dupe mark
+    // is for our scoring and display; it must never become a token in this file.
     let qso_lines: Vec<&str> = cab.lines().filter(|l| l.starts_with("QSO:")).collect();
-    assert_eq!(qso_lines.len(), 5);
+    assert_eq!(
+        qso_lines.len(),
+        6,
+        "five scoring contacts plus the reported dupe"
+    );
+    assert!(
+        !cab.contains("X-QSO"),
+        "the dupe is never asked to be excluded"
+    );
     assert!(
         qso_lines.iter().all(|l| l.ends_with(" 0")),
         "every CQ WW QSO line ends with the transmitter column: {qso_lines:?}"
