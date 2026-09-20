@@ -472,6 +472,12 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   unmodified. Opus is an IETF standard (RFC 6716) available under royalty-free patent
   licences; libopus's neural extensions are not enabled (see **[NOTICE](NOTICE)** for the full
   attribution and why).
+- **[SQLite](https://sqlite.org/)** (public domain) — **D. Richard Hipp** and the SQLite
+  developers. Nexus's logbook is stored in SQLite, statically linked through the
+  [`rusqlite`](https://github.com/rusqlite/rusqlite) (MIT) and `libsqlite3-sys` (MIT) crates,
+  which carry the SQLite C amalgamation; ADIF is still written alongside it as a plain-text
+  mirror, so your log stays readable without Nexus. SQLite is not licensed — it is dedicated
+  to the public domain (see **[NOTICE](NOTICE)** for the per-file verification).
 - **[Hamlib](https://hamlib.github.io/)** — `rigctld` for CAT control, bundled on every platform
   (tools GPL-2.0-or-later, library LGPL-2.1-or-later; launched as a separate process, not linked).
 - **[OpenSSL](https://www.openssl.org/)** (Apache-2.0) — the secure connection for HRDLog.net
