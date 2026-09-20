@@ -2107,6 +2107,10 @@ export const DE: PartialCatalog = {
     "one": "{{count}} weiterer Kontakt wartet hinter diesem",
     "other": "{{count}} weitere Kontakte warten hinter diesem"
   },
+  "logPrompt.autoLogged": {
+    "one": "{{count}} Kontakt wurde ohne Ihre Bestätigung geloggt — die Warteschlange war voll. Er steht in Ihrem Log und Ihre Verbindungen laden ihn hoch; das Verbindungsprotokoll nennt ihn.",
+    "other": "{{count}} Kontakte wurden ohne Ihre Bestätigung geloggt — die Warteschlange war voll. Sie stehen in Ihrem Log und Ihre Verbindungen laden sie hoch; das Verbindungsprotokoll nennt sie."
+  },
   "logPrompt.discard": "Verwerfen",
   "logPrompt.log": "QSO loggen",
   "logbook.globe.spin.stop.title": "Langsame Rotation anhalten",

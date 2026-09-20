@@ -6103,6 +6103,16 @@ select optgroup {
   font-size: 12px;
   color: var(--text-dim);
 }
+/* "N contacts were logged without your confirmation" — the queue's cap logging the oldest
+   waiting contact unreviewed. A warning, not a note: that contact is already in the log and on
+   its way to the connectors. --state-weak is the app's "something is wrong here" colour and
+   exists in both themes. */
+.logconfirm-autologged {
+  margin: calc(-1 * var(--space-1)) 0 var(--space-3);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--state-weak);
+}
 .logconfirm-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -3912,6 +3912,12 @@ export interface AppSnapshot {
   /** How many MORE completed contacts are queued behind the one the popup shows (operator
    *  ruling 2026-09-19: queue them, never replace). 0 or absent = this is the only one. */
   pendingLogsWaiting?: number
+  /** How many contacts the queue logged WITHOUT review since the operator last answered this
+   *  popup — at the queue's cap the oldest waiting contact is logged as it stands, and it then
+   *  uploads to the connectors and joins the LoTW batch like any other. Answering the popup
+   *  (confirm or discard) is the acknowledgement, so the engine resets this to 0 there: a
+   *  counter that never reset would leave the warning up forever after one cap event. */
+  pendingLogsAutoLogged?: number
   /** Remote snapshot identity for the CURRENT QSO; native calls do not require it. */
   currentQsoLogKey?: string | null
   remoteFtSettings?: import('./remote-web/station-operation').FtSettingsContext | null

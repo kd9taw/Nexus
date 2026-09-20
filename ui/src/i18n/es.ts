@@ -1845,6 +1845,10 @@ export const ES: PartialCatalog = {
     "one": "{{count}} contacto más espera detrás de este",
     "other": "{{count}} contactos más esperan detrás de este"
   },
+  "logPrompt.autoLogged": {
+    "one": "{{count}} contacto se anotó sin tu confirmación: la cola estaba llena. Está en tu log y tus conexiones lo subirán; el registro de conexiones lo nombra.",
+    "other": "{{count}} contactos se anotaron sin tu confirmación: la cola estaba llena. Están en tu log y tus conexiones los subirán; el registro de conexiones los nombra."
+  },
   "logPrompt.discard": "Descartar",
   "logPrompt.grid.label": "Locator",
   "logPrompt.log": "Anotar QSO",

@@ -1845,6 +1845,10 @@ export const FR: PartialCatalog = {
     "one": "{{count}} autre contact attend derrière celui-ci",
     "other": "{{count}} autres contacts attendent derrière celui-ci"
   },
+  "logPrompt.autoLogged": {
+    "one": "{{count}} contact a été enregistré sans votre confirmation : la file était pleine. Il est dans votre journal et vos connexions l'enverront ; le journal des connexions le nomme.",
+    "other": "{{count}} contacts ont été enregistrés sans votre confirmation : la file était pleine. Ils sont dans votre journal et vos connexions les enverront ; le journal des connexions les nomme."
+  },
   "logPrompt.discard": "Abandonner",
   "logPrompt.grid.label": "Locator",
   "logPrompt.log": "Enregistrer QSO",

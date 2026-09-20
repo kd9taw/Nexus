@@ -18,13 +18,16 @@ interface Props {
   /** How many MORE completed contacts are held behind this one (operator ruling 2026-09-19:
    *  queue them). 0 = this is the only one, and nothing is said about a queue. */
   waiting?: number
+  /** How many contacts the queue logged WITHOUT review since this popup was last answered.
+   *  0 = nothing to report, and the warning is absent. */
+  autoLogged?: number
   onStop?: () => void
 }
 
 /** WSJT-X "Prompt me to log QSO" — a small confirm popup shown when a QSO
  * completes and the operator has asked to review before logging. Pre-fills the
  * exchanged details; the call/grid/reports stay editable. */
-export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, onStop }: Props) {
+export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogged = 0, onStop }: Props) {
   const allowed = useStationCapability('qsoLogging')
   const [call, setCall] = useState(record.call)
   const [grid, setGrid] = useState(record.grid ?? '')
@@ -63,6 +66,16 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, onStop }
         {waiting > 0 && (
           <p className="logconfirm-waiting" role="status">
             {t('logPrompt.waiting', { count: waiting })}
+          </p>
+        )}
+
+        {/* A contact the queue logged at its cap, unreviewed. It is in the log, the connectors
+            will upload it and LoTW will carry it under the operator's certificate, so this is a
+            WARNING, not a note — and it belongs here rather than only in the Connections log,
+            because this popup is where the operator comes back to. */}
+        {autoLogged > 0 && (
+          <p className="logconfirm-autologged" role="alert">
+            {t('logPrompt.autoLogged', { count: autoLogged })}
           </p>
         )}
 
