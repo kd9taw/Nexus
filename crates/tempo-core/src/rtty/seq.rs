@@ -1148,6 +1148,17 @@ mod tests {
         )
     }
 
+    /// The other event the engine can arm the sequencer with. A separate fixture
+    /// because `field_day` returns a separate spec per event (disjoint class letters),
+    /// so a claim about "the shipped exchanges" is only checked by visiting both.
+    fn wfd_seq() -> RttySeq {
+        RttySeq::new(
+            MYCALL,
+            crate::contest::field_day(crate::fieldday::FdEvent::WinterFd),
+            &[("CLASS", "2M"), ("SECTION", "EPA")],
+        )
+    }
+
     fn sends(actions: &[Action]) -> Vec<String> {
         actions
             .iter()
@@ -1758,6 +1769,78 @@ mod tests {
             serials(&seq.take_actions()),
             vec!["002"],
             "the next contact took the abandoned contact's number"
+        );
+    }
+
+    /// ⭐ **The sequencer's serial run cannot reach the air in the shipped app, and
+    /// THAT is why its reset-to-1 on restart is not the defect it reads as.**
+    ///
+    /// [`next_serial`](RttySeq::next_serial) starts at 1 in [`RttySeq::new`] and a
+    /// restart therefore re-issues numbers a previous session already handed out —
+    /// mechanically the same shape as the contest-session reset fixed on 2026-09-20.
+    /// The consequence is not: a number this machine issues is observable in exactly
+    /// one place, the `{SERIAL}` token of a rendered template, and **no template the
+    /// engine can build contains one**. [`Templates::for_spec`] returns
+    /// [`Templates::field_day`] or [`Templates::casual`] and nothing else; neither
+    /// carries the token. Every `{SERIAL}` in this file below the `cfg(test)` line is
+    /// a fixture that overrides BOTH the spec and the template set, and the engine's
+    /// own door refuses to build anything else — `set_rtty_auto` constructs the
+    /// sequencer with `contest::field_day(event)` or `contest::casual()`, and
+    /// `rtty_auto_contest_gate` refuses every other contest outright.
+    ///
+    /// The other half, and it is why the logbook is not a second surface:
+    /// [`Action::LogQso`] carries the PEER's copied exchange, never the issued value,
+    /// so the number cannot reach a row either.
+    ///
+    /// ⚠️ **This is a gate, not a record of a green run.** Put `{SERIAL}` in a shipped
+    /// template — a serial-bearing RTTY contest is the obvious reason to — and this
+    /// goes red, because the counter's restart reset becomes visible the same day.
+    /// Wire the run's continuation across a restart FIRST; the counter is private
+    /// state with no accessor, so the restore has to be designed with it.
+    #[test]
+    fn no_shipped_exchange_lets_the_sequencer_put_a_serial_on_the_air() {
+        // A restart IS a fresh `RttySeq::new` — `set_rtty_auto(true)` builds one from
+        // settings and merges nothing back. So the question "does a restart re-issue a
+        // number?" is exactly "does a cold session send what a warm one sends?", and
+        // the peer is held fixed so a serial is the only thing that COULD differ.
+        let warm_then_cold = |build: fn() -> RttySeq| {
+            let mut warm = build();
+            for (i, call) in ["W1AW", "K1ABC", "N0XYZ"].iter().enumerate() {
+                warm.answer(call, i as u64 * 1_000);
+                warm.take_actions();
+                warm.abort();
+            }
+            warm.answer("W9ZZZ", 9_000);
+            let warm_sends = sends(&warm.take_actions());
+
+            let mut cold = build();
+            cold.answer("W9ZZZ", 0);
+            (warm_sends, sends(&cold.take_actions()))
+        };
+
+        for (what, build) in [
+            ("casual", casual_seq as fn() -> RttySeq),
+            ("ARRL Field Day", fd_seq as fn() -> RttySeq),
+            ("Winter Field Day", wfd_seq as fn() -> RttySeq),
+        ] {
+            let (warm, cold) = warm_then_cold(build);
+            // Two empty vectors are equal, and a harness that compared them would pass
+            // this leg while seeing nothing at all.
+            assert!(!warm.is_empty(), "{what}: the fourth contact sent nothing");
+            assert_eq!(
+                warm, cold,
+                "{what}: three contacts moved something the fourth one SENDS — a serial \
+                 reached the air, and the restart reset is now a live defect"
+            );
+        }
+
+        // POSITIVE CONTROL — the same harness, on the fixture whose templates DO carry
+        // `{SERIAL}`. Without this, a harness that compared two empty vectors would
+        // pass all three legs above and prove nothing at all.
+        let (warm, cold) = warm_then_cold(serial_seq);
+        assert_ne!(
+            warm, cold,
+            "the harness cannot see a serial even when every template renders one"
         );
     }
 
