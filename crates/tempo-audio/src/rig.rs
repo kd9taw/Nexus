@@ -110,6 +110,27 @@ pub fn split_mode_line(mode: &str, passband_hz: i32) -> String {
 pub fn vfo_line(vfo: &str) -> String {
     format!("V {vfo}\n")
 }
+/// What a `U FUNC <n>` attempt actually ESTABLISHED — three outcomes, not two.
+///
+/// ⭐⭐ R1 (transmit review, 2026-09-19). Collapsing this into `Result` is what made a
+/// tune-up the radio really started read as one it refused: `Err` covered both "the rig
+/// answered no" and "we stopped listening after 700 ms while Hamlib was still reading the
+/// rig's reply". The ATU is a transmit action, and those two must never be the same thing.
+///
+/// The shape is `remote_control::Completion::refuse`'s: a failure AFTER an attempted write is
+/// Unknown, never Rejected.
+#[derive(Debug)]
+pub enum FuncSet {
+    /// `RPRT 0` — the rig took it.
+    Ok,
+    /// Nothing is acting on this command: either the rig ANSWERED with an error code, or the
+    /// line never reached the wire at all. The radio's state is what it was.
+    Refused(String),
+    /// The line WENT OUT and no verdict came back — no reply inside our window, or the link
+    /// dropped under it. The rig may be doing exactly what we asked, right now.
+    Uncertain(String),
+}
+
 /// rigctld `U` — set a function (RIT/XIT must be enabled this way before `J`/`Z`).
 ///
 /// Takes a VALUE, not a bool, because `RIG_FUNC_TUNER` is not boolean — see
@@ -1015,8 +1036,15 @@ impl Rig {
 
     /// Enable/disable a rig CAT function via rigctld `U FUNC <0|1>`. CAT-only; `Ok(())` on
     /// `RPRT 0`, else an error (unsupported func or link failure).
+    ///
+    /// The receive-side funcs this serves do not care WHY it failed. The one that does — the
+    /// ATU, which keys the transmitter — calls [`Self::set_func_value`] and reads the
+    /// [`FuncSet`] verdict itself.
     pub fn set_func(&mut self, token: &str, on: bool) -> std::io::Result<()> {
-        self.set_func_value(token, u8::from(on))
+        match self.set_func_value(token, u8::from(on)) {
+            FuncSet::Ok => Ok(()),
+            FuncSet::Refused(why) | FuncSet::Uncertain(why) => Err(std::io::Error::other(why)),
+        }
     }
 
     /// `U FUNC <n>` with an arbitrary value — because `RIG_FUNC_TUNER` is NOT a boolean.
@@ -1026,17 +1054,23 @@ impl Rig {
     /// `src/settings.c::rig_set_func` hands it straight to `caps->set_func(rig, vfo, func,
     /// status)` with no clamping on the way. What each BACKEND then does with it differs, which
     /// is the whole reason this entry point exists — see [`ATU_START_TUNE`].
-    pub fn set_func_value(&mut self, token: &str, value: u8) -> std::io::Result<()> {
+    pub fn set_func_value(&mut self, token: &str, value: u8) -> FuncSet {
         if self.control.is_none() {
-            return Err(std::io::Error::other("not a CAT rig"));
+            // Nothing was written, so nothing is acting on it — a refusal, not uncertainty.
+            return FuncSet::Refused("not a CAT rig".into());
         }
-        let reply = self.command(&func_line(token, value))?;
-        if reply_ok(&reply) {
-            Ok(())
-        } else {
-            Err(std::io::Error::other(format!(
-                "set_func {token} rejected: {reply:?}"
-            )))
+        match self.command(&func_line(token, value)) {
+            Ok(reply) if reply_ok(&reply) => FuncSet::Ok,
+            // The rig ANSWERED, and said no. That is a fact about the radio.
+            Ok(reply) => FuncSet::Refused(match rprt_code(&reply) {
+                Some(code) => format!("the rig answered RPRT {code} to {token} {value}"),
+                None => format!("the rig answered {reply:?} to {token} {value}"),
+            }),
+            // ⚠️ EVERY OTHER OUTCOME IS UNCERTAIN, and deliberately so: `command` writes the
+            // line BEFORE it waits, so a deadline, a dropped stream or a half-open link all
+            // leave a command on the wire that the radio may be acting on this second. The
+            // caller decides what to do with that; what it must not do is call it a refusal.
+            Err(e) => FuncSet::Uncertain(format!("no verdict on {token} {value}: {e}")),
         }
     }
 

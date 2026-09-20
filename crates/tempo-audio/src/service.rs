@@ -34,7 +34,7 @@ use crate::backend::AudioBackend;
 use crate::device::CpalBackend;
 use crate::frames::RxRing;
 use crate::rig::tuning::{passband_for, retune_passband, same_named_band};
-use crate::rig::{PttMode, Rig, SerialLine, ATU_START_TUNE};
+use crate::rig::{FuncSet, PttMode, Rig, SerialLine, ATU_START_TUNE};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
 mod monitor_claims;
@@ -6831,18 +6831,48 @@ impl RadioLoop {
                         let fire_atu = engine_lock(engine).take_atu_tune();
                         if fire_atu && self.may_key() {
                             crate::civ::diag::note("ATU: operator asked the rig to tune up");
-                            if let Err(e) = rig.set_func_value("TUNER", ATU_START_TUNE) {
-                                // NOT re-queued: retrying a keying command the radio already
-                                // refused would key on a later tick the operator didn't ask for.
-                                // They press it again if they want it again.
-                                crate::civ::diag::note(&format!("ATU: the rig refused it: {e}"));
-                            } else {
+                            // ⭐⭐ THREE OUTCOMES, NOT TWO (transmit review R1, 2026-09-19).
+                            //
+                            // The stand-down used to hang on `is_ok()`, which made a tune-up
+                            // the radio REALLY STARTED look like one it refused: Nexus gives
+                            // up on the reply after 700 ms (`is_slow_serial_link` keeps the
+                            // long window for network / ≤19200 links), while Hamlib's AC path
+                            // writes `AC002;` then `ID;` and READS UNTIL THE RIG ANSWERS —
+                            // `newcat_set_ac_cmd`, up to `retry + 2` frames, and an FTdx10
+                            // asks for 2000 ms × 3 of them. One Hamlib read outlasts our whole
+                            // window; our deadline then drops the stream. TX stayed armed and
+                            // the next period boundary keyed an over into a running tune-up.
+                            match rig.set_func_value("TUNER", ATU_START_TUNE) {
                                 // ⭐ #322 / review R4: THE RADIO TOOK IT, so the Digital section
                                 // stands down (`Engine::note_atu_tune_started`). Here and not at
                                 // the drain above, because a press this block cannot send — the
-                                // `may_key()` beside it — and one the rig refuses are both
-                                // dropped, and the operator's QSO must survive either.
-                                engine_lock(engine).note_atu_tune_started();
+                                // `may_key()` beside it — is not a tune-up either.
+                                FuncSet::Ok => {
+                                    engine_lock(engine).note_atu_tune_started();
+                                }
+                                // The rig ANSWERED and said no, so nothing is tuning and the
+                                // operator's QSO is none of our business — the ruling. NOT
+                                // re-queued: retrying a keying command the radio already
+                                // refused would key on a later tick nobody asked for.
+                                FuncSet::Refused(why) => {
+                                    crate::civ::diag::note(&format!(
+                                        "ATU: the rig refused it: {why}"
+                                    ));
+                                }
+                                // ⚠️ NO VERDICT ⇒ STAND DOWN, and the asymmetry is the whole
+                                // point: the command is already on the wire, so the rig may be
+                                // keyed by its own tuner right now. Standing down costs the
+                                // operator a QSO they can start again; the other direction
+                                // transmits into a tune-up, which is the one outcome that
+                                // reaches the air. Same shape as `Completion::refuse` — a
+                                // failure after an attempted write is Unknown, never Rejected.
+                                FuncSet::Uncertain(why) => {
+                                    crate::civ::diag::note(&format!(
+                                        "ATU: no verdict ({why}) — standing the section down, \
+                                         because the rig may be tuning"
+                                    ));
+                                    engine_lock(engine).note_atu_tune_started();
+                                }
                             }
                         }
                         // Apply pending RIT/XIT/VFO clarifier requests (CAT-panel controls). Drain
@@ -21172,8 +21202,15 @@ mod tests {
         mock_rigctld_with_atu_answering(dial_hz, "RPRT 0\n")
     }
 
+    /// [`mock_rigctld_with_atu_answering`]: the rig NEVER answers the tune-up, so what ends
+    /// the wait is NEXUS'S OWN reply deadline — the R1 case, and the one that bit.
+    const ATU_SILENT: &str = "";
+    /// …and the one where the link goes away instead of answering.
+    const ATU_HANGUP: &str = "\0hang up";
+
     /// The same stub, with the answer to the TUNE-UP itself under the test's control: a radio
     /// that refuses `U TUNER 2` answers `RPRT -1`, and the operator's QSO must survive it (R4).
+    /// [`ATU_SILENT`] and [`ATU_HANGUP`] are the no-verdict cases (R1).
     fn mock_rigctld_with_atu_answering(
         dial_hz: u64,
         tune_reply: &'static str,
@@ -21209,6 +21246,17 @@ mod tests {
                     } else {
                         "RPRT 0\n"
                     };
+                    // R1: the two ways a tune-up leaves Nexus with NO VERDICT — the rig is
+                    // busy running its tuner and answers late (Hamlib's AC path reads until
+                    // the RIG replies, which outlasts our window), or the link goes away
+                    // under it. Both must be modelled, because both used to read as "the
+                    // rig refused it".
+                    if reply == ATU_HANGUP {
+                        break; // the rigctld end hangs up without answering
+                    }
+                    if reply.is_empty() {
+                        continue; // …or simply never answers
+                    }
                     if stream.write_all(reply.as_bytes()).is_err() {
                         break;
                     }
@@ -21430,6 +21478,65 @@ mod tests {
                 sent.iter().any(|l| l == "U TUNER 2"),
                 tunes,
                 "model {model}: what reached the radio — saw {sent:?}"
+            );
+        }
+    }
+
+    /// ⭐⭐ R1 (transmit review, 2026-09-19) — A TUNE-UP WE NEVER HEARD BACK FROM IS NOT A
+    /// REFUSAL, AND UNCERTAINTY STANDS DOWN.
+    ///
+    /// The regression this closes was mine (a8531bdd): the stand-down waits for an Ok from
+    /// `set_func_value`, and Nexus gives up on that reply after 700 ms on an ordinary serial
+    /// link (`rigmodels::is_slow_serial_link` — the long window is for network or ≤19200
+    /// baud). Hamlib's AC path does not answer inside it: `newcat_set_ac_cmd`
+    /// (`rigs/yaesu/newcat.c:10842`) writes `AC002;`, then writes `ID;` as a delimiter, then
+    /// READS UNTIL THE RIG ANSWERS — up to `retry + 2` frames, and the FTdx10's own caps are
+    /// `.timeout = 2000, .retry = 3` (`rigs/yaesu/ftdx10.c:155`). ONE of those reads outlasts
+    /// our whole window. Our deadline then errors, `command_permitted` drops the stream, and
+    /// before this the loop read all of that as "the rig refused it": TX stayed armed, the CAT
+    /// link went away while the radio was keyed by its own tuner, and the next period boundary
+    /// keyed an over into a tune-up that was very likely still running.
+    ///
+    /// The rule now: an ANSWER of "no" is a refusal (the operator's ruling — leave the QSO
+    /// alone), and NO ANSWER is uncertainty, which stands down. The command was already on the
+    /// wire, and the safe direction is not transmitting into a tune.
+    #[test]
+    fn a_tune_up_nexus_never_hears_a_verdict_on_stands_the_qso_down() {
+        for (tune_reply, what) in [
+            (ATU_SILENT, "the rig never answered"),
+            (ATU_HANGUP, "the link dropped under it"),
+        ] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_frequency(14.074, "20m", "USB");
+                e.set_tx_enabled(true);
+                assert!(
+                    e.settings().operating_mode == tempo_app::settings::OperatingMode::Digital
+                        && e.tx_enabled()
+                        && e.tx_allowed(),
+                    "scene guard: the Digital section, armed + legal"
+                );
+            }
+            let (addr, log) = mock_rigctld_with_atu_answering(14_074_000, tune_reply);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state();
+            run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+
+            engine.lock().unwrap().atu_tune().expect("the gate passes");
+            run_heavy_polls(&engine, &mut state, &mut rig, &mut backend, 3);
+
+            let sent = log.lock().unwrap().clone();
+            assert!(
+                sent.iter().any(|l| l == "U TUNER 2"),
+                "{what}: the tune-up DID go out — which is why its outcome is uncertain and \
+                 not a refusal; saw {sent:?}"
+            );
+            assert!(
+                !engine.lock().unwrap().tx_enabled(),
+                "{what}: no verdict means the rig may be tuning RIGHT NOW, so the Digital \
+                 section must stand down rather than key into it"
             );
         }
     }
