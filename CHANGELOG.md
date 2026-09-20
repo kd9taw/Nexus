@@ -208,6 +208,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you are working, and the contact is logged and exported with the number that went out. Until now
   there was no number anywhere, and every contact was logged and exported as serial `0`, which is a
   log a sponsor cannot check.
+- **The log strip and the phone cockpit show the number you are actually sending.** In a serial
+  contest they read the exchange straight off the session, whose serial slot is a permanent
+  placeholder, so the "Sent:" line said `599 0` while the contact was logged with the real
+  number. On SSB that is what you read aloud — and it is what the voice-keyer hint told you to
+  record into a slot — so your log would have recorded serials that never went on the air.
+  Both now show the issued number. Contests with no serial are unchanged.
 - **The number belongs to the station you are working, from the moment you enter their call.**
   Search and pounce: call one station, get no answer, work somebody else and come back — the first
   station is given the number they already copied, not a later one, and the number you actually

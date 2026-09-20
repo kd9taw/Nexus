@@ -2813,6 +2813,12 @@ export interface FieldDayStatus {
    *  A VECTOR, never a preformatted string: a rendered session-level exchange is the
    *  thing three emitters got wrong by stamping it on rows it did not describe. */
   composing?: ContestFieldValue[]
+  /** The whole composing exchange as the operator READS IT ALOUD — every sent slot in send
+   *  order, report included, with the ISSUED serial rather than `composing`'s `"0"`
+   *  placeholder. Render this; never join `composing` yourself. `composing` stays raw because
+   *  it is also the "I moved" edit surface, and committing a live serial through `move_to`
+   *  freezes the run at that number. */
+  composingText?: string
   /** ⭐ What `{EXCH}` keys right now: this session's sent exchange WITHOUT the signal
    *  report, as macro text — `'5'` in CQ WW CW, `'5 MA'` for a W/VE station in CQ WW
    *  RTTY, `'3A WI'` in Field Day. The CW keyer's `{EXCH}` is the same string.
