@@ -242,6 +242,32 @@ pub struct ContestSession {
     /// The contact in flight, and the exchange issued to it. Cleared on log or on
     /// abandon; a repeat renders FROM it.
     pub in_flight: Option<InFlightQso>,
+    /// ⭐ **Serials given out and not yet logged, by peer — the half-worked stations.**
+    ///
+    /// [`in_flight`](Self::in_flight) alone was sound for the RTTY sequencer, whose own
+    /// `issued` is a single slot because that machine works exactly one contact at a
+    /// time. **Manual search-and-pounce breaks that premise by design**: the operator
+    /// calls one station, gets no answer, spins on, and comes back ten minutes later.
+    /// With one slot the second station overwrites the first's binding, and the first —
+    /// who has already copied a number — is logged with whatever the counter reached.
+    /// Two stations then hold one serial and one of the two rows disagrees with its own
+    /// partner's log.
+    ///
+    /// ⚠️ **Nothing is evicted by size, ever.** An entry leaves only when the contact is
+    /// logged, because the row carries the number from then on. Any capacity rule
+    /// reintroduces exactly the defect this exists to prevent — the station it forgets
+    /// is the one that comes back. The cost of never forgetting is a callsign and a
+    /// `u32` per half-worked station: ten thousand of them is well under a megabyte, in
+    /// an app that holds the whole contest log in memory and serialises it every tick.
+    ///
+    /// A `BTreeMap` rather than a `HashMap` so [`Debug`] and [`PartialEq`] are stable —
+    /// this type is compared in tests and printed in diagnostics.
+    ///
+    /// **Not persisted.** A restart re-derives `next_serial` from the logged rows, which
+    /// is right, but a station half-worked at the moment of the crash copied a number no
+    /// row carries. They get a fresh one. That is the same trade the journal already
+    /// makes and it is the safe direction: a gap, not a reuse.
+    pub issued: std::collections::BTreeMap<String, u32>,
     pub start_unix: u64,
     /// The ruleset window, or operator-set for an unlisted event.
     pub end_unix: u64,
@@ -344,6 +370,7 @@ impl ContestSession {
             },
             my_exchange,
             in_flight: None,
+            issued: std::collections::BTreeMap::new(),
             start_unix: 0,
             end_unix: 0,
             next_serial: 1,
@@ -429,6 +456,7 @@ impl ContestSession {
             my_location,
             my_exchange: Vec::new(),
             in_flight: None,
+            issued: std::collections::BTreeMap::new(),
             start_unix: 0,
             end_unix: 0,
             next_serial: 1,
@@ -664,6 +692,80 @@ Fill it in on the Contesting tab in Settings."
             since_unix: now_unix,
         });
         self.in_flight.as_ref().expect("just set")
+    }
+
+    /// ⭐ **The operator has named the station they are working.** The one door a
+    /// serial is issued through, and the peer binding the whole run rests on.
+    ///
+    /// Three cases, and the FIRST is the one that is easy to get wrong:
+    ///
+    /// 1. **A contact is already in flight under a different call — that is a
+    ///    CORRECTION, not a new station.** The operator keyed `K1ABC`, heard it was
+    ///    `K1ABD`, and fixed the box. The binding MOVES; no second number is minted.
+    ///    Minting one here is worse than the bug it would be fixing: it strands the
+    ///    first number on a call that will never be logged, and hands the station a
+    ///    second number while they only ever copied the first. The separator between
+    ///    "corrected the call" and "moved to another station" is not the text — it is
+    ///    [`park_working`](Self::park_working), which the entry line calls when it
+    ///    resets.
+    /// 2. **Worked before and never logged** — they already hold a number, and it is
+    ///    the number they must be given again. This is what makes the map worth having.
+    /// 3. **New** — issue, and record the binding.
+    ///
+    /// ⚠️ **Call this on COMMIT, never per keystroke.** Bound to every edit it would
+    /// mint a binding for `K`, `K1`, `K1A`… — burning a number per character and
+    /// stranding all but the last. `Enter`, blur and a spot click are commits; typing
+    /// is not.
+    pub fn working(&mut self, peer: &str, now_unix: u64) -> &InFlightQso {
+        let peer = peer.trim().to_ascii_uppercase();
+        if let Some(f) = self.in_flight.as_mut() {
+            if f.peer != peer {
+                let was = std::mem::replace(&mut f.peer, peer.clone());
+                if let Some(n) = self.issued.remove(&was) {
+                    self.issued.insert(peer, n);
+                }
+            }
+            return self.in_flight.as_ref().expect("just matched");
+        }
+        if let Some(&n) = self.issued.get(&peer) {
+            let mut tx = self.my_exchange.clone();
+            for v in &mut tx {
+                if is_serial_slot(self.exchange, v.key) {
+                    v.raw = n.to_string();
+                }
+            }
+            self.in_flight = Some(InFlightQso {
+                peer,
+                tx,
+                since_unix: now_unix,
+            });
+            return self.in_flight.as_ref().expect("just set");
+        }
+        self.compose_for(&peer, now_unix);
+        if let Some(n) = self.serial_now() {
+            self.issued.insert(peer, n);
+        }
+        self.in_flight.as_ref().expect("compose_for just set it")
+    }
+
+    /// The entry line was cleared without logging — the operator wiped it, or moved to
+    /// another station.
+    ///
+    /// ⚠️ **The binding STAYS in [`issued`](Self::issued).** That station copied the
+    /// number off the air; if they come back it is the number they must be given, and
+    /// dropping it here is the whole defect in miniature. Only the *live* slot is
+    /// released, so the next call the operator commits is a new contact rather than a
+    /// correction of this one.
+    pub fn park_working(&mut self) {
+        self.in_flight = None;
+    }
+
+    /// The contact was logged. The row carries the number from here on, so the binding
+    /// has nothing left to protect and is the one thing that may be forgotten.
+    pub fn logged(&mut self, peer: &str) {
+        self.issued
+            .remove(peer.trim().to_ascii_uppercase().as_str());
+        self.in_flight = None;
     }
 
     /// ⭐ **The serial to SHOW right now** — the one already issued to the contact in
@@ -1036,6 +1138,17 @@ not carry",
 ///
 /// A slot of any other kind is returned unchanged: there is no other shape this build
 /// can shorten without guessing.
+/// Does `key` name this exchange's serial slot? Found by KIND, never by name — the
+/// same rule `fieldday::issued_serial` states: Sweepstakes calls it `NR`, a rules file
+/// is free to call it something else, and a name list would silently stop matching on
+/// the contest after next.
+fn is_serial_slot(spec: &'static super::ExchangeSpec, key: &str) -> bool {
+    matches!(
+        spec.field(key).map(|f| f.kind),
+        Some(super::FieldKind::Serial { .. })
+    )
+}
+
 fn normalise_sent(field: &'static super::FieldSpec, raw: &str) -> String {
     match field.kind {
         super::FieldKind::Grid { chars } => raw.chars().take(chars as usize).collect(),

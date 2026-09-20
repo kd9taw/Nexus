@@ -105,15 +105,152 @@ fn a_serial_contest_issues_a_run_instead_of_logging_zero() {
     }
 }
 
-/// The number is a property of the CONTACT, not of the moment it is read.
+/// ⭐ **A serial keyed to one station must not be keyed to another.**
 ///
-/// A serial is issued once, to one station, and every later read of it — a repeat of
-/// the exchange, the cockpit re-rendering, a second look at the same peer — must give
-/// back that number rather than the next one. The failure this pins is the one
-/// `ContestSession::compose_for`'s own header names: sending your exchange twice and
-/// sending two different numbers, where the second is the one they copy.
+/// The failure, in search-and-pounce with the run at 1: you call K1ABC and key your
+/// exchange, so K1ABC copies 1. He is busy. You spin on, find W4XYZ, key the exchange —
+/// **still 1, because nothing has issued** — and W4XYZ copies 1 too. W4XYZ comes back
+/// first, so he is logged and takes 1. K1ABC answers later and his row is stamped 2, a
+/// number he never copied. Two stations hold one serial, and the K1ABC row disagrees
+/// with K1ABC's own log: both contacts are rejected at check-in, and nothing on screen
+/// ever said so.
+///
+/// ⚠️ **WHY THE SEQUENCE IS commit → wipe → commit → log → return, and why it must not
+/// be simplified back.** This repro went red TWICE. The first red was the defect. The
+/// second came after the engine fix was already in, because the test was still driving
+/// `contest_log_manual` alone and never announcing a peer — so it exercised nothing the
+/// fix had changed. The cure was not to adjust the assertion but to make the test walk
+/// the entry line the way an operator does: commit `K1ABC`, wipe without logging, commit
+/// `W4XYZ`, log him, and only then let `K1ABC` come back.
+///
+/// **A repro that survives the fix being applied HALFWAY is a repro; one that greens the
+/// moment anything changes was only ever a shape.** Collapse these steps — drop the
+/// wipe, or log straight from `contest_log_manual` without committing a call — and this
+/// passes against a build with no peer binding at all, which is precisely the state it
+/// exists to catch.
 #[test]
-fn a_repeat_to_the_same_station_shows_the_number_already_issued() {
+fn a_serial_keyed_to_one_station_is_not_re_issued_to_another() {
+    let mut e = wpx_engine();
+    e.set_frequency(14.025, "20m", "CW");
+
+    // The operator commits K1ABC on the entry line and keys the exchange. THIS is the
+    // number he copies off the air.
+    e.contest_working("K1ABC").expect("a running session");
+    let keyed_to_k1abc = e
+        .contest_sent_exchange()
+        .expect("a running contest session");
+
+    // No answer. The entry line is wiped and W4XYZ is worked and logged instead —
+    // K1ABC is never logged at this point.
+    e.contest_entry_reset();
+    e.contest_working("W4XYZ").expect("a running session");
+    let keyed_to_w4xyz = e
+        .contest_sent_exchange()
+        .expect("a running contest session");
+    assert_ne!(
+        keyed_to_w4xyz, keyed_to_k1abc,
+        "W4XYZ was shown the number K1ABC had already copied"
+    );
+    assert!(e
+        .contest_log_manual("W4XYZ", &fields(&[("RST", "599"), ("NR", "7")]), "CW", None)
+        .unwrap());
+
+    // …then K1ABC comes back. He must be given the number he already copied.
+    e.contest_working("K1ABC").expect("a running session");
+    assert_eq!(
+        e.contest_sent_exchange().as_deref(),
+        Some(keyed_to_k1abc.as_str()),
+        "K1ABC came back and was shown a different number"
+    );
+    assert!(e
+        .contest_log_manual("K1ABC", &fields(&[("RST", "599"), ("NR", "9")]), "CW", None)
+        .unwrap());
+
+    let cab = e.export_log("cabrillo").expect("one entry");
+    let lines = qso_lines(&cab);
+    assert_eq!(lines.len(), 2, "{cab}");
+    let k1abc = lines
+        .iter()
+        .find(|l| l.contains("K1ABC"))
+        .expect("K1ABC was logged");
+    let w4xyz = lines
+        .iter()
+        .find(|l| l.contains("W4XYZ"))
+        .expect("W4XYZ was logged");
+
+    assert!(
+        k1abc.contains(&format!("W9XYZ 599 {keyed_to_k1abc} K1ABC")),
+        "K1ABC's row does not carry the serial he copied ({keyed_to_k1abc}):\n{k1abc}"
+    );
+    assert!(
+        !w4xyz.contains(&format!("W9XYZ 599 {keyed_to_k1abc} W4XYZ")),
+        "W4XYZ took the serial already keyed to K1ABC ({keyed_to_k1abc}):\n{w4xyz}"
+    );
+}
+
+/// ⭐ **Correcting a busted call MOVES the number; it does not mint a second one.**
+///
+/// The hazard is not symmetric between the two ends, which is why it needs its own
+/// test. At the LOG end a wrong key means no binding is found and a fresh number is
+/// issued — visible, and the run stays dense. At the BINDING end a wrong key is worse
+/// twice over: it strands a number on a call that will never be logged, AND when the
+/// right call is identified it mints a second number, while the station only ever
+/// copied the first. So a correction must re-key, and the separator that makes
+/// "corrected the call" distinguishable from "moved to another station" is the entry
+/// line's reset — not the text of the call.
+#[test]
+fn correcting_a_busted_call_keeps_the_number_that_station_copied() {
+    let mut e = wpx_engine();
+    e.set_frequency(14.025, "20m", "CW");
+
+    // Keyed to what the operator THOUGHT the call was.
+    e.contest_working("K1ABC").expect("a running session");
+    let keyed = e.contest_sent_exchange().expect("a running session");
+
+    // "K1ABD, not K1ABC" — the box is corrected on the SAME entry, no reset between.
+    e.contest_working("K1ABD").expect("a running session");
+    assert_eq!(
+        e.contest_sent_exchange().as_deref(),
+        Some(keyed.as_str()),
+        "the correction minted a second number; the station copied the first"
+    );
+
+    assert!(e
+        .contest_log_manual("K1ABD", &fields(&[("RST", "599"), ("NR", "3")]), "CW", None)
+        .unwrap());
+
+    // POSITIVE CONTROL — the wrong call stranded nothing: the next station takes the
+    // very next number, not the one after a burnt one.
+    e.contest_working("W4XYZ").expect("a running session");
+    let next: u32 = e
+        .contest_sent_exchange()
+        .expect("a running session")
+        .parse()
+        .expect("the exchange is the serial");
+    assert_eq!(
+        next,
+        keyed.parse::<u32>().expect("a serial") + 1,
+        "the busted call stranded a serial"
+    );
+
+    let cab = e.export_log("cabrillo").expect("one entry");
+    let line = qso_lines(&cab).remove(0);
+    assert!(
+        line.contains(&format!("W9XYZ 599 {keyed} K1ABD")),
+        "the corrected row does not carry the number that went out:\n{line}"
+    );
+}
+
+/// A read does not advance the run — and that is ALL this pins.
+///
+/// ⚠️ It says nothing about the number being bound to a station; the test that did claim
+/// that was vacuous, because reading twice with nothing in between passes whether or not
+/// anything is bound. `a_serial_keyed_to_one_station_is_not_re_issued_to_another` above
+/// is the one that makes the condition. This one exists because
+/// `Engine::contest_sent_exchange` runs on every snapshot tick and every macro preview,
+/// so a read that advanced the counter would burn a serial per frame.
+#[test]
+fn reading_the_exchange_does_not_advance_the_run() {
     let mut e = wpx_engine();
     e.set_frequency(14.025, "20m", "CW");
 

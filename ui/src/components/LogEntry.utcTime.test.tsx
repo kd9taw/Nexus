@@ -16,6 +16,8 @@ vi.mock('../api', () => {
   return {
     fdLogManual: vi.fn(() => Promise.resolve({})),
     contestLogManual: vi.fn(() => Promise.resolve({})),
+    contestWorking: vi.fn(() => Promise.resolve({})),
+    contestEntryReset: vi.fn(() => Promise.resolve({})),
     logQso: vi.fn(() => Promise.resolve({})),
     getLog,
     // The shared log store (big-log fix) reads through get_log_delta.

@@ -9338,32 +9338,76 @@ impl Engine {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
-        // ⭐ **ISSUE the serial for this contact, so the row is stamped with the number
-        // the operator sent rather than the `"0"` placeholder.** `tx_for_row` — the next
-        // call down — copies the in-flight exchange when there is one for this peer and
-        // the session template when there is not, and until this line there never was
-        // one: `compose_for` had no caller outside tests, so every row of every serial
-        // contest was logged, exported and uploaded claiming serial zero.
+        // ⭐ **Stamp the row with the number THIS STATION COPIED**, which is the number
+        // bound to them by `working` — not a fresh one, and not a lookup of whatever the
+        // counter has reached by now.
         //
-        // The number is the one `contest_sent_exchange` has been showing all along
-        // (both read `ContestSession::serial_now`), which is what makes the log agree
-        // with what went on the air.
-        station.log.session.compose_for(call, now);
+        // `working` is idempotent for a peer that already holds a binding, so the normal
+        // path (the entry line committed the call, a serial was issued, the operator
+        // keyed it) reuses it and advances nothing. It is called here anyway rather than
+        // relied upon, because logging must stamp a real serial even on a path that
+        // never announced the peer — an older shell, a test, a future caller.
+        station.log.session.working(call, now);
         let logged =
             station
                 .log
                 .log_fields_at(call, fields, mode, submode.unwrap_or_default(), 0, now);
-        // ⚠️ **Cleared whether or not the row landed, and the refusal is the reason.**
-        // A dupe is refused here, and an exchange left in flight for a station that was
-        // never logged is one `contest_sent_exchange` would go on showing — so the
-        // operator would key that number at the NEXT station while the row they then
-        // logged took a different one. A spent number is a gap in the run, which no
-        // checker can see; two stations copying one number is an error against both.
-        station.log.session.clear_in_flight();
+        // The row carries the number from here on, so the binding may finally be
+        // forgotten. Done whether or not the row landed: a dupe is refused above, and a
+        // refused contact is over — its number is spent, which no log checker can see,
+        // while handing it to the next station is an error against both of them.
+        station.log.session.logged(call);
         if logged {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
         }
         Ok(logged)
+    }
+
+    /// ⭐ **The operator committed a callsign on the contest entry line** — the door a
+    /// contest serial is issued through, and the only thing that binds a number to the
+    /// station that copies it.
+    ///
+    /// Before this existed, `contest_sent_exchange` rendered the session's free-running
+    /// counter with no peer attached, and the number was not issued until the contact
+    /// was logged. In search-and-pounce that is a defect on the air: call K1ABC and key
+    /// the exchange (he copies 5), get no answer, work W4XYZ and key it (he copies 5
+    /// too), log W4XYZ — who takes 5 — and then log K1ABC, whose row says 6. Two
+    /// stations hold one number and the K1ABC row disagrees with K1ABC's own log; both
+    /// contacts are rejected at check-in and nothing on screen ever said so.
+    ///
+    /// ⚠️ **COMMIT semantics — Enter, blur, a spot click. Never per keystroke.** Bound
+    /// to every edit this mints a binding for each prefix of the call and strands all
+    /// but the last. `contest_zone_hint` is the per-keystroke endpoint and is
+    /// deliberately not this one.
+    ///
+    /// A blank call is [`Self::contest_entry_reset`] — the operator cleared the box.
+    pub fn contest_working(&mut self, call: &str) -> Result<(), String> {
+        if call.trim().is_empty() {
+            self.contest_entry_reset();
+            return Ok(());
+        }
+        let now = now_unix_secs();
+        let Mode::FieldDay { station, .. } = &mut self.mode else {
+            return Err("Contest mode is not active".into());
+        };
+        station.log.session.working(call, now);
+        Ok(())
+    }
+
+    /// The contest entry line was cleared without logging — the wipe button, or moving
+    /// to another station.
+    ///
+    /// The number that station copied STAYS bound to them: come back an hour later and
+    /// they are given the same one, which is the whole point of keeping it. Only the
+    /// live slot is released, so the next call committed is a new contact rather than a
+    /// correction of this one — that distinction is what makes a busted-call fix
+    /// possible at all.
+    ///
+    /// Silent outside a contest: the entry line resets in ordinary logging too.
+    pub fn contest_entry_reset(&mut self) {
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.log.session.park_working();
+        }
     }
 
     /// ⭐ **The operator's station data, as the sources a ruleset may name** (§3.4).

@@ -14,7 +14,7 @@ import type {
   LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestIMoved, contestLogManual, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
+import { contestEntryReset, contestIMoved, contestLogManual, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { NO_LOG, useSharedLog } from '../features/logStore'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDateTimeToUnix } from '../features/utcLog'
@@ -957,6 +957,13 @@ export function LogEntry({
 
   const onCallBlur = () => {
     if (!fdActive && !qrzBusy && logCall.trim().length >= 3 && !logName.trim()) void lookup(true)
+    // ⭐ THE CONTEST SERIAL'S PEER DOOR. Blur is the one hook that catches every way an
+    // operator finishes a call in the contest strip — SPACE walking to the first exchange
+    // box, Tab, or a click away — so the number the strip shows and the keyer sends is bound
+    // to THIS station before the exchange goes out. On COMMIT and never per keystroke: bound
+    // to onChange it would mint a binding for every prefix of the call and strand all but the
+    // last. (`contestZoneHint` above is the per-keystroke endpoint; this is deliberately not.)
+    if (fdActive && !remoteMode) void contestWorking(logCall.trim()).catch(() => {})
   }
 
   // Auto-look-up name/QTH shortly after the operator stops typing a call (no Tab needed), so they
@@ -1020,6 +1027,11 @@ export function LogEntry({
     setLogCoords(null)
     setLogParkRef('')
     if (!remoteMode) void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
+    // The entry line ended WITHOUT logging (the clear button, or moving on). The serial that
+    // station copied stays bound to them — come back later and they get the same one — but the
+    // live slot is released, so the next call committed is a NEW contact and not a correction
+    // of this one. That distinction is the whole of the busted-call fix.
+    if (fdActive && !remoteMode) void contestEntryReset().catch(() => {})
     // When the other-radio override is open, refresh its UTC time to now for the next contact
     // (a run of live V/UHF contacts each get the current time, never a silently-reused stale
     // one) while KEEPING band/freq/mode — like fdClass/fdSection, so they aren't re-entered.
@@ -1476,6 +1488,7 @@ export function LogEntry({
               // `logIt` only trims the ends. Costs nothing on any other path (a pasted call
               // with a stray space comes out clean).
               onChange={(e) => setLogCall(e.target.value.replace(/\s+/g, '').toUpperCase())}
+              onBlur={onCallBlur}
               onKeyDown={(e) => {
                 // SPACE walks Call → field₁, whatever field₁ is.
                 onExchangeSpace(e, fdBoxRefs.current[fdReceives[0]?.key ?? ''] ?? null)

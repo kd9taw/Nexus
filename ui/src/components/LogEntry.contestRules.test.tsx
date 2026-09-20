@@ -26,6 +26,8 @@ import type { AppSnapshot, FieldDayQso, FieldDayStatus } from '../types'
 vi.mock('../api', () => ({
   fdLogManual: vi.fn(() => Promise.resolve({})),
   contestLogManual: vi.fn(() => Promise.resolve(true)),
+  contestWorking: vi.fn(() => Promise.resolve(true)),
+  contestEntryReset: vi.fn(() => Promise.resolve(true)),
   contestIMoved: vi.fn(() => Promise.resolve({})),
   contestZoneHint: vi.fn(() => Promise.resolve(null)),
   logQso: vi.fn(() => Promise.resolve({})),
