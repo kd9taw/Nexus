@@ -478,6 +478,15 @@ jobs:
           npm --prefix remote ci
       - name: Build the hosted browser
         run: npm --prefix ui run build:remote
+      # The sweep runs against the BUILT Worker, not its source: runtime.mjs:39 loads
+      # `../dist/index.js` into workerd. Splitting this job out of `remote-web` left that
+      # build behind and all three shards failed on the first run — the same trap the
+      # Remote notes already record for `npm --prefix remote test`. `types` and `check`
+      # stay in `remote-web`; they are validation, and only the bundle is needed here.
+      - name: Bundle the Cloudflare service (the sweep loads dist/, not src/)
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: npm --prefix remote run build
       - name: Compiled browser sign-in, approval, observation and responsive layouts
         env:
           NEXUS_BROWSER_SHARD: ${{ matrix.shard }}
