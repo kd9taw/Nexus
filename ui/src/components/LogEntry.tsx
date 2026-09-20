@@ -1404,7 +1404,7 @@ export function LogEntry({
               {movingTo === null ? (
                 <>
                   <span className="mono le-fd-sent-val" title={t('logEntry.sent.title')}>
-                    {fdComposing.map((v) => v.raw).filter((r) => r !== '').join(' ')}
+                    {fieldDay?.composingText || fdComposing.map((v) => v.raw).filter((r) => r !== '').join(' ')}
                   </span>
                   <button
                     type="button"

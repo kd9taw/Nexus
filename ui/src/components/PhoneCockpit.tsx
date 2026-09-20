@@ -890,7 +890,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // Field Day exchange the operator reads aloud (and the string to record into a voice-keyer
   // slot) — what the SESSION is composing, which is what the next contact will hear. Empty
   // until FD setup fills it in.
-  const fdExchange = composingText(fieldDay?.composing)
+  const fdExchange = fieldDay?.composingText || composingText(fieldDay?.composing)
 
   // ── THE PANE REGION (2026-07-30 layout assessment, design3 §3) ─────────────────────
   // Every operator-content block under the scope renders through a CockpitPaneFrame in

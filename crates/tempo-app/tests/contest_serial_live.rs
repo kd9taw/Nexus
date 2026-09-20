@@ -390,3 +390,63 @@ fn an_exchange_with_no_serial_slot_is_unchanged() {
         lines[0]
     );
 }
+
+/// ⭐ **The strip the operator READS shows the issued serial, not the placeholder.**
+///
+/// On phone there is no macro: the operator reads the exchange off the screen and speaks
+/// it. The log strip's "Sent:" line and the phone cockpit both render the composing
+/// VECTOR, whose serial slot holds `session::sent_value`'s `"0"` for ever — so with the
+/// run at 1 the screen said `599 0` while the row was logged as 1. A log that records
+/// serials the station never sent fails check-in while looking correct, and three of the
+/// five serial rulesets have a phone leg.
+///
+/// The report stays: `contest_sent_exchange` drops it because `{RST}` is its own macro
+/// token, but nothing keys this string, and dropping `599` here would be a regression for
+/// CQ WW RTTY, where it is part of what the operator says.
+#[test]
+fn the_exchange_the_operator_reads_aloud_carries_the_issued_serial() {
+    let mut e = wpx_engine();
+    e.set_frequency(14.025, "20m", "CW");
+
+    e.contest_working("K1ABC").expect("a running session");
+    assert_eq!(
+        e.contest_composing_text().as_deref(),
+        Some("599 1"),
+        "the strip showed the placeholder, not the number this station was given"
+    );
+
+    assert!(e
+        .contest_log_manual("K1ABC", &fields(&[("RST", "599"), ("NR", "5")]), "CW", None)
+        .unwrap());
+    e.contest_working("W4XYZ").expect("a running session");
+    assert_eq!(e.contest_composing_text().as_deref(), Some("599 2"));
+
+    // …and it follows the BINDING, not the counter: a station worked and left unlogged
+    // is read back at the number they copied.
+    e.contest_entry_reset();
+    e.contest_working("N0DEF").expect("a running session");
+    assert_eq!(e.contest_composing_text().as_deref(), Some("599 3"));
+    e.contest_entry_reset();
+    e.contest_working("W4XYZ").expect("a running session");
+    assert_eq!(
+        e.contest_composing_text().as_deref(),
+        Some("599 2"),
+        "W4XYZ came back and the strip read a different number aloud"
+    );
+}
+
+/// POSITIVE CONTROL — Field Day, which has no serial slot, reads exactly as before, and
+/// the report-bearing CQ WW RTTY exchange keeps its `599`.
+#[test]
+fn an_exchange_with_no_serial_reads_aloud_unchanged() {
+    let mut e = Engine::new("W9XYZ", "EN61", 0);
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_event = "arrlfd".into();
+    s.fd_class = "2A".into();
+    s.fd_section = "WI".into();
+    e.apply_settings(s);
+    e.set_mode("fieldday-sp")
+        .expect("a Field Day session builds");
+    assert_eq!(e.contest_composing_text().as_deref(), Some("2A WI"));
+}

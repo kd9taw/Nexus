@@ -314,3 +314,49 @@ describe('the sent side, read-only, with its one action', () => {
     expect(api.contestIMoved).not.toHaveBeenCalled()
   })
 })
+
+// ⭐ THE SERIAL THE OPERATOR READS OFF THIS STRIP. In a serial contest `composing`'s NR slot
+// holds the session template's `"0"` for ever — a serial is issued to a CONTACT, not to a
+// session — so joining the vector showed `599 0` while the row was being logged with the real
+// number. On phone that is not cosmetic: there is no macro, the operator reads this line and
+// speaks it, so the log would record serials that never went on the air.
+//
+// ⚠️ The engine renders the bound number into `composingText`; `composing` deliberately keeps
+// the placeholder, because it is ALSO the "I moved" edit surface and committing a live serial
+// through `move_to` freezes the run at that number. The two assertions below are one pair:
+// the read-only line takes `composingText`, the edit boxes still take the raw vector.
+describe('the serial on the sent line', () => {
+  const wpx = () =>
+    fdStatus({
+      receives: [
+        { key: 'RST', kind: 'rst', required: true },
+        { key: 'NR', kind: 'serial', required: true },
+      ],
+      composing: [
+        { key: 'RST', raw: '599' },
+        { key: 'NR', raw: '0' },
+      ],
+      composingText: '599 7',
+    } as unknown as Partial<FieldDayStatus>)
+
+  it('reads the issued serial, not the composing placeholder', () => {
+    renderStrip(wpx())
+    expect(document.querySelector('.le-fd-sent-val')!.textContent).toBe('599 7')
+    // POSITIVE CONTROL — the placeholder really is in the vector, so the assertion above is
+    // about the substitution and not about a fixture that never had a `0` in it.
+    expect(wpx().composing!.map((v) => v.raw).join(' ')).toBe('599 0')
+  })
+
+  it('still prefills the "I moved" boxes from the RAW vector, placeholder and all', () => {
+    renderStrip(wpx())
+    fireEvent.click(screen.getByRole('button', { name: 'I moved' }))
+    const sent = document.querySelector('.le-fd-sent')!
+    const boxes = [...sent.querySelectorAll('input')] as HTMLInputElement[]
+    expect(boxes.map((b) => b.value)).toEqual(['599', '0'])
+  })
+
+  it('falls back to the vector when an older station sends no composingText', () => {
+    renderStrip(fdStatus())
+    expect(document.querySelector('.le-fd-sent-val')!.textContent).toBe('3A WI')
+  })
+})

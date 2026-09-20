@@ -1614,6 +1614,24 @@ pub struct FieldDayStatus {
     /// describes a row reads that row's own `mex`.
     #[serde(default)]
     pub sent_exchange: String,
+    /// ⭐ **The whole composing exchange as the operator READS IT ALOUD** — every sent
+    /// slot in send order, report included, with the issued serial in place of the
+    /// template's `"0"`. [`Engine::contest_composing_text`] renders it.
+    ///
+    /// ⚠️ **It exists so the number can reach the screen without reaching
+    /// [`composing`](Self::composing).** That vector is also the "I moved" EDIT surface:
+    /// put a live serial in it, let the operator commit the edit, and
+    /// `ContestSession::move_to` writes the number into `my_exchange` — after which
+    /// `serial_now` reads it back instead of the counter and **the run freezes there for
+    /// the rest of the contest**. So the rendered string and the editable vector are two
+    /// things on purpose, and `composing` keeps the placeholder.
+    ///
+    /// Why not reuse [`sent_exchange`](Self::sent_exchange): that one drops the RST,
+    /// because `{RST}` is its own macro token. Nothing keys THIS — it is read by a human,
+    /// and on phone it is the only place the number appears — so dropping `599` would
+    /// lose part of what a CQ WW RTTY operator actually says.
+    #[serde(default)]
+    pub composing_text: String,
     /// The bands this contest runs on (`"20m"`), from the ruleset, as ADVISORY data — the strip
     /// says so when the rig is elsewhere, and nothing refuses a contact over it. Empty when the
     /// ruleset names none, which is every contest before CQ WW RTTY.

@@ -7788,6 +7788,46 @@ impl Engine {
         Some(words.join(" "))
     }
 
+    /// ⭐ **The WHOLE composing exchange as the operator reads it aloud** — every sent
+    /// slot in send order, report included, with the issued serial in place of the
+    /// template's `"0"`.
+    ///
+    /// [`contest_sent_exchange`](Self::contest_sent_exchange) leaves the RST out because
+    /// `{RST}` is its own macro token. Nothing keys THIS: it is what the log strip's
+    /// "Sent:" line and the phone cockpit show, and on phone there is no macro at all —
+    /// the operator reads the number off the screen and speaks it. Dropping the report
+    /// there would be a regression for CQ WW RTTY, whose `599` is part of what is said.
+    ///
+    /// ⚠️ **This exists so the SNAPSHOT can carry the number without the composing
+    /// VECTOR carrying it.** `FieldDayStatus::composing` is also the "I moved" edit
+    /// surface: prefill an edit box with a live serial, let the operator commit it, and
+    /// `ContestSession::move_to` writes that number into `my_exchange` — after which
+    /// `serial_now`'s no-in-flight branch parses it and returns it instead of
+    /// `next_serial`, and **the run freezes at that number for the rest of the
+    /// contest**. Unreachable today only because `contest_i_moved` refuses any exchange
+    /// not named `"fieldday"`, which arms the moment the `contest_qth_*` mirror lands.
+    /// So the rendered string and the editable vector are deliberately two things.
+    pub fn contest_composing_text(&self) -> Option<String> {
+        use tempo_core::contest::FieldKind;
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return None;
+        };
+        let session = &station.log.session;
+        let serial = session.serial_now();
+        let words: Vec<String> = session
+            .role()
+            .sends
+            .iter()
+            .filter_map(|key| match session.exchange.field(key).map(|f| f.kind) {
+                None => None,
+                Some(FieldKind::Serial { .. }) => serial.map(|n| n.to_string()),
+                Some(_) => Some(session.field(key).to_string()),
+            })
+            .filter(|v| !v.is_empty())
+            .collect();
+        Some(words.join(" "))
+    }
+
     /// Record the worked station's QRZ name + US state for the `{HISNAME}`/`{HISSTATE}` CW
     /// macro tokens. Pushed by the frontend when a callbook lookup resolves; `call` keys it to
     /// the contact so a stale lookup never keys the wrong name (see `expand_cw`). Empty
