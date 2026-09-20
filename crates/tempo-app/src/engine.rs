@@ -7741,11 +7741,22 @@ impl Engine {
     /// `{EXCH}` keys in a contest that is not Field Day, and what the RTTY macros read off
     /// the snapshot as `sentExchange`. `None` outside a contest session.
     ///
-    /// The running session's composing slots, in its role's send order. Two kinds are left
-    /// out, each because it has its own answer: an RST, which `{RST}` keys (and which a
-    /// phone contact sends as 59, not the session's 599); and a SERIAL, whose session
-    /// value is a placeholder — a number is issued to a contact, not to a session, and
-    /// keying the placeholder would put a serial nobody was given on the air.
+    /// The running session's composing slots, in its role's send order. One kind is left
+    /// out: an RST, which `{RST}` keys (and which a phone contact sends as 59, not the
+    /// session's 599).
+    ///
+    /// ⭐ **A SERIAL is the one slot whose value is not read off the session**, because
+    /// the session's own is the `"0"` placeholder and keying that would put a number
+    /// nobody was given on the air. It comes from
+    /// [`ContestSession::serial_now`](tempo_core::contest::ContestSession::serial_now)
+    /// instead — the number the contact in flight was issued, or the next one to be
+    /// issued, and reading it issues nothing. That matters here more than anywhere: this
+    /// is called on every snapshot tick and on every macro preview, so a read that
+    /// advanced the run would burn a serial per frame.
+    ///
+    /// Until 2026-09-20 the serial slot was dropped rather than rendered, so in CQ WPX —
+    /// whose whole exchange is a report and a number — `{EXCH}` was the empty string and
+    /// the operator had no serial to send at all.
     ///
     /// ⚠️ **It describes the NEXT transmission, never a contact already logged.** A row
     /// carries its own sent exchange (`LoggedQso::tx`, rendered by
@@ -7758,17 +7769,16 @@ impl Engine {
             return None;
         };
         let session = &station.log.session;
-        let words: Vec<&str> = session
+        let serial = session.serial_now();
+        let words: Vec<String> = session
             .role()
             .sends
             .iter()
-            .filter(|key| {
-                matches!(
-                    session.exchange.field(key).map(|f| f.kind),
-                    Some(kind) if !matches!(kind, FieldKind::Rst { .. } | FieldKind::Serial { .. })
-                )
+            .filter_map(|key| match session.exchange.field(key).map(|f| f.kind) {
+                Some(FieldKind::Rst { .. }) | None => None,
+                Some(FieldKind::Serial { .. }) => serial.map(|n| n.to_string()),
+                Some(_) => Some(session.field(key).to_string()),
             })
-            .map(|key| session.field(key))
             .filter(|v| !v.is_empty())
             .collect();
         Some(words.join(" "))
@@ -9324,10 +9334,28 @@ impl Engine {
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
+        // ⭐ **ISSUE the serial for this contact, so the row is stamped with the number
+        // the operator sent rather than the `"0"` placeholder.** `tx_for_row` — the next
+        // call down — copies the in-flight exchange when there is one for this peer and
+        // the session template when there is not, and until this line there never was
+        // one: `compose_for` had no caller outside tests, so every row of every serial
+        // contest was logged, exported and uploaded claiming serial zero.
+        //
+        // The number is the one `contest_sent_exchange` has been showing all along
+        // (both read `ContestSession::serial_now`), which is what makes the log agree
+        // with what went on the air.
+        station.log.session.compose_for(call, now);
         let logged =
             station
                 .log
                 .log_fields_at(call, fields, mode, submode.unwrap_or_default(), 0, now);
+        // ⚠️ **Cleared whether or not the row landed, and the refusal is the reason.**
+        // A dupe is refused here, and an exchange left in flight for a station that was
+        // never logged is one `contest_sent_exchange` would go on showing — so the
+        // operator would key that number at the NEXT station while the row they then
+        // logged took a different one. A spent number is a gap in the run, which no
+        // checker can see; two stations copying one number is an error against both.
+        station.log.session.clear_in_flight();
         if logged {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
         }

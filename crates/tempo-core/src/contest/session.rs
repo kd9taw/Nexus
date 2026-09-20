@@ -666,6 +666,42 @@ Fill it in on the Contesting tab in Settings."
         self.in_flight.as_ref().expect("just set")
     }
 
+    /// ⭐ **The serial to SHOW right now** — the one already issued to the contact in
+    /// flight, or, with nothing in flight, the next one to be issued, **without
+    /// issuing it**. `None` when this exchange declares no serial slot at all (both
+    /// Field Day events, the QSO parties that send a county).
+    ///
+    /// A reader, never a writer, and that is the whole of why it exists separately
+    /// from [`compose_for`](Self::compose_for). What the cockpit shows and what the
+    /// keyer sends are read constantly — every snapshot tick, every macro preview —
+    /// and issuing on a read would hand a different number to each look.
+    ///
+    /// It takes no peer because at most one contact is ever in flight: the number
+    /// belongs to whoever [`compose_for`] last composed for, and
+    /// [`clear_in_flight`](Self::clear_in_flight) is what ends that.
+    pub fn serial_now(&self) -> Option<u32> {
+        let held = match &self.in_flight {
+            Some(f) => &f.tx,
+            None => &self.my_exchange,
+        }
+        .iter()
+        .find(|v| {
+            matches!(
+                self.exchange.field(v.key).map(|f| f.kind),
+                Some(super::FieldKind::Serial { .. })
+            )
+        })?;
+        // An in-flight exchange carries the number that was issued; `my_exchange`
+        // carries `sent_value`'s `"0"` placeholder, which numbers nothing — so a zero
+        // falls through to the counter exactly as no value at all would.
+        held.raw
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|&n| n > 0)
+            .or(Some(self.next_serial))
+    }
+
     /// The exchange to stamp on a row for `peer`: the one issued to them if there is
     /// one, else the session's current sent exchange.
     ///
@@ -1292,6 +1328,35 @@ mod tests {
         assert_eq!(serial_of(&s.tx_for_row("K1ABC", "DIG")), "0");
         s.clear_in_flight();
         assert_eq!(serial_of(&s.tx_for_row("W1AW", "DIG")), "0");
+    }
+
+    /// ⭐ **Reading the run never moves it** — the property the cockpit rides on.
+    ///
+    /// `Engine::contest_sent_exchange` renders `{EXCH}` from this, and it is called on
+    /// every snapshot tick and every macro preview. The placeholder must never leak
+    /// (`"0"` is a serial nobody was given) and neither must the read advance anything.
+    #[test]
+    fn the_serial_to_show_is_the_one_in_flight_and_reading_it_issues_nothing() {
+        let mut s = serial_session();
+        // Nothing in flight: the number the NEXT contact will be issued, read twice.
+        assert_eq!(s.serial_now(), Some(1));
+        assert_eq!(s.serial_now(), Some(1));
+        assert_eq!(s.next_serial, 1, "a read advanced the run");
+
+        // In flight: the number that station was actually given, not the next one.
+        s.compose_for("W1AW", 10);
+        assert_eq!(s.next_serial, 2);
+        assert_eq!(s.serial_now(), Some(1), "the peer in flight holds 1");
+
+        // The contact ends and its number is spent.
+        s.clear_in_flight();
+        assert_eq!(s.serial_now(), Some(2));
+
+        // An exchange with no serial slot has no number to show, ever.
+        assert_eq!(
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI").serial_now(),
+            None
+        );
     }
 
     /// §4.1: the move lands on the SESSION, and on the location the role is derived

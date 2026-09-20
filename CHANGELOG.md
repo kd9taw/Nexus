@@ -177,6 +177,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Your CW and RTTY macro keys now send a serial number in the contests that use one — the text
+  they transmit has changed.** In CQ WPX (CW and SSB), ARRL November Sweepstakes (CW and SSB) and
+  the California QSO Party, an `{EXCH}` macro used to leave the serial out entirely: an F-key set to
+  `{CALL} 599 {EXCH} {EXCH}` keyed `K1ABC 599` and stopped there, and Sweepstakes sent
+  `A W9XYZ 74 WI` with no number in front. The same keys now send `K1ABC 599 1 1` and
+  `1 A W9XYZ 74 WI`. The serial is counted for you: the log strip shows the number for the contact
+  you are working, and the contact is logged and exported with the number that went out. Until now
+  there was no number anywhere, and every contact was logged and exported as serial `0`, which is a
+  log a sponsor cannot check.
+- **The number belongs to the station you are working, from the moment you enter their call.**
+  Search and pounce: call one station, get no answer, work somebody else and come back — the first
+  station is given the number they already copied, not a later one, and the number you actually
+  sent is the number that reaches your log. Correcting a busted call keeps the number too, so
+  fixing `K1ABC` to `K1ABD` does not hand them a second one. Reading the strip, previewing an
+  F-key, or sending your exchange twice never moves the run; logging the contact does, so the next
+  station gets the next number. Contests with no serial in their exchange, Field Day among them,
+  are unchanged.
+
 - **A Field Day exchange copied by the RTTY sequencer now reaches the log as fields, not just as a
   note.** If Auto was running in Field Day and you switched Field Day off while a contact was still
   on the air, that contact finished under the Field Day exchange but no longer had a contest log to
