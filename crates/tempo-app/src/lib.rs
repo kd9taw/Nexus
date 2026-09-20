@@ -289,6 +289,7 @@ impl AppState {
                 comp_level: None,
                 notch_freq_hz: None,
                 atu: None, // engine fills from the CAT TUNER probe (None = no ATU on this rig)
+                atu_start_tune_unsupported: false, // …and with it, whether it can be STARTED
                 filter_width_hz: None, // engine fills from the CAT `m` passband read-back
                 rit_hz: 0,
                 xit_hz: 0,
@@ -957,6 +958,8 @@ impl AppState {
             harq_rescues: 0,
             // Filled by the engine when a QSO awaits confirm-before-log; None here.
             pending_log: None,
+            pending_qso_log_key: None,
+            pending_logs_waiting: 0,
             // Filled by the engine from its last connector-upload note; empty here.
             upload_note: None,
             upload_ok: false,

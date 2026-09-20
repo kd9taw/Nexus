@@ -836,6 +836,15 @@ pub struct RadioStatus {
     /// own gated command (`atu_tune`), never the generic `set_rig_func`.
     #[serde(default)]
     pub atu: Option<bool>,
+    /// The rig has a tuner (`atu` above) but THIS CAT path cannot START a tune-up on it — only
+    /// switch it in and out. The ATU control stays visible, because the tuner and its in-line
+    /// state are real, and is disabled with a reason that points at the rig's own TUNER button.
+    ///
+    /// NEGATIVE ON PURPOSE. A snapshot from a station older than the page leaves this field
+    /// out, and `false` — "nothing says it can't" — is that station's real behaviour. The
+    /// positive spelling would default a working ATU button to disabled.
+    #[serde(default)]
+    pub atu_start_tune_unsupported: bool,
     /// Rig RX passband / filter width in Hz from CAT; `None` = unknown or the rig's own default.
     #[serde(default)]
     pub filter_width_hz: Option<u32>,
@@ -2800,9 +2809,19 @@ pub struct AppSnapshot {
     /// A completed QSO awaiting the operator's confirm-before-log (WSJT-X "Prompt
     /// me to log QSO"). Present only when `prompt_to_log` is on and a QSO just
     /// finished; the UI shows a confirm popup, then calls `confirm_pending_log` /
-    /// `discard_pending_log`.
+    /// `discard_pending_log`. It is the FRONT of the hold queue — see
+    /// `pending_logs_waiting`.
     #[serde(default)]
     pub pending_log: Option<LoggedQso>,
+    /// The identity of the contact in `pending_log`, which changes whenever that contact does.
+    /// The popup sends it back with the confirm or the discard, and a key for a hold that has
+    /// moved on is refused — so one station's edits can never be logged onto another's contact.
+    #[serde(default)]
+    pub pending_qso_log_key: Option<String>,
+    /// How many MORE completed contacts are queued behind `pending_log`, each waiting for its
+    /// own turn in the popup. `0` when the one shown is the only one.
+    #[serde(default)]
+    pub pending_logs_waiting: u32,
     /// Last connector auto-upload outcome (QRZ/ClubLog/eQSL) — operator-facing
     /// toast text; `upload_tick` bumps on each new outcome so the UI toasts it.
     #[serde(default)]

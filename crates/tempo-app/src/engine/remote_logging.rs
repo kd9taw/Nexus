@@ -24,6 +24,57 @@ fn identity_key(id: u64) -> Option<String> {
     (id != u64::MAX).then(|| format!("{id:016x}"))
 }
 
+/// Where a held contact's GRIDSQUARE came from — the one thing a [`QsoRecord`] cannot say
+/// about itself, and the thing the confirm popup's edits turn on.
+///
+/// ⭐ R2 follow-up (operator review, 2026-09-19). [`Engine::dx_grid_resolved`] has three
+/// sources and only the first is the station's own; the other two are LOOKUPS KEYED ON THE
+/// CALLSIGN, which is the BUSTED call when the operator corrects one — so they are another
+/// station's grid, exactly as COUNTRY and NAME are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum GridSource {
+    /// The station SENT it, in the message we decoded. Correcting a mis-copied call does
+    /// not make it wrong: it is still the grid that station put on the air.
+    Transmitted,
+    /// The session roster, or a grid logged for that call before — both keyed on the call.
+    ///
+    /// The DEFAULT, and so what a journal written by an older build restores as: a grid we
+    /// cannot vouch for is dropped on a corrected call rather than logged against a station
+    /// that may never have sent it. A missing grid can be filled in later; a confidently
+    /// wrong one is exported, uploaded and believed.
+    #[default]
+    LookedUp,
+}
+
+impl GridSource {
+    /// Which source [`Engine::dx_grid_resolved`] takes for a contact whose exchange carried
+    /// `dxgrid` — the ONE predicate it and the hold share, so they cannot drift apart.
+    pub(crate) fn of(dxgrid: Option<&str>) -> Self {
+        match dxgrid {
+            Some(grid) if !grid.trim().is_empty() => Self::Transmitted,
+            _ => Self::LookedUp,
+        }
+    }
+}
+
+/// A completed contact waiting for the operator's confirm: the record, and where its grid
+/// came from ([`GridSource`]).
+#[derive(Clone, Debug)]
+pub(crate) struct HeldQso {
+    pub(crate) record: QsoRecord,
+    pub(crate) grid_source: GridSource,
+}
+
+impl HeldQso {
+    pub(crate) fn new(record: QsoRecord, grid_source: GridSource) -> Self {
+        Self {
+            record,
+            grid_source,
+        }
+    }
+}
+
 /// The existing journal DTO plus fields which the ordinary UI edit DTO does
 /// not carry. Legacy journals remain readable. Nothing changes the log format.
 #[derive(Serialize, Deserialize)]
@@ -35,14 +86,46 @@ struct PendingRecord {
     time_off_unix: Option<u64>,
     #[serde(default)]
     freq_rx_mhz: Option<f64>,
+    /// Absent from a journal written before this build — and then [`GridSource::LookedUp`],
+    /// which is the safe answer for a grid whose provenance nobody recorded.
+    #[serde(default)]
+    grid_source: GridSource,
 }
 
-pub(super) fn pending_qso_json(record: &QsoRecord) -> serde_json::Result<String> {
-    serde_json::to_string(&PendingRecord {
-        record: record.clone().into(),
-        time_off_unix: record.time_off_unix,
-        freq_rx_mhz: record.freq_rx_mhz,
-    })
+fn pending_record(held: &HeldQso) -> PendingRecord {
+    PendingRecord {
+        record: held.record.clone().into(),
+        time_off_unix: held.record.time_off_unix,
+        freq_rx_mhz: held.record.freq_rx_mhz,
+        grid_source: held.grid_source,
+    }
+}
+
+impl PendingRecord {
+    fn into_held(self) -> HeldQso {
+        let grid_source = self.grid_source;
+        let mut record: QsoRecord = self.record.into();
+        record.time_off_unix = self.time_off_unix;
+        record.freq_rx_mhz = self.freq_rx_mhz;
+        HeldQso::new(record, grid_source)
+    }
+}
+
+pub(super) fn pending_qso_json(
+    record: &QsoRecord,
+    grid_source: GridSource,
+) -> serde_json::Result<String> {
+    serde_json::to_string(&pending_record(&HeldQso::new(record.clone(), grid_source)))
+}
+
+/// The WHOLE confirm-before-log queue, oldest first — what the desktop journals on every hold
+/// change. A journal written by an older build holds one record and not an array;
+/// [`Engine::load_pending_qso_json`] reads both.
+pub(super) fn pending_qso_queue_json(
+    held: &std::collections::VecDeque<HeldQso>,
+) -> serde_json::Result<String> {
+    let queue: Vec<PendingRecord> = held.iter().map(pending_record).collect();
+    serde_json::to_string(&queue)
 }
 
 /// An exact hold, including its incarnation. Replacing a hold with an identical
@@ -51,6 +134,7 @@ pub(super) fn pending_qso_json(record: &QsoRecord) -> serde_json::Result<String>
 pub struct PendingLogIdentity {
     identity: Arc<()>,
     record: Arc<QsoRecord>,
+    grid_source: GridSource,
     path: Option<PathBuf>,
     epoch: u64,
 }
@@ -164,7 +248,7 @@ impl PendingJournalWrite {
     /// Call without holding Engine. No rename or change to the live journal yet.
     pub fn prepare(self) -> io::Result<PreparedPendingJournal> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let text = pending_qso_json(self.pending.record())?;
+        let text = pending_qso_json(self.pending.record(), self.pending.grid_source)?;
         let path = self
             .pending
             .path
@@ -235,8 +319,17 @@ impl PendingLogConfirmation {
 }
 
 impl Engine {
-    pub(super) fn replace_pending_log(&mut self, record: Option<QsoRecord>) {
-        self.pending_log = record;
+    /// Install `held` as the hold the popup is showing, or (with `None`) drop that hold and
+    /// promote whatever was waiting behind it. Either way the front's identity is fresh, so a
+    /// confirm or discard issued against the old front is refused.
+    pub(super) fn replace_pending_log(&mut self, held: Option<HeldQso>) {
+        match held {
+            Some(held) if self.pending_logs.is_empty() => self.pending_logs.push_back(held),
+            Some(held) => self.pending_logs[0] = held,
+            None => {
+                self.pending_logs.pop_front();
+            }
+        }
         self.pending_log_identity = Arc::new(());
         self.pending_log_epoch = next_identity();
     }
@@ -262,15 +355,16 @@ impl Engine {
     }
 
     pub fn pending_qso_log_key(&self) -> Option<String> {
-        self.pending_log
-            .as_ref()
+        self.pending_log()
             .and_then(|_| identity_key(self.pending_log_epoch))
     }
 
     pub fn pending_log_identity(&self) -> Option<PendingLogIdentity> {
+        let held = self.pending_logs.front()?;
         Some(PendingLogIdentity {
             identity: self.pending_log_identity.clone(),
-            record: Arc::new(self.pending_log.clone()?),
+            record: Arc::new(held.record.clone()),
+            grid_source: held.grid_source,
             path: self.station.pending_qso_path.clone(),
             epoch: self.pending_log_epoch,
         })
@@ -278,16 +372,20 @@ impl Engine {
 
     fn matches_pending_log(&self, pending: &PendingLogIdentity) -> bool {
         Arc::ptr_eq(&self.pending_log_identity, &pending.identity)
-            && self.pending_log.as_ref() == Some(pending.record())
+            && self.pending_log() == Some(pending.record())
             && self.station.pending_qso_path == pending.path
     }
 
+    /// Restore the journal: this build's queue, or the single record older builds wrote.
+    /// Each restored contact keeps the grid provenance the journal recorded — a journal from
+    /// an older build records none, and those restore as [`GridSource::LookedUp`].
     pub fn load_pending_qso_json(&mut self, text: &str) {
-        if let Ok(pending) = serde_json::from_str::<PendingRecord>(text) {
-            let mut record: QsoRecord = pending.record.into();
-            record.time_off_unix = pending.time_off_unix;
-            record.freq_rx_mhz = pending.freq_rx_mhz;
-            self.load_pending_qso(record);
+        if let Ok(queue) = serde_json::from_str::<Vec<PendingRecord>>(text) {
+            for pending in queue {
+                self.hold_pending_log(pending.into_held());
+            }
+        } else if let Ok(pending) = serde_json::from_str::<PendingRecord>(text) {
+            self.hold_pending_log(pending.into_held());
         }
     }
 
@@ -295,19 +393,19 @@ impl Engine {
     /// before calling. Eligibility and write-once behavior are shared with the
     /// local button. An existing confirmation is never replaced by this action.
     pub fn log_current_qso_for_sync(&mut self) -> CurrentQsoLogOutcome {
-        if self.pending_log.is_some() {
+        if self.pending_log().is_some() {
             return CurrentQsoLogOutcome::PendingExists;
         }
-        let Some(record) = self.take_current_qso_record() else {
+        let Some(held) = self.take_current_qso_record() else {
             return CurrentQsoLogOutcome::NoEligibleContact;
         };
         if self.settings.prompt_to_log {
-            self.replace_pending_log(Some(record));
+            self.replace_pending_log(Some(held));
             CurrentQsoLogOutcome::Pending(PendingJournalWrite {
                 pending: self.pending_log_identity().expect("hold just installed"),
             })
         } else {
-            CurrentQsoLogOutcome::Append(self.log_qso_for_sync(record))
+            CurrentQsoLogOutcome::Append(self.log_qso_for_sync(held.record))
         }
     }
 
@@ -329,6 +427,13 @@ impl Engine {
                 .ok_or(LogFailure::PersistenceUnconfirmed)?,
         )
         .map_err(|_| LogFailure::PersistenceUnconfirmed)?;
+        // The temporary file holds the ONE contact this publication prepared, which was the
+        // whole queue when it started (`log_current_qso_for_sync` refuses while a hold exists).
+        // A local completion can have joined the queue since — the rename would then leave those
+        // out of the journal — so rewrite it from the live queue.
+        if self.pending_logs_waiting() > 0 {
+            self.persist_pending_qso();
+        }
         Ok(JournalSync {
             parent: prepared.parent.take(),
         })
@@ -352,6 +457,10 @@ impl Engine {
         record.grid = edits.grid;
         record.rst_sent = edits.rst_sent;
         record.rst_rcvd = edits.rst_rcvd;
+        // The same R2 re-derivation the desktop confirm runs: a corrected call must not carry
+        // the busted call's COUNTRY, NAME or looked-up GRID into the log, whichever client the
+        // operator confirmed from.
+        self.rederive_after_edits(&mut record, pending.record(), pending.grid_source);
         let outcome = self.log_qso_for_sync(record);
         Ok(PendingLogConfirmation { pending, outcome })
     }
@@ -528,9 +637,10 @@ mod tests {
         );
         let held = fixture.hold();
         assert_eq!(fixture.engine.pending_qso_log_key(), held.key());
-        fixture
-            .engine
-            .replace_pending_log(Some(held.record().clone()));
+        fixture.engine.replace_pending_log(Some(HeldQso::new(
+            held.record().clone(),
+            GridSource::LookedUp,
+        )));
         assert_ne!(fixture.engine.pending_qso_log_key(), held.key());
         fixture.engine.call_station("W1AW");
         assert_ne!(
@@ -541,7 +651,7 @@ mod tests {
         fixture.engine.pending_log_epoch = u64::MAX;
         assert!(fixture.engine.current_qso_log_key().is_none());
         assert!(fixture.engine.pending_qso_log_key().is_none());
-        assert!(fixture.engine.pending_log.is_some());
+        assert!(fixture.engine.pending_log().is_some());
     }
 
     #[test]
@@ -564,7 +674,7 @@ mod tests {
         let CurrentQsoLogOutcome::Pending(_) = fixture.engine.log_current_qso_for_sync() else {
             panic!("hold")
         };
-        let mut original = fixture.engine.pending_log.clone().unwrap();
+        let mut original = fixture.engine.pending_log().cloned().unwrap();
         original.freq_rx_mhz = Some(14.0755);
         original.time_off_unix = Some(1_700_000_123);
         original.ota.their_program = Some("POTA".into());
@@ -572,7 +682,9 @@ mod tests {
         original
             .extra
             .push(("APP_TEST_CONTEXT".into(), "kept".into()));
-        fixture.engine.replace_pending_log(Some(original.clone()));
+        fixture
+            .engine
+            .replace_pending_log(Some(HeldQso::new(original.clone(), GridSource::LookedUp)));
         let identity = fixture.engine.pending_log_identity().unwrap();
         let prepared = PendingJournalWrite {
             pending: identity.clone(),
@@ -588,7 +700,7 @@ mod tests {
         let text = std::fs::read_to_string(fixture.dir.join("pending.json")).unwrap();
         let mut restored = Engine::new("K2DEF", "FN31", 0);
         restored.load_pending_qso_json(&text);
-        assert_eq!(restored.pending_log, Some(original.clone()));
+        assert_eq!(restored.pending_log(), Some(&original));
         let mut changed = edits(&identity);
         changed.grid = Some("EN38".into());
         changed.rst_rcvd = Some("-09".into());
@@ -597,8 +709,8 @@ mod tests {
             .confirm_pending_log_for_sync(identity.clone(), changed)
             .unwrap();
         assert_eq!(
-            fixture.engine.pending_log,
-            Some(original.clone()),
+            fixture.engine.pending_log(),
+            Some(&original),
             "hold stays until sync"
         );
         assert_eq!(
@@ -612,7 +724,7 @@ mod tests {
             .unwrap()
             .sync()
             .unwrap();
-        assert!(fixture.engine.pending_log.is_none());
+        assert!(fixture.engine.pending_log().is_none());
         assert!(!fixture.dir.join("pending.json").exists());
         let saved = &fixture.engine.station.logbook.records()[0];
         assert_eq!(saved.freq_rx_mhz, original.freq_rx_mhz);
@@ -662,6 +774,54 @@ mod tests {
         assert_eq!(fixture.engine.station.pending_uploads.len(), 1);
     }
 
+    /// ⭐ R2 (operator review, 2026-09-19) ON THE REMOTE CONFIRM TOO. The edits arrive from a
+    /// phone instead of the desktop popup, but they are the same four fields and they produce
+    /// the same log record: a corrected call must not carry the busted call's COUNTRY or NAME
+    /// in, and a grid the station itself TRANSMITTED is not made wrong by the correction.
+    #[test]
+    fn a_remote_confirm_rederives_a_corrected_call_like_the_desktop() {
+        let mut fixture = Fixture::new(Tier::Ft8, true);
+        fixture.engine.set_dxcc_resolver(|call| {
+            Some(if call.starts_with("W9") {
+                "United States".to_string()
+            } else {
+                "Canada".to_string()
+            })
+        });
+        fixture
+            .engine
+            .note_callbook_name("W9XYZ", "the other station's operator");
+        let identity = fixture.hold();
+        assert_eq!(identity.record().country.as_deref(), Some("United States"));
+        assert!(identity.record().name.is_some());
+
+        let mut edits = edits(&identity);
+        edits.call = "VE9XYZ".into();
+        fixture
+            .engine
+            .confirm_pending_log_for_sync(identity, edits)
+            .unwrap()
+            .sync()
+            .unwrap();
+
+        let logged = &fixture.engine.station.logbook.records()[0];
+        assert_eq!(logged.call, "VE9XYZ");
+        assert_eq!(
+            logged.country.as_deref(),
+            Some("Canada"),
+            "the country of the call actually worked"
+        );
+        assert_eq!(
+            logged.name, None,
+            "…and no name looked up for the other one"
+        );
+        assert_eq!(
+            logged.grid.as_deref(),
+            Some("EN37"),
+            "the grid came off the air with the contact, so the correction leaves it alone"
+        );
+    }
+
     #[test]
     fn a_new_identical_hold_invalidates_in_flight_confirm_and_discard() {
         let mut fixture = Fixture::new(Tier::Ft8, true);
@@ -672,9 +832,10 @@ mod tests {
             .unwrap()
             .sync()
             .unwrap();
-        fixture
-            .engine
-            .replace_pending_log(Some(identity.record().clone()));
+        fixture.engine.replace_pending_log(Some(HeldQso::new(
+            identity.record().clone(),
+            GridSource::LookedUp,
+        )));
         fixture.engine.persist_pending_qso();
         assert_eq!(
             fixture
@@ -691,7 +852,7 @@ mod tests {
             LogFailure::StalePending
         );
         assert!(fixture.dir.join("pending.json").exists());
-        assert!(fixture.engine.pending_log.is_some());
+        assert!(fixture.engine.pending_log().is_some());
         let current = fixture.engine.pending_log_identity().unwrap();
         fixture
             .engine
@@ -700,7 +861,7 @@ mod tests {
             .sync()
             .unwrap();
         assert!(!fixture.dir.join("pending.json").exists());
-        assert!(fixture.engine.pending_log.is_none());
+        assert!(fixture.engine.pending_log().is_none());
     }
 
     #[test]
@@ -709,10 +870,11 @@ mod tests {
         let CurrentQsoLogOutcome::Pending(write) = fixture.engine.log_current_qso_for_sync() else {
             panic!("hold")
         };
-        let original = fixture.engine.pending_log.clone().unwrap();
+        let original = fixture.engine.pending_log().cloned().unwrap();
         let prepared = write.prepare().unwrap();
         let temporary = prepared.temporary.clone();
-        fixture.engine.discard_pending_log();
+        let key = fixture.engine.pending_qso_log_key().unwrap_or_default();
+        assert!(fixture.engine.discard_pending_log(&key));
         fixture.engine.load_pending_qso(original);
         fixture.engine.persist_pending_qso();
         let before = std::fs::read(fixture.dir.join("pending.json")).unwrap();
@@ -754,8 +916,8 @@ mod tests {
         let legacy = serde_json::to_string(&dto).unwrap();
         let mut restored = Engine::new("K2DEF", "FN31", 0);
         restored.load_pending_qso_json(&legacy);
-        assert_eq!(restored.pending_log.as_ref().unwrap().call, "W9XYZ");
-        assert_eq!(restored.pending_log.as_ref().unwrap().time_off_unix, None);
+        assert_eq!(restored.pending_log().unwrap().call, "W9XYZ");
+        assert_eq!(restored.pending_log().unwrap().time_off_unix, None);
         fixture.engine.load_pending_qso_json(&legacy);
         assert!(fixture.engine.matches_pending_log(&identity));
     }

@@ -30,6 +30,8 @@
   "mycall": "W9XYZ",
   "mygrid": "EN37",
   "pendingLog": null,
+  "pendingLogsWaiting": 0,
+  "pendingQsoLogKey": null,
   "qso": null,
   "qsy": null,
   "radio": {
@@ -37,6 +39,7 @@
     "agc": null,
     "amp": null,
     "atu": null,
+    "atuStartTuneUnsupported": false,
     "audioError": null,
     "band": "20m",
     "beacon": false,

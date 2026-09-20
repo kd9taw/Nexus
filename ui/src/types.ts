@@ -1233,6 +1233,11 @@ export interface RadioStatus {
    * in-line. NOT a DSP toggle — running it keys the transmitter, so it rides the gated
    * `atuTune()` command, never `setRigFunc`. */
   atu?: boolean | null
+  /** The rig has a tuner, but THIS CAT connection cannot START a tune-up on it — Hamlib's Icom
+   * and Kenwood backends only switch the tuner in and out. The ATU button stays (the tuner and
+   * its in-line state are real) and is disabled with a reason pointing at the radio's own TUNER
+   * button. Absent = nothing says it can't, which is how every station behaved before 1.14. */
+  atuStartTuneUnsupported?: boolean
   /** Rig RX passband / filter width in Hz over CAT; null/absent = unknown or the rig's default. */
   filterWidthHz?: number | null
   /** RIT (receive incremental tuning) offset in Hz — last commanded (0 = off). */

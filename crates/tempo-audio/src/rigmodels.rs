@@ -279,6 +279,29 @@ pub fn rig_model_name(model: u32) -> Option<&'static str> {
         .map(|(_, name)| name)
 }
 
+/// Does Hamlib carry [`crate::rig::ATU_START_TUNE`] — `set_func TUNER 2`, "start tuning" — all
+/// the way to THIS radio, or does its backend clamp it to "switch the tuner in line"?
+///
+/// Read out of Hamlib's own source, because the difference is invisible on the wire (both
+/// clamping backends answer `RPRT 0`, so the rig accepts a command that tunes nothing):
+///  * **Icom** — `rigs/icom/icom.c:7085`, `icom_set_func`: `fctbuf[0] = status ? 0x01 : 0x00`,
+///    so `RIG_FUNC_TUNER` can only ever send `1C 01 01`, "tuner in line". Icom's own
+///    start-tune byte `02` is simply not reachable through that function.
+///  * **Kenwood** — `rigs/kenwood/kenwood.c`, `kenwood_set_func`: `"AC1%c0"` with
+///    `(status == 0) ? '0' : '1'`, whose THIRD digit is the tune-start and is hard-coded `0`.
+///  * **Yaesu** — `rigs/yaesu/newcat.c`, `newcat_set_func`: `"AC00%d"` with the status passed
+///    straight through, so 2 becomes `AC002` — a real tune-up. This is the backend #322 was
+///    reported and fixed on.
+///
+/// Keyed on the catalog NAME rather than the Hamlib backend number, deliberately: `2xxx` is
+/// the Kenwood backend but also Elecraft, whose rigs answer `AC` in their own dialect and are
+/// not something this machine can test. An unknown model answers `true` — the pre-1.14
+/// behaviour — because a button wrongly disabled is worse than one that was already a no-op.
+pub fn hamlib_atu_start_tune_reaches(model: u32) -> bool {
+    !matches!(rig_model_name(model), Some(name)
+        if name.starts_with("Icom ") || name.starts_with("Kenwood "))
+}
+
 /// Catalog entries where **the program is the rig**: CAT is served by an application on a PC
 /// (or by the radio's own Ethernet API), over TCP or a virtual COM pair. None of them is ever
 /// a USB device that enumerates with a descriptor.
@@ -1164,6 +1187,40 @@ mod tests {
         assert_eq!(program_from_banner("CHKVFO 0"), None);
         assert_eq!(program_from_banner("FA00014074000;"), None);
         assert_eq!(program_from_banner("HTTP/1.1 400 Bad Request"), None);
+    }
+
+    /// ⭐ WHOSE ATU CAN NEXUS ACTUALLY START (operator ruling, 2026-09-19)? Read out of
+    /// Hamlib's source — `icom.c:7085` clamps the status to 0/1, `kenwood.c`'s `"AC1%c0"`
+    /// hard-codes the tune-start digit to 0, and `newcat.c` passes the 2 through as `AC002`.
+    /// A model nobody has checked answers `true`: the pre-1.14 behaviour, and a button
+    /// wrongly disabled is worse than one that was already doing nothing.
+    #[test]
+    fn only_the_backends_that_carry_a_start_tune_keep_the_atu_button_live() {
+        for model in [3073, 3085, 3081, 3090, 3078] {
+            let name = rig_model_name(model).unwrap();
+            assert!(
+                !hamlib_atu_start_tune_reaches(model),
+                "{name}: Hamlib's Icom backend clamps TUNER 2 to 1"
+            );
+        }
+        for model in [2031, 2037, 2041, 2039] {
+            let name = rig_model_name(model).unwrap();
+            assert!(
+                !hamlib_atu_start_tune_reaches(model),
+                "{name}: Kenwood's AC1x0 has no tune-start digit"
+            );
+        }
+        // The Yaesus the #322 fix was reported and verified on, and a model we don't name.
+        for model in [1042, 1049, 1035, 0, 999_999] {
+            assert!(
+                hamlib_atu_start_tune_reaches(model),
+                "model {model} must keep the behaviour it had"
+            );
+        }
+        // Elecraft rides the Kenwood BACKEND NUMBER but answers `AC` in its own dialect, so
+        // the catalogue name — not `model / 1000` — is what this question is keyed on.
+        assert!(rig_model_name(2029).unwrap().starts_with("Elecraft"));
+        assert!(hamlib_atu_start_tune_reaches(2029));
     }
 
     #[test]

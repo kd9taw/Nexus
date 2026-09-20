@@ -32,6 +32,7 @@ pub enum LogWriteOutcome {
     Duplicate,
 }
 
+use self::remote_logging::{GridSource, HeldQso};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1669,6 +1670,14 @@ pub fn upload_backoff_secs(attempts: u8) -> i64 {
 /// worker tick / 2 s), so a permanently-down service eventually stops retrying.
 pub const MAX_UPLOAD_RETRIES: u8 = 20;
 
+/// How many contacts the confirm-before-log queue holds (see `Engine::pending_logs`).
+///
+/// An FT8 contact takes about a minute, so 64 is about an hour of completions with nobody
+/// answering the popup — far past any real "I'll confirm these in a moment", and about 64 kB
+/// of held records. Past it the oldest WAITING contact is logged rather than dropped: the
+/// ruling is that no contact is lost.
+pub const PENDING_LOG_QUEUE_CAP: usize = 64;
+
 /// How many callbook names a session remembers for the log (#293) — a busy FT8 hour
 /// looks up a few dozen stations; the oldest answer is dropped first.
 const CALLBOOK_NAMES_CAP: usize = 64;
@@ -2119,10 +2128,20 @@ pub struct Engine {
     /// ONE more over (#170, #153) — see [`RecentPartner`] for the three bounds. Session-only,
     /// one deep, and dropped the moment it is spent or expires.
     recent_partner: Option<RecentPartner>,
-    /// A completed QSO held for the operator to confirm before it is logged
-    /// (WSJT-X "Prompt me to log QSO"). `Some` only while `prompt_to_log` is on
-    /// and a finished contact is awaiting confirm/discard.
-    pending_log: Option<QsoRecord>,
+    /// Completed QSOs held for the operator to confirm before they are logged (WSJT-X
+    /// "Prompt me to log QSO"), oldest first. Non-empty only while `prompt_to_log` is on.
+    ///
+    /// ⭐ A QUEUE, NOT A SLOT (operator ruling, 2026-09-19, from the review's R2). A contact
+    /// that finished while the popup was open used to REPLACE the held one: the popup kept the
+    /// first station's call and reports, the confirm logged them onto the second contact's date,
+    /// time, frequency and country, and the second contact was never logged. The FRONT is the
+    /// contact the popup is showing; a later completion waits behind it. Stock WSJT-X refuses
+    /// the second contact outright (`LogQSO::initLogQSO` returns while its dialog is open), which
+    /// loses it; the operator asked for it to be queued instead.
+    pending_logs: VecDeque<HeldQso>,
+    /// The identity of the hold at the FRONT — a fresh `Arc` and epoch every time that
+    /// changes, so a confirm or discard for a hold that has moved on is refused rather than
+    /// applied to the contact now showing.
     pending_log_identity: std::sync::Arc<()>,
     pending_log_epoch: u64,
     qso_log_epoch: u64,
@@ -2632,6 +2651,16 @@ pub struct Engine {
     /// (it doesn't need one). Running the tuner KEYS THE TRANSMITTER, so it gets its own request
     /// path behind [`Self::atu_tune_gate`] and must never become reachable from that generic one.
     rig_tuner: Option<bool>,
+    /// ⭐ Whether an ATU press on THIS CAT path can actually start a tune-up, or only switch the
+    /// tuner in line. `true` until the radio loop's probe says otherwise, so an unknown or
+    /// unprobed radio behaves exactly as it did before this existed.
+    ///
+    /// Hamlib's Icom and Kenwood backends clamp `set_func TUNER 2` to 1 (see
+    /// `rigmodels::hamlib_atu_start_tune_reaches` for the source lines), and answer `RPRT 0`
+    /// while doing it — so the press looked accepted, the radio tuned nothing, and (#322 / R4)
+    /// the Digital section stood down for a tune-up that never happened. Operator ruling
+    /// (2026-09-19): "Say it can't, add it natively."
+    rig_atu_start_tune: bool,
     /// A pending "run the rig's own ATU tune-up" request from the operator — the Unix second it
     /// was pressed. Drained by the radio loop via [`Self::take_atu_tune`], which RE-RUNS the TX
     /// gate and enforces [`ATU_REQUEST_MAX_AGE_SECS`] before anything keys.
@@ -4365,7 +4394,7 @@ impl Engine {
             qso_report_sent: None,
             stalled_qso: None,
             recent_partner: None,
-            pending_log: None,
+            pending_logs: VecDeque::new(),
             pending_log_identity: std::sync::Arc::new(()),
             pending_log_epoch: 0,
             qso_log_epoch: remote_logging::next_identity(),
@@ -4497,6 +4526,7 @@ impl Engine {
             rig_refused_dial_mhz: None,
             pending_func: [None; 6],
             rig_tuner: None,
+            rig_atu_start_tune: true,
             pending_atu_tune: None,
             rig_passband: None,
             pending_passband: None,
@@ -8503,8 +8533,13 @@ impl Engine {
 
     /// Adopt the radio's antenna-tuner capability + state from the loop's probe (`None` = the rig
     /// does not report `TUNER`, so the ATU control disappears).
-    pub fn observe_rig_tuner(&mut self, state: Option<bool>) {
+    ///
+    /// `start_tune` is the second half of that capability: whether the CAT path can START a
+    /// tune-up at all, or only switch the tuner in line ([`Self::rig_atu_start_tune`]). Only the
+    /// loop knows — it owns the connection — so it is told here, beside the state it probed.
+    pub fn observe_rig_tuner(&mut self, state: Option<bool>, start_tune: bool) {
         self.rig_tuner = state;
+        self.rig_atu_start_tune = start_tune;
     }
 
     /// Drop the tuner capability (→ the ATU control hides) on a breaker trip — the same reason as
@@ -8512,6 +8547,7 @@ impl Engine {
     /// and this one offers the operator a button that keys their transmitter.
     pub fn clear_rig_tuner(&mut self) {
         self.rig_tuner = None;
+        self.rig_atu_start_tune = true; // unknown again, and unknown means "as it always was"
     }
 
     /// ⚠️ THE ATU TX GATE. Running the radio's built-in antenna tuner **KEYS THE TRANSMITTER** —
@@ -8528,6 +8564,18 @@ impl Engine {
         if self.rig_tuner.is_none() {
             return Err(
                 "This radio doesn't report an antenna tuner over CAT — nothing to run".to_string(),
+            );
+        }
+        // ⭐ Operator ruling (2026-09-19): "Say it can't, add it natively." On Hamlib's Icom and
+        // Kenwood backends `set_func TUNER 2` is clamped to "tuner in line" and still answers
+        // `RPRT 0`, so letting the press through would switch the tuner in, tune nothing, and —
+        // because the radio "took" it — stand the Digital section down mid-QSO (#322 / R4). The
+        // UI disables the button; this is the other half, for Remote and for a stale window.
+        if !self.rig_atu_start_tune {
+            return Err(
+                "This radio's tuner can't be started over this CAT connection — press TUNER on \
+                 the radio itself"
+                    .to_string(),
             );
         }
         if !self.tx_enabled {
@@ -8567,33 +8615,39 @@ impl Engine {
     ///    and still a transmission nobody asked for at that moment. An ATU tune-up is a
     ///    here-and-now act, not a standing order to key later.
     ///
-    /// In the Digital section a tune-up that fires also stands transmit down, as a Tune release
-    /// does (#322) — so the latch is DOWN when this returns `true` there.
+    /// The stand-down belongs to [`Self::note_atu_tune_started`], not here: draining a press is
+    /// not a tune-up (#322 / review R4).
     pub fn take_atu_tune(&mut self) -> bool {
-        self.take_atu_tune_with_reset(modes::reset_ft8_a7)
-    }
-
-    fn take_atu_tune_with_reset(&mut self, reset: impl FnOnce()) -> bool {
         let Some(at) = self.pending_atu_tune.take() else {
             return false;
         };
-        let fire = now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
-            && self.atu_tune_gate().is_ok();
-        // ⭐ #322 — IN THE DIGITAL SECTION THE RIG'S TUNE-UP ENDS LIKE A TUNE (operator ruling,
-        // 2026-09-19): the sequencer is disarmed and the a7 table dropped, exactly as a Tune
-        // release does in `set_tune_with_reset`. The FTdx10 report on 1.13.0: TX On, then ATU,
-        // and Nexus called the station of the last incomplete QSO.
-        //
-        // AT THE COMMAND, because the tune-up is one rig command whose end Nexus never sees.
-        // And AFTER the gate above, never at the press: the stand-down drops the TX latch, and
-        // the gate refuses a tune-up with the latch down, so a stand-down at the press would
-        // have stopped the ATU ever running in this section. Other sections are untouched, for
-        // the reasons given at the Tune release.
-        if fire && self.settings.operating_mode == crate::settings::OperatingMode::Digital {
-            self.halt_tx_for_context_change("ATU tune-up");
-            reset();
+        now_unix_secs().saturating_sub(at) <= ATU_REQUEST_MAX_AGE_SECS
+            && self.atu_tune_gate().is_ok()
+    }
+
+    /// ⭐ #322 — THE RADIO TOOK THE TUNE-UP, so in the Digital section the sequencer stands down
+    /// and the a7 table goes, exactly as a Tune release does in `set_tune_with_reset`. The FTdx10
+    /// report on 1.13.0: TX On, then ATU, and Nexus called the station of the last incomplete QSO.
+    ///
+    /// ⚠️ ONLY ON A REAL TUNE (operator ruling, 2026-09-19, after the review found the other
+    /// half): "TX drops and the QSO clears only after the tune-up command actually goes to the
+    /// radio and it accepts it. A press that can't tune leaves your QSO alone." So the radio loop
+    /// calls this AFTER its own `may_key()` and an Ok from the rig — [`Self::take_atu_tune`]
+    /// draining the press is not enough, because the loop still drops a tune-up it cannot send
+    /// and the rig can refuse the one it does, and neither is re-queued.
+    ///
+    /// Still at the command rather than at its end: the tune-up is one rig command whose end
+    /// Nexus never sees. Other sections are untouched, for the reasons given at the Tune release.
+    pub fn note_atu_tune_started(&mut self) {
+        self.note_atu_tune_started_with_reset(modes::reset_ft8_a7);
+    }
+
+    fn note_atu_tune_started_with_reset(&mut self, reset: impl FnOnce()) {
+        if self.settings.operating_mode != crate::settings::OperatingMode::Digital {
+            return;
         }
-        fire
+        self.halt_tx_for_context_change("ATU tune-up");
+        reset();
     }
 
     /// Adopt the rig's RX passband width (Hz) from the poll. `None` (a split `m` read) keeps the
@@ -9023,11 +9077,13 @@ impl Engine {
         let Some(path) = &self.station.pending_qso_path else {
             return;
         };
-        let Some(rec) = &self.pending_log else {
+        if self.pending_logs.is_empty() {
             let _ = std::fs::remove_file(path);
             return;
-        };
-        let Ok(text) = remote_logging::pending_qso_json(rec) else {
+        }
+        // THE WHOLE QUEUE, not just the contact the popup is showing: everything waiting
+        // behind it is a finished contact too, and a crash must not take any of them.
+        let Ok(text) = remote_logging::pending_qso_queue_json(&self.pending_logs) else {
             return;
         };
         if let Some(dir) = path.parent() {
@@ -9047,12 +9103,55 @@ impl Engine {
 
     /// Restore a QSO left in the prompt-to-log popup by a previous session (crash, power
     /// loss, or a quit with the popup open) so the operator can still log it. Called by the
-    /// shell at startup AFTER [`Self::set_pending_qso_path`]. Ignored if a QSO is already
-    /// held — a live hold outranks a restored one.
+    /// shell at startup AFTER [`Self::set_pending_qso_path`], once per restored contact, in
+    /// the order they were held; each joins the back of the queue.
+    /// A caller with a bare record cannot say where its grid came from, so it counts as a
+    /// lookup — see [`GridSource::LookedUp`]. The journal's own restore keeps what it
+    /// recorded (`load_pending_qso_json`).
     pub fn load_pending_qso(&mut self, rec: QsoRecord) {
-        if self.pending_log.is_none() {
-            self.replace_pending_log(Some(rec));
+        self.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
+    }
+
+    /// The contact the confirm-before-log popup is showing — the front of the queue.
+    pub(crate) fn pending_log(&self) -> Option<&QsoRecord> {
+        self.pending_logs.front().map(|held| &held.record)
+    }
+
+    /// How many contacts are waiting BEHIND the one the popup is showing.
+    pub(crate) fn pending_logs_waiting(&self) -> usize {
+        self.pending_logs.len().saturating_sub(1)
+    }
+
+    /// Hold a completed contact for the operator's confirm: it becomes the popup's contact when
+    /// nothing is held, and waits behind the open popup otherwise (the R2 ruling on
+    /// [`Self::pending_logs`]). Journals the queue, as every hold change does.
+    ///
+    /// ⚠️ AT THE CAP the OLDEST WAITING contact is LOGGED as it stands, never dropped — the
+    /// ruling is that no contact is lost, and a queue this deep means nobody is at the radio to
+    /// answer the popup. The one the popup is showing is never the one taken: the operator is
+    /// looking at it. [`PENDING_LOG_QUEUE_CAP`] is about an hour of unattended FT8 completions.
+    pub(crate) fn hold_pending_log(&mut self, held: HeldQso) {
+        if self.pending_logs.is_empty() {
+            self.replace_pending_log(Some(held));
+            self.persist_pending_qso();
+            return;
         }
+        if self.pending_logs.len() >= PENDING_LOG_QUEUE_CAP {
+            if let Some(overflow) = self.pending_logs.remove(1) {
+                tempo_core::applog::warn(
+                    "logbook",
+                    &format!(
+                        "logged the QSO with {} WITHOUT your confirmation: the \
+                         confirm-before-log queue is full, with {PENDING_LOG_QUEUE_CAP} \
+                         contacts already waiting",
+                        overflow.record.call
+                    ),
+                );
+                self.log_qso(overflow.record);
+            }
+        }
+        self.pending_logs.push_back(held);
+        self.persist_pending_qso();
     }
 
     /// Flush the in-memory Field Day contest log to `fd_log_path` as ADIF
@@ -11174,33 +11273,105 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .map(|(_, m, snr, slot)| (m, snr, slot))
     }
 
-    /// Confirm-and-log a QSO held by the prompt-to-log popup. `rec` is the
-    /// (possibly operator-edited) record; logs it and clears the pending hold.
+    /// Confirm-and-log the contact the prompt-to-log popup is showing. `rec` is the
+    /// (possibly operator-edited) record; the next held contact is promoted behind it.
+    ///
+    /// `expected_key` is the [`Self::pending_qso_log_key`] the popup was shown with. A key for
+    /// a hold that has moved on — or none at all — is REFUSED (`false`, nothing logged), which
+    /// is the R2 ruling's other half: the popup's contact must never be logged onto whichever
+    /// contact happens to be held now. Remote has always checked this (`matches_pending_log`).
     ///
     /// #329: what is logged is the HELD record, with only the popup's four editable fields
     /// taken from `rec` — the Remote confirm's rule (`confirm_pending_log_for_sync`). `rec`
     /// arrives through the UI's `LoggedQso`, which carries neither TIME_OFF nor the split
     /// FREQ_RX, so logging it as sent dropped both from every confirmed contact.
-    pub fn confirm_pending_log(&mut self, rec: QsoRecord) {
-        let rec = match self.pending_log.take() {
-            Some(mut held) => {
-                held.call = rec.call;
-                held.grid = rec.grid;
-                held.rst_sent = rec.rst_sent;
-                held.rst_rcvd = rec.rst_rcvd;
-                held
-            }
-            None => rec,
+    pub fn confirm_pending_log(&mut self, expected_key: &str, rec: QsoRecord) -> bool {
+        if self.pending_qso_log_key().as_deref() != Some(expected_key) {
+            return false;
+        }
+        let Some(was) = self.pending_logs.front().cloned() else {
+            return false;
         };
-        self.replace_pending_log(None);
-        self.persist_pending_qso(); // clears the journal — it's in the log now
-        self.log_qso(rec);
+        let mut held = was.record.clone();
+        held.call = rec.call;
+        held.grid = rec.grid;
+        held.rst_sent = rec.rst_sent;
+        held.rst_rcvd = rec.rst_rcvd;
+        self.rederive_after_edits(&mut held, &was.record, was.grid_source);
+        self.replace_pending_log(None); // pops it, promoting whatever was waiting
+        self.persist_pending_qso(); // journals what is left — this one is in the log now
+        self.log_qso(held);
+        true
     }
 
-    /// Discard a QSO held by the prompt-to-log popup without logging it.
-    pub fn discard_pending_log(&mut self) {
+    /// ⭐ R2 (operator review, 2026-09-19) — WHAT THE POPUP'S EDITS MAKE STALE.
+    ///
+    /// The held record's COUNTRY and its #293 callbook NAME were derived from the call AS
+    /// DECODED, and `log_qso_inner` fills COUNTRY only when it is empty — so correcting EA3ABC
+    /// to EA8ABC logged and exported Spain, with a stranger's name. ADIF defines both as the
+    /// CONTACTED station's, so a corrected call drops them: COUNTRY (and STATE, for the same
+    /// reason) is left empty for the log funnel to resolve for the call actually worked, and
+    /// NAME is whatever a lookup in THIS session answered for the new call, which is usually
+    /// nothing. An unchanged call keeps everything, byte for byte.
+    ///
+    /// THE GRID GOES THE SAME WAY, BUT ONLY WHEN IT WAS A LOOKUP (R2 follow-up). Of
+    /// `dx_grid_resolved`'s three sources only the first — the grid the station SENT — is
+    /// still that station's after a mis-copied call is corrected; the roster and the
+    /// previously-logged grid are keyed on the busted call, so they are a stranger's.
+    /// [`GridSource`] is what the hold recorded, because the record cannot say.
+    ///
+    /// The reports have the same shape through `log_reports_to_comments`: the COMMENT is built
+    /// from the reports at hold time, and the invariant it was written with is that it "can
+    /// never disagree with the record". So an edited report rebuilds it — but ONLY when the
+    /// comment is still exactly the one we generated, never a comment from anywhere else.
+    /// Every field here follows that rule: re-derive what WE put there, never what the
+    /// operator typed.
+    ///
+    /// `held` is the edited copy about to be logged; `was` is the record as held, and `grid`
+    /// its grid's provenance.
+    fn rederive_after_edits(&self, held: &mut QsoRecord, was: &QsoRecord, grid: GridSource) {
+        let was_sent = was.rst_sent.as_deref();
+        let was_rcvd = was.rst_rcvd.as_deref();
+        // The same rule `StationCore::update_qso` reads an edit with, so the two cannot
+        // disagree about what a correction is: the same call in another case is not one.
+        if !held.call.trim().eq_ignore_ascii_case(was.call.trim()) {
+            held.country = None; // `log_qso_inner` resolves it from the call it is logging
+            held.state = None;
+            held.name = self.callbook_name_for(&held.call);
+            // The grid only goes if it was a LOOKUP keyed on the call that turned out to be
+            // wrong — a grid the station TRANSMITTED is still that station's. And only while
+            // it is still the one we resolved: a grid the operator typed over ours is theirs,
+            // not something to re-derive (the COMMENT rule below draws the same line).
+            let stale_lookup = grid == GridSource::LookedUp
+                && match (held.grid.as_deref(), was.grid.as_deref()) {
+                    (Some(now), Some(before)) => now.trim().eq_ignore_ascii_case(before.trim()),
+                    (now, before) => now == before,
+                };
+            if stale_lookup {
+                held.grid = None;
+            }
+        }
+        if held.rst_sent.as_deref() != was_sent || held.rst_rcvd.as_deref() != was_rcvd {
+            let ours = reports_comment(&held.mode, was_sent, was_rcvd);
+            if held.comment == ours {
+                held.comment = reports_comment(
+                    &held.mode,
+                    held.rst_sent.as_deref(),
+                    held.rst_rcvd.as_deref(),
+                );
+            }
+        }
+    }
+
+    /// Discard the contact the popup is showing without logging it, promoting the next.
+    /// `expected_key` is checked exactly as [`Self::confirm_pending_log`] checks it.
+    pub fn discard_pending_log(&mut self, expected_key: &str) -> bool {
+        if self.pending_qso_log_key().as_deref() != Some(expected_key) {
+            return false;
+        }
         self.replace_pending_log(None);
-        self.persist_pending_qso(); // clears the journal — the operator said no
+        self.persist_pending_qso(); // journals what is left — the operator said no to this one
+        true
     }
 
     /// Operator "Resend": re-arm the current QSO message so a stalled (or just
@@ -11218,22 +11389,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// even if the sequence hasn't reached the final 73. Marks the QSO logged so it
     /// isn't also auto-logged on completion. Returns false outside a QSO / no DX.
     pub fn log_current_qso(&mut self) -> bool {
-        let Some(rec) = self.take_current_qso_record() else {
+        let Some(held) = self.take_current_qso_record() else {
             return false;
         };
         // Respect prompt-to-log just like auto-log.
         if self.settings.prompt_to_log {
-            self.replace_pending_log(Some(rec));
-            self.persist_pending_qso();
+            self.hold_pending_log(held);
         } else {
-            self.log_qso(rec);
+            self.log_qso(held.record);
         }
         true
     }
 
     /// Shared eligibility, captured fields and write-once transition for the
     /// local Log QSO button and its remote equivalent. No transport policy here.
-    fn take_current_qso_record(&mut self) -> Option<QsoRecord> {
+    fn take_current_qso_record(&mut self) -> Option<HeldQso> {
         // Write-once: if this contact was already logged (manual double-click, or
         // it auto-logged on completion), don't log it again.
         if self.qso_logged {
@@ -11285,10 +11455,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if rx_report.is_none() && self.qso_report_sent.is_none() && !report_impossible {
             return None;
         }
+        let grid_source = GridSource::of(dxgrid.as_deref());
         let rec = self.qso_record(dxcall, dxgrid, rx_report);
         self.qso_logged = true;
         self.qso_start_unix = None;
-        Some(rec)
+        Some(HeldQso::new(rec, grid_source))
     }
 
     /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
@@ -16203,9 +16374,11 @@ contact yourself."
                 if self.settings.auto_log {
                     let rec = self.rtty_qso_record(&call, &exchange);
                     if self.settings.prompt_to_log {
-                        // Hold for the operator's confirm-before-log popup.
-                        self.replace_pending_log(Some(rec));
-                        self.persist_pending_qso(); // journal before the popup waits
+                        // Hold for the operator's confirm-before-log popup — behind whatever
+                        // it is already showing, never over it. An RTTY exchange carries no
+                        // grid at all (`rtty_qso_record` logs none), so there is no grid for a
+                        // corrected call to keep or drop.
+                        self.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
                     } else {
                         self.log_qso(rec);
                     }
@@ -17737,6 +17910,7 @@ contact yourself."
         s.radio.manual_notch = self.rig_funcs[5];
         // The rig's own ATU: None = no tuner reported → the UI offers no ATU control at all.
         s.radio.atu = self.rig_tuner;
+        s.radio.atu_start_tune_unsupported = !self.rig_atu_start_tune;
         s.radio.filter_width_hz = self.rig_passband;
         s.radio.rit_hz = self.rit_hz;
         s.radio.xit_hz = self.xit_hz;
@@ -18131,7 +18305,9 @@ contact yourself."
         s.upload_ok = self.station.upload_ok;
         s.upload_tick = self.station.upload_tick;
         s.log_tick = self.station.log_tick();
-        s.pending_log = self.pending_log.clone().map(Into::into);
+        s.pending_log = self.pending_log().cloned().map(Into::into);
+        s.pending_qso_log_key = self.pending_qso_log_key();
+        s.pending_logs_waiting = self.pending_logs_waiting() as u32;
         s
     }
 
@@ -19965,12 +20141,14 @@ contact yourself."
         }
         if let Some((dxcall, dxgrid, rx_report)) = completed {
             if self.settings.auto_log {
+                let grid_source = GridSource::of(dxgrid.as_deref());
                 let rec = self.qso_record(dxcall, dxgrid, rx_report);
                 if self.settings.prompt_to_log {
-                    // Hold for the operator's confirm-before-log popup instead of
-                    // writing it silently.
-                    self.replace_pending_log(Some(rec));
-                    self.persist_pending_qso(); // journal before the popup waits
+                    // Hold for the operator's confirm-before-log popup instead of writing it
+                    // silently — behind whatever it is already showing, never over it. The
+                    // hold carries where its grid came from: the popup can correct the call,
+                    // and a LOOKED-UP grid was keyed on the call that turned out to be wrong.
+                    self.hold_pending_log(HeldQso::new(rec, grid_source));
                 } else {
                     self.log_qso(rec);
                 }
@@ -20172,16 +20350,20 @@ contact yourself."
     /// box and the logged GRIDSQUARE resolve identically — they diverged before, and the
     /// operator saw a blank grid on screen for a contact that logged correctly.
     fn dx_grid_resolved(&self, dxcall: &str, dxgrid: Option<String>) -> Option<String> {
-        dxgrid
+        // Which of the three this takes is also what the confirm popup needs to know later —
+        // `GridSource::of` is the one predicate, so the hold's provenance cannot drift from
+        // what actually resolved the grid.
+        if GridSource::of(dxgrid.as_deref()) == GridSource::Transmitted {
+            return dxgrid;
+        }
+        // Both remaining sources are LOOKUPS KEYED ON `dxcall` — see `GridSource::LookedUp`
+        // for what that means once the operator corrects a busted call in the confirm popup.
+        self.app
+            .inbox
+            .roster
+            .get(dxcall)
+            .and_then(|h| h.grid.clone())
             .filter(|g| !g.trim().is_empty())
-            .or_else(|| {
-                self.app
-                    .inbox
-                    .roster
-                    .get(dxcall)
-                    .and_then(|h| h.grid.clone())
-                    .filter(|g| !g.trim().is_empty())
-            })
             .or_else(|| {
                 // Third and last: a grid we LOGGED for this station before. The session roster
                 // only remembers stations heard since launch, so a station worked on a previous
@@ -23756,7 +23938,7 @@ mod tests {
     /// ATU button is offered in.
     fn atu_engine() -> Engine {
         let mut e = phone_armed_engine();
-        e.observe_rig_tuner(Some(true));
+        e.observe_rig_tuner(Some(true), true);
         e.atu_tune_gate()
             .expect("scene guard: an armed, in-privileges, idle rig with a tuner may run it");
         e
@@ -23780,7 +23962,7 @@ mod tests {
             "the refusal must say the radio has no tuner, got: {err}"
         );
 
-        e.observe_rig_tuner(Some(false));
+        e.observe_rig_tuner(Some(false), true);
         assert_eq!(
             e.snapshot().radio.atu,
             Some(false),
@@ -34513,6 +34695,415 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Work a station to completion with auto-log on, exactly as `prompt_to_log_holds_then_confirms`
+    /// does: answer, report, RR73.
+    fn complete_a_contact(e: &mut Engine, call: &str, slot: u64) {
+        e.call_station(call);
+        e.ingest_decodes_for_test(&[dec_snr(&format!("K2DEF {call} -10"), -7)], slot);
+        e.ingest_decodes_for_test(&[dec_snr(&format!("K2DEF {call} RR73"), -7)], slot + 2);
+    }
+
+    /// ⭐ R2 (operator review, 2026-09-19) — A SECOND COMPLETED QSO NEVER REWRITES THE HELD ONE.
+    /// With "Prompt before logging" on, a contact that finished while the popup was open used to
+    /// REPLACE the held one. The popup seeds its fields from the first contact once, so the
+    /// confirm then logged the FIRST station's call, grid and reports onto the SECOND contact's
+    /// date, time, frequency, country and name — and the second contact was never logged.
+    /// Operator ruling: "Queue them. The open popup keeps the first contact; the second pops up
+    /// right after you log or discard it. No contact is lost or mixed."
+    #[test]
+    fn a_second_completed_qso_never_rewrites_the_held_one() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let first_key = e.pending_qso_log_key().expect("the first contact is held");
+        complete_a_contact(&mut e, "K1ABC", 5);
+
+        let snap = e.snapshot();
+        let shown = snap.pending_log.clone().expect("a contact is held");
+        assert_eq!(
+            shown.call, "W9XYZ",
+            "the popup keeps the contact it is showing"
+        );
+        assert_eq!(
+            snap.pending_qso_log_key.as_deref(),
+            Some(first_key.as_str()),
+            "…and its identity, so the open popup's confirm is still the right one"
+        );
+        assert_eq!(snap.pending_logs_waiting, 1, "the second waits its turn");
+        assert!(e.get_log().is_empty(), "neither is logged yet");
+
+        // Confirming the shown contact logs THAT one and promotes the one behind it.
+        assert!(confirm_held(&mut e, shown.into()));
+        let snap = e.snapshot();
+        assert_eq!(e.get_log().len(), 1);
+        assert_eq!(e.get_log()[0].call, "W9XYZ", "the contact the operator saw");
+        assert_eq!(
+            snap.pending_log.as_ref().map(|q| q.call.as_str()),
+            Some("K1ABC"),
+            "the second contact pops up next"
+        );
+        assert_eq!(snap.pending_logs_waiting, 0);
+        assert_ne!(
+            snap.pending_qso_log_key.as_deref(),
+            Some(first_key.as_str()),
+            "a different contact is a different identity"
+        );
+
+        // …and discarding the promoted one empties the queue without logging it.
+        assert!(discard_held(&mut e));
+        assert!(e.snapshot().pending_log.is_none());
+        assert_eq!(e.get_log().len(), 1, "a discard logs nothing");
+    }
+
+    /// The other half of R2: the confirm must name the contact it is confirming. A popup whose
+    /// contact has been logged, discarded or overtaken sends a key that is no longer the held
+    /// one, and logging its edits onto whatever is held now is exactly the mix the queue exists
+    /// to prevent. Remote has always checked this; the desktop command did not.
+    #[test]
+    fn a_confirm_or_discard_whose_contact_has_moved_on_is_refused() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let shown = e.snapshot().pending_log.expect("held");
+        let stale_key = e.pending_qso_log_key().expect("held");
+
+        // The contact is logged from somewhere else (the Remote confirm, or a second click).
+        assert!(confirm_held(&mut e, shown.clone().into()));
+        complete_a_contact(&mut e, "K1ABC", 5);
+
+        // The popup is still showing the first contact.
+        assert!(
+            !e.confirm_pending_log(&stale_key, shown.clone().into()),
+            "a confirm for a contact that has moved on must log nothing"
+        );
+        assert!(
+            !e.discard_pending_log(&stale_key),
+            "…and a discard must drop nothing"
+        );
+        assert!(
+            !e.confirm_pending_log("", shown.into()),
+            "…nor may a caller with no key at all log the held contact"
+        );
+        assert_eq!(e.get_log().len(), 1, "only the contact actually confirmed");
+        assert_eq!(e.get_log()[0].call, "W9XYZ");
+        assert_eq!(
+            e.snapshot().pending_log.map(|q| q.call),
+            Some("K1ABC".to_string()),
+            "the held contact is untouched"
+        );
+    }
+
+    #[test]
+    fn the_journal_brings_back_every_held_contact() {
+        let dir = std::env::temp_dir().join(format!("nexus-pendingq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("pending_qso.json");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.set_pending_qso_path(path.clone());
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        complete_a_contact(&mut e, "K1ABC", 5);
+        assert_eq!(e.snapshot().pending_logs_waiting, 1);
+
+        // The crash: this engine vanishes, nothing is flushed.
+        drop(e);
+        let text = std::fs::read_to_string(&path).expect("journal readable after the crash");
+        let mut relaunched = Engine::new("K2DEF", "FN31", 0);
+        relaunched.set_pending_qso_path(path.clone());
+        relaunched.load_pending_qso_json(&text);
+
+        let snap = relaunched.snapshot();
+        assert_eq!(
+            snap.pending_log.map(|q| q.call),
+            Some("W9XYZ".to_string()),
+            "the contact the popup was showing comes back first"
+        );
+        assert_eq!(
+            snap.pending_logs_waiting, 1,
+            "and the one behind it with it"
+        );
+
+        // THE OTHER DIRECTION: a journal from a build that held one contact wrote ONE record
+        // and not an array, and it still comes back — as the one contact it was.
+        let legacy = serde_json::to_string(&crate::dto::LoggedQso::from(
+            relaunched.pending_log().cloned().unwrap(),
+        ))
+        .unwrap();
+        let mut older = Engine::new("K2DEF", "FN31", 0);
+        older.load_pending_qso_json(&legacy);
+        let snap = older.snapshot();
+        assert_eq!(snap.pending_log.map(|q| q.call), Some("W9XYZ".to_string()));
+        assert_eq!(snap.pending_logs_waiting, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// …and WHERE EACH GRID CAME FROM has to come back with it. A restored hold whose
+    /// provenance was forgotten would drop a transmitted grid on the first corrected call, so
+    /// the journal records it. A journal written by an older build records nothing, and those
+    /// come back as lookups — the safe way round: a missing grid can be filled in later, a
+    /// wrong one is exported and uploaded.
+    #[test]
+    fn a_restored_hold_remembers_where_its_grid_came_from() {
+        let dir = std::env::temp_dir().join(format!("nexus-pendinggrid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("pending_qso.json");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.set_pending_qso_path(path.clone());
+        e.call_station("EA3ABC");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC IM12", -7)], 3); // their grid, on the air
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC -10", -7)], 5);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC RR73", -7)], 7);
+        drop(e); // the crash: nothing but the journal survives
+
+        let text = std::fs::read_to_string(&path).expect("journal readable after the crash");
+        assert!(
+            text.contains("\"gridSource\":\"transmitted\""),
+            "the journal has to carry what the record cannot say: {text}"
+        );
+        let mut relaunched = Engine::new("K2DEF", "FN31", 0);
+        let mut sent = restored_hold_corrected_to_ea8(&mut relaunched, &text);
+        assert_eq!(
+            sent.grid.as_deref(),
+            Some("IM12"),
+            "the grid EA8ABC sent survives the restart AND the correction"
+        );
+
+        // THE OTHER DIRECTION: the same journal from a build that recorded no provenance.
+        let legacy = text.replace(",\"gridSource\":\"transmitted\"", "");
+        assert!(!legacy.contains("gridSource"), "a pre-provenance journal");
+        let mut older = Engine::new("K2DEF", "FN31", 0);
+        sent = restored_hold_corrected_to_ea8(&mut older, &legacy);
+        assert_eq!(
+            sent.grid, None,
+            "a grid nobody vouched for goes with the busted call"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Restore `journal` into `e`, confirm the hold it brings back with the call corrected to
+    /// EA8ABC, and hand back the record that reached the log.
+    fn restored_hold_corrected_to_ea8(e: &mut Engine, journal: &str) -> QsoRecord {
+        e.load_pending_qso_json(journal);
+        let mut sent = e.snapshot().pending_log.expect("the hold comes back");
+        sent.call = "EA8ABC".into();
+        assert!(confirm_held(e, sent.into()));
+        e.get_log()[0].clone()
+    }
+
+    #[test]
+    fn a_full_hold_queue_logs_the_oldest_waiting_contact_rather_than_losing_it() {
+        // The bound exists so an operator who walked away cannot grow the queue without limit.
+        // What it must never do is drop a real contact, and it must never take the one the
+        // popup is showing out from under them.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        for i in 0..PENDING_LOG_QUEUE_CAP {
+            let rec = e.qso_record(format!("W9A{i}"), None, None);
+            e.hold_pending_log(HeldQso::new(rec, GridSource::LookedUp));
+        }
+        assert_eq!(e.pending_logs_waiting(), PENDING_LOG_QUEUE_CAP - 1);
+        assert!(e.get_log().is_empty(), "the queue is holding, not logging");
+
+        let newest = e.qso_record("K1NEW".into(), None, None);
+        e.hold_pending_log(HeldQso::new(newest, GridSource::LookedUp));
+        assert_eq!(
+            e.pending_log().map(|q| q.call.as_str()),
+            Some("W9A0"),
+            "the contact the popup is showing is never the one taken"
+        );
+        assert_eq!(
+            e.get_log()
+                .iter()
+                .map(|q| q.call.as_str())
+                .collect::<Vec<_>>(),
+            ["W9A1"],
+            "the oldest WAITING contact is logged rather than lost"
+        );
+        assert_eq!(
+            e.pending_logs_waiting(),
+            PENDING_LOG_QUEUE_CAP - 1,
+            "and the queue stays bounded"
+        );
+    }
+
+    /// ⭐ R2 (operator review, 2026-09-19) — A CORRECTED CALL MUST NOT KEEP THE BUSTED CALL'S
+    /// COUNTRY AND NAME. The hold resolves COUNTRY from the call as DECODED and carries the
+    /// #293 callbook NAME for it, and `log_qso_inner` fills COUNTRY only when it is empty — so
+    /// a CW copy of EA8ABC as EA3ABC, corrected in the popup, still logged and exported Spain,
+    /// with a stranger's name. ADIF defines both as the contacted station's.
+    #[test]
+    fn a_corrected_call_logs_its_own_country_and_no_stale_name() {
+        for correct in [false, true] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.set_dxcc_resolver(|call| {
+                Some(if call.starts_with("EA8") {
+                    "Canary Islands".to_string()
+                } else {
+                    "Spain".to_string()
+                })
+            });
+            e.note_callbook_name("EA3ABC", "the other station's operator");
+            e.settings.prompt_to_log = true;
+            complete_a_contact(&mut e, "EA3ABC", 1);
+            let held = e.pending_log().cloned().expect("held for confirm");
+            assert_eq!(
+                held.country.as_deref(),
+                Some("Spain"),
+                "precondition: the hold carries the DECODED call's country"
+            );
+            assert!(held.name.is_some(), "…and that call's callbook name");
+
+            let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+            if correct {
+                sent.call = "EA8ABC".into();
+            }
+            assert!(confirm_held(&mut e, sent.into()));
+
+            let logged = &e.get_log()[0];
+            if correct {
+                assert_eq!(logged.call, "EA8ABC");
+                assert_eq!(
+                    logged.country.as_deref(),
+                    Some("Canary Islands"),
+                    "the country of the call actually worked"
+                );
+                assert_eq!(
+                    logged.name, None,
+                    "a name looked up for the other station is not this one's"
+                );
+            } else {
+                // CONTROL: an uncorrected confirm keeps what the hold carried.
+                assert_eq!(logged.call, "EA3ABC");
+                assert_eq!(logged.country.as_deref(), Some("Spain"));
+                assert_eq!(logged.name, held.name);
+            }
+        }
+    }
+
+    /// ⭐ R2 follow-up (operator review, 2026-09-19) — THE GRID GOES THE SAME WAY, SPLIT BY
+    /// PROVENANCE. `dx_grid_resolved` has three sources. The first is the grid the station
+    /// itself SENT in the decode: mis-copying its CALL does not make that grid wrong. The
+    /// other two — the session roster, then a grid logged for that call before — are LOOKUPS
+    /// KEYED ON THE CALL, so on a corrected call they are another station's grid and must go
+    /// the way COUNTRY and NAME go.
+    ///
+    /// The two scenes below differ by ONE DECODE: the same station, the same grid string, the
+    /// same earlier CQ in the roster. In one, EA3ABC answers our call with its grid — that
+    /// grid came off the air. In the other the whole contact is a bare report exchange, and
+    /// the grid on the record can only have come from the roster.
+    #[test]
+    fn a_corrected_call_keeps_a_transmitted_grid_and_drops_a_looked_up_one() {
+        for transmitted in [true, false] {
+            for correct in [true, false] {
+                let mut e = Engine::new("K2DEF", "FN31", 0);
+                e.settings.prompt_to_log = true;
+                // Heard either way: this is what fills the session roster.
+                e.ingest_decodes_for_test(&[dec_snr("CQ EA3ABC IM12", -7)], 1);
+                e.call_station("EA3ABC");
+                if transmitted {
+                    // The standard FT8 answer to our call carries their grid.
+                    e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC IM12", -7)], 3);
+                }
+                e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC -10", -7)], 5);
+                e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC RR73", -7)], 7);
+
+                let held = e.pending_log().cloned().expect("held for confirm");
+                assert_eq!(
+                    held.grid.as_deref(),
+                    Some("IM12"),
+                    "precondition: the hold shows the same grid either way ({transmitted})"
+                );
+
+                let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+                if correct {
+                    sent.call = "EA8ABC".into();
+                }
+                assert!(confirm_held(&mut e, sent.into()));
+
+                let logged = &e.get_log()[0];
+                match (transmitted, correct) {
+                    (true, true) => assert_eq!(
+                        logged.grid.as_deref(),
+                        Some("IM12"),
+                        "EA8ABC sent this grid itself — the busted CALL is what was wrong"
+                    ),
+                    (false, true) => assert_eq!(
+                        logged.grid, None,
+                        "that grid was looked up under EA3ABC, and EA3ABC is not who we worked"
+                    ),
+                    // CONTROL: no correction, so nothing is stale and the grid stands.
+                    (_, false) => assert_eq!(logged.grid.as_deref(), Some("IM12")),
+                }
+            }
+        }
+    }
+
+    /// …and a grid the OPERATOR typed over ours is theirs: correcting the call in the same
+    /// confirm must not throw it away. The COMMENT rule's shape — re-derive only what is
+    /// still exactly what we resolved.
+    #[test]
+    fn a_corrected_call_keeps_the_grid_the_operator_typed() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.ingest_decodes_for_test(&[dec_snr("CQ EA3ABC IM12", -7)], 1);
+        e.call_station("EA3ABC"); // the grid can only come from the roster
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC -10", -7)], 5);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF EA3ABC RR73", -7)], 7);
+
+        let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+        sent.call = "EA8ABC".into();
+        sent.grid = Some("IL18".into()); // …and the operator knows where EA8ABC is
+        assert!(confirm_held(&mut e, sent.into()));
+
+        assert_eq!(
+            e.get_log()[0].grid.as_deref(),
+            Some("IL18"),
+            "the operator's own grid is not a stale lookup"
+        );
+    }
+
+    /// The same shape through `log_reports_to_comments`: the COMMENT is built from the reports
+    /// at hold time, and its own invariant is that it "can never disagree with the record". An
+    /// edited report used to leave the decoded ones in COMMENT — and in every export.
+    #[test]
+    fn an_edited_report_is_not_left_contradicted_by_the_comment() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.settings.log_reports_to_comments = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let held = e.pending_log().cloned().expect("held");
+        assert_eq!(
+            held.comment.as_deref(),
+            Some("FT8  Sent: -07  Rcvd: -10"),
+            "precondition: WSJT-X's own comment, from the decoded reports"
+        );
+
+        let mut sent = e.snapshot().pending_log.expect("shown for confirm");
+        sent.rst_rcvd = Some("-15".into());
+        assert!(confirm_held(&mut e, sent.into()));
+
+        let logged = &e.get_log()[0];
+        assert_eq!(logged.rst_rcvd.as_deref(), Some("-15"));
+        assert_eq!(
+            logged.comment.as_deref(),
+            Some("FT8  Sent: -07  Rcvd: -15"),
+            "the comment must say what the record says"
+        );
+    }
+
+    /// Confirm the popup's contact the way the desktop does: with the key the snapshot showed.
+    fn confirm_held(e: &mut Engine, rec: QsoRecord) -> bool {
+        let key = e.pending_qso_log_key().unwrap_or_default();
+        e.confirm_pending_log(&key, rec)
+    }
+
+    /// Discard it the same way.
+    fn discard_held(e: &mut Engine) -> bool {
+        let key = e.pending_qso_log_key().unwrap_or_default();
+        e.discard_pending_log(&key)
+    }
+
     #[test]
     fn prompt_to_log_holds_then_confirms() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
@@ -34534,7 +35125,7 @@ mod tests {
         );
 
         // Confirm logs it and clears the hold.
-        e.confirm_pending_log(pending.into());
+        assert!(confirm_held(&mut e, pending.into()));
         assert_eq!(e.get_log().len(), 1, "confirm writes exactly one record");
         assert!(
             e.snapshot().pending_log.is_none(),
@@ -34553,7 +35144,7 @@ mod tests {
         e.call_station_with_grid("W9XYZ", Some("en37"));
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
-        let held = e.pending_log.clone().expect("held for confirm");
+        let held = e.pending_log().cloned().expect("held for confirm");
         assert!(
             held.time_off_unix.is_some() && held.freq_rx_mhz.is_some(),
             "precondition: the hold carries an end time and a split RX leg"
@@ -34563,7 +35154,7 @@ mod tests {
         let mut sent = e.snapshot().pending_log.expect("a QSO awaits confirm");
         sent.grid = Some("EN38".into());
         sent.rst_rcvd = Some("-09".into());
-        e.confirm_pending_log(sent.into());
+        assert!(confirm_held(&mut e, sent.into()));
 
         let saved = &e.station.logbook.records()[0];
         assert_eq!(saved.time_off_unix, held.time_off_unix, "TIME_OFF survives");
@@ -34600,8 +35191,9 @@ mod tests {
         let mut relaunched = Engine::new("K2DEF", "FN31", 0);
         relaunched.set_pending_qso_path(path.clone());
         let text = std::fs::read_to_string(&path).expect("journal readable after the crash");
-        let q: crate::dto::LoggedQso = serde_json::from_str(&text).expect("journal parses");
-        relaunched.load_pending_qso(q.into());
+        // Through the SHELL's own restore path (lib.rs calls this at startup), so the journal
+        // format and the reader cannot drift apart under this test.
+        relaunched.load_pending_qso_json(&text);
         let pending = relaunched
             .snapshot()
             .pending_log
@@ -34609,7 +35201,7 @@ mod tests {
         assert_eq!(pending.call, "W9XYZ", "the SAME station, not a blank hold");
 
         // Confirming logs it and clears the journal, so it cannot resurrect next launch.
-        relaunched.confirm_pending_log(pending.into());
+        assert!(confirm_held(&mut relaunched, pending.into()));
         assert_eq!(relaunched.get_log().len(), 1, "logged exactly once");
         assert!(
             !path.exists(),
@@ -34631,7 +35223,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
         assert!(path.exists(), "journalled while held");
-        e.discard_pending_log();
+        assert!(discard_held(&mut e));
         assert!(
             !path.exists(),
             "a discarded QSO must not be restored on the next launch"
@@ -34647,7 +35239,7 @@ mod tests {
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
         e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
         assert!(e.snapshot().pending_log.is_some());
-        e.discard_pending_log();
+        assert!(discard_held(&mut e));
         assert!(e.get_log().is_empty(), "discard logs nothing");
         assert!(e.snapshot().pending_log.is_none());
     }
@@ -35281,7 +35873,7 @@ mod tests {
             "prompt-to-log holds the manual log too"
         );
         let pending = e.snapshot().pending_log.expect("a QSO awaits confirm");
-        e.confirm_pending_log(pending.into());
+        assert!(confirm_held(&mut e, pending.into()));
         assert_eq!(e.get_log().len(), 1);
     }
 
@@ -44995,12 +45587,13 @@ mod tests {
         e.set_tx_enabled(true);
         e.call_station("W9XYZ");
         let slot = cap_a_directed_call(&mut e, 2);
-        e.observe_rig_tuner(Some(true));
+        e.observe_rig_tuner(Some(true), true);
 
         e.atu_tune()
             .expect("an armed, idle rig with a tuner may run it");
-        // The gate at the wire runs BEFORE the stand-down, so the tune-up still goes out.
+        // The loop drains the press, sends it, and tells the engine the radio took it.
         assert!(e.take_atu_tune(), "the tune-up must still reach the radio");
+        e.note_atu_tune_started();
         assert!(
             !e.tx_enabled(),
             "an ATU tune-up must disarm the sequencer, as a Tune release does"
@@ -45031,16 +45624,106 @@ mod tests {
             let mut e = Engine::new("K2DEF", "FN31", 0);
             e.settings.operating_mode = mode;
             e.set_tx_enabled(true);
-            e.observe_rig_tuner(Some(true));
+            e.observe_rig_tuner(Some(true), true);
             e.atu_tune()
                 .unwrap_or_else(|why| panic!("{mode:?}: precondition — ATU accepted: {why}"));
             assert!(
-                e.take_atu_tune_with_reset(|| hits.set(hits.get() + 1)),
+                e.take_atu_tune(),
                 "{mode:?}: the tune-up must still reach the radio"
             );
+            e.note_atu_tune_started_with_reset(|| hits.set(hits.get() + 1));
             assert_eq!(e.tx_enabled(), keeps_tx, "{mode:?}: arm state after ATU");
             assert_eq!(hits.get(), resets, "{mode:?}: a7 table resets");
         }
+    }
+
+    /// ⭐ R4 (operator review, 2026-09-19) — A PRESS IS NOT A TUNE-UP. The stand-down used to
+    /// fire when the loop DRAINED the press, but the loop still drops a tune-up it cannot send
+    /// (a radio handoff in flight, the Test-CAT hold) and the rig can refuse the one it does,
+    /// and neither is re-queued: the QSO ended with nothing tuned. Operator ruling: "TX drops
+    /// and the QSO clears only after the tune-up command actually goes to the radio and it
+    /// accepts it. A press that can't tune leaves your QSO alone."
+    #[test]
+    fn an_atu_press_that_never_tunes_leaves_the_qso_alone() {
+        use std::cell::Cell;
+        let hits = Cell::new(0u32);
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_tx_enabled(true);
+        e.observe_rig_tuner(Some(true), true);
+        e.atu_tune().expect("an armed, idle rig with a tuner");
+
+        assert!(
+            e.take_atu_tune(),
+            "the press is drained for the loop to send"
+        );
+        assert!(
+            e.tx_enabled(),
+            "a press the loop cannot send, or the rig refuses, must leave the QSO alone"
+        );
+        assert_eq!(hits.get(), 0, "and the a7 table with it");
+
+        // …and the radio taking it is what ends the QSO.
+        e.note_atu_tune_started_with_reset(|| hits.set(hits.get() + 1));
+        assert!(
+            !e.tx_enabled(),
+            "an accepted tune-up stands the sequencer down"
+        );
+        assert_eq!(hits.get(), 1, "…and drops the a7 table");
+    }
+
+    /// ⭐ THE ATU BUTTON ON A PATH THAT CANNOT START A TUNE (operator ruling, 2026-09-19:
+    /// "Say it can't, add it natively"). Hamlib's Icom and Kenwood backends clamp
+    /// `set_func TUNER 2` to "switch the tuner in line" and answer `RPRT 0` — so before this,
+    /// an ATU press there switched the tuner in, tuned nothing, and (because the radio "took"
+    /// it) stood the Digital section down mid-QSO. The gate refuses it instead, with a reason
+    /// that names the rig's own TUNER button, and the snapshot says so before the press.
+    #[test]
+    fn an_atu_press_is_refused_where_the_cat_path_cannot_start_a_tune() {
+        for can_start in [true, false] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.set_tx_enabled(true);
+            e.observe_rig_tuner(Some(false), can_start);
+
+            let snap = e.snapshot();
+            assert_eq!(
+                snap.radio.atu,
+                Some(false),
+                "the rig has a tuner either way, so the control stays"
+            );
+            assert_eq!(snap.radio.atu_start_tune_unsupported, !can_start);
+
+            match e.atu_tune() {
+                Ok(()) => assert!(can_start, "CONTROL: a path that can tune is not refused"),
+                Err(why) => {
+                    assert!(
+                        !can_start,
+                        "a path that can tune must not be refused: {why}"
+                    );
+                    assert!(
+                        why.contains("TUNER on the radio itself"),
+                        "the refusal has to say what to do instead — got {why:?}"
+                    );
+                }
+            }
+            assert!(
+                e.take_atu_tune() == can_start,
+                "nothing may reach the radio from a refused press"
+            );
+        }
+    }
+
+    /// A CAT drop clears the tuner capability, and with it this one: the next radio is unknown
+    /// again, and unknown has to mean "as it always was" or a Yaesu would come back disabled.
+    #[test]
+    fn a_cat_drop_forgets_that_the_tuner_could_not_be_started() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.observe_rig_tuner(Some(true), false);
+        assert!(e.snapshot().radio.atu_start_tune_unsupported);
+        e.clear_rig_tuner();
+        assert!(
+            !e.snapshot().radio.atu_start_tune_unsupported,
+            "a stale can't-tune must not follow the operator to the next radio"
+        );
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════
