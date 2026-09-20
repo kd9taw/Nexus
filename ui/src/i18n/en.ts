@@ -4510,6 +4510,17 @@ export const EN = {
   'recall.calling.label': 'Calling {{call}}',
   'recall.calling.title': "Show {{call}}'s card — the station this one is calling",
   'recall.dupe.label': 'Dupe {{band}}',
+  // ⭐ THE CONTEST-SCOPED PAIR, a SECOND verdict beside `recall.dupe.label` above — they
+  // mean different things and both show at once during a contest. The leading word is what
+  // separates them at contest speed: "Dupe 20m" is the lifetime one, "Contest dupe" is the
+  // one that blocks. A translation must keep that first word distinct from the lifetime
+  // badge's, or the two chips read as the same chip twice.
+  'recall.contestDupe.label': 'Contest dupe',
+  'recall.contestDupe.title':
+    'Already in the contest log on {{band}} — logging this again will be refused as a dupe.',
+  'recall.clubDupe.label': 'Club dupe',
+  'recall.clubDupe.title':
+    'Another position already worked them on {{band}} — logging is allowed but adds no points.',
   'recall.dupe.title':
     'Already worked on {{band}} — logging now would be a dupe. Counts any mode on the band unless Settings’ “match mode too” is on.',
   'recall.confirmed.title': '{{confirmed}} of {{count}} prior QSOs confirmed',

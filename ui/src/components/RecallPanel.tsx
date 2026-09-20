@@ -6,6 +6,7 @@
 // DXpedition calendar carries — so they stay here with the rest of the date handling.
 import type { LoggedQso } from '../types'
 import type { CallHistory } from '../features/callHistory'
+import type { ContestDupeVerdict } from '../features/contestDupe'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { gridToLatLon, stationLatLon, distanceLabelAt, bearingLabelAt } from '../grid'
@@ -78,6 +79,17 @@ interface Props {
   hideNote?: string
   /** The card's ⊞ label, for the ✕'s accessible name. */
   paneTitle?: string
+  /** ⭐ THE CONTEST-SCOPED DUPE, a SECOND verdict beside the lifetime `Dupe {band}` badge.
+   *
+   *  The two mean different things and both are wanted. The lifetime badge asks "have I ever
+   *  worked this station on this band" — correct for general operating, and it stays in step
+   *  with the solid B4 chip the roster, the decode feed and the station card show for the same
+   *  station from `worked_band_set`. It lights for a 2019 QSO that is a perfectly fresh contest
+   *  contact, which during a contest is exactly the wrong answer. This one asks the contest
+   *  log: 'own' is the hard block the log will refuse, 'club' is another position's contact
+   *  (a warning, logging still proceeds). Default 'none' — a host outside a contest passes
+   *  nothing and the card is unchanged. */
+  contestDupe?: ContestDupeVerdict
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -122,7 +134,7 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle }: Props) {
+export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -267,6 +279,27 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
           )}
         </div>
         <div className="recall-badges">
+          {/* ⭐ FIRST in the row, and SOLID where the lifetime badge beside it is tinted — the
+              same idiom `.b4-chip.b4-band` already uses in this cockpit's roster and decode
+              feed, where solid means the narrower scope. Two chips both reading "Dupe" in the
+              same red is the misread this ordering and weight exist to prevent: at contest
+              speed the eye takes the solid one first, and that is the one that blocks. */}
+          {contestDupe === 'own' && (
+            <span
+              className="recall-badge contest-dupe"
+              title={t('recall.contestDupe.title', { band: band ?? '' })}
+            >
+              {t('recall.contestDupe.label')}
+            </span>
+          )}
+          {contestDupe === 'club' && (
+            <span
+              className="recall-badge club-dupe"
+              title={t('recall.clubDupe.title', { band: band ?? '' })}
+            >
+              {t('recall.clubDupe.label')}
+            </span>
+          )}
           {hist.dupeThisBand && band && (
             <span className="recall-badge dupe" title={t('recall.dupe.title', { band })}>
               {t('recall.dupe.label', { band })}

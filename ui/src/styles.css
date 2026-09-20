@@ -8029,6 +8029,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--state-weak, #e0a030);
   background: color-mix(in srgb, var(--state-weak, #e0a030) 14%, transparent);
 }
+/* ⭐ THE CONTEST-SCOPED DUPE, which sits BESIDE `.dupe` above during a contest — two chips,
+   two different questions. SOLID where the lifetime one is tinted: the same weight difference
+   `.b4-chip.b4-band` already carries in this cockpit's roster and decode feed, where solid
+   means the narrower scope. Two tinted red chips both leading with "Dupe" is the misread this
+   prevents — at contest speed the eye takes the solid one first, and that is the one whose
+   contact the log will refuse. */
+.recall-badge.contest-dupe {
+  color: var(--bg, #0b0f14);
+  background: var(--state-weak, #ec5b57);
+}
+/* A club key is a WARNING, never a block (N3FJP semantics: logging proceeds, it just scores
+   nothing). Amber and tinted — so severity reads off the colour and scope off the weight. */
+.recall-badge.club-dupe {
+  color: var(--state-ok, #f1ca47);
+  background: color-mix(in srgb, var(--state-ok, #f1ca47) 14%, transparent);
+}
 .recall-hist {
   margin-top: var(--space-2);
   font-size: var(--fs-body);
