@@ -2693,6 +2693,16 @@ export interface FieldDayQso {
    *  which cannot be split back into slots without guessing. Compare a typed candidate
    *  key (built with `dupeRule`) against these. Absent on a build older than the field. */
   dkey?: string[]
+  /** ⭐ This row is a DUPLICATE the ruleset asked us to log anyway, and it scores zero.
+   *
+   *  In the seven cross-checked contests a dupe is logged and zeroed rather than refused,
+   *  so the log carries rows worth nothing. Without this an operator reviewing their log
+   *  cannot tell one from a real contact, nor an intended dupe from a logging mistake.
+   *
+   *  ⚠️ Do NOT re-derive this from repeated callsigns. The engine answers it from the row,
+   *  under the ruleset's own key; a client-side guess got both the key and the semantics
+   *  wrong. **Absent means false** — it is skipped on the wire for ordinary rows. */
+  dupe?: boolean
 }
 
 /** ⭐ The running ruleset's DUPE RULE — what makes a contact count again.

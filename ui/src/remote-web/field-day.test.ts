@@ -51,6 +51,7 @@ it('accepts the ruleset dupe rule and the keys built from it, and bounds all thr
   const fd=(p.meta as Src).source.fieldDay
   fd.dupeRule={byCall:true,byBand:true,byModeClass:true,byFields:['QTH'],bySentFields:['QTH'],modeClassGroups:[['CW','DIG']]}
   ;(fd.log as Record<string,unknown>[])[0].dkey=['W8XYZ','20M','CW','CUYA','MI']
+  ;(fd.log as Record<string,unknown>[])[0].dupe=true
   ;(fd.club as Record<string,unknown>).dkeys=[['K9CLUB','20M','CW']]
   mutate(fd)
   return p
@@ -68,6 +69,7 @@ it('accepts the ruleset dupe rule and the keys built from it, and bounds all thr
   ['a row key component over the string bound',(fd:Record<string,unknown>)=>{(fd.log as Record<string,unknown>[])[0].dkey=['x'.repeat(1025)]}],
   ['a club key over the string bound',(fd:Record<string,unknown>)=>{(fd.club as Record<string,unknown>).dkeys=[['x'.repeat(1025)]]}],
   ['a club key that is not an array',(fd:Record<string,unknown>)=>{(fd.club as Record<string,unknown>).dkeys=['K9CLUB']}],
+  ['a dupe mark that is not a boolean',(fd:Record<string,unknown>)=>{(fd.log as Record<string,unknown>[])[0].dupe='yes'}],
  ] as [string,(fd:Record<string,unknown>)=>void][]) {
   expect(()=>parseFieldDay(page(mutate)),name).toThrow('invalidFieldDay')
  }

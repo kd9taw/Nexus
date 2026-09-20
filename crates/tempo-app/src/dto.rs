@@ -1402,6 +1402,29 @@ pub struct FieldDayQso {
     /// without guessing. The strip compares its typed candidate against these.
     #[serde(default)]
     pub dkey: Vec<String>,
+    /// ⭐ **This row is a DUPLICATE the ruleset asked us to log anyway**, scored zero.
+    ///
+    /// In the seven cross-checked contests (`DupeRule::log_dupes`) a duplicate is logged and
+    /// zeroed rather than refused, because dropping the row is what costs points — the other
+    /// station takes a NIL. So the log now carries rows that score nothing, and without this
+    /// an operator reviewing their log cannot tell one from a real contact, cannot check the
+    /// sponsor's math against their own, and cannot tell an intended dupe from a logging
+    /// mistake. That ambiguity did not exist while a dupe was never logged at all.
+    ///
+    /// ⚠️ **The UI must not re-derive this.** It was doing exactly that, over a fourth copy of
+    /// the dupe key, which got both the key and the semantics wrong (it marked the original
+    /// as well as the duplicate). This is the engine's own answer, from the row itself.
+    ///
+    /// Skipped when false: a 2048-row Remote capture is measured against a byte bound, and
+    /// `"dupe":false` on every ordinary row spends ~28 KB of it saying nothing.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dupe: bool,
+}
+
+/// `skip_serializing_if` for a flag that is false on almost every row. serde needs a path
+/// taking `&bool`, and `Not::not` is not one.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// ⭐ **The running ruleset's dupe rule, as data** — mirrors

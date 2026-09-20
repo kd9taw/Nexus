@@ -87,9 +87,12 @@ function status(v: unknown): void {
     // `dkey` is the row's dupe key under the running ruleset's own rule, built in Rust by the
     // same builder the engine refuses on — the strip compares against it rather than
     // rebuilding a key it cannot (a row's SENT exchange only reaches here as rendered `mex`).
-    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd','dkey'])
+    // `dupe` marks a row the ruleset asked us to LOG rather than refuse, scored zero. Absent
+    // on every ordinary row (skipped when false) and on any build older than the field.
+    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd','dkey','dupe'])
     if (![q.call,q.class,q.section,q.band,q.submode].every(text) || !['CW','PH','DIG'].includes(String(q.mode)) || !integer(q.whenUnix) ||
       (q.dkey !== undefined && !texts(q.dkey,DUPE_KEY_MAX)) ||
+      (q.dupe !== undefined && typeof q.dupe !== 'boolean') ||
       (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
   }
   if (f.club !== undefined && f.club !== null) {

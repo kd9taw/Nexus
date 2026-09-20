@@ -102,6 +102,9 @@ impl Engine {
                     // The strip cannot build it: the rule names sent slots, and a row's
                     // sent exchange reaches the UI only as the rendered `mex`.
                     dkey: rs.dupe_rule.key(q),
+                    // ⭐ The engine's own answer about this row, so the log table marks a
+                    // zero-scoring dupe instead of guessing at one from a repeated callsign.
+                    dupe: q.dupe,
                 })
                 .collect(),
             // The club block, plus the generalised keys `fd_club_dto` does not carry —
@@ -573,6 +576,71 @@ mod tests {
             wire["club"]["dupes"],
             serde_json::json!([["K1ABC", "20m", "CW"]])
         );
+    }
+
+    /// ⭐ **A LOGGED DUPE MUST SAY SO ON THE WIRE.** In the seven cross-checked contests a
+    /// duplicate is now logged and scored zero rather than refused, so the contest log table
+    /// gained rows that score nothing. Without a flag on the row the operator reviewing their
+    /// log after the event cannot tell a zero-scoring dupe from a real contact, cannot check
+    /// the sponsor's math against their own, and cannot tell an intended dupe from a logging
+    /// mistake — an ambiguity that did not exist while a dupe was never logged at all.
+    ///
+    /// The UI must not re-derive this. It had been doing exactly that, over a fourth copy of
+    /// the key, which is what the row flag replaces.
+    #[test]
+    fn a_logged_dupe_says_so_on_the_row_and_field_day_still_has_none_to_say_it_about() {
+        let mut e = Engine::with_settings(crate::settings::Settings {
+            mycall: "W1ABC".into(),
+            fd_active: true,
+            fd_event: "arrlss_cw".into(),
+            contest_check: "68".into(),
+            fd_section: "EMA".into(),
+            contest_category_assisted: "NON-ASSISTED".into(),
+            contest_category_power: "LOW".into(),
+            ..Default::default()
+        });
+        e.restore_field_day_if_enabled();
+        let ex = |nr: &str| {
+            vec![
+                ("NR".to_string(), nr.to_string()),
+                ("PREC".to_string(), "A".to_string()),
+                ("CALL".to_string(), "K9XYZ".to_string()),
+                ("CK".to_string(), "72".to_string()),
+                ("SEC".to_string(), "IL".to_string()),
+            ]
+        };
+        // The same station twice. Sweepstakes works a station ONCE — neither band nor mode
+        // class is in its key — so the second is a dupe by the ruleset's own rule, and its
+        // `log_dupes` says the sponsor wants it in the log rather than refused.
+        assert!(e.contest_log_manual("K9XYZ", &ex("1"), "CW", None).unwrap());
+        assert!(e.contest_log_manual("K9XYZ", &ex("2"), "CW", None).unwrap());
+        let wire = serde_json::to_value(e.snapshot().field_day.expect("in SS")).unwrap();
+        assert_eq!(
+            wire["log"].as_array().unwrap().len(),
+            2,
+            "the dupe is LOGGED"
+        );
+        assert_eq!(wire["log"][1]["dupe"], true, "{}", wire["log"][1]);
+        // The ordinary row says nothing rather than saying false — the flag is skipped when
+        // false so it does not spend a Remote capture's byte bound on every real contact.
+        assert!(
+            wire["log"][0].get("dupe").is_none(),
+            "the first contact is real: {}",
+            wire["log"][0]
+        );
+
+        // CONTROL — Field Day REFUSES a dupe rather than logging one, so there is no marked
+        // row to find and the flag stays false. This is the half that must never move: if it
+        // ever reports a dupe row, Field Day has started logging them.
+        let mut e = engine("arrlfd", 1);
+        let Mode::FieldDay { station, .. } = &mut e.mode else {
+            panic!("active")
+        };
+        let before = station.log.qso_count();
+        assert!(!station.log.log_mode_at("K1T0", "2A", "WI", "PH", 99, 1000));
+        let wire = serde_json::to_value(e.snapshot().field_day.unwrap()).unwrap();
+        assert_eq!(wire["log"].as_array().unwrap().len(), before);
+        assert!(wire["log"][0].get("dupe").is_none(), "{}", wire["log"][0]);
     }
 
     #[test]
