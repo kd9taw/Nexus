@@ -135,9 +135,25 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
         country: q.entity.clone(),
         state: None,
         band: q.band.clone(),
-        // No frequency: a contest row records the band, and the ADIF writer omits FREQ
-        // rather than emit a zero that gets the whole record rejected on import.
-        freq_mhz: 0.0,
+        // ⭐ **THE DIAL THE CONTACT WAS WORKED ON.** This was `0.0` under a comment saying
+        // a contest row records the band — which is wrong about the artifact:
+        // [`LoggedQso::freq_khz`] is stamped at log time from the dial, the contest log's
+        // own Cabrillo writes it in place of the band edge, and its ADIF writes `FREQ`
+        // from it. So a whole contest reached the lifetime log — the file that goes to
+        // LoTW, QRZ and ClubLog — with `BAND` and nothing else, and on VHF that loses the
+        // segment: 144.200 SSB and 146.520 FM are both `2m`.
+        //
+        // A row that genuinely has no dial keeps `0.0`, and `logbook::adif_record` omits
+        // the field rather than emit the `<FREQ:8>0.000000` that DXKeeper and Swisslog
+        // reject the whole record over — which is the half of the old comment that was
+        // true, and it still holds.
+        //
+        // ⚠️ Field Day is NOT excepted here, and its own ADIF export still is. That
+        // exception (`FieldDayLog::adif`) is about the contest journal and the submitted
+        // file, both pinned byte for byte by the §8(a) goldens; the lifetime log is a
+        // different artifact with a different job, and an FD contact in it has the same
+        // claim to its frequency as any other.
+        freq_mhz: f64::from(q.freq_khz) / 1000.0,
         freq_rx_mhz: None,
         mode: q.recorded_mode().to_string(),
         // A contest exchange carries no signal report unless its own spec declares one,
@@ -271,6 +287,162 @@ mod tests {
         );
         assert_eq!(rec.mode, "CW");
         assert_eq!(rec.station_callsign.as_deref(), Some("W9XYZ"));
+    }
+
+    /// ⭐ **THE DIAL THE CONTACT WAS WORKED ON REACHES THE LIFETIME LOG** (operator review
+    /// of 1.14.0).
+    ///
+    /// This wrote `freq_mhz: 0.0` under a comment saying a contest row records the band —
+    /// which is wrong about the artifact. [`LoggedQso::freq_khz`] is stamped at log time
+    /// from the dial (`Engine::sync_fd_band`), the contest log's own Cabrillo writes it in
+    /// place of the band edge, and its ADIF writes `FREQ` from it. So a weekend's contacts
+    /// reached the file that goes to LoTW, QRZ and ClubLog carrying `BAND` and nothing
+    /// else — and on VHF that loses the segment: 144.200 SSB and 146.520 FM are both `2m`.
+    ///
+    /// The row that genuinely has no dial still writes no `FREQ`: `adif_record` omits a
+    /// zero rather than emit the `<FREQ:8>0.000000` that Swisslog and DXKeeper reject the
+    /// whole record over.
+    #[test]
+    fn a_merged_row_carries_the_frequency_it_was_worked_on() {
+        // A 2 m FM contact and a 2 m SSB one — the pair the band alone cannot tell apart.
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "2m",
+        );
+        log.dial_khz = 144_200;
+        assert!(log.log_submode_at("K1ABC", "2A", "EMA", "PH", "USB", 0, 1_782_583_500));
+        log.dial_khz = 146_520;
+        assert!(log.log_submode_at("W1AW", "1D", "CT", "PH", "FM", 0, 1_782_583_560));
+        // …and one row that never knew its dial, which must stay silent rather than zero.
+        log.dial_khz = 0;
+        assert!(log.log_mode_at("K2DEF", "1D", "MN", "CW", 0, 1_782_583_620));
+
+        let mut lb = Logbook::new();
+        let r = merge_into_general(&log, "pos", &mut lb);
+        assert_eq!((r.added(), r.already, r.refused), (3, 0, 0));
+        let freqs: Vec<f64> = r.written.iter().map(|w| w.freq_mhz).collect();
+        assert_eq!(freqs, vec![144.2, 146.52, 0.0], "the dial per row");
+
+        let adi: Vec<String> = r.written.iter().map(crate::logbook::adif_record).collect();
+        assert!(adi[0].contains("<FREQ:10>144.200000"), "{}", adi[0]);
+        assert!(adi[1].contains("<FREQ:10>146.520000"), "{}", adi[1]);
+        assert!(
+            !adi[2].contains("<FREQ:"),
+            "a row with no dial must not export a zero frequency: {}",
+            adi[2]
+        );
+        // BAND still rides beside it — FREQ is an addition, not a replacement.
+        for a in &adi {
+            assert!(a.contains("<BAND:2>2m"), "{a}");
+        }
+
+        // ⭐ **AND THE CONTEST LOG'S OWN ADIF KEEPS FIELD DAY'S EXCEPTION.** The journal
+        // and the Field Day export are pinned byte for byte by the §8(a) goldens and must
+        // not grow a column; the lifetime log is a different artifact with a different
+        // job, so the two answers here are deliberately not the same one.
+        assert!(
+            !log.adif().contains("<FREQ:"),
+            "the Field Day contest export must not have grown FREQ: {}",
+            log.adif()
+        );
+    }
+
+    /// …and the same for a contest that is NOT Field Day, which is the half the exception
+    /// above could otherwise be read as covering. A QSO party's own ADIF writes `FREQ`
+    /// today; the merged record must agree with it rather than drop to the band.
+    #[test]
+    fn a_non_field_day_contest_row_agrees_with_its_own_export_about_the_frequency() {
+        let spec = crate::contest::exchanges::qso_party_shaped();
+        let mut session = ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        session.exchange = spec;
+        let mut log = FieldDayLog::new("W4TN", session, "20m");
+        log.dial_khz = 14_253;
+        let v = |key: &'static str, raw: &str| crate::contest::FieldValue {
+            key: spec.field(key).expect("declared slot").key,
+            raw: raw.to_string(),
+            domain: None,
+        };
+        assert!(log.log_exchange_at(
+            "W1AW",
+            vec![v("RST", "59"), v("QTH", "CT")],
+            vec![v("RST", "59"), v("QTH", "WIL")],
+            "PH",
+            "USB",
+            0,
+            1_782_583_500,
+        ));
+        // The contest log's own export carries the dial…
+        assert!(
+            log.adif().contains("<FREQ:6>14.253"),
+            "the contest export lost the dial: {}",
+            log.adif()
+        );
+        // …and so does the record the lifetime log keeps, to the same kHz.
+        let mut lb = Logbook::new();
+        let r = merge_into_general(&log, "pos", &mut lb);
+        assert_eq!(r.added(), 1);
+        assert_eq!(r.written[0].freq_mhz, 14.253);
+        assert!(
+            crate::logbook::adif_record(&r.written[0]).contains("<FREQ:9>14.253000"),
+            "{}",
+            crate::logbook::adif_record(&r.written[0])
+        );
+    }
+
+    /// ⭐ **A merged PHONE row says which sideband, and an FM one says FM.**
+    ///
+    /// The mode a merged record carries is [`LoggedQso::recorded_mode`], and it reaches
+    /// the file through the general log's own writer — so the pairing is the one
+    /// `logbook::adif_submode` has used since 2026-09-15 and the two exports of one
+    /// contact cannot disagree.
+    ///
+    /// ⚠️ **This one was GREEN before the fix, and saying so is the point.** It hands the
+    /// row a submode itself, and this layer always carried one through; the defect was
+    /// that no row ever GOT one — `Engine::fd_log_manual` passed `submode: None` for
+    /// every phone contact. The test that was red is
+    /// `engine::tests::a_contest_phone_contact_records_the_mode_that_was_actually_on_the_air`.
+    /// What this pins is the seam below it: that the merge keeps reading `recorded_mode`
+    /// and the writer keeps pairing it, so a phone row cannot lose its mode BETWEEN the
+    /// contest log and the lifetime log.
+    #[test]
+    fn a_merged_phone_row_carries_the_sideband_the_contact_was_worked_on() {
+        for (band, submode, golden) in [
+            ("40m", "LSB", "<MODE:3>SSB<SUBMODE:3>LSB"),
+            ("20m", "USB", "<MODE:3>SSB<SUBMODE:3>USB"),
+            ("2m", "FM", "<MODE:2>FM"),
+        ] {
+            let mut log = FieldDayLog::new(
+                "W9XYZ",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                band,
+            );
+            assert!(log.log_submode_at("K1ABC", "2A", "EMA", "PH", submode, 0, 1_782_583_500));
+            let mut lb = Logbook::new();
+            let r = merge_into_general(&log, "pos", &mut lb);
+            assert_eq!(r.added(), 1);
+            let out = crate::logbook::adif_record(&r.written[0]);
+            assert!(
+                out.contains(golden),
+                "{submode} must ride as {golden}: {out}"
+            );
+            assert!(
+                !out.contains("<MODE:3>USB") && !out.contains("<MODE:3>LSB"),
+                "{submode} put the bare sideband in MODE: {out}"
+            );
+        }
+        // POSITIVE CONTROL: a row with no recorded phone mode still merges as plain SSB
+        // with no submode — the legacy answer, unchanged, and what makes the three above
+        // a statement about the ROW rather than about a writer that always adds one.
+        let log = fd_log(); // K1ABC on CW, W1AW on PH with no submode
+        let mut lb = Logbook::new();
+        let r = merge_into_general(&log, "pos", &mut lb);
+        let out = crate::logbook::adif_record(&r.written[1]);
+        assert!(out.contains("<MODE:3>SSB"), "{out}");
+        assert!(
+            !out.contains("<SUBMODE:"),
+            "no sideband was ever observed: {out}"
+        );
     }
 
     /// ⭐ §3.2 — merging twice writes nothing the second time.

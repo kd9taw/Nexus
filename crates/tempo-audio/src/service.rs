@@ -10842,8 +10842,24 @@ fn fd_interop_mode(mode: &str, submode: &str) -> String {
     // The recorded ACTUAL mode wins — a WFD RTTY QSO must push as RTTY, never
     // as FT8 (a banned mode there). Rows without one (legacy journals, CW/PH)
     // keep the historical class map, byte-identical to what always shipped.
+    //
+    // ⚠️ **A PHONE row's SIDEBAND is collapsed back to its ADIF Mode here, and only
+    // here.** Since the phone-mode fix a `PH` row records `USB`/`LSB`/`FM`/`AM`; USB and
+    // LSB are ADIF *SUBMODEs* and this wire has no submode column to carry one (the same
+    // gap `tier_mode` describes for FT2), so a bare sideband would be a mode word N1MM
+    // and N3FJP have never been sent from here and that this build cannot check against
+    // either program. `SSB` is what they already received for those contacts.
+    //
+    // `FM` and `AM` are Modes in their own right and DO ride: an FM Field Day contact
+    // pushed as `SSB` was a claim about the air that nobody made, which is the operator's
+    // own report, and it was wrong on this wire for the same reason it was wrong in the
+    // .adi.
     if !submode.is_empty() {
-        return submode.to_string();
+        return match submode {
+            "USB" | "LSB" => "SSB",
+            other => other,
+        }
+        .to_string();
     }
     match mode {
         "CW" => "CW",
@@ -12730,6 +12746,15 @@ mod tests {
         assert_eq!(fd_interop_mode("DIG", ""), "FT8");
         assert_eq!(fd_interop_mode("CW", ""), "CW");
         assert_eq!(fd_interop_mode("PH", ""), "SSB");
+        // ⭐ THE PHONE ROW, both halves. A `PH` row now records which phone mode was on
+        // the air, and the two answers here are deliberately different: FM is an ADIF
+        // *Mode* and rides (pushing an FM contact as SSB was the operator's own report),
+        // while a sideband is an ADIF *SUBMODE* and this wire has nowhere to put one — so
+        // it collapses to the `SSB` both programs already received for those contacts.
+        assert_eq!(fd_interop_mode("PH", "FM"), "FM");
+        assert_eq!(fd_interop_mode("PH", "AM"), "AM");
+        assert_eq!(fd_interop_mode("PH", "USB"), "SSB");
+        assert_eq!(fd_interop_mode("PH", "LSB"), "SSB");
     }
 
     // ── THE INTEROP PROVENANCE FIXTURES (spec §3.3) ───────────────────────────────
