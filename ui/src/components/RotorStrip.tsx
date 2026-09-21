@@ -39,13 +39,18 @@ import { pollSingleFlight } from '../singleFlight'
 const SAT_PLATE = 'SAT'
 const ROTOR_PLATE = 'ROTOR'
 
+/** The on-air abbreviation for the reciprocal heading — an invariant token, like the
+ *  azimuth plates and the true/magnetic marks this strip already carries. */
+const LONG_PATH = 'LP'
+
 export interface RotorStripProps {
   /** Poll/render only while the host cockpit is the active view (defaults on). */
   active?: boolean
   /** A selected station to offer a one-click "point at" slew for. */
   targetCall?: string | null
-  /** Slew the rotator toward targetCall (the host wires pointRotatorAtCall). */
-  onPointAt?: (call: string) => void
+  /** Slew the rotator toward targetCall (the host wires pointRotatorAtCall).
+   *  `longPath` takes the reciprocal heading; absent or false is short path. */
+  onPointAt?: (call: string, longPath?: boolean) => void
   /** Open Settings at a section id. Given one, the "not answering" chip becomes the way to
    * the rotator's model/port instead of a tooltip naming where to go looking; without one
    * (a host that cannot navigate) the chip stays the plain indicator it has always been. */
@@ -470,14 +475,35 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
         </span>
       )}
       {targetCall && onPointAt && (
-        <button
-          type="button"
-          style={chipStyle}
-          onClick={() => onPointAt(targetCall)}
-          title={t('rotor.strip.pointAt.title', { call: targetCall })}
-        >
-          → {targetCall}
-        </button>
+        <>
+          <button
+            type="button"
+            style={chipStyle}
+            onClick={() => onPointAt(targetCall, false)}
+            title={t('rotor.strip.pointAt.title', { call: targetCall })}
+          >
+            → {targetCall}
+          </button>
+          {/* ⭐ LONG PATH (#338) — DESKTOP ONLY, deliberately. The browser branch above keeps
+              the short-path button alone: Remote parity is deferred, and putting a control
+              there would be exactly the parity work that was excluded. It is also the wrong
+              surface — both testers asked from the desktop Phone/CW/FT tabs.
+              A SEPARATE button rather than a modifier on the one beside it, because
+              `grid.ts::azimuthTitle` already names the hazard: every bearing Nexus shows is
+              short path and says so out loud, since "a chaser who assumes long path on a low
+              band points the beam 180° wrong". A toggle carries a state the operator can
+              misread at a glance; two buttons cannot be, and the toast names which path it
+              took. `LP` is the on-air abbreviation — an invariant token like the azimuth
+              plates beside it, not translated prose. */}
+          <button
+            type="button"
+            style={chipStyle}
+            onClick={() => onPointAt(targetCall, true)}
+            title={t('rotor.strip.pointAtLong.title', { call: targetCall })}
+          >
+            {LONG_PATH}
+          </button>
+        </>
       )}
       <button
         type="button"

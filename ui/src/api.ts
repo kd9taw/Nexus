@@ -2086,9 +2086,10 @@ export async function pointRotator(azDeg: number): Promise<void> {
   return invoke('point_rotator', { azDeg })
 }
 
-/** Point the rotator at a callsign's DXCC entity; resolves to the bearing it pointed to. */
-export async function pointRotatorAtCall(call: string): Promise<number> {
-  return invoke<number>('point_rotator_at_call', { call })
+/** Point the rotator at a callsign's DXCC entity; resolves to the bearing it pointed to.
+ *  `longPath` takes the reciprocal — the same great circle the other way. */
+export async function pointRotatorAtCall(call: string, longPath = false): Promise<number> {
+  return invoke<number>('point_rotator_at_call', { call, longPath })
 }
 
 /** Current rotator azimuth (degrees), or null if rotctld is unset/unreachable. */
