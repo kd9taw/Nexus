@@ -140,10 +140,17 @@ pub struct LoggedQso {
     pub freq_khz: u32,
     /// Mode class for scoring + per-band-mode dupes: "DIG" | "CW" | "PH".
     pub mode: String,
-    /// The ACTUAL on-air mode behind a "DIG" class (ADIF name, uppercase:
+    /// The ACTUAL on-air mode behind a scoring class (ADIF name, uppercase:
     /// "FT8", "RTTY", "SSTV"…). Empty = not recorded (legacy rows) — exports
     /// fall back to the historical class map. WFD bans the WSJT modes but
     /// allows RTTY/SSTV, so an export must never claim "FT8" for an RTTY QSO.
+    ///
+    /// ⭐ **"PH" carries one too** — `USB` / `LSB` / `FM` / `AM`, the phone mode the
+    /// contact was worked on, because `PH` is a SCORING class and covers all four. Before
+    /// this every contest phone contact exported as bare `SSB`: no row said upper or
+    /// lower, and an FM contact claimed an emission that was never on the air. It is
+    /// filled by `Engine::phone_on_air_mode`, whose ⛔ rule is the general log's own —
+    /// **the sideband comes from the rig or not at all**, never from the band default.
     pub submode: String,
     pub slot: u64,
     /// Unix seconds when the contact was logged — Cabrillo requires a real
@@ -190,6 +197,13 @@ impl LoggedQso {
     /// was worked on**: the contest ADIF journal and the general-log merge both answer
     /// this question, and a row exported as RTTY in one and FT8 in the other is a
     /// contact the operator cannot reconcile afterwards.
+    ///
+    /// ⚠️ **The class map below is the NO-EVIDENCE answer, not the phone answer.** `PH`
+    /// is a scoring class covering SSB, AM and FM; a row that recorded which of them was
+    /// on the air says so in [`submode`](Self::submode) and that wins here. `SSB` is what
+    /// a row with nothing recorded still claims — the legacy rows, and a contact worked
+    /// with no rig read-back to say which sideband — and inventing one from the band
+    /// would be the claim nobody can check afterwards.
     pub fn recorded_mode(&self) -> &str {
         if self.submode.is_empty() {
             match self.mode.as_str() {
@@ -484,7 +498,16 @@ impl FieldDayLog {
     ) -> bool {
         // The "DIG" class covers many on-air modes, so a digital entry stamps
         // [`current_submode`](Self::current_submode) (what the engine says is
-        // actually keyed). CW/PH ARE their on-air mode — no submode.
+        // actually keyed). CW IS its on-air mode and needs no submode.
+        //
+        // ⚠️ **"PH" is NOT filled here, and that is deliberate.** It covers SSB, AM and
+        // FM, so it needs one too — but `current_submode` tracks the FT tier alone, and
+        // reading it here would stamp "FT8" on a phone contact. The evidence for a phone
+        // row (the rig's read-back, the station's commanded class) lives above this crate,
+        // so the caller that HAS it passes it to [`log_submode_at`](Self::log_submode_at)
+        // — `Engine::phone_on_air_mode`, through `fd_log_manual`. A caller with no such
+        // evidence lands here and the row keeps the class alone, which
+        // [`LoggedQso::recorded_mode`] exports as plain `SSB`, exactly as it always did.
         let submode = if mode.eq_ignore_ascii_case("DIG") {
             self.current_submode.clone()
         } else {
@@ -941,9 +964,27 @@ impl FieldDayLog {
         // ADIF MODE → (mode class, actual mode): the reverse of the map in
         // [`adif`](Self::adif) — keep the two in step. A digital MODE keeps its
         // identity as the submode so RTTY/SSTV rows survive the round-trip.
+        //
+        // ⭐ **The PHONE family is three MODEs, not one, and that is why `SSB` cannot be
+        // the whole of it.** `adif` writes a phone row's recorded mode through
+        // `logbook::adif_submode`, which pairs `USB`/`LSB` as `<MODE:3>SSB` +
+        // `<SUBMODE>` and lets `FM` and `AM` ride as MODEs of their own. Reading `MODE`
+        // alone therefore dropped the sideband on every restart — and filed an FM
+        // contact as a `DIG` row, which is the wrong mode class, the wrong dupe bucket
+        // and TWO points instead of the one a phone QSO is worth.
+        //
+        // Only the two REGISTERED sideband spellings are adopted from `SUBMODE`: the
+        // value goes back out through that same cascade on the next export, so an
+        // unrecognised one would re-emit as a bare invalid `<MODE>` and be dropped.
+        let sideband = f
+            .get("SUBMODE")
+            .map(|s| s.trim().to_ascii_uppercase())
+            .filter(|s| s == "USB" || s == "LSB")
+            .unwrap_or_default();
         let (mode, submode) = match f.get("MODE").map(|m| m.to_ascii_uppercase()) {
             Some(m) if m == "CW" => ("CW", String::new()),
-            Some(m) if m == "SSB" => ("PH", String::new()),
+            Some(m) if m == "SSB" => ("PH", sideband),
+            Some(m) if m == "FM" || m == "AM" => ("PH", m),
             Some(m) => ("DIG", m),
             None => ("DIG", String::new()),
         };
@@ -1489,12 +1530,23 @@ fn cabrillo_category_band(qsos: &[LoggedQso]) -> String {
 }
 
 /// Cabrillo `CATEGORY-MODE` for a log, from the modes its rows were worked in: one mode
-/// names itself (`CW`, `SSB`, `RTTY`, `DIGI` for any other digital mode), more than one is
-/// `MIXED`, and an empty log writes no header.
+/// names itself (`CW`, `SSB`, `FM`, `RTTY`, `DIGI` for any other digital mode), more than
+/// one is `MIXED`, and an empty log writes no header.
 fn cabrillo_category_mode(qsos: &[LoggedQso]) -> String {
     let mut kinds = qsos.iter().map(|q| match q.mode.as_str() {
         "CW" => "CW",
-        "PH" => "SSB",
+        // ⭐ FM IS A CLASS, NOT A SIDE, and Cabrillo has a token for it. `PH` is the
+        // SCORING class — it covers SSB, AM and FM alike — so it cannot name the entry's
+        // mode by itself, and an FM-only log declared `CATEGORY-MODE: SSB`. The V3
+        // enumeration is `CW / DIGI / FM / RTTY / SSB / MIXED`: there is no `AM` token,
+        // so AM rides as the phone one, which is the closest legal claim.
+        "PH" => {
+            if q.submode == "FM" {
+                "FM"
+            } else {
+                "SSB"
+            }
+        }
         _ if q.submode == "RTTY" => "RTTY",
         _ => "DIGI",
     });
@@ -2165,6 +2217,182 @@ mod tests {
             .cabrillo(14_080)
             .expect("a single-mode event exports one entry")
             .contains(" RY "));
+    }
+
+    /// ⭐ **A PHONE CONTEST CONTACT CARRIES THE MODE IT WAS WORKED ON, THROUGH BOTH
+    /// EXPORTS AND THROUGH THE JOURNAL** (operator review of 1.14.0).
+    ///
+    /// `PH` is a SCORING CLASS, not a mode — one point either event, and it covers SSB,
+    /// AM and FM alike. The general log has recorded the actual phone mode since
+    /// 2026-09-15 (`logbook::adif_submode`: `<MODE:3>SSB` + `<SUBMODE:3>USB`, the ADIF
+    /// 3.0.4/3.1.7 pairing), and the contest path was left standing: every phone row
+    /// exported as bare `SSB`, so no contest contact said upper or lower and an FM
+    /// contact claimed an emission that was never on the air.
+    ///
+    /// ⚠️ **The half that had to move HERE is the journal READER.** [`Self::adif`] already
+    /// wrote the recorded mode through `adif_submode`; `restore_row` inverted `MODE`
+    /// alone, so a restart dropped the sideband — and filed `<MODE:2>FM` as a `DIG` row,
+    /// which is the wrong mode class, the wrong dupe bucket and TWO points instead of one.
+    #[test]
+    fn a_phone_contact_carries_its_on_air_mode_through_the_exports_and_the_journal() {
+        let fresh = || {
+            FieldDayLog::new(
+                "W9XYZ",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                "40m",
+            )
+        };
+        for (submode, golden) in [
+            ("LSB", "<MODE:3>SSB <SUBMODE:3>LSB "),
+            ("USB", "<MODE:3>SSB <SUBMODE:3>USB "),
+            ("FM", "<MODE:2>FM "),
+            ("AM", "<MODE:2>AM "),
+        ] {
+            let mut log = fresh();
+            assert!(log.log_submode_at("K1ABC", "2A", "EMA", "PH", submode, 0, 1_782_583_500));
+            let adif = log.adif();
+            assert!(
+                adif.contains(golden),
+                "{submode} must ride as {golden}: {adif}"
+            );
+            // ⛔ The bare sideband must never reach MODE — that is the record TQSL drops
+            // on the closed Mode enumeration, exactly as a bare `<MODE:9>TempoFast` is.
+            assert!(
+                !adif.contains("<MODE:3>USB") && !adif.contains("<MODE:3>LSB"),
+                "{submode} emitted the bare invalid mode: {adif}"
+            );
+            // The SCORING CLASS is untouched: phone is one point whatever the emission,
+            // and the Cabrillo QSO line writes the class, never the mode.
+            assert_eq!(
+                log.qso_points(),
+                1,
+                "{submode} is still a one-point phone QSO"
+            );
+            let cab = log
+                .cabrillo(7_074)
+                .expect("a single-mode event exports one entry");
+            assert!(cab.contains(" PH "), "{submode} keeps the PH token: {cab}");
+
+            // …and a restart restores the SAME row — class, mode and points.
+            let mut back = fresh();
+            back.merge_adif(&adif, 0);
+            assert_eq!(back.qso_count(), 1, "{submode} row lost on restore");
+            let q = &back.qsos()[0];
+            assert_eq!(
+                (q.mode.as_str(), q.submode.as_str()),
+                ("PH", submode),
+                "{submode}: the journal round trip lost the phone mode"
+            );
+            assert_eq!(
+                back.qso_points(),
+                1,
+                "{submode}: a restored phone row is one point"
+            );
+            assert!(
+                back.adif().contains(golden),
+                "{submode}: re-export after a restart lost it: {}",
+                back.adif()
+            );
+        }
+
+        // POSITIVE CONTROL, and it is what keeps the round trip above from passing under a
+        // reader that answers `("PH", <whatever MODE said>)` for everything. A row with NO
+        // recorded phone mode — every row logged before this existed — keeps the legacy
+        // class map exactly: bare `SSB`, no `SUBMODE`, and it restores with an EMPTY
+        // submode rather than acquiring "SSB" as though the sideband had been observed.
+        let mut legacy = fresh();
+        assert!(legacy.log_mode_at("W1AW", "1D", "CT", "PH", 0, 1_782_583_560));
+        let adif = legacy.adif();
+        assert!(adif.contains("<MODE:3>SSB "), "{adif}");
+        assert!(
+            !adif.contains("<SUBMODE:"),
+            "no sideband was observed: {adif}"
+        );
+        let mut back = fresh();
+        back.merge_adif(&adif, 0);
+        assert_eq!(
+            (
+                back.qsos()[0].mode.as_str(),
+                back.qsos()[0].submode.as_str()
+            ),
+            ("PH", ""),
+            "a legacy phone row must not invent evidence it never had"
+        );
+        // …and CW and digital are not phone and must not be dragged through the phone arm.
+        let mut other = fresh();
+        assert!(other.log_mode_at("K2DEF", "1D", "EMA", "CW", 0, 1_782_583_620));
+        assert!(other.log_submode_at("K3GHI", "1D", "EMA", "DIG", "RTTY", 0, 1_782_583_680));
+        let mut back = fresh();
+        back.merge_adif(&other.adif(), 0);
+        assert_eq!(
+            back.qsos()
+                .iter()
+                .map(|q| (q.mode.as_str(), q.submode.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("CW", ""), ("DIG", "RTTY")],
+            "the phone arm must not swallow CW or a digital row"
+        );
+    }
+
+    /// ⭐ **Cabrillo's `CATEGORY-MODE` has an `FM` token, and an FM log must use it.**
+    ///
+    /// The header is derived from the rows' own modes, and it read the scoring CLASS: `PH`
+    /// answered `SSB` for every phone row, so an FM-only log declared an SSB entry. The
+    /// Cabrillo V3 enumeration is `CW / DIGI / FM / RTTY / SSB / MIXED` — there is no `AM`
+    /// token, so AM rides as the phone token `SSB`, which is the closest legal claim.
+    ///
+    /// ⚠️ **Asserted on the function rather than on an exported file, because the header is
+    /// not reachable from one today** (checked 2026-09-20): `cabrillo_with` writes it only
+    /// for a ruleset whose `cabrillo.headers` lists it, and of the seventeen shipped
+    /// rulesets exactly one does — `cqww_rtty`, which is RTTY-only. The three ARRL VHF
+    /// rulesets, where an FM entry is ordinary, declare no headers at all. So this fixes
+    /// the derivation before the first ruleset that could print it lands.
+    #[test]
+    fn the_cabrillo_category_mode_names_fm_rather_than_calling_it_ssb() {
+        let rows = |modes: &[(&str, &str)]| -> String {
+            let mut log = FieldDayLog::new(
+                "W9XYZ",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                "2m",
+            );
+            for (i, (mode, submode)) in modes.iter().enumerate() {
+                assert!(log.log_submode_at(
+                    &format!("K{i}ABC"),
+                    "2A",
+                    "EMA",
+                    mode,
+                    submode,
+                    0,
+                    1_782_583_500 + i as u64,
+                ));
+            }
+            cabrillo_category_mode(log.qsos())
+        };
+        assert_eq!(rows(&[("PH", "FM"), ("PH", "FM")]), "FM", "an FM-only log");
+        assert_eq!(
+            rows(&[("PH", "USB"), ("PH", "LSB")]),
+            "SSB",
+            "both sidebands are SSB"
+        );
+        assert_eq!(
+            rows(&[("PH", "")]),
+            "SSB",
+            "a row with no recorded mode is SSB"
+        );
+        assert_eq!(rows(&[("PH", "AM")]), "SSB", "Cabrillo has no AM token");
+        // The discriminating case, and the reason this is not one assertion: FM and SSB in
+        // one log is MIXED, which is only visible once the two stop being the same answer.
+        assert_eq!(rows(&[("PH", "FM"), ("PH", "USB")]), "MIXED");
+        // …and the arms that already worked still do.
+        assert_eq!(rows(&[("CW", "")]), "CW");
+        assert_eq!(rows(&[("DIG", "RTTY")]), "RTTY");
+        assert_eq!(rows(&[("DIG", "FT8")]), "DIGI");
+        assert_eq!(rows(&[("CW", ""), ("PH", "USB")]), "MIXED");
+        assert_eq!(
+            cabrillo_category_mode(&[]),
+            "",
+            "an empty log writes no header"
+        );
     }
 
     #[test]

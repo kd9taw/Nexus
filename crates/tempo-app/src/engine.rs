@@ -9358,6 +9358,84 @@ impl Engine {
         self.fd_log_contact(call, class, section, mode, Some(submode))
     }
 
+    /// ⭐ **The ADIF mode a PHONE contact is actually being worked on** — `"USB"`,
+    /// `"LSB"`, `"FM"`, `"AM"`, or `""` when there is no evidence beyond the scoring
+    /// class.
+    ///
+    /// `PH` is a SCORING class: it is one point either Field Day event and it covers SSB,
+    /// AM and FM alike. Until this existed the contest log was handed nothing else, so
+    /// every phone contact of a weekend exported as bare `SSB` — no row said upper or
+    /// lower, and an FM contact claimed an emission that was never on the air.
+    ///
+    /// **It is the general log's own answer for the same contact** (`PhoneCockpit`'s
+    /// `logMode`, operator report 2026-09-15), matched rather than re-invented, because
+    /// the two exports of one contact must not disagree: `logbook::adif_submode` turns
+    /// `USB`/`LSB` into `<MODE:3>SSB<SUBMODE:3>USB` — the ADIF 3.0.4/3.1.7 pairing — at
+    /// whichever file the row reaches.
+    ///
+    /// ⛔ **THE SIDEBAND COMES FROM THE RIG OR NOT AT ALL.** The AUTO sideband is a BAND
+    /// DEFAULT (LSB below 10 MHz), and writing that into a permanent record invents the
+    /// operator's sideband from the band — the one claim nobody can check afterwards,
+    /// because the rig may have been on the other one all along. Without CAT, or with the
+    /// rig sitting where the read-back names no phone mode, there IS no evidence and the
+    /// row keeps its class alone: plain `SSB`, exactly as before and no worse than the
+    /// report.
+    ///
+    /// FM and AM are not sidebands — they are the station's own commanded class — so they
+    /// are asked through the two predicates that already own that question
+    /// ([`Self::phone_fm_in_force`], [`Self::am_in_force`]) rather than a third copy that
+    /// could drift from what the radio is actually COMMANDED.
+    fn phone_on_air_mode(&self) -> &'static str {
+        // The rig's own read-back wins where there is one: the emission that went out is
+        // the rig's, not the one Nexus asked for. Believed on the same two gates the
+        // cockpit's mismatch chip is shown on — `cat_ok`, and a non-empty read — and
+        // `rig_mode` is cleared both by a commanded retune and by a dropped link, so a
+        // stale value cannot outlive either.
+        if self.cat_status.0 == Some(true) {
+            let rig = self
+                .rig_mode
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_uppercase();
+            // Collapse the FM variants (FMN/WFM), exactly as the cockpit badge does. A
+            // rig in CW, RTTY or a PKT/DATA submode names no phone mode at all, so it is
+            // not evidence about one and falls through to the commanded class below.
+            match if rig.starts_with("FM") || rig.starts_with("WFM") {
+                "FM"
+            } else {
+                rig.as_str()
+            } {
+                "USB" => return "USB",
+                "LSB" => return "LSB",
+                "FM" => return "FM",
+                "AM" => return "AM",
+                _ => {}
+            }
+        }
+        if self.phone_fm_in_force(&self.settings.band, self.settings.dial_mhz) {
+            return "FM";
+        }
+        if self.am_in_force() {
+            return "AM";
+        }
+        ""
+    }
+
+    /// The submode a contest row should carry when its caller named none — the phone mode
+    /// for a `PH` class, and nothing for any other.
+    ///
+    /// A `DIG` row deliberately gets nothing here: it fills its own from
+    /// `FieldDayLog::current_submode`, which tracks the FT tier, and a caller working a
+    /// mode that tier cannot name (RTTY, PSK) says so explicitly through
+    /// [`Self::fd_log_manual_submode`]. `CW` IS its on-air mode and needs none.
+    fn contest_phone_submode(&self, mode: &str, given: Option<&str>) -> Option<&'static str> {
+        if given.is_some() || !mode.eq_ignore_ascii_case("PH") {
+            return None;
+        }
+        Some(self.phone_on_air_mode()).filter(|m| !m.is_empty())
+    }
+
     /// The one Field Day write seam behind both of the above: stamp the REAL
     /// band (a knob-QSY between contacts), funnel through the log's own
     /// methods — which own the dupe check and the per-position sequence number
@@ -9372,6 +9450,10 @@ impl Engine {
     ) -> Result<bool, String> {
         self.sync_fd_band(); // a knob-QSY between contacts must stamp the REAL band
         let now = now_unix_secs();
+        // The phone mode behind a "PH" class, resolved BEFORE the log is borrowed — the
+        // evidence for it (the rig's read-back, the station's commanded class) lives out
+        // here, which is exactly why the row used to leave without it.
+        let submode = submode.or(self.contest_phone_submode(mode, submode));
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Field Day mode is not active".into());
         };
@@ -9404,6 +9486,10 @@ impl Engine {
     ) -> Result<bool, String> {
         self.sync_fd_band(); // a knob-QSY between contacts must stamp the REAL band
         let now = now_unix_secs();
+        // The phone mode behind a "PH" class, on the same terms as `fd_log_contact` —
+        // one derivation, so the two manual entry points cannot record a contact
+        // differently depending on which exchange shape it was logged through.
+        let submode = submode.or(self.contest_phone_submode(mode, submode));
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Contest mode is not active".into());
         };
@@ -34774,6 +34860,92 @@ mod tests {
             adif.contains("<BAND:3>20m"),
             "the catch-up contact is filed on the dial's band, not 70 cm — \
              if a caller can now name the band, delete the guide's caveat: {adif}"
+        );
+    }
+
+    /// ⭐ **A CONTEST PHONE CONTACT RECORDS THE MODE THAT WAS ACTUALLY ON THE AIR**
+    /// (operator review of 1.14.0).
+    ///
+    /// `PH` is the SCORING class, and it was the only thing this seam handed the contest
+    /// log: `fd_log_manual` passed `submode: None`, so every phone contact of a weekend
+    /// exported as bare `SSB` with no sideband, and an FM contact — also class `PH` —
+    /// claimed an emission that was never on the air. The evidence was in hand on the same
+    /// call, which is what made it a seam defect rather than a missing feature.
+    ///
+    /// ⛔ **THE SIDEBAND COMES FROM THE RIG OR NOT AT ALL**, and that is the general log's
+    /// own rule (`PhoneCockpit`'s `logMode`, 2026-09-15), matched here rather than
+    /// re-invented. The AUTO sideband is a BAND DEFAULT — writing it into a permanent
+    /// record invents the operator's sideband from the band, which is exactly the claim
+    /// nobody can check afterwards. FM and AM are not sidebands: they are the station's
+    /// own commanded class, so they ride through without a read-back.
+    #[test]
+    fn a_contest_phone_contact_records_the_mode_that_was_actually_on_the_air() {
+        /// An engine in Field Day, on `band` at `dial_mhz`, in the Phone section.
+        fn fd(dial_mhz: f64, band: &str, sideband: &str) -> Engine {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            e.settings.operating_mode = crate::settings::OperatingMode::Phone;
+            e.set_frequency(dial_mhz, band, sideband);
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+            e
+        }
+
+        // 40 m LSB and 20 m USB — the rig is read back over a healthy CAT link, which is
+        // the only evidence of a sideband there is.
+        for (dial, band, rig, golden) in [
+            (7.185, "40m", "LSB", "<MODE:3>SSB <SUBMODE:3>LSB "),
+            (14.285, "20m", "USB", "<MODE:3>SSB <SUBMODE:3>USB "),
+        ] {
+            let mut e = fd(dial, band, rig);
+            e.set_cat_status(Some(true), "up".into());
+            e.observe_rig_mode(rig.to_string());
+            assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "PH").unwrap());
+            let adif = e.field_day_log_adif().expect("an FD log to flush");
+            assert!(adif.contains(golden), "{band} {rig}: {adif}");
+        }
+
+        // 2 m FM, with NO CAT at all: FM is the station's commanded class (the Phone
+        // section's `phone_mode` policy), not a sideband read off a radio, so it is
+        // recorded on evidence that does not need a read-back.
+        let mut e = fd(146.520, "2m", "FM");
+        e.settings.phone_mode = "fm".into();
+        assert!(e.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+        let adif = e.field_day_log_adif().expect("an FD log to flush");
+        assert!(
+            adif.contains("<MODE:2>FM "),
+            "an FM contact must not export as SSB: {adif}"
+        );
+
+        // ⛔ …and WITHOUT the rig, a sideband is not invented. 40 m AUTO is LSB, and that
+        // is a band default: the contact logs as plain SSB, exactly as it did before, and
+        // no worse than the report.
+        let mut e = fd(7.185, "40m", "LSB");
+        assert!(e.fd_log_manual("K5ABC", "3A", "STX", "PH").unwrap());
+        let adif = e.field_day_log_adif().expect("an FD log to flush");
+        assert!(adif.contains("<MODE:3>SSB "), "{adif}");
+        assert!(
+            !adif.contains("<SUBMODE:"),
+            "no rig said which sideband — none may be claimed: {adif}"
+        );
+
+        // CW and digital are untouched: their class IS their on-air mode, and a digital
+        // row still fills its submode from the tier the way it always did.
+        let mut e = fd(7.030, "40m", "LSB");
+        e.set_cat_status(Some(true), "up".into());
+        e.observe_rig_mode("CW".into());
+        assert!(e.fd_log_manual("K2DEF", "1D", "MN", "CW").unwrap());
+        assert!(e
+            .fd_log_manual_submode("K3GHI", "1D", "MN", "DIG", "RTTY")
+            .unwrap());
+        let adif = e.field_day_log_adif().expect("an FD log to flush");
+        assert!(adif.contains("<MODE:2>CW "), "{adif}");
+        assert!(adif.contains("<MODE:4>RTTY "), "{adif}");
+        assert!(
+            !adif.contains("<SUBMODE:"),
+            "neither CW nor RTTY needs one, and neither may acquire the phone answer: {adif}"
         );
     }
 

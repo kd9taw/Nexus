@@ -91,8 +91,8 @@ pub struct CabrilloHeaders {
     /// `CATEGORY-BAND` — `ALL`, or the one band a single-band log holds (`20M`).
     /// Optional: `""` writes no line.
     pub category_band: String,
-    /// `CATEGORY-MODE` — `CW` / `SSB` / `RTTY` / `DIGI` / `MIXED`, from the log's rows.
-    /// Optional: `""` writes no line.
+    /// `CATEGORY-MODE` — `CW` / `SSB` / `FM` / `RTTY` / `DIGI` / `MIXED`, from the log's
+    /// rows. Optional: `""` writes no line.
     pub category_mode: String,
     /// `CATEGORY-POWER` — `HIGH` / `LOW` / `QRP`, as the entry declared it. Optional:
     /// `""` writes no line.

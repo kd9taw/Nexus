@@ -2679,8 +2679,10 @@ export interface FieldDayQso {
   section: string
   band: string  /** Scoring class: 'DIG' | 'CW' | 'PH'. */
   mode?: string
-  /** The ACTUAL on-air mode behind a 'DIG' row (RTTY, FT4, SSTV…). Empty/absent for CW/PH —
-   *  their class IS the mode — and for rows logged before submode was recorded. */
+  /** The ACTUAL on-air mode behind the scoring class — 'RTTY'/'FT4'/'SSTV'… behind 'DIG', and
+   *  'USB'/'LSB'/'FM'/'AM' behind 'PH', which covers all four. Empty/absent for CW (its class IS
+   *  the mode), for rows logged before submode was recorded, and for a phone contact worked with
+   *  no CAT read-back to say which sideband — Nexus never guesses one from the band. */
   submode?: string
   whenUnix?: number
   /** ⭐ The exchange THIS CONTACT SENT, rendered in Rust from the row itself.

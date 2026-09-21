@@ -5,6 +5,29 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A contest phone contact now records which sideband, and an FM one is no longer logged as
+  SSB.** The contest log filed every phone contact under its scoring class and nothing else, so
+  the exported `.adi` said `SSB` for all of them: no contact said upper or lower, and an FM
+  contact — scored as phone, exactly like SSB — went out claiming an emission that was never on
+  the air. A phone contact now carries the mode the radio was actually on, and it is written the
+  way your everyday logbook has written it since 1.13.0: the mode stays `SSB` and the sideband
+  rides as the `SUBMODE`, with FM and AM as modes in their own right. **The sideband comes from
+  your radio or not at all** — without CAT there is no evidence of one and the contact still logs
+  as plain SSB rather than Nexus guessing it from the band. It survives a restart of the contest
+  log, it reaches N1MM and N3FJP as a mode they already understand, and where a contest's Cabrillo
+  asks for `CATEGORY-MODE` an FM entry can now say so instead of declaring SSB.
+
+- **A contest contact keeps its frequency on the way into your main logbook.** Merging a contest
+  into the lifetime log — the file that goes to LoTW, QRZ and Club Log — wrote the band and threw
+  the dial away, so every row from a contest weekend arrived with no frequency at all. On VHF that
+  lost the segment with it: 144.200 SSB and 146.520 FM both landed as plain `2m`. The dial each
+  contact was logged on now travels with it, and a contact that never knew its dial still writes
+  no frequency rather than a zero. The Field Day file you submit is unchanged.
+
 ## [1.14.0] — 2026-09-20
 
 ### Added
