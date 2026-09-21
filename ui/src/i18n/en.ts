@@ -8985,6 +8985,7 @@ export const EN = {
   'shell.net.reminder': 'Net {{until}}: {{name}} — {{freq}} {{mode}}',
   'shell.net.tune': 'Tune',
   'shell.rotator.pointed': '↗ Pointing antenna to {{bearing}}° ({{call}})',
+  'shell.rotator.pointedLong': '↗ Pointing antenna long path to {{bearing}}° ({{call}})',
   'shell.rotator.failed': "Couldn't point the antenna at {{call}}",
   // `WSJT-X`, `JTDX` and `MSHV` are program names and `:2237` their agreed UDP port.
   'shell.source.companion': 'Source: {{source}} — listening for WSJT-X/JTDX/MSHV on :2237',
@@ -9339,6 +9340,7 @@ export const EN = {
   'rotor.strip.az.title': 'Rotator at {{deg}}° true',
   'rotor.strip.az.title.magnetic': 'Rotator at {{deg}}° true · {{mag}}° magnetic (WMM)',
   'rotor.strip.pointAt.title': 'Point the antenna at {{call}}',
+  'rotor.strip.pointAtLong.title': 'Point the antenna at {{call}} the long way round (reciprocal heading)',
   'rotor.strip.stop.title': 'Stop rotation NOW (mid-pass: stops the satellite track too)',
 
   // A transponder HELD with no armed track — the QO-100/park case.

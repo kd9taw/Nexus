@@ -1918,11 +1918,29 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // flash) and the UI never sees a half-applied mode/freq state. Then open the matching
   // cockpit and — for CW/Phone — hand it the callsign to prefill the log. A need with no
   // Point the antenna rotator at a needed call (great-circle bearing from your grid).
-  const handlePointAntenna = useCallback(async (call: string) => {
+  const handlePointAntenna = useCallback(async (call: string, longPath = false) => {
     try {
       // A browser gets no bearing back: the station resolves it.
-      const bearing: number | null | undefined = await pointRotatorAtCall(call)
-      pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('shell.rotator.pointed', { bearing: Math.round(bearing), call }), 'success', 3000)
+      const bearing: number | null | undefined = await pointRotatorAtCall(call, longPath)
+      // ⚠️ THE TOAST NAMES THE PATH. A heading with no path is half an answer — the same
+      // reason `azimuthTitle` says "short path" out loud on every bearing Nexus displays.
+      //
+      // ⚠️ BOTH KEYS WRITTEN OUT, never `t(computedKey, …)`. A key built in a variable is
+      // invisible to the catalog scanners: `hardcoded-strings` reports both entries as
+      // orphans nobody references, and `placeholders` counts another unreadable call site
+      // against a ratchet that only goes down. Two literal `t(…)` calls cost one line.
+      // …and the PARAMS are object literals at each call site for the same reason: the
+      // guard counts a call site unreadable when the key OR the params come from a
+      // variable, so hoisting them into `where` traded one unreadable site for another.
+      pushToast(
+        bearing == null
+          ? t('remote.b1.rotatorPointing', { call })
+          : longPath
+            ? t('shell.rotator.pointedLong', { bearing: Math.round(bearing), call })
+            : t('shell.rotator.pointed', { bearing: Math.round(bearing), call }),
+        'success',
+        3000,
+      )
     } catch (e) {
       pushToast(remote ? controlFailureMessage(e) : typeof e === 'string' ? e : t('shell.rotator.failed', { call }), 'error', 4000)
     }

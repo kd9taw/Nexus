@@ -10814,6 +10814,7 @@ async fn stop_rotator(state: State<'_, SharedEngine>) -> Result<(), String> {
 async fn point_rotator_at_call(
     state: State<'_, SharedEngine>,
     call: String,
+    long_path: Option<bool>,
 ) -> Result<f64, String> {
     #[cfg(feature = "radio")]
     {
@@ -10834,7 +10835,20 @@ async fn point_rotator_at_call(
             .ok_or("Set your grid square in Settings so a bearing can be computed.")?;
         let info = propagation::dxcc::resolve(&call)
             .ok_or_else(|| format!("Couldn't locate {call} (unknown callsign)."))?;
-        let bearing = propagation::geo::bearing_deg(me, (info.lat, info.lon));
+        let short = propagation::geo::bearing_deg(me, (info.lat, info.lon));
+        // ⭐ LONG PATH IS THE SAME GREAT CIRCLE THE OTHER WAY, so it is the reciprocal exactly
+        // — no second computation and nothing to drift apart. `rem_euclid` rather than `%`
+        // because `%` keeps the sign in Rust and a negative azimuth is not a heading.
+        //
+        // ⚠️ Absent means SHORT. Every bearing Nexus shows is short path and says so (see
+        // `grid.ts::azimuthTitle`, whose own note is that "a chaser who assumes long path on a
+        // low band points the beam 180° wrong"). Defaulting the other way would make the
+        // quiet case the surprising one.
+        let bearing = if long_path.unwrap_or(false) {
+            (short + 180.0).rem_euclid(360.0)
+        } else {
+            short
+        };
         tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::point(&host, bearing))
             .await
             .map_err(|e| e.to_string())?
@@ -10843,7 +10857,7 @@ async fn point_rotator_at_call(
     }
     #[cfg(not(feature = "radio"))]
     {
-        let _ = (state, call);
+        let _ = (state, call, long_path);
         Err("radio support is not built into this binary".to_string())
     }
 }
