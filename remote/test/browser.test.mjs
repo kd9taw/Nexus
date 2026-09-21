@@ -2108,14 +2108,46 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           // and told us only that a selector had moved.
           if(mode==='phone'){
             for(const id of ['COMP','VOX']) assert.equal(await evaluate(`!!document.querySelector('${root} .ph-chain-item[data-chain="${id}"] > button:not([disabled]):not([aria-disabled="true"])')`),false,`${id} must not be drivable on a rig that never reported it`)
-            const plates=await evaluate(`document.querySelector('${root} .ph-chain-absent')?.textContent ?? ''`)
-            for(const id of ['COMP','VOX']) assert.equal(plates.includes(id),true,`${id} must be named in the pane-foot plate line, not silently gone: ${JSON.stringify(plates)}`)
+            // ⚠️ ALL of them, not the first. `absentLine` renders ONCE PER CHAIN — the receive
+            // pane gets one and the transmit pane gets another — and COMP/VOX are `chain: 'tx'`
+            // (rigControls.ts), so `querySelector` returned the RECEIVE line ("RF · NR · NOTCH ·
+            // AF · SQL") and reported COMP missing when it was named one pane down. The product
+            // was right; this assertion was reading the wrong element.
+            const plates=await evaluate(`[...document.querySelectorAll('${root} .ph-chain-absent')].map(n=>n.textContent).join(' ')`)
+            // ⭐ NAMED **OR** SHOWN, because those are the two honest states and the assertion
+            // must not prefer one. `causeFor` returns 'absent' only when the capability mask
+            // says so (or nothing ever reported it), and ONLY an absent control collapses into
+            // the foot line — everything else keeps a row, disabled, with its reason. On this
+            // fixture COMP is genuinely absent and VOX is REPORTED, so VOX draws a row that is
+            // dead by PERMISSION (a browser without station control), not by capability.
+            // Demanding a plate for it asserted a fact about the fixture rather than the rule.
+            //
+            // The rule is what the comment above already says: nothing drivable, and the
+            // operator can still find out why. A visible disabled row satisfies the second
+            // half exactly as a plate does. What must NEVER happen is neither — that is the
+            // silent disappearance this guards, and it still fails here.
+            for(const id of ['COMP','VOX']){
+              const hasRow=await evaluate(`!!document.querySelector('${root} .ph-chain-item[data-chain="${id}"]')`)
+              assert.equal(plates.includes(id)||hasRow,true,`${id} is neither named in a pane-foot plate line nor shown as a row — it vanished silently. plates=${JSON.stringify(plates)}`)
+            }
           }
           if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,`dsp-${mode}-1280-175-light.png`),Buffer.from(shot.data,'base64'))}
           if(mode==='phone'){
-            // Native Phone hides its SSB bandwidth controls for commanded FM.
+            // ⛔ THE BW ROW KEEPS ITS SLOT ON FM, AND IS DEAD IN IT. Not hidden.
+            // This asserted `.ph-filter === null`, which was true before the 2026-09-20
+            // chain-pane rebuild and cannot be true after it: `causeFor` returns 'notOnMode'
+            // for BW on FM, `rendersRow` is `!== 'absent'`, and ONLY 'absent' collapses into
+            // the pane-foot plate line. rigControls.ts says why in as many words — "a fact
+            // about the MODE, not a fault in the radio, and the row keeps its slot rather than
+            // disappearing into the foot line with the things the rig cannot do". FM's
+            // passband is fixed, so there is no width to set, and the operator is told which.
+            //
+            // Both halves are asserted, which is STRONGER than the line it replaces: the row
+            // is there, and nothing in it can be driven. A bare presence check would pass over
+            // a live stepper on a mode that has no bandwidth to step.
             assert.equal(applicationData.get_snapshot.radio.rigMode,'FM')
-            assert.equal(await evaluate(`document.querySelector('${root} .ph-filter')===null`),true)
+            assert.equal(await evaluate(`!!document.querySelector('${root} .ph-filter')`),true,'the BW row keeps its slot on FM')
+            assert.equal(await evaluate(`!!document.querySelector('${root} .ph-filter .ph-filter-step:not([disabled]):not([aria-disabled="true"])')`),false,'and nothing in the BW row is drivable on FM')
             await gesture(root+' .ph-mode-pick > button:nth-of-type(1)','radio.phoneMode')
           }
           for(const direction of [1,2]){
