@@ -1255,6 +1255,10 @@ export interface RadioStatus {
    * — the first is true and this is false, which is a cutoff the operator was told they had
    * and does not; Settings warns on exactly that pair. Display-only; it gates nothing. */
   flexMeterStream?: boolean
+  /** The ACTIVE radio's rated output in watts — full scale for the analog meter's PO arc, so a
+   *  QRP set does not sit on the first tick and an amp does not pin. Follows a radio switch.
+   *  ⚠️ NOT the power cap: that is a FRACTION of this, and is drawn as a mark ON the scale. */
+  ratedWatts?: number | null
   /** Transient Phone mode override ("USB"/"LSB"/"FM"), or null/absent = AUTO (band-derived). */
   sidebandOverride?: string | null
   /** The operator's phone (SSB) sub-band on the current band as [lo, hi) MHz, per license class
@@ -3281,6 +3285,10 @@ export interface Settings {
   catRtsKeysPtt: boolean
   /** Serial baud rate. */
   baud: number
+  /** The ACTIVE radio's rated output in watts — the flat mirror of the per-radio
+   *  `RadioProfilePatch.ratedWatts`, kept in step by the backend's `sync_flat_from_active`
+   *  exactly as `baud` is. Full scale for the Phone cockpit's analog PO arc. */
+  ratedWatts?: number
   /** Rig connection: "serial" (default), "network" (rigctld → rigAddr over TCP, e.g. a
    * FlexRadio via SmartSDR), or "omnirig" (VE3NEA's Windows COM rig-control server drives the
    * radio; Nexus serves the rigctld protocol over it — Windows only). */

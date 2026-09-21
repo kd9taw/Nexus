@@ -1983,6 +1983,10 @@ export interface RadioProfilePatch {
    * flat-only until 2026-07-25 and PTT did not follow a radio switch. */
   pttSerialPort: string
   baud: number
+  /** This radio's RATED OUTPUT in watts — full scale for the Phone analog meter's PO arc.
+   *  Per-radio: a station with a QRP set and a 100 W rig has two different meters.
+   *  ⚠️ NOT the power cap, which is a FRACTION of this and rides on `Settings`. */
+  ratedWatts: number
   rigConn: string
   rigAddr: string
   /** Which OmniRig slot this radio drives when rigConn === "omnirig" (1 = RIG 1, 2 = RIG 2).

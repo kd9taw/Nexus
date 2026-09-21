@@ -1271,11 +1271,18 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // and that resolves to UNKNOWN, never to simplex: resolving an absent value to "no shift"
   // is the one default that puts the confident wrong number back.
   const [rptrShift, setRptrShift] = useState<string | null>(null)
+  // The operator's PHONE power cap, 0..1, for the mark on the analog meter's PO scale. Read in
+  // the same effect rather than a second fetch. It is a FRACTION of the rig's rated output,
+  // which is what makes it placeable on a scale that rated output defines — and why it can be
+  // a mark and never the scale itself.
+  const [powerCap, setPowerCap] = useState<number | null>(null)
   useEffect(() => {
     let alive = true
     void getSettings()
       .then((s) => {
-        if (alive) setRptrShift(typeof s?.rptrShift === 'string' ? s.rptrShift : null)
+        if (!alive) return
+        setRptrShift(typeof s?.rptrShift === 'string' ? s.rptrShift : null)
+        setPowerCap(typeof s?.maxPowerPhone === 'number' ? s.maxPowerPhone : null)
       })
       .catch(() => {})
     return () => {
@@ -2171,6 +2178,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           <AnalogMeter
             radio={snap.radio}
             keyed={snap.radio.transmitting || snap.radio.txBusyReason != null || snap.radio.rigKeyed === true}
+            ratedW={snap.radio.ratedWatts ?? 100}
+            capFrac={powerCap}
           />
           <PhoneScope
             hideSmeter

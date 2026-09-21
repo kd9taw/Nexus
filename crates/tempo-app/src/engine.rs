@@ -18602,6 +18602,13 @@ contact yourself."
         s.radio.tx_po_w = self.rig_tx_po_w;
         s.radio.tx_comp_db = self.rig_tx_comp_db;
         s.radio.swr_scale_verified = self.settings.swr_scale_is_verified();
+        // The ACTIVE radio's rating, so the meter's PO scale follows a radio switch rather than
+        // describing whichever rig was selected when the cockpit mounted.
+        s.radio.rated_watts = self
+            .settings
+            .active_profile()
+            .map(|p| p.rated_watts)
+            .unwrap_or(100);
         s.radio.rig_mode = self.rig_mode.clone();
         s.radio.sideband_override = self.sideband_override.clone();
         // Phone sub-band the operator may legally use on the CURRENT band + class — the band-strip
@@ -39830,6 +39837,7 @@ mod tests {
             rig_model: p.rig_model,
             rig_model_name: p.rig_model_name.clone(),
             serial_port: port.to_string(),
+            rated_watts: p.rated_watts,
             ptt_serial_port: p.ptt_serial_port.clone(),
             baud: p.baud,
             rig_conn: p.rig_conn.clone(),

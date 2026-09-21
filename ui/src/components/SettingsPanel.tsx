@@ -293,7 +293,7 @@ const CTCSS_TONES = [
   167.9, 173.8, 179.9, 186.2, 192.8, 203.5, 210.7, 218.1, 225.7, 233.6, 241.8, 250.3,
 ]
 
-const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin', 'contestCqZone', 'contestItuZone']
+const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'ratedWatts', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin', 'contestCqZone', 'contestItuZone']
 
 /** Clamp a typed zone to `0..=max`, as the STRING `update` takes (0 = not set).
  *
@@ -711,6 +711,11 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     serialPort: s.serialPort ?? '',
     pttSerialPort: s.pttSerialPort ?? '',
     baud: s.baud ?? APP_DEFAULT_BAUD,
+    // ⚠️ PER-RADIO, so it MUST be here, and Rust carries NO serde default for it — a form that
+    // dropped this would fail the whole Save with `missing field ratedWatts` rather than
+    // silently resetting a QRP operator's 5 W rating to 100 on every rig-form edit. That
+    // loudness is deliberate; see `RadioProfilePatch::rated_watts`.
+    ratedWatts: s.ratedWatts ?? 100,
     rigConn: s.rigConn ?? 'serial',
     rigAddr: s.rigAddr ?? '',
     // ⚠️ PER-RADIO, so it MUST be here — see the Flex note below. Which radio inside OmniRig
@@ -4771,6 +4776,28 @@ export function SettingsPanel({
               </label>
                 </>
               )}
+
+              {/* ⭐ THE RIG'S RATED OUTPUT — full scale for the Phone cockpit's analog PO arc.
+                  PER-RADIO, which is why it sits in the rig form rather than with the power
+                  CAPS in Transmit limits: a station with a QRP set and a 100 W rig has two
+                  different meters, and one station-wide number would be wrong for one of them
+                  on every radio switch. It is also a different KIND of number from the cap —
+                  the cap is a fraction of this — so pairing them would invite reading one as
+                  the other. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.rigControl.ratedWatts.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  min={1}
+                  max={2000}
+                  step={1}
+                  inputMode="numeric"
+                  value={String(form.ratedWatts ?? 100)}
+                  onChange={(e) => updateNum('ratedWatts', Number(e.target.value))}
+                />
+                <span className="settings-hint">{t('settings.rigControl.ratedWatts.hint')}</span>
+              </label>
 
               <div className="settings-field">
                 <span className="settings-label">{t('settings.rigControl.split.label')}</span>

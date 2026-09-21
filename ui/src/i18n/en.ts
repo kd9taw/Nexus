@@ -9304,6 +9304,9 @@ export const EN = {
   // One instrument, two roles: S-units on receive, the picked transmit scale when keyed —
   // which is what a rig's single meter does. The scale NAMES (S, PO, SWR, ALC, COMP) are the
   // rig's own front-panel vocabulary and stay as constants in the component, like TxMeters'.
+  'settings.rigControl.ratedWatts.label': 'Rated power (W)',
+  'settings.rigControl.ratedWatts.hint':
+    'What this radio puts out at full drive. It sets the top of the Phone meter’s power scale, so a QRP set reads across the whole dial instead of sitting on the first mark. It is the radio’s rating, not your power limit — the limit is a share of this and shows as a mark on the scale.',
   'meter.aria': 'Signal meter',
   'meter.face.aria': '{{plate}} meter reading {{value}}',
   'meter.pick.aria': 'What the needle reads while transmitting',

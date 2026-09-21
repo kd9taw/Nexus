@@ -208,6 +208,19 @@ export function sLabel(db: number): string {
   return `S${Math.max(0, Math.min(9, Math.round(9 + db / 6)))}`
 }
 
+/** The meter switch, with its keys spelled out.
+ *
+ * ⚠️ NOT `t(`meter.pick.${id}`)`. A template-literal key is invisible to the catalog scanners —
+ * `hardcoded-strings.test.ts` reads every entry as an ORPHAN because no call site names it, and
+ * `placeholders.test.ts` counts the call site as unreadable. A key no tool can see is a key
+ * nobody can maintain, and the guard that would have told you it was missing stays quiet. */
+const PICKS: { id: TxScale; label: () => string; title: () => string }[] = [
+  { id: 'po', label: () => t('meter.pick.po'), title: () => t('meter.pick.po.title') },
+  { id: 'swr', label: () => t('meter.pick.swr'), title: () => t('meter.pick.swr.title') },
+  { id: 'alc', label: () => t('meter.pick.alc'), title: () => t('meter.pick.alc.title') },
+  { id: 'comp', label: () => t('meter.pick.comp'), title: () => t('meter.pick.comp.title') },
+]
+
 export interface AnalogMeterProps {
   radio: RadioStatus
   /** Keyed right now — the arbiter's answer, not the FT slot flag. Swaps the needle's role. */
@@ -299,17 +312,17 @@ export function AnalogMeter({ radio, keyed, ratedW = 100, capFrac = null }: Anal
             so the switch is disabled rather than hidden, which keeps the foot from changing
             height on every key-down (the dock is bottom-anchored above the PTT button). */}
         <div className="ph-meter-pick" role="group" aria-label={t('meter.pick.aria')}>
-          {(['po', 'swr', 'alc', 'comp'] as const).map((s) => (
+          {PICKS.map(({ id, label, title }) => (
             <button
-              key={s}
+              key={id}
               type="button"
               disabled={!keyed}
-              aria-pressed={keyed && scale === s}
-              className={`ph-meter-pick-btn${keyed && scale === s ? ' on' : ''}`}
-              title={t(`meter.pick.${s}.title`)}
-              onClick={() => setScale(s)}
+              aria-pressed={keyed && scale === id}
+              className={`ph-meter-pick-btn${keyed && scale === id ? ' on' : ''}`}
+              title={title()}
+              onClick={() => setScale(id)}
             >
-              {t(`meter.pick.${s}`)}
+              {label()}
             </button>
           ))}
         </div>
