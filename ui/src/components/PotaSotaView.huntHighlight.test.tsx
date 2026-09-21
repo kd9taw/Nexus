@@ -187,6 +187,31 @@ describe('The hunted row stays marked', () => {
     expect(siv, 'the same row re-delivered must not move the list again').toHaveBeenCalledTimes(1)
   })
 
+  it('does not move the list when the activator QSYs — same station, same park', async () => {
+    api.getOtaSpots.mockResolvedValue([spot('K1ABC', 'US-0001'), spot('W9XYZ', 'US-0002')])
+    const hunt = huntFor('W9XYZ', 'US-0002')
+    const view = render(<PotaSotaView snap={snap(hunt, 1)} />)
+    await screen.findByText('US-0002')
+    await waitFor(() => expect(siv).toHaveBeenCalledTimes(1))
+
+    // The activator shifts 2 kHz inside the same park. The station and the reference — the two
+    // things the operator is hunting — have not changed, and the operator did nothing, so the
+    // list must not move under their hands. Keying the reveal on the whole spot (which carries
+    // the frequency) re-scrolls here, on a poll, mid-scroll.
+    api.getOtaSpots.mockResolvedValue([
+      spot('K1ABC', 'US-0001'),
+      spot('W9XYZ', 'US-0002', { freqKhz: 14_287 }),
+    ])
+    view.rerender(<PotaSotaView snap={snap({ ...hunt }, 2)} />)
+    await waitFor(() => expect(api.getOtaSpots).toHaveBeenCalledWith('POTA', true))
+    // The new frequency really is on screen, so the assertion below is about a board that
+    // actually changed rather than one that never re-rendered.
+    await waitFor(() => expect(row('US-0002').textContent).toContain('14.2870'))
+
+    expect(siv, 'a QSY within the same park is not a new place to be').toHaveBeenCalledTimes(1)
+    expect(marked(), 'and the row is still the one marked').toEqual(['US-0002'])
+  })
+
   // POSITIVE CONTROL for the silence above: the reveal is not simply dead. A DIFFERENT target
   // is a new place to be, and it does scroll.
   it('scrolls again when the operator hunts a different row', async () => {
