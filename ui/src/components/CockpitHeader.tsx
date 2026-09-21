@@ -23,7 +23,6 @@ import type { AppSnapshot } from '../types'
 import { bandLabelForMhz, bandRangeForLabel } from '../band'
 import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
-import { Unavailable } from './UnavailableMark'
 import { useWheelTune } from '../useWheelTune'
 import { useRemoteWheelTuning } from '../remote-web/wheel-tuning-context'
 import { t } from '../i18n'
@@ -314,7 +313,7 @@ export function CockpitHeader({
             power slider, the TX pill, the amplifier strip). A band change is when you tune, so it
             lives beside the band picker, as WSJT-X has it. Still outside every ⊞-removable pane —
             this header is not a pane — so the stop line is unchanged; only its position moved. */}
-        {(onTune || onAtuTune) && (
+        {(onTune || (onAtuTune && radio.atu != null)) && (
           <div className="ch-tune">
             {/* ⚠️ DEFERRED (i18n): Tune keys a carrier and is on the Phone, CW, Operate, RTTY and
                 PSK stop-line censuses; `stop-line.test.tsx` finds it by accessible name. */}
@@ -345,42 +344,37 @@ export function CockpitHeader({
                 title reports; hiding it would take that away and answer the operator's "where
                 did my ATU go?" with nothing. It is the ACTION that is unavailable.
 
-                (2) The radio reports NO tuner at all (`radio.atu` null). This used to hide the
-                button, and the reason was good: an ATU control over a rig with no ATU is one
-                the operator presses to no effect, unable to tell whether the app or the radio
-                is at fault. The 2026-09-20 ruling overrules it and ANSWERS it — disabled, he
-                cannot press it, and the tooltip says which of the two it is. What the absent
-                button could never tell him is whether Nexus has an ATU control at all, and a
-                control that vanishes is indistinguishable from one that was never built.
+                ⛔ (2) BUT NOT WHEN THE RADIO REPORTS NO TUNER AT ALL (`radio.atu` null): the
+                button is ABSENT, and that is a deliberate EXCEPTION to the 2026-09-20
+                disabled-with-reason ruling rather than a site nobody got to. The ruling's
+                home ground is "the rig can do it, this path cannot" — a control Nexus built,
+                unreachable through the operator's transport, which is case (1) above. Absent
+                HARDWARE is not a path problem, and this particular control KEYS THE
+                TRANSMITTER: the precaution against a rig with no tuner growing a tune-up
+                button outranks the discoverability the mark would buy. A rig that HAS a
+                tuner it cannot be asked to start keeps its button and its reason, which is
+                the case the operator actually hits.
+
+                This exception was ruled on 2026-09-20 alongside the rest, and it was briefly
+                implemented the other way before that. If you are here to "finish" the sweep,
+                this is the one that stays.
 
                 ⚠️ DEFERRED (i18n): it keys the rig's own tuning carrier, exactly as
-                SetupHealth's Prove TX does, so its words stay here with Tune's and Stop TX's.
-                The ⊘ mark's own words are the caller's — see UnavailableMark. */}
-            {onAtuTune && (
-              <>
-                <button
-                  type="button"
-                  className="cockpit-tune"
-                  onClick={onAtuTune}
-                  disabled={
-                    !control || !radio.txAllowed || !!radio.atuStartTuneUnsupported || radio.atu == null
-                  }
-                  title={
-                    radio.atu == null
-                      ? "This radio is not reporting a built-in antenna tuner over CAT, so there is nothing here for Nexus to start. A rig with an internal ATU that reports it brings this to life; an external tuner is not driven from here."
-                      : `${
-                          radio.atuStartTuneUnsupported
-                            ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
-                            : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
-                        } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`
-                  }
-                >
-                  ATU
-                </button>
-                {radio.atu == null && (
-                  <Unavailable mark="no tuner" title="This radio is not reporting a built-in antenna tuner over CAT. The button stays so you can see the control exists — it comes to life on a rig that reports one." />
-                )}
-              </>
+                SetupHealth's Prove TX does, so its words stay here with Tune's and Stop TX's. */}
+            {onAtuTune && radio.atu != null && (
+              <button
+                type="button"
+                className="cockpit-tune"
+                onClick={onAtuTune}
+                disabled={!control || !radio.txAllowed || !!radio.atuStartTuneUnsupported}
+                title={`${
+                  radio.atuStartTuneUnsupported
+                    ? "This CAT connection can't start the radio's tuner — press TUNER on the radio itself."
+                    : "Run the radio's built-in antenna tuner (it transmits its own carrier for a second or two)."
+                } ${radio.atu ? 'The tuner is switched in.' : 'The tuner is currently bypassed.'}`}
+              >
+                ATU
+              </button>
             )}
           </div>
         )}

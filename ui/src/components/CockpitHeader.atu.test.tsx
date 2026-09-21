@@ -6,8 +6,8 @@
 // radio's built-in antenna tuner, which WSJT-X fires from a right-click on Tune. Two things about
 // that button are load-bearing enough to pin here:
 //
-//  1. it stays on screen on a rig that reports no tuner, DISABLED and saying why (see the
-//     rewritten case below, and the ruling it carries);
+//  1. it is shown ONLY when the radio actually reports a tuner — a deliberate EXCEPTION to
+//     the 2026-09-20 disabled-with-reason ruling, argued in the case below;
 //  2. it lives with the TRANSMIT controls, beside Tune, and carries Tune's licence lockout. An
 //     ATU tune-up keys the transmitter; it is not a receive filter like NB/NR/Notch, and it must
 //     not be reachable when transmitting here is not permitted.
@@ -51,38 +51,41 @@ const atuButton = () => screen.queryByRole('button', { name: 'ATU' })
 afterEach(cleanup)
 
 describe("the rig's own ATU control", () => {
-  // ⭐ THIS CASE USED TO PIN THE OPPOSITE — "is absent when the radio does not report a
-  // tuner" — and its reason was this file's own opening line: *"Offering an ATU control to a
-  // rig that has no ATU is worse than not having the control — the operator presses it,
-  // nothing happens, and they cannot tell whether the app or the radio is at fault."*
+  // ⭐ AN EXCEPTION TO THE DISABLED-WITH-REASON RULING, ruled on the same day as the ruling
+  // and recorded here because it looks exactly like a site the sweep missed.
   //
-  // OPERATOR RULING, 2026-09-20: overruled, and note that the new behaviour answers that
-  // argument rather than ignoring it. The operator CANNOT press this — it is disabled — and
-  // the app IS at fault or not, in writing, in the tooltip. What the absent button could
-  // never tell him is the thing he actually wanted to know: whether Nexus has an ATU control
-  // at all. A vanished control is indistinguishable from one that was never built, and that
-  // reading is the one he can act on, by going looking for a feature that is already there.
-  it('stays on a radio that reports no tuner, disabled and saying why', () => {
+  // That ruling replaced gating-by-absence with disabled-and-said across the Phone cockpit:
+  // a control that vanishes is indistinguishable from one that was never built. Its home
+  // ground is "the rig can do it, THIS PATH cannot" — a control Nexus built, unreachable
+  // through the operator's transport. That case is alive and well on this very button: see
+  // the `atuStartTuneUnsupported` case at the foot of this file, where the radio HAS a tuner
+  // Hamlib will not start, and the button stays and says so.
+  //
+  // ABSENT HARDWARE IS NOT A PATH PROBLEM, and this control KEYS THE TRANSMITTER. An ATU
+  // button on a barefoot rig is a tune-up affordance over a radio with nothing to tune, and
+  // that precaution outranks the discoverability a ⊘ mark would buy.
+  //
+  // ⚠️ IT WAS BRIEFLY IMPLEMENTED THE OTHER WAY while the ruling was being swept, and
+  // reverted. If you are here to "finish" the sweep: this is the one that stays.
+  it('is absent when the radio does not report a tuner', () => {
     mount(snapWith({ atu: null }))
-    const atu = atuButton()
-    expect(atu, 'the ATU button vanished — the operator cannot tell it exists').toBeTruthy()
-    expect(atu!.hasAttribute('disabled'), 'a live ATU button over a radio with no tuner').toBe(true)
-    // The reason, as text and not as a greyed-out look: three things together, because
-    // present-and-disabled without a reason is a control that is merely broken.
-    const why = atu!.closest('.ch-tune')!.querySelector('.ph-unavail')
-    expect(why, 'dead and silent').not.toBeNull()
-    expect(why!.textContent).toMatch(/\S/)
+    expect(atuButton()).toBeNull()
     // …and the control it sits beside is still there, so this is measuring the ATU button and
     // not a header that failed to render at all.
     expect(screen.getByRole('button', { name: 'Tune' })).toBeTruthy()
   })
 
-  it('CONTROL: a radio that DOES report a tuner gets no such mark', () => {
-    // The pair. Without it the case above passes on a header that marks the ATU unavailable
-    // forever, which is the same lie pointing the other way.
+  it('CONTROL: absent, and not a dead button with a reason either', () => {
+    // The exception is ABSENCE. A ⊘ mark in the button's place is what the ruling would have
+    // produced and what was briefly shipped, so it is checked for by name — and checked on
+    // BOTH rigs, because "no mark" on one that has a tuner would pass against a header that
+    // marks the barefoot one.
+    mount(snapWith({ atu: null }))
+    expect(document.querySelector('.ch-tune .ph-unavail'), 'the reverted ⊘ mark came back').toBeNull()
+    cleanup()
     mount(snapWith({ atu: false }))
     expect(atuButton()!.hasAttribute('disabled')).toBe(false)
-    expect(document.querySelector('.ch-tune .ph-unavail'), 'a reporting tuner is marked unavailable').toBeNull()
+    expect(document.querySelector('.ch-tune .ph-unavail')).toBeNull()
   })
 
   it('appears once the radio reports one, bypassed or in-line', () => {
