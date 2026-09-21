@@ -1,6 +1,6 @@
 // ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the meter names
 // are the rig's own front-panel vocabulary and stay as the constants below, every reading is a
-// measurement built here (SWR ratio, ALC %, watts, dB), and the prose around them — the four
+// measurement built here (SWR ratio, ALC %, watts, dB), and the prose around them — the five
 // tooltips, the group's name and the idle line — is in the catalog under `meters.tx.*`.
 //
 // These are READOUTS, not transmit controls: nothing here keys, gates or stops anything.
@@ -15,6 +15,14 @@ const SWR = 'SWR'
 const ALC = 'ALC'
 const PO = 'PO'
 const COMP = 'COMP'
+
+/** The SWR token with the mark that says Nexus cannot vouch for this rig's scale. It rides on
+ *  the LABEL because that is the one part of the row whose width nothing else is pinned to:
+ *  the label is a flex item over a min-width and the track beside it is `flex: 1`, so one more
+ *  character can only shorten the bar by its own width. The row's height, the value column and
+ *  the Operate cell's fixed width are all untouched, which is what the anti-bounce ruling below
+ *  is actually about. Locale-independent, exactly as the token it marks is. */
+const SWR_UNSCALED = 'SWR?'
 
 /** Transmit meters (SWR / ALC / Po / COMP) — the mirror image of the RX S-meter: only the
  *  meters the rig actually reports over CAT (each independently capability-gated, so a rig
@@ -40,20 +48,26 @@ const COMP = 'COMP'
  *  the panel and the menu still cannot drift, and it moves when that menu does. */
 export const TX_METERS_WHEN = 'readings appear on transmit'
 
-type Zone = 'ok' | 'warn' | 'hot'
+/** `unknown` is not a fourth severity — it is the ABSENCE of a severity, for a reading whose
+ *  scale Nexus cannot stand behind (see the SWR row below). */
+type Zone = 'ok' | 'warn' | 'hot' | 'unknown'
 
 /* Three zones, three DISTINCT theme tokens. `--ok` and `--danger` were never defined by
    either theme, so both painted their literal fallback; `--state-weak` IS defined, and it is
    the sheet's red — so `warn` rendered #ec5b57 against `hot`'s #e5484d and the two zones were
    indistinguishable, which is the whole job of a warn band. The amber the `#e0a030` fallback
-   was reaching for is `--alert-warning`. */
+   was reaching for is `--alert-warning`. `--state-pending` is defined by BOTH themes too
+   (checked against that same trap) and already means "no verdict yet" across the sheet. */
 const ZONE_COLOR: Record<Zone, string> = {
   ok: 'var(--state-good)',
   warn: 'var(--alert-warning)',
   hot: 'var(--state-weak)',
+  unknown: 'var(--state-pending)',
 }
 
-/** SWR ratio → bar (1.0→0 %, 3.0→100 %); warn ≥ 1.5, hot ≥ 2.0 (the "retune / back off" line). */
+/** SWR ratio → bar (1.0→0 %, 3.0→100 %); warn ≥ 1.5, hot ≥ 2.0 (the "retune / back off" line).
+ *  Those two thresholds are true of an SWR, not of every rig's REPORTED SWR — the caller
+ *  discards the zone where the scale is unverified; see the row below. */
 export function swrBar(swr: number): { frac: number; value: string; zone: Zone } {
   const frac = Math.max(0, Math.min(1, (swr - 1) / 2))
   const zone: Zone = swr >= 2.0 ? 'hot' : swr >= 1.5 ? 'warn' : 'ok'
@@ -102,8 +116,37 @@ export function TxMeters({
   const lastRows = useRef<MeterRow[]>([])
 
   const rows: MeterRow[] = []
-  if (radio.txSwr != null)
-    rows.push({ label: SWR, title: t('meters.tx.swr.title'), bar: swrBar(radio.txSwr) })
+  if (radio.txSwr != null) {
+    // ⚠️ IS THIS NUMBER ON A SCALE NEXUS CAN STAND BEHIND? The engine takes that question
+    // seriously — it refuses to arm the high-SWR cutoff without `swrScaleVerified` — and so
+    // does Settings. This panel did not, which made it the loudest surface asserting a
+    // threshold over the one number the engine will not act on. On a Xiegu, 1.2:1 on the
+    // rig's own front panel arrives here as 6:1 (#292): a red bar and "keep it under 2:1",
+    // both wrong, in front of an operator who is transmitting.
+    //
+    // ABSENT READS AS UNVERIFIED (`!== true`). The field is optional on the DTO and
+    // per-active-radio; SettingsPanel's three readers all test it the same way, for the same
+    // reason — resolving a missing value to "verified" is the one direction that puts the
+    // false red bar back.
+    //
+    // Unverified, TWO THINGS GO and one stays. The ok/warn/hot zoning (a threshold at 1.5
+    // and 2.0) and the title's "keep it under 2:1" are the same claim about an absolute
+    // scale in two media, and neither is supportable, so the bar goes unzoned and the title
+    // is replaced by one that says what the figure is and is not. The READING STAYS: it is
+    // repeatable, so the operator can still watch it move while they tune, and a meter that
+    // rendered as nothing would be indistinguishable from one Nexus never built. Which is
+    // also why the lost colour cannot be the only signal — `SWR?` is the visible mark.
+    //
+    // The value keeps its `:1`: the doubt is about the rig's CALIBRATION, not about which
+    // quantity this is, and dropping the unit would cost readability without buying honesty.
+    const verified = radio.swrScaleVerified === true
+    const bar = swrBar(radio.txSwr)
+    rows.push({
+      label: verified ? SWR : SWR_UNSCALED,
+      title: verified ? t('meters.tx.swr.title') : t('meters.tx.swr.unverified'),
+      bar: verified ? bar : { ...bar, zone: 'unknown' },
+    })
+  }
   if (radio.txAlc != null)
     rows.push({
       label: ALC,

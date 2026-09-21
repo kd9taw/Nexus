@@ -5811,6 +5811,7 @@ export const DE: PartialCatalog = {
   "meters.tx.aria": "Sendeanzeigen",
   "meters.tx.idle": "TX-Anzeigen — {{when}}",
   "meters.tx.swr.title": "Antennenanpassung — unter 2:1 halten",
+  "meters.tx.swr.unverified": "Antennenanpassung — dies ist der Rohwert des Funkgeräts selbst, und Nexus hat für dieses Modell keine verifizierte Skala, kann also nicht sagen, was hier als hoch gilt. Achten Sie darauf, in welche Richtung sich der Wert beim Abstimmen bewegt; der absolute Wert kann weit danebenliegen, und nichts bricht Ihre Aussendung deswegen ab.",
   "meters.tx.alc.title": "ALC — Mikrofonverstärkung so einstellen, dass SSB-Spitzen den Bereich gerade eben antippen, nie voll ausschlagen",
   "meters.tx.po.title": "Tatsächliche Ausgangsleistung",
   "meters.tx.comp.title": "Sprachkompression",

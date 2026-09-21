@@ -5669,6 +5669,7 @@ export const JA: PartialCatalog = {
   "meters.tx.aria": "送信メーター",
   "meters.tx.idle": "送信メーター — {{when}}",
   "meters.tx.swr.title": "アンテナ整合 — 2:1以下に保ってください",
+  "meters.tx.swr.unverified": "アンテナ整合 — これは無線機自身の生の値です。Nexus はこの機種について検証済みの目盛りを持っていないため、ここで何を高いとみなすかをお伝えできません。同調しながら値がどちらへ動くかを見てください。絶対値は大きく外れていることがあり、この値で送信が止まることはありません。",
   "meters.tx.alc.title": "ALC — SSBのピークがゾーンに軽く触れる程度にマイクゲインを設定。振り切らせないでください",
   "meters.tx.po.title": "実際の出力",
   "meters.tx.comp.title": "スピーチコンプレッション",

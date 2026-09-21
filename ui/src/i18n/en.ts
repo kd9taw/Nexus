@@ -9176,6 +9176,14 @@ export const EN = {
   // written in `TxMeters.tsx`; see the note there for why it has not moved yet.
   'meters.tx.idle': 'TX meters — {{when}}',
   'meters.tx.swr.title': 'Antenna match — keep it under 2:1',
+  // ⚠️ THE SAME READING, ON A SCALE NEXUS CANNOT VOUCH FOR (2026-09-20). `swrScaleVerified`
+  // is false — the rig is outside the two paths whose meter curve we can point at — so the
+  // line above must not be shown: "under 2:1" is a threshold on an absolute scale, and the
+  // bar's ok/warn/hot zoning is that same claim in colour. This REPLACES both. It carries no
+  // number of its own, and it hands back the use that is still valid: watch which way the
+  // figure moves. The meter itself is not hidden — TxMeters.tsx says why.
+  'meters.tx.swr.unverified':
+    "Antenna match — this is the radio's own raw figure, and Nexus has no verified scale for this model, so it cannot tell you what counts as high here. Watch which way it moves as you tune; the absolute number may be well out, and nothing stops your transmission on it.",
   'meters.tx.alc.title': 'ALC — set mic gain so SSB peaks just tickle the zone, never peg it',
   'meters.tx.po.title': 'Actual output power',
   'meters.tx.comp.title': 'Speech compression',
