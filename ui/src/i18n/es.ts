@@ -2364,6 +2364,7 @@ export const ES: PartialCatalog = {
   "meters.tx.idle": "Medidores de TX — {{when}}",
   "meters.tx.po.title": "Potencia real de salida",
   "meters.tx.swr.title": "Adaptación de antena — mantenla por debajo de 2:1",
+  "meters.tx.swr.unverified": "Adaptación de antena — esta es la cifra en bruto del propio equipo, y Nexus no tiene una escala verificada para este modelo, así que no puede decirte qué cuenta como alto aquí. Fíjate en hacia dónde se mueve mientras sintonizas; el número absoluto puede estar muy lejos, y nada detiene tu transmisión por él.",
   "nav.aria": "Modo de operación",
   "nav.awards.label": "Diplomas",
   "nav.awards.title": "Diplomas — tu Journey (primeras veces, escaleras, hitos) y el progreso oficial de DXCC/WAS/WAZ",
