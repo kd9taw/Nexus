@@ -470,6 +470,31 @@ export function globeLayersFromStored(v: string | null): Partial<GlobeLayers> {
   }
 }
 
+// ── layer accessors, HOISTED OUT OF THE JSX ─────────────────────────────────────────────────
+//
+// ⚠️ An accessor written inline in the JSX is a NEW FUNCTION on every render, react-kapsule
+// forwards any prop that is `!==` the last one, and three-globe's paths and polygons layers
+// declare theirs WITHOUT `triggerUpdate: false` — so each one re-ran the layer's `update()`,
+// which re-digests every object it holds. For the state borders that is `calcPath` plus two
+// vertex arrays across **302 line-strings / 11,664 coordinates**, three times a second, with
+// nothing on the map changing (App re-renders the globe on every 300 ms snapshot, and States
+// is on by default). Same mechanism as the spot factory in 2432b38f, one layer over; these are
+// all pure, so module scope is the whole fix.
+//
+// Not every accessor matters: the rings layer declares `ringColor` and its four siblings
+// `triggerUpdate: false`, so an inline one there reaches the layer and changes nothing. Check
+// the prop's declaration before assuming either way.
+const pathPointLat = (p: unknown) => (p as [number, number])[0]
+const pathPointLng = (p: unknown) => (p as [number, number])[1]
+const pathColor = () => 'rgba(126,158,180,0.8)'
+// react-globe.gl declares polygon coordinates as number[] — wrong for polygons (runtime accepts
+// the standard nested GeoJSON rings) — so cast to its shape.
+const polygonGeometry = (d: object) =>
+  (d as { geometry: unknown }).geometry as { type: string; coordinates: number[] }
+const polygonCap = (d: object) => (d as { fill: string }).fill
+const polygonTransparent = () => 'rgba(0,0,0,0)'
+const polygonAlt = (d: object) => (d as { alt: number }).alt
+
 export default function Globe3D({
   myGrid,
   prop,
@@ -695,7 +720,14 @@ export default function Globe3D({
     return (geo.coordinates ?? []).map((line) => line.map(([lon, lat]) => [lat, lon] as [number, number]))
   }, [])
 
-  const rings = qth ? [{ lat: qth.lat, lng: qth.lon }] : []
+  // The QTH ping ring — HELD BY ITS DATUM, for the spots' reason (§4/§5 of the render test).
+  // three-globe's rings layer joins on DATUM IDENTITY too, and its `onCreateObj` returns a Group
+  // with no `__nextRingTime`, so a rebuilt one spawns a ring at radius 0 on the next frame: built
+  // inline, this restarted the propagation animation on every render — ~3×/s — and the ping never
+  // reached full radius. `qth` is already memoised on `myGrid`, so keying on it is exact: the ring
+  // is rebuilt when, and only when, the QTH moves. No `useStableByKey` needed, and no guard on the
+  // accessors either — `ringColor` and friends are `triggerUpdate: false` in the shipped layer.
+  const rings = useMemo(() => (qth ? [{ lat: qth.lat, lng: qth.lon }] : []), [qth])
 
   // The globe surface material: the day-side texture darkened toward the 2-D globe's
   // night-earth mood. Built here (not via a ref getter — react-globe.gl takes it as a
@@ -1800,20 +1832,16 @@ export default function Globe3D({
           arcDashAnimateTime={2200}
           arcAltitudeAutoScale={0.4}
           polygonsData={show.openings ? sectorPolys : []}
-          polygonGeoJsonGeometry={(d: object) =>
-            // react-globe.gl declares coordinates as number[] — wrong for polygons
-            // (runtime accepts the standard nested GeoJSON rings) — so cast to its shape.
-            (d as { geometry: unknown }).geometry as { type: string; coordinates: number[] }
-          }
-          polygonCapColor={(d: object) => (d as { fill: string }).fill}
-          polygonSideColor={() => 'rgba(0,0,0,0)'}
-          polygonStrokeColor={() => 'rgba(0,0,0,0)'}
-          polygonAltitude={(d: object) => (d as { alt: number }).alt}
+          polygonGeoJsonGeometry={polygonGeometry}
+          polygonCapColor={polygonCap}
+          polygonSideColor={polygonTransparent}
+          polygonStrokeColor={polygonTransparent}
+          polygonAltitude={polygonAlt}
           polygonsTransitionDuration={0}
           pathsData={show.states ? statePaths : []}
-          pathPointLat={(p: unknown) => (p as [number, number])[0]}
-          pathPointLng={(p: unknown) => (p as [number, number])[1]}
-          pathColor={() => 'rgba(126,158,180,0.8)'}
+          pathPointLat={pathPointLat}
+          pathPointLng={pathPointLng}
+          pathColor={pathColor}
           pathStroke={1.1}
           ringsData={rings}
           ringColor={() => '#4ea1ff'}

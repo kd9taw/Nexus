@@ -770,12 +770,34 @@ mod tests {
     /// the radio loop (`reap_workers`). Both directions: a stop that is already set returns at
     /// once, a stop that arrives mid-wait is noticed inside the reap budget, and an untouched wait
     /// really does wait.
+    ///
+    /// ⚠️ **"AT ONCE" IS COUNTED AGAINST A REAL WAIT, NOT A CLOCK BUDGET.** The defect here is
+    /// [`backoff_wait`] sleeping before it reads the flag instead of after, and that costs
+    /// exactly one [`RECONNECT_POLL`] — so the `< 50 ms` this used to assert sat precisely ON
+    /// the value it was supposed to discriminate, while also being a size of scheduling stall
+    /// a loaded box hands out for free. One already-stopped wait cannot separate the two — it
+    /// measures 8.6 µs here, and 50 ms either way. TWENTY can: under a millisecond in total as
+    /// the code stands, a measured 1.003 s with the flag read late, against a 120 ms wait taken
+    /// on the same box in the same run. A stall big enough to break that ratio breaks the
+    /// yardstick with it.
     #[test]
     fn a_backing_off_worker_gives_up_as_soon_as_it_is_stopped() {
+        // The delay the positive control below waits out — and the yardstick the
+        // already-stopped waits are measured against.
+        const REAL_WAIT: Duration = Duration::from_millis(120);
+        const STOPPED_RUNS: u32 = 20;
+        assert!(
+            RECONNECT_POLL * STOPPED_RUNS > REAL_WAIT * 4,
+            "the fixture no longer separates a sleep-first backoff from a stop-first one: \
+             {STOPPED_RUNS} × {RECONNECT_POLL:?} must stay well clear of {REAL_WAIT:?}"
+        );
+
         let stop = Arc::new(AtomicBool::new(true));
         let t = Instant::now();
-        assert!(!backoff_wait(&stop, RECONNECT_MAX));
-        assert!(t.elapsed() < Duration::from_millis(50), "returns at once");
+        for _ in 0..STOPPED_RUNS {
+            assert!(!backoff_wait(&stop, RECONNECT_MAX));
+        }
+        let stopped = t.elapsed();
 
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -794,8 +816,15 @@ mod tests {
         // Positive control: with nothing stopping it, the wait is actually waited out.
         let stop = Arc::new(AtomicBool::new(false));
         let t = Instant::now();
-        assert!(backoff_wait(&stop, Duration::from_millis(120)));
-        assert!(t.elapsed() >= Duration::from_millis(100));
+        assert!(backoff_wait(&stop, REAL_WAIT));
+        let real_wait = t.elapsed();
+        assert!(real_wait >= Duration::from_millis(100));
+
+        assert!(
+            stopped < real_wait,
+            "{STOPPED_RUNS} already-stopped waits took {stopped:?}, against {real_wait:?} for \
+             ONE real wait — the stop flag is being read after the sleep, not before it"
+        );
     }
 
     #[test]

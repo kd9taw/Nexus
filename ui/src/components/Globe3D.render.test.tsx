@@ -73,6 +73,14 @@ vi.mock('react-globe.gl', async () => {
   //     factory tears the whole layer down — and react-kapsule forwards a prop to the layer at
   //     all only when it is `!==` the previous one.
   const htmlLayer = { els: new Map<object, HTMLElement>() }
+  // three-globe's RINGS layer, reduced the same way (§5). Same `digest()`, so the same datum-
+  // identity join — but a ring is a `THREE.Group`, not a DOM node, so what stands in for the
+  // spot's `div` is the object the join hands back. `onCreateObj` returns a Group with no
+  // `__nextRingTime`, which is why a rebuilt one restarts the ping from radius 0; `pings` counts
+  // exactly that. NOTE the rings layer declares `ringColor`/`ringMaxRadius`/
+  // `ringPropagationSpeed`/`ringRepeatPeriod`/`ringResolution` as `triggerUpdate: false`, so —
+  // unlike `htmlElement` — a new accessor never reaches this join at all.
+  const ringLayer = { objs: new Map<object, object>(), pings: 0 }
   const Globe = forwardRef<unknown, Record<string, unknown>>(function Globe(props, ref) {
     useImperativeHandle(ref, () => fake, [])
     renders.push(props)
@@ -81,6 +89,19 @@ vi.mock('react-globe.gl', async () => {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
     const host = useRef<HTMLDivElement>(null)
+    const sentRings = useRef<unknown>(undefined)
+    useLayoutEffect(() => {
+      const data = (props.ringsData ?? []) as object[]
+      if (sentRings.current === data) return // react-kapsule forwarded nothing: no digest
+      sentRings.current = data
+      for (const d of data) {
+        if (ringLayer.objs.has(d)) continue
+        ringLayer.pings++
+        ringLayer.objs.set(d, { ping: ringLayer.pings })
+      }
+      const live = new Set(data)
+      for (const d of [...ringLayer.objs.keys()]) if (!live.has(d)) ringLayer.objs.delete(d)
+    })
     const sent = useRef<{ data: unknown; factory: unknown }>({ data: undefined, factory: undefined })
     useLayoutEffect(() => {
       const data = (props.htmlElementsData ?? []) as object[]
@@ -109,7 +130,7 @@ vi.mock('react-globe.gl', async () => {
     })
     return <div data-testid="globe" ref={host} />
   })
-  return { default: Globe, __fake: fake, __htmlLayer: htmlLayer }
+  return { default: Globe, __fake: fake, __htmlLayer: htmlLayer, __ringLayer: ringLayer }
 })
 
 import Globe3D from './Globe3D'
@@ -124,6 +145,10 @@ const fake = (ReactGlobe as unknown as { __fake: FakeGlobe }).__fake
 /** The stub's HTML-elements layer — its map outlives `cleanup()`, so it is reset per test. */
 const htmlLayer = (ReactGlobe as unknown as { __htmlLayer: { els: Map<object, HTMLElement> } })
   .__htmlLayer
+/** The stub's rings layer — same lifetime problem as `htmlLayer`, so also reset per test. */
+const ringLayer = (
+  ReactGlobe as unknown as { __ringLayer: { objs: Map<object, object>; pings: number } }
+).__ringLayer
 
 /** The last ResizeObserver callback Globe3D installed — fired by hand to simulate a resize. */
 let roCallback: (() => void) | null = null
@@ -139,6 +164,8 @@ class RO {
 beforeEach(() => {
   renders.length = 0
   htmlLayer.els.clear()
+  ringLayer.objs.clear()
+  ringLayer.pings = 0
   fake.paused = false
   fake.frames = 0
   roCallback = null
@@ -480,5 +507,116 @@ describe('Globe3D spots keep their DOM nodes across a snapshot', () => {
     expect(dots(r), 'and the layer still draws three spots').toHaveLength(3)
     await poll(r, snapshot([{ ...spot('JA1ZZ', 35, 139, false), ageSecs: 60 }] as MapSpot[]))
     expect(dots(r), 'two spots aged off the map').toHaveLength(1)
+  })
+})
+
+// 5. THE QTH PING RING KEEPS ITS OBJECT UNTIL THE QTH ITSELF MOVES.
+//    §4's sibling, one layer over. `ringsData` was built inline as `qth ? [{ lat, lng }] : []`, so
+//    every render handed three-globe a new array carrying a NEW DATUM — and App re-renders the
+//    globe on every 300 ms snapshot. The rings layer joins on DATUM IDENTITY exactly as the HTML
+//    layer does (data-bind-mapper's id accessor is `d => d`, and the rings layer never overrides
+//    it), and its `onCreateObj` hands back a `THREE.Group` with no `__nextRingTime` — so the next
+//    frame spawns a fresh ring at radius 0. The ping restarted ~3×/s and never reached full
+//    radius. A ring is not a DOM node, so what stands in for §4's `div` is the object the join
+//    hands back, and `pings` counts how many times a new one was made.
+//
+//    ⚠️ ONLY THE DATA TRIGGER — checked against the shipped layer, not assumed from §4.
+//    `ringColor`, `ringResolution`, `ringMaxRadius`, `ringPropagationSpeed` and
+//    `ringRepeatPeriod` are every one of them declared `triggerUpdate: false`, so the inline
+//    `ringColor={() => …}` in the JSX, which IS a new function on every render, reaches the layer
+//    and changes nothing. §4's second half has no counterpart here: pinning that reference would
+//    assert something the layer ignores.
+describe('Globe3D keeps the QTH ping ring across a snapshot', () => {
+  const ring = () => [...ringLayer.objs.values()][0]
+
+  async function mount(grid = 'EN52') {
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<Globe3D {...props(snapshot([]), ROSTER)} myGrid={grid} />)
+    })
+    return r
+  }
+  const poll = (r: ReturnType<typeof render>, grid = 'EN52') =>
+    act(async () => {
+      r.rerender(<Globe3D {...props(snapshot([]), clone(ROSTER))} myGrid={grid} />)
+    })
+
+  it('five identical polls leave the ping ring as the very same object', async () => {
+    const r = await mount()
+    const before = ring()
+    expect(before, 'CONTROL: the QTH ring really did reach the layer').toBeTruthy()
+    for (let i = 0; i < 5; i++) await poll(r)
+    expect(ring(), 'the ring was torn out and rebuilt, restarting its ping').toBe(before)
+    expect(ringLayer.pings, 'and the ping animation started exactly once').toBe(1)
+  })
+
+  it('hands the layer the SAME data array across identical polls', async () => {
+    const r = await mount()
+    const first = renders[renders.length - 1]
+    for (let i = 0; i < 5; i++) await poll(r)
+    expect(
+      renders[renders.length - 1].ringsData,
+      'a new array is a full re-join: the one datum is unseen, so the ring is recreated',
+    ).toBe(first.ringsData)
+  })
+
+  it('POSITIVE CONTROL — the QTH moving DOES rebuild the ring', async () => {
+    const r = await mount()
+    const before = ring()
+    await poll(r, 'FN31') // the operator corrects their grid
+    expect(ring(), 'the ring must follow the QTH').not.toBe(before)
+    expect(ringLayer.pings, 'and the new ring pings from its new place').toBe(2)
+  })
+})
+
+// 6. THE LAYER ACCESSORS ARE THE SAME FUNCTIONS FROM ONE RENDER TO THE NEXT.
+//    §4's second trigger, swept across the layers §4 did not look at. react-kapsule forwards any
+//    prop that is `!==` the last one, and kapsule's setter ends `if (redigest) digest()` — where
+//    `redigest` is the prop's `triggerUpdate`, defaulting to TRUE. three-globe's paths and
+//    polygons layers declare their accessors without it, so an accessor written inline in the JSX
+//    re-ran the layer's `update()` on every render; `PathsLayerKapsule.update` re-digests every
+//    path it holds, recomputing `calcPath` and two vertex arrays across the state-border mesh's
+//    302 line-strings and 11,664 coordinates — three times a second, States being on by default,
+//    with nothing on the map changed.
+//
+//    This asserts the references, not the work: jsdom has no WebGL and three-globe is stubbed, so
+//    what is provable here is exactly what react-kapsule reads — prop identity. `htmlElement` has
+//    its own test in §4 because a new one CLEARS that layer rather than merely re-digesting it.
+describe('Globe3D hands globe.gl the same layer accessors across a snapshot', () => {
+  // Every accessor prop whose layer declares it `triggerUpdate: true` (the default). `ringColor`
+  // and its four siblings are deliberately absent: the rings layer declares them
+  // `triggerUpdate: false`, so pinning them would assert a reference the layer never reads back.
+  const ACCESSORS = [
+    'pathPointLat',
+    'pathPointLng',
+    'pathColor',
+    'polygonGeoJsonGeometry',
+    'polygonCapColor',
+    'polygonSideColor',
+    'polygonStrokeColor',
+    'polygonAltitude',
+  ] as const
+
+  it('five identical polls change none of them', async () => {
+    const prop = snapshot([spot('DL1AA', 50, 8, true)])
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<Globe3D {...props(prop, ROSTER)} />)
+    })
+    const first = renders[renders.length - 1]
+    for (const k of ACCESSORS) {
+      expect(typeof first[k], `CONTROL: ${k} really is being passed to globe.gl`).toBe('function')
+    }
+    for (let i = 0; i < 5; i++) {
+      await act(async () => {
+        r.rerender(<Globe3D {...props(prop, clone(ROSTER))} />)
+      })
+    }
+    const last = renders[renders.length - 1]
+    for (const k of ACCESSORS) {
+      expect(last[k], `${k} is a new function, so its layer re-digests every object it holds`).toBe(
+        first[k],
+      )
+    }
   })
 })
