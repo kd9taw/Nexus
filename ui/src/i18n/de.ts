@@ -5078,7 +5078,7 @@ export const DE: PartialCatalog = {
   "phone.dsp.nr.title": "Noise Reduction — holt die Stimme aus dem breitbandigen Rauschen (RX, DSP)",
   "phone.dsp.notch.title": "Auto-Notch (ANF) — löscht Träger und Heterodyne aus (RX, DSP)",
   "phone.dsp.comp.title": "Sprachkompressor — mehr mittlere Sprechleistung (TX)",
-  "phone.dsp.manualNotch.title": "Manueller Notch — der, den man selbst auf einen Pfeifton setzt, mit dem Frequenzregler. Nicht zu verwechseln mit Notch, der automatisch nach einem Träger sucht.",
+  "phone.dsp.manualNotch.title": "Manueller Notch — der, den man selbst auf einen Pfeifton setzt, mit dem Frequenzregler. Nicht zu verwechseln mit Auto notch, der automatisch nach einem Träger sucht.",
   "phone.dsp.vox.title": "Sprachgesteuertes Senden (VOX) — freihändiges Tasten (TX)",
   "phone.dsp.toggleFailed": "{{func}} konnte nicht umgeschaltet werden",
   "phone.rxDsp.aria": "RX-DSP-Pegel",

@@ -8677,15 +8677,19 @@ export const EN = {
   'phone.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
   // One word, one key: both reference sliders are labelled for the same thing.
   'phone.scope.ref.label': 'Ref',
-  // The DSP function NAMES (NB, NR, Notch, COMP, VOX) are the rig's own and stay in the code;
-  // `{{func}}` is the one the toggle failed on.
+  // The DSP function NAMES stay in the code; `{{func}}` is the one the toggle failed on.
+  // NB/NR/COMP/VOX are the rig's own front-panel words. "Auto notch"/"Manual notch" are NOT —
+  // Hamlib's ANF/MN read inverted on a Yaesu, so the operator ruling of 2026-09-20 replaced
+  // them with plain function names, the same on every rig AND in every locale, which is what
+  // keeps them out of here. See DSP_FUNCS in `PhoneCockpit.tsx`; the two titles below are the
+  // translated half, and they name those two words as the invariant tokens they are.
   'phone.dsp.aria': 'Rig DSP functions',
   'phone.dsp.nb.title': 'Noise Blanker — kills impulse/ignition noise (RX)',
   'phone.dsp.nr.title': 'Noise Reduction — pulls voice out of broadband hiss (RX, DSP)',
   'phone.dsp.notch.title': 'Auto-Notch (ANF) — nulls carriers/heterodynes (RX, DSP)',
   'phone.dsp.comp.title': 'Speech Compressor — more average talk power (TX)',
   'phone.dsp.manualNotch.title':
-    'Manual notch — the one you place yourself on a whistle, using the notch frequency slider. Distinct from Notch, which hunts a carrier automatically.',
+    'Manual notch — the one you place yourself on a whistle, using the notch frequency slider. Distinct from Auto notch, which hunts a carrier automatically.',
   'phone.dsp.vox.title': 'Voice-Operated Transmit — hands-free keying (TX)',
   'phone.dsp.toggleFailed': 'Could not toggle {{func}}',
   'phone.rxDsp.aria': 'RX DSP levels',

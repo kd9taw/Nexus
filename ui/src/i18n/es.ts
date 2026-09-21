@@ -2898,7 +2898,7 @@ export const ES: PartialCatalog = {
   "panels.undo.title": "Dejar la disposición como estaba antes del último cambio",
   "phone.dsp.aria": "Funciones DSP del equipo",
   "phone.dsp.comp.title": "Compresor de voz — más potencia media de voz (TX)",
-  "phone.dsp.manualNotch.title": "Notch manual — el que colocas tú sobre un silbido, con el deslizador de frecuencia del notch. Distinto del Notch, que caza una portadora automáticamente.",
+  "phone.dsp.manualNotch.title": "Notch manual — el que colocas tú sobre un silbido, con el deslizador de frecuencia del notch. Distinto de Auto notch, que caza una portadora automáticamente.",
   "phone.dsp.nb.title": "Noise Blanker — elimina el ruido impulsivo o de encendido (RX)",
   "phone.dsp.notch.title": "Auto-Notch (ANF) — anula portadoras y heterodinos (RX, DSP)",
   "phone.dsp.nr.title": "Noise Reduction — saca la voz del siseo de banda ancha (RX, DSP)",

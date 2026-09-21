@@ -5366,7 +5366,7 @@ export const JA: PartialCatalog = {
   "phone.dsp.nr.title": "ノイズリダクション — 広帯域ノイズの中から音声を引き出します (RX, DSP)",
   "phone.dsp.notch.title": "オートノッチ (ANF) — キャリアやヘテロダインを除去 (RX, DSP)",
   "phone.dsp.comp.title": "スピーチコンプレッサー — 平均トークパワーを上げます (TX)",
-  "phone.dsp.manualNotch.title": "マニュアルノッチ — ノッチ周波数スライダーで、ピー音に自分で合わせるノッチです。キャリアを自動で追いかけるNotchとは別物です。",
+  "phone.dsp.manualNotch.title": "マニュアルノッチ — ノッチ周波数スライダーで、ピー音に自分で合わせるノッチです。キャリアを自動で追いかけるAuto notchとは別物です。",
   "phone.dsp.vox.title": "ボイスオペレート送信 — ハンズフリーキーイング (TX)",
   "phone.dsp.toggleFailed": "{{func}}を切り替えられませんでした",
   "phone.rxDsp.aria": "RX DSPレベル",

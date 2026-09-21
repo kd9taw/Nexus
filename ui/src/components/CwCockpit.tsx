@@ -359,11 +359,18 @@ function callsignChars(raw: string): string {
  * the rig to CW (the rig-mode policy, wired in App). No contest scoring — by design.
  */
 /** DSP funcs relevant to CW — NB (impulse noise), NR (broadband hiss), Notch/ANF (carriers).
- * COMP/VOX are voice-only, so they're deliberately absent here. Capability-gated like Phone. */
+ * COMP/VOX are voice-only, so they're deliberately absent here. Capability-gated like Phone.
+ *
+ * ⭐ "Auto notch", not "Notch" — the same operator ruling (2026-09-20) that renamed the pair in
+ * Phone, and it reaches here because this is the SAME control: ANF, the one that hunts a carrier
+ * on its own, which a Yaesu's panel calls DNF. Naming it "Notch" in CW while Phone calls it
+ * "Auto notch" would rebuild the misread one cockpit over. CW offers no manual notch — the rig
+ * field is not read here — so this is the whole of the pair in this cockpit. DSP_FUNCS in
+ * `PhoneCockpit.tsx` carries the full reasoning. */
 const CW_DSP_FUNCS = [
   { key: 'nb', label: 'NB', titleKey: 'cw.dsp.nb.title' },
   { key: 'nr', label: 'NR', titleKey: 'cw.dsp.nr.title' },
-  { key: 'notch', label: 'Notch', titleKey: 'cw.dsp.notch.title' },
+  { key: 'notch', label: 'Auto notch', titleKey: 'cw.dsp.notch.title' },
 ] as const
 
 export function CwCockpit({
