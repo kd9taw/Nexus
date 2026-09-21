@@ -4693,6 +4693,14 @@ impl Settings {
         self.omnirig_slot = p.omnirig_slot;
         self.rigctld_port = p.rigctld_port;
         self.icom_native_cat = p.icom_native_cat;
+        // ⚠️ Found by `the_flat_mirror_round_trips_every_per_radio_field_both_ways` on its
+        // first run — the THIRD field of this class, after `yaesu_rf_scope` and
+        // `rated_watts`. Its own doc already called itself a flat mirror and neither sync
+        // carried it, so a radio switch left the previous rig's D1/D2/D3 in the flat field
+        // and `Transport::from_settings` handed THAT to the CI-V layer. On an Icom the DATA
+        // mode selects which audio input the rig transmits from, so the wrong one is wrong
+        // TX audio routing on the radio you just switched to.
+        self.icom_data_mode = p.icom_data_mode;
         self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.sstv_hold_data_submode = p.sstv_hold_data_submode;
@@ -4735,6 +4743,7 @@ impl Settings {
             omnirig_slot,
             rigctld_port,
             icom_native_cat,
+            icom_data_mode,
             yaesu_rf_scope,
             data_modes_plain_ssb,
             sstv_hold_data_submode,
@@ -4765,6 +4774,7 @@ impl Settings {
             self.omnirig_slot,
             self.rigctld_port,
             self.icom_native_cat,
+            self.icom_data_mode,
             self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
             self.sstv_hold_data_submode,
@@ -4796,6 +4806,7 @@ impl Settings {
             p.omnirig_slot = omnirig_slot;
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
+            p.icom_data_mode = icom_data_mode;
             p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.sstv_hold_data_submode = sstv_hold_data_submode;
@@ -5749,6 +5760,158 @@ mod tests {
         assert_eq!(
             s.radios[1].rated_watts, 5,
             "a rating typed on the active radio must reach its profile, or the save drops it"
+        );
+    }
+
+    /// ⛔ **THE FLAT MIRROR CARRIES EVERY FIELD IN BOTH DIRECTIONS.**
+    ///
+    /// The sibling of [`every_per_radio_field_is_reachable_through_the_patch`], for the OTHER
+    /// seam. `Settings` holds a flat copy of the active radio's fields, kept in step by
+    /// `sync_flat_from_active` (profile → flat, on load and on a radio switch) and
+    /// `sync_active_from_flat` (flat → profile, before save). Plumbing a per-radio field means
+    /// touching BOTH, and until this test existed nothing checked that the author had.
+    ///
+    /// ⚠️ **TWO BUGS OF THIS EXACT CLASS HAVE SHIPPED.** `yaesu_rf_scope` was a per-profile
+    /// field with no flat mirror at all, so saving the radio you were USING silently dropped
+    /// it (`the_yaesu_scope_optin_survives_a_flat_save_of_the_active_radio`); and
+    /// `rated_watts` was snapshotted into `sync_active_from_flat`'s tuple and then never
+    /// assigned, so a rating typed on the active radio was discarded on save. Both were
+    /// caught by hand — the second only by a clippy `unused variable`, which stops firing the
+    /// moment the variable is bound to anything. Per-field tests cannot close a class.
+    ///
+    /// The check is on VALUES, not on names: every field is perturbed away from its default
+    /// and must arrive with that perturbed value. A line that copies the wrong field, or
+    /// copies a default over a real value, fails here exactly as a missing line does.
+    #[test]
+    fn the_flat_mirror_round_trips_every_per_radio_field_both_ways() {
+        /// Fields that deliberately have no flat mirror. Each is either identity (chosen in
+        /// the radio list, never in the rig form) or tune memory owned by the radio loop,
+        /// which must NOT be written back from a stale flat copy.
+        const UNMIRRORED: [&str; 7] = [
+            "id",
+            "name",
+            "enabled",
+            "bands",
+            "lastDialMhz",
+            "lastBand",
+            "lastSideband",
+        ];
+        // A value that is definitely not the default, whatever the type is.
+        fn perturb(v: &serde_json::Value) -> Option<serde_json::Value> {
+            use serde_json::Value;
+            Some(match v {
+                Value::Bool(b) => Value::Bool(!b),
+                Value::String(s) => Value::String(format!("{s}-mirror-probe")),
+                Value::Number(n) if n.is_f64() => {
+                    serde_json::json!(n.as_f64().unwrap_or(0.0) + 0.25)
+                }
+                Value::Number(n) if n.is_i64() => serde_json::json!(n.as_i64().unwrap_or(0) + 7),
+                Value::Number(n) => serde_json::json!(n.as_u64().unwrap_or(0) + 7),
+                // A null is an Option at None; a mirrored Option must carry a Some too, but
+                // its inner type is not knowable from a null, so it is probed as `false`
+                // only when that round-trips, and skipped otherwise.
+                Value::Null => Value::Bool(true),
+                _ => return None,
+            })
+        }
+
+        let profile_keys: Vec<String> = serde_json::to_value(RadioProfile::default())
+            .expect("profile serializes")
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect();
+        let flat_keys = serde_json::to_value(Settings::default())
+            .expect("settings serialize")
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<String>>();
+
+        // The mirrored set is DERIVED: a per-radio field with a same-named flat field is
+        // mirrored, and every one of those must survive both directions.
+        let mirrored: Vec<&String> = profile_keys
+            .iter()
+            .filter(|k| !UNMIRRORED.contains(&k.as_str()) && flat_keys.contains(*k))
+            .collect();
+        assert!(
+            mirrored.len() > 20,
+            "precondition: the mirror should be most of the profile, found {}",
+            mirrored.len()
+        );
+
+        let mut missing_outbound: Vec<String> = Vec::new();
+        let mut missing_inbound: Vec<String> = Vec::new();
+        for key in &mirrored {
+            let base = serde_json::to_value(RadioProfile::default()).expect("profile");
+            let Some(probe) = perturb(&base[key.as_str()]) else {
+                continue;
+            };
+
+            // ── profile → flat (`sync_flat_from_active`) ────────────────────────────────
+            let mut obj = base.as_object().expect("an object").clone();
+            obj.insert((*key).clone(), probe.clone());
+            let Ok(p) = serde_json::from_value::<RadioProfile>(serde_json::Value::Object(obj))
+            else {
+                continue; // the probe is not a legal value for this field's type
+            };
+            let mut s = Settings {
+                radios: vec![RadioProfile { id: 0, ..p }],
+                active_radio: 0,
+                ..Default::default()
+            };
+            s.sync_flat_from_active();
+            let flat = serde_json::to_value(&s).expect("settings serialize");
+            if flat[key.as_str()] != probe {
+                missing_outbound.push(format!(
+                    "{key}: sync_flat_from_active left {} (profile held {probe})",
+                    flat[key.as_str()]
+                ));
+            }
+
+            // ── flat → profile (`sync_active_from_flat`) ────────────────────────────────
+            let mut s = Settings {
+                radios: vec![RadioProfile::default()],
+                active_radio: 0,
+                ..Default::default()
+            };
+            let mut flat = serde_json::to_value(&s).expect("settings serialize");
+            flat[key.as_str()] = probe.clone();
+            let Ok(mut s2) = serde_json::from_value::<Settings>(flat) else {
+                continue;
+            };
+            s2.sync_active_from_flat();
+            let got = serde_json::to_value(&s2.radios[0]).expect("profile serializes");
+            if got[key.as_str()] != probe {
+                missing_inbound.push(format!(
+                    "{key}: sync_active_from_flat left {} (the form held {probe})",
+                    got[key.as_str()]
+                ));
+            }
+            let _ = &mut s;
+        }
+
+        // ⚠️ ONE assertion covering BOTH directions, deliberately. Two asserts would report
+        // only the first, and the second list would never be printed — which is how a
+        // half-diagnosed seam gets "fixed" one direction at a time.
+        assert!(
+            missing_outbound.is_empty() && missing_inbound.is_empty(),
+            "the flat mirror drops fields.\n\
+             A radio switch does not bring these with it (sync_flat_from_active):\n  {}\n\
+             An edit to the ACTIVE radio is DISCARDED on save for these \
+             (sync_active_from_flat — the shape of the rated_watts and yaesu_rf_scope bugs):\n  {}",
+            if missing_outbound.is_empty() {
+                "(none)".to_string()
+            } else {
+                missing_outbound.join("\n  ")
+            },
+            if missing_inbound.is_empty() {
+                "(none)".to_string()
+            } else {
+                missing_inbound.join("\n  ")
+            },
         );
     }
 
