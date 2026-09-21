@@ -575,8 +575,10 @@ impl RigBackend for CivBackend {
                 let civ = commands::parse_agc_civ(&f)?;
                 Some(format!("{}", commands::agc_hamlib_from_civ(civ)))
             }
-            // The fractional `0x14 <sub>` family — AF gain, RF gain, squelch, NR, NB — all
-            // 0..1 like mic gain, and all distinct from the NR/NB on/off FUNCS on `0x16`.
+            // The fractional `0x14 <sub>` family — AF gain, RF gain, squelch, NR, NB and
+            // compressor DEPTH — all 0..1 like mic gain, and all distinct from the
+            // NR/NB/COMP on/off FUNCS on `0x16`. `COMP` here is the knob; `COMP_METER`
+            // above is the TX meter, and they are answered by name before this arm.
             // One token table (`commands::level_sub`) serves this and the setter below, so
             // the two cannot drift apart or transpose a pair.
             _ => commands::level_sub(name).and_then(|sub| self.dsp_level(sub)),
@@ -626,7 +628,7 @@ impl RigBackend for CivBackend {
         match token {
             "RIT" => Some(self.ack(commands::set_rit_on(self.addr, on))),
             "XIT" => Some(self.ack(commands::set_dtx_on(self.addr, on))),
-            // NB / NR / ANF / COMP / MON / VOX → the 0x16 DSP-function table.
+            // NB / NR / ANF / MN / COMP / MON / VOX → the 0x16 DSP-function table.
             _ => commands::func_sub(token)
                 .map(|sub| self.ack(commands::set_dsp_func(self.addr, sub, on))),
         }
@@ -1244,6 +1246,59 @@ mod tests {
         let mut line = String::new();
         rd.read_line(&mut line).unwrap();
         line
+    }
+
+    /// #95 ON THE NATIVE PATH: the controls an Icom operator lost by turning native CI-V
+    /// ON — the very path they enable to get the panadapter. `MN` (the manual notch) and
+    /// `COMP` (compressor DEPTH) reach the rig, and the daemon stops answering `RPRT -11`
+    /// for them. That answer is the whole defect: the service's poll latches the control
+    /// unsupported, the DTO goes `None`, and the cockpit drops the control — silently, so
+    /// the operator cannot tell it from a feature Nexus never built.
+    #[test]
+    fn native_civ_serves_the_manual_notch_and_the_compressor_depth() {
+        let (_d, port, regs) = daemon_with_regs();
+        let (mut c, mut rd) = client(port);
+
+        // This fixture models a 9700's band/scope registers, not its DSP, so it NAKs these
+        // — a SET comes back `RPRT -1`, "the rig refused". What must never come back is
+        // `RPRT -11`, "this daemon cannot do that", which is what latches the control off.
+        assert_ne!(
+            roundtrip(&mut c, &mut rd, "U MN 1\n"),
+            "RPRT -11\n",
+            "the manual notch must not answer as unimplemented"
+        );
+        assert_ne!(
+            roundtrip(&mut c, &mut rd, "L COMP 0.25\n"),
+            "RPRT -11\n",
+            "compressor depth must not answer as unimplemented"
+        );
+        let _ = roundtrip(&mut c, &mut rd, "u MN\n");
+        let _ = roundtrip(&mut c, &mut rd, "l COMP\n");
+
+        let r = regs.lock().unwrap();
+        let sent = |cmd: u8, data: &[u8]| r.log.iter().any(|(c, d)| *c == cmd && d == data);
+        assert!(
+            sent(0x16, &[0x48, 0x01]),
+            "MN on = 16 48 01; {:02x?}",
+            r.log
+        );
+        assert!(sent(0x16, &[0x48]), "MN read = 16 48; {:02x?}", r.log);
+        assert!(
+            sent(0x14, &[0x0E, 0x00, 0x63]),
+            "COMP 25% = 14 0e 00 63; {:02x?}",
+            r.log
+        );
+        assert!(sent(0x14, &[0x0E]), "COMP read = 14 0e; {:02x?}", r.log);
+        // …and NOTHING addressed `14 0D`, the notch-POSITION register. Compressor depth
+        // landing there would move a notch the operator never asked to move, and it is the
+        // register a `NOTCHF` entry in the percent table would have driven to full scale.
+        assert!(
+            !r.log
+                .iter()
+                .any(|(c, d)| *c == 0x14 && d.first() == Some(&0x0D)),
+            "the notch register must stay out of this; {:02x?}",
+            r.log
+        );
     }
 
     #[test]
