@@ -699,15 +699,30 @@ Fill it in on the Contesting tab in Settings."
     ///
     /// Three cases, and the FIRST is the one that is easy to get wrong:
     ///
-    /// 1. **A contact is already in flight under a different call — that is a
-    ///    CORRECTION, not a new station.** The operator keyed `K1ABC`, heard it was
-    ///    `K1ABD`, and fixed the box. The binding MOVES; no second number is minted.
-    ///    Minting one here is worse than the bug it would be fixing: it strands the
-    ///    first number on a call that will never be logged, and hands the station a
-    ///    second number while they only ever copied the first. The separator between
-    ///    "corrected the call" and "moved to another station" is not the text — it is
-    ///    [`park_working`](Self::park_working), which the entry line calls when it
-    ///    resets.
+    /// 1. **A contact is already in flight under a different call — and NEITHER
+    ///    binding is given up.** The gesture is ambiguous by construction: the same
+    ///    keystrokes are "`K1ABD`, not `K1ABC`" and "no answer, I've moved on", and
+    ///    nothing reachable from here can tell them apart. It was read as a correction
+    ///    always, which `remove`d the outgoing call's binding — so a station who had
+    ///    already copied a number off the air was forgotten by the gesture an operator
+    ///    makes most, which is the very defect [`issued`](Self::issued) exists to
+    ///    prevent, one level up.
+    ///
+    ///    **The ruling (operator, 2026-09-20): keep BOTH.** The outgoing call keeps its
+    ///    number. The incoming call is given **its own** number if it already holds one
+    ///    — and the exchange in flight is RE-RENDERED to it, or the cockpit would show,
+    ///    and the keyer send, a number that disagrees with the binding — and inherits
+    ///    the one in flight only if it holds none. **No second number is minted either
+    ///    way**, so a corrected call still sends what it sent and the run does not
+    ///    advance. The accepted cost is that two stations may hold one serial and, if
+    ///    both complete, two rows carry it: both partners copied that number, so both
+    ///    match at check-in. A stale entry on a call that will never come back costs a
+    ///    `String` and a `u32`, which is the trade `issued`'s own doc already makes.
+    ///
+    ///    [`park_working`](Self::park_working) is still the SEPARATOR, and it is what
+    ///    an unambiguous "moved on" goes through — the wipe button, a log, and a
+    ///    clicked spot, which is a new contact and nothing else. The call committed
+    ///    after it is issued a number of its own.
     /// 2. **Worked before and never logged** — they already hold a number, and it is
     ///    the number they must be given again. This is what makes the map worth having.
     /// 3. **New** — issue, and record the binding.
@@ -718,34 +733,64 @@ Fill it in on the Contesting tab in Settings."
     /// is not.
     pub fn working(&mut self, peer: &str, now_unix: u64) -> &InFlightQso {
         let peer = peer.trim().to_ascii_uppercase();
-        if let Some(f) = self.in_flight.as_mut() {
-            if f.peer != peer {
-                let was = std::mem::replace(&mut f.peer, peer.clone());
-                if let Some(n) = self.issued.remove(&was) {
+        if self.in_flight.as_ref().is_some_and(|f| f.peer != peer) {
+            let exchange = self.exchange;
+            match self.issued.get(&peer).copied() {
+                // They already hold a number: it is the one they copied, so it wins
+                // over the one in flight and the exchange in flight is re-rendered to
+                // it. Skipping the re-render leaves `serial_now` — which is what the
+                // strip shows, what the keyer sends and what `tx_for_row` stamps on the
+                // row — reading a number the binding does not name.
+                Some(n) => {
+                    let f = self.in_flight.as_mut().expect("in flight, another peer");
+                    f.peer = peer.clone();
+                    for v in &mut f.tx {
+                        if is_serial_slot(exchange, v.key) {
+                            v.raw = n.to_string();
+                        }
+                    }
+                }
+                // They hold none: this exchange is theirs from here. Binding it is what
+                // makes a corrected call send what it already sent, and nothing is
+                // minted — the number was issued when it was composed.
+                None => {
+                    self.in_flight
+                        .as_mut()
+                        .expect("in flight, another peer")
+                        .peer = peer.clone();
+                    if let Some(n) = self.serial_now() {
+                        self.issued.insert(peer.clone(), n);
+                    }
+                }
+            }
+        } else if self.in_flight.is_none() {
+            if let Some(&n) = self.issued.get(&peer) {
+                let mut tx = self.my_exchange.clone();
+                for v in &mut tx {
+                    if is_serial_slot(self.exchange, v.key) {
+                        v.raw = n.to_string();
+                    }
+                }
+                self.in_flight = Some(InFlightQso {
+                    peer,
+                    tx,
+                    since_unix: now_unix,
+                });
+            } else {
+                self.compose_for(&peer, now_unix);
+                if let Some(n) = self.serial_now() {
                     self.issued.insert(peer, n);
                 }
             }
-            return self.in_flight.as_ref().expect("just matched");
         }
-        if let Some(&n) = self.issued.get(&peer) {
-            let mut tx = self.my_exchange.clone();
-            for v in &mut tx {
-                if is_serial_slot(self.exchange, v.key) {
-                    v.raw = n.to_string();
-                }
-            }
-            self.in_flight = Some(InFlightQso {
-                peer,
-                tx,
-                since_unix: now_unix,
-            });
-            return self.in_flight.as_ref().expect("just set");
-        }
-        self.compose_for(&peer, now_unix);
-        if let Some(n) = self.serial_now() {
-            self.issued.insert(peer, n);
-        }
-        self.in_flight.as_ref().expect("compose_for just set it")
+        // ⚠️ ONE exit, and not for tidiness: an early `return` of a reference taken from
+        // `self.in_flight` borrows `*self` for the whole function on every path, so the
+        // arms below could not then touch `self`. Every arm leaves a contact in flight —
+        // the one already live under this call, the one just re-labelled, or the one
+        // just composed.
+        self.in_flight
+            .as_ref()
+            .expect("every arm above leaves a contact in flight")
     }
 
     /// The entry line was cleared without logging — the operator wiped it, or moved to
@@ -754,8 +799,8 @@ Fill it in on the Contesting tab in Settings."
     /// ⚠️ **The binding STAYS in [`issued`](Self::issued).** That station copied the
     /// number off the air; if they come back it is the number they must be given, and
     /// dropping it here is the whole defect in miniature. Only the *live* slot is
-    /// released, so the next call the operator commits is a new contact rather than a
-    /// correction of this one.
+    /// released, so the next call the operator commits is issued a number of its own
+    /// rather than inheriting the one that was in flight.
     pub fn park_working(&mut self) {
         self.in_flight = None;
     }

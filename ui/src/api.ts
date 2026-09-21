@@ -685,8 +685,10 @@ export async function contestLogManual(
  *
  *  In a contest with a serial the number shown and keyed is bound to THIS station from here
  *  until the contact is logged: a station worked earlier and never logged gets back the number
- *  they already copied, and correcting the call on the same entry moves the number rather than
- *  minting a second one.
+ *  they already copied, and a different call committed onto the same live entry takes that
+ *  exchange over — a corrected call sends what was already sent rather than a second number —
+ *  WITHOUT the call it replaced losing the number it copied. Both bindings are kept, because
+ *  the gesture is a correction and a move-on in the same keystrokes.
  *
  *  ⚠️ COMMIT ONLY — Enter, blur, a spot click. Never on every keystroke: bound to each edit it
  *  mints a binding per prefix of the call and strands all but the last. `contestZoneHint` is the
