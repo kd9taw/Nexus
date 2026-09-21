@@ -9022,6 +9022,23 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* ⛔ AT xs THE ONE-LINE STRIP MUST STILL FIT, AND THE GUTTERS ARE THE ONLY SLACK THERE IS.
+   Every cell but `.ph-txc-busy` is `white-space: nowrap` at the flex default `min-width: auto`,
+   so none of them can shrink below its own text — and they must not: these are the numbers that
+   say what goes out when you key, and a clipped one is worse than a tight one. The two escapes
+   this rule does NOT take are the reason it exists: wrapping is forbidden (the dock is
+   bottom-anchored, so a second line moves the PTT button out from under a held pointer, which is
+   the whole argument for `nowrap` above), and letting the cockpit scroll sideways is the defect
+   the compiled-browser suite catches — `.phone-cockpit.remote-quick-contact` measured
+   scrollWidth 387 against a 380-px viewport, seven pixels, on 2026-09-21.
+
+   Keyed on the EFFECTIVE width, never a raw `@media (max-width)`: `zoom: var(--ui-zoom)` sits on
+   `.app` rather than the root, so a media query measures the UNZOOMED width and a pinned-zoom
+   window never reaches it. `useViewport.ts` publishes the effective bucket; xs is < 768. */
+[data-viewport='xs'] .ph-txcontract {
+  gap: var(--space-1);
+  padding: 2px var(--space-1);
+}
 /* ✓rig · ⌁cmd · ⊘ — how well the figure beside it is known. Dim and small: the NUMBER is what
    the operator reads at a glance and the mark is what they check when it matters. Never
    colour alone — the word carries it (see TruthMark), so these three differ in text first. */
