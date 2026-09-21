@@ -38,6 +38,9 @@ import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
 import { LiveLevelMeter, useSmeterDb } from './LiveMeters'
 import { formatDialMhz } from './FrequencyReadout'
+// ⊘ — the shared unavailable mark. Its own module so `CockpitHeader` can print the same
+// one without an import cycle through this file; see the note there.
+import { Unavailable } from './UnavailableMark'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
@@ -317,20 +320,6 @@ interface PhoneFunc {
   titleKey: MessageKey
 }
 
-/** ⊘ — WHY THIS CONTROL IS DEAD, in text, beside the control it is about.
- *
- *  ⭐ THE RULING THIS EXISTS FOR (operator, 2026-09-20). Until now a control the radio did not
- *  report simply did not render, and the argument for that was real: *"a control that does
- *  nothing is worse than none."* It is overruled, because a control that VANISHES is
- *  indistinguishable from one that was never built — the operator who cannot find a manual
- *  notch learns nothing about whether his radio lacks it, whether his CAT backend lacks it, or
- *  whether Nexus never wrote it, and the third reading is the one he acts on. #95 was filed in
- *  exactly that confusion. So the control stays, disabled, wearing this.
- *
- *  ⚠️ TEXT, NEVER COLOUR ALONE, and never the glyph alone either: `⊘` is aria-hidden
- *  decoration and the WORD beside it is what a screen reader and a monochrome display get.
- *  The long sentence is the tooltip — a mark that fitted the whole explanation would not fit
- *  a control row. */
 /** ✓rig · ⌁cmd · ⊘ — HOW WELL THIS NUMBER IS KNOWN, which on a transmit readout is half the
  *  number's meaning.
  *
@@ -357,14 +346,6 @@ function TruthMark({ kind, title }: { kind: 'rig' | 'cmd' | 'off'; title: string
       <span aria-hidden="true">{glyph}</span>
       {kind === 'off' ? ' ' : ''}
       {word}
-    </span>
-  )
-}
-
-function Unavailable({ mark, title }: { mark: string; title: string }) {
-  return (
-    <span className="ph-unavail" role="note" title={title}>
-      <span aria-hidden="true">⊘</span> {mark}
     </span>
   )
 }

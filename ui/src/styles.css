@@ -8972,7 +8972,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .ph-txc-cell {
   display: inline-flex;
   align-items: baseline;
-  gap: 4px;
+  gap: var(--space-1);
   white-space: nowrap;
 }
 .ph-txc-lbl {

@@ -301,12 +301,18 @@ describe('a control the radio cannot drive is disabled and says why', () => {
     expect(mark.getAttribute('title'), 'the notch-frequency reason does not name the CAT backend').toMatch(/backend/i)
   })
 
-  it('CONTROL — a rig that reports everything wears no ⊘ mark at all', () => {
+  it('CONTROL — a rig that reports everything wears no ⊘ mark anywhere in the two chains', () => {
     // Without this the whole file would pass against a cockpit that marks every control
     // unavailable forever, which is the failure mode of a negative-space assertion.
+    //
+    // ⚠️ SCOPED TO THE TWO PANES, and it was not at first: a document-wide sweep for
+    // `.ph-unavail` also catches the HEADER's ATU mark, which is correct there (FULL_RIG
+    // reports no `atu`) and has nothing to do with the receive and transmit chains. It is
+    // named rather than widened — the ATU's own pair is in CockpitHeader.atu.test.tsx.
     mount(FULL_RIG)
+    const inChains = [...document.querySelectorAll('[data-pane="receiver"] .ph-unavail, [data-pane="transmitter"] .ph-unavail')]
     expect(
-      [...document.querySelectorAll('.ph-unavail')].map((m) => m.closest('[data-chain]')?.getAttribute('data-chain')),
+      inChains.map((m) => m.closest('[data-chain]')?.getAttribute('data-chain')),
       'a fully-reporting rig is being told it cannot do something',
     ).toEqual([])
   })
