@@ -357,23 +357,6 @@ pub fn rig_conn_is_network(rig_conn: &str, rig_addr: &str) -> bool {
 /// `Engine::repeater_tune` has to ask about the OUTPUT frequency of a machine the radio has
 /// not moved to yet — the convention it would use once it got there is what decides where
 /// keying it would land.
-/// The SIGN of an FM repeater shift: `+1` up, `-1` down, `0` simplex — and `0` for anything the
-/// grammar does not admit, which is what [`tempo_audio::rig::rptr_shift_line`] puts on the wire
-/// (`R None`) for an unrecognised value.
-///
-/// Free-standing for the same reason as [`rptr_offset_for_dial`] directly below, and it is the
-/// same hazard: the wire layer and the licence gate must not drift about which way a shift moves
-/// the transmitter. Both normalise through here, so `"-"` — which `Settings` does store — cannot
-/// read as a shift to one of them and as simplex to the other. A gate that read a live minus
-/// shift as simplex would under-refuse, which is the direction that keys.
-pub fn rptr_shift_sign(shift: &str) -> i8 {
-    match shift.trim().to_ascii_lowercase().as_str() {
-        "plus" | "+" => 1,
-        "minus" | "-" => -1,
-        _ => 0,
-    }
-}
-
 pub fn rptr_offset_for_dial(mhz: f64) -> i64 {
     if mhz >= 1240.0 {
         12_000_000

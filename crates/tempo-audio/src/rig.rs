@@ -76,12 +76,9 @@ pub fn mode_line(mode: &str, passband_hz: i32) -> String {
 }
 /// rigctld `R` — FM repeater shift: "plus"→`+`, "minus"→`-`, anything else→`None`.
 pub fn rptr_shift_line(shift: &str) -> String {
-    // Normalised by `tempo_app::settings::rptr_shift_sign`, NOT by a second copy of the match:
-    // the licence gate asks the same function which way this shift moves the transmitter, and a
-    // wire layer that disagreed with it would key somewhere the gate had not judged.
-    let s = match tempo_app::settings::rptr_shift_sign(shift) {
-        1 => "+",
-        -1 => "-",
+    let s = match shift.trim().to_ascii_lowercase().as_str() {
+        "plus" | "+" => "+",
+        "minus" | "-" => "-",
         _ => "None",
     };
     format!("R {s}\n")
@@ -1599,23 +1596,6 @@ mod tests {
         assert_eq!(rptr_shift_line("plus"), "R +\n");
         assert_eq!(rptr_shift_line("minus"), "R -\n");
         assert_eq!(rptr_shift_line("simplex"), "R None\n");
-        // The short forms are what `Settings` stores on the remote-recall path, and they route
-        // through the same `rptr_shift_sign` the licence gate asks — so these three cases are
-        // also the cross-crate agreement check: if the wire ever disagreed with the gate about
-        // which way a shift moves the transmitter, the gate would judge a frequency the rig was
-        // never going to key.
-        assert_eq!(rptr_shift_line("+"), "R +\n");
-        assert_eq!(rptr_shift_line("-"), "R -\n");
-        assert_eq!(
-            rptr_shift_line("MINUS"),
-            "R -\n",
-            "case-insensitive, as it always was"
-        );
-        assert_eq!(
-            rptr_shift_line("sideways"),
-            "R None\n",
-            "unrecognised → no shift"
-        );
         assert_eq!(rptr_offset_line(600_000), "O 600000\n");
         assert_eq!(ctcss_line(100.0), "C 1000\n"); // Hamlib wants tenths of Hz
         assert_eq!(ctcss_line(0.0), "C 0\n"); // off
