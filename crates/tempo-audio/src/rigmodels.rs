@@ -37,6 +37,15 @@ pub fn rig_models() -> Vec<(u32, &'static str)> {
         (3073, "Icom IC-7300"),
         (3085, "Icom IC-705"),
         (3078, "Icom IC-7610"),
+        // IC-7600 — moved up from the extended tier on a tester report ("the Icom IC-7600
+        // doesn't appear to be supported"). It WAS supported; it was only ever reachable from
+        // Settings' full catalog, never from the wizard, because "Show all models" defaults
+        // OFF. That is precisely the criterion
+        // `the_sdr_program_profiles_are_in_the_default_list` records: an entry that lives only
+        // in `extended_rig_models` is invisible to exactly the operator who has the problem.
+        // Sits here rather than with the older Icoms so a 7610 owner's neighbour is findable —
+        // the curated lineage otherwise jumps IC-756PROIII straight to IC-7610.
+        (3063, "Icom IC-7600"),
         (3081, "Icom IC-9700"),
         // IC-7760 (split control-head/RF-deck flagship). Verified index 92 in the bundled
         // Hamlib 4.7.1 riglist.h → model 3092. Driven via Hamlib rigctld, NOT Nexus's native
@@ -204,7 +213,6 @@ fn extended_rig_models() -> Vec<(u32, &'static str)> {
         (3061, "Icom IC-7200"),
         (3067, "Icom IC-7410"),
         (3062, "Icom IC-7700"),
-        (3063, "Icom IC-7600"),
         (3056, "Icom IC-7800"),
         (3068, "Icom IC-9100"),
         (3026, "Icom IC-756"),
@@ -1092,6 +1100,40 @@ mod tests {
         // And it does not emulate a TS-2000: Hamlib's powersdr/thetis backends send the
         // ZZ-prefixed extended set (`ZZMD%02d`, `ZZTX1;ZZTX`), not TS-2000 CAT.
         assert!(!name(2048).contains("TS-2000"), "got {:?}", name(2048));
+    }
+
+    /// THE FIELD REPORT (2026-09-20): *"The Icom IC-7600 doesn't appear to be supported."*
+    /// It always was — `(3063, "Icom IC-7600")` sat in the extended tier, so CAT worked the
+    /// moment you found it. The tester never found it, because the wizard shows the verified
+    /// tier and "Show all models" defaults OFF. Same shape and same remedy as the SDR-program
+    /// report above; this test is here so a future tidy-up cannot quietly demote it again.
+    ///
+    /// ⚠️ The triage note that prompted this claimed the verified tier "already carries the
+    /// 7200, 7410, 7700, 7800 and the whole 756 family". It does not — every one of those is
+    /// extended-only, and the real argument is the one asserted below: the curated Icom
+    /// lineage jumps IC-756PROIII straight to IC-7610 with the 7600 missing from the middle.
+    #[test]
+    fn the_ic_7600_is_in_the_default_list() {
+        let verified: Vec<u32> = rig_models().into_iter().map(|(m, _)| m).collect();
+        assert!(
+            verified.contains(&3063),
+            "an IC-7600 owner must find their radio in the WIZARD, not only behind Show-all"
+        );
+        assert_eq!(rig_model_name(3063), Some("Icom IC-7600"));
+        // Moving it must not duplicate it: `all_rig_models` chains both tiers.
+        assert_eq!(
+            all_rig_models().iter().filter(|(m, _)| *m == 3063).count(),
+            1,
+            "promoted, not copied"
+        );
+        // The lineage claim in the doc above, asserted rather than left as prose: both
+        // neighbours are curated, so the gap was real.
+        for (m, who) in [(3057u32, "IC-756PROIII"), (3078, "IC-7610")] {
+            assert!(
+                verified.contains(&m),
+                "{who} ({m}) is curated, which is what made the 7600's absence a hole"
+            );
+        }
     }
 
     /// AN 8400/8600 OWNER HAS TO BE ABLE TO FIND THEIR RADIO (2026-08-17 Flex audit,
