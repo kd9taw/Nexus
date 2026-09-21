@@ -42,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your radio or not at all** — without CAT there is no evidence of one and the contact still logs
   as plain SSB rather than Nexus guessing it from the band. It survives a restart of the contest
   log, it reaches N1MM and N3FJP as a mode they already understand, and where a contest's Cabrillo
-  asks for `CATEGORY-MODE` an FM entry can now say so instead of declaring SSB.
+  asks for `CATEGORY-MODE` an FM entry can now say so instead of declaring SSB. **This applies to
+  contacts logged from here on.** A contest you have already merged into your main logbook keeps
+  what it was given — see the note below.
 
 - **A contest contact keeps its frequency on the way into your main logbook.** Merging a contest
   into the lifetime log — the file that goes to LoTW, QRZ and Club Log — wrote the band and threw
@@ -53,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code that restores it after a restart, so leaving the frequency out of the file was also
   leaving it out of the recovery, and a restart mid-event quietly blanked the dial on every
   contact already in the log.
+- **A contest you merged before this release is not repaired by it, and re-merging will not fix
+  it.** Contacts are matched into the lifetime log by a stable id, so a second merge reports
+  everything as already there and changes nothing — by design, because that is what stops a
+  re-merge duplicating your log. If you merged a contest on 1.14.0 or earlier, those rows keep the
+  band without the dial, and their phone contacts keep plain `SSB`. Repairing them means editing
+  the rows; nothing in this release does it for you.
 
 ### Corrections to 1.14.0
 
