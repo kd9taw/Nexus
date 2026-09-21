@@ -50,6 +50,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report keeps coming, and stops only if it goes quiet for two minutes or the whole download
   passes ten. The message when it does stop says which of those happened and how much had
   arrived, instead of offering two possible causes and picking neither.
+- **A contact QRZ or eQSL never took now goes back when you fix the credential.** 1.14.0 made
+  every upload service say so in the Connections log when it gives up on a contact after its
+  retries — but only Club Log ever went back for them, so on QRZ and eQSL the contact was named
+  and then left. Saving your QRZ Logbook API key, or your eQSL password, now sweeps the log the
+  way saving the Club Log app-password already did: every contact that service never accepted is
+  re-queued, one every 15 seconds so the catch-up doesn't look like a flood, and the Connections
+  log says how many and roughly how long it will take. A contact one service already holds is
+  only sent to the other, so nothing is uploaded twice. HRDLog, N3FJP, Cloudlog and World Radio
+  League keep no per-contact record of what they already hold, so they have no sweep — for those
+  it is still the button on the row, or an ADIF export. The catch-up lines in the Connections log
+  now also name the service actually catching up; every one of them said Club Log before.
 - **FT4 contacts now export as ADIF the way WSJT-X writes them, so LoTW and the rest accept
   them.** FT4 is not an ADIF mode in its own right — it is a submode of MFSK, as Q65, FST4 and
   FST4W are — and Nexus was writing a bare `MODE=FT4`. That spelling is not in the mode list

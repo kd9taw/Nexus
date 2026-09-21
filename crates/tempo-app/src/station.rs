@@ -72,6 +72,37 @@ fn band_key(band: &str) -> String {
     crate::bandplan::canonical_band(band).to_ascii_lowercase()
 }
 
+/// Which of `want`'s legs this record has NOT successfully uploaded — never stamped, or
+/// stamped an outcome that is not [`UploadOutcome::is_sent`]. The catch-up sweep's
+/// per-record question (#290); see [`StationCore::requeue_failed_uploads`].
+///
+/// ⛔ **The three legs below are the whole list, and the omissions are deliberate.** They
+/// are exactly the ones that leave a per-QSO stamp in
+/// [`UploadState`](tempo_core::logbook::UploadState), so "has this contact already reached
+/// the service?" has an answer. HRDLog, N3FJP, Cloudlog and WRL keep no such stamp: adding
+/// one of them here could only answer "never sent" for every record in the log, and a
+/// sweep would re-push the whole book on every credential save, forever. LoTW is not a leg
+/// at all — it goes out as a TQSL-signed batch, not through this queue. A leg that is not
+/// here contributes nothing rather than reading as unsent, so asking for only those
+/// queues nothing.
+fn unsent_legs(rec: &QsoRecord, want: u8) -> u8 {
+    use crate::engine::upload_legs as legs;
+    fn sent(s: &Option<tempo_core::logbook::UploadStatus>) -> bool {
+        s.as_ref().is_some_and(|u| u.outcome.is_sent())
+    }
+    let mut owed = 0u8;
+    for (leg, status) in [
+        (legs::QRZ, &rec.upload.qrz),
+        (legs::CLUBLOG, &rec.upload.clublog),
+        (legs::EQSL, &rec.upload.eqsl),
+    ] {
+        if want & leg != 0 && !sent(status) {
+            owed |= leg;
+        }
+    }
+    owed
+}
+
 /// The worked-before (B4) sweeps `Engine::snapshot` reads, each with the log revision (and the
 /// other inputs) it was built from. See [`StationCore::worked_sets`].
 #[derive(Default)]
@@ -826,39 +857,37 @@ impl StationCore {
         });
     }
 
-    /// Re-queue the CLUBLOG leg of every logged QSO whose ClubLog upload has NOT succeeded
-    /// (never stamped, or stamped a failure) — the F4MQS "nothing retried after I fixed the
-    /// password" gap. Bounded, and PACED: these go out as [`UploadOrigin::CatchUp`], one
-    /// every [`CATCHUP_UPLOAD_SPACING_SECS`], because the log this scans holds
-    /// ADIF-imported history as well as this session's contacts and ClubLog objects to
-    /// history arriving through the realtime endpoint in a burst (#193). Returns how many
-    /// were queued.
-    pub fn requeue_failed_clublog(&mut self) -> usize {
+    /// Re-queue, on each of `legs`, every logged QSO whose upload on THAT leg has NOT
+    /// succeeded (never stamped, or stamped a failure) — the F4MQS "nothing retried after I
+    /// fixed the password" gap. Bounded, and PACED: these go out as
+    /// [`UploadOrigin::CatchUp`], one every [`CATCHUP_UPLOAD_SPACING_SECS`], because the log
+    /// this scans holds ADIF-imported history as well as this session's contacts and ClubLog
+    /// objects to history arriving through the realtime endpoint in a burst (#193). Returns
+    /// how many RECORDS were queued.
+    ///
+    /// Each record carries only what it is actually short of, so a contact that reached QRZ
+    /// but not eQSL is re-pushed to eQSL alone rather than duplicated at QRZ.
+    ///
+    /// ⛔ Only the legs that leave a per-QSO upload stamp can be swept — see [`unsent_legs`]
+    /// for which three, and why the other four are refused. Asking for only those queues
+    /// nothing.
+    pub fn requeue_failed_uploads(&mut self, legs: u8) -> usize {
         // Into FREE space only (#290): past the cap a catch-up record would only be dropped
         // again, and what is not queued stays unsent in the log for the next sweep.
         let room = UPLOAD_QUEUE_CAP.saturating_sub(self.pending_uploads.len());
-        let stale: Vec<tempo_core::logbook::QsoRecord> = self
+        let stale: Vec<(tempo_core::logbook::QsoRecord, u8)> = self
             .logbook
             .records()
             .iter()
-            .filter(|r| {
-                !r.upload
-                    .clublog
-                    .as_ref()
-                    .is_some_and(|u| u.outcome.is_sent())
+            .filter_map(|r| match unsent_legs(r, legs) {
+                0 => None,
+                owed => Some((QsoRecord::clone(r), owed)),
             })
             .take(room)
-            .map(|r| QsoRecord::clone(r))
             .collect();
         let n = stale.len();
-        for rec in stale {
-            self.requeue_upload_at(
-                rec,
-                crate::engine::upload_legs::CLUBLOG,
-                0,
-                0,
-                crate::engine::UploadOrigin::CatchUp,
-            );
+        for (rec, owed) in stale {
+            self.requeue_upload_at(rec, owed, 0, 0, crate::engine::UploadOrigin::CatchUp);
         }
         n
     }

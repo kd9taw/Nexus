@@ -1637,7 +1637,7 @@ pub enum UploadOrigin {
     /// A contact just logged at the key. Goes out AT ONCE — that is what "realtime"
     /// means, and pacing one of these would be a regression, not a fix.
     Live,
-    /// A record swept back up by a catch-up scan ([`StationCore::requeue_failed_clublog`]):
+    /// A record swept back up by a catch-up scan ([`StationCore::requeue_failed_uploads`]):
     /// history, not news. Paced — see [`CATCHUP_UPLOAD_SPACING_SECS`].
     CatchUp,
 }
@@ -1648,7 +1648,7 @@ pub enum UploadOrigin {
 pub struct PendingUpload {
     pub rec: tempo_core::logbook::QsoRecord,
     /// Live contact or catch-up replay — see [`UploadOrigin`]. Set at BOTH enqueue
-    /// points (`log_qso` = Live, `requeue_failed_clublog` = CatchUp) and CARRIED
+    /// points (`log_qso` = Live, `requeue_failed_uploads` = CatchUp) and CARRIED
     /// THROUGH the worker's transient-failure re-queue, so a catch-up record that
     /// blips on the network cannot come back as a live one and skip the pacing.
     pub origin: UploadOrigin,
@@ -1693,7 +1693,7 @@ const CALLBOOK_NAMES_CAP: usize = 64;
 /// are never subject to this.
 ///
 /// WHY THIS EXISTS (#193, KR8MER — live in 1.9.2): saving the ClubLog app-password fires
-/// `requeue_failed_clublog`, which sweeps up to 256 never-uploaded QSOs — including ones
+/// `requeue_failed_uploads`, which sweeps up to 256 never-uploaded QSOs — including ones
 /// that arrived by ADIF import — and queued them all due-now. The drain worker takes the
 /// whole queue per tick and pushes in a bare loop, so the only thing rationing the pushes
 /// was ClubLog's own response latency: the reporter measured 81 realtime uploads in 4
@@ -21784,9 +21784,9 @@ contact yourself."
             .requeue_after_failure(rec, legs, attempts, earliest_due, origin)
     }
 
-    /// See [`StationCore::requeue_failed_clublog`].
-    pub fn requeue_failed_clublog(&mut self) -> usize {
-        self.station.requeue_failed_clublog()
+    /// See [`StationCore::requeue_failed_uploads`].
+    pub fn requeue_failed_uploads(&mut self, legs: u8) -> usize {
+        self.station.requeue_failed_uploads(legs)
     }
 
     /// See [`StationCore::note_upload`].
@@ -32264,7 +32264,7 @@ mod tests {
     fn a_credential_fix_requeues_the_clublog_qsos_that_never_uploaded() {
         // THE F4MQS GAP: QSOs logged before the app-password was stored stayed
         // un-uploaded with nothing flagging them, and fixing the password retried
-        // NOTHING. `requeue_failed_clublog` (called from set_clublog_password) picks up
+        // NOTHING. `requeue_failed_uploads` (called from set_clublog_password) picks up
         // exactly the records whose ClubLog upload never succeeded, and only those.
         let mut e = Engine::new("K2DEF", "FN31", 0);
         for call in ["W9XYZ", "K1ABC", "N7GHI"] {
@@ -32284,7 +32284,7 @@ mod tests {
             None,
         );
 
-        let n = e.requeue_failed_clublog();
+        let n = e.requeue_failed_uploads(upload_legs::CLUBLOG);
         assert_eq!(n, 2, "only the two that never succeeded are re-queued");
         let queued = e.take_pending_uploads();
         assert_eq!(queued.len(), 2);
@@ -32302,6 +32302,121 @@ mod tests {
         assert!(
             queued[1].retry_after_unix > queued[0].retry_after_unix,
             "the catch-up is paced, not a burst"
+        );
+    }
+
+    #[test]
+    fn a_credential_fix_requeues_the_qrz_and_eqsl_qsos_that_never_uploaded() {
+        // #290, THE CATCH-UP HALF: the sweep was hard-coded to the ClubLog leg, so a QSO
+        // QRZ or eQSL had given up on after its 20 retries never went back — fixing the
+        // API key or the password retried nothing, exactly the gap the ClubLog sweep was
+        // built to close. Each leg is swept on its own, and PER RECORD: a contact that
+        // reached QRZ but not eQSL owes the eQSL leg only, or the catch-up would insert a
+        // duplicate at the service that already has it.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for call in ["W9XYZ", "K1ABC", "N7GHI"] {
+            let rec = e.qso_record(call.into(), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        assert!(e.take_pending_uploads().is_empty(), "queue drained");
+
+        // The first reached QRZ, the second reached eQSL; the third reached neither.
+        let now = now_unix_secs() as i64;
+        let (first, second) = (e.get_log()[0].clone(), e.get_log()[1].clone());
+        e.stamp_qrz_upload(
+            &first,
+            tempo_core::logbook::UploadOutcome::Accepted,
+            now,
+            None,
+        );
+        e.stamp_eqsl_upload(
+            &second,
+            tempo_core::logbook::UploadOutcome::Accepted,
+            now,
+            None,
+        );
+
+        assert_eq!(
+            e.requeue_failed_uploads(upload_legs::QRZ),
+            2,
+            "QRZ owes the two it never took"
+        );
+        let queued = e.take_pending_uploads();
+        assert!(
+            queued.iter().all(|p| p.legs == upload_legs::QRZ),
+            "a QRZ catch-up carries the QRZ leg alone — legs were {:?}",
+            queued.iter().map(|p| p.legs).collect::<Vec<_>>()
+        );
+        assert!(
+            queued.iter().all(|p| p.origin == UploadOrigin::CatchUp),
+            "history, not news (#193)"
+        );
+
+        assert_eq!(
+            e.requeue_failed_uploads(upload_legs::EQSL),
+            2,
+            "eQSL owes the two it never took"
+        );
+        let queued = e.take_pending_uploads();
+        assert!(
+            queued.iter().all(|p| p.legs == upload_legs::EQSL),
+            "an eQSL catch-up carries the eQSL leg alone — legs were {:?}",
+            queued.iter().map(|p| p.legs).collect::<Vec<_>>()
+        );
+
+        // Both at once: one record each, owing only what that record is actually short of.
+        assert_eq!(
+            e.requeue_failed_uploads(upload_legs::QRZ | upload_legs::EQSL),
+            3
+        );
+        let queued = e.take_pending_uploads();
+        let owed: Vec<u8> = queued.iter().map(|p| p.legs).collect();
+        assert_eq!(
+            owed,
+            vec![
+                upload_legs::EQSL,
+                upload_legs::QRZ,
+                upload_legs::QRZ | upload_legs::EQSL
+            ],
+            "the leg a record already reached is not re-pushed"
+        );
+    }
+
+    #[test]
+    fn a_catch_up_sweep_refuses_the_legs_that_leave_no_stamp() {
+        // ⛔ #290's load-bearing guard. HRDLog, N3FJP, Cloudlog and WRL keep no per-QSO
+        // upload stamp, so "has this contact already reached the service?" has no answer
+        // for them — a sweep could only conclude "never sent" for EVERY record in the log,
+        // and would re-push the whole book on every credential save, forever. The mask
+        // refuses them rather than trusting a caller to remember.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for call in ["W9XYZ", "K1ABC"] {
+            let rec = e.qso_record(call.into(), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+
+        let unstamped =
+            upload_legs::HRDLOG | upload_legs::N3FJP | upload_legs::CLOUDLOG | upload_legs::WRL;
+        assert_eq!(
+            e.requeue_failed_uploads(unstamped),
+            0,
+            "a leg with no stamp cannot be swept"
+        );
+        assert!(e.take_pending_uploads().is_empty(), "and queues nothing");
+
+        // POSITIVE CONTROL: the same two records, same empty log-of-stamps, swept with a
+        // mask that DOES include the stamped legs. Without this the zero above would also
+        // be what an empty logbook looks like.
+        assert_eq!(e.requeue_failed_uploads(upload_legs::ALL), 2);
+        let queued = e.take_pending_uploads();
+        assert!(
+            queued
+                .iter()
+                .all(|p| p.legs == upload_legs::QRZ | upload_legs::CLUBLOG | upload_legs::EQSL),
+            "ALL is trimmed to the stamped legs — legs were {:?}",
+            queued.iter().map(|p| p.legs).collect::<Vec<_>>()
         );
     }
 
@@ -32330,7 +32445,7 @@ mod tests {
             e.log_qso(rec);
         }
         e.take_pending_uploads();
-        assert_eq!(e.requeue_failed_clublog(), 6);
+        assert_eq!(e.requeue_failed_uploads(upload_legs::CLUBLOG), 6);
         let queued = e.take_pending_uploads();
 
         // Every one of them now fails, the way a busy ClubLog fails them: back on the queue
@@ -32377,7 +32492,7 @@ mod tests {
         }
         e.take_pending_uploads(); // drop the fresh-log queue; this is about the CATCH-UP
 
-        let n = e.requeue_failed_clublog();
+        let n = e.requeue_failed_uploads(upload_legs::CLUBLOG);
         assert_eq!(n, 12);
         let queued = e.take_pending_uploads();
         let now = now_unix_secs() as i64;
@@ -32416,7 +32531,7 @@ mod tests {
         }
         e.take_pending_uploads();
         // A big catch-up now owns slots minutes into the future…
-        e.requeue_failed_clublog();
+        e.requeue_failed_uploads(upload_legs::CLUBLOG);
         e.take_pending_uploads();
 
         // …and the contact at the key still goes NOW.
@@ -32461,7 +32576,7 @@ mod tests {
             e.log_qso(rec);
         }
         e.take_pending_uploads();
-        e.requeue_failed_clublog();
+        e.requeue_failed_uploads(upload_legs::CLUBLOG);
         let queued = e.take_pending_uploads();
         let dues: Vec<i64> = queued.iter().map(|p| p.retry_after_unix).collect();
 
@@ -32494,7 +32609,7 @@ mod tests {
             let rec = e.qso_record(format!("K1L{i}"), None, None);
             e.requeue_upload(rec, upload_legs::QRZ, 1); // live contacts waiting on a retry
         }
-        e.requeue_failed_clublog(); // 300 contacts ClubLog never took
+        e.requeue_failed_uploads(upload_legs::CLUBLOG); // 300 contacts ClubLog never took
         let rec = e.qso_record("K1NEW".into(), None, None);
         e.log_qso(rec); // and a contact at the key, arriving at a full queue
 

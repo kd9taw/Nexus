@@ -15773,6 +15773,21 @@ fn cap_hrdlog_retries(failed: u8, retries_so_far: u8) -> u8 {
     }
 }
 
+/// Each connector leg's name in the Connections log — one table, so the queue-full line, the
+/// catch-up progress line and the panel cannot come to call the same service by two names.
+const UPLOAD_LEG_SERVICES: [(u8, &str); 7] = {
+    use tempo_app::engine::upload_legs as legs;
+    [
+        (legs::QRZ, "QRZ Logbook"),
+        (legs::CLUBLOG, "ClubLog"),
+        (legs::EQSL, "eQSL"),
+        (legs::HRDLOG, "HRDLog.net"),
+        (legs::N3FJP, "N3FJP"),
+        (legs::CLOUDLOG, "Cloudlog"),
+        (legs::WRL, "World Radio League"),
+    ]
+};
+
 /// The QSO a give-up line names, borrowed from the record the worker is holding.
 struct GivenUpQso<'a> {
     call: &'a str,
@@ -15857,20 +15872,10 @@ fn upload_dropped_lines(
     dropped: &[tempo_app::engine::PendingUpload],
     on: u8,
 ) -> Vec<(&'static str, String)> {
-    use tempo_app::engine::upload_legs as legs;
-    const CONNECTORS: [(u8, &str); 7] = [
-        (legs::QRZ, "QRZ Logbook"),
-        (legs::CLUBLOG, "ClubLog"),
-        (legs::EQSL, "eQSL"),
-        (legs::HRDLOG, "HRDLog.net"),
-        (legs::N3FJP, "N3FJP"),
-        (legs::CLOUDLOG, "Cloudlog"),
-        (legs::WRL, "World Radio League"),
-    ];
     let mut lines = Vec::new();
     for p in dropped {
         let (y, mo, d, h, mi, _) = tempo_core::logbook::datetime_utc(p.rec.when_unix);
-        for (leg, service) in CONNECTORS {
+        for (leg, service) in UPLOAD_LEG_SERVICES {
             if p.legs & on & leg != 0 {
                 lines.push((
                     service,
@@ -17234,6 +17239,51 @@ fn clear_lotw_password() -> Result<(), String> {
     r
 }
 
+/// #290, THE CATCH-UP HALF — re-send the contacts this connector never took, and say so.
+///
+/// Entering a credential is the moment for it: the QSOs that failed on the missing or wrong
+/// one only become sendable now, and NOTHING else ever brings back a contact the queue gave
+/// up on past [`MAX_UPLOAD_RETRIES`](tempo_app::engine::MAX_UPLOAD_RETRIES) — the give-up
+/// line names it, but naming is not sending. Until this was generalised, only ClubLog had
+/// the sweep, which is what the issue is titled for.
+///
+/// `lead_in` is the saver's own word for the credential it just stored ("app-password
+/// saved"), so each service's line reads in its own vocabulary. Silent when nothing is owed.
+///
+/// ⚠️ Call it AFTER the connector's toggle is on: the drain worker skips a leg whose toggle
+/// is off WITHOUT counting it as failed, so a record drained in the gap would leave the
+/// queue with the leg never attempted.
+///
+/// Only the legs that leave a per-QSO upload stamp can be swept (`StationCore::unsent_legs`
+/// holds that list and why), so HRDLog, N3FJP, Cloudlog and WRL have no saver calling this.
+fn catch_up_failed_uploads(
+    state: &State<'_, SharedEngine>,
+    leg: u8,
+    service: &'static str,
+    lead_in: &str,
+) {
+    let requeued = {
+        let mut eng = engine_lock(state);
+        eng.requeue_failed_uploads(leg)
+    };
+    if requeued == 0 {
+        return;
+    }
+    // Say it is PACED and roughly how long (#193). The catch-up can run for the best part
+    // of an hour at the far end of the 256-record cap, and an operator watching old
+    // contacts trickle out with no explanation is the report this line prevents.
+    let spacing = tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS;
+    let mins = (requeued as u64 * spacing as u64).div_ceil(60);
+    conn_log(
+        service,
+        "info",
+        format!(
+            "{lead_in} — re-queued {requeued} un-uploaded QSO(s) for {service}, sending one \
+             every {spacing}s (about {mins} min) so the catch-up doesn't look like a flood"
+        ),
+    );
+}
+
 /// Store (or, if empty, clear) the eQSL website password in the OS keychain.
 /// Write-only, like the LoTW counterpart. Saving also switches eQSL auto-upload
 /// ON (entering the credential is the intent).
@@ -17251,6 +17301,12 @@ fn set_eqsl_password(password: String, state: State<'_, SharedEngine>) -> Result
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("eQSL", "ok", "password saved to the OS keychain");
     set_upload_toggle(&state, UploadToggle::Eqsl, true);
+    catch_up_failed_uploads(
+        &state,
+        tempo_app::engine::upload_legs::EQSL,
+        "eQSL",
+        "password saved",
+    );
     Ok(())
 }
 
@@ -17379,6 +17435,12 @@ fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<()
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("QRZ Logbook", "ok", "API key saved to the OS keychain");
     set_upload_toggle(&state, UploadToggle::Qrz, true);
+    catch_up_failed_uploads(
+        &state,
+        tempo_app::engine::upload_legs::QRZ,
+        "QRZ Logbook",
+        "API key saved",
+    );
     Ok(())
 }
 
@@ -19134,31 +19196,17 @@ fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Res
         .set_password(&password)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("ClubLog", "ok", "app-password saved to the OS keychain");
-    // CATCH-UP (F4MQS): entering the credential the QSOs were failing on is the moment to
-    // re-send them — scan the log for ClubLog uploads that never succeeded and re-queue
-    // their ClubLog leg. Without this, every QSO logged before the password was stored
-    // stayed un-uploaded with nothing to flag it.
-    let requeued = {
-        let mut eng = engine_lock(&state);
-        eng.requeue_failed_clublog()
-    };
-    if requeued > 0 {
-        // Say it is PACED and roughly how long (#193). The catch-up can run for the best
-        // part of an hour at the far end of the 256-record cap, and an operator watching
-        // old contacts trickle out with no explanation is the report this line prevents.
-        let spacing = tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS;
-        let mins = (requeued as u64 * spacing as u64).div_ceil(60);
-        conn_log(
-            "ClubLog",
-            "info",
-            format!(
-                "app-password saved — re-queued {requeued} un-uploaded QSO(s) for ClubLog, \
-                 sending one every {spacing}s (about {mins} min) so the catch-up doesn't \
-                 look like a flood"
-            ),
-        );
-    }
     set_upload_toggle(&state, UploadToggle::Clublog, true);
+    // CATCH-UP (F4MQS): entering the credential the QSOs were failing on is the moment to
+    // re-send them. Without this, every QSO logged before the password was stored stayed
+    // un-uploaded with nothing to flag it. Now AFTER the toggle, not before — see
+    // `catch_up_failed_uploads`: a record drained in the gap would lose the leg silently.
+    catch_up_failed_uploads(
+        &state,
+        tempo_app::engine::upload_legs::CLUBLOG,
+        "ClubLog",
+        "app-password saved",
+    );
     Ok(())
 }
 
@@ -23979,7 +24027,7 @@ pub fn run() {
                 // BACKOFF: a record not yet due goes back on the queue untouched — no push,
                 // no attempt spent, no toast. This is what turns 20-in-40-seconds into one
                 // push every few minutes for a genuinely-down service. It is ALSO what
-                // paces the catch-up: `requeue_failed_clublog` stamps those records one
+                // paces the catch-up: `requeue_failed_uploads` stamps those records one
                 // spacing apart, so all but the one whose slot has come round land here.
                 if p.retry_after_unix > now_unix {
                     let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -23988,16 +24036,26 @@ pub fn run() {
                 }
                 if p.origin == tempo_app::engine::UploadOrigin::CatchUp {
                     catchup_left = catchup_left.saturating_sub(1);
-                    conn_log(
-                        "ClubLog",
-                        "info",
-                        format!(
-                            "catch-up: sending an older QSO with {} — {catchup_left} still \
-                             queued, one every {}s so ClubLog isn't flooded",
-                            p.rec.call,
-                            tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
-                        ),
-                    );
+                    // #290: filed under the service the record is actually owed to. This
+                    // said "ClubLog" outright, which was the only sweep there was — an eQSL
+                    // catch-up would have reported its whole run under ClubLog's name.
+                    // `catchup_left` counts RECORDS, so a record owing two legs says the
+                    // same remaining count on both lines, which is what is left to send.
+                    for (_, service) in UPLOAD_LEG_SERVICES
+                        .iter()
+                        .filter(|(leg, _)| p.legs & leg != 0)
+                    {
+                        conn_log(
+                            service,
+                            "info",
+                            format!(
+                                "catch-up: sending an older QSO with {} — {catchup_left} still \
+                                 queued, one every {}s so {service} isn't flooded",
+                                p.rec.call,
+                                tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
+                            ),
+                        );
+                    }
                 }
                 let rec = p.rec.clone();
                 // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
