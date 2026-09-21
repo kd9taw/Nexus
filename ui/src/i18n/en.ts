@@ -8590,6 +8590,47 @@ export const EN = {
     'Set a rigctld/CAT rig in Settings.',
   'phone.pane.log.title': 'Log',
 
+  // ── Phone ▸ THE TRANSMIT CONTRACT (the dock's top line) ─────────────────────────────
+  // `TX`, `SPLIT`, `XIT` and `simplex` are the rig's own vocabulary and are printed from the
+  // code; every figure on the strip is a measurement and is formatted there too.
+  'phone.txContract.aria': 'Transmit contract — what goes out when you key',
+  'phone.txContract.freq.title':
+    'The frequency your next over will actually be emitted on — the engine\u2019s own answer, ' +
+    'with any confirmed split and any XIT offset already in it. Under split this is NOT your ' +
+    'receive dial.',
+  'phone.txContract.freq.commanded.title':
+    'Nexus worked this frequency out from what it commanded and cannot confirm all of it ' +
+    'against the radio — either there is no CAT link, or XIT is in play and the clarifier is ' +
+    'write-only, so an offset dialled at the radio would not show here.',
+  'phone.txContract.noEmission.title':
+    'This station is not reporting a transmit frequency. Nexus will not print your receive ' +
+    'dial in its place — under split they are unrelated numbers.',
+  'phone.txContract.mode.title':
+    'The mode your next over goes out in, and where Nexus got it. This is the same read-back ' +
+    'the logbook writes, so what you see here and what gets recorded cannot disagree.',
+  'phone.txContract.split.title': 'How far your transmit frequency sits from your receive dial (kHz)',
+  'phone.txContract.split.commanded.title':
+    'Nexus asked the radio for this split. The snapshot does not carry the radio\u2019s own ' +
+    'confirmation, so it is shown as commanded rather than read back — check the radio if the ' +
+    'pile-up is not hearing you where you expect.',
+  'phone.txContract.xit.title': 'Transmit incremental tuning — the offset added to your transmit frequency (Hz)',
+  'phone.txContract.xit.commanded.title':
+    'Nexus cannot read XIT back from any radio, so this is what Nexus commanded — not ' +
+    'necessarily where the transmitter is. An offset set on the radio\u2019s own clarifier ' +
+    'knob will not appear here.',
+  'phone.txContract.power.title':
+    'Your power setting, and the output the radio last actually measured. No mark: the ' +
+    'setting is the radio\u2019s read-back when CAT reports one and the last commanded value ' +
+    'otherwise, and nothing says which.',
+  'phone.txContract.lastWatts': '{{watts}} W last',
+  'phone.truth.rig.mark': 'rig',
+  'phone.truth.rig.title':
+    'Read back from the radio — this is what the rig says, not what Nexus asked for.',
+  'phone.truth.cmd.mark': 'cmd',
+  'phone.truth.cmd.title':
+    'Nexus commanded this and cannot read it back, so it is what Nexus believes rather than ' +
+    'what the radio confirms.',
+
   // ── Phone ▸ the header: the mode picker, split, mic gain, filter and REC ─────────────
   // `AUTO`, `USB`, `LSB` and `FM` are mode names — the buttons print them from the code and
   // `{{mode}}`/`{{sideband}}` carry them into these sentences unchanged.

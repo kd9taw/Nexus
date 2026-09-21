@@ -37,6 +37,7 @@ import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
 import { LiveLevelMeter, useSmeterDb } from './LiveMeters'
+import { formatDialMhz } from './FrequencyReadout'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
@@ -89,6 +90,13 @@ const BW = 'BW'
 const DB = 'dB'
 const DBM = 'dBm'
 const REC = 'REC'
+/** The transmit contract's own plates. `TX`, `SPLIT` and `XIT` are the rig's words and
+ *  `simplex` is the mode term the DTO itself uses — all four are technical vocabulary rather
+ *  than prose, so they are printed from here in every locale. */
+const TX = 'TX'
+const SPLIT = 'SPLIT'
+const XIT = 'XIT'
+const SIMPLEX = 'simplex'
 /** The mode picker's AUTO face — the word and the sideband it resolved to, both tokens. */
 const autoPlate = (sideband: string) => `AUTO·${sideband}`
 
@@ -323,6 +331,36 @@ interface PhoneFunc {
  *  decoration and the WORD beside it is what a screen reader and a monochrome display get.
  *  The long sentence is the tooltip — a mark that fitted the whole explanation would not fit
  *  a control row. */
+/** ✓rig · ⌁cmd · ⊘ — HOW WELL THIS NUMBER IS KNOWN, which on a transmit readout is half the
+ *  number's meaning.
+ *
+ *  `rig` is a genuine read-back. `cmd` is Nexus's own command with no way to confirm it: RIT,
+ *  XIT and VFO A/B are write-only and optimistic (engine.rs:5558, :18262), so an offset the
+ *  operator dialled on the radio's own clarifier knob is invisible to this app entirely. `off`
+ *  is "there is no value here", with the reason in the tooltip.
+ *
+ *  ⚠️ A COMMANDED VALUE IS NEVER RENDERED AS THOUGH IT WERE READ. That is the whole rule, and
+ *  it is why the emission's mark falls to `cmd` the moment XIT is non-zero — the figure is
+ *  still the engine's, but part of it is now something nobody read back.
+ *
+ *  ⚠️ TEXT, NEVER COLOUR ALONE. The glyph is aria-hidden decoration; the WORD beside it is
+ *  what a screen reader speaks and what a monochrome display shows. */
+function TruthMark({ kind, title }: { kind: 'rig' | 'cmd' | 'off'; title: string }) {
+  const glyph = kind === 'rig' ? '✓' : kind === 'cmd' ? '⌁' : '⊘'
+  // Each key written out as a literal `t()` call rather than one call over a computed key:
+  // the catalog guard extracts keys by reading the source, so a computed one is invisible to
+  // it and the entry it names reads as an orphan nobody references.
+  const word =
+    kind === 'off' ? t('phone.unavail.mark') : kind === 'rig' ? t('phone.truth.rig.mark') : t('phone.truth.cmd.mark')
+  return (
+    <span className={`ph-truth ph-truth--${kind}`} title={title}>
+      <span aria-hidden="true">{glyph}</span>
+      {kind === 'off' ? ' ' : ''}
+      {word}
+    </span>
+  )
+}
+
 function Unavailable({ mark, title }: { mark: string; title: string }) {
   return (
     <span className="ph-unavail" role="note" title={title}>
@@ -741,6 +779,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       /* ignore */
     }
   }, [tuneStep])
+  // The last output power the rig actually measured — see the transmit contract below.
+  const lastPoW = useRef<number | null>(null)
   const scopeRef = useRef<HTMLDivElement>(null)
   // Cockpit root: the scope-height splitter measures + writes its CSS var here.
   const cockpitRef = useRef<HTMLElement>(null)
@@ -1169,6 +1209,27 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const hasSquelch = reports('squelch')
   const hasMicGain = reports('micGain')
   const hasCompLevel = reports('compLevel')
+  // ── THE TRANSMIT CONTRACT — read, never computed ───────────────────────────────────
+  // `txEmissionMhz` is `Engine::tx_emission_mhz()`, which resolves `tx_freq_verdict()` — THE
+  // one decision about which frequency the next over is emitted on — and folds XIT in. It is
+  // printed verbatim. Adding a dial to an offset here would be a SECOND answer to that
+  // question, free to disagree with the one the licence gate actually judges.
+  const txEmission = snap.radio.txEmissionMhz ?? null
+  const xitHz = snap.radio.xitHz ?? 0
+  // ⚠️ XIT DEMOTES THE WHOLE FIGURE. It rides INTO the emission and its path is write-only
+  // and optimistic, so with a clarifier offset in play the number contains a component
+  // nothing read back — and calling that a read-back is exactly the lie the marks exist to
+  // stop. No CAT link demotes it for the plainer reason.
+  const emissionRead = catOk && xitHz === 0
+  const splitTxMhz = snap.radio.splitTxMhz ?? null
+  // Formatting two reported numbers, not deciding anything: the engine already put the split
+  // into the emission above. This cell only says WHY that figure differs from the dial.
+  const splitOffsetKhz = splitTxMhz == null ? null : (splitTxMhz - snap.radio.dialMhz) * 1000
+  // The watts the rig last actually measured. `txPoW` is present only while transmitting, so
+  // between overs this is a memory and the word "last" is what says so. A ref, not state:
+  // the poll re-renders anyway and retention must never itself cause a render (TxMeters).
+  if (snap.radio.txPoW != null) lastPoW.current = snap.radio.txPoW
+  const powerPct = snap.radio.rfPower == null ? null : Math.round(snap.radio.rfPower * 100)
   /** BW is the one control whose unavailability is not about a field being absent — see the
    *  note at the row. Ordered: no CAT beats FM, because with the link down the mode is not
    *  something we know either. */
@@ -2065,6 +2126,100 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           then unkey the rig. Pinning removes the mount/unmount but not the growth: the hint
           is one line and the readings are up to four rows, so the panel still changes height
           on key-down. Above the row, that growth leaves the row's screen position fixed. */}
+      {/* ⭐ THE TRANSMIT CONTRACT — "what goes out when I key?", in one line that is always
+          there and never moves (operator, 2026-09-20).
+ 
+          The answer used to be scattered across four places and none of them was the
+          emission: the dial is in the header, the split offset is a chip beside it, XIT is in
+          the tuning strip, and under split the RX dial is not a conservative stand-in for the
+          TX frequency — it is an unrelated number. XIT moves the transmitter without moving
+          anything on screen at all.
+ 
+          ⚠️ ABOVE THE METERS, so it is above the PTT row. The dock is bottom-anchored and a
+          child that GROWS below the row pushes the button out from under a held pointer,
+          which fires onPointerLeave and drops the transmission mid-over. This strip is one
+          fixed line either way; its position is the belt to that brace.
+ 
+          ⚠️ NO ⊞ ID AND NO CONTROLS. It is a readout, so it is not in the vocabulary (nothing
+          can hide it) and it holds nothing that could be mistaken for a way to stop or start
+          a transmission — THE STOP LINE is untouched by it in both directions. */}
+      <div className="ph-txcontract" role="group" aria-label={t('phone.txContract.aria')}>
+        <span className="ph-txc-cell" data-txc="freq" title={t('phone.txContract.freq.title')}>
+          <span className="ph-txc-lbl">{TX}<span aria-hidden="true">▸</span></span>
+          {txEmission == null ? (
+            <>
+              <span className="ph-txc-val mono">—</span>
+              <TruthMark kind="off" title={t('phone.txContract.noEmission.title')} />
+            </>
+          ) : (
+            <>
+              {/* The header's OWN formatter, so the dock and the readout can never print one
+                  frequency two different ways. */}
+              <span className="ph-txc-val mono">{formatDialMhz(txEmission)}</span>
+              <TruthMark
+                kind={emissionRead ? 'rig' : 'cmd'}
+                title={emissionRead ? t('phone.truth.rig.title') : t('phone.txContract.freq.commanded.title')}
+              />
+            </>
+          )}
+        </span>
+        <span className="ph-txc-cell" data-txc="mode" title={t('phone.txContract.mode.title')}>
+          <span className="ph-txc-val">{observedMode}</span>
+          {/* The SAME read-back gate the log writes through (`rigReadPhoneMode`): catOk, a
+              non-empty rig mode, and a mode this cockpit can name. What the operator is told
+              here and what Nexus writes into the record cannot disagree. */}
+          <TruthMark
+            kind={rigReadPhoneMode != null ? 'rig' : 'cmd'}
+            title={rigReadPhoneMode != null ? t('phone.truth.rig.title') : t('phone.truth.cmd.title')}
+          />
+        </span>
+        <span className="ph-txc-cell" data-txc="split" title={t('phone.txContract.split.title')}>
+          <span className="ph-txc-lbl">{SPLIT}</span>
+          {splitOffsetKhz == null ? (
+            <span className="ph-txc-val">{SIMPLEX}</span>
+          ) : (
+            <>
+              <span className="ph-txc-val mono">
+                {splitOffsetKhz >= 0 ? `+${splitOffsetKhz.toFixed(1)}` : splitOffsetKhz.toFixed(1)}
+              </span>
+              {/* ⚠️ ALWAYS `cmd`, AND THAT IS A GAP IN THE DTO rather than a judgement about
+                  the radio. `Engine::tx_freq_verdict` DOES distinguish a split we commanded
+                  and the rig acknowledged from one the rig merely reported, and refuses
+                  outright when it cannot say where — but none of that reaches the snapshot:
+                  `txEmissionMhz` collapses SplitUnverified onto the dial and the verdict
+                  itself is not a field. Until it is, "Nexus commanded this" is the most this
+                  strip may claim, and claiming more is the one thing it must never do. */}
+              <TruthMark kind="cmd" title={t('phone.txContract.split.commanded.title')} />
+            </>
+          )}
+        </span>
+        <span className="ph-txc-cell" data-txc="xit" title={t('phone.txContract.xit.title')}>
+          <span className="ph-txc-lbl">{XIT}</span>
+          <span className="ph-txc-val mono">{xitHz >= 0 ? `+${xitHz}` : String(xitHz)}</span>
+          {/* `cmd` EVEN AT ZERO. Write-only means Nexus cannot see an offset dialled at the
+              radio, so "+0" states what Nexus commanded and not where the transmitter is. */}
+          <TruthMark kind="cmd" title={t('phone.txContract.xit.commanded.title')} />
+        </span>
+        <span className="ph-txc-cell" data-txc="power" title={t('phone.txContract.power.title')}>
+          <span className="ph-txc-val mono">{powerPct == null ? '—' : `${powerPct}%`}</span>
+          {/* NO MARK ON POWER, deliberately: `rfPower` is documented as the rig read-back
+              WHEN CAT REPORTS ONE and the last commanded value otherwise, and the snapshot
+              does not say which it is — so neither mark would be supportable. The measured
+              watts beside it are evidence of their own and need none. */}
+          {lastPoW.current != null && (
+            <span className="ph-txc-sub">{t('phone.txContract.lastWatts', { watts: Math.round(lastPoW.current) })}</span>
+          )}
+        </span>
+        {/* WHO HOLDS THE TRANSMITTER, in the arbiter's own words — `tx_owner()` covers all
+            seven owners, and a second wording here could disagree with the one that really
+            holds the rig. Absent when nobody does: an idle transmitter is not news. */}
+        {snap.radio.txBusyReason && (
+          <span className="ph-txc-cell ph-txc-busy" data-txc="busy" title={snap.radio.txBusyReason}>
+            {snap.radio.txBusyReason}
+          </span>
+        )}
+      </div>
+
       {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
       {/* ⚠️ NOTHING IN THIS ROW IS MIGRATED, and that is the whole of why this file is on the

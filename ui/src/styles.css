@@ -8953,6 +8953,68 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   padding: 1px var(--space-1);
 }
+/* THE TRANSMIT CONTRACT — the dock's top line (2026-09-20). ONE LINE, ALWAYS: `nowrap` is
+   not tidiness, it is the whole reason this sits where it does. The dock is bottom-anchored,
+   so a strip that wrapped to two lines on a narrow window would push the PTT button out from
+   under a held pointer mid-over. The busy cell is the only elastic one and it truncates (its
+   full text is its tooltip, and the arbiter says the same thing elsewhere); every other cell
+   is fixed-width content. */
+.ph-txcontract {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  gap: var(--space-3);
+  padding: 2px var(--space-2);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  min-width: 0;
+}
+.ph-txc-cell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+.ph-txc-lbl {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.ph-txc-val {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ph-txc-sub {
+  color: var(--text-dim);
+}
+/* The one cell that may be any length. It is also the least load-bearing: `txBusyReason` is
+   the arbiter's sentence and it reaches the operator on the PTT button and in the meters too. */
+.ph-txc-busy {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ✓rig · ⌁cmd · ⊘ — how well the figure beside it is known. Dim and small: the NUMBER is what
+   the operator reads at a glance and the mark is what they check when it matters. Never
+   colour alone — the word carries it (see TruthMark), so these three differ in text first. */
+.ph-truth {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: help;
+}
+.ph-truth--rig {
+  color: var(--state-good);
+}
+.ph-truth--cmd {
+  color: var(--alert-warning);
+}
+
 .ph-ptt-row {
   display: flex;
   align-items: center;
