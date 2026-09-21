@@ -1915,14 +1915,22 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           layout, stored or hand-edited, can move, hide or scroll it away. PTT and Lock
           have no id in the panel vocabulary (unrepresentable beats guarded); the TX
           meters DO keep their ⊞ id — a readout, not a control — but render here, beside
-          the button that keys the rig (they appear only while keyed). */}
+          the button that keys the rig. */}
       <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
-      {/* Transmit meters (SWR/ALC/Po/COMP) — appear only while keyed. At the TOP of the
-          dock, exactly as in CW: the dock is bottom-anchored (sticky bottom), so a child
-          mounting BELOW the PTT row would grow the dock upward and shift the button out
-          from under the operator's held pointer mid-over — onPointerLeave would then
-          unkey the rig. Growth above the row leaves the row's screen position fixed. */}
-      {shown('txmeters') && <TxMeters radio={snap.radio} />}
+      {/* Transmit meters (SWR/ALC/Po/COMP), `pinned`: the readings STAY after the key is
+          released, dimmed, and before the first over the panel holds a one-line hint saying
+          when it reads. They used to render only while keyed, and that is the wrong half of
+          the QSO — this is the meter a voice operator learns their drive from, and a reading
+          that exists only while the mic key is held is one they can never study. Same prop,
+          same reasons, as the Operate strip (the anti-bounce ruling in TxMeters.tsx).
+
+          At the TOP of the dock, exactly as in CW: the dock is bottom-anchored (sticky
+          bottom), so a child GROWING below the PTT row pushes the dock upward and shifts the
+          button out from under the operator's held pointer mid-over — onPointerLeave would
+          then unkey the rig. Pinning removes the mount/unmount but not the growth: the hint
+          is one line and the readings are up to four rows, so the panel still changes height
+          on key-down. Above the row, that growth leaves the row's screen position fixed. */}
+      {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
       {/* ⚠️ NOTHING IN THIS ROW IS MIGRATED, and that is the whole of why this file is on the
           i18n PARTIAL list. PTT is Phone's stop-line census (features/panelState.ts) and

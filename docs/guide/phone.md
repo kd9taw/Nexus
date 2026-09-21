@@ -46,8 +46,10 @@ the box, or a consequence to unticking it — the entry says so in a line under 
   level, AGC) only ever offer what your radio reports over CAT. A rig that
   reports none of them has nothing for those panes to hold, and the entries say
   so rather than hiding an empty pane behind a silent checkbox.
-- **TX Meters** (SWR / ALC / PO / COMP) read on transmit, so the panel is empty
-  while you listen. The entry says when it reads.
+- **TX Meters** (SWR / ALC / PO / COMP) read on transmit, and the last over's
+  readings stay on screen after you unkey, dimmed, so you can look at what your
+  drive actually did instead of trying to read a needle while you talk. Until
+  your first over the panel says when it reads.
 - **Voice Keyer** puts the F-key message pane away if you work with a mic and
   never use it. Unticking it stops a message that is playing and throws away a
   recording you are part-way through making; the entry says both before you tick
