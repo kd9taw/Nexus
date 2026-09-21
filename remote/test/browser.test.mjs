@@ -2067,7 +2067,17 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
 
         }
         if(['cw','phone'].includes(mode)){
-          const controls=[...['nb','nr','notch',...(mode==='phone'?['manualNotch']:[])].map((func,index)=>({selector:root+` .ph-dsp > button:nth-of-type(${func==='manualNotch'?6:index+1})`,func})),
+          // ⭐ PHONE NAMES ITS CONTROLS; CW STILL COUNTS THEM. The 2026-09-20 Phone rebuild split
+          // the single `.ph-dsp` group into a RECEIVE and a TRANSMIT chain, so Phone has no
+          // `.ph-dsp` container any more and `nth-of-type(6)` for the manual notch encoded the
+          // OLD combined pane's ordering. CW is untouched and keeps the positional selectors it
+          // has always used. Phone selects on `data-chain`, which NAMES the control instead of
+          // its position — order-independent, so the next reorganisation cannot silently point
+          // these assertions at a different button. Nothing about what is asserted changes, and
+          // the pinned total below (656) is what stops a selector that matches nothing from
+          // passing quietly: a control that never renders still hangs its `until`.
+          const PHONE_DSP={nb:'NB',nr:'NR',notch:'ANF',manualNotch:'MN'}
+          const controls=[...['nb','nr','notch',...(mode==='phone'?['manualNotch']:[])].map((func,index)=>({selector:mode==='phone'?root+` .ph-chain-item[data-chain="${PHONE_DSP[func]}"] > button`:root+` .ph-dsp > button:nth-of-type(${index+1})`,func})),
             ...['auto','fast','mid','slow','off'].map((speed,index)=>({selector:root+` .ph-agc > button:nth-of-type(${index+1})`,speed}))]
           for(const {selector,func,speed} of controls){
             for(const [width,height,zoom]of [[390,844,1],[1280,800,1],[390,844,1.75],[1280,800,1.75]])for(const theme of ['dark','light']){
