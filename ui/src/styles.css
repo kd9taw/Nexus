@@ -17079,6 +17079,18 @@ button.cq-skiptx1.on {
 .pota-spot-v2.pota-spot-new {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border-soft));
 }
+/* The hunt target keeps its row marked while the operator scrolls the board — on a long list a
+   hunter otherwise loses their place, which is the report this answers. Tint copied from
+   `.np-row.selected`; the inset left edge is the NON-COLOUR cue, the same job `.np-row.need-*`
+   does, so the row is still findable without colour.
+   ⚠️ ORDER IS LOAD-BEARING: `.pota-spot-open` and `.pota-spot-new` above set `border-color` at
+   the same specificity (0,2,0), so this must stay AFTER them or the row you are working on loses
+   its border to a band-open accent. */
+.pota-spot-v2.selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-soft));
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 .pota-spot-main {
   flex: 1 1 auto;
   display: flex;
