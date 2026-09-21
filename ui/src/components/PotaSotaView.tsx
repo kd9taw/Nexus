@@ -331,6 +331,29 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
 
   const hunt = (observation ? observation.hunt : snap.hunt) ?? null
 
+  // The row the hunt target names, so the board marks where the operator is — scrolling a long
+  // list otherwise loses it, and the banner says WHO without saying WHERE. A render of `hunt`,
+  // never a second copy of it: Clear hunt target and logging the QSO both consume the target,
+  // and the mark goes with it rather than drifting out of step.
+  // ⚠️ MATCHED ON THE PAIR, call AND reference. One activator legitimately works two references
+  // at once (a two-fer) and appears on two rows; a call-only match would mark both and point at
+  // the wrong park.
+  const huntedSpot = hunt
+    ? (filtered.find((s) => s.activator === hunt.call && s.reference === hunt.reference) ?? null)
+    : null
+
+  // Keep that row on screen. Keyed on the ROW — so the 60 s poll and the log re-read, which hand
+  // back fresh objects carrying the same spot, re-render without moving the list: this fires when
+  // the target CHANGES or when its row first arrives, never under the operator's own scrolling.
+  // 'nearest' so a row already visible moves nothing at all. (jsdom has no scrollIntoView, hence
+  // the optional call — the useRovingList idiom.)
+  const huntedRowRef = useRef<HTMLLIElement | null>(null)
+  const huntedRowKey = huntedSpot ? spotKey(huntedSpot) : null
+  useEffect(() => {
+    if (!huntedRowKey) return
+    huntedRowRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [huntedRowKey])
+
   // My-side activation: the backend stamps my park ref onto every QSO I log while active.
   const [nativeAct, setAct] = useState<Activation | null>(null)
   const act = observation ? observation.activation : nativeAct
@@ -814,10 +837,19 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             if (s.bandOpen) tooltipParts.push(t('ota.spot.bandOpen.tooltip'))
             const tooltip = tooltipParts.join('\n')
 
+            // Identity, because `huntedSpot` was found in this very array — the pair match is
+            // made once, not re-derived per row.
+            const hunted = s === huntedSpot
             return (
               <li
                 key={spotKey(s)}
-                className={`pota-spot pota-spot-v2${s.bandOpen ? ' pota-spot-open' : ''}${s.newPark ? ' pota-spot-new' : ''}`}
+                ref={hunted ? huntedRowRef : null}
+                // aria-current, NOT aria-selected: these rows are `listitem`, a role that does
+                // not support aria-selected (ARIA 1.2 allows it on gridcell/option/row/tab/
+                // treeitem), so a reader would drop it. aria-current is global and reads as
+                // "current item" — the mark is never colour alone.
+                aria-current={hunted ? 'true' : undefined}
+                className={`pota-spot pota-spot-v2${hunted ? ' selected' : ''}${s.bandOpen ? ' pota-spot-open' : ''}${s.newPark ? ' pota-spot-new' : ''}`}
                 title={tooltip}
               >
                 <div className="pota-spot-main">
