@@ -301,6 +301,42 @@ describe('a control the radio cannot drive is disabled and says why', () => {
     expect(mark.getAttribute('title'), 'the notch-frequency reason does not name the CAT backend').toMatch(/backend/i)
   })
 
+  it('a momentary null does NOT kill a live control — the capability is sticky', () => {
+    // `null` means both "this rig lacks it" and "we don't know right now": the radio loop
+    // clears every reading on a CAT re-confirmation, which a QSY triggers, and gating on the
+    // live value alone used to make the whole DSP group vanish the instant you clicked a
+    // spot. Nothing vanishes any more, so the same gap would now read as controls going
+    // dead-and-⊘ under the operator's hand — the same lie in a new costume.
+    const { rerender } = render(<PhoneCockpit snap={snapWith(FULL_RIG)} theme="dark" />)
+    expect(document.querySelector('[data-chain="NRLVL"] .ph-unavail')).toBeNull()
+    rerender(<PhoneCockpit snap={snapWith({})} theme="dark" />)
+    expect(
+      document.querySelector('[data-chain="NRLVL"] .ph-unavail'),
+      'a QSY-blanked reading was read as a radio that cannot do it',
+    ).toBeNull()
+    expect((screen.getByLabelText('Noise-reduction level') as HTMLInputElement).disabled).toBe(false)
+  })
+
+  it('…but a DIFFERENT RADIO starts over — one rig cannot vouch for another', () => {
+    // The other end of sticky, and the reason it cannot simply be "remember forever": a
+    // handoff to a second radio is not a momentary null, and carrying the first rig's
+    // capabilities across it would leave live-looking controls over a radio that has none of
+    // them. That is the exact failure the ⊘ exists to prevent, arriving through the back
+    // door. The cockpit does not remount on a handoff, so nothing else would clear it.
+    // `activeRadioId` is a SNAPSHOT field, not a radio one — putting it in `radio` is the
+    // mistake that made the first draft of this test pass against the unfixed component.
+    const onRadio = (id: number, radio: Record<string, unknown>) =>
+      ({ ...snapWith(radio), activeRadioId: id }) as AppSnapshot
+    const { rerender } = render(<PhoneCockpit snap={onRadio(1, FULL_RIG)} theme="dark" />)
+    expect(document.querySelector('[data-chain="NRLVL"] .ph-unavail')).toBeNull()
+    rerender(<PhoneCockpit snap={onRadio(2, {})} theme="dark" />)
+    expect(
+      document.querySelector('[data-chain="NRLVL"] .ph-unavail'),
+      'the new radio inherited the old one\u2019s capabilities',
+    ).not.toBeNull()
+    expect((screen.getByLabelText('Noise-reduction level') as HTMLInputElement).disabled).toBe(true)
+  })
+
   it('CONTROL — a rig that reports everything wears no ⊘ mark anywhere in the two chains', () => {
     // Without this the whole file would pass against a cockpit that marks every control
     // unavailable forever, which is the failure mode of a negative-space assertion.

@@ -1094,7 +1094,18 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // ⚠️ AND IT COVERS EVERY FIELD, closing the gap #95 left: `compLevel` and `notchFreqHz` had
   // no sticky at all, so the two controls that report went away on a QSY while NB/NR stayed.
   const seenFields = useRef(new Set<string>())
-  /** Reported now, or reported at some point this session. Mutating during render matches
+  // ⚠️ …BUT ONE RIG CANNOT VOUCH FOR ANOTHER. A handoff to a second radio is not a momentary
+  // null, and this cockpit does NOT remount on one — so without this the new radio would
+  // inherit the old one's capabilities and wear live-looking controls it has nothing behind,
+  // which is the exact failure the ⊘ exists to prevent, arriving through the back door. The
+  // two refs this replaces had the same hole; widening the memory to every field is what
+  // makes it worth closing.
+  const seenRadio = useRef(snap.activeRadioId)
+  if (seenRadio.current !== snap.activeRadioId) {
+    seenFields.current = new Set()
+    seenRadio.current = snap.activeRadioId
+  }
+  /** Reported now, or reported at some point on THIS radio. Mutating during render matches
    *  what the two refs this replaces already did, and for the same reason: the answer has to
    *  be available to the very render that asks. */
   const reports = (field: string): boolean => {
