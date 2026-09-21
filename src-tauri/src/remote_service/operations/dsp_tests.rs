@@ -18,7 +18,15 @@ fn receiver_dsp_requires_v3_and_actual_readback_and_never_replays_a_completed_ge
             let (f, connection) = station(mode, 500);
             {
                 let mut e = f.engine.lock().unwrap();
-                e.observe_rig_funcs([Some(false); 6]);
+                // ⚠️ `from_fn` INFERS THE ARITY, and that is the point. This was
+                // `[Some(false); 6]` and broke when RIG_FUNCS grew to 7 for the transmit
+                // monitor — in src-tauri, which is NOT a workspace member, so
+                // `cargo test --workspace` and the branch's own gate both missed it and the
+                // failure surfaced only in CI's `test-tauri` job.
+                // A fixture whose meaning is "every function off" should mean that at any
+                // arity. The PRODUCT sites keep the fixed-size array on purpose, so growing
+                // the list still forces a compile error everywhere a real decision is made.
+                e.observe_rig_funcs(std::array::from_fn(|_| Some(false)));
                 e.observe_rig_agc("fast".into());
             }
             let file = std::fs::read(f.dir.join("settings.json")).unwrap();
@@ -43,7 +51,7 @@ fn receiver_dsp_requires_v3_and_actual_readback_and_never_replays_a_completed_ge
             {
                 let mut e = f.engine.lock().unwrap();
                 // A completed duplicate must not undo a later local pick.
-                e.observe_rig_funcs([Some(false); 6]);
+                e.observe_rig_funcs(std::array::from_fn(|_| Some(false)));
                 e.observe_rig_agc("off".into());
             }
             assert_eq!(run(&f, 3, &command).unwrap(), applied);
@@ -76,7 +84,7 @@ fn receiver_dsp_refuses_keying_functions_wrong_context_and_logging_only_grants()
     let (f, connection) = station("phone", 2400);
     {
         let mut e = f.engine.lock().unwrap();
-        e.observe_rig_funcs([Some(false); 6]);
+        e.observe_rig_funcs(std::array::from_fn(|_| Some(false)));
         e.observe_rig_agc("fast".into());
     }
     let action =
