@@ -11079,6 +11079,10 @@ struct RttyStateDto {
     /// Per-character confidence 0–100, parallel to `text`'s chars — render low
     /// values faint (the ATC soft metric).
     char_conf: Vec<u8>,
+    /// Parallel to `text`: true where WE keyed the character, false where it was decoded
+    /// off the air. Lets the cockpit show a sent over in the same stream as the replies,
+    /// in the order it happened, and still tell the two apart.
+    char_tx: Vec<bool>,
     /// Configured baud rate (true 45.45 by default — never 45).
     baud: f64,
     /// Configured mark/space shift (Hz).
@@ -11119,6 +11123,7 @@ fn rtty_state_dto(eng: &Engine) -> RttyStateDto {
         space_hz: s.space_hz,
         text: s.text,
         char_conf: s.conf,
+        char_tx: s.tx,
         baud: s.baud,
         shift_hz: s.shift_hz,
         backend: s.backend,

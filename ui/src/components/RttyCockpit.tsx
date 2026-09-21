@@ -127,7 +127,7 @@ const rttyPanelLabels = (): Record<RttyPanelId, string> => ({
  * mode. The full design story (per-character-first, the RTTY_MAX_RUNS cap, the
  * field hang it fixed) lives with the function. */
 export { confidenceRuns, TRANSCRIPT_MAX_RUNS as RTTY_MAX_RUNS } from '../transcript'
-import { confidenceRuns } from '../transcript'
+import { authoredRuns } from '../transcript'
 
 /** The character under a point, as an offset into `box.textContent` — or null when nothing
  *  under it is in `box`. The browser's caret hit-test first (`caretPositionFromPoint`, or the
@@ -684,7 +684,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // unconditionally every 400 ms and this cockpit stays MOUNTED in the
   // keep-alive host, so without the memo the whole 4000-char ring was regrouped
   // (and every span reconciled) on renders that carried no new copy at all.
-  const runs = useMemo(() => confidenceRuns(text_rx, rtty?.charConf ?? []), [text_rx, rtty?.charConf])
+  // Our own keyed text rides in the same stream as the received copy, in the order it
+  // happened — that interleaving is the point. `authoredRuns` keeps authorship exact
+  // across the fade grouping; see its note on why a run never spans the boundary.
+  const runs = useMemo(
+    () => authoredRuns(text_rx, rtty?.charConf ?? [], rtty?.charTx),
+    [text_rx, rtty?.charConf, rtty?.charTx],
+  )
   // Stream transcript: bottom-pinned via the shared discipline. The old
   // unconditional snap on every poll that changed the text made mid-QSO
   // scroll-back impossible — the pane reset to the bottom before the operator
@@ -945,7 +951,15 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         >
           {text_rx ? (
             runs.map((run, i) => (
-              <span key={i} style={run.opacity < 1 ? { opacity: run.opacity } : undefined}>
+              // ⭐ OUR OVER IS MARKED, not merely coloured. `.rtty-sent` carries the visual
+              // difference, and the title says it in words for anyone who cannot use the
+              // colour — the project's rule is that colour never carries a fact alone.
+              <span
+                key={i}
+                className={run.tx ? 'rtty-sent' : undefined}
+                title={run.tx ? t('rtty.stream.sent.title') : undefined}
+                style={run.opacity < 1 ? { opacity: run.opacity } : undefined}
+              >
                 {run.text}
               </span>
             ))

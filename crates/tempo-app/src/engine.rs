@@ -2889,7 +2889,15 @@ pub struct Engine {
     rtty_audio: Vec<f32>,
     /// Ring of decoded RTTY characters (+ per-char ATC confidence), capped at
     /// [`RTTY_TEXT_CAP`] — the cockpit transcript. Pushed by the decode thread.
-    rtty_chars: VecDeque<tempo_core::rtty::DecodedChar>,
+    /// The RTTY transcript ring: each decoded character, and whether WE sent it.
+    ///
+    /// ⭐ ONE container rather than two parallel ones, deliberately. The flag has to stay
+    /// aligned with its character through an extend, a cap trim and a clear, and two
+    /// collections that must agree is the alignment bug waiting to be written.
+    ///
+    /// ⚠️ The flag is NOT on `DecodedChar`: that type is shared with PSK (`psk::varicode`),
+    /// and this is an RTTY-only feature.
+    rtty_chars: VecDeque<(tempo_core::rtty::DecodedChar, bool)>,
     /// Latest AFC offset (Hz) reported by the RTTY demodulator.
     rtty_afc_hz: f32,
     /// Whether the RTTY demodulator's AFC has acquired-then-frozen (locked).
@@ -3850,6 +3858,9 @@ pub struct RttyRxState {
     pub mark_hz: f32,
     pub space_hz: f32,
     pub text: String,
+    /// Parallel to `text`: true where WE keyed the character, false where it was
+    /// decoded off the air.
+    pub tx: Vec<bool>,
     pub conf: Vec<u8>,
     pub baud: f64,
     pub shift_hz: u32,
@@ -15686,7 +15697,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         afc_hz: f32,
         afc_locked: bool,
     ) {
-        self.rtty_chars.extend(chars.iter().copied());
+        self.rtty_chars.extend(chars.iter().map(|c| (*c, false)));
         while self.rtty_chars.len() > RTTY_TEXT_CAP {
             self.rtty_chars.pop_front();
         }
@@ -15701,7 +15712,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
 
     /// The compact RTTY state the UI polls (`get_rtty_state`).
     pub fn rtty_state(&self) -> RttyRxState {
-        let text: String = self.rtty_chars.iter().map(|c| c.ch).collect();
+        let text: String = self.rtty_chars.iter().map(|(c, _)| c.ch).collect();
         // Auto-sequencer surface: the live state, the peer + their copied exchange,
         // and — only while Auto is on — a heard CQ the operator can click to answer.
         // `find_cq` SURFACES only; it never drives the machine (the human gate).
@@ -15732,8 +15743,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             conf: self
                 .rtty_chars
                 .iter()
-                .map(|c| (c.confidence.clamp(0.0, 1.0) * 100.0).round() as u8)
+                .map(|(c, _)| (c.confidence.clamp(0.0, 1.0) * 100.0).round() as u8)
                 .collect(),
+            // Parallel to `text`: true where WE keyed the character. The cockpit draws
+            // those differently so an operator can tell their own over from the far end's
+            // at a glance, in one stream and in the order it actually happened.
+            tx: self.rtty_chars.iter().map(|(_, tx)| *tx).collect(),
             baud: self.rtty_baud(),
             shift_hz: self.rtty_shift_hz(),
             backend: if self.rtty_fsk() { "fsk" } else { "afsk" }.to_string(),
@@ -16671,6 +16686,46 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // unattended run).
         if let Some(start) = res.watchdog_start {
             self.tx_watchdog_start = Some(start);
+        }
+        // ⭐ ECHO OUR OWN OVER INTO THE TRANSCRIPT, at the moment it is keyed.
+        //
+        // The operator asked for the sent text in the decoded window, the way a keyboard-mode
+        // program shows it. The value is the INTERLEAVING — your over in time order against
+        // the replies — so it is appended here, where the latch has just decided to key these
+        // characters, and not where they were typed or queued.
+        //
+        // ⛔ ONLY WHAT ACTUALLY RADIATES. `res.drop` is some when a gate went down this tick,
+        // and `rtty_abort` is already armed when a stop is in flight; in both cases the audio
+        // loop takes its abort branch and never keys this chunk. Echoing it would put text in
+        // the transcript that was never transmitted — a false record of your own
+        // transmission, which is worse than no echo at all.
+        //
+        // ⚠️ WHAT THIS STILL CANNOT SEE, written down rather than implied: a stop that arrives
+        // AFTER this returns and before the loop keys. That window is one tick, and it is
+        // bounded by the look-ahead rather than by the whole over. Closing it would mean
+        // moving the echo into the audio loop, which does not own the transcript.
+        if res.drop.is_none() && !self.rtty_abort {
+            if let RttyStreamTick::Text(sent) = &res.tick {
+                let keyed: Vec<(tempo_core::rtty::DecodedChar, bool)> = sent
+                    .chars()
+                    // Confidence 1.0: our own text is not a guess about a signal. The
+                    // faint low-confidence rendering is about copy quality, and it must not
+                    // dim the one thing on screen we are certain of.
+                    .map(|ch| {
+                        (
+                            tempo_core::rtty::DecodedChar {
+                                ch,
+                                confidence: 1.0,
+                            },
+                            true,
+                        )
+                    })
+                    .collect();
+                self.rtty_chars.extend(keyed);
+                while self.rtty_chars.len() > RTTY_TEXT_CAP {
+                    self.rtty_chars.pop_front();
+                }
+            }
         }
         match res.drop {
             None => res.tick,
@@ -22630,6 +22685,85 @@ mod tests {
         e.set_rtty_armed(true);
         assert_eq!(e.poll_rtty_one(), None);
         assert!(!e.rtty_state().sending);
+    }
+
+    /// ⭐ **OUR OWN OVER APPEARS IN THE TRANSCRIPT, AND ONLY WHAT RADIATED.**
+    ///
+    /// The operator asked for the sent text in the decoded window the way a keyboard-mode
+    /// program shows it. The value is the INTERLEAVING — your over in time order against
+    /// the replies — so the echo happens where the latch decides to KEY characters, not
+    /// where they were typed or queued.
+    ///
+    /// ⛔ The second half is the one that matters: text that never went on the air must
+    /// NOT appear. A transcript claiming you transmitted something you did not is a false
+    /// record of your own transmission, which is worse than no echo at all.
+    #[test]
+    fn the_rtty_transcript_echoes_what_was_keyed_and_nothing_else() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        e.set_license_class("extra");
+        e.settings.dial_mhz = 14.080;
+        let _ = e.set_rtty_latched(true);
+        let _ = e.rtty_type("CQ");
+
+        // Precondition: nothing is in the transcript yet, so anything found below arrived
+        // from the echo rather than from an earlier state.
+        assert_eq!(
+            e.rtty_state().text,
+            "",
+            "precondition: transcript starts empty"
+        );
+
+        // A tick that actually keys puts the characters in the transcript, marked as ours.
+        let tick = e.poll_rtty_stream(64);
+        assert!(
+            matches!(tick, RttyStreamTick::Text(ref t) if t.contains("CQ")),
+            "precondition: this tick keys the typed text, got {tick:?}"
+        );
+        let st = e.rtty_state();
+        assert!(
+            st.text.contains("CQ"),
+            "the keyed over is in the transcript: {:?}",
+            st.text
+        );
+        assert_eq!(
+            st.tx.len(),
+            st.text.chars().count(),
+            "the flag is parallel to the text"
+        );
+        assert!(
+            st.tx.iter().all(|&m| m),
+            "and every character of it is marked as ours"
+        );
+
+        // A STOPPED STREAM ADDS NOTHING. The operator hits Stop, the latch goes, and the
+        // transcript stops growing — no half-over appended from a queue that will never be
+        // keyed.
+        let before = e.rtty_state().text;
+        let _ = e.rtty_type("NEVER SENT");
+        e.set_tx_enabled(false);
+        let _ = e.poll_rtty_stream(64);
+        assert_eq!(
+            e.rtty_state().text,
+            before,
+            "a stopped stream adds nothing to the transcript"
+        );
+
+        // ⚠️⚠️ WHAT THIS TEST DOES **NOT** PROVE, written down rather than implied, because
+        // the assertion above looks like it covers it and does not.
+        //
+        // The echo is guarded by `res.drop.is_none() && !self.rtty_abort`, and NEITHER
+        // clause is exercised here. Measured, not assumed: replacing the whole guard with
+        // `if true` leaves this test GREEN. It passes because `set_tx_enabled(false)` drops
+        // the latch as well as arming the abort, so the following tick is `Idle` and there
+        // is no `Text` to echo either way — the observable cannot differ.
+        //
+        // The case the guard is really for is a tick that BOTH yields text AND decides to
+        // drop: the TX watchdog tripping, or `RTTY_MAX_LATCH_MS`. Both are wall-clock
+        // driven and this engine has no clock seam, so neither is constructible from a unit
+        // test. The guard stays — it is correct, it is cheap, and the failure it prevents is
+        // a false record of your own transmission — but it is reasoned, not covered.
+        // Closing it wants either a clock seam or a bench check with a short watchdog.
     }
 
     #[test]

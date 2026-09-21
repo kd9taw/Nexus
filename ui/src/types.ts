@@ -1480,6 +1480,11 @@ export interface RttyState {
   /** Per-character confidence 0–100, parallel to `text`'s chars — render low
    * values faint (the ATC soft metric). */
   charConf: number[]
+  /** Parallel to `text`: true where WE keyed the character. The stream shows a sent over
+   * beside the replies, in the order it happened, drawn so the two are distinguishable.
+   * Optional so a station older than this field degrades to an all-received transcript
+   * rather than throwing. */
+  charTx?: boolean[]
   /** Configured baud rate (true 45.45 by default). */
   baud: number
   /** Configured mark/space shift (Hz). */

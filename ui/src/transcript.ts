@@ -69,3 +69,59 @@ export function confidenceRuns(
   // ceil: the block count can never exceed TRANSCRIPT_MAX_RUNS.
   return group(Math.max(1, Math.ceil(n / TRANSCRIPT_MAX_RUNS)))
 }
+
+/** A transcript run that also says WHO sent it. */
+export interface AuthoredRun {
+  text: string
+  opacity: number
+  /** We keyed this text; false (or absent) means it was decoded off the air. */
+  tx: boolean
+}
+
+/**
+ * [`confidenceRuns`], but for a transcript that carries our own keyed text beside the
+ * received copy (RTTY). Returns the same runs with an authorship flag.
+ *
+ * ⛔ **AUTHORSHIP IS A HARD BOUNDARY — a run NEVER spans it.** This segments the text by
+ * `tx` FIRST and fades each segment independently, rather than teaching `confidenceRuns`
+ * about authorship. Two reasons, and the second is the load-bearing one:
+ *
+ *  1. `confidenceRuns` is shared with PSK, which has no sent-text stream. An optional
+ *     parameter would still put an untested branch in a function PSK renders every poll.
+ *  2. Its `TRANSCRIPT_MAX_RUNS` fallback re-groups over equal BLOCKS scored by their MEAN
+ *     confidence. Averaging is an acceptable loss for a FADE — the doc says so, and a fade
+ *     is a claim about copy quality. It is not acceptable for AUTHORSHIP: a block
+ *     straddling the boundary would have to pick one, and the transcript would then show
+ *     the far end's text as ours, or ours as theirs. Wrong about who transmitted is a
+ *     different order of wrong from slightly wrong about how faint.
+ *
+ * The per-segment run cap keeps the whole transcript bounded: overs are few, so segments
+ * are few, and each is capped by the function it delegates to.
+ */
+export function authoredRuns(
+  text: string,
+  conf: number[],
+  tx: readonly boolean[] | undefined,
+): AuthoredRun[] {
+  // No authorship information at all — a station older than the field, or a mode that
+  // does not echo. Degrade to exactly today's transcript rather than guessing.
+  if (!tx || tx.length === 0) {
+    return confidenceRuns(text, conf).map((r) => ({ ...r, tx: false }))
+  }
+  const chars = [...text]
+  const out: AuthoredRun[] = []
+  let i = 0
+  while (i < chars.length) {
+    // `?? false` so a short `tx` array (a truncated ring, a station mid-upgrade) reads as
+    // received rather than throwing or claiming we sent it.
+    const mine = tx[i] ?? false
+    let j = i
+    while (j < chars.length && (tx[j] ?? false) === mine) j++
+    const segment = chars.slice(i, j).join('')
+    for (const run of confidenceRuns(segment, conf.slice(i, j))) {
+      out.push({ ...run, tx: mine })
+    }
+    i = j
+  }
+  return out
+}

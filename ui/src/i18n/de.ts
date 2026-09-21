@@ -5172,6 +5172,7 @@ export const DE: PartialCatalog = {
   "rtty.clear.label": "Leeren",
   "rtty.clear.title": "Die dekodierte Mitschrift leeren",
   "rtty.stream.listening": "hört mit…",
+  "rtty.stream.sent.title": "Sent by this station",
   "rtty.stream.idle": "RX starten, um RTTY aus dem Empfangsaudio zu dekodieren",
   "rtty.seq.aria": "RTTY-Auto-Sequenzer",
   "rtty.seq.callingCq": "Ruft CQ",
