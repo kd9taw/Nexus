@@ -9,6 +9,20 @@ pub enum RadioLevel {
     NoiseReduction,
     Compression,
     NotchFrequency,
+    /// AF gain — the rig's own volume control. ⚠️ ON SOME STATIONS THIS IS ALSO THE DECODER'S
+    /// AUDIO. A soundcard fed from the rig's speaker or headphone jack (a SignaLink, a
+    /// Rigblaster, a bare 3.5 mm lead) sits BEHIND this knob, so turning it down to silence
+    /// the speaker silences FT8/RTTY/PSK too. A rig's own USB codec and a fixed-level
+    /// ACC/DATA jack do not, and Nexus cannot tell which one an operator has — the capture
+    /// device name is the same either way. So the control carries the warning rather than
+    /// the app guessing; see the cockpit's `phone.analog.af.*` strings.
+    AfGain,
+    /// RF gain — RECEIVE front-end gain, not transmit power. Hamlib spells them `RF` and
+    /// `RFPOWER` for exactly this reason and the two must never be transposed.
+    RfGain,
+    /// Squelch. The FM-relevant one, and the other decode hazard: on most rigs a closed
+    /// squelch mutes the AF path the decoder listens to as well.
+    Squelch,
 }
 
 impl RadioLevel {
@@ -19,6 +33,9 @@ impl RadioLevel {
             "nr" => Self::NoiseReduction,
             "compression" => Self::Compression,
             "notch" => Self::NotchFrequency,
+            "afGain" => Self::AfGain,
+            "rfGain" => Self::RfGain,
+            "squelch" => Self::Squelch,
             _ => return None,
         })
     }
@@ -29,6 +46,11 @@ impl RadioLevel {
             Self::NoiseReduction => "NR",
             Self::Compression => "COMP",
             Self::NotchFrequency => "NOTCHF",
+            // Hamlib's own names, read off `rig.h` and a live `rigctl l ?`: `AF` is volume,
+            // `RF` is RF GAIN (not TX power), `SQL` is squelch. All three are float 0..1.
+            Self::AfGain => "AF",
+            Self::RfGain => "RF",
+            Self::Squelch => "SQL",
         }
     }
     pub fn valid_reading(self, value: f32) -> bool {
@@ -63,6 +85,9 @@ impl Engine {
             RadioLevel::NoiseReduction => self.nr_level,
             RadioLevel::Compression => self.comp_level,
             RadioLevel::NotchFrequency => self.notch_freq_hz,
+            RadioLevel::AfGain => self.af_gain,
+            RadioLevel::RfGain => self.rf_gain,
+            RadioLevel::Squelch => self.squelch,
         }
     }
     fn remote_level_displayed(&self, level: RadioLevel) -> Option<f32> {
@@ -72,6 +97,9 @@ impl Engine {
             RadioLevel::NoiseReduction => self.rig_nr_level,
             RadioLevel::Compression => self.rig_comp_level,
             RadioLevel::NotchFrequency => self.rig_notch_freq_hz,
+            RadioLevel::AfGain => self.rig_af_gain,
+            RadioLevel::RfGain => self.rig_rf_gain,
+            RadioLevel::Squelch => self.rig_squelch,
         };
         observed.or_else(|| self.remote_level_desired(level))
     }
@@ -178,6 +206,18 @@ impl Engine {
             RadioLevel::NotchFrequency => {
                 self.set_notch_freq_hz(desired);
                 self.observe_rig_notch_freq_hz(observed);
+            }
+            RadioLevel::AfGain => {
+                self.set_af_gain(desired);
+                self.observe_rig_af_gain(observed);
+            }
+            RadioLevel::RfGain => {
+                self.set_rf_gain(desired);
+                self.observe_rig_rf_gain(observed);
+            }
+            RadioLevel::Squelch => {
+                self.set_squelch(desired);
+                self.observe_rig_squelch(observed);
             }
         }
     }

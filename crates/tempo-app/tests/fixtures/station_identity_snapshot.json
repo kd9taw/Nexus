@@ -41,6 +41,7 @@
   "qsy": null,
   "radio": {
     "activeVfo": "A",
+    "afGain": null,
     "agc": null,
     "amp": null,
     "atu": null,
@@ -83,6 +84,7 @@
     "recordingWarning": null,
     "refusedAgc": null,
     "refusedDialMhz": null,
+    "rfGain": null,
     "rfPower": null,
     "rigConfirmed": false,
     "rigKeyed": false,
@@ -102,6 +104,7 @@
     "source": "native",
     "sourceLabel": "Native (FT8)",
     "splitTxMhz": null,
+    "squelch": null,
     "swrScaleVerified": false,
     "timeSyncOk": true,
     "trPeriodSecs": 15.0,

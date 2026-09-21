@@ -471,6 +471,9 @@ impl Request {
             (RadioLevel::NoiseReduction, engine.nr_level),
             (RadioLevel::Compression, engine.comp_level),
             (RadioLevel::NotchFrequency, engine.notch_freq_hz),
+            (RadioLevel::AfGain, engine.af_gain),
+            (RadioLevel::RfGain, engine.rf_gain),
+            (RadioLevel::Squelch, engine.squelch),
         ]
         .into_iter()
         .filter_map(|(kind, value)| value.map(|value| (kind, value)))
@@ -653,6 +656,9 @@ impl Request {
         engine.rig_nr_level = None;
         engine.rig_comp_level = None;
         engine.rig_notch_freq_hz = None;
+        engine.rig_af_gain = None;
+        engine.rig_rf_gain = None;
+        engine.rig_squelch = None;
         engine.rig_agc = None;
         engine.set_rig_refused_agc(None);
         engine.clear_rig_mode();

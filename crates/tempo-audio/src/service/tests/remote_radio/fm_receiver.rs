@@ -53,6 +53,9 @@ impl Adjustment {
                     RadioLevel::NoiseReduction => e.observe_rig_nr_level(before),
                     RadioLevel::Compression => e.observe_rig_comp_level(before),
                     RadioLevel::NotchFrequency => e.observe_rig_notch_freq_hz(before),
+                    RadioLevel::AfGain => e.observe_rig_af_gain(before),
+                    RadioLevel::RfGain => e.observe_rig_rf_gain(before),
+                    RadioLevel::Squelch => e.observe_rig_squelch(before),
                 }
                 e.queue_remote_level(
                     "phone",

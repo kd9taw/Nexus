@@ -269,6 +269,9 @@ impl AppState {
                 time_sync_ok: true,
                 rf_power: None,  // engine fills from command/read-back
                 mic_gain: None,  // engine fills from command/read-back
+                af_gain: None,   // engine fills from command/read-back
+                rf_gain: None,   // engine fills from command/read-back
+                squelch: None,   // engine fills from command/read-back
                 nr_level: None,  // engine fills from CAT NR-level read-back
                 agc: None,       // engine fills from CAT AGC read-back
                 smeter_db: None, // engine fills from CAT STRENGTH read-back

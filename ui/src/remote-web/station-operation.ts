@@ -16,7 +16,7 @@ export type PhoneMode = (typeof PHONE_MODES)[number]
 export const SAT_VFO_MAPS = ['off', 'downlink-only', 'uplink-only', 'a-down-b-up', 'a-up-b-down',
   'main-down-sub-up', 'main-up-sub-down'] as const
 export type SatVfoMap = (typeof SAT_VFO_MAPS)[number]
-export const RADIO_LEVELS = ['power', 'micGain', 'nr', 'compression', 'notch'] as const
+export const RADIO_LEVELS = ['power', 'micGain', 'nr', 'compression', 'notch', 'afGain', 'rfGain', 'squelch'] as const
 export type RadioLevel = (typeof RADIO_LEVELS)[number]
 export type FtCallSelection = { call: string; grid: string | null; message: string | null; snr: number | null; freq: number | null }
 export type FtExchangeContext = { dxcall: string | null; state: string; txNow: string | null; cqRunning: boolean }

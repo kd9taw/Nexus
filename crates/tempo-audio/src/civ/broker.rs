@@ -566,9 +566,6 @@ impl RigBackend for CivBackend {
                 self.tx_meter(commands::METER_PO, commands::po_watts_from_raw, 1)
             }
             "COMP_METER" => self.tx_meter(commands::METER_COMP, commands::comp_db_from_raw, 1),
-            // RX DSP levels — 0..1 like mic gain (distinct from the NR/NB on/off funcs).
-            "NR" => self.dsp_level(commands::LVL_NR),
-            "NB" => self.dsp_level(commands::LVL_NB),
             // AGC as the Hamlib enum int (OFF=0/FAST=2/SLOW=3/MEDIUM=5), translated from the rig's
             // Icom byte so the rigctld side stays Hamlib-native.
             "AGC" => {
@@ -578,7 +575,11 @@ impl RigBackend for CivBackend {
                 let civ = commands::parse_agc_civ(&f)?;
                 Some(format!("{}", commands::agc_hamlib_from_civ(civ)))
             }
-            _ => None,
+            // The fractional `0x14 <sub>` family — AF gain, RF gain, squelch, NR, NB — all
+            // 0..1 like mic gain, and all distinct from the NR/NB on/off FUNCS on `0x16`.
+            // One token table (`commands::level_sub`) serves this and the setter below, so
+            // the two cannot drift apart or transpose a pair.
+            _ => commands::level_sub(name).and_then(|sub| self.dsp_level(sub)),
         }
     }
 
@@ -594,8 +595,6 @@ impl RigBackend for CivBackend {
                 let percent = (frac.clamp(0.0, 1.0) * 100.0).round() as u8;
                 Some(self.ack(commands::set_mic_gain(self.addr, percent)))
             }
-            "NR" => self.set_dsp_level_pct(commands::LVL_NR, value),
-            "NB" => self.set_dsp_level_pct(commands::LVL_NB, value),
             "AGC" => {
                 // Value is the Hamlib AGC enum int; translate to the rig's Icom byte.
                 let hamlib: u8 = value.parse().ok()?;
@@ -608,7 +607,8 @@ impl RigBackend for CivBackend {
                 let wpm: u32 = value.parse().ok()?;
                 Some(self.ack(commands::set_keyer_speed_wpm(self.addr, wpm)))
             }
-            _ => None,
+            // The same `0x14 <sub>` family as the getter, off the same table.
+            _ => commands::level_sub(name).and_then(|sub| self.set_dsp_level_pct(sub, value)),
         }
     }
 

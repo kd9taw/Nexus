@@ -79,6 +79,10 @@ const AGC = 'AGC'
 // (PROC on a Yaesu front panel); NOTCH is the MANUAL notch, not the automatic one.
 const COMP = 'COMP'
 const NOTCH = 'NOTCH'
+// The three analog levels, under the rig's own front-panel names.
+const AF = 'AF'
+const RF = 'RF'
+const SQL = 'SQL'
 const HZ = 'Hz'
 const BW = 'BW'
 const DB = 'dB'
@@ -497,6 +501,53 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     if (control) setNotchHz(hz)
     void levels.change('notch', hz).catch(error => pushToast(String(error), 'error'))
   }
+  // The three analog levels, each the same shape as NR/COMP above: mirror the rig's own
+  // value so the slider shows where the knob really is, and never fight an in-flight drag.
+  const [af, setAf] = useState(50)
+  const afDragging = useRef(false)
+  useEffect(() => {
+    const rb = snap.radio.afGain
+    if (rb != null && !afDragging.current) {
+      const pct = Math.round(rb * 100)
+      setAf((a) => (Math.abs(a - pct) >= 2 ? pct : a))
+    }
+  }, [snap.radio.afGain])
+  const shownAf = control ? af : Math.round((levels.draft('afGain') ?? snap.radio.afGain ?? 0) * 100)
+  const changeAf = (pct: number) => {
+    if (!levels.can('afGain')) return
+    if (control) setAf(pct)
+    void levels.change('afGain', pct / 100).catch(error => pushToast(String(error), 'error'))
+  }
+  const [rfg, setRfg] = useState(100)
+  const rfgDragging = useRef(false)
+  useEffect(() => {
+    const rb = snap.radio.rfGain
+    if (rb != null && !rfgDragging.current) {
+      const pct = Math.round(rb * 100)
+      setRfg((r) => (Math.abs(r - pct) >= 2 ? pct : r))
+    }
+  }, [snap.radio.rfGain])
+  const shownRfg = control ? rfg : Math.round((levels.draft('rfGain') ?? snap.radio.rfGain ?? 0) * 100)
+  const changeRfg = (pct: number) => {
+    if (!levels.can('rfGain')) return
+    if (control) setRfg(pct)
+    void levels.change('rfGain', pct / 100).catch(error => pushToast(String(error), 'error'))
+  }
+  const [sql, setSql] = useState(0)
+  const sqlDragging = useRef(false)
+  useEffect(() => {
+    const rb = snap.radio.squelch
+    if (rb != null && !sqlDragging.current) {
+      const pct = Math.round(rb * 100)
+      setSql((q) => (Math.abs(q - pct) >= 2 ? pct : q))
+    }
+  }, [snap.radio.squelch])
+  const shownSql = control ? sql : Math.round((levels.draft('squelch') ?? snap.radio.squelch ?? 0) * 100)
+  const changeSql = (pct: number) => {
+    if (!levels.can('squelch')) return
+    if (control) setSql(pct)
+    void levels.change('squelch', pct / 100).catch(error => pushToast(String(error), 'error'))
+  }
   const shownNr = control ? nr : Math.round((levels.draft('nr') ?? snap.radio.nrLevel ?? 0) * 100)
   const changeNr = (pct: number) => {
     if (!levels.can('nr')) return
@@ -914,6 +965,33 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // Learned only while the pane is SHOWN — the ⊞-hidden state must not keep learning
   // (that is the pre-rebuild behaviour: re-showing a hidden pane renders what it knew
   // when it was hidden, and nothing else silently widens the column budget meanwhile).
+  // ⚠️ THE DECODE-AUDIO HAZARD — the one way these two controls can break something the
+  // operator is not looking at.
+  //
+  // WHAT IS TRUE. On a station whose soundcard is fed from the rig's SPEAKER or HEADPHONE
+  // jack — a SignaLink, a Rigblaster, a bare 3.5 mm lead, which is how most radios older
+  // than a built-in USB codec are wired — the audio the decoder hears passes through the AF
+  // gain control. Drop AF to silence the room and FT8/RTTY/PSK stop decoding, with nothing
+  // on screen saying why. A rig's own USB codec and a fixed-level ACC/DATA jack are tapped
+  // ahead of AF and are NOT affected. Squelch is the worse of the two: on most rigs a closed
+  // squelch mutes the AF path including the USB/data tap, which is why every digital-mode
+  // guide says to open it fully on SSB.
+  //
+  // WHY THE WARNING IS NOT CONDITIONAL ON THE AUDIO PATH. Nexus cannot tell those wirings
+  // apart. `audio_in` is a capture-device NAME, and a SignaLink enumerates as "USB Audio
+  // CODEC" exactly like a rig's internal one — sniffing the name would be a proxy for the
+  // thing, and a wrong one. So the control carries the warning and the operator, who can see
+  // their own cabling, decides.
+  //
+  // IT NOTIFIES AND NEVER ACTS: nothing here clamps, refuses or restores a level. A zero AF
+  // is a legitimate thing to want (headphones out, listening through the computer), and an
+  // operator who means it must be able to have it.
+  const DECODE_MUTE_PCT = 5
+  const afMutesDecode = snap.radio.afGain != null && Math.round(snap.radio.afGain * 100) <= DECODE_MUTE_PCT
+  // ON FM A RAISED SQUELCH IS CORRECT OPERATING and warning about it would be noise, so the
+  // FM case is excluded rather than merely ranked lower.
+  const squelchMutesDecode = snap.radio.squelch != null &&
+    Math.round(snap.radio.squelch * 100) >= DECODE_MUTE_PCT && commandedMode !== 'FM'
   const liveDspFuncs = DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
   // Whether each rig-gated pane CAN render at all on this station, independent of the ⊞
   // tick. Computed here, above the menu, so the entry's note and the pane read ONE boolean
@@ -932,7 +1010,13 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     // failure this whole block is written against, arriving from the other side. Caught by
     // PhoneCockpit.notch.test.tsx before it shipped.
     snap.radio.compLevel != null ||
-    snap.radio.notchFreqHz != null
+    snap.radio.notchFreqHz != null ||
+    // The two analog levels that live in this pane, for the same reason: a rig reporting RF
+    // gain or squelch and nothing else would have had both controls built and then never
+    // rendered. (compLevel/notchFreqHz above have the same latent gap in the STICKY below,
+    // which #95 left and this change does not widen.)
+    snap.radio.rfGain != null ||
+    snap.radio.squelch != null
   // ⊞ Panels. `main`/`side` are unused here (Phone has no two-column pane grid), so the
   // host is only supplying `shown` + the menu items.
   //
@@ -986,7 +1070,8 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       : DSP_FUNCS.filter((f) => seenDspFuncs.current.includes(f.key))
   // Same sticky rule for the NR/AGC levels pane: a CAT re-confirmation nulls these too,
   // and unmounting on that made the pane flicker away on every QSY.
-  if (shown('dspLevels') && (snap.radio.nrLevel != null || snap.radio.agc != null))
+  if (shown('dspLevels') && (snap.radio.nrLevel != null || snap.radio.agc != null ||
+    snap.radio.rfGain != null || snap.radio.squelch != null))
     seenDspLevels.current = true
 
   // Which panes CAN render right now — the exact conditions that gate them in the JSX,
@@ -1215,6 +1300,60 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   aria-label={t('phone.rxDsp.nr.aria')}
                 />
                 <span className="ph-power-val">{shownNr}%</span>
+              </label>
+            )}
+            {/* RF GAIN — receive front-end gain. Not the header's Pwr slider, which is
+                transmit power; they are `RF` and `RFPOWER` to Hamlib for that reason. */}
+            {snap.radio.rfGain != null && (
+              <label className="ph-dsplev" title={t('phone.analog.rf.title')}>
+                <span>{RF}</span>
+                <input {...levels.input('rfGain')} disabled={!levels.can('rfGain')}
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={shownRfg}
+                  onChange={(e) => changeRfg(Number(e.target.value))}
+                  onPointerDown={() => {
+                    rfgDragging.current = true
+                    levels.input('rfGain').onPointerDown()
+                  }}
+                  onPointerUp={() => {
+                    rfgDragging.current = false
+                    levels.input('rfGain').onPointerUp()
+                  }}
+                  aria-label={t('phone.analog.rf.aria')}
+                />
+                <span className="ph-power-val">{shownRfg}%</span>
+              </label>
+            )}
+            {/* SQUELCH — correct operating on FM, and the classic silently-deaf fault
+                everywhere else, which is why the warning excludes FM rather than ranking
+                it. See the decode-audio note where `squelchMutesDecode` is computed. */}
+            {snap.radio.squelch != null && (
+              <label className="ph-dsplev" title={t('phone.analog.sql.title')}>
+                <span>{SQL}</span>
+                <input {...levels.input('squelch')} disabled={!levels.can('squelch')}
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={shownSql}
+                  onChange={(e) => changeSql(Number(e.target.value))}
+                  onPointerDown={() => {
+                    sqlDragging.current = true
+                    levels.input('squelch').onPointerDown()
+                  }}
+                  onPointerUp={() => {
+                    sqlDragging.current = false
+                    levels.input('squelch').onPointerUp()
+                  }}
+                  aria-label={t('phone.analog.sql.aria')}
+                />
+                <span className="ph-power-val">{shownSql}%</span>
+                {squelchMutesDecode && (
+                  <span className="ph-lvl-warn" role="status" title={t('phone.analog.sql.mutesDecode.title')}>
+                    {t('phone.analog.sql.mutesDecode.label')}
+                  </span>
+                )}
               </label>
             )}
             {/* #95: the speech processor's DEPTH. The toggle switched PROC on and there was
@@ -1465,6 +1604,33 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               aria-label={t('phone.mic.aria')}
             />
             <span className="ph-power-val">{shownMic}%</span>
+          </label>
+        )}
+        {snap.radio.afGain != null && (
+          <label className="ph-power" title={t('phone.analog.af.title')}>
+            <span>{AF}</span>
+            <input {...levels.input('afGain')} disabled={!levels.can('afGain')}
+              type="range"
+              min={0}
+              max={100}
+              value={shownAf}
+              onChange={(e) => changeAf(Number(e.target.value))}
+              onPointerDown={() => {
+                afDragging.current = true
+                levels.input('afGain').onPointerDown()
+              }}
+              onPointerUp={() => {
+                afDragging.current = false
+                levels.input('afGain').onPointerUp()
+              }}
+              aria-label={t('phone.analog.af.aria')}
+            />
+            <span className="ph-power-val">{shownAf}%</span>
+            {afMutesDecode && (
+              <span className="ph-lvl-warn" role="status" title={t('phone.analog.af.mutesDecode.title')}>
+                {t('phone.analog.af.mutesDecode.label')}
+              </span>
+            )}
           </label>
         )}
         {catOk && commandedMode !== 'FM' && (

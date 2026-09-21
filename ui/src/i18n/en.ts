@@ -8570,6 +8570,31 @@ export const EN = {
   'phone.mic.label': 'Mic',
   'phone.mic.aria': 'Mic gain',
   'phone.mic.title': 'Microphone gain — raise it until SSB peaks tickle the ALC zone',
+  'phone.analog.af.aria': 'AF gain',
+  'phone.analog.af.title':
+    "AF gain — the radio's own volume. If your soundcard is fed from the rig's speaker or " +
+    'headphone jack, this also sets the level the decoder hears, so turning it right down ' +
+    'stops FT8, RTTY and PSK as well as the speaker. A rig with its own USB audio, or a ' +
+    'fixed-level ACC/DATA jack, is not affected.',
+  'phone.analog.af.mutesDecode.label': 'DECODE?',
+  'phone.analog.af.mutesDecode.title':
+    'AF is almost fully down. If the decoder listens through the rig\u2019s speaker or ' +
+    'headphone jack it has gone quiet too. Raise AF, or feed the soundcard from the USB ' +
+    'codec or the rear ACC/DATA jack, which are not affected by this control.',
+  'phone.analog.rf.aria': 'RF gain',
+  'phone.analog.rf.title':
+    'RF gain — the receiver front end, not transmit power. Back it off on a loud band to ' +
+    'lift a signal out of the noise the AGC is riding on.',
+  'phone.analog.sql.aria': 'Squelch',
+  'phone.analog.sql.title':
+    'Squelch — the level a signal must reach before you hear it. Normal on FM; on SSB, CW ' +
+    'and the data modes leave it fully open, because a closed squelch mutes the audio the ' +
+    'decoder listens to on most radios, including the USB feed.',
+  'phone.analog.sql.mutesDecode.label': 'DECODE?',
+  'phone.analog.sql.mutesDecode.title':
+    'The squelch is up outside FM. On most radios that mutes the audio the decoder hears ' +
+    'as well as the speaker, so nothing will decode until a signal breaks it. Wind it fully ' +
+    'down for SSB, CW and the data modes.',
   'phone.filter.title': 'RX filter / passband width (CAT)',
   'phone.filter.narrower.title': 'Narrower (−{{step}} Hz)',
   'phone.filter.wider.title': 'Wider (+{{step}} Hz)',

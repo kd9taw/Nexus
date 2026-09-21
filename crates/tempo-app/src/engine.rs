@@ -2630,6 +2630,22 @@ pub struct Engine {
     /// HZ, not a 0..1 fraction.
     notch_freq_hz: Option<f32>,
     rig_notch_freq_hz: Option<f32>,
+    /// THE THREE ANALOG LEVELS a voice operator rides continuously, and which a digital-first
+    /// history left out: AF gain, RF gain and squelch. Same desired/read-back split as every
+    /// pair above — the rig's own value wins when it reports one, so a slider shows where the
+    /// knob really is rather than where we last asked for it, and a 750 ms poll can never
+    /// clobber a drag still in flight.
+    ///
+    /// Each starts `None` and STAYS `None` until the radio reports it, which is what keeps
+    /// these from being a memory dressed as a reading: the desired half can only be set
+    /// through a control that renders only once the observed half exists.
+    af_gain: Option<f32>,
+    rig_af_gain: Option<f32>,
+    /// RECEIVE gain. Not `rf_power` two fields up — see [`RadioLevel::RfGain`].
+    rf_gain: Option<f32>,
+    rig_rf_gain: Option<f32>,
+    squelch: Option<f32>,
+    rig_squelch: Option<f32>,
     /// Desired / read-back AGC time constant, one of [`Engine::AGC_SPEEDS`] (the loop maps it to the
     /// rig's value). Commanded until the poll confirms; `None` when the rig doesn't report it.
     agc: Option<String>,
@@ -4540,6 +4556,12 @@ impl Engine {
             zero_power_noted: false,
             mic_gain: None,
             rig_mic_gain: None,
+            af_gain: None,
+            rig_af_gain: None,
+            rf_gain: None,
+            rig_rf_gain: None,
+            squelch: None,
+            rig_squelch: None,
             nr_level: None,
             rig_nr_level: None,
             comp_level: None,
@@ -8380,6 +8402,57 @@ impl Engine {
     pub fn observe_rig_notch_freq_hz(&mut self, hz: f32) {
         if hz.is_finite() {
             self.rig_notch_freq_hz = Some(hz.clamp(NOTCH_MIN_HZ, NOTCH_MAX_HZ));
+        }
+    }
+
+    /// Set desired AF GAIN (0.0–1.0) — the rig's volume. The radio loop applies it.
+    ///
+    /// ⚠️ THIS CAN SILENCE THE DECODER. On a station whose soundcard is fed from the rig's
+    /// speaker or headphone jack, the audio Nexus decodes passes through this control, so a
+    /// zero here stops FT8/RTTY/PSK as surely as pulling the cable. It is still the
+    /// operator's knob and nothing here clamps or refuses it (alerts notify, never act) —
+    /// the cockpit warns at the control instead.
+    pub fn set_af_gain(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
+        self.af_gain = Some(frac.clamp(0.0, 1.0));
+    }
+    pub fn af_gain(&self) -> Option<f32> {
+        self.af_gain
+    }
+    pub fn observe_rig_af_gain(&mut self, frac: f32) {
+        if frac.is_finite() {
+            self.rig_af_gain = Some(frac.clamp(0.0, 1.0));
+        }
+    }
+
+    /// Set desired RF GAIN (0.0–1.0) — RECEIVE front-end gain. Not transmit power; that is
+    /// [`Self::set_rf_power`], and the two reach different Hamlib levels (`RF` vs `RFPOWER`).
+    pub fn set_rf_gain(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
+        self.rf_gain = Some(frac.clamp(0.0, 1.0));
+    }
+    pub fn rf_gain(&self) -> Option<f32> {
+        self.rf_gain
+    }
+    pub fn observe_rig_rf_gain(&mut self, frac: f32) {
+        if frac.is_finite() {
+            self.rig_rf_gain = Some(frac.clamp(0.0, 1.0));
+        }
+    }
+
+    /// Set desired SQUELCH (0.0–1.0). Normal operating practice on FM and the classic
+    /// silent-decoder fault everywhere else: on most rigs a closed squelch mutes the AF path
+    /// the decoder listens to as well, including the USB/data tap on many radios.
+    pub fn set_squelch(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
+        self.squelch = Some(frac.clamp(0.0, 1.0));
+    }
+    pub fn squelch(&self) -> Option<f32> {
+        self.squelch
+    }
+    pub fn observe_rig_squelch(&mut self, frac: f32) {
+        if frac.is_finite() {
+            self.rig_squelch = Some(frac.clamp(0.0, 1.0));
         }
     }
 
@@ -18331,6 +18404,9 @@ contact yourself."
         s.radio.nr_level = self.rig_nr_level.or(self.nr_level);
         s.radio.comp_level = self.rig_comp_level.or(self.comp_level);
         s.radio.notch_freq_hz = self.rig_notch_freq_hz.or(self.notch_freq_hz);
+        s.radio.af_gain = self.rig_af_gain.or(self.af_gain);
+        s.radio.rf_gain = self.rig_rf_gain.or(self.rf_gain);
+        s.radio.squelch = self.rig_squelch.or(self.squelch);
         s.radio.agc = self.rig_agc.clone().or_else(|| self.agc.clone());
         s.radio.refused_agc = self.rig_refused_agc.clone();
         s.radio.smeter_db = self.rig_smeter_db;

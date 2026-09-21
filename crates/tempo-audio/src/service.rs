@@ -995,9 +995,34 @@ const LVL_COMP: usize = 4;
 /// MANUAL-NOTCH FREQUENCY (Hz, not a 0..1 fraction — see `read_level_hz`). The other half of
 /// `MN` above: a notch you cannot place is not a notch.
 const LVL_NOTCHF: usize = 5;
+/// THE THREE ANALOG LEVELS a voice operator rides continuously — AF gain, RF gain and
+/// squelch — which a digital-first history left out of the CAT layer entirely. Hamlib's own
+/// names (`rig.h`: `AF` volume, `RF` RF gain — NOT TX power, `SQL` squelch), all float 0..1,
+/// so they read through the ordinary [`Rig::read_level`] like MICGAIN and NR.
+const LVL_AF: usize = 6;
+const LVL_RF: usize = 7;
+const LVL_SQL: usize = 8;
 /// Per-level slot count, derived from the highest index above for the same reason
-/// [`N_FUNCS`] is derived — these arrays grew from 4 to 6 in the same change.
-const N_LEVELS: usize = LVL_NOTCHF + 1;
+/// [`N_FUNCS`] is derived — these arrays grew from 4 to 6 in the same change, and from 6 to
+/// 9 when the analog levels landed.
+const N_LEVELS: usize = LVL_SQL + 1;
+/// ⚠️ AND THE DERIVATION IS HELD DOWN AT COMPILE TIME. "Highest index plus one" is only
+/// correct while the reader knows which index is highest, and the crash [`N_FUNCS`] documents
+/// came from exactly that kind of by-hand agreement: an array index is a RUNTIME bound, so a
+/// slot added above the count compiles, ships, and panics the radio loop — TX and RX dead
+/// until restart. This makes it a BUILD failure instead. Add an index, add it here.
+const _: () = assert!(
+    LVL_RFPOWER < N_LEVELS
+        && LVL_MICGAIN < N_LEVELS
+        && LVL_NR < N_LEVELS
+        && LVL_AGC < N_LEVELS
+        && LVL_COMP < N_LEVELS
+        && LVL_NOTCHF < N_LEVELS
+        && LVL_AF < N_LEVELS
+        && LVL_RF < N_LEVELS
+        && LVL_SQL < N_LEVELS,
+    "a level index is outside the derived slot count — widen N_LEVELS"
+);
 
 /// Record one extended-level read outcome into its `supported`/`misses` slot, with the same
 /// miss-tolerance as the S-meter: a hit resets the counter and confirms support; three consecutive
@@ -2918,6 +2943,11 @@ struct RadioLoop {
     /// value each rig refused — same give-up idiom as `nr_level_giveup`.
     last_comp_level: Option<f32>,
     last_notch_freq_hz: Option<f32>,
+    /// Last value WRITTEN for each analog level — the change-detection the write leg dedupes
+    /// against, exactly as for mic gain above.
+    last_af_gain: Option<f32>,
+    last_rf_gain: Option<f32>,
+    last_squelch: Option<f32>,
     last_agc: Option<String>,
     /// The AGC speed this rig REFUSED, so it stops being re-sent. Hamlib carries AGC as an
     /// enum (OFF/SUPERFAST/FAST/SLOW/USER/MEDIUM/AUTO) and backends do not all implement every
@@ -2950,6 +2980,9 @@ struct RadioLoop {
     nr_level_giveup: Option<f32>,
     comp_level_giveup: Option<f32>,
     notch_freq_giveup: Option<f32>,
+    af_gain_giveup: Option<f32>,
+    rf_gain_giveup: Option<f32>,
+    squelch_giveup: Option<f32>,
     /// Open WAV sink while a QSO recording is streaming live RX capture to disk (audio
     /// bridge). The loop owns the file handle so the audio never has to live in RAM.
     qso_sink: Option<crate::voice::WavSink>,
@@ -3463,6 +3496,9 @@ impl RadioLoop {
             last_nr_level: None,
             last_comp_level: None,
             last_notch_freq_hz: None,
+            last_af_gain: None,
+            last_rf_gain: None,
+            last_squelch: None,
             last_agc: None,
             agc_giveup: None,
             rf_power_giveup: None,
@@ -3470,6 +3506,9 @@ impl RadioLoop {
             nr_level_giveup: None,
             comp_level_giveup: None,
             notch_freq_giveup: None,
+            af_gain_giveup: None,
+            rf_gain_giveup: None,
+            squelch_giveup: None,
             qso_sink: None,
             qso_started_ms: None,
             voice_mic_open: false,
@@ -4909,6 +4948,9 @@ impl RadioLoop {
         self.last_nr_level = None;
         self.last_comp_level = None;
         self.last_notch_freq_hz = None;
+        self.last_af_gain = None;
+        self.last_rf_gain = None;
+        self.last_squelch = None;
         self.last_agc = None;
         self.agc_giveup = None; // a fresh rig may well take the step the old one refused
         self.rf_power_giveup = None; // …and so may it take the level this one refused
@@ -4916,6 +4958,9 @@ impl RadioLoop {
         self.nr_level_giveup = None;
         self.comp_level_giveup = None;
         self.notch_freq_giveup = None;
+        self.af_gain_giveup = None;
+        self.rf_gain_giveup = None;
+        self.squelch_giveup = None;
         self.fake_it_restore = None;
         self.audio_rig_split = false;
         self.rig_split_restore = None; // the OLD radio's split is not the new one's to restore
@@ -6329,6 +6374,9 @@ impl RadioLoop {
                     self.nr_level_giveup = None;
                     self.comp_level_giveup = None;
                     self.notch_freq_giveup = None;
+                    self.af_gain_giveup = None;
+                    self.rf_gain_giveup = None;
+                    self.squelch_giveup = None;
                     self.on_cat_link_back();
                     {
                         let mut eng = engine_lock(engine);
@@ -6587,6 +6635,43 @@ impl RadioLoop {
                             note_ext_read(
                                 &mut self.level_supported[LVL_NOTCHF],
                                 &mut self.level_misses[LVL_NOTCHF],
+                                ok,
+                            );
+                        }
+                        // The three analog levels. Same capability cache as everything else
+                        // here (3 consecutive misses and the loop stops asking), so a rig that
+                        // reports none of them never pays a CAT timeout for the question.
+                        for (slot, token, adopt) in [
+                            (
+                                LVL_AF,
+                                "AF",
+                                Engine::observe_rig_af_gain as fn(&mut Engine, f32),
+                            ),
+                            (
+                                LVL_RF,
+                                "RF",
+                                Engine::observe_rig_rf_gain as fn(&mut Engine, f32),
+                            ),
+                            (
+                                LVL_SQL,
+                                "SQL",
+                                Engine::observe_rig_squelch as fn(&mut Engine, f32),
+                            ),
+                        ] {
+                            if self.level_supported[slot] == Some(false) || !have_budget() {
+                                continue;
+                            }
+                            let ok = match rig.read_level(token) {
+                                Ok(frac) => {
+                                    let mut eng = engine_lock(engine);
+                                    adopt(&mut eng, frac);
+                                    true
+                                }
+                                Err(_) => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[slot],
+                                &mut self.level_misses[slot],
                                 ok,
                             );
                         }
@@ -8813,15 +8898,55 @@ impl RadioLoop {
                 }
             }
             // RX DSP levels: NR level (0..1) + AGC speed — applied on change like mic gain.
-            let (nr, agc, comp, notchf) = {
+            let (nr, agc, comp, notchf, analog) = {
                 let mut e = engine_lock(engine);
                 (
                     e.nr_level(),
                     e.agc_to_command(),
                     e.comp_level(),
                     e.notch_freq_hz(),
+                    [e.af_gain(), e.rf_gain(), e.squelch()],
                 )
             };
+            // The three analog levels, each on the same give-up idiom as the writes below: a
+            // refusal is remembered against THAT value, so a rig that will not take it is
+            // asked once rather than every pass, and a different value from the operator is
+            // still tried. Silent on refusal — unlike RF power and NR these carry no cat
+            // status line, because a rig that cannot set AF or squelch over CAT is the common
+            // case rather than a fault worth interrupting the operator about, and the
+            // read-back the poll already does shows the truth either way.
+            for (desired, token, last, giveup) in [
+                (
+                    analog[0],
+                    "AF",
+                    &mut self.last_af_gain,
+                    &mut self.af_gain_giveup,
+                ),
+                (
+                    analog[1],
+                    "RF",
+                    &mut self.last_rf_gain,
+                    &mut self.rf_gain_giveup,
+                ),
+                (
+                    analog[2],
+                    "SQL",
+                    &mut self.last_squelch,
+                    &mut self.squelch_giveup,
+                ),
+            ] {
+                let Some(value) = desired else { continue };
+                if Some(value) == *last || *giveup == Some(value) {
+                    continue;
+                }
+                match rig.set_rx_level(token, value) {
+                    Ok(()) => {
+                        *last = Some(value);
+                        *giveup = None;
+                    }
+                    Err(_) => *giveup = Some(value),
+                }
+            }
             // #95's two writes. Same shape as NR below — a refusal is remembered against THAT
             // value so a rig that will not take it is asked once, not on every pass, and a
             // different value from the operator is still tried.
