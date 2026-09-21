@@ -14,7 +14,7 @@
 // the acronym itself and is a named constant below. The prose is in the catalog under
 // `globe.*`, and the two legends + the ★-filter hint come from `map.*` because the 2-D map
 // and this globe are deliberately identical there.
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useContext } from 'react'
 import { NavigationMapContext } from '../remote-web/useNavigation'
 import { heatPulse, sectorPulse } from '../features/pulse'
@@ -623,19 +623,30 @@ export default function Globe3D({
     return polys
   }, [qth, prop])
 
-  // Spots → globe points (band-colored; green = heard me). `label` carries the SAME
-  // hover-tooltip line the 2-D map shows (shared builder), so the two read identically.
-  const points = useMemo(
+  // Spots → globe points (band-colored; green = heard me).
+  //
+  // ⚠️ CONTENT-KEYED, for the arcs' reason below with more at stake: a spot is a real `div`, and
+  // three-globe's HTML layer joins on DATUM IDENTITY — a new array of new objects removes every
+  // element from the DOM and builds it again, and the dots are missing until the next drawn
+  // frame. App deserialises a whole new propagation snapshot on every poll, so that was the
+  // normal case, not the exception (operator: the spots "flickering aggressively").
+  //
+  // The datum carries ONLY what the dot draws, so the key is the datum itself and no field it
+  // reads can be left out of the key (`useStableByKey`'s one hazard). The hover line — the same
+  // builder the 2-D map uses, so the two read identically — is looked up LIVE at hover time
+  // instead: its age ticks with every poll, so a datum carrying it would either go stale or
+  // rebuild every dot on the clock.
+  const pointsBuilt = useMemo(
     () =>
       spots.map((s) => ({
         lat: s.lat,
         lng: s.lon,
         call: s.call,
         color: s.heardMe ? GETTING_OUT : bandColor(s.band),
-        label: spotTooltip(s),
       })),
     [spots],
   )
+  const points = useStableByKey(pointsBuilt, JSON.stringify(pointsBuilt))
 
   // Great-circle arcs from the QTH: the SELECTED station, everyone who reported hearing ME
   // (TX), and — under its own toggle — everyone I decoded (RX).
@@ -1612,14 +1623,55 @@ export default function Globe3D({
   // same layout space the globe is sized in). The .app UI zoom makes visual px ≠ layout
   // px, so undo it via the rect ratio — same fix as the 2-D map's canvasXY. Reads the
   // live client size off the ref so a window resize never strands a stale scale.
-  const wrapXY = (e: MouseEvent): [number, number] => {
+  // Memoised because the spot factory below closes over it and must keep ONE identity (see there).
+  const wrapXY = useCallback((e: MouseEvent): [number, number] => {
     const el = wrapRef.current
     if (!el) return [e.clientX, e.clientY]
     const rect = el.getBoundingClientRect()
     const sx = rect.width > 0 ? el.clientWidth / rect.width : 1
     const sy = rect.height > 0 ? el.clientHeight / rect.height : 1
     return [(e.clientX - rect.left) * sx, (e.clientY - rect.top) * sy]
-  }
+  }, [])
+
+  // What a spot's own handlers must read AT EVENT TIME. The factory below is built once and
+  // outlives every snapshot, so it cannot close over either of these.
+  const liveRef = useRef({ onSelectCall, spots })
+  useEffect(() => {
+    liveRef.current = { onSelectCall, spots }
+  })
+
+  // A spot's DOM element.
+  //
+  // ⚠️ ONE IDENTITY FOR THE LIFE OF THE COMPONENT. three-globe's HTML layer opens its update with
+  // `changedProps.hasOwnProperty('htmlElement') && dataMapper.clear()` — a new factory throws
+  // every element away before the join even runs — and react-kapsule forwards this prop whenever
+  // it is `!==` the previous one. Written inline in the JSX it was a new function on EVERY
+  // render, and App re-renders the globe on every 300 ms snapshot: every spot on the map was
+  // rebuilt ~3×/s, which is the flicker the operator reported. Globe3D.render.test.tsx §4 holds
+  // both halves down by DOM-node identity.
+  const spotElement = useCallback(
+    (d: object) => {
+      const p = d as { call: string; color: string }
+      const el = document.createElement('div')
+      el.className = 'globe3d-spot'
+      el.style.setProperty('--c', p.color)
+      el.onclick = () => liveRef.current.onSelectCall(p.call)
+      // Rich hover tooltip matching the 2-D map (call · band · mode · freq · age …),
+      // rendered as the shared .map-hover element near the cursor. Read off the CURRENT
+      // snapshot, so the age it quotes is the age the 2-D map would quote.
+      const showHover = (e: MouseEvent) => {
+        const live = liveRef.current.spots.find((sp) => sp.call === p.call)
+        if (!live) return
+        const [x, y] = wrapXY(e)
+        setHover({ x, y, text: spotTooltip(live) })
+      }
+      el.onmouseenter = showHover
+      el.onmousemove = showHover
+      el.onmouseleave = () => setHover(null)
+      return el
+    },
+    [wrapXY],
+  )
 
   // Stars exist but NONE matched (starred bird aged past the 30-day element
   // cutoff or left the group file) → the ★ filter hides every bird. Say so —
@@ -1739,23 +1791,7 @@ export default function Globe3D({
           htmlLat="lat"
           htmlLng="lng"
           htmlAltitude={0.01}
-          htmlElement={(d: object) => {
-            const p = d as { call: string; color: string; label: string }
-            const el = document.createElement('div')
-            el.className = 'globe3d-spot'
-            el.style.setProperty('--c', p.color)
-            el.onclick = () => onSelectCall(p.call)
-            // Rich hover tooltip matching the 2-D map (call · band · mode · freq · age …),
-            // rendered as the shared .map-hover element near the cursor.
-            const showHover = (e: MouseEvent) => {
-              const [x, y] = wrapXY(e)
-              setHover({ x, y, text: p.label })
-            }
-            el.onmouseenter = showHover
-            el.onmousemove = showHover
-            el.onmouseleave = () => setHover(null)
-            return el
-          }}
+          htmlElement={spotElement}
           arcsData={arcs}
           arcColor="color"
           arcStroke={0.5}
