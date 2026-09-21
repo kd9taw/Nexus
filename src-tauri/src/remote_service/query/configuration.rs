@@ -234,6 +234,7 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "qsySet",
     "radioPegged",
     "radios",
+    "ratedWatts",
     "rigAddr",
     "rigConn",
     "rigModel",
@@ -377,6 +378,7 @@ pub(super) const RADIO_KEYS: &[&str] = &[
     "omnirigSlot",
     "pttMethod",
     "pttSerialPort",
+    "ratedWatts",
     "rigAddr",
     "rigConn",
     "rigModel",
@@ -534,6 +536,11 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
     "pounceThreshold",
     "wantedCalls",
     "blockedCalls",
+    // The radio's rating, not an operating preference: it describes the hardware, exactly as
+    // `rigModelName` and `baud` do, and it is the denominator the power meter's scale is drawn
+    // against. A browser may read what the rig is rated at; naming a different rig is a shack
+    // change, not a remote one.
+    "ratedWatts",
     "stationPowerW",
     "maxPowerPhone",
     "maxPowerCw",
@@ -723,7 +730,7 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
 ];
 impl Serialize for SettingsView<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut out = serializer.serialize_struct("SettingsView", 270)?;
+        let mut out = serializer.serialize_struct("SettingsView", 271)?;
         out.serialize_field("mycall", &self.0.mycall)?;
         out.serialize_field("mygrid", &self.0.mygrid)?;
         out.serialize_field("opName", &self.0.op_name)?;
@@ -914,6 +921,7 @@ impl Serialize for SettingsView<'_> {
         out.serialize_field("monitorEnabled", &self.0.monitor_enabled)?;
         out.serialize_field("monitorDevice", &self.0.monitor_device)?;
         out.serialize_field("monitorLevel", &self.0.monitor_level)?;
+        out.serialize_field("ratedWatts", &self.0.rated_watts)?;
         out.serialize_field("stationPowerW", &self.0.station_power_w)?;
         out.serialize_field("units", &self.0.units)?;
         out.serialize_field("maxPowerPhone", &self.0.max_power_phone)?;
@@ -1010,7 +1018,7 @@ impl Serialize for SettingsView<'_> {
 }
 impl Serialize for RadioView<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut out = serializer.serialize_struct("RadioView", 39)?;
+        let mut out = serializer.serialize_struct("RadioView", 40)?;
         out.serialize_field("id", &self.0.id)?;
         out.serialize_field("name", &self.0.name)?;
         out.serialize_field("enabled", &self.0.enabled)?;
@@ -1032,6 +1040,7 @@ impl Serialize for RadioView<'_> {
         out.serialize_field("audioOut", &self.0.audio_out)?;
         out.serialize_field("txLevel", &self.0.tx_level)?;
         out.serialize_field("rxGain", &self.0.rx_gain)?;
+        out.serialize_field("ratedWatts", &self.0.rated_watts)?;
         out.serialize_field("rotatorModel", &self.0.rotator_model)?;
         out.serialize_field("rotatorPort", &self.0.rotator_port)?;
         out.serialize_field("rotatorBaud", &self.0.rotator_baud)?;

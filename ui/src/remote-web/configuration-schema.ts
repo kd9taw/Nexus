@@ -172,6 +172,7 @@ export const SETTINGS_KEYS = [
   'monitorEnabled',
   'monitorDevice',
   'monitorLevel',
+  'ratedWatts',
   'stationPowerW',
   'units',
   'maxPowerPhone',
@@ -316,6 +317,9 @@ export const NEWER_SETTINGS = {
   clusterNodesAuto: false,
   // It logs in with the bare callsign.
   clusterSsid: '',
+  // A station that predates the per-radio rating reports none, and the meter scale it was
+  // drawing all along is the 100 W full scale that `default_rated_watts` still gives it.
+  ratedWatts: 100,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -531,6 +535,7 @@ export const SETTINGS_SHAPES = {
   "monitorEnabled": "boolean",
   "monitorDevice": "string",
   "monitorLevel": "number",
+  "ratedWatts": "number",
   "stationPowerW": "nullable-number",
   "units": "string",
   "maxPowerPhone": "nullable-number",

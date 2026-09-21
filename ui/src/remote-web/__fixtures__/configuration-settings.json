@@ -244,6 +244,7 @@
         "omnirigSlot": 1,
         "pttMethod": "vox",
         "pttSerialPort": "",
+        "ratedWatts": 100,
         "rigAddr": "",
         "rigConn": "serial",
         "rigModel": 0,
@@ -262,6 +263,7 @@
         "yaesuRfScope": false
       }
     ],
+    "ratedWatts": 100,
     "rigAddr": "",
     "rigConn": "serial",
     "rigModel": 0,

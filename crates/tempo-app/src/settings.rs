@@ -4790,6 +4790,7 @@ impl Settings {
             p.serial_port = serial_port;
             p.ptt_serial_port = ptt_serial_port;
             p.baud = baud;
+            p.rated_watts = rated_watts;
             p.rig_conn = rig_conn;
             p.rig_addr = rig_addr;
             p.omnirig_slot = omnirig_slot;
@@ -5701,7 +5702,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// The rating is PER-RADIO, and this is the claim that makes that worth the plumbing: a
     /// station with a QRP set and a 100 W rig gets a meter that follows the radio switch. A
     /// station-wide number would be wrong for one of the two every time.
@@ -5709,8 +5709,18 @@ mod tests {
     fn the_rated_power_follows_the_active_radio() {
         let mut s = Settings::default();
         s.radios = vec![
-            RadioProfile { id: 0, name: "FTDX10".into(), rated_watts: 100, ..Default::default() },
-            RadioProfile { id: 1, name: "FT-818".into(), rated_watts: 6, ..Default::default() },
+            RadioProfile {
+                id: 0,
+                name: "FTDX10".into(),
+                rated_watts: 100,
+                ..Default::default()
+            },
+            RadioProfile {
+                id: 1,
+                name: "FT-818".into(),
+                rated_watts: 6,
+                ..Default::default()
+            },
         ];
 
         s.active_radio = 0;
@@ -5719,13 +5729,30 @@ mod tests {
 
         s.active_radio = 1;
         s.sync_flat_from_active();
-        assert_eq!(s.rated_watts, 6, "switching radios must bring its own rating");
+        assert_eq!(
+            s.rated_watts, 6,
+            "switching radios must bring its own rating"
+        );
 
         // And the default is 100 rather than 0 — a rig nobody has configured must still give
         // the meter a usable scale, not a division by zero.
         assert_eq!(RadioProfile::default().rated_watts, 100);
+
+        // ⚠️ THE OTHER DIRECTION, and it is where this shipped broken. Editing the ACTIVE radio
+        // goes through the FLAT form, so `sync_active_from_flat` is what persists it — and that
+        // function snapshotted `rated_watts` into its tuple and then never assigned it to the
+        // profile. The operator would type 6, save, reopen Settings and find 100, with nothing
+        // reporting a failure. Exactly the shape of
+        // `the_yaesu_scope_optin_survives_a_flat_save_of_the_active_radio`.
+        s.rated_watts = 5;
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.radios[1].rated_watts, 5,
+            "a rating typed on the active radio must reach its profile, or the save drops it"
+        );
     }
 
+    #[test]
     fn every_per_radio_field_is_reachable_through_the_patch() {
         const NOT_EDITABLE: [&str; 7] = [
             "id",

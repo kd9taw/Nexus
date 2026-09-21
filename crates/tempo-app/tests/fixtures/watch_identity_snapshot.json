@@ -83,6 +83,7 @@
     "preampStepsDb": null,
     "qsoRecording": false,
     "radioConfigWarning": null,
+    "ratedWatts": 100,
     "recordingWarning": null,
     "refusedAgc": null,
     "refusedDialMhz": null,
