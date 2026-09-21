@@ -12,8 +12,9 @@
 //    shader-program compile per arc. App hands Connect a NEW `stations` array on every 300 ms
 //    snapshot, and 29324da8 put `stations` in the arcs memo, so the whole arc set was torn down
 //    and recompiled ~3×/s with nothing on screen changing (65–72% main thread in headless Chrome).
+//    The stub also applies three-globe's HTML-elements join, so the spot `div`s are real (§4).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { forwardRef, useEffect, useImperativeHandle } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { render, cleanup, act, fireEvent, screen } from '@testing-library/react'
 import type { MapSpot, PropagationSnapshot, Station } from '../types'
 
@@ -63,6 +64,15 @@ vi.mock('react-globe.gl', async () => {
     autoRotate: false,
     autoRotateSpeed: 0,
   })
+  // three-globe's HTML-elements layer, reduced to the two rules that decide whether a spot's
+  // `div` SURVIVES an update. Both are read off the shipped source, and §4 below leans on them:
+  //   • data-bind-mapper `digest()` joins on DATUM IDENTITY (its id accessor is `d => d`): an
+  //     unseen datum creates an element, a vanished datum removes one, the rest are left alone.
+  //   • three-globe `htmlElementsLayer.update()` opens with
+  //     `changedProps.hasOwnProperty('htmlElement') && state.dataMapper.clear()` — a new element
+  //     factory tears the whole layer down — and react-kapsule forwards a prop to the layer at
+  //     all only when it is `!==` the previous one.
+  const htmlLayer = { els: new Map<object, HTMLElement>() }
   const Globe = forwardRef<unknown, Record<string, unknown>>(function Globe(props, ref) {
     useImperativeHandle(ref, () => fake, [])
     renders.push(props)
@@ -70,9 +80,36 @@ vi.mock('react-globe.gl', async () => {
       ;(props.onGlobeReady as (() => void) | undefined)?.()
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
-    return <div data-testid="globe" />
+    const host = useRef<HTMLDivElement>(null)
+    const sent = useRef<{ data: unknown; factory: unknown }>({ data: undefined, factory: undefined })
+    useLayoutEffect(() => {
+      const data = (props.htmlElementsData ?? []) as object[]
+      const factory = props.htmlElement as ((d: object) => HTMLElement) | undefined
+      const dataChanged = sent.current.data !== data
+      const factoryChanged = sent.current.factory !== factory
+      sent.current = { data, factory }
+      if (!dataChanged && !factoryChanged) return // react-kapsule forwarded nothing: no digest
+      if (factoryChanged) {
+        htmlLayer.els.forEach((el) => el.remove())
+        htmlLayer.els.clear()
+      }
+      if (!factory || !host.current) return
+      for (const d of data) {
+        if (htmlLayer.els.has(d)) continue
+        const el = factory(d)
+        htmlLayer.els.set(d, el)
+        host.current.appendChild(el)
+      }
+      const live = new Set(data)
+      for (const [d, el] of [...htmlLayer.els]) {
+        if (live.has(d)) continue
+        el.remove()
+        htmlLayer.els.delete(d)
+      }
+    })
+    return <div data-testid="globe" ref={host} />
   })
-  return { default: Globe, __fake: fake }
+  return { default: Globe, __fake: fake, __htmlLayer: htmlLayer }
 })
 
 import Globe3D from './Globe3D'
@@ -84,6 +121,9 @@ type FakeGlobe = {
   controls: () => { autoRotate: boolean; dispatchEvent: (e: { type: string }) => void }
 }
 const fake = (ReactGlobe as unknown as { __fake: FakeGlobe }).__fake
+/** The stub's HTML-elements layer — its map outlives `cleanup()`, so it is reset per test. */
+const htmlLayer = (ReactGlobe as unknown as { __htmlLayer: { els: Map<object, HTMLElement> } })
+  .__htmlLayer
 
 /** The last ResizeObserver callback Globe3D installed — fired by hand to simulate a resize. */
 let roCallback: (() => void) | null = null
@@ -98,6 +138,7 @@ class RO {
 
 beforeEach(() => {
   renders.length = 0
+  htmlLayer.els.clear()
   fake.paused = false
   fake.frames = 0
   roCallback = null
@@ -336,5 +377,108 @@ describe('the 3-D Layers panel', () => {
     })
     expect(panel()).toBeNull()
     expect(screen.getByRole('button', { name: 'Layers' })).toBeTruthy()
+  })
+})
+
+// 4. A SPOT KEEPS ITS DOM NODE UNTIL THE DOT ITSELF CHANGES.
+//    Operator report: "all the spots on the 3d connect map are flickering aggressively". A spot is
+//    not drawn in WebGL at all — each one is a real `div` that three-globe's HTML-elements layer
+//    parents to a CSS2DObject, and that layer pulls every one of them out of the DOM and builds
+//    them again whenever EITHER of two references is new:
+//      • `htmlElementsData` — the join is on DATUM IDENTITY, so a fresh snapshot (App deserialises
+//        a whole new object graph per poll) means every datum is unseen and every element is
+//        recreated;
+//      • `htmlElement` — the layer's update opens by clearing itself when that accessor changed,
+//        and react-kapsule forwards it whenever it is `!==` the last one, so an element factory
+//        written inline in the JSX rebuilds the layer on EVERY render — and App re-renders the
+//        globe on every 300 ms snapshot, which is the aggressive part.
+//    The dots come back no earlier than the next drawn frame (CSS2DRenderer writes the DOM only
+//    while rendering, and this globe renders on change), so each rebuild is a dropout.
+describe('Globe3D spots keep their DOM nodes across a snapshot', () => {
+  /** A FRESH object graph, as `getPropagation()` hands App one on every poll: new snapshot, new
+   *  array, new spot objects — same three stations, same places. The suites above re-use ONE
+   *  `prop` object, which is exactly why none of them could see this. */
+  const feed = (ageSecs: number, dl1aaLat: number): PropagationSnapshot =>
+    snapshot([
+      { ...spot('DL1AA', dl1aaLat, 8, true), ageSecs },
+      { ...spot('JA1ZZ', 35, 139, false), ageSecs },
+      { ...spot('VK2QQ', -33, 151, false), ageSecs },
+    ] as MapSpot[])
+
+  const dots = (r: ReturnType<typeof render>) =>
+    Array.from(r.container.querySelectorAll('.globe3d-spot')) as HTMLElement[]
+
+  async function mount(p: PropagationSnapshot) {
+    let r!: ReturnType<typeof render>
+    await act(async () => {
+      r = render(<Globe3D {...props(p, ROSTER)} />)
+    })
+    return r
+  }
+  const poll = (r: ReturnType<typeof render>, p: PropagationSnapshot) =>
+    act(async () => {
+      r.rerender(<Globe3D {...props(p, clone(ROSTER))} />)
+    })
+
+  it('five identical polls leave all three dots as the very same nodes', async () => {
+    const r = await mount(feed(60, 50))
+    const before = dots(r)
+    expect(before, 'CONTROL: the three spots really did reach the layer').toHaveLength(3)
+    for (let i = 0; i < 5; i++) await poll(r, feed(60, 50))
+    const after = dots(r)
+    expect(after, 'three spots on the air, three dots').toHaveLength(3)
+    before.forEach((el, i) =>
+      expect(after[i], `spot ${i} was torn out of the DOM and rebuilt`).toBe(el),
+    )
+  })
+
+  // The two rebuild triggers, read one at a time: asserted together, whichever failed first would
+  // hide the other, and they are separate defects with separate fixes.
+  it('hands the layer the SAME data array across identical polls', async () => {
+    const r = await mount(feed(60, 50))
+    const first = renders[renders.length - 1]
+    for (let i = 0; i < 5; i++) await poll(r, feed(60, 50))
+    expect(
+      renders[renders.length - 1].htmlElementsData,
+      'a new array is a full re-join: every datum is unseen, so every element is recreated',
+    ).toBe(first.htmlElementsData)
+  })
+
+  it('hands the layer the SAME element factory across identical polls', async () => {
+    const r = await mount(feed(60, 50))
+    const first = renders[renders.length - 1]
+    for (let i = 0; i < 5; i++) await poll(r, feed(60, 50))
+    expect(
+      renders[renders.length - 1].htmlElement,
+      'a new element factory makes the layer clear() itself before the join even starts',
+    ).toBe(first.htmlElement)
+  })
+
+  it('an age tick rebuilds nothing, and the hover still reads the NEW age', async () => {
+    const r = await mount(feed(60, 50))
+    const before = dots(r)
+    expect(before, 'CONTROL: the three spots really did reach the layer').toHaveLength(3)
+    await poll(r, feed(120, 50))
+    dots(r).forEach((el, i) =>
+      expect(el, `nothing moved, so spot ${i} must still be the same node`).toBe(before[i]),
+    )
+    await act(async () => {
+      fireEvent.mouseEnter(before[0])
+    })
+    expect(
+      r.container.querySelector('.map-hover')?.textContent,
+      'the dot is held by what it DRAWS, so its tooltip must be read live, not frozen at 1m',
+    ).toContain('2m ago')
+  })
+
+  it('POSITIVE CONTROL — a dot that moves, and a spot that ages off, do rebuild', async () => {
+    const r = await mount(feed(60, 50))
+    const before = dots(r)
+    expect(before, 'CONTROL: the three spots really did reach the layer').toHaveLength(3)
+    await poll(r, feed(60, 52)) // DL1AA's reported position drifted 2° north
+    expect(r.container.contains(before[0]), 'the dot moved: its old node must be gone').toBe(false)
+    expect(dots(r), 'and the layer still draws three spots').toHaveLength(3)
+    await poll(r, snapshot([{ ...spot('JA1ZZ', 35, 139, false), ageSecs: 60 }] as MapSpot[]))
+    expect(dots(r), 'two spots aged off the map').toHaveLength(1)
   })
 })
