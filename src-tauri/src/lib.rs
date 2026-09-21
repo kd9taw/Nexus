@@ -17504,10 +17504,11 @@ fn is_complete_lotw_body(body: &str) -> bool {
 
 #[tauri::command]
 async fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, String> {
-    // The impl blocks for up to 60 s on the LoTW fetch (its own note below) and
-    // shells out to `tqsl`. `spawn_blocking`, not `#[tauri::command(async)]`:
-    // the latter only moves the body off the UI thread, onto a tokio WORKER, and
-    // a 60 s hold there starves every other async task in the app. This is the
+    // The impl blocks on the LoTW fetch (its own note below) and shells out to
+    // `tqsl`. A full first pull is minutes, not seconds — `propagation::live::lotw`
+    // bounds it at ten. `spawn_blocking`, not `#[tauri::command(async)]`: the latter
+    // only moves the body off the UI thread, onto a tokio WORKER, and a hold that
+    // long there starves every other async task in the app. This is the
     // `qrz_push_qso` pattern — the blocking pool is where blocking work belongs.
     let engine = state.inner().clone();
     let res = tauri::async_runtime::spawn_blocking(move || download_lotw_report_impl(&engine))
@@ -17527,7 +17528,7 @@ async fn download_lotw_report(state: State<'_, SharedEngine>) -> Result<LotwSync
 
 fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, String> {
     // Read username + cursor (non-secret) under a brief lock; the network fetch
-    // below must NOT hold the engine lock (it can block for up to 60 s).
+    // below must NOT hold the engine lock (a full pull can run for minutes).
     let (username, owncall, since) = {
         let eng = engine_lock(state);
         let s = eng.settings();
@@ -28913,7 +28914,7 @@ mod tests {
     /// literal `engine_lock` was blind to `state.lock()` spelled directly
     /// (`set_skip_tx1`, `hunted_parks_count`, `import_hunted_parks_csv`) and to
     /// a lock taken inside a helper (`download_lotw_report` → `_impl`, which
-    /// blocks up to 60 s), so six live commands sat on the UI thread with the
+    /// blocks for minutes), so six live commands sat on the UI thread with the
     /// guard green. `engine_lock` stays as a second signal for anything that
     /// reaches the engine without taking it as state.
     /// Verified failing first: it named all 149 offenders before the sweep, and
