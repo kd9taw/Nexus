@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FT4 contacts now export as ADIF the way WSJT-X writes them, so LoTW and the rest accept
+  them.** FT4 is not an ADIF mode in its own right — it is a submode of MFSK, as Q65, FST4 and
+  FST4W are — and Nexus was writing a bare `MODE=FT4`. That spelling is not in the mode list
+  every service checks against, so an FT4 contact could be rejected outright by TQSL/LoTW and
+  read wrongly by anything else that takes an ADIF file: QRZ, eQSL, Club Log, HRD, and the live
+  feed JTAlert and Log4OM listen to. They now go out as `MODE=MFSK` with `SUBMODE=FT4`, which is
+  exactly what WSJT-X writes for the same contact. Nexus already *read* that spelling correctly,
+  so importing an FT4 log from WSJT-X always worked; it was only our own export that was wrong.
+  Q65, FST4 and FST4W are fixed with it. Contacts already in your log are unchanged — re-export
+  them and they will come out right.
 - **Contest serials: the station you called first is no longer forgotten when you move on.** 1.14.0
   said that calling one station, getting no answer, working somebody else and coming back would give
   the first station the number they already copied. That only held if you pressed **Clear** in

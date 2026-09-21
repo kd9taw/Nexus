@@ -2768,6 +2768,29 @@ pub(crate) fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
         // JS8 is a registered ADIF SUBMODE under MFSK (JS8Call logs it that way too); a bare
         // MODE=JS8 misses the MODE enumeration and TQSL drops it, exactly as for FT2.
         "JS8" => Some(("MFSK", "JS8")),
+        // ⭐⭐ THE WSJT-X FAMILY, AND THIS TABLE WAS THE ONLY HALF OF THE ROUND TRIP MISSING
+        // THEM (operator-review finding A1, 2026-09-21; operator approved the fix same day).
+        //
+        // FT4, Q65, FST4 and FST4W are registered ADIF **submodes of MFSK**, exactly as FT2
+        // and JS8 above are — and `promoted_submode` below has listed all four since it was
+        // written. So Nexus READ `<mode:4>MFSK <submode:3>FT4` correctly, stored mode="FT4",
+        // and then WROTE it back as a bare `<MODE:3>FT4`: a one-directional loss, with the
+        // knowledge sitting forty lines further down the same file.
+        //
+        // `Tier::Ft4` is a TRANSMITTING tier, so this was not an import-only edge — every FT4
+        // contact Nexus logged itself went out this way, to log.adi, the QRZ insert, eQSL, the
+        // TQSL/LoTW batch, Club Log, the HRD datagram and the WSJT-X type-12 LoggedADIF
+        // datagram that JTAlert and Log4OM read. A bare FT4 misses the MODE enumeration and so
+        // misses all three legs of the MODE%SUBMODE -> SUBMODE -> MODE cascade, which is the
+        // same failure this table's own notes describe for TempoFast and FT2.
+        //
+        // WSJT-X is this project's standard for the FT modes and writes precisely this, naming
+        // the same four (logbook/logbook.cpp): FT4, FST4 and Q65 take `<mode:4>MFSK` plus a
+        // submode, everything else takes a bare mode. FST4W rides with FST4.
+        "FT4" => Some(("MFSK", "FT4")),
+        "Q65" => Some(("MFSK", "Q65")),
+        "FST4" => Some(("MFSK", "FST4")),
+        "FST4W" => Some(("MFSK", "FST4W")),
         // -- The phone SIDEBAND (operator report, 2026-09-15) ------------------------
         // The sideband a phone contact was worked on is what HRD and the other loggers
         // track, and until now nothing here recorded it: a phone QSO was stored and
@@ -4617,14 +4640,19 @@ mod tests {
     fn existing_modes_emit_byte_identical_adif_mode_blocks() {
         for (mode, golden) in [
             ("FT8", "<MODE:3>FT8"),
-            ("FT4", "<MODE:3>FT4"),
+            // ⤴ FT4 and Q65 were `<MODE:3>FT4` / `<MODE:3>Q65` here until 2026-09-21. That was
+            // not a golden protecting correct output — it was this guard freezing a defect
+            // along with the behaviour it meant to protect, which is the hazard of capturing
+            // "the writer's exact output" rather than the output the spec asks for. Both are
+            // MFSK submodes; see `adif_submode`.
+            ("FT4", "<MODE:4>MFSK<SUBMODE:3>FT4"),
             ("CW", "<MODE:2>CW"),
             ("SSB", "<MODE:3>SSB"),
             ("RTTY", "<MODE:4>RTTY"),
             ("PSK31", "<MODE:5>PSK31"),
             ("SSTV", "<MODE:4>SSTV"),
             ("MFSK", "<MODE:4>MFSK"),
-            ("Q65", "<MODE:3>Q65"),
+            ("Q65", "<MODE:4>MFSK<SUBMODE:3>Q65"),
             ("WSPR", "<MODE:4>WSPR"),
             (
                 "TempoFast",
@@ -4651,6 +4679,65 @@ mod tests {
                 adif.matches("<SUBMODE:").count(),
                 usize::from(golden.contains("<SUBMODE:")),
                 "{mode}: {adif}"
+            );
+        }
+    }
+
+    /// ⭐ THE WSJT-X FAMILY ROUND-TRIPS, AND THE EXPORT IS THE HALF THAT WAS BROKEN.
+    ///
+    /// `promoted_submode` has listed FT4, Q65, FST4 and FST4W since it was written, so Nexus
+    /// READ `<mode:4>MFSK <submode:3>FT4` correctly and stored mode="FT4" — and then wrote it
+    /// back as a bare `<MODE:3>FT4`, a MODE the closed enumeration does not contain. One
+    /// direction of a round trip the other direction already knew.
+    ///
+    /// Asserted as a ROUND TRIP rather than on the export alone, because the export string on
+    /// its own cannot tell a fixed writer from a writer that now loses the mode a different
+    /// way — the failure `promoted_submode`'s own comment describes ("our own export re-imports
+    /// as bare MFSK and the mode is lost on the next full save").
+    #[test]
+    fn the_wsjtx_mfsk_submodes_survive_the_adif_round_trip() {
+        for mode in ["FT4", "Q65", "FST4", "FST4W"] {
+            let mut r = rec("W1AW", "20m", 1_700_000_000);
+            r.mode = mode.into();
+            let adif = adif_record(&r);
+
+            // The parent is MFSK and the spelling rides SUBMODE, exactly as WSJT-X writes it.
+            assert!(
+                adif.contains("<MODE:4>MFSK"),
+                "{mode} must export under its registered parent: {adif}"
+            );
+            assert!(
+                adif.contains(&format!("<SUBMODE:{}>{mode}", mode.len())),
+                "{mode} must ride SUBMODE: {adif}"
+            );
+            // And the bare form is GONE — the thing TQSL drops.
+            assert!(
+                !adif.contains(&format!("<MODE:{}>{mode}", mode.len())),
+                "{mode} must not also appear as a bare MODE: {adif}"
+            );
+
+            // Back in, and the mode Nexus stores is the one it started with.
+            let back = parse_adif(&adif);
+            assert_eq!(back.len(), 1, "{mode}: one record back out");
+            assert_eq!(back[0].mode, mode, "{mode} was lost on re-import: {adif}");
+        }
+    }
+
+    /// The control for the test above: a mode that is NOT an MFSK submode must still export
+    /// bare. Without this, "wrap everything in MFSK" would pass the round trip too.
+    #[test]
+    fn a_registered_parent_mode_still_exports_bare() {
+        for mode in ["FT8", "CW", "RTTY", "WSPR"] {
+            let mut r = rec("W1AW", "20m", 1_700_000_000);
+            r.mode = mode.into();
+            let adif = adif_record(&r);
+            assert!(
+                adif.contains(&format!("<MODE:{}>{mode}", mode.len())),
+                "{mode} is its own ADIF MODE and must not be wrapped: {adif}"
+            );
+            assert!(
+                !adif.contains("<SUBMODE:"),
+                "{mode} has no submode to emit: {adif}"
             );
         }
     }
