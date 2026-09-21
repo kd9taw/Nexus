@@ -9104,6 +9104,29 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 [data-viewport='xs'] .ph-txcontract {
   gap: var(--space-1);
   padding: 2px var(--space-1);
+  /* ⛔ AND AT xs IT WRAPS — INTO RESERVED SPACE, WHICH IS THE WHOLE POINT.
+     Tightening the gutters bought ~10 px. It was not enough: at 390 CSS px with a pinned
+     1.75 zoom the effective width is ~213 px and the strip needs ~372, so four constraints
+     that hold everywhere else become jointly unsatisfiable — every cell always rendered
+     (`split` says SIMPLEX and `xit` says `+0` deliberately, each for a recorded reason),
+     nothing clipped, no sideways scroll, and no wrapping.
+
+     ⭐ The `nowrap` rule above is not about HEIGHT, it is about a height that CHANGES: a
+     second line appearing mid-over pushes the bottom-anchored PTT out from under a held
+     pointer. Reserving the second line removes the transition and keeps the guarantee — the
+     strip is two lines tall at xs whether it needs one or two, so nothing moves when the
+     busy cell arrives on key-down. The elastic busy cell still truncates, so it joins a
+     reserved line rather than opening a third.
+
+     `min-height` is in `em`, which resolves against this element's own 0.78rem, so the
+     reserve tracks the strip's type instead of a pixel guess; `border-box` (set globally)
+     means it covers the 2 px padding. `align-content: flex-start` keeps the rows packed at
+     the top of the reserve instead of spreading into it.
+
+     ⚠️ Only the compiled-browser sweep can see any of this — jsdom never lays out. */
+  flex-wrap: wrap;
+  align-content: flex-start;
+  min-height: calc(2.5em + 4px);
 }
 /* ✓rig · ⌁cmd · ⊘ — how well the figure beside it is known. Dim and small: the NUMBER is what
    the operator reads at a glance and the mark is what they check when it matters. Never

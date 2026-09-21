@@ -1096,8 +1096,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const afMutesDecode = snap.radio.afGain != null && Math.round(snap.radio.afGain * 100) <= DECODE_MUTE_PCT
   // ON FM A RAISED SQUELCH IS CORRECT OPERATING and warning about it would be noise, so the
   // FM case is excluded rather than merely ranked lower.
+  //
+  // ⛔ **THE RIG WINS OVER THE COMMAND HERE TOO** (operator review of 1.15.0, finding T1).
+  // This read `commandedMode`, so on the ONE station where the warning matters — a rig
+  // sitting on a mode Nexus did not command — it stayed silent over a squelch that had
+  // muted the decoder. The header is already showing the `rig: USB` mismatch chip at that
+  // moment. It cuts both ways: a rig moved to FM at the knob raised a spurious DECODE? over
+  // a squelch that was correct for the mode it was actually on. `observedMode` is the
+  // rig-first answer built for exactly this rule under this file's "THE RIG WINS OVER THE
+  // COMMAND" note, and it falls back to the command when there is no read-back.
   const squelchMutesDecode = snap.radio.squelch != null &&
-    Math.round(snap.radio.squelch * 100) >= DECODE_MUTE_PCT && commandedMode !== 'FM'
+    Math.round(snap.radio.squelch * 100) >= DECODE_MUTE_PCT && observedMode !== 'FM'
   // ⭐ DOES THIS RIG DRIVE THIS CONTROL — and it is STICKY, which is the half that is easy
   // to drop and expensive to lose.
   //

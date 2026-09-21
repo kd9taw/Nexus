@@ -240,6 +240,25 @@ describe('the decode-audio hazard', () => {
     expect(warn()).toHaveLength(0)
   })
 
+  // ⛔ THE RIG WINS OVER THE COMMAND (operator review of 1.15.0, finding T1). The predicate
+  // read `commandedMode`, so it was answering "what did Nexus ask for?" when the question is
+  // "what is the radio actually on?". Both directions are asserted, because the defect cut
+  // both ways and a fix that only silenced the spurious case would be half a fix.
+  it('WARNS when Nexus commanded FM but the rig is really on USB', () => {
+    // The one station where it matters: the rig is sitting on a mode Nexus did not command,
+    // the squelch is muting the decoder, and the old predicate stayed quiet about it. The
+    // header is already showing the rig-vs-command mismatch chip at this moment.
+    mount({ squelch: 0.35, rigMode: 'USB' }, 'fm')
+    expect(warn(), 'a squelch muting the decoder on USB must be reported').toHaveLength(1)
+  })
+
+  it('stays QUIET when the rig was moved to FM at the knob, whatever Nexus commanded', () => {
+    // The mirror case. A raised squelch is correct operating on FM, so warning about it here
+    // would be standing noise over a rig doing the right thing.
+    mount({ squelch: 0.35, rigMode: 'FM' })
+    expect(warn(), 'a correct FM squelch must not raise a spurious warning').toHaveLength(0)
+  })
+
   it('control: that SAME squelch on SSB does warn', () => {
     // Pairs with the FM case above. Without it, the FM assertion passes on a predicate that
     // never fires at all — "no warning on FM" would be proving nothing about FM.
