@@ -1350,6 +1350,18 @@ export function LogEntry({
   const fdDupe = contestDupe(fieldDay, fdTypedCall, snap.radio.band, fdModeClass)
   const fdOwnDupe = fdDupe === 'own'
   const fdClubDupe = fdDupe === 'club'
+  // ⭐ WHICH COMPONENTS THE OWN-DUPE SENTENCE MAY NAME — the same two flags `contestDupe` just
+  // applied. It has always keyed on exactly what the rule names; the sentence did not, and
+  // naming the rig's CURRENT band and mode under a rule that ignores them points the operator
+  // at the one place the contact is NOT. Seven of the nine rulesets that reach this sentence
+  // name fewer than three components (CQ WW and WPX drop the mode class; Sweepstakes drops
+  // both — rule 2.2, a station is worked once). The CLUB sentence below keeps both: that check
+  // matches its key RAW, ungated by the rule, so it really is on this band in this mode class.
+  //
+  // ⚠️ `!== false`, not `=== true`. An absent rule is `contestDupe`'s LEGACY_TRIPLE, which
+  // names all three, so a station too old to send a rule must keep the sentence it always had.
+  const fdDupeByBand = fieldDay?.dupeRule?.byBand !== false
+  const fdDupeByModeClass = fieldDay?.dupeRule?.byModeClass !== false
   // ⭐ WHICH CONTEST'S WORDS. Field Day's chip, hint and button name Field Day; every
   // other contest's contacts go to the same contest log under that contest's rules, and
   // telling a CQ WW operator their contacts go "to the Field Day log" is simply wrong.
@@ -1604,11 +1616,29 @@ export function LogEntry({
         )}
         {fdOwnDupe && (
           <div className="le-fd-hint" role="alert">
-            {t('logEntry.fd.dupe.own', {
-              call: fdTypedCall,
-              band: snap.radio.band,
-              mode: fdModeClass,
-            })}
+            {/* FOUR literal call sites rather than one with a computed key: the i18n
+                extractor reads keys statically and the placeholder guard compares each
+                site's params against its entry, and a ternary INSIDE `t()` hides both
+                from them — the entries read as orphans nobody references, and a band
+                passed to a band-free sentence stops being a CI failure. Which is the
+                whole point here: the sites that drop a component drop its VALUE too. */}
+            {fdDupeByBand
+              ? fdDupeByModeClass
+                ? t('logEntry.fd.dupe.own', {
+                    call: fdTypedCall,
+                    band: snap.radio.band,
+                    mode: fdModeClass,
+                  })
+                : t('logEntry.fd.dupe.ownAnyMode', {
+                    call: fdTypedCall,
+                    band: snap.radio.band,
+                  })
+              : fdDupeByModeClass
+                ? t('logEntry.fd.dupe.ownAnyBand', {
+                    call: fdTypedCall,
+                    mode: fdModeClass,
+                  })
+                : t('logEntry.fd.dupe.ownAnyBandOrMode', { call: fdTypedCall })}
           </div>
         )}
         {fdClubDupe && (
