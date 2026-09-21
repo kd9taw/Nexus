@@ -16447,10 +16447,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// only whether the CONTEST is workable, so neither direction of the master switch
     /// trips it.
     ///
-    /// ⚠️ **Only while IDLE.** A contact on the air finishes under the grammar it
-    /// started with — the peer copied that exchange and is answering it, and
-    /// [`RttySeq::spec`] exists so the row it logs is resolved against the same one. A
-    /// save mid-QSO changes nothing here and the next idle save re-arms.
+    /// ⚠️ **Only while the machine is at REST — `Idle` or `Done`.** A contact on the
+    /// air finishes under the grammar it started with: the peer copied that exchange
+    /// and is answering it, and [`RttySeq::spec`] exists so the row it logs is
+    /// resolved against the same one. A save mid-QSO changes nothing here.
+    ///
+    /// ⚠️ **`Done` is a resting state, not a contact, and leaving it out was this
+    /// method's own defect.** It is terminal — `on_tx_complete` and `tick` both enter
+    /// it from `Confirmed`, `tick` and `advance` then return early, and the only door
+    /// back to `Idle` is [`rtty_auto_abort`](Self::rtty_auto_abort), a button the
+    /// operator presses — so it is where the sequencer rests after EVERY completed
+    /// auto contact. An `Idle`-only guard therefore skipped the save that costs most:
+    /// Field Day STARTING over a machine parked on a casual contact re-armed nothing,
+    /// so every later over went out as `UR RST 599 … NAME … QTH …` and, `fd_exchange`
+    /// returning `None` for a casual exchange, those contacts landed in the general
+    /// logbook and never reached the contest log. Rebuilding in `Done` preserves
+    /// nothing worth keeping: `log_and_close` already dropped `issued`, and `peer`,
+    /// `peer_fields`, `window` and `repeats` are all spent on the finished contact.
     ///
     /// ⚠️ **The armed check comes FIRST, and that ordering is load-bearing.**
     /// [`contest::field_day`](tempo_core::contest::field_day) loads the rules table,
@@ -16475,7 +16488,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let Some(seq) = self.rtty_seq.as_ref() else {
             return; // Auto is off — nothing armed, and nothing may touch the rules table.
         };
-        if seq.state() != tempo_core::rtty::SeqState::Idle {
+        if !matches!(
+            seq.state(),
+            tempo_core::rtty::SeqState::Idle | tempo_core::rtty::SeqState::Done
+        ) {
             return;
         }
         let _ = self.set_rtty_auto(true);
@@ -23229,6 +23245,106 @@ mod tests {
         assert!(
             ours.contains("2A WI"),
             "the contact in flight changed exchange under the peer: {ours}"
+        );
+    }
+
+    /// Work one full auto contact through to [`SeqState::Done`] — **the terminal
+    /// state the sequencer rests in after every completed QSO**, and the state the
+    /// two tests below are about. `their` is the peer's exchange, in whichever
+    /// grammar is on the air.
+    ///
+    /// ⚠️ Nothing here aborts, and that is the whole point. `auto_cq_text` ends with
+    /// `rtty_auto_abort()`, which puts the machine back in `Idle`, so every master
+    /// switch moved through that helper lands on the one state the guard already
+    /// accepted — which is why the re-arm test above could not see this defect.
+    fn work_a_contact_to_done(e: &mut Engine, their: &str) {
+        e.set_operating_mode("rtty", false); // a save can leave FD mode; re-arm the gate
+        e.rtty_auto_cq().expect("the initiate door is open");
+        assert!(e.poll_rtty_one().is_some(), "drain the CQ");
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW W1AW K\n"), 0.0, true);
+        assert!(e.poll_rtty_one().is_some(), "drain our exchange");
+        e.push_rtty_decode(&rtty_decoded(their), 0.0, true);
+        assert!(e.poll_rtty_one().is_some(), "drain our sign-off");
+        e.push_rtty_decode(&rtty_decoded("TU 73\n"), 0.0, true);
+        assert_eq!(
+            e.rtty_state().seq_state,
+            "done",
+            "the contact never reached the resting state these tests are about — \
+             an Idle here would silently re-run the test above"
+        );
+    }
+
+    /// ⭐ **THE COSTLY DIRECTION: Field Day starts while the machine rests in `Done`.**
+    ///
+    /// `Done` is terminal and is where the sequencer sits after EVERY completed auto
+    /// contact — `on_tx_complete` and `tick` both put it there out of `Confirmed`,
+    /// `tick` and `advance` then return early, and the only door back to `Idle` is
+    /// [`Engine::rtty_auto_abort`], which is a button the operator presses. So the
+    /// resting state of a sequencer that has worked anything at all is `Done`, not
+    /// `Idle`, and an idle-only re-arm guard never fires on the save that matters.
+    ///
+    /// A casual contact, then the Field Day master goes on: every later over went out
+    /// as `UR RST 599 … NAME … QTH …`, and because `apply_rtty_action`'s `fd_exchange`
+    /// returns `None` for a casual exchange those contacts landed in the general
+    /// logbook and **never reached the contest log** — the exact half the re-arm was
+    /// written to fix.
+    #[test]
+    fn field_day_starting_under_a_finished_contact_re_arms_the_sequencer() {
+        let mut e = rtty_fd_engine();
+        set_fd_master(&mut e, false); // before Field Day: the casual exchange
+        e.set_operating_mode("rtty", false);
+        e.set_rtty_auto(true).expect("Auto arms outside a contest");
+        work_a_contact_to_done(
+            &mut e,
+            "W9XYZ DE W1AW R UR RST 599 599 NAME BOB QTH BOSTON K\n",
+        );
+
+        // Field Day starts with the dock still reading "Done · W1AW".
+        set_fd_master(&mut e, true);
+
+        // The operator clears the finished contact and runs — the only gesture the
+        // dock offers in `Done` (Abort), then CQ.
+        e.rtty_auto_abort();
+        e.set_operating_mode("rtty", false);
+        e.rtty_auto_cq().expect("the initiate door is open");
+        let cq = e.poll_rtty_one().expect("a CQ is queued");
+        assert!(
+            cq.contains("CQ FD"),
+            "Field Day started over a finished contact and the sequencer kept calling \
+             the casual CQ: {cq}"
+        );
+
+        // …and the exchange with it, which is the half that decides WHICH LOG the
+        // contact lands in.
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW W1AW K\n"), 0.0, true);
+        let exch = e.poll_rtty_one().expect("our exchange is queued");
+        assert!(
+            exch.contains("2A WI") && !exch.contains("UR RST"),
+            "a Field Day contact went out with the casual exchange, so it scores \
+             nothing and misses the contest log: {exch}"
+        );
+    }
+
+    /// The other direction: **Field Day ends while the machine rests in `Done`.**
+    ///
+    /// The operator saves with the sequencer parked on a finished contest contact,
+    /// later clears it and presses CQ — and the rig keys `CQ FD CQ FD DE …` with
+    /// `2A WI` behind it, after Field Day is over.
+    #[test]
+    fn field_day_ending_under_a_finished_contact_re_arms_the_sequencer() {
+        let mut e = rtty_fd_engine();
+        e.set_rtty_auto(true).expect("Auto arms in Field Day");
+        work_a_contact_to_done(&mut e, "W9XYZ DE W1AW R 3A EMA 3A EMA K\n");
+
+        // Field Day ends with the dock still reading "Done · W1AW".
+        set_fd_master(&mut e, false);
+
+        e.rtty_auto_abort();
+        let cq = auto_cq_text(&mut e);
+        assert!(
+            !cq.contains("CQ FD") && cq.contains("CQ CQ CQ"),
+            "Field Day ended over a finished contact and the sequencer is still \
+             calling CQ FD: {cq}"
         );
     }
 
