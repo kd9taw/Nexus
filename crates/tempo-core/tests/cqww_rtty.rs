@@ -686,7 +686,13 @@ fn the_dial_survives_the_journal() {
     let ve3 = [("RST", "599"), ("ZN", "4"), ("QTH", "ON")];
     assert!(work_on(&mut log, "20m", 14_083, "VE3XYZ", &ve3, 1));
     let adif = log.adif();
-    assert!(adif.contains("<FREQ:6>14.083"), "{adif}");
+    // ⭐ SIX DECIMALS. `FREQ` is the frequency RADIATED, so it must be able to carry a digital
+    // mode's TX audio offset; three decimals rounded that away. The CABRILLO dial rides in its
+    // own tag now, which is what `merge_adif` restores the QSO line's kHz from — asserted
+    // below, and asserted here so a journal that drops the tag fails at the writer rather than
+    // silently rebuilding the dial from the on-air value.
+    assert!(adif.contains("<FREQ:9>14.083000"), "{adif}");
+    assert!(adif.contains("<APP_NEXUS_DIALKHZ:5>14083"), "{adif}");
     let mut restored = FieldDayLog::new("W9XYZ", select(&station("W9XYZ", "4", "IL")), "20m");
     restored.merge_adif(&adif, 0);
     assert_eq!(restored.qsos()[0].freq_khz, 14_083);

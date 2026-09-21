@@ -153,8 +153,25 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
         // file, both pinned byte for byte by the §8(a) goldens; the lifetime log is a
         // different artifact with a different job, and an FD contact in it has the same
         // claim to its frequency as any other.
-        freq_mhz: f64::from(q.freq_khz) / 1000.0,
-        freq_rx_mhz: None,
+        // ⚠️ THE ON-AIR PAIR, NOT THE DIAL. This read `freq_khz` — the frequency the
+        // operator was LISTENING on, rounded to the kHz Cabrillo writes in — and hardcoded
+        // `freq_rx_mhz: None`. Two ways that was wrong in the file that goes to LoTW, QRZ
+        // and Club Log: a contact worked SPLIT recorded the receive leg as `FREQ` and never
+        // said so, and every digital contact recorded the bare dial instead of dial + the
+        // TX audio offset, so an operator's FT8 contest rows and their ordinary FT8 rows
+        // described the same contact two different ways.
+        //
+        // Both legs are now stamped at log time from `Engine::log_frequencies`, the general
+        // log's own answer, so this copies rather than re-deriving — see
+        // [`LoggedQso::on_air_mhz`]. A row with no on-air value falls back to the dial,
+        // which is all a pre-pair row ever knew; `logbook::adif_record` still omits a zero
+        // rather than emit the `<FREQ:8>0.000000` that DXKeeper and Swisslog reject.
+        freq_mhz: if q.on_air_hz > 0 {
+            q.on_air_hz as f64 / 1e6
+        } else {
+            f64::from(q.freq_khz) / 1000.0
+        },
+        freq_rx_mhz: q.freq_rx_hz.filter(|hz| *hz > 0).map(|hz| hz as f64 / 1e6),
         mode: q.recorded_mode().to_string(),
         // A contest exchange carries no signal report unless its own spec declares one,
         // and neither Field Day event's does. Inventing 599 would be a claim about the
@@ -289,6 +306,107 @@ mod tests {
         assert_eq!(rec.station_callsign.as_deref(), Some("W9XYZ"));
     }
 
+    /// ⛔ **THE LEG THAT GOES OUT IS THE ONE THAT WAS TRANSMITTED** (operator review of
+    /// 1.15.0, finding L1 — a regression introduced by the commit that added `FREQ` here).
+    ///
+    /// Two defects in one line, both of them a confident wrong number in the file that goes
+    /// to LoTW, QRZ and Club Log — and the previous behaviour was `0.0`, so this range
+    /// turned "absent" into "wrong", which is worse:
+    ///
+    /// 1. A contact worked **SPLIT** recorded the frequency the operator was LISTENING on
+    ///    as ADIF `FREQ`, and emitted no `FREQ_RX` at all, so nothing said it was a split
+    ///    contact and the one frequency it did state was the wrong one.
+    /// 2. A **digital** contact recorded the bare dial rather than the dial plus the TX
+    ///    audio offset, so the same operator's FT8 contest rows and their ordinary FT8 rows
+    ///    described one contact two different ways.
+    ///
+    /// Both legs are stamped at log time from `Engine::log_frequencies` — the general log's
+    /// own answer, so the two emitters cannot disagree — and this function copies them.
+    #[test]
+    fn a_split_contact_logs_the_transmit_leg_and_says_it_was_split() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        // Worked split: listening on 14.025000, transmitting on 14.028500. The dial is the
+        // RECEIVE leg, which is exactly why writing it as FREQ was wrong.
+        log.dial_khz = 14_025;
+        log.on_air_hz = 14_028_500;
+        log.on_air_rx_hz = Some(14_025_000);
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+
+        let mut lb = Logbook::new();
+        let r = merge_into_general(&log, "pos", &mut lb);
+        assert_eq!(r.added(), 1);
+
+        assert_eq!(
+            r.written[0].freq_mhz, 14.0285,
+            "the leg that was TRANSMITTED"
+        );
+        let adi = crate::logbook::adif_record(&r.written[0]);
+        assert!(adi.contains("<FREQ:9>14.028500"), "{adi}");
+
+        // ⚠️ ITS OWN CONTROL. The two claims below fail for a DIFFERENT reason than the two
+        // above — `freq_rx_mhz` was hardcoded `None`, so a run that fixed only `FREQ` would
+        // still ship a split contact that never says it was split. Asserted after the FREQ
+        // pair deliberately, and verified to red on its own by reverting only that field.
+        assert_eq!(
+            r.written[0].freq_rx_mhz,
+            Some(14.025),
+            "the leg that was LISTENED on — without it nothing says this was worked split"
+        );
+        assert!(adi.contains("<FREQ_RX:9>14.025000"), "{adi}");
+
+        // And the CABRILLO dial is untouched: the sponsor's convention is the VFO readout,
+        // so the QSO line still says 14025 even though the transmission was 3.5 kHz up.
+        assert_eq!(
+            log.qsos()[0].freq_khz,
+            14_025,
+            "the Cabrillo dial is a different fact and must not follow the on-air value"
+        );
+    }
+
+    /// The digital half of L1, split out so its control reports its OWN claim: a red on the
+    /// split test above says nothing about this one.
+    ///
+    /// A simplex FT8 contact transmits on the dial PLUS the TX audio offset (minus it on
+    /// LSB). Recording the bare dial made a contest row and an ordinary row describe the
+    /// same contact two different ways, and a simplex row must still emit no `FREQ_RX` —
+    /// `<FREQ_RX>` equal to `<FREQ>` is a claim that the QSO was worked split.
+    #[test]
+    fn a_digital_contact_logs_the_dial_plus_its_tx_audio_offset() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        log.dial_khz = 14_074;
+        log.on_air_hz = 14_075_500; // 1500 Hz up, USB
+        log.on_air_rx_hz = None;
+        assert!(log.log_submode_at("W1AW", "1D", "CT", "DIG", "FT8", 0, 1_782_583_560));
+
+        let mut lb = Logbook::new();
+        let r = merge_into_general(&log, "pos", &mut lb);
+        assert_eq!(r.added(), 1);
+        assert_eq!(
+            r.written[0].freq_mhz, 14.0755,
+            "dial + the TX audio offset, which is what the general log writes"
+        );
+        assert_eq!(
+            r.written[0].freq_rx_mhz, None,
+            "a simplex contact must not claim a receive leg"
+        );
+        let adi = crate::logbook::adif_record(&r.written[0]);
+        assert!(adi.contains("<FREQ:9>14.075500"), "{adi}");
+        assert!(!adi.contains("FREQ_RX"), "{adi}");
+        assert_eq!(
+            log.qsos()[0].freq_khz,
+            14_074,
+            "Cabrillo still writes the dial"
+        );
+    }
+
     /// ⭐ **THE DIAL THE CONTACT WAS WORKED ON REACHES THE LIFETIME LOG** (operator review
     /// of 1.14.0).
     ///
@@ -349,9 +467,20 @@ mod tests {
         // `merge_adif` restores `freq_khz` by reading `FREQ` back, so withholding it here
         // silently zeroed the dial on every logged contact whenever Nexus restarted
         // mid-event. See `fieldday::tests::a_field_day_contact_keeps_its_dial_across_a_restart`.
+        // ⭐ SIX DECIMALS, matching the general log's own writer. `FREQ` is the frequency
+        // RADIATED, so it has to be able to carry a digital mode's TX audio offset; three
+        // decimals rounded that away and was the reason a contest row and an ordinary row
+        // described one contact two different ways.
         assert!(
-            log.adif().contains("<FREQ:7>144.200"),
+            log.adif().contains("<FREQ:10>144.200000"),
             "the Field Day export lost the dial: {}",
+            log.adif()
+        );
+        // And the Cabrillo dial rides in its own tag now that FREQ no longer carries it —
+        // without this a restart would rebuild the QSO line from the on-air value.
+        assert!(
+            log.adif().contains("<APP_NEXUS_DIALKHZ:6>144200"),
+            "the Cabrillo dial is not journalled: {}",
             log.adif()
         );
     }
@@ -382,7 +511,7 @@ mod tests {
         ));
         // The contest log's own export carries the dial…
         assert!(
-            log.adif().contains("<FREQ:6>14.253"),
+            log.adif().contains("<FREQ:9>14.253000"),
             "the contest export lost the dial: {}",
             log.adif()
         );

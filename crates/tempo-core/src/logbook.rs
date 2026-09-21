@@ -2343,7 +2343,9 @@ pub fn adif_record(r: &QsoRecord) -> String {
     let (y, mo, d, h, mi, s) = datetime_utc(r.when_unix);
     let mut out = String::new();
     out.push_str(&field("CALL", &r.call));
-    if let Some(g) = &r.grid {
+    // `Some("")` is the same malformed shape as an empty MODE below — an import that
+    // carried the tag with nothing in it. Filter rather than emit `<GRIDSQUARE:0>`.
+    if let Some(g) = r.grid.as_ref().filter(|g| !g.trim().is_empty()) {
         out.push_str(&field("GRIDSQUARE", g));
     }
     if let Some(c) = &r.country {
@@ -2402,12 +2404,19 @@ pub fn adif_record(r: &QsoRecord) -> String {
     // APP_TEMPO_MODE preserves the exact protocol for round-trip fidelity into our own log;
     // it is never the primary carrier, because an APP_-only mode is invisible to every
     // uploader.
+    // ⛔ AND MODE OBEYS THE SAME ABSENT-NOT-EMPTY RULE AS BAND AND FREQ ABOVE (operator
+    // review of 1.15.0, finding A4). An imported record whose source omitted MODE — which a
+    // spreadsheet or paper-log conversion ordinarily does — stored `mode = ""` and
+    // re-exported as `<MODE:0>`: a present-but-zero-length ENUMERATION field, which is
+    // exactly the malformed shape the two guards above exist to avoid. Omitting it is both
+    // honest and safer; a reader that needs a mode can see there is none.
     match adif_submode(&r.mode) {
         Some((parent, sub)) => {
             out.push_str(&field("MODE", parent));
             out.push_str(&field("SUBMODE", sub));
             out.push_str(&field("APP_TEMPO_MODE", &r.mode));
         }
+        None if r.mode.trim().is_empty() => {}
         None => out.push_str(&field("MODE", &r.mode)),
     }
     out.push_str(&field("QSO_DATE", &format!("{y:04}{mo:02}{d:02}")));
@@ -2855,7 +2864,14 @@ pub(crate) fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
 /// must not rename phone rows — SSB is the mode the log carries and the one we
 /// should keep storing, and the sideband spellings already meet each other in
 /// [`dedup_mode`], so promoting them would buy nothing.
-fn promoted_submode(sub: &str) -> Option<&'static str> {
+/// The registry of SUBMODE values that are safe to adopt as a row's actual mode on the way
+/// back IN — i.e. exactly those whose next export re-emits a valid parent `MODE` + `SUBMODE`
+/// pair through [`adif_submode`]. Anything not here stays as its parent MODE, because
+/// re-emitting an unregistered value as a bare `<MODE>` is what TQSL rejects outright.
+///
+/// `pub(crate)` for the contest journal, which faced the identical read-side loss: see
+/// `fieldday::FieldDayLog::merge_adif`.
+pub(crate) fn promoted_submode(sub: &str) -> Option<&'static str> {
     match sub.trim().to_ascii_uppercase().as_str() {
         "TEMPOFAST" => Some("TempoFast"),
         "TEMPODEEP" => Some("TempoDeep"),
@@ -2886,8 +2902,24 @@ fn ota_fields(
         // Loggers that key on the dedicated field — HRDLog among them — see no park at all
         // from SIG_INFO alone. Emitting both is safe: an ADIF reader ignores tags it does
         // not know. (Our own parser already READS POTA_REF; this closes the read/write gap.)
+        // ⛔ **A TWO-FER IS TWO PARKS, AND `MY_SIG_INFO` HOLDS ONE** (operator review of
+        // 1.15.0, finding A2). This wrote the pair as a single value —
+        // `<MY_SIG_INFO:15>US-1234,US-5678` — so the lifetime log, and every upload built
+        // on it (QRZ, Club Log, eQSL, any handed-out .adi), named a park that resolves to
+        // nothing. `adif_for_activation` already gets this right by rewriting `my_ref` to
+        // the one park being submitted, which is why the POTA submission was correct and
+        // only the lifetime log was wrong — the rule was enforced in exactly one place.
+        //
+        // The DEDICATED field keeps the whole list: this file's own parser documents
+        // `POTA_REF` as a field that "may hold a comma list, verbatim", so the two-fer is
+        // not lost — it moves to the tag that can represent it.
         (Some(p), Some(r)) if p.eq_ignore_ascii_case("POTA") => {
-            field(sig, p) + &field(sig_info, r) + &field(pota, r)
+            let first = r
+                .split([',', ';'])
+                .map(str::trim)
+                .find(|s| !s.is_empty())
+                .unwrap_or("");
+            field(sig, p) + &field(sig_info, first) + &field(pota, r)
         }
         (Some(p), Some(r)) => field(sig, p) + &field(sig_info, r),
         _ => String::new(),
@@ -4694,6 +4726,75 @@ mod tests {
     /// its own cannot tell a fixed writer from a writer that now loses the mode a different
     /// way — the failure `promoted_submode`'s own comment describes ("our own export re-imports
     /// as bare MFSK and the mode is lost on the next full save").
+    /// ⛔ **A TWO-FER NAMES ONE PARK IN `MY_SIG_INFO`** (operator review of 1.15.0, A2).
+    ///
+    /// The pair went out as a single value, so every consumer of the lifetime log read a
+    /// park id that resolves to nothing. `adif_for_activation` was already correct — the
+    /// rule was stated and enforced in exactly one place, and tested only there.
+    #[test]
+    fn a_two_fer_names_one_park_in_my_sig_info_and_keeps_both_in_the_dedicated_field() {
+        let mut r = rec("K1ABC", "20m", 1_782_583_500);
+        r.ota.my_program = Some("POTA".into());
+        r.ota.my_ref = Some("US-1234,US-5678".into());
+        let adi = adif_record(&r);
+
+        assert!(
+            adi.contains("<MY_SIG_INFO:7>US-1234"),
+            "MY_SIG_INFO must name ONE park: {adi}"
+        );
+        assert!(
+            !adi.contains("US-1234,US-5678") || !adi.contains("MY_SIG_INFO:15"),
+            "the comma pair must not be one MY_SIG_INFO value: {adi}"
+        );
+        // Nothing is LOST: the dedicated field is the one that can hold a list, and this
+        // file's own parser reads it that way.
+        assert!(
+            adi.contains("<MY_POTA_REF:15>US-1234,US-5678"),
+            "the second park must survive in MY_POTA_REF: {adi}"
+        );
+        // Control: a single-park activation is untouched by the split.
+        let mut one = rec("K2DEF", "20m", 1_782_583_500);
+        one.ota.my_program = Some("POTA".into());
+        one.ota.my_ref = Some("US-1234".into());
+        let adi1 = adif_record(&one);
+        assert!(adi1.contains("<MY_SIG_INFO:7>US-1234"), "{adi1}");
+        assert!(adi1.contains("<MY_POTA_REF:7>US-1234"), "{adi1}");
+    }
+
+    /// ⛔ **AN EMPTY ENUMERATION FIELD IS NEVER EMITTED** (operator review of 1.15.0, A4).
+    ///
+    /// An import whose source omitted MODE — an ordinary spreadsheet or paper-log
+    /// conversion — stored `mode = ""` and re-exported `<MODE:0>`, the same malformed shape
+    /// this function already guards BAND and FREQ against. GRIDSQUARE had the same hole.
+    #[test]
+    fn a_record_with_no_mode_omits_the_tag_rather_than_emitting_an_empty_one() {
+        let mut r = rec("K1ABC", "20m", 1_782_583_500);
+        r.mode = String::new();
+        r.grid = Some("   ".into());
+        let adi = adif_record(&r);
+        assert!(
+            !adi.contains("<MODE:0>"),
+            "an empty MODE was emitted: {adi}"
+        );
+        assert!(!adi.contains("MODE:0"), "{adi}");
+        assert!(
+            !adi.contains("GRIDSQUARE:0"),
+            "an empty GRIDSQUARE was emitted: {adi}"
+        );
+        // ⚠️ CONTROL, and it is the half that says the filter is not just deleting the
+        // field: a record that HAS a mode still emits it, and the record is still valid.
+        let ok = rec("K2DEF", "20m", 1_782_583_500);
+        let adi_ok = adif_record(&ok);
+        assert!(
+            adi_ok.contains("<MODE:"),
+            "the control lost its mode too — the filter is too wide: {adi_ok}"
+        );
+        assert!(
+            adi.contains("<CALL:5>K1ABC"),
+            "the rest of the record survives: {adi}"
+        );
+    }
+
     #[test]
     fn the_wsjtx_mfsk_submodes_survive_the_adif_round_trip() {
         for mode in ["FT4", "Q65", "FST4", "FST4W"] {

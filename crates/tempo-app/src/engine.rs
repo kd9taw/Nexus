@@ -5523,9 +5523,24 @@ impl Engine {
         } else {
             0
         };
+        // ⭐ AND THE ON-AIR PAIR, from the SAME function the general log uses. The contest
+        // path used to publish only the dial, so `contest::merge` had nothing else to write
+        // as ADIF `FREQ` — which made a split contact record the receive leg and a digital
+        // contact record the bare dial. `log_frequencies` already applies the sideband-signed
+        // TX audio offset and splits the pair only for a genuine same-band split.
+        let hz = |mhz: f64| {
+            if mhz.is_finite() && mhz > 0.0 {
+                (mhz * 1e6).round() as u64
+            } else {
+                0
+            }
+        };
+        let (on_air_mhz, on_air_rx_mhz) = self.log_frequencies();
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             station.log.band = band;
             station.log.dial_khz = dial_khz;
+            station.log.on_air_hz = hz(on_air_mhz);
+            station.log.on_air_rx_hz = on_air_rx_mhz.map(hz).filter(|v| *v > 0);
         }
     }
 

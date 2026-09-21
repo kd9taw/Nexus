@@ -138,6 +138,32 @@ pub struct LoggedQso {
     /// *"Stations competing for World and Continent awards must provide accurate
     /// frequencies for all contacts in the log."*
     pub freq_khz: u32,
+    /// ⭐ **The frequency actually RADIATED** — the dial with the sideband-signed TX audio
+    /// offset applied, in MHz. `0.0` = not known.
+    ///
+    /// ⚠️ **NOT the same fact as [`freq_khz`](Self::freq_khz), and that is deliberate.**
+    /// Cabrillo's convention is the VFO readout, which is what a sponsor's cross-check
+    /// expects and what `cabrillo_with` writes. ADIF `FREQ` means the frequency the
+    /// transmission was ON, which for any AFSK/digital mode is the dial plus the audio
+    /// offset (minus it on LSB). Collapsing the two made every digital contest contact
+    /// export at the bare dial — 14.074000 — while the SAME operator's ordinary FT8 rows
+    /// carried dial + offset, so one contact was described two different ways.
+    ///
+    /// Stamped at log time from `Engine::log_frequencies`, which is the general log's own
+    /// answer: ONE function decides what frequency a contact was worked on, because two
+    /// emitters disagreeing about it is a contact the operator cannot reconcile afterwards.
+    ///
+    /// In **Hz**, deliberately: this struct derives `Eq` and is compared for dupe detection,
+    /// and a float frequency in a compared row is an equality that depends on how it was
+    /// computed. Hz is exact at every frequency an amateur radio reaches.
+    pub on_air_hz: u64,
+    /// The RECEIVE leg, in MHz, and `None` unless the contact was genuinely worked split on
+    /// ONE band. ADIF `FREQ_RX` equal to `FREQ` is not a harmless duplicate — it is a claim
+    /// that the QSO was worked split, carried into every logger the export reaches.
+    ///
+    /// ⚠️ A split contact used to export the LISTENING leg as `FREQ` with no `FREQ_RX`: the
+    /// wrong frequency, stated confidently, in the file that goes to LoTW, QRZ and Club Log.
+    pub freq_rx_hz: Option<u64>,
     /// Mode class for scoring + per-band-mode dupes: "DIG" | "CW" | "PH".
     pub mode: String,
     /// The ACTUAL on-air mode behind a scoring class (ADIF name, uppercase:
@@ -269,6 +295,13 @@ pub struct FieldDayLog {
     /// The dial right now, in kHz (`0` = unknown) — kept beside [`band`](Self::band) by
     /// the engine and stamped onto each row as it is logged, exactly as the band is.
     pub dial_khz: u32,
+    /// The on-air TX frequency right now (MHz, `0.0` = unknown) and the receive leg when
+    /// split is genuinely in use — kept beside [`dial_khz`](Self::dial_khz) by the engine
+    /// and stamped onto each row as it is logged, exactly as the band and the dial are.
+    /// Both come from `Engine::log_frequencies`; see [`LoggedQso::on_air_mhz`] for why this
+    /// is a different fact from the dial rather than a second copy of it.
+    pub on_air_hz: u64,
+    pub on_air_rx_hz: Option<u64>,
     pub event: FdEvent,
     /// The ACTUAL on-air digital mode currently keyed (ADIF-style name, e.g.
     /// "FT8", "FT4"), stamped by the engine at FD entry and on every tier
@@ -313,6 +346,8 @@ impl FieldDayLog {
             session,
             band: band.to_string(),
             dial_khz: 0,
+            on_air_hz: 0,
+            on_air_rx_hz: None,
             event,
             current_submode: String::new(),
             qsos: Vec::new(),
@@ -602,6 +637,8 @@ impl FieldDayLog {
             prefix: crate::contest::wpx_prefix(call),
             band,
             freq_khz: self.dial_khz,
+            on_air_hz: self.on_air_hz,
+            freq_rx_hz: self.on_air_rx_hz,
             mode,
             submode: submode.trim().to_ascii_uppercase(),
             slot,
@@ -851,11 +888,28 @@ impl FieldDayLog {
             // on every already-logged contact the moment Nexus restarted mid-event, and
             // nothing told the operator. Pinned by
             // `a_field_day_contact_keeps_its_dial_across_a_restart`.
+            // ⭐ ADIF `FREQ` is the frequency RADIATED, so it is the on-air value and not the
+            // dial — six decimals, the general log's own precision, because rounding to the
+            // kHz Cabrillo writes in would throw away the audio offset this exists to carry.
+            // A row that predates the pair falls back to the dial, which is what its `FREQ`
+            // meant when it was written.
+            let journal_mhz = if q.on_air_hz > 0 {
+                q.on_air_hz as f64 / 1e6
+            } else {
+                f64::from(q.freq_khz) / 1000.0
+            };
+            if journal_mhz > 0.0 {
+                s.push_str(&adif_field("FREQ", &format!("{journal_mhz:.6}")));
+            }
+            if let Some(rx) = q.freq_rx_hz.filter(|hz| *hz > 0) {
+                s.push_str(&adif_field("FREQ_RX", &format!("{:.6}", rx as f64 / 1e6)));
+            }
+            // ⚠️ THE CABRILLO DIAL RIDES SEPARATELY, because `FREQ` no longer carries it.
+            // `merge_adif` restores this, and without it a mid-event restart would rebuild
+            // every row's dial from the on-air value and hand the sponsor a QSO line off by
+            // the audio offset. An old journal has no such tag and falls back to `FREQ`.
             if q.freq_khz > 0 {
-                s.push_str(&adif_field(
-                    "FREQ",
-                    &format!("{:.3}", f64::from(q.freq_khz) / 1000.0),
-                ));
+                s.push_str(&adif_field("APP_NEXUS_DIALKHZ", &q.freq_khz.to_string()));
             }
             // A real date/time so [`merge_adif`](Self::merge_adif) can restore
             // `when_unix` (and Cabrillo keeps its ARRL-required timestamps
@@ -989,16 +1043,42 @@ impl FieldDayLog {
         // Only the two REGISTERED sideband spellings are adopted from `SUBMODE`: the
         // value goes back out through that same cascade on the next export, so an
         // unrecognised one would re-emit as a bare invalid `<MODE>` and be dropped.
-        let sideband = f
+        let raw_submode = f
             .get("SUBMODE")
             .map(|s| s.trim().to_ascii_uppercase())
-            .filter(|s| s == "USB" || s == "LSB")
             .unwrap_or_default();
+        let sideband = if raw_submode == "USB" || raw_submode == "LSB" {
+            raw_submode.clone()
+        } else {
+            String::new()
+        };
+        // ⛔ **AND THE DIGITAL SUBMODES, which this dropped** (operator review of 1.15.0,
+        // findings A3 and L2 — reached independently by two lenses).
+        //
+        // `adif` writes a digital row through `logbook::adif_submode`, so a TempoFast
+        // contact journals as `<MODE:4>MFSK <SUBMODE:9>TEMPOFAST`. Reading `MODE` alone
+        // brought it back as bare "MFSK" after a mid-event restart — in the SUBMITTED Field
+        // Day file and in the merged lifetime record, so an operator filtering "worked on
+        // TempoFast", or a submode-sensitive award, never saw it. TEMPOFAST, TEMPODEEP, FT4,
+        // FT2, Q65, FST4 and FST4W were all lost this way.
+        //
+        // The narrow filter above was justified by "an unrecognised one would re-emit as a
+        // bare invalid MODE" — TRUE for a value ADIF has never heard of, and FALSE for
+        // exactly these, because `promoted_submode` IS the registry of values that re-emit
+        // correctly. It is the same function the general log uses for the same job, so the
+        // two readers cannot disagree about what a row was worked on.
+        //
+        // ⚠️ The round-trip test covers RTTY, which survives because RTTY is a real ADIF
+        // MODE and so never needed promoting — which is why the suite could not see this.
         let (mode, submode) = match f.get("MODE").map(|m| m.to_ascii_uppercase()) {
             Some(m) if m == "CW" => ("CW", String::new()),
             Some(m) if m == "SSB" => ("PH", sideband),
             Some(m) if m == "FM" || m == "AM" => ("PH", m),
-            Some(m) => ("DIG", m),
+            Some(m) => (
+                "DIG",
+                crate::logbook::promoted_submode(&raw_submode)
+                    .map_or(m, |promoted| promoted.to_ascii_uppercase()),
+            ),
             None => ("DIG", String::new()),
         };
         // QSO_DATE (yyyymmdd) + TIME_ON (hhmmss) → when_unix. Unparseable rows
@@ -1091,11 +1171,22 @@ impl FieldDayLog {
         let placed = crate::contest::resolve_call(call);
         // The journaled dial (MHz), if the row carried one. Anything unparseable is simply
         // unknown — never a guessed frequency.
+        let mhz_of = |key: &str| {
+            f.get(key)
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .filter(|mhz| mhz.is_finite() && *mhz > 0.0 && *mhz < 1_000_000.0)
+        };
+        let on_air_hz = mhz_of("FREQ").map_or(0, |mhz| (mhz * 1e6).round() as u64);
+        let freq_rx_hz = mhz_of("FREQ_RX").map(|mhz| (mhz * 1e6).round() as u64);
+        // The Cabrillo dial rides in its own tag. A journal written before that tag existed
+        // put the DIAL in `FREQ`, so falling back to it restores exactly what that row meant
+        // — never a dial reconstructed from an on-air value it does not carry.
         let freq_khz = f
-            .get("FREQ")
-            .and_then(|v| v.trim().parse::<f64>().ok())
-            .filter(|mhz| mhz.is_finite() && *mhz > 0.0 && *mhz < 1_000_000.0)
-            .map_or(0, |mhz| (mhz * 1000.0).round() as u32);
+            .get("APP_NEXUS_DIALKHZ")
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|khz| *khz > 0)
+            .or_else(|| mhz_of("FREQ").map(|mhz| (mhz * 1000.0).round() as u32))
+            .unwrap_or(0);
         self.qsos.push(LoggedQso {
             call: call.clone(),
             rx,
@@ -1106,6 +1197,8 @@ impl FieldDayLog {
             prefix: crate::contest::wpx_prefix(call),
             band,
             freq_khz,
+            on_air_hz,
+            freq_rx_hz,
             mode: mode.to_string(),
             submode,
             slot: 0,
@@ -2236,6 +2329,80 @@ mod tests {
     /// 2026-09-20).
     ///
     /// Field Day's journal and its submitted export are the SAME function, and
+    /// ⛔ **A DIGITAL SUBMODE SURVIVES A MID-EVENT RESTART** (operator review of 1.15.0,
+    /// findings A3 and L2 — found independently by the adif and logbook lenses).
+    ///
+    /// The journal writes `<MODE:4>MFSK <SUBMODE:9>TEMPOFAST`; the reader adopted `SUBMODE`
+    /// only when it was exactly `USB` or `LSB`, so the row came back as bare "MFSK". That
+    /// reached the SUBMITTED Field Day file and the merged lifetime record, and an operator
+    /// filtering "worked on TempoFast" — or a submode-sensitive award — never saw the
+    /// contact. TempoDeep, FT4, FT2, Q65, FST4 and FST4W were lost the same way.
+    ///
+    /// ⚠️ RTTY is the control, and it is why the existing round-trip test could not see
+    /// this: RTTY is a real ADIF MODE, so it never needed promoting and survived either way.
+    #[test]
+    fn a_digital_submode_survives_the_field_day_journal_round_trip() {
+        for (submode, adif_mode) in [
+            ("TempoFast", "MFSK"),
+            ("TempoDeep", "MFSK"),
+            ("FT4", "MFSK"),
+            ("Q65", "MFSK"),
+            ("FST4", "MFSK"),
+        ] {
+            let mut log = FieldDayLog::new(
+                "W9XYZ",
+                ContestSession::field_day(FdEvent::ArrlFd, "2A", "WI"),
+                "20m",
+            );
+            assert!(log.log_submode_at("K1ABC", "1H", "CT", "DIG", submode, 0, 1_782_583_500));
+            let journal = log.adif();
+            // Precondition: the journal really does split it into parent + SUBMODE, or the
+            // reader below would be restoring from something else entirely.
+            assert!(
+                journal.contains(&format!("<MODE:{}>{adif_mode}", adif_mode.len())),
+                "{submode}: journal did not write the parent MODE: {journal}"
+            );
+            assert!(
+                journal.to_ascii_uppercase().contains(&format!(
+                    "<SUBMODE:{}>{}",
+                    submode.len(),
+                    submode.to_ascii_uppercase()
+                )),
+                "{submode}: journal did not write the SUBMODE: {journal}"
+            );
+
+            let mut restored = FieldDayLog::new(
+                "W9XYZ",
+                ContestSession::field_day(FdEvent::ArrlFd, "2A", "WI"),
+                "20m",
+            );
+            restored.merge_adif(&journal, 0);
+            assert_eq!(restored.qso_count(), 1, "{submode}");
+            assert_eq!(
+                restored.qsos()[0].recorded_mode().to_ascii_uppercase(),
+                submode.to_ascii_uppercase(),
+                "{submode} came back as something else after a restart"
+            );
+        }
+
+        // THE CONTROL. RTTY is a real ADIF MODE, so it round-trips with no promotion at all
+        // — it passed before this fix and must still pass, which is what says the change is
+        // an ADDITION to the reader rather than a different reader.
+        let mut rtty = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "2A", "WI"),
+            "20m",
+        );
+        assert!(rtty.log_submode_at("K2DEF", "1H", "CT", "DIG", "RTTY", 0, 1_782_583_500));
+        let mut back = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "2A", "WI"),
+            "20m",
+        );
+        back.merge_adif(&rtty.adif(), 0);
+        assert_eq!(back.qsos()[0].recorded_mode(), "RTTY", "the control moved");
+    }
+
     /// [`Self::merge_adif`] restores `freq_khz` by reading `FREQ` back out of it
     /// (`self.qsos` ← `f.get("FREQ")`). So while `adif` withheld `FREQ` for Field Day
     /// alone, **a restart mid-event silently zeroed the dial on every contact already
@@ -2263,8 +2430,15 @@ mod tests {
 
         // The journal must carry it, or the reader below has nothing to restore from.
         assert!(
-            log.adif().contains("<FREQ:6>14.253"),
+            log.adif().contains("<FREQ:9>14.253000"),
             "Field Day's journal dropped the dial: {}",
+            log.adif()
+        );
+        // ⭐ AND THE DIAL ITSELF, in its own tag. `FREQ` is the on-air frequency now, so it
+        // is no longer the thing `merge_adif` may rebuild the Cabrillo kHz from.
+        assert!(
+            log.adif().contains("<APP_NEXUS_DIALKHZ:5>14253"),
+            "the Cabrillo dial is not journalled: {}",
             log.adif()
         );
 
