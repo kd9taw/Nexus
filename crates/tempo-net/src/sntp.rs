@@ -121,8 +121,15 @@ pub struct Measurement {
 /// falling back to zero.
 ///
 /// Queries run sequentially, so a fully unreachable list costs
-/// `hosts.len() * timeout`. It runs on the background probe thread, never the
-/// audio loop.
+/// `hosts.len() * timeout` — **once the names resolve**, which is the part this
+/// bound does not cover. `timeout` is applied to the UDP socket
+/// (`set_read_timeout`/`set_write_timeout` in [`query`]), and the
+/// `to_socket_addrs` lookup happens BEFORE that: it is a blocking `getaddrinfo`
+/// with no timeout of its own, so a resolver that is failing slowly — a dead DNS
+/// server, a pending firewall prompt — adds an unbounded amount to every host in
+/// the list, and the cost above is a floor rather than a ceiling. That is a
+/// latency cost and not a stall, because this runs on the background probe
+/// thread, holding no engine lock, never the audio loop.
 pub fn measure(hosts: &[&str], timeout: Duration) -> Option<Measurement> {
     let mut samples: Vec<i64> = Vec::with_capacity(hosts.len());
     for h in hosts {
