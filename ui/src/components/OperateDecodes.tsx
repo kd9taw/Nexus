@@ -415,6 +415,19 @@ export function OperateDecodes({
       // would be the same class of self-own the country exclude guards against. "Mid-QSO"
       // is `partnerCall` (the sequencer's live partner), NOT the selection: the selection
       // lingers after Done, and a finished QSO's partner is just a worked station.
+      //
+      // ⭐ AND A DECODE ADDRESSED TO ME IS NEVER HIDDEN (#268). The partner exemption above
+      // expires ONE MESSAGE TOO EARLY: the RR73 that ends the QSO is the same event that
+      // clears `partnerCall` and logs the contact, and `recent_decodes` is rebuilt from
+      // scratch every snapshot (engine.rs `working_a_station_clears_the_icons_on_a_decode_
+      // already_on_screen` — the retroactive refresh is an operator ruling and stays), so
+      // `worked` flips true under a row already on screen and the next 4 Hz poll takes it
+      // away. bitslave watched his partner's RR73 vanish out of the Rx Frequency pane while
+      // he was reading it. A row losing its CHIPS when you work the station is what was
+      // asked for; a row being REMOVED is not.
+      // The rule, rather than a patch for the RR73 alone: −B4 declutters stations I could
+      // work and already have. A station that has put MY callsign on the air is traffic for
+      // me whatever the logbook says, so it stays — exactly like `!d.mine` beside it.
       .filter(
         (d) =>
           !(
@@ -422,6 +435,7 @@ export function OperateDecodes({
             filter !== 'b4' &&
             d.worked &&
             !d.mine &&
+            !d.directedToMe &&
             (partnerCall == null || d.from !== partnerCall)
           ),
       )

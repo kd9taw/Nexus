@@ -3,9 +3,13 @@
 // #268 (and #235, closed into it) — THE RX FREQUENCY PANE AND −B4.
 //
 // Field reports: a worked station's RR73 vanished from the Rx Frequency pane, and a restart
-// "fixed" it. −B4 hiding a just-worked station is by design; what was wrong is that the Rx
-// Frequency pane had no −B4 chip of its own, and read the setting ONCE when it mounted — so
-// turning −B4 off in Band Activity never reached it until Nexus restarted.
+// "fixed" it. THIS file is the restart half: the Rx Frequency pane had no −B4 chip of its own
+// and read the setting ONCE when it mounted, so turning −B4 off in Band Activity never reached
+// it until Nexus restarted.
+//
+// The disappearance itself — "−B4 hiding a just-worked station is by design", as this comment
+// used to say flatly — is `OperateDecodes.b4directed.test.tsx`. It is by design for a station
+// calling CQ and it was never right for the partner's RR73, which is ADDRESSED TO US.
 //
 // Both panes are mounted side by side exactly as the cockpit does (the Rx pane locked to
 // 'rx' and compact), because the defect lives BETWEEN two instances: each one on its own
@@ -33,10 +37,27 @@ const decode = (over: Partial<DecodeRow> = {}): DecodeRow => ({
   ...over,
 })
 
-// A worked station sitting on our RX frequency — the RR73 that disappeared.
+// A worked station sitting on our RX frequency — what −B4 is for, and what this file
+// toggles the chip against.
+//
+// ⚠️ NOT the RR73 any more, and the swap is the point. `directedToMe` on the PD2BS line is
+// what the engine really puts there (`Msg::parse("KD9TAW PD2BS RR73").addressee()` is us), and
+// this fixture used to leave it at the helper's `false` — so the row it called "the RR73 that
+// disappeared" was not the row the operator saw, and the file could not have noticed that a
+// message addressed to us is exempt from −B4 (`OperateDecodes.b4directed.test.tsx`, the other
+// half of #268). The chip-sync assertions below need a row −B4 really hides, so they use one:
+// a worked station calling CQ at nobody in particular.
 const rows = [
   decode({ from: 'W1AW', message: 'CQ W1AW FN31' }),
-  decode({ from: 'PD2BS', message: 'KD9TAW PD2BS RR73', worked: true, isCq: false, freqHz: RX_HZ + 5 }),
+  decode({ from: 'G3XYZ', message: 'CQ G3XYZ IO91', worked: true, freqHz: RX_HZ + 5 }),
+  decode({
+    from: 'PD2BS',
+    message: 'KD9TAW PD2BS RR73',
+    worked: true,
+    isCq: false,
+    directedToMe: true,
+    freqHz: RX_HZ + 5,
+  }),
 ]
 
 function mountBoth() {
@@ -75,25 +96,25 @@ describe('−B4 in the Rx Frequency pane (#268)', () => {
     localStorage.setItem('nexus.decodes.hideB4', '1')
     const { band, rx } = mountBoth()
     // Both start hiding the worked station — the reported state.
-    expect(shows(band, /PD2BS/)).toBe(false)
-    expect(shows(rx, /PD2BS/)).toBe(false)
+    expect(shows(band, /G3XYZ/)).toBe(false)
+    expect(shows(rx, /G3XYZ/)).toBe(false)
     expect(shows(rx, /W1AW/)).toBe(true) // the pane is not simply empty
 
     fireEvent.click(b4Chip(band)!)
-    expect(shows(band, /PD2BS/)).toBe(true)
-    expect(shows(rx, /PD2BS/), 'Rx Frequency still hiding after −B4 went off in Band Activity').toBe(true)
+    expect(shows(band, /G3XYZ/)).toBe(true)
+    expect(shows(rx, /G3XYZ/), 'Rx Frequency still hiding after −B4 went off in Band Activity').toBe(true)
   })
 
   it('toggling −B4 in the Rx Frequency pane takes effect live in both panes', () => {
     const { band, rx } = mountBoth()
-    expect(shows(rx, /PD2BS/)).toBe(true)
+    expect(shows(rx, /G3XYZ/)).toBe(true)
     fireEvent.click(b4Chip(rx)!)
     expect(b4Chip(rx)!.getAttribute('aria-pressed')).toBe('true')
-    expect(shows(rx, /PD2BS/)).toBe(false)
-    expect(shows(band, /PD2BS/)).toBe(false)
+    expect(shows(rx, /G3XYZ/)).toBe(false)
+    expect(shows(band, /G3XYZ/)).toBe(false)
     expect(b4Chip(band)!.getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(b4Chip(rx)!)
-    expect(shows(rx, /PD2BS/)).toBe(true)
-    expect(shows(band, /PD2BS/)).toBe(true)
+    expect(shows(rx, /G3XYZ/)).toBe(true)
+    expect(shows(band, /G3XYZ/)).toBe(true)
   })
 })

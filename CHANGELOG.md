@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The RR73 that finishes your QSO no longer disappears from the Rx Frequency pane.** With −B4
+  on, the other operator's `RR73` was on screen for a moment and then gone: logging the contact
+  marks them worked, the sequencer lets go of them as your partner, and the decode list is
+  rebuilt from the logbook on every update — so −B4 took the row away while you were reading it.
+  A decode addressed to *you* is now never hidden by −B4, in either pane, whatever the logbook
+  says: a station putting your callsign on the air is traffic for you, not clutter. −B4 still
+  hides a worked station calling CQ, which is what it is for. (#268)
 - **FT4 contacts now export as ADIF the way WSJT-X writes them, so LoTW and the rest accept
   them.** FT4 is not an ADIF mode in its own right — it is a submode of MFSK, as Q65, FST4 and
   FST4W are — and Nexus was writing a bare `MODE=FT4`. That spelling is not in the mode list
