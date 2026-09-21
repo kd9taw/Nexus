@@ -2928,6 +2928,8 @@ export const JA: PartialCatalog = {
   "recall.contestDupe.label": "コンテスト重複",
   "recall.contestDupe.title": "{{band}} でコンテストログに既にあります — 再度記録すると重複として拒否されます。",
   "recall.contestDupe.titleLogged": "{{band}} でコンテストログに既にあります — それでも交信して記録してください。このコンテストは重複を残し、得点を0として扱います。省くと相手局がクレジットを失います。",
+  "recall.contestDupe.titleAnyBand": "コンテストログに既にあります — このコンテストはバンドに関係なく1局を1回だけカウントするため、再度記録すると重複として拒否されます。",
+  "recall.contestDupe.titleLoggedAnyBand": "コンテストログに既にあります — このコンテストはバンドに関係なく1局を1回だけカウントします。それでも交信して記録してください。重複は残り、得点は0として扱われます。省くと相手局がクレジットを失います。",
   "recall.clubDupe.label": "クラブ重複",
   "recall.clubDupe.title": "他のポジションが {{band}} で既に交信済みです — 記録はできますが得点になりません。",
   "recall.dupe.title": "{{band}}では交信済みです — いま記録するとデュープになります。設定の「モードも一致」がオンでない限り、バンド内の全モードが対象です。",

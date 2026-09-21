@@ -3351,6 +3351,8 @@ export const ES: PartialCatalog = {
   "recall.contestDupe.label": "Dupe concurso",
   "recall.contestDupe.title": "Ya está en el log del concurso en {{band}} — volver a anotarlo se rechazará como dupe.",
   "recall.contestDupe.titleLogged": "Ya está en el log del concurso en {{band}} — trabájalo y anótalo igualmente: este concurso conserva los duplicados y los puntúa a cero. Omitirlo le cuesta el crédito a la otra estación.",
+  "recall.contestDupe.titleAnyBand": "Ya está en el log del concurso — este concurso cuenta una estación una sola vez, sin importar la banda, así que volver a anotarlo se rechazará como dupe.",
+  "recall.contestDupe.titleLoggedAnyBand": "Ya está en el log del concurso — este concurso cuenta una estación una sola vez, sin importar la banda. Trabájalo y anótalo igualmente: conserva los duplicados y los puntúa a cero. Omitirlo le cuesta el crédito a la otra estación.",
   "recall.clubDupe.label": "Dupe de club",
   "recall.clubDupe.title": "Otra posición ya lo trabajó en {{band}} — se permite anotarlo, pero no suma puntos.",
   "recall.dupe.title": "Ya trabajado en {{band}} — anotarlo ahora sería un dupe. Cuenta cualquier modo de la banda salvo que esté activo “que el modo también coincida” en Ajustes.",

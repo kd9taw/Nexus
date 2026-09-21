@@ -99,6 +99,19 @@ interface Props {
    *  would push them into exactly that. Default false — Field Day, the QSO parties and the
    *  VHF runnings do refuse one. */
   contestLogsDupes?: boolean
+  /** ⭐ Whether THIS contest's dupe rule names the band at all (`FieldDayStatus.dupeRule.byBand`).
+   *
+   *  It decides only what the badge SAYS, never whether it lights — `contestDupe` has always
+   *  applied exactly the components the rule names. Sweepstakes names none but the callsign
+   *  (rule 2.2: a station is worked once, regardless of band), so the badge correctly lights
+   *  for a 40 m contact while the operator is on 20 m — and the tooltip, which interpolated the
+   *  CURRENT band, then sent him to look at 20 m, where by definition there was nothing. In the
+   *  one shipped contest where a dupe cannot be on the band he is looking at.
+   *
+   *  ⚠️ Default TRUE, matching `contestDupe`'s own `LEGACY_TRIPLE`: a station too old to send a
+   *  rule meant `(call, band, mode class)`, and a host outside a contest passes nothing and gets
+   *  the sentence this card has always shown. */
+  contestDupeByBand?: boolean
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -143,7 +156,7 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle }: Props) {
+export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, contestDupe = 'none', contestLogsDupes = false, contestDupeByBand = true, hasLookup = true, bounded = false, onOpenLog, latestNote, historyNotice, calling, onShowCall, onRemove, hideNote, paneTitle }: Props) {
   const units = useUnits()
   const c = call.trim()
   const cu = c.toUpperCase()
@@ -296,14 +309,21 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
           {contestDupe === 'own' && (
             <span
               className="recall-badge contest-dupe"
-              /* Two literal call sites rather than one with a computed key: the i18n
-                 extractor reads keys statically, and a ternary INSIDE `t()` hides both
+              /* FOUR literal call sites rather than one with a computed key: the i18n
+                 extractor reads keys statically, and a ternary INSIDE `t()` hides them
                  from it — they read as orphan entries nobody references, and the
-                 unreadable-call-site ratchet ticks up. Both guards caught it. */
+                 unreadable-call-site ratchet ticks up. Both guards caught it.
+                 The `…AnyBand` pair takes no {{band}} at all, which is the fix: under a
+                 ruleset that works a station once regardless of band, the band the
+                 operator is sitting on is the one place the contact is NOT. */
               title={
-                contestLogsDupes
-                  ? t('recall.contestDupe.titleLogged', { band: band ?? '' })
-                  : t('recall.contestDupe.title', { band: band ?? '' })
+                contestDupeByBand
+                  ? contestLogsDupes
+                    ? t('recall.contestDupe.titleLogged', { band: band ?? '' })
+                    : t('recall.contestDupe.title', { band: band ?? '' })
+                  : contestLogsDupes
+                    ? t('recall.contestDupe.titleLoggedAnyBand')
+                    : t('recall.contestDupe.titleAnyBand')
               }
             >
               {t('recall.contestDupe.label')}

@@ -2656,6 +2656,8 @@ export const DE: PartialCatalog = {
   "recall.contestDupe.label": "Contest-Dupe",
   "recall.contestDupe.title": "Steht auf {{band}} bereits im Contest-Log — ein erneuter Eintrag wird als Dupe abgelehnt.",
   "recall.contestDupe.titleLogged": "Steht auf {{band}} bereits im Contest-Log — trotzdem arbeiten und eintragen: dieser Contest behält Dupes und wertet sie mit null. Weglassen kostet der Gegenstation ihre Gutschrift.",
+  "recall.contestDupe.titleAnyBand": "Steht bereits im Contest-Log — dieser Contest zählt eine Station nur einmal, unabhängig vom Band, ein erneuter Eintrag wird also als Dupe abgelehnt.",
+  "recall.contestDupe.titleLoggedAnyBand": "Steht bereits im Contest-Log — dieser Contest zählt eine Station nur einmal, unabhängig vom Band. Trotzdem arbeiten und eintragen: er behält Dupes und wertet sie mit null. Weglassen kostet der Gegenstation ihre Gutschrift.",
   "recall.clubDupe.label": "Club-Dupe",
   "recall.clubDupe.title": "Eine andere Position hat die Station auf {{band}} bereits gearbeitet — der Eintrag ist erlaubt, bringt aber keine Punkte.",
   "recall.dupe.title": "Auf {{band}} bereits gearbeitet — ein Eintrag jetzt wäre ein Dupe. Zählt jede Betriebsart auf dem Band, sofern in den Einstellungen nicht zusätzlich die Betriebsart verglichen wird.",

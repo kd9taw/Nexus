@@ -3351,6 +3351,8 @@ export const FR: PartialCatalog = {
   "recall.contestDupe.label": "Doublon concours",
   "recall.contestDupe.title": "Déjà dans le journal du concours sur {{band}} — un nouvel enregistrement sera refusé comme doublon.",
   "recall.contestDupe.titleLogged": "Déjà dans le journal du concours sur {{band}} — contactez-le et enregistrez-le quand même : ce concours conserve les doublons et les compte pour zéro. L'omettre fait perdre son crédit à l'autre station.",
+  "recall.contestDupe.titleAnyBand": "Déjà dans le journal du concours — ce concours ne compte une station qu'une fois, quelle que soit la bande, donc un nouvel enregistrement sera refusé comme doublon.",
+  "recall.contestDupe.titleLoggedAnyBand": "Déjà dans le journal du concours — ce concours ne compte une station qu'une fois, quelle que soit la bande. Contactez-le et enregistrez-le quand même : il conserve les doublons et les compte pour zéro. L'omettre fait perdre son crédit à l'autre station.",
   "recall.clubDupe.label": "Doublon club",
   "recall.clubDupe.title": "Une autre position les a déjà contactés sur {{band}} — l'enregistrement est autorisé mais ne rapporte aucun point.",
   "recall.dupe.title": "Déjà contacté sur {{band}} — l'enregistrer maintenant ferait un doublon. Compte n'importe quel mode sur la bande, sauf si « Comparer aussi le mode » est activé dans les Réglages.",

@@ -4520,6 +4520,17 @@ export const EN = {
     'Already in the contest log on {{band}} — logging this again will be refused as a dupe.',
   'recall.contestDupe.titleLogged':
     'Already in the contest log on {{band}} — work and log it anyway: this contest keeps duplicates and scores them zero. Leaving it out costs the other station its credit.',
+  // ⭐ THE SAME PAIR FOR A RULESET THAT IGNORES THE BAND, and the {{band}} they drop is the
+  // whole point. Sweepstakes works a station ONCE (rule 2.2), so the badge correctly lights
+  // for a 40 m contact while the operator sits on 20 m — and the two above then said "on 20m",
+  // where he looked, found nothing and read the badge as broken. A band-free sentence is the
+  // honest one: the row's own band is not in hand at the badge, and under a rule like this
+  // there may be several rows to choose between. `recall.clubDupe.title` keeps its band —
+  // that check matches the band raw, so a club dupe really is on the one being looked at.
+  'recall.contestDupe.titleAnyBand':
+    'Already in the contest log — this contest counts a station once regardless of band, so logging this again will be refused as a dupe.',
+  'recall.contestDupe.titleLoggedAnyBand':
+    'Already in the contest log — this contest counts a station once regardless of band. Work and log it anyway: it keeps duplicates and scores them zero. Leaving it out costs the other station its credit.',
   'recall.clubDupe.label': 'Club dupe',
   'recall.clubDupe.title':
     'Another position already worked them on {{band}} — logging is allowed but adds no points.',

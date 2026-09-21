@@ -480,3 +480,55 @@ describe('RecallPanel — bounded history + compact carcass census (styles.css)'
     }
   })
 })
+
+// ── the contest-dupe tooltip must not name a band its own ruleset ignores ──────────────
+//
+// `contestDupe` applies only the components a ruleset's rule names, which is correct and is
+// what makes this reachable at all. ARRL Sweepstakes is `by_call: true, by_band: false,
+// by_mode_class: false` — rule 2.2, a station is worked ONCE regardless of band — so the
+// predicate collapses to the callsign and a station worked on 40 m rightly raises the badge
+// while the operator sits on 20 m. Both tooltips then interpolated the CURRENT band, so the
+// operator read "Already in the contest log on 20m", checked 20 m, found nothing and concluded
+// the badge was broken — in the one shipped contest where the dupe is by definition invisible
+// on the band being looked at. Newly reachable: before the per-rule predicate, a cross-band SS
+// dupe raised no badge at all.
+//
+// A band-free wording rather than naming the ROW's band: the row is not in hand here (the
+// verdict that arrives is a three-state enum, and widening it would change `contestDupe` for
+// the log strip and the FT cockpit too), and under a band-free rule there can be SEVERAL
+// matching rows — a station worked on 40 and on 80 — so naming one would be arbitrary. The
+// club badge keeps its band on purpose: that check matches the band raw, so it is always this one.
+describe('RecallPanel — the contest-dupe tooltip follows the rule it is reporting', () => {
+  const title = () => document.querySelector('.recall-badge.contest-dupe')!.getAttribute('title')!
+
+  const card = (byBand: boolean, logsDupes: boolean) => (
+    <RecallPanel
+      call="W1AW"
+      band="20m"
+      hist={hist()}
+      contestDupe="own"
+      contestDupeByBand={byBand}
+      contestLogsDupes={logsDupes}
+    />
+  )
+
+  // ⚠️ BOTH ARMS PASS EVERY PROP EXPLICITLY. `contestDupeByBand` defaults to `true` in the
+  // destructure and a JS default fires on an explicit `undefined`, so an arm that merely
+  // omitted it would read the same branch as the other and the pair would prove nothing.
+  it.each([false, true])('with a contest that keeps duplicates = %s', (logsDupes) => {
+    // SWEEPSTAKES — the rule names no band, so neither may the sentence.
+    const ss = render(card(false, logsDupes))
+    expect(title(), 'the tooltip named a band this ruleset ignores').not.toContain('20m')
+    expect(title()).toContain('regardless of band')
+    expect(title()).toContain(logsDupes ? 'log it anyway' : 'refused as a dupe')
+    ss.unmount()
+
+    // THE CONTROL — Field Day, CQ WW, the QSO parties: one contact per band, so the band is
+    // the most useful thing this sentence can carry and must still be carried. Without this
+    // arm the assertions above pass just as well on an interpolation that simply broke.
+    render(card(true, logsDupes))
+    expect(title(), 'a per-band ruleset stopped naming the band').toContain('20m')
+    expect(title()).not.toContain('regardless of band')
+    expect(title()).toContain(logsDupes ? 'log it anyway' : 'refused as a dupe')
+  })
+})

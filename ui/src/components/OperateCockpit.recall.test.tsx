@@ -124,10 +124,25 @@ vi.mock('./OperateDecodes', async (importOriginal) => {
   return { ...real, OperateDecodes: () => <div data-testid="od-pane" /> }
 })
 
-function makeSnap(dxcall: string | null = null, loggedTick = 0): AppSnapshot {
+/** A running contest whose dupe rule keys on the given components, with W1ABC already in its
+ *  log on 40 m — the cross-band contact that is the whole of the Sweepstakes case. */
+function fdWithRule(byBand: boolean, logDupes = false) {
+  return {
+    running: true,
+    state: 'running',
+    qsoCount: 1,
+    sections: 1,
+    points: 1,
+    log: [{ call: 'W1ABC', band: '40m', mode: 'FT8' }],
+    dupeRule: { byCall: true, byBand, byModeClass: false, byFields: [], bySentFields: [], modeClassGroups: [], logDupes },
+  }
+}
+
+function makeSnap(dxcall: string | null = null, loggedTick = 0, fieldDay: unknown = undefined): AppSnapshot {
   return {
     mycall: 'KD9TAW',
     loggedTick,
+    ...(fieldDay ? { fieldDay } : {}),
     // A logged contact moves the log's own tick too, as the engine does; the card follows it.
     logTick: loggedTick,
     mygrid: MY_GRID,
@@ -196,8 +211,9 @@ function renderCockpit(
   selectedCall: string | null,
   layoutMode: 'classic' | 'roster' = 'classic',
   dxcall: string | null = null,
+  fieldDay: unknown = undefined,
 ) {
-  return render(cockpit(selectedCall, layoutMode, dxcall))
+  return render(cockpit(selectedCall, layoutMode, dxcall, 0, fieldDay))
 }
 
 /** The cockpit element — separate from `render` so a test can RE-render it with a new snapshot. */
@@ -206,11 +222,13 @@ function cockpit(
   layoutMode: 'classic' | 'roster' = 'classic',
   dxcall: string | null = null,
   loggedTick = 0,
+  fieldDay: unknown = undefined,
 ) {
   const noop = () => {}
   return (
     <OperateCockpit
-      snap={makeSnap(dxcall, loggedTick)}
+      snap={makeSnap(dxcall, loggedTick, fieldDay)}
+      fdActive={fieldDay != null}
       theme="dark"
       tier="FT8"
       onTierChange={noop}
@@ -457,5 +475,47 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
     } finally {
       getLog.mockImplementation(async () => priorQsos)
     }
+  })
+})
+
+// ── the delivery path for the contest-dupe sentence (the Sweepstakes report) ───────────
+//
+// RecallPanel.test.tsx proves the card can say either sentence; this proves the cockpit hands
+// it the right one, which is the half the operator actually sees. The seam is one expression
+// in OperateCockpit — `snap.fieldDay?.dupeRule?.byBand !== false` — and it has to read the
+// same rule `contestDupe` reads, or the badge and its tooltip describe different contests.
+describe('the contest-dupe tooltip names a band only when the ruleset does', () => {
+  const dupeTitle = () =>
+    document.querySelector('.recall-badge.contest-dupe')!.getAttribute('title')!
+
+  it('SWEEPSTAKES: the 40 m contact raises the badge on 20 m, and the sentence names no band', async () => {
+    // `by_band: false` (rule 2.2 — a station is worked once, regardless of band). The rig is
+    // on 20 m and the only contact is on 40 m, so this badge is right and is UNCHECKABLE on
+    // the band the operator is looking at. Saying "on 20m" here sent him to the one place the
+    // contact is not, and the report that followed was that the badge was broken.
+    renderCockpit('W1ABC', 'classic', null, fdWithRule(false))
+    await card()
+    expect(document.querySelector('.recall-badge.contest-dupe'), 'no contest-dupe badge').not.toBeNull()
+    expect(dupeTitle(), 'the cockpit still handed the card the band-naming sentence').not.toContain('20m')
+    expect(dupeTitle()).toContain('regardless of band')
+  })
+
+  it('CONTROL — a per-band ruleset still names the band', async () => {
+    // Same fixture, same 40 m contact, `by_band: true`: Field Day, CQ WW, the QSO parties.
+    // The band is the useful thing to say and must still be said, and without this arm the
+    // test above passes just as well on a cockpit that lost the band everywhere.
+    renderCockpit('W1ABC', 'classic', null, fdWithRule(true))
+    await card()
+    // On 20 m with the contact on 40 m, a per-band rule sees no dupe at all — which is
+    // itself the contrast: the SS badge above exists only because its rule drops the band.
+    expect(document.querySelector('.recall-badge.contest-dupe'), 'a per-band rule raised a cross-band dupe').toBeNull()
+  })
+
+  it('CONTROL — the same per-band ruleset, the contact on the band being worked', async () => {
+    renderCockpit('W1ABC', 'classic', null, { ...fdWithRule(true), log: [{ call: 'W1ABC', band: '20m', mode: 'FT8' }] })
+    await card()
+    expect(document.querySelector('.recall-badge.contest-dupe'), 'no contest-dupe badge').not.toBeNull()
+    expect(dupeTitle(), 'a per-band ruleset stopped naming the band').toContain('20m')
+    expect(dupeTitle()).not.toContain('regardless of band')
   })
 })
