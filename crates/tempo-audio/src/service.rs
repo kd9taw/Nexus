@@ -99,14 +99,22 @@ fn safe_rigctld_port(port: u16) -> u16 {
 
 /// The CI-V address to natively drive `t` at — `Some` only when the operator opted this
 /// radio into `icom_native_cat` AND it's a scope-capable Icom on a serial connection.
-fn native_civ_addr(t: &Transport) -> Option<u8> {
+fn native_civ_model(t: &Transport) -> Option<crate::civ::commands::IcomModel> {
     // OmniRig joins `is_network()` as a transport the CI-V daemon can never serve: OmniRig
     // holds the COM port, so Nexus cannot open it to speak CI-V. Mirrored in tempo-app's
     // `native_civ_reachable`, which is what tells the operator the cure does not exist here.
     if !t.icom_native_cat || t.is_network() || t.is_omnirig() || t.rig_model == 0 {
         return None;
     }
-    crate::rigmodels::icom_scope_model(t.rig_model).map(|m| m.default_civ_addr())
+    crate::rigmodels::icom_scope_model(t.rig_model)
+}
+
+/// The CI-V bus address for [`native_civ_model`]'s rig. Split out from the model rather
+/// than resolved separately: the daemon needs BOTH (the address to talk on, the model to
+/// know which attenuator pads and preamps this rig has), and two independent lookups of the
+/// same transport are two things that can disagree.
+fn native_civ_addr(t: &Transport) -> Option<u8> {
+    native_civ_model(t).map(|m| m.default_civ_addr())
 }
 
 /// Does this transport key RTS/DTR on the SAME serial port rigctld uses for CAT?
@@ -176,13 +184,14 @@ fn spawn_cat_daemon(
     #[cfg_attr(not(feature = "serial"), allow(unused_mut))] // only mutated on the serial path
     let mut native_fallback: Option<String> = None;
     #[cfg(feature = "serial")]
-    if let Some(addr) = native_civ_addr(t).filter(|_| ptt_line.is_none()) {
+    if let Some(model) = native_civ_model(t).filter(|_| ptt_line.is_none()) {
         match crate::civ::broker::CivDaemon::start(
             &t.serial_port,
             t.baud,
-            addr,
+            model.default_civ_addr(),
             t.rigctld_port,
             t.icom_data_mode,
+            Some(model),
         ) {
             Ok(d) => return Ok((CatDaemon::Native(d), None)),
             Err(e) => {
@@ -956,7 +965,12 @@ const CAT_REOPEN_MAX_MS: f64 = 300_000.0;
 /// operator found a Notch button that did nothing he could hear and no way at all to place a
 /// notch, which is what "notch" means to most operators. Each renders only when the rig
 /// reports it, so a radio with one of the two still shows one button rather than a dead pair.
-const RIG_FUNCS: [&str; 6] = ["NB", "NR", "ANF", "COMP", "VOX", "MN"];
+/// ⭐ `MON` IS THE SEVENTH AND IT WAS ALREADY BUILT. `civ::commands::func_sub` has mapped
+/// it to `16 45` all along and the Hamlib backends all carry `RIG_FUNC_MON`, but this list
+/// is what the poll asks for — so nothing ever asked, the state stayed `None`, and the
+/// cockpit had no monitor control on any backend. The transmit monitor is how a phone
+/// operator hears their own audio; without it you cannot tell a dead mic from a dead rig.
+const RIG_FUNCS: [&str; 7] = ["NB", "NR", "ANF", "COMP", "VOX", "MN", "MON"];
 
 /// How many per-func slots the loop keeps, DERIVED from the table above rather than
 /// written out beside it.
@@ -1002,10 +1016,21 @@ const LVL_NOTCHF: usize = 5;
 const LVL_AF: usize = 6;
 const LVL_RF: usize = 7;
 const LVL_SQL: usize = 8;
+/// TRANSMIT-MONITOR GAIN — the other half of the `MON` func above. A 0..1 fraction, so it
+/// reads through the ordinary [`Rig::read_level`] like AF/RF/SQL.
+const LVL_MONITOR_GAIN: usize = 9;
+/// ⚠️ THE ATTENUATOR AND THE PREAMP ARE INTEGER DECIBELS, and they are the first levels
+/// here that are not a 0..1 fraction since `NOTCHF`. They read through `read_att_db` /
+/// `read_preamp_db` (the RAW reader) for exactly the reason `NOTCHF` does: `read_level`
+/// filters its answer to 0.0..=1.0, so a 12 dB pad comes back as an ERROR, three of those
+/// latch the level unsupported, and the control disappears. Worse, it fails asymmetrically
+/// — `0` (pad off) is inside the range — so it would look healthy until first use.
+const LVL_ATT: usize = 10;
+const LVL_PREAMP: usize = 11;
 /// Per-level slot count, derived from the highest index above for the same reason
 /// [`N_FUNCS`] is derived — these arrays grew from 4 to 6 in the same change, and from 6 to
 /// 9 when the analog levels landed.
-const N_LEVELS: usize = LVL_SQL + 1;
+const N_LEVELS: usize = LVL_PREAMP + 1;
 /// ⚠️ AND THE DERIVATION IS HELD DOWN AT COMPILE TIME. "Highest index plus one" is only
 /// correct while the reader knows which index is highest, and the crash [`N_FUNCS`] documents
 /// came from exactly that kind of by-hand agreement: an array index is a RUNTIME bound, so a
@@ -1020,7 +1045,10 @@ const _: () = assert!(
         && LVL_NOTCHF < N_LEVELS
         && LVL_AF < N_LEVELS
         && LVL_RF < N_LEVELS
-        && LVL_SQL < N_LEVELS,
+        && LVL_SQL < N_LEVELS
+        && LVL_MONITOR_GAIN < N_LEVELS
+        && LVL_ATT < N_LEVELS
+        && LVL_PREAMP < N_LEVELS,
     "a level index is outside the derived slot count — widen N_LEVELS"
 );
 
@@ -2945,6 +2973,9 @@ struct RadioLoop {
     last_notch_freq_hz: Option<f32>,
     /// Last value WRITTEN for each analog level — the change-detection the write leg dedupes
     /// against, exactly as for mic gain above.
+    last_monitor_gain: Option<f32>,
+    last_att_db: Option<u8>,
+    last_preamp_db: Option<u8>,
     last_af_gain: Option<f32>,
     last_rf_gain: Option<f32>,
     last_squelch: Option<f32>,
@@ -2980,6 +3011,9 @@ struct RadioLoop {
     nr_level_giveup: Option<f32>,
     comp_level_giveup: Option<f32>,
     notch_freq_giveup: Option<f32>,
+    monitor_gain_giveup: Option<f32>,
+    att_db_giveup: Option<u8>,
+    preamp_db_giveup: Option<u8>,
     af_gain_giveup: Option<f32>,
     rf_gain_giveup: Option<f32>,
     squelch_giveup: Option<f32>,
@@ -3496,6 +3530,9 @@ impl RadioLoop {
             last_nr_level: None,
             last_comp_level: None,
             last_notch_freq_hz: None,
+            last_monitor_gain: None,
+            last_att_db: None,
+            last_preamp_db: None,
             last_af_gain: None,
             last_rf_gain: None,
             last_squelch: None,
@@ -3506,6 +3543,9 @@ impl RadioLoop {
             nr_level_giveup: None,
             comp_level_giveup: None,
             notch_freq_giveup: None,
+            monitor_gain_giveup: None,
+            att_db_giveup: None,
+            preamp_db_giveup: None,
             af_gain_giveup: None,
             rf_gain_giveup: None,
             squelch_giveup: None,
@@ -4948,6 +4988,9 @@ impl RadioLoop {
         self.last_nr_level = None;
         self.last_comp_level = None;
         self.last_notch_freq_hz = None;
+        self.last_monitor_gain = None;
+        self.last_att_db = None;
+        self.last_preamp_db = None;
         self.last_af_gain = None;
         self.last_rf_gain = None;
         self.last_squelch = None;
@@ -4958,6 +5001,9 @@ impl RadioLoop {
         self.nr_level_giveup = None;
         self.comp_level_giveup = None;
         self.notch_freq_giveup = None;
+        self.monitor_gain_giveup = None;
+        self.att_db_giveup = None;
+        self.preamp_db_giveup = None;
         self.af_gain_giveup = None;
         self.rf_gain_giveup = None;
         self.squelch_giveup = None;
@@ -6374,6 +6420,9 @@ impl RadioLoop {
                     self.nr_level_giveup = None;
                     self.comp_level_giveup = None;
                     self.notch_freq_giveup = None;
+                    self.monitor_gain_giveup = None;
+                    self.att_db_giveup = None;
+                    self.preamp_db_giveup = None;
                     self.af_gain_giveup = None;
                     self.rf_gain_giveup = None;
                     self.squelch_giveup = None;
@@ -6512,9 +6561,22 @@ impl RadioLoop {
                         if !self.rx_ranges_probed {
                             self.rx_ranges_probed = true;
                             self.rx_ranges = rig.read_rx_ranges();
+                            // ⭐ AND THE ATTENUATOR / PREAMP STEP LISTS, off the same reply's
+                            // other end. An attenuator is not a slider: it is the handful of
+                            // pads THIS radio has, and the control cannot be drawn — nor a
+                            // value chosen — without asking. `None` = unknown, and the
+                            // cockpit must then offer nothing rather than a guessed ladder,
+                            // because an unheld pad is COMMANDED at the radio, not merely
+                            // displayed. Same cadence as the range table: once per CAT
+                            // confirmation, never per poll.
+                            let steps = rig.read_db_steps();
                             {
                                 let mut eng = engine_lock(engine);
                                 eng.observe_rig_rx_ranges(self.rx_ranges.clone());
+                                eng.observe_rig_db_steps(
+                                    steps.as_ref().map(|s| s.attenuator_db.clone()),
+                                    steps.as_ref().map(|s| s.preamp_db.clone()),
+                                );
                             }
                         }
                         // Does this radio have a built-in ATU? ONE round-trip per CAT
@@ -6668,6 +6730,55 @@ impl RadioLoop {
                                     true
                                 }
                                 Err(_) => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[slot],
+                                &mut self.level_misses[slot],
+                                ok,
+                            );
+                        }
+                        // The transmit monitor's GAIN — an ordinary 0..1 level, and the
+                        // other half of the `MON` func the round-robin above now polls.
+                        if self.level_supported[LVL_MONITOR_GAIN] != Some(false) && have_budget() {
+                            let ok = match rig.read_level("MONITOR_GAIN") {
+                                Ok(frac) => {
+                                    let mut eng = engine_lock(engine);
+                                    eng.observe_rig_monitor_gain(frac);
+                                    true
+                                }
+                                Err(_) => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[LVL_MONITOR_GAIN],
+                                &mut self.level_misses[LVL_MONITOR_GAIN],
+                                ok,
+                            );
+                        }
+                        // ⚠️ THE TWO DECIBEL LEVELS, through the RAW reader — see [`LVL_ATT`].
+                        // Same capability cache as everything else here, so a rig with
+                        // neither stops being asked after three misses.
+                        for (slot, read, adopt) in [
+                            (
+                                LVL_ATT,
+                                Rig::read_att_db as fn(&mut Rig) -> Option<u8>,
+                                Engine::observe_rig_att_db as fn(&mut Engine, u8),
+                            ),
+                            (
+                                LVL_PREAMP,
+                                Rig::read_preamp_db as fn(&mut Rig) -> Option<u8>,
+                                Engine::observe_rig_preamp_db as fn(&mut Engine, u8),
+                            ),
+                        ] {
+                            if self.level_supported[slot] == Some(false) || !have_budget() {
+                                continue;
+                            }
+                            let ok = match read(rig) {
+                                Some(db) => {
+                                    let mut eng = engine_lock(engine);
+                                    adopt(&mut eng, db);
+                                    true
+                                }
+                                None => false,
                             };
                             note_ext_read(
                                 &mut self.level_supported[slot],
@@ -7130,6 +7241,7 @@ impl RadioLoop {
                                 eng.clear_rig_mode();
                                 eng.clear_rig_funcs();
                                 eng.clear_rig_tuner();
+                                eng.clear_rig_db_steps();
                                 eng.clear_rig_passband();
                                 eng.set_cat_status(Some(false), msg);
                             }
@@ -8905,8 +9017,12 @@ impl RadioLoop {
                     e.agc_to_command(),
                     e.comp_level(),
                     e.notch_freq_hz(),
-                    [e.af_gain(), e.rf_gain(), e.squelch()],
+                    [e.af_gain(), e.rf_gain(), e.squelch(), e.monitor_gain()],
                 )
+            };
+            let (att_db, preamp_db) = {
+                let e = engine_lock(engine);
+                (e.att_db(), e.preamp_db())
             };
             // The three analog levels, each on the same give-up idiom as the writes below: a
             // refusal is remembered against THAT value, so a rig that will not take it is
@@ -8934,6 +9050,15 @@ impl RadioLoop {
                     &mut self.last_squelch,
                     &mut self.squelch_giveup,
                 ),
+                // The transmit monitor's GAIN rides the same idiom: a 0..1 level, silent on
+                // refusal, given up per-value. Its on/off half is a FUNC and goes out with
+                // the rest of the DSP toggles through `take_func_requests`.
+                (
+                    analog[3],
+                    "MONITOR_GAIN",
+                    &mut self.last_monitor_gain,
+                    &mut self.monitor_gain_giveup,
+                ),
             ] {
                 let Some(value) = desired else { continue };
                 if Some(value) == *last || *giveup == Some(value) {
@@ -8945,6 +9070,40 @@ impl RadioLoop {
                         *giveup = None;
                     }
                     Err(_) => *giveup = Some(value),
+                }
+            }
+            // ⚠️ THE ATTENUATOR AND PREAMP GET THEIR OWN BLOCK, not a row in the loop above,
+            // because they are INTEGER DECIBELS. Through `set_rx_level` they would be
+            // clamped to 0..1 and printed `{:.3}`, so a 12 dB pad would leave as
+            // `L ATT 1.000` — well-formed, accepted by rigctld, and the wrong amount of
+            // attenuation. Same per-value give-up as everything else here.
+            //
+            // A step this radio never declared is refused by `Engine::set_att_db` before it
+            // can reach here, so what arrives is a pad the rig has, or `0` (off).
+            for (desired, set, last, giveup) in [
+                (
+                    att_db,
+                    Rig::set_att_db as fn(&mut Rig, u8) -> std::io::Result<()>,
+                    &mut self.last_att_db,
+                    &mut self.att_db_giveup,
+                ),
+                (
+                    preamp_db,
+                    Rig::set_preamp_db as fn(&mut Rig, u8) -> std::io::Result<()>,
+                    &mut self.last_preamp_db,
+                    &mut self.preamp_db_giveup,
+                ),
+            ] {
+                let Some(db) = desired else { continue };
+                if Some(db) == *last || *giveup == Some(db) {
+                    continue;
+                }
+                match set(rig, db) {
+                    Ok(()) => {
+                        *last = Some(db);
+                        *giveup = None;
+                    }
+                    Err(_) => *giveup = Some(db),
                 }
             }
             // #95's two writes. Same shape as NR below — a refusal is remembered against THAT
@@ -13881,10 +14040,30 @@ mod tests {
             ("AGC", LVL_AGC),
             ("COMP", LVL_COMP),
             ("NOTCHF", LVL_NOTCHF),
+            // ⚠️ THIS LIST IS HAND-KEPT AND HAD ALREADY GONE STALE: AF/RF/SQL landed
+            // without being added, so three live slots were unasserted here. The
+            // `const _: () = assert!(…)` beside `N_LEVELS` is the real guard — it is a
+            // BUILD failure — and this stays as the readable census of what the loop
+            // reaches. Add a slot, add it in both places.
+            ("AF", LVL_AF),
+            ("RF", LVL_RF),
+            ("SQL", LVL_SQL),
+            ("MONITOR_GAIN", LVL_MONITOR_GAIN),
+            ("ATT", LVL_ATT),
+            ("PREAMP", LVL_PREAMP),
         ] {
             assert!(idx < st.level_supported.len(), "level_supported {name}");
             assert!(idx < st.level_misses.len(), "level_misses {name}");
         }
+        // ⭐ AND THE MONITOR IS ACTUALLY ASKED FOR. `func_sub` has mapped `MON` to `16 45`
+        // all along and every Hamlib backend carries `RIG_FUNC_MON` — what was missing was
+        // this table, so nothing ever issued the read, the state stayed `None`, and the
+        // control was absent on every backend. A capability nobody polls is indistinguishable
+        // from one that was never built.
+        assert!(
+            RIG_FUNCS.contains(&"MON"),
+            "the transmit monitor must be polled, not merely encodable"
+        );
     }
 
     #[test]
@@ -16636,8 +16815,14 @@ mod tests {
         drop(probe);
         let (mut radio, _push) = FakeRadio::new(0xA2);
         radio.dead = true;
-        let daemon = crate::civ::broker::CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1)
-            .expect("daemon starts (TCP binds) even though the radio I/O is dead");
+        let daemon = crate::civ::broker::CivDaemon::start_with_io(
+            Box::new(radio),
+            0xA2,
+            port,
+            1,
+            Some(crate::civ::commands::IcomModel::Ic9700),
+        )
+        .expect("daemon starts (TCP binds) even though the radio I/O is dead");
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         let mut cat = CatDaemon::Native(daemon);
         while cat.is_alive() {
@@ -24285,7 +24470,14 @@ mod tests {
         let (mut radio, _push) = FakeRadio::new(0xA2);
         radio.mute = mute;
         let regs = radio.regs();
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1).unwrap();
+        let d = CivDaemon::start_with_io(
+            Box::new(radio),
+            0xA2,
+            port,
+            1,
+            Some(crate::civ::commands::IcomModel::Ic9700),
+        )
+        .unwrap();
         (d, Rig::rigctld(&format!("127.0.0.1:{port}")), regs)
     }
 

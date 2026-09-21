@@ -267,11 +267,17 @@ impl AppState {
                 // Optimistic until the engine has seen decodes to judge from
                 // (the engine recomputes this from recent DT each snapshot).
                 time_sync_ok: true,
-                rf_power: None,  // engine fills from command/read-back
-                mic_gain: None,  // engine fills from command/read-back
-                af_gain: None,   // engine fills from command/read-back
-                rf_gain: None,   // engine fills from command/read-back
-                squelch: None,   // engine fills from command/read-back
+                rf_power: None,     // engine fills from command/read-back
+                mic_gain: None,     // engine fills from command/read-back
+                af_gain: None,      // engine fills from command/read-back
+                rf_gain: None,      // engine fills from command/read-back
+                squelch: None,      // engine fills from command/read-back
+                monitor: None,      // engine fills from the CAT MON func poll
+                monitor_gain: None, // engine fills from command/read-back
+                att_db: None,       // engine fills from the CAT ATT read-back
+                preamp_db: None,    // engine fills from the CAT PREAMP read-back
+                att_steps_db: None, // engine fills from the radio's own \dump_state
+                preamp_steps_db: None,
                 nr_level: None,  // engine fills from CAT NR-level read-back
                 agc: None,       // engine fills from CAT AGC read-back
                 smeter_db: None, // engine fills from CAT STRENGTH read-back

@@ -54,6 +54,16 @@ struct SatSplit {
 pub struct CivBackend {
     h: CivHandle,
     addr: u8,
+    /// WHICH Icom this is — needed because the preamp's wire byte is a POSITION in this
+    /// rig's own list, and the attenuator may only be offered the pads this rig has
+    /// ([`commands::preamp_steps_db`], [`commands::attenuator_steps_db`]).
+    ///
+    /// ⚠️ NOT derivable from [`Self::addr`], and that is the reason it is carried. The
+    /// CI-V address is user-changeable on the radio's own menu, so two operators can run
+    /// different rigs at the same address; a model inferred from the bus would eventually
+    /// hand an IC-7300 the 7610's 6/12/18 dB pads. `None` = an Icom this build has no step
+    /// list for, and then neither control is offered at all rather than guessed at.
+    model: Option<IcomModel>,
     /// When the dial was last READ from the radio (not merely cached). Bounds how long a
     /// timed-out `f` may serve the cache — see [`cache_fresh`].
     last_freq_ok: Mutex<Option<std::time::Instant>>,
@@ -96,10 +106,17 @@ fn cache_fresh(last_ok: Option<std::time::Instant>, now: std::time::Instant) -> 
 }
 
 impl CivBackend {
-    pub fn new(h: CivHandle, addr: u8, tx_intent: Arc<AtomicBool>, data_mode: u8) -> Self {
+    pub fn new(
+        h: CivHandle,
+        addr: u8,
+        tx_intent: Arc<AtomicBool>,
+        data_mode: u8,
+        model: Option<IcomModel>,
+    ) -> Self {
         CivBackend {
             h,
             addr,
+            model,
             last_freq_ok: Mutex::new(None),
             data_mode: std::sync::atomic::AtomicU8::new(data_mode.clamp(1, 3)),
             split: AtomicBool::new(false),
@@ -528,6 +545,20 @@ impl RigBackend for CivBackend {
         }
     }
 
+    /// The rig's own pads and preamps, so a client reading `\dump_state` learns which
+    /// values exist instead of trying them. Empty for a model this build has no list for —
+    /// see [`CivBackend::model`].
+    fn preamp_steps_db(&self) -> Vec<u8> {
+        self.model
+            .map(|m| commands::preamp_steps_db(m).to_vec())
+            .unwrap_or_default()
+    }
+    fn attenuator_steps_db(&self) -> Vec<u8> {
+        self.model
+            .map(|m| commands::attenuator_steps_db(m).to_vec())
+            .unwrap_or_default()
+    }
+
     fn level(&self, name: &str) -> Option<String> {
         match name {
             "STRENGTH" => {
@@ -566,6 +597,42 @@ impl RigBackend for CivBackend {
                 self.tx_meter(commands::METER_PO, commands::po_watts_from_raw, 1)
             }
             "COMP_METER" => self.tx_meter(commands::METER_COMP, commands::comp_db_from_raw, 1),
+            // ATTENUATOR and PREAMP — INTEGER DECIBELS, not the 0..1 fractions everything
+            // else on this surface deals in, and each on a register of its own. Both answer
+            // `None` (→ `RPRT -11`, and the poll then hides the control) when this build has
+            // no step list for the rig, because neither value can be interpreted without one.
+            "ATT" => {
+                let model = self.model?;
+                if commands::attenuator_steps_db(model).is_empty() {
+                    return None;
+                }
+                let f = self
+                    .read(
+                        commands::read_attenuator(self.addr),
+                        commands::ATT_CMD,
+                        None,
+                    )
+                    .ok()?;
+                Some(commands::parse_attenuator_db(&f)?.to_string())
+            }
+            // The rig answers with a POSITION; the operator is shown the LABEL that position
+            // has on THIS rig. A position the list cannot explain is no reading at all rather
+            // than a number passed through — see `preamp_db_for_index`.
+            "PREAMP" => {
+                let model = self.model?;
+                if commands::preamp_steps_db(model).is_empty() {
+                    return None;
+                }
+                let f = self
+                    .read(
+                        commands::read_preamp(self.addr),
+                        0x16,
+                        Some(commands::FUNC_PREAMP),
+                    )
+                    .ok()?;
+                let idx = commands::parse_preamp_index(&f)?;
+                Some(commands::preamp_db_for_index(model, idx)?.to_string())
+            }
             // AGC as the Hamlib enum int (OFF=0/FAST=2/SLOW=3/MEDIUM=5), translated from the rig's
             // Icom byte so the rigctld side stays Hamlib-native.
             "AGC" => {
@@ -608,6 +675,45 @@ impl RigBackend for CivBackend {
             "KEYSPD" => {
                 let wpm: u32 = value.parse().ok()?;
                 Some(self.ack(commands::set_keyer_speed_wpm(self.addr, wpm)))
+            }
+            // ⚠️ THE TWO INTEGER-DECIBEL LEVELS, and they must never reach the percent path
+            // below. `L ATT 12` down that path becomes "12 %" and then a level byte; the
+            // operator asks for a 12 dB pad and the radio is sent something else entirely.
+            //
+            // A value this rig has no step for is REFUSED (`Some(false)` → `RPRT -1`, "the
+            // rig said no"), never rounded to the nearest pad it does have: an attenuator is
+            // a list of a particular radio's own choices, and substituting a neighbour
+            // changes the front end by an amount nobody asked for. A value that is not a
+            // whole number of decibels is refused the same way rather than truncated — and
+            // refused rather than answered `None`, which would latch the whole control
+            // unsupported over one malformed line.
+            "ATT" => {
+                let model = self.model?;
+                let steps = commands::attenuator_steps_db(model);
+                if steps.is_empty() {
+                    return None;
+                }
+                let Ok(db) = value.trim().parse::<u8>() else {
+                    return Some(false);
+                };
+                if db != 0 && !steps.contains(&db) {
+                    return Some(false);
+                }
+                Some(self.ack(commands::set_attenuator_db(self.addr, db)))
+            }
+            "PREAMP" => {
+                let model = self.model?;
+                if commands::preamp_steps_db(model).is_empty() {
+                    return None;
+                }
+                let Ok(db) = value.trim().parse::<u8>() else {
+                    return Some(false);
+                };
+                // The LABEL the operator picked → the POSITION the rig is told to select.
+                let Some(idx) = commands::preamp_index_for_db(model, db) else {
+                    return Some(false);
+                };
+                Some(self.ack(commands::set_preamp_index(self.addr, idx)))
             }
             // The same `0x14 <sub>` family as the getter, off the same table.
             _ => commands::level_sub(name).and_then(|sub| self.set_dsp_level_pct(sub, value)),
@@ -809,6 +915,7 @@ impl CivDaemon {
         civ_addr: u8,
         tcp_port: u16,
         data_mode: u8,
+        model: Option<IcomModel>,
     ) -> std::io::Result<CivDaemon> {
         let engine = CivEngine::start(io, civ_addr);
         let listener = TcpListener::bind(("127.0.0.1", tcp_port))?;
@@ -819,6 +926,7 @@ impl CivDaemon {
             civ_addr,
             tx_intent.clone(),
             data_mode,
+            model,
         ));
         let tcp_stop = Arc::new(AtomicBool::new(false));
         let tcp_thread = {
@@ -882,6 +990,7 @@ impl CivDaemon {
         civ_addr: u8,
         tcp_port: u16,
         data_mode: u8,
+        model: Option<IcomModel>,
     ) -> std::io::Result<CivDaemon> {
         let mut port = serialport::new(port_name, baud)
             .timeout(super::engine::READ_TIMEOUT)
@@ -893,7 +1002,7 @@ impl CivDaemon {
         // `control_line::idle_both_lines`. (This path carries real data at the operator's
         // baud, so it cannot go through `open_control_line_port` and its baud ladder.)
         crate::control_line::idle_both_lines(&mut port);
-        Self::start_with_io(Box::new(port), civ_addr, tcp_port, data_mode)
+        Self::start_with_io(Box::new(port), civ_addr, tcp_port, data_mode, model)
     }
 
     /// The CI-V address to drive `model_name` at, when it's a native-capable Icom.
@@ -1059,7 +1168,8 @@ mod tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
         let (radio, _push) = FakeRadio::new(0xA2);
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1).unwrap();
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1, Some(IcomModel::Ic9700))
+            .unwrap();
         (d, port)
     }
 
@@ -1189,7 +1299,8 @@ mod tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
         let (radio, push) = FakeRadio::new(0xA2);
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1).unwrap();
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1, Some(IcomModel::Ic9700))
+            .unwrap();
 
         // A single-frame burst: 27 00 <main> <seq=1> <total=1>, then the header the assembler
         // requires — mode 00 (Center), centre frequency, ± half-width, out-of-range flag — then
@@ -1230,7 +1341,8 @@ mod tests {
         drop(probe);
         let (radio, _push) = FakeRadio::new(0xA2);
         let regs = radio.regs();
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1).unwrap();
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1, Some(IcomModel::Ic9700))
+            .unwrap();
         (d, port, regs)
     }
 
@@ -1516,7 +1628,8 @@ mod tests {
         let (radio, _push) = FakeRadio::new(0x94);
         let regs = radio.regs();
         regs.lock().unwrap().no_satmode = true;
-        let _d = CivDaemon::start_with_io(Box::new(radio), 0x94, port, 1).unwrap();
+        let _d = CivDaemon::start_with_io(Box::new(radio), 0x94, port, 1, Some(IcomModel::Ic7300))
+            .unwrap();
         let (mut c, mut rd) = client(port);
 
         assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT -1\n");
@@ -1671,7 +1784,13 @@ mod tests {
         let (radio, _push) = FakeRadio::new(0xA2);
         let regs = radio.regs();
         let engine = CivEngine::start(Box::new(radio), 0xA2);
-        let backend = CivBackend::new(engine.handle(), 0xA2, Arc::new(AtomicBool::new(false)), 1);
+        let backend = CivBackend::new(
+            engine.handle(),
+            0xA2,
+            Arc::new(AtomicBool::new(false)),
+            1,
+            Some(IcomModel::Ic9700),
+        );
 
         assert!(
             backend.set_mode("PKTFM", 0),
@@ -1723,6 +1842,7 @@ mod tests {
             0xA2,
             Arc::new(AtomicBool::new(false)),
             1,
+            Some(IcomModel::Ic9700),
         ));
         assert!(backend.set_freq(435_640_000));
         assert_eq!(backend.set_split(true, "Sub"), Some(true));
@@ -1749,5 +1869,174 @@ mod tests {
         let seen_uplink = poller.join().unwrap();
         assert!(!seen_uplink, "a dial poll must never serve the uplink");
         assert_eq!(backend.freq_hz(), 435_640_000);
+    }
+
+    /// THE THREE CONTROLS REACH THE RADIO AND COME BACK — monitor, attenuator, preamp, on
+    /// the IC-7610 because it is the rig whose pads and preamps have labels that are NOT
+    /// their wire bytes. Driven through the `RigBackend` surface the rigctld verbs land on,
+    /// with the fake radio's registers as the witness: what the operator asked for, what the
+    /// bus carried, and what the read gives back are three different questions here.
+    ///
+    /// ⚠️ THE ATTENUATOR IS NOT A FRACTION AND THE PREAMP IS NOT A DECIBEL COUNT. Both would
+    /// have "worked" through the generic 0..1 percent path — `L ATT 12` would have arrived as
+    /// full scale, `L PREAMP 12` as preamp twelve — and both would have moved the operator's
+    /// front end by an amount nobody asked for, which is worse than an unimplemented control.
+    #[test]
+    fn monitor_attenuator_and_preamp_reach_the_wire_and_read_back() {
+        let (radio, _push) = FakeRadio::new(0x98);
+        let regs = radio.regs();
+        let engine = CivEngine::start(Box::new(radio), 0x98);
+        let backend = CivBackend::new(
+            engine.handle(),
+            0x98,
+            Arc::new(AtomicBool::new(false)),
+            1,
+            Some(IcomModel::Ic7610),
+        );
+
+        // MONITOR on/off. This half was ALREADY reachable — `func_sub` has held `MON` =>
+        // 0x45 all along — and asserted here because nothing in the tree ever asked for it,
+        // which is indistinguishable from it not working.
+        assert_eq!(backend.set_func("MON", true), Some(true));
+        assert_eq!(backend.func("MON"), Some(true));
+        assert_eq!(backend.set_func("MON", false), Some(true));
+        assert_eq!(backend.func("MON"), Some(false));
+
+        // MONITOR GAIN — a 0..1 fraction on the level family, like AF/RF/SQL.
+        // ⚠️ THREE DISAGREEING VALUES: one setting proves nothing about which register the
+        // payload reached, because every level in this family takes the same shape.
+        for (frac, raw) in [("0.25", 63u16), ("0.50", 127), ("1.00", 255)] {
+            assert_eq!(backend.set_level("MONITOR_GAIN", frac), Some(true));
+            let sent = regs
+                .lock()
+                .unwrap()
+                .log
+                .iter()
+                .rev()
+                .find(|(c, d)| *c == 0x14 && d.first() == Some(&0x15))
+                .map(|(_, d)| {
+                    commands::parse_dsp_level_raw(
+                        &crate::civ::frame::Frame {
+                            to: 0xE0,
+                            from: 0x98,
+                            cmd: 0x14,
+                            data: d.clone(),
+                        },
+                        0x15,
+                    )
+                })
+                .expect("a 14 15 frame on the bus");
+            assert_eq!(sent, Some(raw), "MONITOR_GAIN {frac}");
+        }
+
+        // ATTENUATOR — the operator's dB in, BCD dB on the bus, the same dB back out.
+        // The IC-7610's three pads are what make this a real test: 6 dB encodes identically
+        // under BCD and raw hex, 12 and 18 do not.
+        for (db, wire) in [(6u8, 0x06u8), (12, 0x12), (18, 0x18), (0, 0x00)] {
+            assert_eq!(
+                backend.set_level("ATT", &db.to_string()),
+                Some(true),
+                "set ATT {db}"
+            );
+            assert_eq!(regs.lock().unwrap().att_raw, wire, "ATT {db} dB on the bus");
+            assert_eq!(
+                backend.level("ATT").as_deref(),
+                Some(db.to_string().as_str()),
+                "read ATT {db} back"
+            );
+        }
+        // A pad this rig does not have is REFUSED, not rounded to a neighbour. 10 dB is the
+        // IC-9700's pad, not the 7610's — quietly substituting 12 would attenuate by an
+        // amount the operator did not choose.
+        assert_eq!(
+            backend.set_level("ATT", "10"),
+            Some(false),
+            "10 dB is not a 7610 pad"
+        );
+        assert_eq!(
+            regs.lock().unwrap().att_raw,
+            0x00,
+            "a refused pad never reaches the bus"
+        );
+
+        // PREAMP — the LABEL goes in, the POSITION goes on the bus, the LABEL comes back.
+        for (db, idx) in [(12u8, 1u8), (20, 2), (0, 0)] {
+            assert_eq!(
+                backend.set_level("PREAMP", &db.to_string()),
+                Some(true),
+                "set PREAMP {db}"
+            );
+            assert_eq!(
+                regs.lock()
+                    .unwrap()
+                    .funcs
+                    .get(&commands::FUNC_PREAMP)
+                    .copied(),
+                Some(idx),
+                "PREAMP {db} dB selects position {idx}"
+            );
+            assert_eq!(
+                backend.level("PREAMP").as_deref(),
+                Some(db.to_string().as_str()),
+                "read PREAMP {db} back"
+            );
+        }
+        // ⭐ AND THE POSITION IS NEVER THE DECIBELS. Stated as its own assertion because an
+        // implementation that sent the dB straight through passes every "12 goes in, 12
+        // comes out" round trip while asking the radio for a preamp it does not have.
+        assert_ne!(
+            regs.lock()
+                .unwrap()
+                .funcs
+                .get(&commands::FUNC_PREAMP)
+                .copied(),
+            Some(12),
+            "the bus carries the preamp's position, never its label"
+        );
+        assert_eq!(
+            backend.set_level("PREAMP", "10"),
+            Some(false),
+            "not a 7610 preamp"
+        );
+    }
+
+    /// A RIG WITH NO STEP LIST OFFERS NEITHER CONTROL, rather than a guessed one. The IC-905
+    /// has no Hamlib backend to read pads off (NEEDS-BENCH), and `None` is what a build that
+    /// does not know the model carries. Both must answer "unimplemented" — `None`, which the
+    /// rigctld layer turns into `RPRT -11` and the poll latches as unsupported, so the
+    /// control disappears instead of moving the wrong thing.
+    #[test]
+    fn an_unknown_model_offers_no_attenuator_or_preamp_at_all() {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let engine = CivEngine::start(Box::new(radio), 0xA2);
+        let backend = CivBackend::new(
+            engine.handle(),
+            0xA2,
+            Arc::new(AtomicBool::new(false)),
+            1,
+            None,
+        );
+
+        assert_eq!(backend.set_level("ATT", "12"), None);
+        assert_eq!(backend.level("ATT"), None);
+        assert_eq!(backend.set_level("PREAMP", "12"), None);
+        assert_eq!(backend.level("PREAMP"), None);
+        // Nothing was put on the bus for either.
+        let r = regs.lock().unwrap();
+        assert!(
+            !r.log
+                .iter()
+                .any(|(c, d)| *c == 0x11
+                    || (*c == 0x16 && d.first() == Some(&commands::FUNC_PREAMP))),
+            "an unknown model must not command a register it cannot interpret"
+        );
+        // ⭐ THE POSITIVE CONTROL: the monitor is model-INDEPENDENT (a bare on/off on a
+        // register every rig in the family shares), so it must still work here. Without it
+        // this test would pass just as well against a backend that had gone entirely deaf.
+        drop(r);
+        assert_eq!(backend.set_func("MON", true), Some(true));
+        assert_eq!(backend.func("MON"), Some(true));
+        assert_eq!(backend.set_level("MONITOR_GAIN", "0.50"), Some(true));
     }
 }

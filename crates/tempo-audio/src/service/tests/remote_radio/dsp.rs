@@ -37,7 +37,7 @@ fn remote_dsp_uses_the_actual_owner_and_does_not_reconcile_back_to_old_native_ch
             e.agc_to_command();
             s.state.last_agc = Some("fast".into());
             e.observe_rig_agc("fast".into());
-            e.observe_rig_funcs([Some(false); 6]);
+            e.observe_rig_funcs([Some(false); 7]);
             e.remote_observe_mode(Some(&read), Some("LSB"));
             let connection = e
                 .remote_monitor_observation()
@@ -124,7 +124,7 @@ fn remote_dsp_unknown_write_never_enters_the_native_retry_path() {
             e.agc_to_command();
             s.state.last_agc = Some("fast".into());
             e.observe_rig_agc("fast".into());
-            e.observe_rig_funcs([Some(false); 6]);
+            e.observe_rig_funcs([Some(false); 7]);
             let connection = e
                 .remote_monitor_observation()
                 .radio

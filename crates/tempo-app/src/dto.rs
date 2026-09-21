@@ -776,6 +776,34 @@ pub struct RadioStatus {
     /// deaf to the decoder everywhere else. `None` when the rig doesn't report it.
     #[serde(default)]
     pub squelch: Option<f32>,
+    /// TRANSMIT MONITOR on/off — the rig playing your own audio back while you talk
+    /// (Hamlib `MON`). `None` when the rig doesn't report it, so the toggle hides.
+    #[serde(default)]
+    pub monitor: Option<bool>,
+    /// …and how loud it plays it (0.0–1.0, Hamlib `MONITOR_GAIN`). ⚠️ NOT `af_gain`: this
+    /// one is heard only while transmitting and can never silence a decoder.
+    #[serde(default)]
+    pub monitor_gain: Option<f32>,
+    /// ATTENUATOR in whole dB (`0` = off), read back from the rig; `None` = not reported.
+    /// ⚠️ NOT a 0..1 fraction like the levels above — an input pad is decibels.
+    #[serde(default)]
+    pub att_db: Option<u8>,
+    /// PREAMP by the dB label this radio gives it (`0` = off). On an Icom the labels are
+    /// `1`/`2` (P.AMP1/P.AMP2) rather than real decibels — they are names, not gains.
+    #[serde(default)]
+    pub preamp_db: Option<u8>,
+    /// ⭐ THE PADS AND PREAMPS THIS RADIO ACTUALLY HAS, ascending, without the implicit `0`
+    /// (off) every rig has — read from the radio's own `\dump_state`.
+    ///
+    /// ⚠️ AN ATTENUATOR IS A LIST, NOT A SLIDER, and the lists differ by rig (an IC-7300
+    /// has one 20 dB pad; an IC-7610 has 6/12/18). `None` = the radio never told us, and
+    /// the UI must then offer NO control: a step that is not on the rig gets NAKed or
+    /// silently rounded, and either way the front end moves by an amount the operator did
+    /// not choose. An EMPTY list is the different, positive answer — no pad fitted.
+    #[serde(default)]
+    pub att_steps_db: Option<Vec<u8>>,
+    #[serde(default)]
+    pub preamp_steps_db: Option<Vec<u8>>,
     /// AGC time constant as "fast"|"mid"|"slow"; `None` when the rig doesn't report it.
     #[serde(default)]
     pub agc: Option<String>,

@@ -55,6 +55,20 @@ pub trait RigBackend: Send + Sync {
     fn rx_ranges(&self) -> Option<Vec<(u64, u64)>> {
         None
     }
+    /// The radio's PREAMP steps and ATTENUATOR pads, in dB, for `\dump_state` — ascending,
+    /// and WITHOUT the implicit `0` (off) every rig has. Empty (the default) means "this
+    /// backend declares none", which is what a client must read as "offer no such control".
+    ///
+    /// ⚠️ These are not cosmetic capability flags: an attenuator is the handful of pads a
+    /// PARTICULAR radio has, and a client that guessed a ladder would command a pad the rig
+    /// does not own — NAKed, or silently rounded to a neighbour. Declaring them is how the
+    /// client learns which values exist without trying them on the air.
+    fn preamp_steps_db(&self) -> Vec<u8> {
+        Vec::new()
+    }
+    fn attenuator_steps_db(&self) -> Vec<u8> {
+        Vec::new()
+    }
     // ---- extended verbs (the full surface Nexus's own `Rig` client uses) ----
     /// Read a level (`l NAME`). Return the reply VALUE line(s) without trailing newline
     /// (e.g. `"-12"` for STRENGTH dB, `"0.50"` for RFPOWER 0..1).
@@ -161,12 +175,15 @@ const DUMP_STATE: &str = concat!(
     "0\n",                                                // announces
     "0\n",                                                // preamp list (empty)
     "0\n",                                                // attenuator list (empty)
-    "0x0\n",                                              // has_get_func
-    "0x0\n",                                              // has_set_func
-    "0x0\n",                                              // has_get_level
-    "0x0\n",                                              // has_set_level
-    "0x0\n",                                              // has_get_parm
-    "0x0\n",                                              // has_set_parm
+    // ⚠️ THE TWO LINES ABOVE ARE POSITIONAL and adjacent — preamp FIRST, attenuator
+    // second, per Hamlib's own `dump_state`. `dump_state()` below substitutes a backend's
+    // real lists here by counting lines, so their order and their neighbours are data.
+    "0x0\n", // has_get_func
+    "0x0\n", // has_set_func
+    "0x0\n", // has_get_level
+    "0x0\n", // has_set_level
+    "0x0\n", // has_get_parm
+    "0x0\n", // has_set_parm
 );
 
 /// The `\dump_state` reply for `backend`.
@@ -176,8 +193,21 @@ const DUMP_STATE: &str = concat!(
 /// NET-rigctl client (WSJT-X) must be allowed to set any freq/mode, and a client reading these
 /// ranges as capability must therefore see "covers everything" rather than a guess.
 fn dump_state(backend: &dyn RigBackend) -> String {
-    let Some(ranges) = backend.rx_ranges().filter(|r| !r.is_empty()) else {
+    let ranges = backend.rx_ranges().filter(|r| !r.is_empty());
+    let preamp = backend.preamp_steps_db();
+    let att = backend.attenuator_steps_db();
+    if ranges.is_none() && preamp.is_empty() && att.is_empty() {
         return DUMP_STATE.to_string();
+    }
+    // Hamlib prints a db list as its values space-separated, each followed by a space, and
+    // ends it with the newline — no count, no terminator value. An ABSENT list keeps the
+    // `0` the constant already shipped, which Hamlib's own reader takes as end-of-list.
+    let db_line = |v: &[u8]| {
+        if v.is_empty() {
+            "0".to_string()
+        } else {
+            v.iter().map(|d| format!("{d} ")).collect()
+        }
     };
     let mut out = String::with_capacity(DUMP_STATE.len());
     let mut lines = DUMP_STATE.lines();
@@ -186,13 +216,20 @@ fn dump_state(backend: &dyn RigBackend) -> String {
         out.push_str(lines.next().unwrap_or("0"));
         out.push('\n');
     }
-    for (lo, hi) in ranges {
-        // Same 7 fields Hamlib emits: start end modes low_power high_power vfo ant.
-        out.push_str(&format!("{lo} {hi} 0xffffffff -1 -1 0x3 0x0\n"));
+    if let Some(ranges) = ranges.as_ref() {
+        for (lo, hi) in ranges {
+            // Same 7 fields Hamlib emits: start end modes low_power high_power vfo ant.
+            out.push_str(&format!("{lo} {hi} 0xffffffff -1 -1 0x3 0x0\n"));
+        }
     }
-    // Skip the default RX rows (up to and including their all-zero terminator), keep the rest.
-    let mut in_rx = true;
-    for line in lines {
+    // Walk the rest of the constant. The RX rows are dropped only when the backend supplied
+    // its own; the two db lines are substituted by POSITION — they are the 5th and 4th lines
+    // from the end, which is why they are counted from the tail rather than matched by text
+    // (both currently read "0", and so do max_ifshift and announces just above them).
+    let rest: Vec<&str> = lines.collect();
+    let db_at = rest.len().saturating_sub(8); // …, preamp, att, then the six has_* masks
+    let mut in_rx = ranges.is_some();
+    for (i, line) in rest.iter().enumerate() {
         if in_rx {
             if line.trim() == "0 0 0 0 0 0 0" {
                 in_rx = false;
@@ -200,7 +237,11 @@ fn dump_state(backend: &dyn RigBackend) -> String {
             }
             continue;
         }
-        out.push_str(line);
+        match i {
+            _ if i == db_at => out.push_str(&db_line(&preamp)),
+            _ if i == db_at + 1 => out.push_str(&db_line(&att)),
+            _ => out.push_str(line),
+        }
         out.push('\n');
     }
     out
@@ -1364,6 +1405,86 @@ pub(crate) mod tests {
         assert!(lines.contains(&"0 0"), "ts/filter terminator present");
         // Every line parses as the expected token shape (no stray text).
         assert!(lines[3].split_whitespace().count() == 7);
+    }
+
+    /// ⭐ THE STEP LISTS REACH A CLIENT. A rig's attenuator pads and preamps are per-rig
+    /// facts, and `\dump_state` is the one machine-readable place a client can learn them
+    /// without commanding the radio and seeing what happens. The broker declared neither —
+    /// both lines were a hard `0` — so a native-CI-V operator's client had no way to know
+    /// the radio even had a pad.
+    ///
+    /// The round trip is against [`crate::rig::parse_dump_state_db_lists`], and that is the
+    /// point rather than a shortcut: that parser is itself pinned to REAL `\dump_state`
+    /// replies captured from Hamlib's own `rigctld` (`tests/fixtures/dump_state_ic*.txt`),
+    /// so agreeing with it is agreeing with Hamlib's format — not with our own opinion of it.
+    #[test]
+    fn dump_state_declares_the_backends_attenuator_and_preamp_steps() {
+        struct Stepped;
+        impl RigBackend for Stepped {
+            fn freq_hz(&self) -> u64 {
+                14_074_000
+            }
+            fn mode(&self) -> (String, u32) {
+                ("USB".into(), 2400)
+            }
+            fn ptt(&self) -> bool {
+                false
+            }
+            fn set_freq(&self, _hz: u64) -> bool {
+                true
+            }
+            fn set_mode(&self, _m: &str, _p: u32) -> bool {
+                true
+            }
+            fn set_ptt(&self, _on: bool) -> bool {
+                true
+            }
+            // The IC-7610's real lists — two steps and three, so neither can stand in for
+            // the other and a transposition is visible.
+            fn preamp_steps_db(&self) -> Vec<u8> {
+                vec![12, 20]
+            }
+            fn attenuator_steps_db(&self) -> Vec<u8> {
+                vec![6, 12, 18]
+            }
+        }
+
+        let ds = reply("\\dump_state", &Stepped);
+        let parsed = crate::rig::parse_dump_state_db_lists(&ds)
+            .expect("our own dump_state must parse as a dump_state");
+        assert_eq!(parsed.preamp_db, vec![12, 20]);
+        assert_eq!(parsed.attenuator_db, vec![6, 12, 18]);
+
+        // POSITION, asserted directly as well as through the parser: the two lists are
+        // adjacent, preamp first, and they sit between `announces` and the six has_* masks.
+        // Every one of those neighbours currently reads "0" or "0x0", so a one-line slip
+        // produces a dump that still LOOKS well formed.
+        let lines: Vec<&str> = ds.lines().collect();
+        let pre = lines
+            .iter()
+            .position(|l| l.trim() == "12 20")
+            .expect("the preamp list is in the dump");
+        assert_eq!(
+            lines[pre + 1].trim(),
+            "6 12 18",
+            "attenuator follows preamp"
+        );
+        assert_eq!(lines[pre - 1].trim(), "0", "announces precedes it");
+        assert!(
+            lines[pre + 2].starts_with("0x"),
+            "the has_get_func mask follows the attenuator, got {:?}",
+            lines[pre + 2]
+        );
+
+        // ⭐ THE REGRESSION GUARD. A backend that declares NEITHER must emit the dump it
+        // always emitted, unchanged — this reply is what a NET-rigctl client (WSJT-X) reads
+        // to decide the rig is usable at all, and it is the one part of this module with no
+        // local test rig to validate it against.
+        assert_eq!(
+            reply("\\dump_state", &MockRig::default()),
+            DUMP_STATE,
+            "a backend with no steps must not perturb the shipped dump"
+        );
     }
 
     #[test]

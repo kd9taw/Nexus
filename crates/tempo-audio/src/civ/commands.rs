@@ -357,6 +357,16 @@ pub const LVL_SQL: u8 = 0x03;
 /// a long time under `COMP_METER`. `16 44` ([`func_sub`]) switches the processor on; without
 /// this level there was no way to say how hard it should work.
 pub const LVL_COMP: u8 = 0x0E;
+/// TRANSMIT-MONITOR GAIN — how loud the rig plays your own transmitted audio back to you
+/// while you are talking. The on/off half of this control was already here as the `MON`
+/// func (`16 45`, [`func_sub`]); this is its volume, on the `0x14` family like every other
+/// fraction. From the same capture: `L MONITOR_GAIN 0.25` -> `14 15 00 63`, `0.5` ->
+/// `14 15 01 27`, `1.0` -> `14 15 02 55`, read `l MONITOR_GAIN` -> `14 15`.
+///
+/// ⚠️ NOT the AF gain. [`LVL_AF`] is the receiver's volume; this one is only heard while
+/// transmitting, and turning it down does not quieten the received audio a decoder listens
+/// to. The two are adjacent knobs on the front panel and adjacent bytes on the bus.
+pub const LVL_MONITOR_GAIN: u8 = 0x15;
 
 /// Hamlib level token → its `0x14` sub-command, for the fractional 0..1 levels the generic
 /// [`set_dsp_level`] / [`read_dsp_level`] pair serves. One table shared by the broker's
@@ -382,6 +392,7 @@ pub fn level_sub(token: &str) -> Option<u8> {
         "NR" => LVL_NR,
         "NB" => LVL_NB,
         "COMP" => LVL_COMP,
+        "MONITOR_GAIN" => LVL_MONITOR_GAIN,
         _ => return None,
     })
 }
@@ -402,6 +413,112 @@ pub fn parse_dsp_level_raw(f: &Frame, sub: u8) -> Option<u16> {
     } else {
         None
     }
+}
+
+/// ATTENUATOR — the receiver's input pad, on its OWN CI-V command rather than the `0x14`
+/// level family, one byte carrying the attenuation **in BCD decibels** (`0x00` = off).
+///
+/// ⚠️ BCD, NOT RAW HEX, AND NOT A FRACTION. `L ATT 12` puts `11 12` on the wire, where
+/// `0x12` reads as twelve. A raw-hex encoder would send `11 0c` and pad the receiver by
+/// some other amount; a 0..1 fraction (the shape every other level here has) would send
+/// nothing meaningful at all. Captured from Hamlib 4.5.5's own Icom backend against a pty
+/// at the IC-7610's address, whose three-step pad is what tells the two encodings apart:
+/// `L ATT 6` -> `11 06`, `L ATT 12` -> `11 12`, `L ATT 18` -> `11 18`, `L ATT 0` -> `11 00`.
+pub const ATT_CMD: u8 = 0x11;
+/// PREAMP — on the `0x16` family but **deliberately not a [`func_sub`] entry**: that table
+/// feeds [`parse_dsp_func`], which answers a bool, and a preamp has three states (off,
+/// P.AMP1, P.AMP2). The payload byte is the preamp's POSITION, not its decibels — see
+/// [`preamp_index_for_db`].
+pub const FUNC_PREAMP: u8 = 0x02;
+
+/// The attenuator pads this rig actually has, in dB, ascending. `0` (off) is NOT in the
+/// list: every rig has it, and it is the implicit first position.
+///
+/// Read off Hamlib 4.5.5's own backend for each rig (`rigctl -m <model> 1`, the
+/// `Attenuator:` line — the `rig_caps.attenuator[]` array its `\dump_state` also emits),
+/// not transcribed from a manual. An attenuator is a LIST, not a slider: offering a rig a
+/// value it does not own gets the command NAKed or silently rounded to a neighbour.
+///
+/// ⛔ The IC-905 is empty because Hamlib 4.5.5 has no IC-905 backend to read it from
+/// (`-m 3095` returns no caps at all). An empty list renders no control, which degrades
+/// honestly; a guessed one would move the operator's front end by the wrong amount.
+/// NEEDS-BENCH (IC-905).
+pub fn attenuator_steps_db(model: IcomModel) -> &'static [u8] {
+    match model {
+        IcomModel::Ic7300 | IcomModel::Ic705 => &[20],
+        IcomModel::Ic9700 => &[10],
+        IcomModel::Ic7610 => &[6, 12, 18],
+        IcomModel::Ic905 => &[],
+    }
+}
+
+/// The preamps this rig has, by the label Hamlib gives each one, in list order. Same source
+/// and same exclusion of `0` as [`attenuator_steps_db`].
+///
+/// ⚠️ The 7300-family labels are `1` and `2` because they are Icom's P.AMP1/P.AMP2
+/// SELECTORS carried in Hamlib's dB-labelled array — they are names, not gains. The IC-7610
+/// labels its two `12` and `20`, which really are decibels. Nothing here may treat a label
+/// as a number to send: [`preamp_index_for_db`] looks it up.
+pub fn preamp_steps_db(model: IcomModel) -> &'static [u8] {
+    match model {
+        IcomModel::Ic7300 | IcomModel::Ic705 | IcomModel::Ic9700 => &[1, 2],
+        IcomModel::Ic7610 => &[12, 20],
+        IcomModel::Ic905 => &[],
+    }
+}
+
+/// Set the attenuator to `db` dB (0 = off). The caller is responsible for offering only
+/// values from [`attenuator_steps_db`]; this encodes whatever it is given.
+pub fn set_attenuator_db(radio: u8, db: u8) -> Frame {
+    Frame::command(radio, ATT_CMD, &[to_bcd(db)])
+}
+/// Read the attenuator setting (`11`, no payload) — the reply carries the dB in BCD.
+pub fn read_attenuator(radio: u8) -> Frame {
+    Frame::command(radio, ATT_CMD, &[])
+}
+/// Extract the attenuation in dB from an `11` reply.
+pub fn parse_attenuator_db(f: &Frame) -> Option<u8> {
+    (f.cmd == ATT_CMD)
+        .then(|| f.data.first().map(|&b| from_bcd(b)))
+        .flatten()
+}
+
+/// Set the preamp by its POSITION in the rig's list (0 = off, 1 = first preamp, …).
+/// Translate an operator-facing label with [`preamp_index_for_db`] first.
+pub fn set_preamp_index(radio: u8, idx: u8) -> Frame {
+    Frame::command(radio, 0x16, &[FUNC_PREAMP, idx])
+}
+/// Read the preamp selection (`16 02`) — the reply carries the position.
+pub fn read_preamp(radio: u8) -> Frame {
+    Frame::command(radio, 0x16, &[FUNC_PREAMP])
+}
+/// Extract the preamp position from a `16 02` reply.
+pub fn parse_preamp_index(f: &Frame) -> Option<u8> {
+    if f.cmd == 0x16 && f.data.first() == Some(&FUNC_PREAMP) {
+        f.data.get(1).copied()
+    } else {
+        None
+    }
+}
+
+/// A preamp LABEL (what the operator picked) → the POSITION to put on the wire, for this
+/// rig. `0` is off on every rig; a label this rig does not have is `None` rather than a
+/// nearest match — a preamp is a list of the rig's own choices, and quietly substituting a
+/// neighbour changes the front end by an amount nobody asked for.
+pub fn preamp_index_for_db(model: IcomModel, db: u8) -> Option<u8> {
+    if db == 0 {
+        return Some(0);
+    }
+    let i = preamp_steps_db(model).iter().position(|&v| v == db)?;
+    u8::try_from(i + 1).ok()
+}
+/// The inverse of [`preamp_index_for_db`]: a position read back off the rig → the label to
+/// show. `None` for a position this rig's list cannot explain.
+pub fn preamp_db_for_index(model: IcomModel, idx: u8) -> Option<u8> {
+    if idx == 0 {
+        return Some(0);
+    }
+    preamp_steps_db(model).get(usize::from(idx) - 1).copied()
 }
 
 /// AGC time constant (`16 12`), one byte. On the IC-7300/9700/705 family: 00=off, 01=FAST,
@@ -1121,5 +1238,216 @@ mod tests {
             data: f.data.clone(),
         };
         assert_eq!(parse_rf_power_raw(&reply), Some(127)); // 50% of 255
+    }
+
+    /// THE TRANSMIT MONITOR'S GAIN. `16 45` ([`func_sub`]) already switched the monitor on —
+    /// it was in this table and nothing ever asked for it — but a monitor with no volume is
+    /// a speaker you cannot turn down while you are talking into the microphone.
+    ///
+    /// Captured the way [`LVL_AF`] and [`LVL_COMP`] were: Hamlib 4.5.5's own Icom backend
+    /// driven against a pty at the IC-7300's address (`rigctl -m 3073`), frames off the wire —
+    /// `L MONITOR_GAIN 0.25` -> `14 15 00 63`, `0.5` -> `14 15 01 27`, `1.0` -> `14 15 02 55`,
+    /// and the read `l MONITOR_GAIN` -> `14 15`. Reproduced at the IC-7610's address
+    /// (`-m 3078`, `98` on the bus) so the register is the family's and not one rig's.
+    #[test]
+    fn the_monitor_gain_level_is_the_byte_hamlibs_icom_backend_puts_on_the_wire() {
+        assert_eq!(LVL_MONITOR_GAIN, 0x15);
+        assert_eq!(
+            level_sub("MONITOR_GAIN"),
+            Some(LVL_MONITOR_GAIN),
+            "MONITOR_GAIN sub-command"
+        );
+        // ⚠️ THREE DIFFERENT GAINS, so the payload identifies the register it came from.
+        // One value driven through all of them is inert: MONITOR_GAIN and COMP transposed
+        // would produce an identical frame at every single setting and pass.
+        for (percent, bcd) in [(25u8, 63u16), (50, 127), (100, 255)] {
+            let f = set_dsp_level(0xA2, level_sub("MONITOR_GAIN").unwrap(), percent);
+            assert_eq!(f.cmd, 0x14);
+            assert_eq!(
+                f.data[0], 0x15,
+                "monitor gain must not ride another level's register"
+            );
+            assert_eq!(
+                level_from_bcd2(f.data[1], f.data[2]),
+                bcd,
+                "MONITOR_GAIN {percent}%"
+            );
+        }
+        assert_eq!(read_dsp_level(0xA2, LVL_MONITOR_GAIN).data, vec![0x15]);
+        // THE POSITIVE CONTROL: the same capture reproduced the constants this file already
+        // held — `14 0a` RFPOWER, `14 0b` MICGAIN, `14 06` NR, `14 0e` COMP and the four
+        // `0x16` funcs — which is what makes the new byte evidence rather than recollection.
+        assert_eq!(level_sub("NR"), Some(0x06));
+        assert_eq!(level_sub("COMP"), Some(0x0E));
+        assert_eq!(set_rf_power(0xA2, 50).data[0], 0x0A);
+        assert_eq!(set_mic_gain(0xA2, 50).data[0], 0x0B);
+        for (token, sub) in [("ANF", 0x41u8), ("NB", 0x22), ("COMP", 0x44), ("MON", 0x45)] {
+            assert_eq!(func_sub(token), Some(sub), "{token} sub-command");
+        }
+        // The MONITOR is a FUNC and its GAIN is a LEVEL: two registers, two families. A
+        // table answering one with the other's byte would move the wrong control silently.
+        assert_ne!(
+            u16::from(LVL_MONITOR_GAIN),
+            u16::from(func_sub("MON").unwrap()),
+            "the monitor's gain must not ride its on/off register"
+        );
+        assert_eq!(func_sub("MONITOR_GAIN"), None); // a level, never a func
+    }
+
+    /// ⚠️ THE ATTENUATOR IS DECIBELS IN BCD, AND THE OBVIOUS READING OF THE BYTE IS WRONG.
+    /// It is not a 0..1 fraction and it is not the dB as a plain integer: `L ATT 12` puts
+    /// `11 12` on the wire, where `0x12` is BCD twelve. A raw-hex encoder would send `11 0c`
+    /// and a twelve-dB pad would arrive as something else entirely.
+    ///
+    /// Established by capture, not by recall: Hamlib 4.5.5's own Icom backend against a pty.
+    /// ⭐ The IC-7610 (`-m 3078`) is what proves the encoding, because it is the one rig here
+    /// with a THREE-STEP pad — `L ATT 6` -> `11 06`, `L ATT 12` -> `11 12`, `L ATT 18` ->
+    /// `11 18`. Under raw hex those would have been `06`/`0c`/`12`; two of the three differ,
+    /// so the three values discriminate the encodings where any one of them alone could not.
+    /// `L ATT 0` -> `11 00` (off) and the read `l ATT` -> a bare `11`.
+    ///
+    /// The attenuator also has its OWN command (`0x11`), not a `0x14` level sub-command, so
+    /// it cannot go through [`set_dsp_level`]'s percent path at all.
+    #[test]
+    fn the_attenuator_is_bcd_decibels_on_its_own_command() {
+        // The three steps the IC-7610 actually has, and the byte each one produces.
+        for (db, wire) in [(0u8, 0x00u8), (6, 0x06), (12, 0x12), (18, 0x18)] {
+            let f = set_attenuator_db(0x98, db);
+            assert_eq!(f.cmd, 0x11, "the attenuator has its own CI-V command");
+            assert_eq!(f.data, vec![wire], "ATT {db} dB");
+        }
+        // ⭐ THE DISCRIMINATOR, stated as its own assertion: BCD and raw hex AGREE on 6 dB
+        // and DISAGREE on 12 and 18. A test driven only at 6 dB would pass either way.
+        assert_eq!(set_attenuator_db(0x98, 12).data, vec![0x12]);
+        assert_ne!(
+            set_attenuator_db(0x98, 12).data,
+            vec![12],
+            "12 dB is BCD 0x12, not raw 0x0c — a raw-hex encoder pads by the wrong amount"
+        );
+        // Read frame carries no payload, and a reply decodes back to the dB.
+        assert_eq!(read_attenuator(0x98).data, Vec::<u8>::new());
+        let reply = Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x11, 0x18, 0xFD]).unwrap();
+        assert_eq!(parse_attenuator_db(&reply), Some(18));
+        // A frame from a different register is not an attenuator reading.
+        let other = Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x14, 0x06, 0x01, 0x27, 0xFD]).unwrap();
+        assert_eq!(parse_attenuator_db(&other), None);
+        // And it is NOT a 0x14 level: nothing may route it into the percent path, which
+        // would turn 12 dB into "12%" and then into full scale.
+        assert_eq!(level_sub("ATT"), None);
+        assert_eq!(func_sub("ATT"), None);
+    }
+
+    /// ⚠️ THE PREAMP'S WIRE BYTE IS A LIST POSITION, NOT A DECIBEL COUNT — which is why the
+    /// per-rig step list is load-bearing rather than decoration.
+    ///
+    /// Captured against a pty from Hamlib 4.5.5's own Icom backend at two addresses. On the
+    /// IC-7300 (`-m 3073`) whose preamps Hamlib labels `1` and `2`: `L PREAMP 1` -> `16 02 01`,
+    /// `L PREAMP 2` -> `16 02 02`, `L PREAMP 0` -> `16 02 00`. That capture alone is
+    /// ambiguous — the label and the index are the same number. ⭐ The IC-7610 (`-m 3078`),
+    /// whose preamps are labelled `12` and `20` dB, settles it: `L PREAMP 12` -> `16 02 01`
+    /// and `L PREAMP 20` -> `16 02 02`. The rig is told WHICH preamp, and the operator's dB
+    /// is only a label that must be looked up in that rig's own list.
+    ///
+    /// So the preamp rides the `0x16` family but is NOT a [`func_sub`] entry: that table
+    /// feeds [`parse_dsp_func`], which answers a bool, and this control has three states.
+    #[test]
+    fn the_preamp_is_a_list_index_not_a_decibel_count() {
+        for (idx, wire) in [(0u8, 0x00u8), (1, 0x01), (2, 0x02)] {
+            let f = set_preamp_index(0x98, idx);
+            assert_eq!(f.cmd, 0x16);
+            assert_eq!(f.data, vec![FUNC_PREAMP, wire], "preamp index {idx}");
+        }
+        assert_eq!(read_preamp(0x98).data, vec![FUNC_PREAMP]);
+        let reply = Frame::parse(&[0xFE, 0xFE, 0xE0, 0x98, 0x16, 0x02, 0x02, 0xFD]).unwrap();
+        assert_eq!(parse_preamp_index(&reply), Some(2));
+        // ⭐ THE TRANSLATION, at the rig where label and index DISAGREE. 12 dB is the
+        // IC-7610's FIRST preamp, so the wire byte is 1 — an implementation that sent the
+        // decibels would ask for preamp twelve, which does not exist.
+        assert_eq!(preamp_index_for_db(IcomModel::Ic7610, 12), Some(1));
+        assert_eq!(preamp_index_for_db(IcomModel::Ic7610, 20), Some(2));
+        assert_ne!(
+            preamp_index_for_db(IcomModel::Ic7610, 12),
+            Some(12),
+            "the wire carries the preamp's POSITION, never its decibels"
+        );
+        // Off is off on every rig, and a label this rig does not have is refused rather
+        // than rounded to a neighbour — a preamp is a list, not a slider.
+        assert_eq!(preamp_index_for_db(IcomModel::Ic7610, 0), Some(0));
+        assert_eq!(preamp_index_for_db(IcomModel::Ic7610, 10), None);
+        // Round trip, so the getter and the setter cannot disagree about the same rig.
+        assert_eq!(preamp_db_for_index(IcomModel::Ic7610, 1), Some(12));
+        assert_eq!(preamp_db_for_index(IcomModel::Ic7610, 2), Some(20));
+        assert_eq!(preamp_db_for_index(IcomModel::Ic7610, 0), Some(0));
+        assert_eq!(preamp_db_for_index(IcomModel::Ic7610, 3), None);
+        // The 7300's list makes label and index coincide; that is the case that hides the
+        // bug, so it is asserted beside the one that exposes it.
+        assert_eq!(preamp_index_for_db(IcomModel::Ic7300, 2), Some(2));
+        assert_eq!(preamp_db_for_index(IcomModel::Ic7300, 2), Some(2));
+        // It is not a bool func and not a 0x14 level.
+        assert_eq!(func_sub("PREAMP"), None);
+        assert_eq!(level_sub("PREAMP"), None);
+    }
+
+    /// THE STEP LISTS, AND WHERE EVERY NUMBER CAME FROM. An attenuator is not a slider: it
+    /// is the handful of pads a particular radio actually has, and offering a value the rig
+    /// does not own gets it NAKed or silently rounded.
+    ///
+    /// Each list is what Hamlib 4.5.5's own backend for that rig prints under `Attenuator:`
+    /// and `Preamp:` in `rigctl -m <model> 1` (`dump_caps`) — the same `rig_caps.attenuator[]`
+    /// / `.preamp[]` arrays its `\dump_state` emits, read back live rather than transcribed:
+    ///
+    /// ```text
+    /// IC-7300  m=3073   Attenuator: 20dB            Preamp: 1dB 2dB
+    /// IC-9700  m=3081   Attenuator: 10dB            Preamp: 1dB 2dB
+    /// IC-705   m=3085   Attenuator: 20dB            Preamp: 1dB 2dB
+    /// IC-7610  m=3078   Attenuator: 6dB 12dB 18dB   Preamp: 12dB 20dB
+    /// ```
+    ///
+    /// ⚠️ The 7300-family "preamps" are `1` and `2` because they are Icom's P.AMP1/P.AMP2
+    /// SELECTORS, which Hamlib carries in the same dB-labelled array; they are labels, not
+    /// twelve-decibel-style gains, and [`preamp_index_for_db`] treats every entry as a label
+    /// for exactly that reason.
+    ///
+    /// ⛔ THE IC-905 IS DELIBERATELY EMPTY. Hamlib 4.5.5 has no IC-905 backend at all
+    /// (`rigctl -m 3095` returns no caps), so there is no source to read its pads off and
+    /// nothing was invented for it: an empty list means the control does not render, which
+    /// degrades honestly. NEEDS-BENCH (IC-905).
+    #[test]
+    fn the_step_lists_are_the_ones_hamlibs_own_backends_declare() {
+        assert_eq!(attenuator_steps_db(IcomModel::Ic7300), &[20]);
+        assert_eq!(attenuator_steps_db(IcomModel::Ic9700), &[10]);
+        assert_eq!(attenuator_steps_db(IcomModel::Ic705), &[20]);
+        assert_eq!(attenuator_steps_db(IcomModel::Ic7610), &[6, 12, 18]);
+        assert_eq!(preamp_steps_db(IcomModel::Ic7300), &[1, 2]);
+        assert_eq!(preamp_steps_db(IcomModel::Ic9700), &[1, 2]);
+        assert_eq!(preamp_steps_db(IcomModel::Ic705), &[1, 2]);
+        assert_eq!(preamp_steps_db(IcomModel::Ic7610), &[12, 20]);
+        // ⚠️ The lists DIFFER between rigs, which is the whole reason they exist. A single
+        // hard-coded ladder would pass a test that only ever looked at one model.
+        assert_ne!(
+            attenuator_steps_db(IcomModel::Ic7300),
+            attenuator_steps_db(IcomModel::Ic7610)
+        );
+        assert_ne!(
+            attenuator_steps_db(IcomModel::Ic7300),
+            attenuator_steps_db(IcomModel::Ic9700)
+        );
+        assert_ne!(
+            preamp_steps_db(IcomModel::Ic7300),
+            preamp_steps_db(IcomModel::Ic7610)
+        );
+        // Unknown rig, empty list, no control — never a guessed one.
+        assert!(attenuator_steps_db(IcomModel::Ic905).is_empty());
+        assert!(preamp_steps_db(IcomModel::Ic905).is_empty());
+        // 0 (off) is never IN a list; it is the implicit first position every rig has.
+        for m in [
+            IcomModel::Ic7300,
+            IcomModel::Ic9700,
+            IcomModel::Ic705,
+            IcomModel::Ic7610,
+        ] {
+            assert!(!attenuator_steps_db(m).contains(&0), "{m:?} attenuator");
+            assert!(!preamp_steps_db(m).contains(&0), "{m:?} preamp");
+        }
     }
 }

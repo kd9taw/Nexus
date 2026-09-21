@@ -1196,6 +1196,28 @@ export interface RadioStatus {
   /** MANUAL notch (Hamlib MN), distinct from `notch` which is the AUTOMATIC notch (ANF).
    *  A radio may report either, both or neither; each toggle renders only when non-null. */
   manualNotch?: boolean | null
+  /** TRANSMIT MONITOR on/off (Hamlib MON) — the rig playing your own audio back while you
+   *  talk. Absent when the rig doesn't report it, so the toggle hides. */
+  monitor?: boolean | null
+  /** …and how loud, 0.0–1.0 (Hamlib MONITOR_GAIN). ⚠️ NOT `afGain`: this one is heard only
+   *  while TRANSMITTING, so turning it down can never silence a decoder. */
+  monitorGain?: number | null
+  /** ATTENUATOR, in whole dB (0 = off). ⚠️ NOT a 0.0–1.0 fraction like the levels above —
+   *  an input pad is decibels, and it is one of `attStepsDb`, never a free number. */
+  attDb?: number | null
+  /** PREAMP by the dB LABEL this radio gives it (0 = off). ⚠️ On an Icom the labels are
+   *  `1`/`2` — the P.AMP1/P.AMP2 selectors — so they are names, not gains. */
+  preampDb?: number | null
+  /** ⭐ THE PADS AND PREAMPS THIS RADIO ACTUALLY HAS, ascending, without the implicit 0
+   *  (off) every rig has — read from the radio's own `\dump_state`.
+   *
+   *  ⚠️ AN ATTENUATOR IS A LIST, NOT A SLIDER, and the lists differ by rig: an IC-7300 has
+   *  one 20 dB pad, an IC-7610 has 6/12/18. Absent/null = the radio never told us, and the
+   *  UI must then render NO control — a step that is not on the rig gets NAKed or silently
+   *  rounded, and either way the front end moves by an amount the operator did not choose.
+   *  An EMPTY array is the different, positive answer: no pad fitted. */
+  attStepsDb?: number[] | null
+  preampStepsDb?: number[] | null
   /** AGC time constant, one of `Engine::AGC_SPEEDS` ("auto" | "fast" | "mid" | "slow" |
    * "off"); absent when the rig doesn't report it. */
   agc?: string | null

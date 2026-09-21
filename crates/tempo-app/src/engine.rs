@@ -2641,6 +2641,31 @@ pub struct Engine {
     /// through a control that renders only once the observed half exists.
     af_gain: Option<f32>,
     rig_af_gain: Option<f32>,
+    /// TRANSMIT-MONITOR GAIN (0..1) — commanded, and what the rig reports. The other half
+    /// of the `MON` func: a monitor with no volume is a speaker you cannot turn down while
+    /// the microphone is live. ⚠️ Not [`Self::af_gain`]: this one is heard only while
+    /// TRANSMITTING, so turning it down never quietens what a decoder hears.
+    monitor_gain: Option<f32>,
+    rig_monitor_gain: Option<f32>,
+    /// ATTENUATOR and PREAMP, in whole dB as the rig labels them (`0` = off). Observed-only
+    /// here: the UI commands a step and the poll reports what the radio actually has.
+    ///
+    /// ⚠️ NOT FRACTIONS, and not free-running numbers — each is only ever one of
+    /// [`Self::rig_att_steps`] / [`Self::rig_preamp_steps`].
+    rig_att_db: Option<u8>,
+    rig_preamp_db: Option<u8>,
+    /// The pad / preamp the OPERATOR chose, for the radio loop to apply. Separate from the
+    /// observed pair above for the same reason every other level here is: an observation
+    /// must never fight a set that has not landed yet.
+    att_db: Option<u8>,
+    preamp_db: Option<u8>,
+    /// The pads and preamps THIS radio declares (`\dump_state`), ascending, without the
+    /// implicit `0` every rig has. `None` = the radio never told us, and then NO control is
+    /// offered — an attenuator is a list of a particular radio's own choices, and a guessed
+    /// step is COMMANDED at the radio rather than merely displayed. Empty is the different,
+    /// positive answer: this radio has none.
+    rig_att_steps: Option<Vec<u8>>,
+    rig_preamp_steps: Option<Vec<u8>>,
     /// RECEIVE gain. Not `rf_power` two fields up — see [`RadioLevel::RfGain`].
     rf_gain: Option<f32>,
     rig_rf_gain: Option<f32>,
@@ -2683,10 +2708,16 @@ pub struct Engine {
     /// Rig CAT DSP-function states, per `[nb, nr, notch(ANF), comp, vox]`, from the radio-loop
     /// poll. `None` = the rig doesn't support that func (hide the toggle); `Some(bool)` =
     /// supported + current on/off. Observed-only, same `None = can't do it` idiom as `rig_smeter_db`.
-    rig_funcs: [Option<bool>; 6],
-    /// Pending func toggles from the UI, per the same `[nb, nr, notch, comp, vox]` order; the
-    /// radio loop drains + applies them next cycle (mirrors the split-request seam). Off the TCP path.
-    pending_func: [Option<bool>; 6],
+    /// ⚠️ SEVEN, and the seventh is `MON` — the TRANSMIT MONITOR. The width is not free to
+    /// drift: `observe_rig_funcs` takes exactly this array, and the radio loop passes its
+    /// `[Option<bool>; N_FUNCS]`, so a mismatch is a COMPILE error across the two crates
+    /// rather than the runtime index panic that once killed the radio loop (see
+    /// `RadioLoop`'s `N_FUNCS`).
+    rig_funcs: [Option<bool>; 7],
+    /// Pending func toggles from the UI, per the same `[nb, nr, notch, comp, vox, manualNotch,
+    /// monitor]` order; the radio loop drains + applies them next cycle (mirrors the
+    /// split-request seam). Off the TCP path.
+    pending_func: [Option<bool>; 7],
     /// Whether the radio reports a built-in antenna tuner (Hamlib `RIG_FUNC_TUNER`) and, if so,
     /// whether it is currently switched in-line. `None` = the rig never answered the func, so no
     /// ATU control is offered at all — an ATU button on a radio that has no ATU is worse than no
@@ -3955,6 +3986,10 @@ fn func_index(func: &str) -> Option<usize> {
         // `manualNotch` there — deliberately NOT "notch", which is index 2, the AUTOMATIC
         // notch. Two notches, two indices; mixing them would toggle the wrong one silently.
         "manualnotch" => Some(5),
+        // The TRANSMIT MONITOR — your own audio played back while you talk. Not a
+        // receive-side DSP toggle like the five above, and deliberately last so the
+        // existing indices are untouched.
+        "monitor" => Some(6),
         _ => None,
     }
 }
@@ -4558,6 +4593,14 @@ impl Engine {
             rig_mic_gain: None,
             af_gain: None,
             rig_af_gain: None,
+            monitor_gain: None,
+            rig_monitor_gain: None,
+            rig_att_db: None,
+            rig_preamp_db: None,
+            att_db: None,
+            preamp_db: None,
+            rig_att_steps: None,
+            rig_preamp_steps: None,
             rf_gain: None,
             rig_rf_gain: None,
             squelch: None,
@@ -4580,10 +4623,10 @@ impl Engine {
             rig_tx_po_w: None,
             rig_tx_comp_db: None,
             rig_mode: None,
-            rig_funcs: [None; 6],
+            rig_funcs: [None; 7],
             rig_rx_ranges: None,
             rig_refused_dial_mhz: None,
-            pending_func: [None; 6],
+            pending_func: [None; 7],
             rig_tuner: None,
             rig_atu_start_tune: true,
             pending_atu_tune: None,
@@ -8456,6 +8499,99 @@ impl Engine {
         }
     }
 
+    /// Set desired TRANSMIT-MONITOR GAIN (0.0–1.0) — how loud the rig plays your own audio
+    /// back while you are talking. The `MON` func switches it on; this says how loud.
+    ///
+    /// ⚠️ NOT [`Self::set_af_gain`], and the distinction matters to a decoder: AF gain sits
+    /// in front of the audio Nexus decodes on a speaker-fed station, and this one is heard
+    /// only while transmitting. Turning the monitor down can never silence FT8.
+    pub fn set_monitor_gain(&mut self, frac: f32) {
+        self.remote_actuation.revoke();
+        self.monitor_gain = Some(frac.clamp(0.0, 1.0));
+    }
+    pub fn monitor_gain(&self) -> Option<f32> {
+        self.monitor_gain
+    }
+    pub fn observe_rig_monitor_gain(&mut self, frac: f32) {
+        if frac.is_finite() {
+            self.rig_monitor_gain = Some(frac.clamp(0.0, 1.0));
+        }
+    }
+
+    /// Choose an ATTENUATOR pad, in whole dB (`0` = off). The radio loop applies it.
+    ///
+    /// ⚠️ A STEP THIS RADIO DOES NOT HAVE IS REFUSED, not rounded to the nearest one it
+    /// does. That is the whole difference between this and a slider: the rig either NAKs an
+    /// unheld pad or silently substitutes a neighbour, and a substituted pad attenuates by
+    /// an amount the operator did not choose — on receive, where the only symptom is
+    /// signals that are quieter than they should be. `0` is always allowed: switching the
+    /// pad out is a thing every radio can do, and it is the safe direction.
+    ///
+    /// Returns whether the choice was taken, so a caller can say so rather than leaving the
+    /// operator to infer it from a control that did not move.
+    pub fn set_att_db(&mut self, db: u8) -> bool {
+        if db != 0 && !self.rig_att_steps.as_ref().is_some_and(|v| v.contains(&db)) {
+            return false;
+        }
+        self.remote_actuation.revoke();
+        self.att_db = Some(db);
+        true
+    }
+    pub fn att_db(&self) -> Option<u8> {
+        self.att_db
+    }
+    /// Choose a PREAMP by its dB label (`0` = off). Same list rule and same reason as
+    /// [`Self::set_att_db`] — and here the label is not even a gain on every rig: an Icom's
+    /// are `1`/`2`, the P.AMP selectors, so "the nearest value" would be meaningless as
+    /// well as wrong.
+    pub fn set_preamp_db(&mut self, db: u8) -> bool {
+        if db != 0
+            && !self
+                .rig_preamp_steps
+                .as_ref()
+                .is_some_and(|v| v.contains(&db))
+        {
+            return false;
+        }
+        self.remote_actuation.revoke();
+        self.preamp_db = Some(db);
+        true
+    }
+    pub fn preamp_db(&self) -> Option<u8> {
+        self.preamp_db
+    }
+
+    /// Adopt the ATTENUATOR / PREAMP readings (whole dB, `0` = off) from the radio loop.
+    /// Observed-only: these are steps the radio holds, not sliders the app runs.
+    pub fn observe_rig_att_db(&mut self, db: u8) {
+        self.rig_att_db = Some(db);
+    }
+    pub fn observe_rig_preamp_db(&mut self, db: u8) {
+        self.rig_preamp_db = Some(db);
+    }
+
+    /// Adopt the pads and preamps this radio DECLARES (`\dump_state`), from the loop's
+    /// once-per-CAT-confirmation probe.
+    ///
+    /// ⚠️ `None` MUST HIDE THE CONTROL, and that is not the usual fail-open. Elsewhere an
+    /// unknown capability means "let the operator try and let the rig answer"
+    /// ([`Self::rig_covers_mhz`]); here there is nothing to try WITH — a step list is not a
+    /// permission, it is the set of values that exist, and inventing one commands the radio
+    /// to a pad it does not have. Empty is the different, positive answer: no pad fitted.
+    pub fn observe_rig_db_steps(&mut self, att: Option<Vec<u8>>, preamp: Option<Vec<u8>>) {
+        self.rig_att_steps = att;
+        self.rig_preamp_steps = preamp;
+    }
+    /// Drop the step lists and readings on a breaker trip, for the same reason
+    /// [`Self::clear_rig_funcs`] drops the DSP states: a half-open CAT link must never
+    /// leave a stale capability — here, a pad list — standing in the cockpit.
+    pub fn clear_rig_db_steps(&mut self) {
+        self.rig_att_steps = None;
+        self.rig_preamp_steps = None;
+        self.rig_att_db = None;
+        self.rig_preamp_db = None;
+    }
+
     /// Set desired AGC speed — an OPERATOR PICK, which the radio loop
     /// honours even when it is the speed the loop last wrote (see [`Self::agc_to_command`]).
     pub fn set_agc(&mut self, speed: &str) {
@@ -8653,7 +8789,7 @@ impl Engine {
 
     /// Adopt the rig's CAT DSP-function states `[nb, nr, notch, comp, vox]` from the radio-loop
     /// poll. A `None` slot = the rig doesn't support that func (its toggle hides). Observed-only.
-    pub fn observe_rig_funcs(&mut self, funcs: [Option<bool>; 6]) {
+    pub fn observe_rig_funcs(&mut self, funcs: [Option<bool>; 7]) {
         self.rig_funcs = funcs;
     }
 
@@ -8699,7 +8835,7 @@ impl Engine {
     /// Drop all rig func states (→ the toggles hide) — called on a breaker trip so a half-open
     /// CAT link never freezes stale NB/NR/… states in the cockpit.
     pub fn clear_rig_funcs(&mut self) {
-        self.rig_funcs = [None; 6];
+        self.rig_funcs = [None; 7];
     }
 
     /// Queue a func toggle from the UI (`func` = "nb"|"nr"|"notch"|"comp"|"vox"); the radio loop
@@ -8717,7 +8853,7 @@ impl Engine {
     /// Drain the pending func requests for the radio loop to apply —
     /// `[nb, nr, notch(auto), comp, vox, manual_notch]`,
     /// each `Some(on)` to apply then cleared. Mirrors `take_split_request`.
-    pub fn take_func_requests(&mut self) -> [Option<bool>; 6] {
+    pub fn take_func_requests(&mut self) -> [Option<bool>; 7] {
         std::mem::take(&mut self.pending_func)
     }
 
@@ -18431,6 +18567,15 @@ contact yourself."
         s.radio.comp = self.rig_funcs[3];
         s.radio.vox = self.rig_funcs[4];
         s.radio.manual_notch = self.rig_funcs[5];
+        // The TRANSMIT MONITOR and its gain; None = the rig never answered → control hides.
+        s.radio.monitor = self.rig_funcs[6];
+        s.radio.monitor_gain = self.rig_monitor_gain.or(self.monitor_gain);
+        // ATTENUATOR / PREAMP: the reading, and the steps this radio actually has. The UI
+        // renders a control only when it has a list — see `observe_rig_db_steps`.
+        s.radio.att_db = self.rig_att_db;
+        s.radio.preamp_db = self.rig_preamp_db;
+        s.radio.att_steps_db = self.rig_att_steps.clone();
+        s.radio.preamp_steps_db = self.rig_preamp_steps.clone();
         // The rig's own ATU: None = no tuner reported → the UI offers no ATU control at all.
         s.radio.atu = self.rig_tuner;
         s.radio.atu_start_tune_unsupported = !self.rig_atu_start_tune;
