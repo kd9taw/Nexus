@@ -9022,6 +9022,137 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* ══ THE ANALOG METER (Phone) ════════════════════════════════════════════════════════════
+   One instrument replacing the 10-px S strip in the scope header and the four TX bar rows in
+   the dock. Its height is TAKEN FROM THE WATERFALL, deliberately and with the operator's word
+   (2026-09-21): the cockpit stands at 572 px against a 580 px ceiling, so there are 8 px of
+   slack in the whole surface and no other source. `.ph-scope` is `flex: 1; min-height: 0`, so
+   a fixed height here just works — the scope yields without a layout fight.
+
+   Colours are the sheet's own tokens, so the face themes with everything else and needs no
+   dark/light fork: `currentColor` for the needle, `--text-dim` for printed scales. A meter
+   drawn in absolute greys would be the one panel that ignores the theme. */
+.ph-meter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-1) var(--space-2) 2px;
+  flex: 0 0 auto;
+  color: var(--text);
+}
+.ph-meter-face {
+  width: 100%;
+  /* THE HEIGHT THE WATERFALL GIVES UP. 118 px of face + the foot row lands the instrument at
+     about 150 px, which is the "full multi-scale" size the operator picked over a 110 px
+     compact one — the stacked arcs are only legible at this size. */
+  height: 118px;
+  max-width: 320px;
+  overflow: visible;
+}
+/* The printed scales. On the face whatever the needle reads, exactly as a rig prints all of
+   its scales — that is what makes it legible at a glance instead of a number whose meaning
+   changes without saying so. */
+.ph-meter-arc {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+.ph-meter-arc--aux {
+  stroke-opacity: 0.55;
+}
+.ph-meter-tick line {
+  stroke: var(--text-dim);
+  stroke-width: 1.5;
+}
+.ph-meter-tick text {
+  fill: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+/* The top band. `--alert-warning` and `--state-weak`, never a raw red: the sheet's warn colour
+   is a distinct token and painting warn with the hot one is the bug TxMeters' ZONE_COLOR note
+   records. */
+.ph-meter-tick.hot line {
+  stroke: var(--state-weak);
+}
+.ph-meter-tick.hot text {
+  fill: var(--state-weak);
+}
+.ph-meter-needle {
+  stroke: var(--text);
+  stroke-width: 2;
+  stroke-linecap: round;
+  /* Ballistic, like a real movement. Fast enough to read a syllable, slow enough not to
+     jitter on poll noise — and it is a TRANSITION, so a missing reading removes the needle
+     rather than animating it to zero, which would read as "no signal". */
+  transition: x2 90ms linear, y2 90ms linear;
+}
+.ph-meter.keyed .ph-meter-needle {
+  stroke: var(--accent);
+}
+.ph-meter-hub {
+  fill: var(--text);
+}
+.ph-meter-plate {
+  fill: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+/* Where the operator's own power ceiling sits on the PO scale. A MARK, not a limit line: the
+   rig can be told to exceed it and this says where the line was, which is the honest claim. */
+.ph-meter-cap {
+  stroke: var(--alert-warning);
+  stroke-width: 2;
+  stroke-dasharray: 3 2;
+}
+.ph-meter-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+.ph-meter-value {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 4.2em;
+  text-align: right;
+}
+.ph-meter-pick {
+  display: flex;
+  gap: 2px;
+}
+/* DISABLED, NOT HIDDEN, on receive. A receiver meters one thing, so there is nothing to pick —
+   but the row must keep its height, because this sits above a bottom-anchored dock and a row
+   that appeared on key-down would move the PTT button under a held pointer. */
+.ph-meter-pick-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ph-meter-pick-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ph-meter-pick-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ✓rig · ⌁cmd · ⊘ — how well the figure beside it is known. Dim and small: the NUMBER is what
    the operator reads at a glance and the mark is what they check when it matters. Never
    colour alone — the word carries it (see TruthMark), so these three differ in text first. */

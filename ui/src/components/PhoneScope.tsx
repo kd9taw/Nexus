@@ -155,6 +155,11 @@ interface Props {
   /** Master gate for click/drag tuning: the cockpit passes catOk && !transmitting &&
    * dial-known. False → no pointer capture, no box, no cursor affordance. */
   interactive?: boolean
+  /** Hide the thin S-meter strip in this header. Phone passes it because its analog meter
+   *  reads S on the same screen and two readings of one number is worse than either. CW has no
+   *  analog meter and keeps the strip — one host's change must not reach the other
+   *  (`TxMeters`' four-row contract leaking into Operate is what that costs). */
+  hideSmeter?: boolean
   /** Trace peak-hold time constant (ms) — how long a column's peak stands after the signal
    * stops. See TRACE_HOLD_MS: the cockpit picks it, because the right answer depends on the
    * SIGNAL, not on the operator. CW passes `fast` (48 ms dits have to be visible as keying);
@@ -190,6 +195,7 @@ function sMeterDisplay(db: number): { frac: number; label: string; zone: 'ok' | 
 }
 
 export function PhoneScope({
+  hideSmeter = false,
   transmitting,
   theme,
   active = true,
@@ -1294,14 +1300,23 @@ export function PhoneScope({
               : t('scope.smeter.title.none')
         }
       >
-        <span className="ph-scope-smeter-label">S</span>
-        <div className="ph-scope-smeter-track">
-          <div
-            className="ph-scope-smeter-fill"
-            style={{ width: sm ? `${Math.round(sm.frac * 100)}%` : '0%', background: smColor }}
-          />
-        </div>
-        <span className="ph-scope-smeter-label ph-scope-smeter-value">{sm ? sm.label : '—'}</span>
+        {/* ⚠️ ONLY THESE THREE ARE THE S-METER. The strip they sit in is `ph-scope-smeter` but
+            it also carries the RF-source badge, the dynamic-range readout and the G/Z gain
+            control — hiding the strip would take those with it, which is a different and much
+            worse change than the one asked for. Phone hides the reading because its analog
+            meter shows the same number on the same screen; CW keeps it. */}
+        {!hideSmeter && (
+          <>
+            <span className="ph-scope-smeter-label">S</span>
+            <div className="ph-scope-smeter-track">
+              <div
+                className="ph-scope-smeter-fill"
+                style={{ width: sm ? `${Math.round(sm.frac * 100)}%` : '0%', background: smColor }}
+              />
+            </div>
+            <span className="ph-scope-smeter-label ph-scope-smeter-value">{sm ? sm.label : '—'}</span>
+          </>
+        )}
         {(source === 'flex' || source === 'civ') && (
           <span
             className="ph-scope-src"

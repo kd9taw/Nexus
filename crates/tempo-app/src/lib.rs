@@ -250,6 +250,7 @@ impl AppState {
                 rig_confirmed: false,
                 flex_dax_tx: false,
                 flex_meter_stream: false,
+                rated_watts: 100,
                 dial_mhz: 14.074, // FT8 20m (default mode)
                 band: "20m".to_string(),
                 sideband: "USB".to_string(),

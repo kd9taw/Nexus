@@ -1136,6 +1136,15 @@ pub struct RadioStatus {
     /// does not. Settings warns on exactly that pair. Display-only; it gates nothing.
     #[serde(default)]
     pub flex_meter_stream: bool,
+    /// The ACTIVE radio's rated output in watts — full scale for the Phone analog meter's PO
+    /// arc. Per-radio (`RadioProfile::rated_watts`), so it follows a radio switch; 100 until
+    /// the operator says otherwise.
+    ///
+    /// ⚠️ NOT the operator's power cap. The cap is a FRACTION of this (`max_power_phone` and
+    /// friends are 0.0..=1.0), which is exactly why the cap can be drawn as a mark ON this
+    /// scale and cannot define it.
+    #[serde(default)]
+    pub rated_watts: u32,
 }
 
 /// serde default helper: TX drive defaults to 0.9.

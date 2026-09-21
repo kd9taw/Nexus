@@ -139,7 +139,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     neededInHourOne: true,
     keywords: ['cat', 'com port', 'serial port', 'usb', 'baud', 'ptt', 'rig model', 'hamlib',
       'rigctld', 'flex', 'smartsdr', 'icom', 'ci-v', 'civ', 'yaesu', 'kenwood', 'detect',
-      'test cat', 'split', 'stop bits', 'parity', 'handshake', 'data bits', 'rig control'],
+      'test cat', 'split', 'stop bits', 'parity', 'handshake', 'data bits', 'rig control',
+      // The rig's RATED OUTPUT — full scale for the Phone meter's power arc. An operator who
+      // wants it will search for what they call it, and none of those words is "rated".
+      'rated power', 'watts', 'power scale', 'meter scale', 'qrp', '100w', 's meter', 'meter'],
   },
   {
     id: 'rig-advanced',

@@ -1218,6 +1218,11 @@ pub struct Settings {
     pub cat_ptt_line_state: String,
     /// Serial baud rate for CAT.
     pub baud: u32,
+    /// The ACTIVE radio's rated output in watts — the flat mirror of
+    /// [`RadioProfile::rated_watts`], kept in step by `sync_flat_from_active` exactly as `baud`
+    /// is. Full scale for the Phone cockpit's analog PO arc.
+    #[serde(default = "default_rated_watts")]
+    pub rated_watts: u32,
     /// Rig connection type: "serial" (default; rigctld talks to `serial_port`/`baud`) or
     /// "network" (rigctld talks to `rig_addr` over TCP — e.g. a FlexRadio via SmartSDR).
     /// Empty is treated as "serial". `#[serde(default)]` so older settings files still load.
@@ -3108,6 +3113,15 @@ pub struct RadioProfile {
     #[serde(default)]
     pub ptt_serial_port: String,
     pub baud: u32,
+    /// This radio's RATED OUTPUT in watts — full scale for the Phone cockpit's analog PO arc.
+    ///
+    /// PER-RADIO because it has to be: a station with a QRP set and a 100 W rig has two
+    /// different meters, and a single station-wide number would be wrong for one of them every
+    /// time the operator switched. It is the rig's rating, NOT the operator's power cap — the
+    /// cap is a FRACTION of this (`max_power_phone` and friends are 0.0..=1.0), which is what
+    /// makes the cap placeable as a mark ON this scale rather than able to define it.
+    #[serde(default = "default_rated_watts")]
+    pub rated_watts: u32,
     pub rig_conn: String,
     pub rig_addr: String,
     /// Which OmniRig slot this radio drives when `rig_conn == "omnirig"`: **1 = RIG 1**
@@ -3286,6 +3300,15 @@ pub struct RadioProfilePatch {
     #[serde(default)]
     pub ptt_serial_port: String,
     pub baud: u32,
+    /// See `RadioProfile::rated_watts`.
+    ///
+    /// ⚠️ NO `#[serde(default)]`, DELIBERATELY. A default here does not make patch drift safe,
+    /// it makes it QUIET: `apply_to` would then write 100 unconditionally and silently reset an
+    /// operator's QRP rating on every edit of the rig form — which is exactly what
+    /// `icom_data_mode` was doing to Icom DATA submodes. Without one, a UI that forgets to send
+    /// the field fails the whole Save loudly, and
+    /// `the_typescript_patch_carries_every_field_the_rust_patch_does` catches it in CI first.
+    pub rated_watts: u32,
     pub rig_conn: String,
     pub rig_addr: String,
     /// See `RadioProfile::omnirig_slot` — RIG 1 / RIG 2. `#[serde(default)]` like
@@ -3369,6 +3392,7 @@ impl RadioProfilePatch {
         // _patch` pins it; `radio_profile_patch_assigns_every_profile_field` stops the next
         // added field from being dropped the same way.
         p.ptt_serial_port = self.ptt_serial_port;
+        p.rated_watts = self.rated_watts;
         p.rig_model = self.rig_model;
         p.rig_model_name = self.rig_model_name;
         p.serial_port = self.serial_port;
@@ -3450,6 +3474,17 @@ fn default_aprs_path() -> Vec<String> {
     vec!["WIDE1-1".to_string(), "WIDE2-1".to_string()]
 }
 
+/// A radio's rated output in watts — full scale for the analog meter's PO arc.
+///
+/// 100 W because that is what the overwhelming majority of HF rigs are, so the meter is right
+/// on most stations untouched — the project's "needs configuration before it works = unfinished"
+/// rule applied to an instrument. The operators it is WRONG for are the two who most need a
+/// readable meter: a 5 W QRP set whose needle would otherwise never leave the first tick, and a
+/// station behind an amplifier whose needle would pin.
+fn default_rated_watts() -> u32 {
+    100
+}
+
 fn default_true() -> bool {
     true
 }
@@ -3466,6 +3501,7 @@ impl Default for RadioProfile {
             serial_port: String::new(),
             ptt_serial_port: String::new(),
             baud: 38400,
+            rated_watts: 100,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
             omnirig_slot: 1,
@@ -3936,6 +3972,7 @@ impl Default for Settings {
             cat_serial_handshake: default_cat_auto(),
             cat_ptt_line_state: default_cat_auto(),
             baud: 38400,
+            rated_watts: 100,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
             omnirig_slot: 1,
@@ -4268,6 +4305,7 @@ impl Settings {
             serial_port: self.serial_port.clone(),
             ptt_serial_port: self.ptt_serial_port.clone(),
             baud: self.baud,
+            rated_watts: self.rated_watts,
             rig_conn: self.rig_conn.clone(),
             rig_addr: self.rig_addr.clone(),
             omnirig_slot: self.omnirig_slot,
@@ -4649,6 +4687,7 @@ impl Settings {
         self.serial_port = p.serial_port;
         self.ptt_serial_port = p.ptt_serial_port;
         self.baud = p.baud;
+        self.rated_watts = p.rated_watts;
         self.rig_conn = p.rig_conn;
         self.rig_addr = p.rig_addr;
         self.omnirig_slot = p.omnirig_slot;
@@ -4690,6 +4729,7 @@ impl Settings {
             serial_port,
             ptt_serial_port,
             baud,
+            rated_watts,
             rig_conn,
             rig_addr,
             omnirig_slot,
@@ -4719,6 +4759,7 @@ impl Settings {
             self.serial_port.clone(),
             self.ptt_serial_port.clone(),
             self.baud,
+            self.rated_watts,
             self.rig_conn.clone(),
             self.rig_addr.clone(),
             self.omnirig_slot,
@@ -5538,6 +5579,7 @@ mod tests {
             serial_port: "COM7".into(),
             ptt_serial_port: "COM9".into(),
             baud: 115_200,
+            rated_watts: 100,
             rig_conn: "network".into(),
             rig_addr: "192.0.2.10:4992".into(),
             omnirig_slot: 2,
@@ -5660,6 +5702,30 @@ mod tests {
     }
 
     #[test]
+    /// The rating is PER-RADIO, and this is the claim that makes that worth the plumbing: a
+    /// station with a QRP set and a 100 W rig gets a meter that follows the radio switch. A
+    /// station-wide number would be wrong for one of the two every time.
+    #[test]
+    fn the_rated_power_follows_the_active_radio() {
+        let mut s = Settings::default();
+        s.radios = vec![
+            RadioProfile { id: 0, name: "FTDX10".into(), rated_watts: 100, ..Default::default() },
+            RadioProfile { id: 1, name: "FT-818".into(), rated_watts: 6, ..Default::default() },
+        ];
+
+        s.active_radio = 0;
+        s.sync_flat_from_active();
+        assert_eq!(s.rated_watts, 100, "the 100 W rig");
+
+        s.active_radio = 1;
+        s.sync_flat_from_active();
+        assert_eq!(s.rated_watts, 6, "switching radios must bring its own rating");
+
+        // And the default is 100 rather than 0 — a rig nobody has configured must still give
+        // the meter a usable scale, not a division by zero.
+        assert_eq!(RadioProfile::default().rated_watts, 100);
+    }
+
     fn every_per_radio_field_is_reachable_through_the_patch() {
         const NOT_EDITABLE: [&str; 7] = [
             "id",
@@ -5678,6 +5744,7 @@ mod tests {
             serial_port: String::new(),
             ptt_serial_port: String::new(),
             baud: 0,
+            rated_watts: 100,
             rig_conn: String::new(),
             rig_addr: String::new(),
             omnirig_slot: 0,
@@ -5827,6 +5894,7 @@ mod tests {
             serial_port: String::new(),
             ptt_serial_port: String::new(),
             baud: 0,
+            rated_watts: 100,
             rig_conn: String::new(),
             rig_addr: String::new(),
             omnirig_slot: 0,
@@ -5909,6 +5977,7 @@ mod tests {
         let json = r#"{
             "pttMethod": "cat", "rigModel": 1049, "rigModelName": "Yaesu FT-710",
             "serialPort": "/dev/cu.usbserial-01AF7FED0", "pttSerialPort": "", "baud": 38400,
+            "ratedWatts": 100,
             "rigConn": "serial", "rigAddr": "", "omnirigSlot": 0, "rigctldPort": 4533,
             "icomNativeCat": false, "dataModesPlainSsb": false, "sstvHoldDataSubmode": false,
             "audioIn": "USB Audio Device", "audioOut": "USB Audio Device",
@@ -6075,6 +6144,7 @@ mod tests {
             serial_port: p.serial_port.clone(),
             ptt_serial_port: p.ptt_serial_port.clone(),
             baud: p.baud,
+            rated_watts: 100,
             rig_conn: p.rig_conn.clone(),
             rig_addr: p.rig_addr.clone(),
             omnirig_slot: p.omnirig_slot,
