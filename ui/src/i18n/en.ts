@@ -8552,15 +8552,42 @@ export const EN = {
   'phone.panel.scope': 'Scope',
   'phone.panel.rigscope': 'Rig Scope Controls',
   'phone.panel.txmeters': 'TX Meters',
-  'phone.panel.dsp': 'DSP Functions',
-  'phone.panel.dspLevels': 'RX DSP Levels',
+  'phone.panel.receiver': 'Receiver',
+  'phone.panel.transmitter': 'Transmitter',
   'phone.panel.bandActivity': 'Band Activity',
   'phone.panel.voiceKeyer': 'Voice Keyer',
   'phone.pane.bandActivity.title': 'Band activity',
   'phone.pane.voiceKeyer.title': 'Voice keyer',
   'phone.pane.rigscope.title': 'Rig scope controls',
-  'phone.pane.dsp.title': 'DSP functions',
-  'phone.pane.dspLevels.title': 'RX DSP levels',
+  'phone.pane.receiver.title': 'Receiver',
+  'phone.pane.transmitter.title': 'Transmitter',
+  // The two chain groups' accessible names. They are the pane's QUESTION, not its contents —
+  // a screen-reader user landing in the group should hear what it is for before what is in it.
+  'phone.chain.receiver.aria': 'Receiver chain — what you are hearing',
+  'phone.chain.transmitter.aria': 'Transmitter chain — how your voice goes out',
+  // ── ⊘ — THE UNAVAILABLE MARK ────────────────────────────────────────────────────────
+  // A control the radio cannot drive stays on screen, disabled, wearing this. The mark is a
+  // WORD, never the glyph alone and never a colour: the glyph is aria-hidden decoration and
+  // this text is what a screen reader and a monochrome display both get.
+  'phone.unavail.mark': 'not reported',
+  'phone.unavail.title':
+    '{{control}} is not coming back from this radio over CAT, so Nexus has nothing to set. ' +
+    'The control stays on screen and dead rather than disappearing, because a control that ' +
+    'vanishes is indistinguishable from one that was never built.',
+  // The manual-notch FREQUENCY is a backend fact, not a fact about the radio, and saying
+  // otherwise would be false: Hamlib's Icom backend exposes no NOTCHF for any natively-driven
+  // model, so the notch itself is real and reachable from the radio's own knob.
+  'phone.unavail.notchFreq.title':
+    'This radio is not reporting a manual-notch frequency over CAT. On an Icom driven ' +
+    "natively, Hamlib's backend exposes no notch frequency at all — the notch is still there, " +
+    'and you set where it sits on the radio itself.',
+  'phone.unavail.fm.mark': 'fixed on FM',
+  'phone.unavail.fm.title':
+    'FM has a fixed passband, so there is no filter width to set. The stepper comes back on SSB.',
+  'phone.unavail.noCat.mark': 'no CAT',
+  'phone.unavail.noCat.title':
+    'There is no CAT link to this radio, so nothing here can be commanded or read back. ' +
+    'Set a rigctld/CAT rig in Settings.',
   'phone.pane.log.title': 'Log',
 
   // ── Phone ▸ the header: the mode picker, split, mic gain, filter and REC ─────────────
@@ -8715,7 +8742,6 @@ export const EN = {
   // them with plain function names, the same on every rig AND in every locale, which is what
   // keeps them out of here. See DSP_FUNCS in `PhoneCockpit.tsx`; the two titles below are the
   // translated half, and they name those two words as the invariant tokens they are.
-  'phone.dsp.aria': 'Rig DSP functions',
   'phone.dsp.nb.title': 'Noise Blanker — kills impulse/ignition noise (RX)',
   'phone.dsp.nr.title': 'Noise Reduction — pulls voice out of broadband hiss (RX, DSP)',
   'phone.dsp.notch.title': 'Auto-Notch (ANF) — nulls carriers/heterodynes (RX, DSP)',
@@ -8724,7 +8750,6 @@ export const EN = {
     'Manual notch — the one you place yourself on a whistle, using the notch frequency slider. Distinct from Auto notch, which hunts a carrier automatically.',
   'phone.dsp.vox.title': 'Voice-Operated Transmit — hands-free keying (TX)',
   'phone.dsp.toggleFailed': 'Could not toggle {{func}}',
-  'phone.rxDsp.aria': 'RX DSP levels',
   'phone.rxDsp.nr.title':
     'Noise-reduction depth — raise until the noise floor drops, back off if audio gets watery',
   'phone.rxDsp.nr.aria': 'Noise-reduction level',

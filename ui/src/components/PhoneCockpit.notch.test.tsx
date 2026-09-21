@@ -111,33 +111,66 @@ describe('#95 — the controls that were missing', () => {
   })
 })
 
-describe('#95 — and the dead controls it must not create', () => {
-  it('shows NO notch-frequency slider on a rig that does not report one', () => {
-    // The other half of the report: a control that does nothing is worse than none. An
-    // auto-notch-only radio must not grow a frequency slider with nothing behind it.
+// ⭐ THESE FOUR USED TO PIN THE OPPOSITE, AND THE REASON THEY GAVE WAS OVERRULED, NOT FORGOTTEN.
+//
+// What they said, verbatim: *"a control that does nothing is worse than none. An auto-notch-only
+// radio must not grow a frequency slider with nothing behind it."* That is a real argument — a
+// live-looking slider over a radio that cannot move is a lie about the radio — and #95 was
+// partly a report of exactly that shape from the other direction.
+//
+// OPERATOR RULING, 2026-09-20: it is overruled, on a ground the argument does not answer. A
+// control that VANISHES is indistinguishable from one that was never built. The operator who
+// cannot find a manual notch learns nothing about whether his radio lacks it, whether his CAT
+// backend lacks it, or whether Nexus simply never wrote it — and the third reading is the one
+// he acts on, because it is the only one he can do something about. #95 itself was filed in
+// that confusion. So the control stays, DISABLED, carrying the reason as text.
+//
+// The old argument survives as a CONSTRAINT rather than a behaviour: the control must be
+// visibly dead and must say why, which is what each assertion below now demands — present AND
+// disabled AND a reason, three things, because any two of them pass on a half-built control.
+// The general shape of the rule is pinned in PhoneCockpit.chain.test.tsx; what is here is the
+// #95 surface specifically, in the file that reported it.
+describe('#95 — and the dead controls it must not HIDE', () => {
+  /** Present, disabled, and carrying a reason — the three the ruling turns on. */
+  function deadAndSaid(el: HTMLElement | null, what: string) {
+    expect(el, `${what}: not on screen — a vanished control reads as one Nexus never built`).toBeTruthy()
+    expect((el as HTMLInputElement | HTMLButtonElement).disabled, `${what}: live over a radio that cannot drive it`).toBe(true)
+    const mark = el!.closest('[data-chain]')?.querySelector('.ph-unavail')
+    expect(mark, `${what}: dead and silent — the operator cannot tell "your radio can't" from "Nexus didn't"`).not.toBeNull()
+    expect(mark!.textContent, `${what}: the reason is not text`).toMatch(/\S/)
+  }
+
+  it('shows the notch-frequency slider DISABLED, with the reason, on a rig that does not report one', () => {
     mount({ notch: true })
-    expect(screen.queryByLabelText('Manual notch frequency in hertz')).toBeNull()
+    deadAndSaid(screen.queryByLabelText('Manual notch frequency in hertz'), 'notch frequency')
   })
 
-  it('shows NO compressor slider on a rig that does not report one', () => {
+  it('shows the compressor slider DISABLED, with the reason, on a rig that does not report one', () => {
     mount({ comp: true })
-    expect(screen.queryByLabelText('Speech processor depth')).toBeNull()
+    deadAndSaid(screen.queryByLabelText('Speech processor depth'), 'compressor depth')
   })
 
-  it('shows NO manual-notch button on a rig with only the automatic notch', () => {
+  it('shows the manual-notch button DISABLED, with the reason, on a rig with only the automatic notch', () => {
+    // The pair still has to be told apart, and that is what this case is really about: the
+    // AUTOMATIC notch is live here and the MANUAL one is not, so the two must render
+    // differently — which a disabled state and a reason do, and a missing button cannot.
     mount({ notch: true })
-    expect(screen.getByRole('button', { name: 'Auto notch' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Manual notch' })).toBeNull()
+    const auto = screen.getByRole('button', { name: 'Auto notch' }) as HTMLButtonElement
+    expect(auto.disabled, 'the automatic notch is dead on a rig that reports it').toBe(false)
+    deadAndSaid(screen.queryByRole('button', { name: 'Manual notch' }), 'manual notch')
   })
 
-  it('control: a bare rig grows none of them', () => {
-    // Without this, every "queryBy … toBeNull" above would pass on a component that renders
-    // nothing at all, which is the failure mode of a negative assertion.
+  it('control: a bare rig grows all of them, every one dead and every one saying why', () => {
+    // The direction this control guards has INVERTED with the ruling. It used to stop the
+    // "queryBy … toBeNull" assertions above passing on a component that rendered nothing;
+    // now the risk is the mirror image — a component that renders every control LIVE over a
+    // radio that reports nothing, which is the lie the overruled argument was written
+    // against. So each one is checked dead AND explained.
     mount({})
-    expect(screen.queryByLabelText('Manual notch frequency in hertz')).toBeNull()
-    expect(screen.queryByLabelText('Speech processor depth')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Manual notch' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Auto notch' })).toBeNull()
+    deadAndSaid(screen.queryByLabelText('Manual notch frequency in hertz'), 'notch frequency')
+    deadAndSaid(screen.queryByLabelText('Speech processor depth'), 'compressor depth')
+    deadAndSaid(screen.queryByRole('button', { name: 'Manual notch' }), 'manual notch')
+    deadAndSaid(screen.queryByRole('button', { name: 'Auto notch' }), 'auto notch')
   })
 })
 

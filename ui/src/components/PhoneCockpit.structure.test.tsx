@@ -186,7 +186,7 @@ describe('PhoneCockpit pane-grid shell', () => {
 
   it('every operator-content block renders through a CockpitPaneFrame inside the region', () => {
     renderCockpit()
-    for (const id of ['bandActivity', 'voiceKeyer', 'log', 'dsp', 'dspLevels']) {
+    for (const id of ['bandActivity', 'voiceKeyer', 'log', 'receiver', 'transmitter']) {
       const pane = document.querySelector(`[data-pane="${id}"]`)
       expect(pane, `pane "${id}" missing`).not.toBeNull()
       expect(pane!.classList.contains('pane-frame'), `"${id}" is not a .pane-frame`).toBe(true)
@@ -248,9 +248,9 @@ describe('PhoneCockpit pane-grid shell', () => {
   })
 
   it("⊞ Panels 'removed' still hides exactly the pane it names", () => {
-    renderCockpit({ panels: fakePanels(['dsp']) })
-    expect(document.querySelector('[data-pane="dsp"]')).toBeNull()
-    expect(document.querySelector('[data-pane="dspLevels"]')).not.toBeNull()
+    renderCockpit({ panels: fakePanels(['receiver']) })
+    expect(document.querySelector('[data-pane="receiver"]')).toBeNull()
+    expect(document.querySelector('[data-pane="transmitter"]')).not.toBeNull()
     expect(document.querySelector('[data-pane="bandActivity"]')).not.toBeNull()
     // PTT is not gated by the menu — it has no id to gate. (That is true of this cockpit's
     // stop-line census, not of "TX chrome": voiceKeyer transmits and is listed.)
@@ -331,14 +331,20 @@ describe('PhoneCockpit pane-grid shell', () => {
   })
 
   it('the leading column is never left empty by the menu (no band of empty panel)', async () => {
-    // Reachable the moment the keyer became hideable: a rig that reports no DSP and no
-    // native scope has nothing in the leading column but Band Activity and the keyer, so
-    // unticking both used to leave a `minmax(0,1fr)` track holding nothing beside the log
+    // Reachable the moment the keyer became hideable: unticking everything the leading
+    // column can hold used to leave a `minmax(0,1fr)` track holding nothing beside the log
     // — the "empty black box" complaint rebuilt. The tier collapses to 1 instead, and the
     // .cockpit-col count still equals data-cols (useRegionCols' standing invariant).
+    //
+    // ⚠️ IT TAKES FOUR TICKS NOW, not two. Before the 2026-09-20 rebuild a rig reporting no
+    // DSP contributed nothing to this column by itself, so hiding Band Activity and the
+    // keyer emptied it. The two chain panes have no capability gate — `shown(id)` is the
+    // only thing that can take them away — so the rig's silence no longer empties anything
+    // and the operator has to untick them too. Weakening this case to "two ticks and a
+    // silent rig" would have left it passing while asserting nothing.
     renderCockpit({
       snap: makeSnap({ nb: null, nr: null, nrLevel: null, agc: null }),
-      panels: fakePanels(['bandActivity', 'voiceKeyer']),
+      panels: fakePanels(['bandActivity', 'voiceKeyer', 'receiver', 'transmitter']),
     })
     const region = document.querySelector('.cockpit-panes')!
     stubWidth(region, 1800)
@@ -365,8 +371,8 @@ describe('PhoneCockpit pane-grid shell', () => {
     // TX-capable pane outranks the grouping aesthetic (fix-round D1, 2026-07-31).
     expect(cols[0].querySelector('[data-pane="voiceKeyer"]')).not.toBeNull()
     expect(cols[0].querySelectorAll('.pane-frame').length).toBe(2)
-    expect(cols[1].querySelector('[data-pane="dsp"]')).not.toBeNull()
-    expect(cols[1].querySelector('[data-pane="dspLevels"]')).not.toBeNull()
+    expect(cols[1].querySelector('[data-pane="receiver"]')).not.toBeNull()
+    expect(cols[1].querySelector('[data-pane="transmitter"]')).not.toBeNull()
     expect(cols[2].querySelector('[data-pane="log"]')).not.toBeNull()
     expect(cols[2].querySelectorAll('.pane-frame').length).toBe(1)
     // Panes are ROLE-typed now, not span-weighted: the strips (band activity's fixed-height
@@ -376,7 +382,7 @@ describe('PhoneCockpit pane-grid shell', () => {
     // outweighs the strips, so equal rows cannot starve it (design3 §3 fr-share rule).
     expect((document.querySelector('[data-pane="bandActivity"]') as HTMLElement).dataset.fit).toBe('content')
     expect((document.querySelector('[data-pane="voiceKeyer"]') as HTMLElement).dataset.fit).toBe('content')
-    expect((document.querySelector('[data-pane="dsp"]') as HTMLElement).dataset.fit).toBe('content')
+    expect((document.querySelector('[data-pane="receiver"]') as HTMLElement).dataset.fit).toBe('content')
     const phLog = document.querySelector('[data-pane="log"]') as HTMLElement
     expect(phLog.dataset.fit).toBe('fill')
     expect(phLog.style.flex).toContain('--cockpit-pane-flex')
@@ -488,10 +494,18 @@ describe('PhoneCockpit pane-grid shell', () => {
   })
 
   it('maxCols caps the tier at 2 when a third column would sit empty', async () => {
-    // No aux pane can render (rig reports no DSP capability and no scope feed) → even an
-    // ultrawide region stays 2-col: a 3-track template with an empty middle is the "band
-    // of empty black" rebuilt.
-    renderCockpit({ snap: makeSnap({ nb: null, nr: null, nrLevel: null, agc: null }) })
+    // No aux pane renders → even an ultrawide region stays 2-col: a 3-track template with
+    // an empty middle is the "band of empty black" rebuilt.
+    //
+    // ⚠️ THE AUX COLUMN IS EMPTIED BY THE MENU NOW, not by a silent rig. Its occupants are
+    // the rig-scope pane (which needs a native panadapter streaming, and the stubbed
+    // PhoneScope never reports one) and the two chain panes, which always render until they
+    // are unticked. The old fixture — a rig reporting no DSP — leaves both chain panes up,
+    // so it would now assert 3 and prove nothing about the cap.
+    renderCockpit({
+      snap: makeSnap({ nb: null, nr: null, nrLevel: null, agc: null }),
+      panels: fakePanels(['receiver', 'transmitter']),
+    })
     const region = document.querySelector('.cockpit-panes')!
     stubWidth(region, 1800)
     act(() => fire!())
@@ -501,7 +515,8 @@ describe('PhoneCockpit pane-grid shell', () => {
     cleanup()
 
     // Band Activity absent (no onWorkSpot wire) → the leading 3-col track would be empty,
-    // so the tier is likewise capped at 2 with aux panes present.
+    // so the tier is likewise capped at 2 with aux panes present. (No `panels` prop at all
+    // here, which is the remote observer's shape: every pane shows and the ⊞ menu hides.)
     render(<PhoneCockpit snap={makeSnap()} theme="dark" spots={[]} />)
     const region2 = document.querySelector('.cockpit-panes')!
     stubWidth(region2, 1800)

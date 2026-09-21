@@ -244,7 +244,7 @@ describe('hiding the Phone voice keyer', () => {
     // entry may stop it.
     const r = render(view())
     await act(async () => {})
-    r.rerender(view(['dsp']))
+    r.rerender(view(['receiver']))
     await act(async () => {})
     expect(document.querySelector('[data-pane="voiceKeyer"] .vk')).not.toBeNull()
     expect(stopVoice, 'an unrelated ⊞ toggle aborted the voice keyer').not.toHaveBeenCalled()
@@ -387,13 +387,13 @@ describe('hiding the Phone voice keyer', () => {
 
   it('an Undo that ends nothing carries no warning', async () => {
     // The converse, same reason as the entry notes: a warning the operator cannot act on
-    // teaches him to ignore the next one. Undoing a re-tick of DSP Functions hides a pane
-    // whose hide ends nothing — which is every entry in every vocabulary but the keyer's.
+    // teaches him to ignore the next one. Undoing a re-tick of Receiver hides a pane whose
+    // hide ends nothing — which is every entry in every vocabulary but the keyer's.
     render(<LivePanels />)
     await act(async () => {})
-    toggle(/DSP Functions/, false)
+    toggle(/Receiver/, false)
     await act(async () => {})
-    toggle(/DSP Functions/, true)
+    toggle(/Receiver/, true)
     await act(async () => {})
     const undo = within(openMenu()).getByRole('button', { name: /undo last change/i })
     expect((undo as HTMLButtonElement).disabled).toBe(false)

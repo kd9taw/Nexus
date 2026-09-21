@@ -38,12 +38,21 @@ interface Props {
   onSnap?: (snap: AppSnapshot) => void
   /** Surface a failure to the operator — silence here reads as "the button is broken". */
   onError?: (msg: string) => void
+  /** ⭐ WHY THIS CONTROL IS DEAD, when the host knows and the control cannot (2026-09-20).
+   *
+   *  The host used to answer that by not rendering this at all — Phone gated it on `catOk` —
+   *  and a control that VANISHES is indistinguishable from one that was never built, which
+   *  for split is the worst case in the app: it is the first thing a DX chaser looks for.
+   *  Passing the reason in keeps ONE fact driving both halves, the disabled buttons and the
+   *  printed mark, so they cannot disagree. Omitted ⇒ nothing is wrong and nothing is said,
+   *  which is what CW and Operate pass. */
+  unavailable?: { mark: string; title: string }
 }
 
-export function SplitControl({ snap, onSnap, onError }: Props) {
+export function SplitControl({ snap, onSnap, onError, unavailable }: Props) {
   const control = useStationControl()
   // A browser needs the station's splitTuning hint; it is off while that browser's TX is armed.
-  const allowed = useStationCapability('splitTuning') || control
+  const allowed = (useStationCapability('splitTuning') || control) && unavailable == null
   // Local keeps its own wording; a browser is told what the station answered (busy, not sent,
   // outside the licence).
   const failed = (local: string) => (error: unknown) => onError?.(control ? local : controlFailureMessage(error))
@@ -114,6 +123,13 @@ export function SplitControl({ snap, onSnap, onError }: Props) {
       >
         +
       </button>
+      {/* TEXT, never colour alone, and the glyph is decoration: the WORD is what a screen
+          reader and a monochrome display get. Same shape as the cockpit's own ⊘ marks. */}
+      {unavailable && (
+        <span className="ph-unavail" role="note" title={unavailable.title}>
+          <span aria-hidden="true">⊘</span> {unavailable.mark}
+        </span>
+      )}
     </div>
   )
 }

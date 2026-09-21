@@ -120,44 +120,89 @@ describe('the analog levels a voice operator rides', () => {
 
   it('keeps RF gain and transmit power apart', () => {
     // `RF` and `RFPOWER` are different Hamlib levels and different knobs on the radio.
-    // Reporting only RF gain must not put a value into the header's transmit-power slider.
+    // Reporting only RF gain must not put a value into the transmit-power slider.
+    //
+    // ⚠️ REWRITTEN WITH THE 2026-09-20 RULING, because its old second line used the ABSENCE
+    // of the AF slider as its proxy — and under the ruling nothing is absent any more, so
+    // the proxy would have gone permanently red while saying nothing about RF-versus-power.
+    // What it was always reaching for is asserted directly instead: this rig's 0.3 RF gain
+    // reads on the RF control and NOWHERE ELSE. 30% appearing on the power slider would mean
+    // the receive gain had been plumbed into the transmitter — which is the whole case.
     mount({ rfGain: 0.3 })
-    expect(screen.getByLabelText('RF gain')).toBeTruthy()
-    expect(screen.queryByLabelText('AF gain')).toBeNull()
+    expect((screen.getByLabelText('RF gain') as HTMLInputElement).value).toBe('30')
+    const power = screen.getByLabelText('Power') as HTMLInputElement
+    expect(power.value, 'the receive RF gain reached the transmit-power slider').not.toBe('30')
+    // …and they are not even in the same place any more: RF gain is a receive control and
+    // lives in the receive chain, while power stays in the header with the transmit chrome.
+    expect(screen.getByLabelText('RF gain').closest('[data-pane]')!.getAttribute('data-pane')).toBe('receiver')
+    expect(power.closest('[data-pane]'), 'the power slider drifted into a pane').toBeNull()
   })
 })
 
-describe('and the dead controls it must not create', () => {
-  it('shows NO AF slider on a rig that does not report one', () => {
+// ⭐ THESE FOUR USED TO PIN THE OPPOSITE, AND THE REASON THEY GAVE WAS OVERRULED, NOT FORGOTTEN.
+//
+// The reason, from this file's twin and quoted in it: *"a control that does nothing is worse
+// than none. An auto-notch-only radio must not grow a frequency slider with nothing behind
+// it."* It applied here unchanged — a live AF slider over a radio with no CAT AF gain is a lie
+// about the radio.
+//
+// OPERATOR RULING, 2026-09-20: overruled. A control that VANISHES is indistinguishable from
+// one that was never built, and of the three things an absent AF slider could mean — the radio
+// has no CAT AF gain, the backend does not expose it, Nexus never wrote it — the operator acts
+// on the third, because it is the only one he can do anything about. The argument survives as
+// a CONSTRAINT: the control must be visibly dead and must say why. That is what each assertion
+// below now demands, and it is three things — present AND disabled AND the reason — because
+// any two of them pass on a half-built control.
+describe('and the dead controls it must not HIDE', () => {
+  /** Present, disabled, and carrying a reason. */
+  function deadAndSaid(el: HTMLElement | null, what: string) {
+    expect(el, `${what}: not on screen — a vanished control reads as one Nexus never built`).toBeTruthy()
+    expect((el as HTMLInputElement).disabled, `${what}: live over a radio that does not report it`).toBe(true)
+    const mark = el!.closest('[data-chain]')?.querySelector('.ph-unavail')
+    expect(mark, `${what}: dead and silent — the operator cannot tell "your radio can't" from "Nexus didn't"`).not.toBeNull()
+    expect(mark!.textContent, `${what}: the reason is not text`).toMatch(/\S/)
+  }
+
+  it('shows the AF slider DISABLED, with the reason, on a rig that does not report one', () => {
     mount({ rfGain: 0.5, squelch: 0.5 })
-    expect(screen.queryByLabelText('AF gain')).toBeNull()
+    deadAndSaid(screen.queryByLabelText('AF gain'), 'AF gain')
+    // …and its two neighbours are LIVE in the same render, which is what makes this able to
+    // differ: a build that marked the whole pane dead would pass the line above alone.
+    expect((screen.getByLabelText('RF gain') as HTMLInputElement).disabled).toBe(false)
+    expect((screen.getByLabelText('Squelch') as HTMLInputElement).disabled).toBe(false)
   })
 
-  it('shows NO RF gain slider on a rig that does not report one', () => {
+  it('shows the RF gain slider DISABLED, with the reason, on a rig that does not report one', () => {
     mount({ afGain: 0.5, squelch: 0.5 })
-    expect(screen.queryByLabelText('RF gain')).toBeNull()
+    deadAndSaid(screen.queryByLabelText('RF gain'), 'RF gain')
+    expect((screen.getByLabelText('AF gain') as HTMLInputElement).disabled).toBe(false)
   })
 
-  it('shows NO squelch slider on a rig that does not report one', () => {
+  it('shows the squelch slider DISABLED, with the reason, on a rig that does not report one', () => {
     mount({ afGain: 0.5, rfGain: 0.5 })
-    expect(screen.queryByLabelText('Squelch')).toBeNull()
+    deadAndSaid(screen.queryByLabelText('Squelch'), 'squelch')
+    expect((screen.getByLabelText('AF gain') as HTMLInputElement).disabled).toBe(false)
   })
 
-  it('control: a bare rig grows none of them', () => {
-    // Without this, every queryBy-toBeNull above would pass on a component that rendered
-    // nothing at all, which is the failure mode of a negative assertion.
+  it('control: a bare rig grows all three, every one dead and every one saying why', () => {
+    // The direction this control guards has INVERTED with the ruling. It used to stop the
+    // three "queryBy-toBeNull" assertions passing on a component that rendered nothing at
+    // all; the risk now is the mirror image — three LIVE sliders over a radio that reports
+    // no level at all, which is the lie the overruled argument was written against.
     mount({})
-    expect(screen.queryByLabelText('AF gain')).toBeNull()
-    expect(screen.queryByLabelText('RF gain')).toBeNull()
-    expect(screen.queryByLabelText('Squelch')).toBeNull()
+    deadAndSaid(screen.queryByLabelText('AF gain'), 'AF gain')
+    deadAndSaid(screen.queryByLabelText('RF gain'), 'RF gain')
+    deadAndSaid(screen.queryByLabelText('Squelch'), 'squelch')
   })
 
-  it('control: the pane still exists for a rig whose ONLY level is one of the new ones', () => {
-    // The #95 lesson from the other side — the pane's existence test is a separate boolean
-    // from the control's, so a rig reporting squelch and no NR and no AGC would have had the
-    // control built and then never rendered.
+  it('control: a rig whose ONLY level is one of these still gets it, live', () => {
+    // The #95 lesson from the other side. It used to be about the PANE's existence being a
+    // separate boolean from the control's — a rig reporting squelch and no NR and no AGC had
+    // the control built and then never rendered, because `canDspLevels` said the pane could
+    // not exist. That whole boolean is gone with the rebuild (the receive pane always
+    // renders), so what is left to check is the control itself.
     mount({ squelch: 0.2, nrLevel: undefined, agc: undefined })
-    expect(screen.getByLabelText('Squelch')).toBeTruthy()
+    expect((screen.getByLabelText('Squelch') as HTMLInputElement).disabled).toBe(false)
   })
 })
 

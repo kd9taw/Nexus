@@ -8809,6 +8809,41 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-1);
 }
 
+/* THE TWO CHAIN PANES (Phone Receiver / Transmitter, 2026-09-20). One wrapping row of
+   control groups in signal order; the pane is fit="content", so the wrap IS the height and
+   nothing here may set one. Same family as .ph-dsp-levels above, which the CW cockpit still
+   uses — deliberately NOT shared, because these two wrap groups rather than controls. */
+.ph-chain {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-1) var(--space-2);
+}
+/* One control plus whatever it has to say about itself. It is the ⊘ anchor, so it must stay
+   a box around exactly ONE control — see the note in PhoneCockpit's RX_FUNCS. */
+.ph-chain-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+/* ⊘ — a control the radio cannot drive, and why. Dim rather than alarming: this is a fact
+   about the station, not a fault, and it sits beside controls that are working. The glyph is
+   aria-hidden in the markup and the WORD carries the meaning, so nothing here is colour-only
+   and a monochrome display loses nothing. */
+.ph-unavail {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: help;
+}
+
 /* Rig scope controls (native Icom CI-V) — a compact strip that drives the radio's panadapter. */
 .ph-rigscope {
   display: flex;
