@@ -1354,7 +1354,28 @@ export const EN = {
     'Section "{{section}}" isn\'t a known ARRL/RAC section — required to log.',
   'logEntry.fd.logged': 'Logged {{call}} {{exchange}} ({{mode}})',
   'logEntry.fd.failed': 'FD log failed',
+  // ⭐ FOUR OWN-DUPE SENTENCES, ONE PER SHAPE OF `DupeRule`. `contestDupe` applies exactly
+  // the components a ruleset's rule names, so a sentence that names the rig's CURRENT band
+  // and mode class unconditionally sends the operator to look somewhere the contact is not —
+  // and the warning that was RIGHT gets read as broken. `by_band` and `by_mode_class` vary
+  // INDEPENDENTLY, hence four; the one below is the both-named case and is unchanged.
+  //
+  // Seven of the nine shipped rulesets whose verdict reaches this sentence name fewer than
+  // three components: CQ WW and WPX (five) drop the mode class, Sweepstakes (two) drops both
+  // — rule 2.2, a station is worked once. Only Field Day and Winter Field Day name all three.
+  //
+  // Four complete sentences rather than a frame plus an interpolated fragment: the fragment
+  // would have to carry its own preposition ("on 20m" but "in PH"), which is prose and differs
+  // per language and per token, and the no-components case is a different clause entirely, not
+  // a fragment at all. `logEntry.fd.dupe.club` keeps both on purpose — `contestDupe` matches a
+  // club key RAW, ungated by the rule, so a club dupe really is on this band in this mode.
   'logEntry.fd.dupe.own': 'Dupe: {{call}} is already in this position\'s log on {{band}} {{mode}}',
+  'logEntry.fd.dupe.ownAnyMode':
+    'Dupe: {{call}} is already in this position\'s log on {{band}} — this contest counts a station once per band, any mode',
+  'logEntry.fd.dupe.ownAnyBand':
+    'Dupe: {{call}} is already in this position\'s log in {{mode}} — this contest counts a station once per mode, any band',
+  'logEntry.fd.dupe.ownAnyBandOrMode':
+    'Dupe: {{call}} is already in this position\'s log — this contest counts a station once, regardless of band or mode',
   'logEntry.fd.dupe.club': 'Club dupe: another position already worked {{call}} on {{band}} {{mode}} — logging is allowed but adds no points',
   'logEntry.fd.needField': 'Enter their {{field}} to log.',
   'logEntry.fd.badField': '{{field}} "{{value}}" isn\'t a known value — required to log.',
