@@ -393,6 +393,9 @@ impl RadioLoop {
                 RadioLevel::NoiseReduction => self.last_nr_level = Some(desired),
                 RadioLevel::Compression => self.last_comp_level = Some(desired),
                 RadioLevel::NotchFrequency => self.last_notch_freq_hz = Some(desired),
+                RadioLevel::AfGain => self.last_af_gain = Some(desired),
+                RadioLevel::RfGain => self.last_rf_gain = Some(desired),
+                RadioLevel::Squelch => self.last_squelch = Some(desired),
             }
         }
         for &(level, actual) in readback.levels() {
@@ -402,6 +405,9 @@ impl RadioLoop {
                 RadioLevel::NoiseReduction => engine.observe_rig_nr_level(actual),
                 RadioLevel::Compression => engine.observe_rig_comp_level(actual),
                 RadioLevel::NotchFrequency => engine.observe_rig_notch_freq_hz(actual),
+                RadioLevel::AfGain => engine.observe_rig_af_gain(actual),
+                RadioLevel::RfGain => engine.observe_rig_rf_gain(actual),
+                RadioLevel::Squelch => engine.observe_rig_squelch(actual),
             }
         }
         if let Some(power) = readback.radio().power() {

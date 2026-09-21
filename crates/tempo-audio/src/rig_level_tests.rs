@@ -1,13 +1,19 @@
 use super::*;
 use tempo_app::engine::remote_radio::RadioLevel;
 
-fn choices() -> [(RadioLevel, f32, f32); 5] {
+fn choices() -> [(RadioLevel, f32, f32); 8] {
     [
         (RadioLevel::Power, 0.5, 0.35),
         (RadioLevel::MicGain, 0.5, 0.35),
         (RadioLevel::NoiseReduction, 0.5, 0.35),
         (RadioLevel::Compression, 0.5, 0.35),
         (RadioLevel::NotchFrequency, 600.0, 1500.0),
+        // The three analog levels. Their whole contribution here is the TOKEN: the assertion
+        // below reads the literal `L …` line off a real socket, so `AF`/`RF`/`SQL` are pinned
+        // as the bytes a rigctld sees rather than as a constant this tree compares to itself.
+        (RadioLevel::AfGain, 0.5, 0.35),
+        (RadioLevel::RfGain, 0.5, 0.35),
+        (RadioLevel::Squelch, 0.5, 0.35),
     ]
 }
 fn changes(peer: &Peer) -> Vec<String> {

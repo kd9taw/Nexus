@@ -1734,6 +1734,24 @@ export async function setNotchFreq(hz: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_notch_freq', { hz })
 }
 
+/** Set AF gain (the rig's volume) as a 0.0–1.0 fraction.
+ *
+ * ⚠️ On a station whose soundcard is fed from the rig's speaker or headphone jack this is
+ * also the DECODER's audio level — zero here stops FT8/RTTY/PSK, not just the speaker. */
+export async function setAfGain(gain: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_af_gain', { gain })
+}
+
+/** Set RF gain (RECEIVE front-end gain, not transmit power) as a 0.0–1.0 fraction. */
+export async function setRfGain(gain: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_rf_gain', { gain })
+}
+
+/** Set the squelch threshold as a 0.0–1.0 fraction. */
+export async function setSquelch(level: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_squelch', { level })
+}
+
 /** Set the AGC speed — `Engine::AGC_SPEEDS`, in the order the cockpits show them. */
 export async function setAgc(speed: 'auto' | 'fast' | 'mid' | 'slow' | 'off'): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_agc', { speed })

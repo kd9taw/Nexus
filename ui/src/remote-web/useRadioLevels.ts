@@ -1,13 +1,14 @@
 import { useContext, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { pushToast } from '../toast'
-import { setRfPower, setMicGain, setNrLevel, setCompLevel, setNotchFreq } from '../api'
+import { setRfPower, setMicGain, setNrLevel, setCompLevel, setNotchFreq, setAfGain, setRfGain, setSquelch } from '../api'
 import type { AppSnapshot } from '../types'
 import { RemoteOperationsContext, useStationCapability, useStationControl } from '../stationAccess'
 import { controlFailureMessage } from './control-failure'
 import { useRemoteStation } from './amplifier-observation'
 import type { ControlContext, RadioLevel, StationAction } from './station-operation'
 
-const fields = { power: 'rfPower', micGain: 'micGain', nr: 'nrLevel', compression: 'compLevel', notch: 'notchFreqHz' } as const
+const fields = { power: 'rfPower', micGain: 'micGain', nr: 'nrLevel', compression: 'compLevel', notch: 'notchFreqHz',
+  afGain: 'afGain', rfGain: 'rfGain', squelch: 'squelch' } as const
 
 type Draft = { level: RadioLevel; expected: number; value: number; mode: string;
   context: ControlContext; leaseId: string; revision: number; boot: string; canceled: boolean }
@@ -57,6 +58,9 @@ export function useRadioLevels(snap: AppSnapshot) {
         case 'nr': return setNrLevel(value)
         case 'compression': return setCompLevel(value)
         case 'notch': return setNotchFreq(value)
+        case 'afGain': return setAfGain(value)
+        case 'rfGain': return setRfGain(value)
+        case 'squelch': return setSquelch(value)
       }
     }
     if (!can(level) || !operations || !context || !Number.isFinite(value)) throw Error('notController')

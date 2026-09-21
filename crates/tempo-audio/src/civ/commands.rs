@@ -327,6 +327,38 @@ pub fn parse_mic_gain_raw(f: &Frame) -> Option<u16> {
 /// A `0x14` level sub-command: Noise-Reduction level = 0x06, Noise-Blanker level = 0x12.
 pub const LVL_NR: u8 = 0x06;
 pub const LVL_NB: u8 = 0x12;
+/// The three ANALOG levels on the same `0x14` family: AF gain (volume), RF gain (receive
+/// front-end gain, NOT transmit power) and squelch.
+///
+/// THESE BYTES WERE READ OFF THE WIRE, not off a table from memory. Hamlib 4.5.5's own Icom
+/// backend was driven against a pty with `rigctl -m 3073` (IC-7300) and the frames captured:
+/// `L AF 0.5` → `14 01 01 27`, `L RF 0.5` → `14 02 01 27`, `L SQL 0.5` → `14 03 01 27`, and
+/// the reads `l AF`/`l RF`/`l SQL` → `14 01`/`14 02`/`14 03`. The same capture produced
+/// `14 0a` for RFPOWER, `14 0b` for MICGAIN and `14 06` for NR — three constants this file
+/// already held, which is the positive control that the capture reports real bytes rather
+/// than an artefact of the harness. The `01 27` payload is BCD 127, exactly what
+/// [`level_to_bcd2`] produces for 50%.
+pub const LVL_AF: u8 = 0x01;
+pub const LVL_RF: u8 = 0x02;
+pub const LVL_SQL: u8 = 0x03;
+
+/// Hamlib level token → its `0x14` sub-command, for the fractional 0..1 levels the generic
+/// [`set_dsp_level`] / [`read_dsp_level`] pair serves. One table shared by the broker's
+/// getter and setter so the two cannot disagree — exactly what [`func_sub`] does for the
+/// `0x16` on/off family.
+///
+/// RFPOWER (`14 0A`) and MICGAIN (`14 0B`) are in the same CI-V family and deliberately NOT
+/// here: they have their own named builders above, and the broker answers them from those.
+pub fn level_sub(token: &str) -> Option<u8> {
+    Some(match token {
+        "AF" => LVL_AF,
+        "RF" => LVL_RF,
+        "SQL" => LVL_SQL,
+        "NR" => LVL_NR,
+        "NB" => LVL_NB,
+        _ => return None,
+    })
+}
 /// Set a `14 <sub>` DSP level from a 0–100 percent (mapped onto the 0–255 scale), like mic gain.
 pub fn set_dsp_level(radio: u8, sub: u8, percent: u8) -> Frame {
     let level = u16::from(percent.min(100)) * 255 / 100;
@@ -811,6 +843,53 @@ mod tests {
         assert_eq!(agc_civ_from_hamlib(3), 0x03); // SLOW
         assert_eq!(agc_hamlib_from_civ(0x02), 5); // MID → MEDIUM
         assert_eq!(agc_hamlib_from_civ(0x03), 3); // SLOW
+    }
+
+    /// THE ANALOG LEVELS REACH THE RIGHT REGISTER — and, just as importantly, not each
+    /// other's. A transposed sub-command would move a control the operator never touched:
+    /// `L AF 0` landing on `14 02` turns the receiver down instead of the speaker, and
+    /// landing on `14 03` closes the squelch and goes deaf.
+    ///
+    /// ⚠️ EVERY VALUE BELOW DIFFERS. Driving all three with one number is inert — a table
+    /// with AF and RF swapped produces byte-identical frames and passes. Distinct percentages
+    /// make the payload identify which level it came from, so a swap shows up in both the sub
+    /// and the value.
+    #[test]
+    fn the_analog_level_subs_are_the_bytes_hamlibs_icom_backend_puts_on_the_wire() {
+        // Captured from Hamlib 4.5.5 `rigctl -m 3073` against a pty; see `LVL_AF`'s doc.
+        for (token, sub, percent, bcd) in [
+            ("AF", 0x01u8, 20u8, 51u16),
+            ("RF", 0x02, 60, 153),
+            ("SQL", 0x03, 90, 229),
+        ] {
+            assert_eq!(level_sub(token), Some(sub), "{token} sub-command");
+            let f = set_dsp_level(0xA2, level_sub(token).unwrap(), percent);
+            assert_eq!(f.cmd, 0x14);
+            assert_eq!(
+                f.data[0], sub,
+                "{token} must not ride another level's register"
+            );
+            assert_eq!(
+                level_from_bcd2(f.data[1], f.data[2]),
+                bcd,
+                "{token} payload"
+            );
+            assert_eq!(
+                read_dsp_level(0xA2, sub).data,
+                vec![sub],
+                "{token} read frame"
+            );
+        }
+        // The two in-repo constants the same wire capture reproduced — the positive control
+        // that the captured table is the real Icom one and not this file talking to itself.
+        assert_eq!(level_sub("NR"), Some(0x06));
+        assert_eq!(level_sub("NB"), Some(0x12));
+        // RFPOWER and MICGAIN are the same CI-V family but have their own builders, and the
+        // broker answers them before it ever reaches this table.
+        assert_eq!(level_sub("RFPOWER"), None);
+        assert_eq!(level_sub("MICGAIN"), None);
+        assert_eq!(level_sub("STRENGTH"), None);
+        assert_eq!(level_sub(""), None);
     }
 
     #[test]

@@ -13145,6 +13145,36 @@ fn set_notch_freq(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot
     Ok(eng.snapshot())
 }
 
+/// Set AF GAIN as a 0.0–1.0 fraction — the rig's volume; the radio loop applies it.
+///
+/// ⚠️ ON SOME STATIONS THIS IS ALSO THE DECODER'S AUDIO LEVEL. A soundcard fed from the rig's
+/// speaker or headphone jack sits behind this control, so zero here stops FT8/RTTY/PSK as
+/// well as the speaker. Nothing is clamped or refused — it is the operator's knob and alerts
+/// notify rather than act; the cockpit warns at the slider.
+#[tauri::command(async)]
+fn set_af_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_af_gain(gain);
+    Ok(eng.snapshot())
+}
+
+/// Set RF GAIN as a 0.0–1.0 fraction — RECEIVE front-end gain, not transmit power (that is
+/// `set_rf_power`, and Hamlib keeps them apart as `RF` and `RFPOWER`).
+#[tauri::command(async)]
+fn set_rf_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_rf_gain(gain);
+    Ok(eng.snapshot())
+}
+
+/// Set SQUELCH as a 0.0–1.0 fraction; the radio loop applies it to the rig.
+#[tauri::command(async)]
+fn set_squelch(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_squelch(level);
+    Ok(eng.snapshot())
+}
+
 /// Set the AGC speed ("fast"|"mid"|"slow"); the radio loop applies it to the rig.
 #[tauri::command(async)]
 fn set_agc(state: State<'_, SharedEngine>, speed: String) -> Result<AppSnapshot, String> {
@@ -24850,6 +24880,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_nr_level,
             set_comp_level,
             set_notch_freq,
+            set_af_gain,
+            set_rf_gain,
+            set_squelch,
             set_agc,
             set_split,
             set_rig_func,

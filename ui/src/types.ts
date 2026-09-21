@@ -1183,6 +1183,16 @@ export interface RadioStatus {
   compLevel?: number | null
   /** MANUAL-notch frequency in HZ — not a 0..1 level. Null when the rig has no NOTCHF. */
   notchFreqHz?: number | null
+  /** AF gain (the rig's volume) 0.0–1.0 — rig read-back or commanded; absent when the rig
+   * doesn't report it. ⚠️ On a station whose soundcard is fed from the rig's speaker or
+   * headphone jack this is ALSO the decoder's audio level, so zero here stops FT8/RTTY/PSK.
+   * Nexus cannot tell that path from a fixed-level USB codec, so the control warns. */
+  afGain?: number | null
+  /** RF gain 0.0–1.0 — RECEIVE front-end gain, NOT `rfPower` above. */
+  rfGain?: number | null
+  /** Squelch 0.0–1.0. Normal practice on FM; on every other mode a raised squelch is the
+   * classic reason a station goes silently deaf to its own decoder. */
+  squelch?: number | null
   /** MANUAL notch (Hamlib MN), distinct from `notch` which is the AUTOMATIC notch (ANF).
    *  A radio may report either, both or neither; each toggle renders only when non-null. */
   manualNotch?: boolean | null

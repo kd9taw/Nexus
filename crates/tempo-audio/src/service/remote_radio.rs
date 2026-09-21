@@ -154,6 +154,18 @@ impl RadioLoop {
                             self.last_notch_freq_hz = Some(desired);
                             self.notch_freq_giveup = None;
                         }
+                        RadioLevel::AfGain => {
+                            self.last_af_gain = Some(desired);
+                            self.af_gain_giveup = None;
+                        }
+                        RadioLevel::RfGain => {
+                            self.last_rf_gain = Some(desired);
+                            self.rf_gain_giveup = None;
+                        }
+                        RadioLevel::Squelch => {
+                            self.last_squelch = Some(desired);
+                            self.squelch_giveup = None;
+                        }
                     }
                 }
                 match readback.receiver_dsp() {

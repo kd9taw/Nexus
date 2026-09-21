@@ -1,12 +1,15 @@
 use super::*;
 
-fn choices() -> [(RadioLevel, f32, f32); 5] {
+fn choices() -> [(RadioLevel, f32, f32); 8] {
     [
         (RadioLevel::Power, 0.5, 0.35),
         (RadioLevel::MicGain, 0.5, 0.35),
         (RadioLevel::NoiseReduction, 0.5, 0.35),
         (RadioLevel::Compression, 0.5, 0.35),
         (RadioLevel::NotchFrequency, 600.0, 1500.0),
+        (RadioLevel::AfGain, 0.5, 0.35),
+        (RadioLevel::RfGain, 0.5, 0.35),
+        (RadioLevel::Squelch, 0.5, 0.35),
     ]
 }
 fn observe(s: &mut Station, level: RadioLevel, value: f32) {
@@ -16,6 +19,9 @@ fn observe(s: &mut Station, level: RadioLevel, value: f32) {
         RadioLevel::NoiseReduction => s.engine.observe_rig_nr_level(value),
         RadioLevel::Compression => s.engine.observe_rig_comp_level(value),
         RadioLevel::NotchFrequency => s.engine.observe_rig_notch_freq_hz(value),
+        RadioLevel::AfGain => s.engine.observe_rig_af_gain(value),
+        RadioLevel::RfGain => s.engine.observe_rig_rf_gain(value),
+        RadioLevel::Squelch => s.engine.observe_rig_squelch(value),
     }
     let mode = s.engine.rig_mode_effective();
     s.sample(14_074_000, &mode);
@@ -27,6 +33,9 @@ fn set(s: &mut Station, level: RadioLevel, value: f32) {
         RadioLevel::NoiseReduction => s.engine.set_nr_level(value),
         RadioLevel::Compression => s.engine.set_comp_level(value),
         RadioLevel::NotchFrequency => s.engine.set_notch_freq_hz(value),
+        RadioLevel::AfGain => s.engine.set_af_gain(value),
+        RadioLevel::RfGain => s.engine.set_rf_gain(value),
+        RadioLevel::Squelch => s.engine.set_squelch(value),
     }
 }
 fn queue(
@@ -87,6 +96,9 @@ fn remote_levels_commit_actual_readback_preserving_settings_decoder_and_tx() {
             RadioLevel::NoiseReduction => snapshot.radio.nr_level,
             RadioLevel::Compression => snapshot.radio.comp_level,
             RadioLevel::NotchFrequency => snapshot.radio.notch_freq_hz,
+            RadioLevel::AfGain => snapshot.radio.af_gain,
+            RadioLevel::RfGain => snapshot.radio.rf_gain,
+            RadioLevel::Squelch => snapshot.radio.squelch,
         };
         assert_eq!(displayed, Some(actual));
         assert_eq!(s.engine.settings, settings);
@@ -248,5 +260,94 @@ fn remote_power_keeps_each_native_mode_ceiling_and_rechecks_a_lowered_limit() {
         assert!(!request.commit_level_readback(&mut s.engine, Some(cap)));
         assert!(!matches!(receipt.outcome(), Outcome::Applied { .. }));
         assert!(!s.engine.tx_enabled());
+    }
+}
+
+/// The snapshot value for one of the three analog levels — the number a slider would show.
+fn shown(s: &mut Station, level: RadioLevel) -> Option<f32> {
+    let snapshot = s.engine.snapshot();
+    match level {
+        RadioLevel::AfGain => snapshot.radio.af_gain,
+        RadioLevel::RfGain => snapshot.radio.rf_gain,
+        RadioLevel::Squelch => snapshot.radio.squelch,
+        other => unreachable!("this helper covers the three analog levels, not {other:?}"),
+    }
+}
+
+/// AF GAIN, RF GAIN AND SQUELCH SHOW THE RADIO, NOT OUR MEMORY OF IT.
+///
+/// ⚠️ THE TWO NUMBERS DISAGREE ON PURPOSE, and that is the whole test. With the rig reporting
+/// back the same value that was commanded, this passes on a snapshot wired to the COMMANDED
+/// field that never asks the radio at all — the assertion cannot tell the two apart. 0.30
+/// commanded against 0.80 reported can: drop the observation, or read the desired field, and
+/// it reads 0.30.
+///
+/// The first assertion is the other half, and it is why these controls are not a memory
+/// dressed as a reading: before the rig has said anything there is no value at all, so the
+/// slider does not render. The commanded value can only ever appear AFTER a reading has.
+#[test]
+fn af_rf_and_squelch_display_the_rigs_reading_over_the_commanded_value() {
+    const COMMANDED: f32 = 0.30;
+    const REPORTED: f32 = 0.80;
+    for level in [RadioLevel::AfGain, RadioLevel::RfGain, RadioLevel::Squelch] {
+        let mut s = Station::new(OperatingMode::Phone);
+        assert_eq!(
+            shown(&mut s, level),
+            None,
+            "{level:?}: nothing read and nothing commanded must show nothing"
+        );
+        set(&mut s, level, COMMANDED);
+        assert_eq!(
+            shown(&mut s, level),
+            Some(COMMANDED),
+            "{level:?}: an in-flight command stands until the poll answers"
+        );
+        observe(&mut s, level, REPORTED);
+        assert_eq!(
+            shown(&mut s, level),
+            Some(REPORTED),
+            "{level:?}: the rig's own reading must beat the commanded value"
+        );
+    }
+}
+
+/// The three tokens are Hamlib's, verified against `rig.h` and a live `rigctl -m 1 l ?`:
+/// `AF` is volume, `RF` is RF GAIN (not TX power — `RFPOWER` is that), `SQL` is squelch.
+/// A transposition here would move a control the operator did not touch, so each is pinned
+/// by name and the pair that is easy to swap is pinned against each other.
+#[test]
+fn the_analog_level_tokens_are_the_hamlib_names_and_are_not_transposed() {
+    assert_eq!(
+        RadioLevel::from_name("afGain").map(RadioLevel::token),
+        Some("AF")
+    );
+    assert_eq!(
+        RadioLevel::from_name("rfGain").map(RadioLevel::token),
+        Some("RF")
+    );
+    assert_eq!(
+        RadioLevel::from_name("squelch").map(RadioLevel::token),
+        Some("SQL")
+    );
+    // RF GAIN is a receive control and RFPOWER is a transmit one. Hamlib spells them
+    // differently for that reason and so must we.
+    assert_ne!(RadioLevel::RfGain.token(), RadioLevel::Power.token());
+    assert_eq!(RadioLevel::Power.token(), "RFPOWER");
+    // The wire token is not an accepted name — only the camelCase field names cross the
+    // browser boundary, so a caller cannot smuggle a raw Hamlib token through.
+    for token in ["AF", "RF", "SQL"] {
+        assert!(
+            RadioLevel::from_name(token).is_none(),
+            "{token} is a wire token, not a name"
+        );
+    }
+    // All three are plain 0..1 fractions, so they take the shared percentage display rule
+    // rather than the notch's hertz one.
+    for level in [RadioLevel::AfGain, RadioLevel::RfGain, RadioLevel::Squelch] {
+        assert!(level.valid_reading(0.0) && level.valid_reading(1.0));
+        assert!(!level.valid_reading(1.5) && !level.valid_reading(f32::NAN));
+        assert!(level.valid_target(0.5));
+        assert!(level.same_display_value(0.501, 0.5));
+        assert!(!level.same_display_value(0.51, 0.5));
     }
 }

@@ -762,6 +762,20 @@ pub struct RadioStatus {
     /// not a level like the others. This is where the notch actually sits in the passband.
     #[serde(default)]
     pub notch_freq_hz: Option<f32>,
+    /// AF GAIN (0.0–1.0) — the rig's volume control, read back or commanded; `None` when the
+    /// rig doesn't report it. ⚠️ On a station whose soundcard is fed from the rig's speaker
+    /// or headphone jack this is ALSO the decoder's audio level, so zero here stops
+    /// FT8/RTTY/PSK. The cockpit warns at the control; nothing in the app clamps it.
+    #[serde(default)]
+    pub af_gain: Option<f32>,
+    /// RF GAIN (0.0–1.0) — RECEIVE front-end gain. Not `rf_power` above; Hamlib calls these
+    /// `RF` and `RFPOWER` and transposing them would move the transmitter.
+    #[serde(default)]
+    pub rf_gain: Option<f32>,
+    /// SQUELCH (0.0–1.0) — normal practice on FM, and the other way a station goes silently
+    /// deaf to the decoder everywhere else. `None` when the rig doesn't report it.
+    #[serde(default)]
+    pub squelch: Option<f32>,
     /// AGC time constant as "fast"|"mid"|"slow"; `None` when the rig doesn't report it.
     #[serde(default)]
     pub agc: Option<String>,
