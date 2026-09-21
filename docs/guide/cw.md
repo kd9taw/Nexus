@@ -93,7 +93,8 @@ Levels** offer only what your radio reports over CAT. Those three draw inside on
 title bar and one border instead of three — they are still three separate menu
 entries, each switching its own group and explaining itself when your radio
 cannot feed it. **Sent Echo** holds what you have transmitted this session, so it
-is empty until your first over; **TX Meters** read on transmit. The line explains
+is empty until your first over; **TX Meters** read on transmit and keep the last
+send's readings on screen, dimmed, once the key is up. The line explains
 the screen; the tick is still yours — untick Sent Echo at start-up and it stays away after your first over,
 rather than making you transmit before you can hide it. Once you have unticked an
 entry its line goes with it: the pane is off your screen because you said so, not

@@ -472,8 +472,9 @@ describe('PhoneCockpit pane-grid shell', () => {
 
   it('TX meters render ABOVE the PTT row in the bottom-anchored dock', () => {
     // The dock is `flex: 0 0 auto; position: sticky; bottom: 0` — bottom-anchored — and
-    // TxMeters mounts only while transmitting. Below the PTT row it grows the dock UP
-    // under the held pointer: the button shifts, `onPointerLeave` fires, TX drops
+    // TxMeters grows on key-down (one line of idle hint → up to four rows of readings;
+    // before it was pinned, from nothing at all). Below the PTT row that growth pushes the
+    // dock UP under the held pointer: the button shifts, `onPointerLeave` fires, TX drops
     // mid-over. CW names this hazard and puts the meters first; Phone must match.
     renderCockpit({ snap: makeSnap({ transmitting: true, txSwr: 1.2 }) })
     const meters = document.querySelector('.cockpit-txdock .ph-txmeters')
@@ -507,5 +508,43 @@ describe('PhoneCockpit pane-grid shell', () => {
     act(() => fire!())
     await frame()
     expect(region2.getAttribute('data-cols')).toBe('2')
+  })
+})
+
+// ── the TX meters are a teaching instrument, so they cannot live only mid-over ─────────
+//
+// SWR, ALC, Po and COMP used to render ONLY while keyed: the panel appeared on key-down and
+// vanished on release. For a voice operator that is the wrong half of the QSO — the meter is
+// how you learn your own drive, and a reading you can never look at without also holding the
+// mic key teaches nothing. Operate has had the answer since the anti-bounce ruling: `pinned`
+// retains the last live readings between overs and shows a fixed-height hint before the first
+// one. Phone and CW now pass the same prop; CwCockpit.structure.test.tsx is this test's twin.
+describe('PhoneCockpit TX meters are pinned, not flashed', () => {
+  const meters = () => document.querySelector('.cockpit-txdock .ph-txmeters')
+  const at = (over: Record<string, unknown>) => (
+    <PhoneCockpit snap={makeSnap(over)} theme="dark" onWorkSpot={() => {}} spots={[]} />
+  )
+
+  it('keeps the last over on screen after the key is released', () => {
+    // BEFORE THE FIRST OVER — the panel is on screen saying when it reads. It used to render
+    // nothing at all here, which is indistinguishable from a panel Nexus never built.
+    const r = render(at({}))
+    expect(meters(), 'no TX meters panel while receiving').not.toBeNull()
+    expect(meters()!.textContent).toContain('readings appear on transmit')
+
+    // KEYED — the live reading, undimmed.
+    r.rerender(at({ transmitting: true, txSwr: 2.5, swrScaleVerified: true }))
+    expect(meters()!.textContent).toContain('2.5:1')
+    expect(meters()!.classList.contains('idle')).toBe(false)
+
+    // ⭐ UNKEYED, AND THE RIG HAS STOPPED REPORTING — which is what makes this assertion able
+    // to differ. The snapshot carries no SWR now, so a panel that merely re-rendered what it
+    // was handed would show the hint again (or, before this change, nothing); 2.5:1 can only
+    // be on screen because the last live reading was RETAINED, and `idle` is what says the
+    // operator is looking at a memory rather than a live needle.
+    r.rerender(at({ txSwr: null }))
+    expect(meters()!.textContent).toContain('2.5:1')
+    expect(meters()!.classList.contains('idle')).toBe(true)
+    expect(meters()!.textContent).not.toContain('readings appear on transmit')
   })
 })

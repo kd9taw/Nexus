@@ -359,11 +359,18 @@ function callsignChars(raw: string): string {
  * the rig to CW (the rig-mode policy, wired in App). No contest scoring — by design.
  */
 /** DSP funcs relevant to CW — NB (impulse noise), NR (broadband hiss), Notch/ANF (carriers).
- * COMP/VOX are voice-only, so they're deliberately absent here. Capability-gated like Phone. */
+ * COMP/VOX are voice-only, so they're deliberately absent here. Capability-gated like Phone.
+ *
+ * ⭐ "Auto notch", not "Notch" — the same operator ruling (2026-09-20) that renamed the pair in
+ * Phone, and it reaches here because this is the SAME control: ANF, the one that hunts a carrier
+ * on its own, which a Yaesu's panel calls DNF. Naming it "Notch" in CW while Phone calls it
+ * "Auto notch" would rebuild the misread one cockpit over. CW offers no manual notch — the rig
+ * field is not read here — so this is the whole of the pair in this cockpit. DSP_FUNCS in
+ * `PhoneCockpit.tsx` carries the full reasoning. */
 const CW_DSP_FUNCS = [
   { key: 'nb', label: 'NB', titleKey: 'cw.dsp.nb.title' },
   { key: 'nr', label: 'NR', titleKey: 'cw.dsp.nr.title' },
-  { key: 'notch', label: 'Notch', titleKey: 'cw.dsp.notch.title' },
+  { key: 'notch', label: 'Auto notch', titleKey: 'cw.dsp.notch.title' },
 ] as const
 
 export function CwCockpit({
@@ -1866,12 +1873,14 @@ export function CwCockpit({
           so that is this cockpit keeping its one-click transmits where the operator put them,
           not a safety constraint. Same reading as the pane-region comment above. The TX meters
           keep their ⊞ id (`txmeters` in CW_PANEL_IDS — a readout, not a control) and render at
-          the TOP of the dock: they mount only while keyed, and growing the dock downward would
-          shift the Send button under the operator's pointer mid-QSO. */}
+          the TOP of the dock: the panel changes height on key-down, and growing the dock
+          downward would shift the Send button under the operator's pointer mid-QSO. */}
       <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
-        {/* Live transmit meters (SWR / ALC / Po / COMP) — self-gating: shown only while keyed,
-            and only the meters the rig reports. A CW op wants SWR + Po as they send. */}
-        {shown('txmeters') && <TxMeters radio={snap.radio} />}
+        {/* Transmit meters (SWR / ALC / Po / COMP) — only the meters the rig reports, and
+            `pinned`, so the last send's readings stay on screen (dimmed) after the key is
+            up. CW keys in short bursts: unpinned, the panel appeared and was gone before a
+            reading could be read at all. See PhoneCockpit's dock for the full reasoning. */}
+        {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
         <div className="cw-macros" role="group" aria-label={t('cw.macros.aria')}>
           {/* The buttons ADVERTISE their F-keys, and default Mac keyboards eat bare F-keys

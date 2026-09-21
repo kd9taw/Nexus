@@ -1833,6 +1833,10 @@ function OperateRecall({
       hist={hist}
       contestDupe={fdDupe}
       contestLogsDupes={snap.fieldDay?.dupeRule?.logDupes === true}
+      // `!== false`, not `=== true`: an absent rule is `contestDupe`'s LEGACY_TRIPLE, which
+      // names the band. The two must agree about the rule or the badge and its sentence
+      // describe different contests.
+      contestDupeByBand={snap.fieldDay?.dupeRule?.byBand !== false}
       newEntity={newEntity}
       newBandSlot={newBandSlot}
       newModeSlot={newModeSlot}

@@ -627,3 +627,33 @@ describe('the cockpit says when CAT keying is unproven on this radio', () => {
     expect(warns[0].matches('.caution'), 'the caution jumped ahead of a live error').toBe(false)
   })
 })
+
+// ── the twin of PhoneCockpit.structure.test.tsx's pinned-meters test ──────────────────
+//
+// CW keys in short bursts, so the flash-in was even shorter here than on Phone: the panel
+// appeared for the length of a send and was gone before the operator could read it. Same
+// prop, same reason — the readings are how you learn what your rig is doing, and they have
+// to survive the release to be readable at all.
+describe('CwCockpit TX meters are pinned, not flashed', () => {
+  const meters = () => document.querySelector('.cockpit-txdock .ph-txmeters')
+  const at = (over: Record<string, unknown>) => (
+    <CwCockpit snap={makeSnap(over)} theme="dark" onWorkSpot={() => {}} spots={[]} />
+  )
+
+  it('keeps the last send on screen after the key is released', async () => {
+    const r = await renderCockpit()
+    expect(meters(), 'no TX meters panel while receiving').not.toBeNull()
+    expect(meters()!.textContent).toContain('readings appear on transmit')
+
+    await act(async () => { r.rerender(at({ transmitting: true, txPoW: 45 })) })
+    expect(meters()!.textContent).toContain('45 W')
+    expect(meters()!.classList.contains('idle')).toBe(false)
+
+    // The rig stops reporting once the key is up, so a retained reading is the ONLY way
+    // 45 W can still be on screen — see the Phone twin for why that is the assertion.
+    await act(async () => { r.rerender(at({ txPoW: null })) })
+    expect(meters()!.textContent).toContain('45 W')
+    expect(meters()!.classList.contains('idle')).toBe(true)
+    expect(meters()!.textContent).not.toContain('readings appear on transmit')
+  })
+})

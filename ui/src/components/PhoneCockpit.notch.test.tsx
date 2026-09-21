@@ -14,8 +14,9 @@
 // control renders ONLY when its own field is non-null — so no rig grows a slider that does
 // nothing, which is the failure being reported from the other direction.
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
+import { setRigFunc } from '../api'
 import type { AppSnapshot } from '../types'
 
 vi.mock('../api', () => ({
@@ -105,8 +106,8 @@ describe('#95 — the controls that were missing', () => {
   it('offers a MANUAL notch toggle, distinct from the automatic one', () => {
     mount({ notch: true, manualNotch: false })
     // Both, because a radio can have both and they do different things.
-    expect(screen.getByRole('button', { name: 'Notch' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'MN' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Auto notch' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Manual notch' })).toBeTruthy()
   })
 })
 
@@ -125,8 +126,8 @@ describe('#95 — and the dead controls it must not create', () => {
 
   it('shows NO manual-notch button on a rig with only the automatic notch', () => {
     mount({ notch: true })
-    expect(screen.getByRole('button', { name: 'Notch' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'MN' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Auto notch' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Manual notch' })).toBeNull()
   })
 
   it('control: a bare rig grows none of them', () => {
@@ -135,7 +136,40 @@ describe('#95 — and the dead controls it must not create', () => {
     mount({})
     expect(screen.queryByLabelText('Manual notch frequency in hertz')).toBeNull()
     expect(screen.queryByLabelText('Speech processor depth')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'MN' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Manual notch' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Auto notch' })).toBeNull()
+  })
+})
+
+// ── what the two buttons are CALLED (#95, and an open FTDX-10 report) ──────────────────
+//
+// Both were always wired right — `notch` is Hamlib ANF, `manualNotch` is MN — so this is
+// not about behaviour. It is that a Yaesu's own front panel calls the AUTOMATIC notch DNF
+// and the MANUAL one NOTCH, exactly inverted from the Hamlib vocabulary these buttons wore:
+// the operator pressed "Notch" expecting the manual one and got the hunter. Reported twice.
+//
+// OPERATOR RULING, 2026-09-20: plain function names, the same on every rig and in every
+// locale. Not a per-vendor label table — five rotator models sat dead at the wrong baud on
+// exactly that pattern — and not Hamlib's words, because the report stands.
+//
+// ⚠️ THE PAIR IS THE TEST. Either name asserted alone passes unchanged on a build that has
+// swapped the two, which is the failure being fixed. So each name is looked up AND pressed,
+// and the rig function that comes out the other side is what says the name sits on the right
+// button; a swap makes the FIRST press report `manualNotch`.
+describe('the notch pair is named for what each one does', () => {
+  it('calls them Auto notch and Manual notch, each on its own rig function', () => {
+    vi.mocked(setRigFunc).mockClear()
+    mount({ notch: false, manualNotch: false })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto notch' }))
+    expect(vi.mocked(setRigFunc).mock.calls).toEqual([['notch', true]])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manual notch' }))
+    expect(vi.mocked(setRigFunc).mock.calls).toEqual([['notch', true], ['manualNotch', true]])
+
+    // Both presses above landed, so the card is mounted and populated — which is what lets
+    // these two read as "the old names are gone" rather than "nothing rendered".
     expect(screen.queryByRole('button', { name: 'Notch' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'MN' })).toBeNull()
   })
 })

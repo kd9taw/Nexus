@@ -445,8 +445,14 @@ describe('⊞ Panels — TX Meters say when they have anything to show', () => {
     const box = expectOperable('TX Meters')
     const note = screen.getByText(TX_METERS_WHEN)
     expect(box.getAttribute('aria-describedby')).toBe(note.id)
-    // On receive the panel itself renders nothing, which is exactly why the entry says so.
-    expect(document.querySelector('.ph-txmeters')).toBeNull()
+    // On receive the panel is now PRESENT and says the same thing the entry does — it is
+    // `pinned`, so before the first over it holds a one-line hint that interpolates this very
+    // string (`meters.tx.idle` takes TX_METERS_WHEN). The entry and the panel therefore cannot
+    // drift. Until 2026-09-20 the panel rendered nothing here, which is what the entry's note
+    // was compensating for; the note stays, because it is still what the panel is waiting on.
+    const panel = document.querySelector('.ph-txmeters')
+    expect(panel, 'the pinned panel should hold its idle hint on receive').not.toBeNull()
+    expect(panel!.textContent).toContain(TX_METERS_WHEN)
   })
 
   it('CW: the same id, the same note', async () => {

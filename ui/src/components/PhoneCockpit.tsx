@@ -252,18 +252,37 @@ export const VOICE_KEYER_UNDO_ENDS =
   'away a recording in progress'
 
 /** Expert DSP-function toggles. `key` matches the RadioStatus field + the set_rig_func name; the
- * cockpit only renders those the rig reports as supported (field non-null), so no dead buttons. */
+ * cockpit only renders those the rig reports as supported (field non-null), so no dead buttons.
+ *
+ * ⭐ THE TWO NOTCH LABELS ARE NOT THE RIG'S VOCABULARY, and that is deliberate — everything else
+ * here is. NB/NR/COMP/VOX are printed on the radio's own panel and mean the same thing on every
+ * one; "Notch" is not. A Yaesu calls the AUTOMATIC notch DNF and the MANUAL one NOTCH, so
+ * Hamlib's names (ANF → "Notch", MN → "MN") read to a Yaesu operator as exactly INVERTED: they
+ * pressed Notch for the one you park on a heterodyne and got the hunter. Reported twice — #95
+ * (FT-991A, closed) and an open FTDX-10 report — against correctly wired buttons.
+ *
+ * OPERATOR RULING, 2026-09-20: plain function names, the SAME on every rig. Rejected: a
+ * per-vendor label table (this project has been bitten by per-model tables — five rotator models
+ * sat dead at the wrong baud) and keeping Hamlib's words (the report stands, twice).
+ *
+ * ⚠️ WHY THEY ARE STILL LITERALS and not catalog keys, now that they are plain English rather
+ * than rig tokens: the ruling says the same name in all five locales, and a catalog entry is the
+ * one thing that cannot promise that — five files, five translators, and the pair's whole job is
+ * that AUTO and MANUAL are told apart at a glance. The tooltips beside them ARE translated and
+ * carry the explanation; these two words are the invariant token the sentence refers to.
+ * `PhoneCockpit.notch.test.tsx` pins the pair by pressing each and reading the rig function back,
+ * so a future re-inversion is a red test rather than a third report. */
 const DSP_FUNCS = [
   { key: 'nb', label: 'NB', titleKey: 'phone.dsp.nb.title' },
   { key: 'nr', label: 'NR', titleKey: 'phone.dsp.nr.title' },
-  { key: 'notch', label: 'Notch', titleKey: 'phone.dsp.notch.title' },
+  { key: 'notch', label: 'Auto notch', titleKey: 'phone.dsp.notch.title' },
   { key: 'comp', label: 'COMP', titleKey: 'phone.dsp.comp.title' },
   { key: 'vox', label: 'VOX', titleKey: 'phone.dsp.vox.title' },
   // #95. TWO notches, and they are different controls: `notch` above is the AUTOMATIC
   // notch (Hamlib ANF), which hunts a carrier on its own; this is the MANUAL one you
   // park on a heterodyne, and it is what most operators mean by "notch". Each renders
   // only when the rig reports it, so a radio with one shows one button.
-  { key: 'manualNotch', label: 'MN', titleKey: 'phone.dsp.manualNotch.title' },
+  { key: 'manualNotch', label: 'Manual notch', titleKey: 'phone.dsp.manualNotch.title' },
 ] as const
 
 /** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
@@ -1896,14 +1915,22 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           layout, stored or hand-edited, can move, hide or scroll it away. PTT and Lock
           have no id in the panel vocabulary (unrepresentable beats guarded); the TX
           meters DO keep their ⊞ id — a readout, not a control — but render here, beside
-          the button that keys the rig (they appear only while keyed). */}
+          the button that keys the rig. */}
       <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
-      {/* Transmit meters (SWR/ALC/Po/COMP) — appear only while keyed. At the TOP of the
-          dock, exactly as in CW: the dock is bottom-anchored (sticky bottom), so a child
-          mounting BELOW the PTT row would grow the dock upward and shift the button out
-          from under the operator's held pointer mid-over — onPointerLeave would then
-          unkey the rig. Growth above the row leaves the row's screen position fixed. */}
-      {shown('txmeters') && <TxMeters radio={snap.radio} />}
+      {/* Transmit meters (SWR/ALC/Po/COMP), `pinned`: the readings STAY after the key is
+          released, dimmed, and before the first over the panel holds a one-line hint saying
+          when it reads. They used to render only while keyed, and that is the wrong half of
+          the QSO — this is the meter a voice operator learns their drive from, and a reading
+          that exists only while the mic key is held is one they can never study. Same prop,
+          same reasons, as the Operate strip (the anti-bounce ruling in TxMeters.tsx).
+
+          At the TOP of the dock, exactly as in CW: the dock is bottom-anchored (sticky
+          bottom), so a child GROWING below the PTT row pushes the dock upward and shifts the
+          button out from under the operator's held pointer mid-over — onPointerLeave would
+          then unkey the rig. Pinning removes the mount/unmount but not the growth: the hint
+          is one line and the readings are up to four rows, so the panel still changes height
+          on key-down. Above the row, that growth leaves the row's screen position fixed. */}
+      {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
       {/* ⚠️ NOTHING IN THIS ROW IS MIGRATED, and that is the whole of why this file is on the
           i18n PARTIAL list. PTT is Phone's stop-line census (features/panelState.ts) and

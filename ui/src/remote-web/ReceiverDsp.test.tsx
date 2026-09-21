@@ -85,7 +85,7 @@ function fixture(mode: 'cw' | 'phone' = 'cw', capabilities: ControlCapability[] 
     func: (label: string) => [...ui.container.querySelectorAll<HTMLButtonElement>('.ph-dsp-btn')].find(b => b.textContent === label)! }
 }
 
-it.each([['cw','nb','NB'],['cw','nr','NR'],['cw','notch','Notch'],['phone','nb','NB'],['phone','nr','NR'],['phone','notch','Notch'],['phone','manualNotch','MN']] as const)
+it.each([['cw','nb','NB'],['cw','nr','NR'],['cw','notch','Auto notch'],['phone','nb','NB'],['phone','nr','NR'],['phone','notch','Auto notch'],['phone','manualNotch','Manual notch']] as const)
 ('the actual %s %s toggle waits for radio readback and a new station sample', async (mode, func, label) => {
   const h = fixture(mode); await tick()
   const button = () => h.func(label)
