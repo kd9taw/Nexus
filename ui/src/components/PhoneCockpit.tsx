@@ -73,7 +73,7 @@ import { latestOnly } from '../remote-web/latest-only'
 import { RotorStrip } from './RotorStrip'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { setFrequency, openPanelWindow, getSettings } from '../api'
+import { setFrequency, openPanelWindow, getSettings, pointRotatorAtCall } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
@@ -752,6 +752,16 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
   const [spotOpen, setSpotOpen] = useState(false) // spot-to-cluster popup
   const [spotCall, setSpotCall] = useState('') // seed: '' from the toolbar, the typed call from LogEntry
+  // The call the operator is working RIGHT NOW, reported up by the log strip on every change.
+  // ⭐ Not `spotCall`, which is only captured when Spot is pressed and is stale or empty the rest
+  // of the time — a Beam button reading it would point at the last station spotted.
+  //
+  // ⚠️ REPORT DIRECTION ONLY: `onCallChange` without `cwLive`. RttyCockpit passes BOTH halves
+  // because a decoder fills its box and the strip has to take that fill; nothing fills Phone's
+  // call but the operator's own typing, so the fill half has no source here. Passing `cwLive`
+  // anyway would ACTIVATE LogEntry's clear-on-empty branch (`logCall` is set to '' when the
+  // host's box goes empty) against a host that has no box — see the test below.
+  const [workedCall, setWorkedCall] = useState('')
   // Wheel-to-tune over the bandscope, sharing the tuning strip's step selector.
   // Tuning step, persisted per cockpit ('nexus.phone.tuneStep'): the cockpit unmounts on every
   // mode switch, so plain state reset the step to 100 Hz on each round-trip (FTDX10
@@ -1824,6 +1834,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           setSpotCall(call)
           setSpotOpen(true)
         }}
+        onCallChange={setWorkedCall}
         pendingWork={pendingWork}
         onConsumeWork={onConsumeWork}
         fieldDay={fieldDay}
@@ -1980,7 +1991,29 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             onManage={onOpenMemories}
           /> : <MemoryStripUnavailable />
         )}
-        {control || rotatorControl ? <RotorStrip onOpenSettings={onOpenSettings} /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
+        {/* ⭐ THE BEAM BUTTON WAS NEVER MISSING FROM THE STRIP — it was missing from THIS HOST.
+            `RotorStrip` has rendered a one-click "→ CALL" slew since it was written, and CwCockpit
+            and OperateCockpit both pass `targetCall`/`onPointAt`. Phone did not, so the control
+            rendered as nothing (`{targetCall && onPointAt && …}`) and two testers reported the
+            feature as absent — one of them naming this tab specifically. Phone was the only
+            cockpit with no live worked-call to pass; `workedCall` above is that source. */}
+        {control || rotatorControl ? <RotorStrip
+          onOpenSettings={onOpenSettings}
+          targetCall={workedCall || null}
+          onPointAt={(call) =>
+            pointRotatorAtCall(call)
+              .then((bearing: number | null | undefined) =>
+                // A browser gets no bearing back: the station resolves it.
+                pushToast(bearing == null ? t('remote.b1.rotatorPointing', { call }) : t('cw.rotator.pointed', { call, bearing: Math.round(bearing) }), 'info'),
+              )
+              .catch((e) =>
+                pushToast(
+                  control ? t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }) : controlFailureMessage(e),
+                  'error',
+                ),
+              )
+          }
+        /> : <span className="dim" role="status" aria-label={t('remote.rotatorUnavailable')} title={t('remote.rotatorUnavailable')}>{t('rotor.strip.aria')} —</span>}
         {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
             '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
             the glyph and the tooltip already say. The accessible name is explicit here rather
