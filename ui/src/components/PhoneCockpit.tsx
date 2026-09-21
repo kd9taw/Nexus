@@ -51,6 +51,7 @@ import {
   type ControlState,
   type RigControl,
 } from '../features/rigControls'
+import { AnalogMeter } from './AnalogMeter'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
@@ -2160,7 +2161,19 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               ))}
             </div>
           )}
+          {/* ⭐ THE ANALOG METER — inside the SCOPE region, which is what makes the trade the
+              operator asked for ("room to lessen the waterfall") actually happen: `.ph-scope-wrap`
+              is a flex column at `flex: 1`, this is `flex: 0 0 auto`, so the face takes its
+              height and the scope absorbs the remainder. It is NOT a fifth child of the shell —
+              the four-child contract (header · scope · one pane region · one TX dock) holds.
+              It carries no ⊞ vocabulary id and so reaches no stop control; the stop line is
+              untouched. */}
+          <AnalogMeter
+            radio={snap.radio}
+            keyed={snap.radio.transmitting || snap.radio.txBusyReason != null || snap.radio.rigKeyed === true}
+          />
           <PhoneScope
+            hideSmeter
             active={active && details}
             transmitting={snap.radio.transmitting}
             theme={theme}
