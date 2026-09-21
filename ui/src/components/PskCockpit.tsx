@@ -529,7 +529,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           // NO `txBlanks` — RTTY's ruling: a latched over runs to the 10-minute
           // ceiling and the dark band would read as a dead waterfall.
           transmitting={snap?.radio.transmitting ?? false}
-          keyed={sending || latched} // #230, RTTY's reason: the slot flag never sees a PSK over
+          // #230, RTTY's reason: the slot flag never sees a PSK over — and a tune carrier
+          // holds the picture exactly as an over does (see RttyCockpit's note).
+          keyed={sending || latched || (snap?.radio.tuning ?? false)}
           rxOffsetHz={centerHz}
           txOffsetHz={0}
           cursors={[{ hz: centerHz, color: '#3ddc8c', label: 'RX' }]}

@@ -815,7 +815,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           transmitting={snap?.radio.transmitting ?? false}
           // #230: our OWN keyed state — `radio.transmitting` is the slot-TX indicator and stays
           // false through an RTTY over, including a latched one.
-          keyed={sending || latched}
+          // …and a TUNE carrier holds it just the same: the backend's hold is
+          // `tx_until_ms.is_some() || tuning_keyed || manual_ptt_applied` (service.rs), so a
+          // tune froze this waterfall with nothing on screen saying so — the #230 symptom on
+          // the #230 surface. Tune reached the keyboard cockpits after the label was written.
+          keyed={sending || latched || (snap?.radio.tuning ?? false)}
           rxOffsetHz={(rtty.markHz + rtty.spaceHz) / 2}
           txOffsetHz={0}
           cursors={[

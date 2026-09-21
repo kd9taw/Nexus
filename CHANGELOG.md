@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The waterfall now says "TRANSMITTING — display held" during a tune, too.** On RTTY, PSK, JS8
+  and SSTV the receive picture freezes while the radio is keyed, and since 1.13.0 a label has
+  said so — but only for a message you sent. Pressing Tune froze it exactly the same way with
+  nothing on screen to explain it, which is the "the waterfall has died" look the label exists
+  to prevent. (#230)
 - **The RR73 that finishes your QSO no longer disappears from the Rx Frequency pane.** With −B4
   on, the other operator's `RR73` was on screen for a moment and then gone: logging the contact
   marks them worked, the sequencer lets go of them as your partner, and the decode list is

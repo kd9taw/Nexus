@@ -1822,7 +1822,9 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               // whole transmission, which is exactly what field reports (2026-08-17) called
               // "the waterfall stops". See the prop's doc in Waterfall.tsx.
               transmitting={snap?.radio.transmitting ?? false}
-              keyed={sending} // #230: a Scottie DX over is ~4.5 minutes of held picture
+              // #230: a Scottie DX over is ~4.5 minutes of held picture — and a tune carrier
+              // holds it the same way (see RttyCockpit's note).
+              keyed={sending || (snap?.radio.tuning ?? false)}
               rxOffsetHz={0}
               txOffsetHz={0}
               hint={t('sstv.waterfall.hint')}
