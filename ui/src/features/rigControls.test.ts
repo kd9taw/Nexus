@@ -14,6 +14,8 @@ import {
   chainControls,
   deadControlProps,
   guard,
+  capStateFor,
+  stepsFor,
   type ControlState,
   type RigControl,
   type UnavailableCause,
@@ -98,13 +100,44 @@ describe('which cause is the one to name', () => {
     expect(absentPlates('rx', state({ reported: () => false })), 'BW was listed as missing').not.toContain('BW')
   })
 
-  it('the caps model, when it lands, says absent WITHOUT waiting for a silent probe', () => {
-    // The stub's whole point: `lacks` is the model table's answer and does not depend on
-    // whether a read ever came back. A radio reporting the field but listed as lacking it is
-    // a contradiction the model table wins — it is the sounder source.
-    const s = state({ caps: { lacks: ['NOTCHF'] } })
-    expect(causeFor(byId('NOTCHF'), s)).toBe('absent')
-    expect(causeFor(byId('RF'), s), 'caps.lacks leaked to a control it does not name').toBeNull()
+  it('the caps masks, when they land, settle it WITHOUT waiting for a probe', () => {
+    // The masks are what `\dump_state` gives and they do not depend on whether a read ever
+    // came back — `present` settles a control whose value has never arrived, and `absent`
+    // settles one whose probe will never answer.
+    const s = state({ caps: { levelSet: ['RF'] }, reported: () => false })
+    expect(causeFor(byId('RF'), s), 'a masked-present control was still waiting for a poll').toBeNull()
+    expect(causeFor(byId('NOTCHF'), s), 'a level missing from a PRESENT mask is absent').toBe('absent')
+  })
+
+  it('⛔ UNKNOWN IS NOT ABSENT — a missing mask claims nothing', () => {
+    // The whole reason the masks are positive and three-state. A control absent from a mask
+    // that DOES NOT EXIST has not been judged at all, and treating that as "your radio does
+    // not have it" is the same default that resolves an unread repeater shift to simplex.
+    // Here the FUNC masks are supplied and the LEVEL masks are not, in one state.
+    const s = state({ caps: { funcSet: ['NB'] }, reported: (c: RigControl) => c.id === 'RF' })
+    expect(capStateFor(byId('RF'), s.caps), 'a missing mask was read as an empty one').toBe('unknown')
+    expect(causeFor(byId('RF'), s), 'unknown fell through to the observed answer — RF was reported').toBeNull()
+    expect(causeFor(byId('NRLVL'), s), 'unknown + never reported is still absent, from observation').toBe('absent')
+    // …and the FUNC mask that IS present judges its own dimension.
+    expect(capStateFor(byId('NB'), s.caps)).toBe('present')
+    expect(capStateFor(byId('ANF'), s.caps), 'a func missing from a PRESENT func mask is absent').toBe('absent')
+  })
+
+  it('no caps at all is unknown for everything — today’s world, unchanged', () => {
+    // The state the app is actually in until the backend lands. Nothing may be claimed from
+    // the masks, and the cockpit's own "has this radio ever reported it" answers instead.
+    for (const c of RIG_CONTROLS) expect(capStateFor(c, undefined), c.id).toBe('unknown')
+  })
+
+  it('the step lists are three-state too: chips, a bare stepper, or nothing known', () => {
+    // ATT/PRE's four states hang off this. A list with entries picks chips; an EMPTY list
+    // means the rig has the stage but offers no steps, which is a dB stepper and NOT the
+    // same as not knowing; absent means unknown.
+    expect(stepsFor(byId('ATT'), { attDb: [6, 12] })).toEqual([6, 12])
+    expect(stepsFor(byId('ATT'), { attDb: [] }), 'an empty step list was read as unknown').toEqual([])
+    expect(stepsFor(byId('ATT'), {}), 'a missing step list was read as empty').toBeUndefined()
+    expect(stepsFor(byId('PRE'), { preampDb: [10] })).toEqual([10])
+    expect(stepsFor(byId('RF'), { attDb: [6] }), 'a step list leaked to a control with no steps').toBeUndefined()
   })
 
   it('the four undetectable causes never fire today', () => {
@@ -119,7 +152,7 @@ describe('which cause is the one to name', () => {
       for (const catOk of [true, false])
         for (const mode of ['USB', 'FM', 'AM'])
           for (const reported of [() => true, () => false])
-            for (const caps of [undefined, { lacks: [c.id] }, { lacks: [] }]) {
+            for (const caps of [undefined, {}, { funcSet: [], levelSet: [] }, { funcSet: [c.token.hamlib], levelSet: [c.token.hamlib] }]) {
               const cause = causeFor(c, { catOk, mode, reported, caps })
               if (cause) seen.add(cause)
             }

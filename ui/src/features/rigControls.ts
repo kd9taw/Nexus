@@ -121,23 +121,64 @@ export const RIG_CONTROLS: readonly RigControl[] = [
 /**
  * ⚠️ THE CAPABILITY MODEL DOES NOT EXIST YET. Parsing Hamlib's `\dump_state` into
  * `RadioStatus.caps` is a BACKEND job and step 1 of the programme; nothing on the snapshot
- * carries it today. This is the shape this file assumes, declared here so the backend can
- * match it rather than the other way round:
+ * carries it today. This is the shape the DTO should carry, declared here so the backend can
+ * match it rather than the other way round.
  *
- *   caps.lacks — control ids the MODEL TABLE says this radio family does not have. That is
- *                the only sound discriminator between "this rig cannot" and "we have not
- *                managed to read it yet", and it is what the pane-foot collapse wants.
- *   caps.steps — the step list for a `dbSteps` control. Present and non-empty ⇒ chips;
- *                present and EMPTY ⇒ a plain dB stepper; absent ⇒ the bit is clear.
+ * ⭐ POSITIVE MASKS, NEVER A "LACKS" LIST, and the reason is the ruling's first exception
+ * wearing a different hat. A negative list requires the backend to know the full universe of
+ * control ids in order to state an absence — so a control added next month would be missing
+ * from every rig's list, and every radio in the fleet would report "your radio does not have
+ * this" about something Nexus had only just built. What `\dump_state` actually gives is what
+ * the rig HAS, so that is what crosses the wire.
  *
- * Until it arrives `capsLacks` answers from the snapshot alone: a field this radio has never
- * reported. That conflates a family-wide absence with a probe that has not landed, which is
- * why the cockpit holds a per-radio "has ever reported" memory in front of it — a momentary
- * null must never reach this.
+ * ⛔ AND THE THREE STATES MUST SURVIVE THE CROSSING, because a bare mask cannot express them
+ * and the reasons depend on the difference:
+ *   PRESENT — the token is in the mask. Drivable.
+ *   ABSENT  — the mask EXISTS and the token is not in it. The backend genuinely does not
+ *             offer it, which is a fact worth printing.
+ *   UNKNOWN — no caps at all (no `\dump_state` yet), or that particular mask is missing.
+ *             Nothing may be claimed; the cockpit falls back to "has this radio ever
+ *             reported it", which is what it has always done.
+ * Collapsing UNKNOWN into ABSENT is the same class of error as resolving an unread repeater
+ * shift to simplex: a default that manufactures a confident wrong answer.
  */
-export interface RigCaps {
-  lacks?: readonly string[]
-  steps?: Readonly<Record<string, readonly number[]>>
+export interface RigCapsDto {
+  /** Hamlib func tokens the rig reports as readable / settable (`NB`, `ANF`, `VOX`…). */
+  funcGet?: readonly string[]
+  funcSet?: readonly string[]
+  /** Hamlib level tokens, likewise (`RF`, `AF`, `NOTCHF`, `AGC`…). */
+  levelGet?: readonly string[]
+  levelSet?: readonly string[]
+  /** The attenuator and preamp STEP LISTS in dB, straight from `\dump_state`. Present and
+   *  non-empty ⇒ chips; present and EMPTY ⇒ the rig has the stage but no step list, so a
+   *  plain dB stepper; absent ⇒ that dimension is unknown. */
+  attDb?: readonly number[]
+  preampDb?: readonly number[]
+}
+
+export type CapState = 'present' | 'absent' | 'unknown'
+
+/**
+ * What the caps masks say about ONE control — the three-state derivation, kept here rather
+ * than asked of the DTO.
+ *
+ * It reads the SET mask, because the question this answers is "may the operator drive it".
+ * The GET mask is a different question (whether a value can be read BACK, which decides
+ * `phone.prov.rig` versus `phone.prov.cmd`) and is deliberately not folded in here.
+ */
+export function capStateFor(c: RigControl, caps?: RigCapsDto): CapState {
+  if (!caps || !c.built) return 'unknown'
+  const mask = c.kind === 'toggle' ? caps.funcSet : caps.levelSet
+  // The mask itself missing is UNKNOWN, not an empty set of capabilities.
+  if (!mask) return 'unknown'
+  return mask.includes(c.token.hamlib) ? 'present' : 'absent'
+}
+
+/** The dB step list for a stepped control (ATT/PRE), or `undefined` when unknown. Empty
+ *  means the rig has the stage with no steps to choose from — a different thing. */
+export function stepsFor(c: RigControl, caps?: RigCapsDto): readonly number[] | undefined {
+  if (!caps) return undefined
+  return c.id === 'ATT' ? caps.attDb : c.id === 'PRE' ? caps.preampDb : undefined
 }
 
 /** What the resolver needs to know. `reported` is the cockpit's STICKY answer — reported now
@@ -148,7 +189,9 @@ export interface ControlState {
   reported: (c: RigControl) => boolean
   /** The mode the next over goes out in, for `notOnMode`. */
   mode: string
-  caps?: RigCaps
+  /** The rig's own capability masks, when the backend supplies them. Absent ⇒ every control
+   *  is UNKNOWN and the sticky "has ever reported" answer stands, which is today's world. */
+  caps?: RigCapsDto
 }
 
 /**
@@ -166,9 +209,18 @@ export function causeFor(c: RigControl, s: ControlState): UnavailableCause | nul
   // width to set — a fact about the MODE, not a fault in the radio, and the row keeps its
   // slot rather than disappearing into the foot line with the things the rig cannot do.
   if (c.id === 'BW' && s.mode === 'FM') return 'notOnMode'
-  if (s.caps?.lacks?.includes(c.id)) return 'absent'
-  // A BUILT control with no capability field has no per-radio signal to read — BW is the
-  // one today. Nothing left to disqualify it, so it is available.
+  // THE MASKS FIRST, because they are the sounder source: they say what the rig HAS rather
+  // than what a poll has happened to bring back. `present` settles it even if no value has
+  // arrived yet; `absent` settles it without waiting for a probe that will never answer.
+  const cap = capStateFor(c, s.caps)
+  if (cap === 'present') return null
+  if (cap === 'absent') return 'absent'
+  // UNKNOWN — no caps, or no such mask. Fall back to what the cockpit has observed, which
+  // is all this has ever had. ⚠️ Never treat unknown as absent: that is the default that
+  // manufactures a confident wrong answer.
+  //
+  // A BUILT control with no capability field has no per-radio signal at all — BW is the one
+  // today. Nothing left to disqualify it, so it is available.
   if (!c.field) return null
   return s.reported(c) ? null : 'absent'
 }
