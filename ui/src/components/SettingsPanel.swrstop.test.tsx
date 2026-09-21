@@ -200,6 +200,41 @@ describe('the high-SWR cutoff is offered only where the number can be trusted', 
 //
 // The cure is the CLAIM, not the mechanism: the engine's cutoff is untouched (it is already
 // fail-safe on a missing reading, and a gate in front of it could suppress a real halt).
+/** ⚠️ A DUAL-RADIO STATION WITH THE **OTHER** PROFILE OPEN IN THE FORM.
+ *
+ *  The Flex (id 0) is the radio that is OPERATING; the operator has clicked Configure on a
+ *  second, non-Flex profile, so the form's top-level fields mirror the EDITED radio while
+ *  `activeRadio` still names the Flex. That split is the shipped shape — `editingRadioId` is
+ *  documented as decoupled from `activeRadioId` (SettingsPanel.tsx:1464) — and it is what broke
+ *  the hint: the model was read from the form and the meter-worker fact from the active radio,
+ *  so one sentence asked two different radios.
+ *
+ *  Every other case in this file has ONE radio whose profile IS the active one, which is exactly
+ *  why they all passed with the bug present. */
+function dualRadioEditingTheOtherDoc() {
+  const doc = settingsDoc() as unknown as Record<string, unknown>
+  const base = (doc.radios as Record<string, unknown>[])[0]
+  const flex = {
+    ...base,
+    id: 0,
+    rigModel: 2036,
+    rigModelName: 'FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)',
+    rigConn: 'network',
+    rigAddr: '192.0.2.10:5002',
+    icomNativeCat: false,
+  }
+  const other = {
+    ...base,
+    id: 1,
+    name: 'Radio 2',
+    rigModel: 1042,
+    rigModelName: 'Yaesu FT-710',
+    rigConn: 'serial',
+    icomNativeCat: false,
+  }
+  return { ...doc, ...other, activeRadio: 0, radios: [flex, other] } as never
+}
+
 describe('a Flex whose meter worker is not running is told so', () => {
   beforeEach(() => {
     api.get('getSettings').mockImplementation(() => Promise.resolve(flexSettingsDoc()))
@@ -227,6 +262,23 @@ describe('a Flex whose meter worker is not running is told so', () => {
     // moment they are trying to make it work. The warning carries the safety, not the greying.
     const sw = await openRadioTab(radioStatus(true, false))
     expect(off(sw)).toBe(false)
+  })
+
+  it('the warning survives having ANOTHER radio open in the form — the model must come from the ACTIVE radio', async () => {
+    // The Flex is operating with no meter worker; the operator is editing the FT-710's profile.
+    // Reading the model off the form asked the FT-710 whether the FLEX's cutoff works, fell
+    // through, and restored the reassuring line — the exact false all-clear this branch deletes.
+    api.get('getSettings').mockImplementation(() =>
+      Promise.resolve(dualRadioEditingTheOtherDoc()),
+    )
+    const sw = await openRadioTab(radioStatus(true, false))
+    const hint = hintOf(sw)
+    expect(hint, 'the operating radio still cannot stop a transmission, whatever is on screen').toContain(
+      'will not stop anything',
+    )
+    expect(hint, 'and the false all-clear must not come back just because another profile is open').not.toContain(
+      'exactly as Stop TX does',
+    )
   })
 
   it('POSITIVE CONTROL — with the worker running it reads as an ordinary verified radio', async () => {

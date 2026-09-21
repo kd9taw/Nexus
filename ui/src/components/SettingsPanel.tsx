@@ -6103,10 +6103,25 @@ export function SettingsPanel({
                 />
                 <span className="settings-power-cap-unit">:1</span>
               </label>
+              {/* ⚠️ THE MODEL COMES FROM THE ACTIVE RADIO, NOT FROM `form`. `form` mirrors
+                  `editingRadioId`, which is decoupled from `activeRadioId` (see :1464) — while
+                  `radio` is always the ACTIVE radio's live state. Reading the two together asked
+                  ONE question of TWO different radios, and both directions were wrong on a
+                  dual-radio station: opening a non-Flex profile while a Flex operates restored
+                  `hint`, the reassuring line about a cutoff that cannot fire — the exact false
+                  all-clear this branch exists to delete; and opening the Flex profile while a
+                  verified radio operates warned that a LIVE cutoff was dead, which teaches the
+                  operator to distrust a warning that is usually right.
+                  This file already forbids the same mistake for `test_cat` at :2452 — "a green
+                  tick earned by the OTHER radio … it's what hid the CAT-flip bug through a whole
+                  review." Found by the operator review of the pushed range, 2026-09-21. */}
               <span className="settings-hint">
                 {!radio?.swrScaleVerified
                   ? t('settings.transmit.swrStop.unverified')
-                  : [2036, 23005].includes(form.rigModel) && radio?.flexMeterStream !== true
+                  : [2036, 23005].includes(
+                        form.radios?.find((r) => r.id === form.activeRadio)?.rigModel ??
+                          form.rigModel,
+                      ) && radio?.flexMeterStream !== true
                     ? t('settings.transmit.swrStop.noMeterStream')
                     : t('settings.transmit.swrStop.hint')}
               </span>
