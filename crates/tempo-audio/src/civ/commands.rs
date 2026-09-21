@@ -274,17 +274,24 @@ pub const FUNC_SATMODE: u8 = 0x5A;
 /// ON-OFF function sub-commands under CI-V command `0x16` (Icom
 /// IC-7300/9700/7610/705 generation share this 16-family table): the DSP/audio
 /// set — Noise Blanker, Noise Reduction, Auto Notch, speech Compressor,
-/// Monitor, VOX — plus satellite mode ([`FUNC_SATMODE`], the token Hamlib
-/// calls `SATMODE`). The Hamlib func token maps to its sub-command byte here —
+/// Monitor, VOX, MANUAL notch — plus satellite mode ([`FUNC_SATMODE`], the token
+/// Hamlib calls `SATMODE`). The Hamlib func token maps to its sub-command byte here —
 /// one place, so both the getter and setter agree.
+///
+/// ⚠️ `ANF` AND `MN` ARE TWO CONTROLS, not two names for one. `ANF` is the automatic
+/// notch, which hunts a carrier down by itself; `MN` is the manual notch an operator
+/// parks on a heterodyne by ear. A rig may have either, both or neither, and this table
+/// held only `ANF` — so native CI-V answered `RPRT -11` for `MN`, the poll latched it
+/// unsupported and the cockpit dropped the button with no error at all.
 pub fn func_sub(token: &str) -> Option<u8> {
     Some(match token {
         "NB" => 0x22,   // Noise Blanker
         "NR" => 0x40,   // Noise Reduction
-        "ANF" => 0x41,  // Auto Notch Filter
+        "ANF" => 0x41,  // Auto Notch Filter (hunts a carrier by itself)
         "COMP" => 0x44, // Speech Compressor
         "MON" => 0x45,  // Monitor
         "VOX" => 0x46,  // VOX
+        "MN" => 0x48,   // MANUAL notch — a different control from ANF, on its own register
         "SATMODE" => FUNC_SATMODE,
         _ => return None,
     })
@@ -341,6 +348,15 @@ pub const LVL_NB: u8 = 0x12;
 pub const LVL_AF: u8 = 0x01;
 pub const LVL_RF: u8 = 0x02;
 pub const LVL_SQL: u8 = 0x03;
+/// SPEECH-PROCESSOR DEPTH — how hard the compressor works, a 0..1 fraction on the same
+/// `0x14` family. From the same capture: `L COMP 0.25` → `14 0e 00 63`, `0.5` → `14 0e 01 27`,
+/// `1.0` → `14 0e 02 55`.
+///
+/// ⚠️ NOT [`METER_COMP`]. This is the knob; that is the TX meter reading how many dB of
+/// compression the rig is applying, on the `0x15` family, and the broker has served it for
+/// a long time under `COMP_METER`. `16 44` ([`func_sub`]) switches the processor on; without
+/// this level there was no way to say how hard it should work.
+pub const LVL_COMP: u8 = 0x0E;
 
 /// Hamlib level token → its `0x14` sub-command, for the fractional 0..1 levels the generic
 /// [`set_dsp_level`] / [`read_dsp_level`] pair serves. One table shared by the broker's
@@ -349,6 +365,15 @@ pub const LVL_SQL: u8 = 0x03;
 ///
 /// RFPOWER (`14 0A`) and MICGAIN (`14 0B`) are in the same CI-V family and deliberately NOT
 /// here: they have their own named builders above, and the broker answers them from those.
+///
+/// ⛔ AND NEITHER IS `NOTCHF`, THE MANUAL-NOTCH FREQUENCY — DO NOT ADD IT HERE.
+/// [`set_dsp_level`] is a PERCENT path (`percent.min(100) * 255 / 100`); Hamlib's `NOTCHF`
+/// is Hz. An entry here would clamp every notch frequency above 100 Hz to full scale and
+/// park the notch at the end of its range for every operator, silently. Nor is one needed
+/// for parity: Hamlib 4.5.5's own Icom backend has no `NOTCHF` for ANY rig Nexus drives
+/// natively — it carries `NOTCHF_RAW` (`14 0D`), a raw 0..255 notch POSITION — so a
+/// Hamlib-served IC-7300 answers `NOTCHF` "not available" exactly as this daemon does.
+/// Serving it in Hz needs the rig's Hz↔position curve, which is a bench measurement.
 pub fn level_sub(token: &str) -> Option<u8> {
     Some(match token {
         "AF" => LVL_AF,
@@ -356,6 +381,7 @@ pub fn level_sub(token: &str) -> Option<u8> {
         "SQL" => LVL_SQL,
         "NR" => LVL_NR,
         "NB" => LVL_NB,
+        "COMP" => LVL_COMP,
         _ => return None,
     })
 }
@@ -890,6 +916,88 @@ mod tests {
         assert_eq!(level_sub("MICGAIN"), None);
         assert_eq!(level_sub("STRENGTH"), None);
         assert_eq!(level_sub(""), None);
+    }
+
+    /// THE MANUAL NOTCH REACHES THE RIG. `MN` is the notch an operator parks on a
+    /// heterodyne by ear; `ANF` is the automatic one that hunts a carrier by itself. Two
+    /// controls, two registers — and this table held only `ANF`, so on the native CI-V path
+    /// the MN button latched unsupported and the cockpit dropped it, indistinguishable from
+    /// a feature Nexus never wrote.
+    ///
+    /// Captured the way the analog levels were (see [`LVL_AF`]): Hamlib 4.5.5's own Icom
+    /// backend driven against a pty at the IC-7300's address — `U MN 1` → `16 48 01`,
+    /// `U MN 0` → `16 48 00`, `u MN` → `16 48`.
+    #[test]
+    fn the_manual_notch_func_is_the_byte_hamlibs_icom_backend_puts_on_the_wire() {
+        assert_eq!(func_sub("MN"), Some(0x48), "MN sub-command");
+        // THE TWO NOTCHES ARE NOT ONE REGISTER. A table answering `MN` with `ANF`'s byte
+        // passes every "is MN supported" check while the button drives the automatic
+        // notch — the exact confusion #95 was filed about.
+        assert_ne!(
+            func_sub("MN"),
+            func_sub("ANF"),
+            "the manual notch must not ride the automatic notch's register"
+        );
+        assert_eq!(set_dsp_func(0xA2, 0x48, true).data, vec![0x48, 0x01]);
+        assert_eq!(set_dsp_func(0xA2, 0x48, false).data, vec![0x48, 0x00]);
+        assert_eq!(read_dsp_func(0xA2, 0x48).data, vec![0x48]);
+        // THE POSITIVE CONTROL: the same capture reproduced four bytes this table already
+        // held, which is what makes the fifth evidence rather than recollection.
+        for (token, sub) in [("ANF", 0x41u8), ("NB", 0x22), ("COMP", 0x44), ("MON", 0x45)] {
+            assert_eq!(func_sub(token), Some(sub), "{token} sub-command");
+        }
+        // `NOTCHF` is where the manual notch SITS, not whether it is on; it is a level, and
+        // a deliberately absent one — see the compressor-depth test below.
+        assert_eq!(func_sub("NOTCHF"), None);
+        assert_eq!(func_sub("MANUAL_NOTCH"), None); // not a Hamlib token
+    }
+
+    /// THE COMPRESSOR DEPTH REACHES THE RIG — and it is NOT the compression METER.
+    /// `COMP` the level is how hard the speech processor works (`14 0E`, a 0..1 fraction).
+    /// `COMP_METER` is how many dB of compression the rig shows while keyed, off the `0x15`
+    /// meter family, and the broker already served that one. Conflating the two is the easy
+    /// mistake here: the operator got a compressor they could switch on (`16 44`) and no way
+    /// to say how hard it should work, which is the half that matters.
+    ///
+    /// ⛔ AND THE THIRD CONTROL, `NOTCHF`, IS DELIBERATELY NOT HERE. Hamlib 4.5.5's Icom
+    /// backend has no `NOTCHF` for ANY rig Nexus drives natively — the same harness that
+    /// captured the bytes below shows `NOTCHF` present on Yaesu (FT-991, FTDX-10) and absent
+    /// on the IC-7300/7610/9700/705, which carry `NOTCHF_RAW` (`14 0D`) instead: a raw 0..255
+    /// notch POSITION, where `NOTCHF` is Hz. So native CI-V is already at parity with a
+    /// Hamlib-served Icom here, and [`set_dsp_level`] is a PERCENT path: a `NOTCHF` entry in
+    /// this table would clamp every frequency above 100 Hz to full scale and silently park
+    /// the notch at the end of its range. Placing it in Hz needs the rig's Hz↔position curve,
+    /// which is a bench measurement. NEEDS-BENCH (IC-7300).
+    #[test]
+    fn the_compressor_depth_level_is_the_byte_hamlibs_icom_backend_puts_on_the_wire() {
+        assert_eq!(LVL_COMP, 0x0E);
+        assert_eq!(level_sub("COMP"), Some(LVL_COMP), "COMP sub-command");
+        // Captured from Hamlib 4.5.5 `rigctl -m 3073` against a pty: `L COMP 0.25` →
+        // `14 0e 00 63`, `L COMP 0.5` → `14 0e 01 27`, `L COMP 1.0` → `14 0e 02 55`.
+        // ⚠️ THREE DIFFERENT DEPTHS, so the payload identifies the register it came from.
+        // One value driven through all three is inert: COMP and NR transposed would produce
+        // the identical frame and pass.
+        for (percent, bcd) in [(25u8, 63u16), (50, 127), (100, 255)] {
+            let f = set_dsp_level(0xA2, level_sub("COMP").unwrap(), percent);
+            assert_eq!(f.cmd, 0x14);
+            assert_eq!(
+                f.data[0], 0x0E,
+                "compressor depth must not ride another level's register"
+            );
+            assert_eq!(
+                level_from_bcd2(f.data[1], f.data[2]),
+                bcd,
+                "COMP {percent}%"
+            );
+        }
+        assert_eq!(read_dsp_level(0xA2, LVL_COMP).data, vec![0x0E]);
+        // The TRANSMIT METER is a different thing on a different command family, and the
+        // broker answers it by name before this table is ever consulted.
+        assert_eq!(level_sub("COMP_METER"), None);
+        // The ruling above, made executable: neither notch-frequency token may fall into
+        // the percent path.
+        assert_eq!(level_sub("NOTCHF"), None);
+        assert_eq!(level_sub("NOTCHF_RAW"), None);
     }
 
     #[test]
