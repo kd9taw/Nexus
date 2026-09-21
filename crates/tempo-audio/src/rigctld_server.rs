@@ -335,7 +335,22 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
         "\\dump_state" => Handled::Reply(dump_state(backend)),
         // No VFO mode → the client sends commands without an explicit VFO argument.
         "\\chk_vfo" => Handled::Reply("CHKVFO 0\n".into()),
-        "\\get_powerstat" => Handled::Reply("1\n".into()), // powered on
+        // ⚠️ A CONSTANT, not a reading — Nexus has no rig power state to report.
+        // [`RigBackend`] has no power-state verb and the CAT layer never asks a radio
+        // for one; the broker answers the whole surface from Nexus's own model of the
+        // rig (`freq_hz` is the dial SETTING), and it serves on the `cat_broker`
+        // setting alone, with no radio attached at all.
+        //
+        // Deliberately not the `RPRT -11` this module gives every other verb it does
+        // not implement. Hamlib queries this inside `rig_open`, so the answer is
+        // consumed at the moment the link comes up, and a non-`1` there is its
+        // rig-is-off signature — see `tests/fixtures/rigctld/never_answers_ftdx10.log`
+        // ("rig_open: Some rigs cannot get_powerstat while off"), captured from a rig
+        // that never answered. A client that read `0`/`RPRT -11` as "radio
+        // unavailable" would lose CAT entirely, which is far worse than this
+        // over-claim. Revisit if Nexus ever learns real rig power (#214's
+        // remote/WFVIEW-style control is where that would land).
+        "\\get_powerstat" => Handled::Reply("1\n".into()),
         "\\stop_morse" => Handled::Reply(rprt_ext(backend.stop_morse())),
         "\\stop_voice_mem" => Handled::Reply(rprt_ext(backend.stop_voice_mem())),
         "q" | "Q" => Handled::Close,

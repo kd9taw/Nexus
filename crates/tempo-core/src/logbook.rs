@@ -2564,10 +2564,12 @@ pub fn adif_record(r: &QsoRecord) -> String {
     }
     // Contest provenance — the standard ADIF contest fields under their real names,
     // and the exchange vectors under the four `APP_NEXUS_*` tags (ADIF's
-    // application-defined namespace). ⭐ The write list and the READ list are the same
-    // list, kept in one function each and next to each other, so they cannot drift:
-    // whatever is emitted here is consumed by `parse_record`'s contest block, which is
-    // what keeps `extra` free of a tag this build models.
+    // application-defined namespace). ⚠️ The write list is NOT the read list.
+    // `parse_contest` consumes the tags it names; the exchange's own standard columns
+    // ([`ContestFields::adif`]) are written here and deliberately read back as the
+    // ordinary ADIF they are — `STATE` into `state`, `MY_ARRL_SECT` and friends into
+    // `extra`, re-emitted from there exactly once. That is the honest shape, not a
+    // gap: see the field's own doc comment, which is where this is explained.
     out.push_str(&contest_fields(r.contest.as_deref()));
     // The record's identity (APP_-namespaced; other loggers ignore it, and one that drops it
     // hands back a row the next load gives a provisional id).
@@ -2628,8 +2630,17 @@ fn contest_fields(c: Option<&ContestFields>) -> String {
     out
 }
 
-/// The read direction of [`contest_fields`], and deliberately the same list in the
-/// same order — `remove` for every tag it writes, so none of them can reach `extra`.
+/// The read direction of [`contest_fields`] — `remove` for every tag it names, in the
+/// same order.
+///
+/// ⚠️ **Not every tag [`contest_fields`] writes, and the difference is deliberate.**
+/// The exchange's own standard columns ([`ContestFields::adif`]) are emitted there and
+/// NOT restored here: they are ordinary ADIF, so on re-import `STATE` lands in
+/// [`QsoRecord::state`] and `MY_ARRL_SECT` and friends land in [`QsoRecord::extra`],
+/// and a re-export writes each exactly once from there. That field's doc comment has
+/// the reasoning. An earlier wording here claimed the two lists were one and that no
+/// tag written could reach `extra`; two reviews read it as a round-trip guarantee it
+/// never was.
 ///
 /// `None` when the record carried not one of them, which is nearly every record in a
 /// lifetime log: a `Some` here is a claim that this contact belonged to a contest, and
@@ -3685,12 +3696,15 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         // ⭐ The contest block is CONSUMED, exactly as OPERATOR and STATION_CALLSIGN
-        // above are — `remove` before the `drain` that fills `extra`. Three things
-        // follow, and the third is why this is not cosmetic: the write direction and
-        // the read direction are one list; `extra` never carries a tag this build
-        // models, which is the by-construction property its own doc comment claims;
-        // and the merge's idempotence survives a restart, because `APP_NEXUS_QID`
-        // comes back on read.
+        // above are — `remove` before the `drain` that fills `extra` — which is what
+        // makes the merge idempotent across a restart: `APP_NEXUS_QID` comes back on
+        // read.
+        //
+        // ⚠️ It consumes the tags it NAMES, not everything `contest_fields` writes.
+        // The exchange's standard columns ([`ContestFields::adif`]) come back as the
+        // ordinary ADIF they are — `STATE` into `state` above, `MY_ARRL_SECT` and
+        // friends into `extra` — and are re-emitted from there exactly once. See that
+        // field's doc comment.
         contest: parse_contest(f),
         // Whatever the parser did not consume is a field it does not model —
         // preserved verbatim, by construction. Sorted: deterministic writes.
