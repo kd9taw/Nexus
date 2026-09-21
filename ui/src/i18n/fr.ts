@@ -2362,22 +2362,11 @@ export const FR: PartialCatalog = {
   "meters.rx.label": "Niveau RX",
   "meters.rx.title": "{{label}} : {{level}} (visez ~30 dB, comme WSJT-X)",
   "meters.tx.alc.title": "ALC — réglez le gain micro pour que les crêtes SSB effleurent la zone, sans jamais la saturer",
-  // The analog meter (Phone) + the rig's rated power. English until translated: the
+  // The rig's rated power. English until translated: the
   // completeness guard requires every locale to DEFINE every key, and the runtime's
   // English fallback is a safety net for a blank value, not a licence to omit one.
   "settings.rigControl.ratedWatts.label": "Rated power (W)",
   "settings.rigControl.ratedWatts.hint": "What this radio puts out at full drive. It sets the top of the Phone meter’s power scale, so a QRP set reads across the whole dial instead of sitting on the first mark. It is the radio’s rating, not your power limit — the limit is a share of this and shows as a mark on the scale.",
-  "meter.aria": "Signal meter",
-  "meter.face.aria": "{{plate}} meter reading {{value}}",
-  "meter.pick.aria": "What the needle reads while transmitting",
-  "meter.pick.po": "PO",
-  "meter.pick.po.title": "Power out — needle reads watts against this radio’s rated output",
-  "meter.pick.swr": "SWR",
-  "meter.pick.swr.title": "Antenna match",
-  "meter.pick.alc": "ALC",
-  "meter.pick.alc.title": "Automatic level control — keep the peaks out of the top band",
-  "meter.pick.comp": "CMP",
-  "meter.pick.comp.title": "Speech compression, in dB",
   "meters.tx.aria": "Mesures d'émission",
   "meters.tx.comp.title": "Compression de parole",
   "meters.tx.idle": "Mesures TX — {{when}}",
@@ -4012,6 +4001,7 @@ export const FR: PartialCatalog = {
   "scope.pause.title": "Mettre la cascade en pause — puis remonter l'historique à la molette",
   "scope.paused.badge": "⏸ en pause · molette pour remonter",
   "scope.resolution.aria": "Résolution du scope {{width}} — cliquez pour changer",
+  "scope.smeter.aria": "S-meter",
   "scope.smeter.title": "S-meter {{reading}} ({{db}} dB par rapport à S9, via CAT)",
   "scope.smeter.title.none": "Cette radio ne renvoie pas de S-meter par CAT",
   "scope.smeter.title.tx": "S-meter en pause pendant l'émission",

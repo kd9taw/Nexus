@@ -51,7 +51,7 @@ import {
   type ControlState,
   type RigControl,
 } from '../features/rigControls'
-import { AnalogMeter } from './AnalogMeter'
+import { SMeter } from './SMeter'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
@@ -1271,18 +1271,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // and that resolves to UNKNOWN, never to simplex: resolving an absent value to "no shift"
   // is the one default that puts the confident wrong number back.
   const [rptrShift, setRptrShift] = useState<string | null>(null)
-  // The operator's PHONE power cap, 0..1, for the mark on the analog meter's PO scale. Read in
-  // the same effect rather than a second fetch. It is a FRACTION of the rig's rated output,
-  // which is what makes it placeable on a scale that rated output defines — and why it can be
-  // a mark and never the scale itself.
-  const [powerCap, setPowerCap] = useState<number | null>(null)
   useEffect(() => {
     let alive = true
     void getSettings()
       .then((s) => {
         if (!alive) return
         setRptrShift(typeof s?.rptrShift === 'string' ? s.rptrShift : null)
-        setPowerCap(typeof s?.maxPowerPhone === 'number' ? s.maxPowerPhone : null)
       })
       .catch(() => {})
     return () => {
@@ -1514,6 +1508,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
 
       {hasReceiverPane && (
         <CockpitPaneFrame title={t('phone.pane.receiver.title')} paneId="receiver" fit="content" {...closeProps('receiver')}>
+          {/* ⭐ THE S-METER, AT THE HEAD OF THE RECEIVE CHAIN. It was an arc floating alone in
+              the scope region first, and it read as an ornament — a meter belongs WITH what it
+              measures, and everything below this line is the same receiver. Placing it here
+              also gives the waterfall back the ~150 px the face was spending. */}
+          <SMeter radio={snap.radio} />
           <div className="ph-chain" role="group" aria-label={t('phone.chain.receiver.aria')}>
             {noCatBanner('rx')}
             {/* ── IF: the passband ──────────────────────────────────────────────────
@@ -2168,19 +2167,6 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               ))}
             </div>
           )}
-          {/* ⭐ THE ANALOG METER — inside the SCOPE region, which is what makes the trade the
-              operator asked for ("room to lessen the waterfall") actually happen: `.ph-scope-wrap`
-              is a flex column at `flex: 1`, this is `flex: 0 0 auto`, so the face takes its
-              height and the scope absorbs the remainder. It is NOT a fifth child of the shell —
-              the four-child contract (header · scope · one pane region · one TX dock) holds.
-              It carries no ⊞ vocabulary id and so reaches no stop control; the stop line is
-              untouched. */}
-          <AnalogMeter
-            radio={snap.radio}
-            keyed={snap.radio.transmitting || snap.radio.txBusyReason != null || snap.radio.rigKeyed === true}
-            ratedW={snap.radio.ratedWatts ?? 100}
-            capFrac={powerCap}
-          />
           <PhoneScope
             hideSmeter
             active={active && details}

@@ -440,10 +440,9 @@ const MIGRATED = [
   'components/FastGraph.tsx',
   'components/LevelMeter.tsx',
   'components/LiveMeters.tsx',
-  // The Phone analog meter. Migrated from birth: every string goes through `t()`, and the
-  // five scale NAMES (S, PO, SWR, SWR?, ALC, COMP) are the rig's own front-panel vocabulary,
-  // held as named constants exactly as this file's sibling `TxMeters.tsx` holds its four.
-  'components/AnalogMeter.tsx',
+  // The Phone S-meter. Migrated from birth: the only literal is the scale's name `S`, held as
+  // a named constant exactly as this file's sibling `TxMeters.tsx` holds its four.
+  'components/SMeter.tsx',
   'components/TxMeters.tsx',
   'components/RotorStrip.tsx',
   'components/prop/RotorPane.tsx',

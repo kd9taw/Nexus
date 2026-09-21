@@ -5824,6 +5824,7 @@ export const DE: PartialCatalog = {
   "scope.window.sharp.title": "Auflösung: Scharf — 4096-Punkte-Fenster, 341 ms. Halbe Trägerbreite bei doppelter Zeitverschmierung. Am besten, um einen schwachen Träger aus einem vollen Durchlassbereich zu holen. Klicken für schneller.",
   "scope.window.fast.title": "Auflösung: Schnell — 1024-Punkte-Fenster, 85 ms. Träger erscheinen doppelt so breit, dafür lösen sich Tastung und Sprachansätze wirklich auf. Klicken, um zum Standard zurückzukehren.",
   "scope.resolution.aria": "Bandscope-Auflösung {{width}} — klicken zum Ändern",
+  "scope.smeter.aria": "S-meter",
   "scope.smeter.title": "S-Meter {{reading}} ({{db}} dB rel S9, über CAT)",
   "scope.smeter.title.tx": "S-Meter beim Senden angehalten",
   "scope.smeter.title.none": "Dieses Funkgerät meldet kein S-Meter über CAT",
@@ -5847,22 +5848,11 @@ export const DE: PartialCatalog = {
   "fastGraph.aria": "Fast Graph — Signalleistung über die Sende-/Empfangsperiode; Pings zeichnen sich als Spitzen",
   "meters.rx.label": "RX-Pegel",
   "meters.rx.title": "{{label}}: {{level}} (Ziel etwa 30 dB, wie WSJT-X)",
-  // The analog meter (Phone) + the rig's rated power. English until translated: the
+  // The rig's rated power. English until translated: the
   // completeness guard requires every locale to DEFINE every key, and the runtime's
   // English fallback is a safety net for a blank value, not a licence to omit one.
   "settings.rigControl.ratedWatts.label": "Rated power (W)",
   "settings.rigControl.ratedWatts.hint": "What this radio puts out at full drive. It sets the top of the Phone meter’s power scale, so a QRP set reads across the whole dial instead of sitting on the first mark. It is the radio’s rating, not your power limit — the limit is a share of this and shows as a mark on the scale.",
-  "meter.aria": "Signal meter",
-  "meter.face.aria": "{{plate}} meter reading {{value}}",
-  "meter.pick.aria": "What the needle reads while transmitting",
-  "meter.pick.po": "PO",
-  "meter.pick.po.title": "Power out — needle reads watts against this radio’s rated output",
-  "meter.pick.swr": "SWR",
-  "meter.pick.swr.title": "Antenna match",
-  "meter.pick.alc": "ALC",
-  "meter.pick.alc.title": "Automatic level control — keep the peaks out of the top band",
-  "meter.pick.comp": "CMP",
-  "meter.pick.comp.title": "Speech compression, in dB",
   "meters.tx.aria": "Sendeanzeigen",
   "meters.tx.idle": "TX-Anzeigen — {{when}}",
   "meters.tx.swr.title": "Antennenanpassung — unter 2:1 halten",

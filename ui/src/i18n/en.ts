@@ -9260,6 +9260,10 @@ export const EN = {
     'Resolution: Fast — 1024-point window, 85 ms. Carriers read twice as wide, but keying and speech onsets actually resolve. Click to return to the default.',
   'scope.resolution.aria': 'Scope resolution {{width}} — click to change',
   // `{{reading}}` is the S-unit plate (S7, S9+20) and `{{db}}` the CAT reading it came from.
+  'settings.rigControl.ratedWatts.label': 'Rated power (W)',
+  'settings.rigControl.ratedWatts.hint':
+    'What this radio puts out at full drive. It sets the top of the transmit power meter\u2019s scale, so a QRP set reads across the whole bar instead of sitting on the first mark. It is the radio\u2019s rating, not your power limit.',
+  'scope.smeter.aria': 'S-meter',
   'scope.smeter.title': 'S-meter {{reading}} ({{db}} dB rel S9, via CAT)',
   'scope.smeter.title.tx': 'S-meter paused during transmit',
   'scope.smeter.title.none': 'No CAT S-meter reported by this rig',
@@ -9300,24 +9304,6 @@ export const EN = {
   'meters.rx.label': 'RX level',
   // `{{label}}` is the meter's own name (the host may pass one) and `{{level}}` its reading.
   'meters.rx.title': '{{label}}: {{level}} (aim ~30 dB, like WSJT-X)',
-  // ── The analog meter (Phone) ────────────────────────────────────────────────────────
-  // One instrument, two roles: S-units on receive, the picked transmit scale when keyed —
-  // which is what a rig's single meter does. The scale NAMES (S, PO, SWR, ALC, COMP) are the
-  // rig's own front-panel vocabulary and stay as constants in the component, like TxMeters'.
-  'settings.rigControl.ratedWatts.label': 'Rated power (W)',
-  'settings.rigControl.ratedWatts.hint':
-    'What this radio puts out at full drive. It sets the top of the Phone meter’s power scale, so a QRP set reads across the whole dial instead of sitting on the first mark. It is the radio’s rating, not your power limit — the limit is a share of this and shows as a mark on the scale.',
-  'meter.aria': 'Signal meter',
-  'meter.face.aria': '{{plate}} meter reading {{value}}',
-  'meter.pick.aria': 'What the needle reads while transmitting',
-  'meter.pick.po': 'PO',
-  'meter.pick.po.title': 'Power out — needle reads watts against this radio’s rated output',
-  'meter.pick.swr': 'SWR',
-  'meter.pick.swr.title': 'Antenna match',
-  'meter.pick.alc': 'ALC',
-  'meter.pick.alc.title': 'Automatic level control — keep the peaks out of the top band',
-  'meter.pick.comp': 'CMP',
-  'meter.pick.comp.title': 'Speech compression, in dB',
   'meters.tx.aria': 'Transmit meters',
   // `{{when}}` is `TX_METERS_WHEN`, the one string the ⊞ Panels menu shows for this panel —
   // interpolated rather than repeated so the panel and the menu cannot drift. It is still

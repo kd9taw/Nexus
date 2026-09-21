@@ -83,8 +83,18 @@ export function alcBar(alc: number): { frac: number; value: string; zone: Zone }
 }
 
 /** Output power (watts) → bar, scaled to a 100 W reference (2 m full on the IC-9700). */
-export function poBar(watts: number): { frac: number; value: string; zone: Zone } {
-  const frac = Math.max(0, Math.min(1, watts / 100))
+export function poBar(watts: number, ratedW = 100): { frac: number; value: string; zone: Zone } {
+  // ⭐ FULL SCALE IS THE RADIO'S RATED OUTPUT, not a hardcoded 100 (operator, 2026-09-21).
+  // `watts / 100` is wrong for exactly the two operators most likely to be watching: a 5 W QRP
+  // set never left the first tick and a station behind an amplifier pinned. `ratedWatts` is
+  // per-radio and defaults to 100, so most HF stations are unaffected.
+  //
+  // ⚠️ Fixed in the SHARED component on purpose, unlike the four-rows contract that had no
+  // business here: this is a CORRECTNESS defect and it is identical in all three cockpits — a
+  // QRP rig's power bar is as wrong in Operate as it is in Phone. A ruling about one surface
+  // does not belong in a component three surfaces share; a fix every surface needs does.
+  const full = ratedW > 0 ? ratedW : 100
+  const frac = Math.max(0, Math.min(1, watts / full))
   return { frac, value: `${Math.round(watts)} W`, zone: 'ok' }
 }
 
@@ -181,7 +191,7 @@ export function TxMeters({
     key: 'po',
     label: PO,
     title: t('meters.tx.po.title'),
-    bar: radio.txPoW == null ? null : poBar(radio.txPoW),
+    bar: radio.txPoW == null ? null : poBar(radio.txPoW, radio.ratedWatts ?? 100),
   })
   rows.push({
     key: 'comp',

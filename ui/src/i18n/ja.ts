@@ -5682,6 +5682,7 @@ export const JA: PartialCatalog = {
   "scope.window.sharp.title": "分解能:シャープ — 4096ポイント窓、341 ms。キャリア幅は半分、時間方向のにじみは倍。混み合った帯域から弱いキャリアを拾うのに最適。クリックで高速側へ。",
   "scope.window.fast.title": "分解能:高速 — 1024ポイント窓、85 ms。キャリアは倍の幅に見えますが、キーイングや音声の立ち上がりが実際に分解できます。クリックでデフォルトに戻ります。",
   "scope.resolution.aria": "スコープ分解能 {{width}} — クリックで変更",
+  "scope.smeter.aria": "S-meter",
   "scope.smeter.title": "Sメーター {{reading}}(S9比 {{db}} dB、CAT経由)",
   "scope.smeter.title.tx": "送信中はSメーターを一時停止します",
   "scope.smeter.title.none": "この無線機はCATでSメーター値を返しません",
@@ -5705,22 +5706,11 @@ export const JA: PartialCatalog = {
   "fastGraph.aria": "Fast Graph — T/R周期にわたる信号強度。ピングはスパイクとして描かれます",
   "meters.rx.label": "RXレベル",
   "meters.rx.title": "{{label}}:{{level}}(目安は約30 dB、WSJT-Xと同じ)",
-  // The analog meter (Phone) + the rig's rated power. English until translated: the
+  // The rig's rated power. English until translated: the
   // completeness guard requires every locale to DEFINE every key, and the runtime's
   // English fallback is a safety net for a blank value, not a licence to omit one.
   "settings.rigControl.ratedWatts.label": "Rated power (W)",
   "settings.rigControl.ratedWatts.hint": "What this radio puts out at full drive. It sets the top of the Phone meter’s power scale, so a QRP set reads across the whole dial instead of sitting on the first mark. It is the radio’s rating, not your power limit — the limit is a share of this and shows as a mark on the scale.",
-  "meter.aria": "Signal meter",
-  "meter.face.aria": "{{plate}} meter reading {{value}}",
-  "meter.pick.aria": "What the needle reads while transmitting",
-  "meter.pick.po": "PO",
-  "meter.pick.po.title": "Power out — needle reads watts against this radio’s rated output",
-  "meter.pick.swr": "SWR",
-  "meter.pick.swr.title": "Antenna match",
-  "meter.pick.alc": "ALC",
-  "meter.pick.alc.title": "Automatic level control — keep the peaks out of the top band",
-  "meter.pick.comp": "CMP",
-  "meter.pick.comp.title": "Speech compression, in dB",
   "meters.tx.aria": "送信メーター",
   "meters.tx.idle": "送信メーター — {{when}}",
   "meters.tx.swr.title": "アンテナ整合 — 2:1以下に保ってください",
