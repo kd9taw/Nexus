@@ -5847,6 +5847,8 @@ export const DE: PartialCatalog = {
   "meters.rx.title": "{{label}}: {{level}} (Ziel etwa 30 dB, wie WSJT-X)",
   "meters.tx.aria": "Sendeanzeigen",
   "meters.tx.idle": "TX-Anzeigen — {{when}}",
+  "meters.tx.notReported.mark": "nicht gemeldet",
+  "meters.tx.notReported": "Dieses Funkgerät hat {{meter}} während des Sendens nicht gemeldet — dafür gibt es auf der CAT-Verbindung also kein Instrument. Die Zeile bleibt stehen, damit die Anzeige auf jedem Gerät gleich hoch ist — und weil eine verschwundene Zeile wie etwas wirkt, das Nexus nie gebaut hat.",
   "meters.tx.swr.title": "Antennenanpassung — unter 2:1 halten",
   "meters.tx.swr.unverified": "Antennenanpassung — dies ist der Rohwert des Funkgeräts selbst, und Nexus hat für dieses Modell keine verifizierte Skala, kann also nicht sagen, was hier als hoch gilt. Achten Sie darauf, in welche Richtung sich der Wert beim Abstimmen bewegt; der absolute Wert kann weit danebenliegen, und nichts bricht Ihre Aussendung deswegen ab.",
   "meters.tx.alc.title": "ALC — Mikrofonverstärkung so einstellen, dass SSB-Spitzen den Bereich gerade eben antippen, nie voll ausschlagen",

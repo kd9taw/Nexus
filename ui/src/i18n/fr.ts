@@ -2365,6 +2365,8 @@ export const FR: PartialCatalog = {
   "meters.tx.aria": "Mesures d'émission",
   "meters.tx.comp.title": "Compression de parole",
   "meters.tx.idle": "Mesures TX — {{when}}",
+  "meters.tx.notReported.mark": "non signalé",
+  "meters.tx.notReported": "Cette station n’a pas signalé {{meter}} pendant l’émission : il n’y a donc pas de mesure pour cela sur la liaison CAT. La ligne reste afin que le panneau ait la même hauteur sur toutes les stations — et parce qu’une ligne disparue se lit comme une fonction que Nexus n’a jamais réalisée.",
   "meters.tx.po.title": "Puissance de sortie réelle",
   "meters.tx.swr.title": "Adaptation d'antenne — restez sous 2:1",
   "meters.tx.swr.unverified": "Adaptation d’antenne — c’est la valeur brute de la radio elle-même, et Nexus n’a pas d’échelle vérifiée pour ce modèle : il ne peut donc pas vous dire ce qui compte comme élevé ici. Regardez dans quel sens elle évolue pendant que vous accordez ; le chiffre absolu peut être très faux, et rien n’interrompt votre émission à cause de lui.",

@@ -2365,6 +2365,8 @@ export const ES: PartialCatalog = {
   "meters.tx.aria": "Medidores de transmisión",
   "meters.tx.comp.title": "Compresión de voz",
   "meters.tx.idle": "Medidores de TX — {{when}}",
+  "meters.tx.notReported.mark": "sin datos",
+  "meters.tx.notReported": "Esta radio no informó de {{meter}} mientras transmitía, así que no tiene ese medidor en el enlace CAT. La fila se queda para que el panel tenga la misma altura en cualquier radio — y porque una fila que desaparece se lee como algo que Nexus nunca construyó.",
   "meters.tx.po.title": "Potencia real de salida",
   "meters.tx.swr.title": "Adaptación de antena — mantenla por debajo de 2:1",
   "meters.tx.swr.unverified": "Adaptación de antena — esta es la cifra en bruto del propio equipo, y Nexus no tiene una escala verificada para este modelo, así que no puede decirte qué cuenta como alto aquí. Fíjate en hacia dónde se mueve mientras sintonizas; el número absoluto puede estar muy lejos, y nada detiene tu transmisión por él.",

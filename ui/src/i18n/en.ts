@@ -9302,6 +9302,13 @@ export const EN = {
   // interpolated rather than repeated so the panel and the menu cannot drift. It is still
   // written in `TxMeters.tsx`; see the note there for why it has not moved yet.
   'meters.tx.idle': 'TX meters — {{when}}',
+  // A meter the radio stayed silent about THROUGH an over — so it is one this radio does not
+  // report, as against the blank rows before the first over, which the line above answers.
+  'meters.tx.notReported.mark': 'not reported',
+  'meters.tx.notReported':
+    'This radio did not report {{meter}} while it was transmitting, so it has no meter for ' +
+    'it on the CAT link. The row stays so the panel is the same height on every radio — and ' +
+    'because a row that vanished would read as one Nexus never built.',
   'meters.tx.swr.title': 'Antenna match — keep it under 2:1',
   // ⚠️ THE SAME READING, ON A SCALE NEXUS CANNOT VOUCH FOR (2026-09-20). `swrScaleVerified`
   // is false — the rig is outside the two paths whose meter curve we can point at — so the
