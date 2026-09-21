@@ -836,9 +836,22 @@ impl FieldDayLog {
             s.push_str(&adif_field("BAND", &q.band));
             // The dial, when this row knows it — in MHz, as ADIF's FREQ is. A row that does
             // not writes nothing rather than a zero an importer would refuse the record
-            // over. Never for Field Day: its journal and export are pinned byte for byte by
-            // the §8(a) goldens.
-            if q.freq_khz > 0 && self.session.exchange.name != "fieldday" {
+            // over.
+            //
+            // ⚠️ **FIELD DAY IS NOT EXCEPTED, AND THE EXCEPTION THAT USED TO SIT HERE WAS
+            // JUSTIFIED BY A CLAIM THAT IS NOT TRUE.** It read "never for Field Day: its
+            // journal and export are pinned byte for byte by the §8(a) goldens". They are
+            // not: every row in the golden fixtures carries `dial_khz == 0`, so all ten
+            // pass with the clause or without it, and they never held it in place. Measured,
+            // then removed (operator ruling, 2026-09-20).
+            //
+            // What the exception actually cost: this function is BOTH the journal and the
+            // submitted export, and [`Self::merge_adif`] restores `freq_khz` by reading
+            // `FREQ` back out of it — so withholding the field here silently zeroed the dial
+            // on every already-logged contact the moment Nexus restarted mid-event, and
+            // nothing told the operator. Pinned by
+            // `a_field_day_contact_keeps_its_dial_across_a_restart`.
+            if q.freq_khz > 0 {
                 s.push_str(&adif_field(
                     "FREQ",
                     &format!("{:.3}", f64::from(q.freq_khz) / 1000.0),
@@ -2217,6 +2230,56 @@ mod tests {
             .cabrillo(14_080)
             .expect("a single-mode event exports one entry")
             .contains(" RY "));
+    }
+
+    /// ⭐ **A FIELD DAY CONTACT KEEPS ITS DIAL ACROSS A RESTART** (operator ruling,
+    /// 2026-09-20).
+    ///
+    /// Field Day's journal and its submitted export are the SAME function, and
+    /// [`Self::merge_adif`] restores `freq_khz` by reading `FREQ` back out of it
+    /// (`self.qsos` ← `f.get("FREQ")`). So while `adif` withheld `FREQ` for Field Day
+    /// alone, **a restart mid-event silently zeroed the dial on every contact already
+    /// logged**, and nothing told the operator.
+    ///
+    /// ⚠️ **The exception's written justification was FALSE, and was measured before it
+    /// was removed.** It read "its journal and export are pinned byte for byte by the
+    /// §8(a) goldens" — but every row in the golden fixtures carries `dial_khz == 0`, so
+    /// all ten pass with the clause or without it. The goldens never held it in place.
+    /// A justification nobody can reproduce is how an exception outlives its reason.
+    #[test]
+    fn a_field_day_contact_keeps_its_dial_across_a_restart() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "2A", "WI"),
+            "20m",
+        );
+        log.dial_khz = 14_253;
+        assert!(log.log_mode_at("K1ABC", "1H", "CT", "PH", 0, 1_782_583_500));
+        assert_eq!(
+            log.qsos()[0].freq_khz,
+            14_253,
+            "precondition: the row is stamped with the dial at log time"
+        );
+
+        // The journal must carry it, or the reader below has nothing to restore from.
+        assert!(
+            log.adif().contains("<FREQ:6>14.253"),
+            "Field Day's journal dropped the dial: {}",
+            log.adif()
+        );
+
+        let mut restored = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "2A", "WI"),
+            "20m",
+        );
+        restored.merge_adif(&log.adif(), 0);
+        assert_eq!(restored.qso_count(), 1);
+        assert_eq!(
+            restored.qsos()[0].freq_khz,
+            14_253,
+            "a restart zeroed the dial on a contact that was logged with one"
+        );
     }
 
     /// ⭐ **A PHONE CONTEST CONTACT CARRIES THE MODE IT WAS WORKED ON, THROUGH BOTH

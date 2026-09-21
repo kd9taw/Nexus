@@ -49,7 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dial away, so every row from a contest weekend arrived with no frequency at all. On VHF that
   lost the segment with it: 144.200 SSB and 146.520 FM both landed as plain `2m`. The dial each
   contact was logged on now travels with it, and a contact that never knew its dial still writes
-  no frequency rather than a zero. The Field Day file you submit is unchanged.
+  no frequency rather than a zero. **Field Day is included** — its log is written by the same
+  code that restores it after a restart, so leaving the frequency out of the file was also
+  leaving it out of the recovery, and a restart mid-event quietly blanked the dial on every
+  contact already in the log.
 
 ### Corrections to 1.14.0
 

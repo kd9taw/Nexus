@@ -337,13 +337,21 @@ mod tests {
             assert!(a.contains("<BAND:2>2m"), "{a}");
         }
 
-        // ⭐ **AND THE CONTEST LOG'S OWN ADIF KEEPS FIELD DAY'S EXCEPTION.** The journal
-        // and the Field Day export are pinned byte for byte by the §8(a) goldens and must
-        // not grow a column; the lifetime log is a different artifact with a different
-        // job, so the two answers here are deliberately not the same one.
+        // ⭐ **AND FIELD DAY'S OWN ADIF NOW CARRIES IT TOO** — this assertion was the
+        // opposite until 2026-09-20, and it was inverted by an operator ruling, not to make
+        // anything go green.
+        //
+        // What it used to say was that the Field Day export "must not grow a column"
+        // because journal and export "are pinned byte for byte by the §8(a) goldens".
+        // ⚠️ That was measured and is FALSE: every row in the golden fixtures carries
+        // `dial_khz == 0`, so all ten pass either way and they never pinned this at all.
+        // And the exception had a real cost, because that one function is BOTH artifacts:
+        // `merge_adif` restores `freq_khz` by reading `FREQ` back, so withholding it here
+        // silently zeroed the dial on every logged contact whenever Nexus restarted
+        // mid-event. See `fieldday::tests::a_field_day_contact_keeps_its_dial_across_a_restart`.
         assert!(
-            !log.adif().contains("<FREQ:"),
-            "the Field Day contest export must not have grown FREQ: {}",
+            log.adif().contains("<FREQ:7>144.200"),
+            "the Field Day export lost the dial: {}",
             log.adif()
         );
     }
