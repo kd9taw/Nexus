@@ -6617,7 +6617,60 @@ impl Engine {
             // dangerous direction is the one an operator reaches for to work a station low in
             // the passband.
             let mark = self.rtty_tx_mark_hz() / 1_000_000.0;
-            allow(dial - mark - shift) && allow(dial - mark)
+            // ⛔ AND WHICH SIDE OF THE DIAL THE AUDIO LANDS ON. This subtracted
+            // unconditionally, i.e. it assumed LSB — the RTTY convention, and right for the
+            // common case. On the OTHER sideband an AFSK emission sits ABOVE the dial, so the
+            // gate was checking the wrong half of the carrier and could approve a transmission
+            // outside a privileged segment. Same defect class as the 1.9.0 netting regression
+            // the comment above records, on the sideband axis instead of the offset axis.
+            //
+            // ⚠️ NOT `rtty_reverse`, which is the obvious-looking field and the wrong one: it
+            // flips the TONES, not the sideband (`service.rs` says so twice, with a test). The
+            // sideband is carried in the MODE WORD — `RTTY`/`FSK`/`PKTLSB` are LSB-side,
+            // `RTTYR`/`FSKR`/`PKTUSB` are USB-side, and Hamlib's `RTTYR` is USB-side by
+            // definition. `settings.rs`'s doc for `rtty_reverse` says the opposite and is the
+            // outlier; the mode word and its test are the authority.
+            //
+            // ⭐ AN UNREADABLE MODE CHECKS BOTH SIDES. This is a privilege gate, so the safe
+            // answer to "which half of the carrier?" is "whichever is worse". A rig that has
+            // not reported its mode, or reports one this does not recognise, is refused unless
+            // the emission is legal on EITHER side — never approved on a guess.
+            match self.rtty_afsk_usb_side() {
+                Some(true) => allow(dial + mark) && allow(dial + mark + shift),
+                Some(false) => allow(dial - mark - shift) && allow(dial - mark),
+                None => {
+                    allow(dial - mark - shift)
+                        && allow(dial - mark)
+                        && allow(dial + mark)
+                        && allow(dial + mark + shift)
+                }
+            }
+        }
+    }
+
+    /// Is the AFSK emission on the UPPER side of the dial? `None` = cannot tell, which
+    /// [`Self::rtty_emission_ok`] treats as "check both".
+    ///
+    /// ⭐ THE RIG WINS OVER THE COMMAND, the same precedence the log and the Phone cockpit
+    /// use: a rig sitting on a sideband Nexus did not command is exactly the case this
+    /// exists for, and reading our own command back would answer the wrong question.
+    fn rtty_afsk_usb_side(&self) -> Option<bool> {
+        let word = self
+            .rig_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(|m| m.to_ascii_uppercase())
+            .unwrap_or_else(|| self.rig_mode_effective().to_ascii_uppercase());
+        match word.replace('-', "").as_str() {
+            // USB-side: the DATA submode on the upper sideband, and Hamlib's reverse RTTY
+            // spellings, which are USB-side by definition.
+            "PKTUSB" | "USB" | "DATAU" | "RTTYR" | "FSKR" => Some(true),
+            // LSB-side: the RTTY convention — mark = lower audio = higher RF.
+            "PKTLSB" | "LSB" | "DATAL" | "RTTY" | "FSK" => Some(false),
+            // ⚠️ Anything else — FM, CW, a vendor spelling nobody has mapped, a rig that has
+            // reported nothing — is NOT assumed. See the both-sides arm above.
+            _ => None,
         }
     }
 
@@ -29264,6 +29317,94 @@ mod tests {
     /// centre UP moves the emission DOWN. Park the dial so the assumed emission is just inside
     /// the bottom of the 20 m data segment, net up, and the real emission drops out of it while
     /// the gate still says yes.
+    /// ⛔ **THE GATE JUDGES THE SIDE THE RIG IS ACTUALLY ON** — the sibling defect to the
+    /// netting regression below, on the other axis, and found by the 2026-09-21 review.
+    ///
+    /// AFSK rides LSB by convention, so the emission sits BELOW the dial and this gate
+    /// subtracted the mark unconditionally. On a rig on the OTHER sideband the emission sits
+    /// ABOVE the dial, so the gate checked the wrong half of the carrier — and approved a
+    /// transmission outside the operator's privileges.
+    ///
+    /// ⚠️ The field that LOOKS right is `rtty_reverse`, and it is the wrong one: it flips the
+    /// TONES, not the sideband. The sideband is in the MODE WORD.
+    #[test]
+    fn the_rtty_gate_judges_the_sideband_the_rig_reports() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("rtty", false);
+        e.settings.rtty_backend = "afsk".into();
+        e.settings.rtty_shift_hz = 170;
+
+        // 20 m data for a General starts at 14.025. Default mark 2125 Hz.
+        // Park the dial so the LSB emission is legal and the USB emission is NOT: a dial of
+        // 14.0265 emits at 14.024375 on LSB (below the 14.025 floor → illegal) and at
+        // 14.028625 on USB (legal). So the two sides genuinely disagree here, which is what
+        // makes this test able to fail — a dial where both sides agree would prove nothing.
+        let dial = 14.0265;
+
+        e.observe_rig_mode("PKTLSB".into());
+        assert!(
+            !e.rtty_emission_ok(dial),
+            "precondition: on LSB this dial emits at 14.0244, below the General 14.025 floor"
+        );
+
+        // ⭐ THE FIX. The same dial on the UPPER sideband emits at 14.0286, which is legal —
+        // and before this the gate still judged it as LSB and refused. (This direction costs
+        // the operator a legal transmission; the dangerous direction is asserted below.)
+        e.observe_rig_mode("PKTUSB".into());
+        assert!(
+            e.rtty_emission_ok(dial),
+            "on the upper sideband the emission is at 14.0286, inside the segment"
+        );
+    }
+
+    /// ⛔ **THE DANGEROUS HALF OF THE SIDEBAND DEFECT — split out so its control reports its
+    /// OWN claim.** A red on the sibling test above says nothing about this one.
+    ///
+    /// The old gate only ever looked BELOW the dial. On a rig on the upper sideband an
+    /// emission that leaves the TOP of the segment therefore looked legal, and the gate
+    /// approved an out-of-privilege transmission.
+    #[test]
+    fn the_rtty_gate_refuses_an_upper_sideband_emission_that_leaves_the_segment() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("rtty", false);
+        e.settings.rtty_backend = "afsk".into();
+        e.settings.rtty_shift_hz = 170;
+
+        // 20 m data ends at 14.150. Default mark 2125 Hz, so a dial of 14.1495 emits at
+        // 14.151625 on USB (OUTSIDE) and 14.147375 on LSB (inside). The two sides disagree,
+        // which is what makes this able to fail at all.
+        let high = 14.1495;
+
+        e.observe_rig_mode("PKTLSB".into());
+        assert!(
+            e.rtty_emission_ok(high),
+            "precondition: on LSB this dial is inside the segment"
+        );
+
+        e.observe_rig_mode("PKTUSB".into());
+        assert!(
+            !e.rtty_emission_ok(high),
+            "THE DEFECT: on USB the emission is at 14.1516, ABOVE the 14.150 ceiling, and the \
+             gate approved it because it only ever looked below the dial"
+        );
+
+        // ⭐ AN UNREADABLE MODE CHECKS BOTH SIDES — a privilege gate must not guess. `high` is
+        // legal on LSB and illegal on USB, so an unrecognised mode must refuse it.
+        e.observe_rig_mode("SOMETHING-NOBODY-MAPPED".into());
+        assert!(
+            !e.rtty_emission_ok(high),
+            "an unrecognised mode must be refused unless BOTH sides are legal"
+        );
+        // …and the both-sides arm is not simply refusing everything: mid-segment is legal
+        // either way and must still pass.
+        assert!(
+            e.rtty_emission_ok(14.100),
+            "mid-segment is legal on either side and must still pass"
+        );
+    }
+
     #[test]
     fn the_rtty_gate_judges_the_netted_mark_not_the_old_fixed_one() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
