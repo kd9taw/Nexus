@@ -77,7 +77,7 @@ impl Adjustment {
                     .unwrap()
             }
             Self::Function(func) => {
-                e.observe_rig_funcs([Some(false); 6]);
+                e.observe_rig_funcs([Some(false); 7]);
                 e.queue_remote_receiver_dsp(
                     "phone",
                     ReceiverDsp::Function { func, on: false },

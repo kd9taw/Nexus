@@ -13175,6 +13175,48 @@ fn set_squelch(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot
     Ok(eng.snapshot())
 }
 
+/// Set the TRANSMIT-MONITOR GAIN as a 0.0–1.0 fraction — how loud the rig plays your own
+/// audio back while you are talking. Its on/off half is the `MON` func, reached through
+/// [`set_rig_func`] as `"monitor"`.
+///
+/// ⚠️ NOT `set_af_gain`, and the difference matters to a decoder: AF gain sits in front of
+/// the received audio on a speaker-fed station, and this one is heard only while
+/// transmitting — turning the monitor down can never silence FT8.
+#[tauri::command(async)]
+fn set_monitor_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_monitor_gain(gain);
+    Ok(eng.snapshot())
+}
+
+/// Set the ATTENUATOR to a whole number of dB (`0` = off); the radio loop applies it.
+///
+/// ⚠️ THIS IS A LIST, NOT A SLIDER. The caller must pass one of `radio.att_steps_db` — the
+/// pads THIS radio declares — and a value that is not one of them is REFUSED rather than
+/// rounded to the nearest that is: the rig would NAK it or silently substitute a neighbour,
+/// and a substituted pad attenuates by an amount the operator did not choose. The error says
+/// so, so the UI can tell the operator instead of leaving a control that did not move.
+#[tauri::command(async)]
+fn set_att_db(state: State<'_, SharedEngine>, db: u8) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if !eng.set_att_db(db) {
+        return Err(format!("this radio has no {db} dB attenuator step"));
+    }
+    Ok(eng.snapshot())
+}
+
+/// Set the PREAMP by its dB LABEL (`0` = off); the radio loop applies it. Same list rule and
+/// same refusal as [`set_att_db`] — and on an Icom the labels are `1`/`2` (P.AMP1/P.AMP2)
+/// rather than decibels at all, so "the nearest value" would be meaningless as well as wrong.
+#[tauri::command(async)]
+fn set_preamp_db(state: State<'_, SharedEngine>, db: u8) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if !eng.set_preamp_db(db) {
+        return Err(format!("this radio has no {db} dB preamp step"));
+    }
+    Ok(eng.snapshot())
+}
+
 /// Set the AGC speed ("fast"|"mid"|"slow"); the radio loop applies it to the rig.
 #[tauri::command(async)]
 fn set_agc(state: State<'_, SharedEngine>, speed: String) -> Result<AppSnapshot, String> {
@@ -13192,7 +13234,8 @@ fn set_split(state: State<'_, SharedEngine>, tx_mhz: Option<f64>) -> Result<AppS
     Ok(eng.snapshot())
 }
 
-/// Enable/disable a rig DSP function ("nb"|"nr"|"notch"|"comp"|"vox"); the radio loop applies it
+/// Enable/disable a rig CAT function ("nb"|"nr"|"notch"|"comp"|"vox"|"manualNotch"|"monitor");
+/// the radio loop applies it
 /// next cycle. The snapshot reflects the requested state optimistically (the loop's GET reconciles).
 #[tauri::command(async)]
 fn set_rig_func(
@@ -24881,6 +24924,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_comp_level,
             set_notch_freq,
             set_af_gain,
+            set_monitor_gain,
+            set_att_db,
+            set_preamp_db,
             set_rf_gain,
             set_squelch,
             set_agc,

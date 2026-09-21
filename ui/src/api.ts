@@ -1656,12 +1656,14 @@ export async function swapVfo(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('swap_vfo')
 }
 
-/** Toggle a rig DSP function ('nb'|'nr'|'notch'|'comp'|'vox') on/off; the radio loop applies it.
- * The returned snapshot reflects the request optimistically (the loop's read-back reconciles). */
+/** Toggle a rig CAT function on/off; the radio loop applies it. The returned snapshot
+ * reflects the request optimistically (the loop's read-back reconciles). */
 export async function setRigFunc(
   // 'notch' is the AUTOMATIC notch (ANF); 'manualNotch' is the one you place (MN). Two
   // different rig functions — see engine.rs func_index, where they are indices 2 and 5.
-  func: 'nb' | 'nr' | 'notch' | 'comp' | 'vox' | 'manualNotch',
+  // 'monitor' is the TRANSMIT monitor (MON) — your own audio played back while you talk,
+  // not a receive-side DSP toggle like the rest. Its volume is `setMonitorGain`.
+  func: 'nb' | 'nr' | 'notch' | 'comp' | 'vox' | 'manualNotch' | 'monitor',
   on: boolean,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_rig_func', { func, on })
@@ -1745,6 +1747,32 @@ export async function setAfGain(gain: number): Promise<AppSnapshot> {
 /** Set RF gain (RECEIVE front-end gain, not transmit power) as a 0.0–1.0 fraction. */
 export async function setRfGain(gain: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_rf_gain', { gain })
+}
+
+/** Set the TRANSMIT-MONITOR gain (0.0–1.0) — how loud the rig plays your own audio back
+ * while you are talking. Its on/off half is `setRigFunc('monitor', …)`.
+ *
+ * ⚠️ NOT `setAfGain`: the monitor is heard only while transmitting, so unlike AF gain it
+ * can never silence the audio a decoder is listening to. */
+export async function setMonitorGain(gain: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_monitor_gain', { gain })
+}
+
+/** Set the ATTENUATOR to a whole number of dB (0 = off).
+ *
+ * ⚠️ `db` MUST be one of `radio.attStepsDb` — the pads this radio declares. Anything else
+ * REJECTS (the promise rejects with a message naming the step), because the rig would NAK
+ * it or silently substitute a neighbour and attenuate by an amount nobody chose. Render the
+ * control from `attStepsDb`, and render none at all when it is absent. */
+export async function setAttDb(db: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_att_db', { db })
+}
+
+/** Set the PREAMP by its dB LABEL (0 = off). Same list rule and same rejection as
+ * `setAttDb`; the labels come from `radio.preampStepsDb`. On an Icom they are `1`/`2`
+ * (P.AMP1/P.AMP2) rather than decibels, so never treat one as a gain figure. */
+export async function setPreampDb(db: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_preamp_db', { db })
 }
 
 /** Set the squelch threshold as a 0.0–1.0 fraction. */

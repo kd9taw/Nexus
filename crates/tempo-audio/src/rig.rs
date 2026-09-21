@@ -317,6 +317,102 @@ pub fn parse_dump_state_rx_ranges(reply: &str) -> Option<Vec<(u64, u64)>> {
     None // ran out of lines without ever seeing the terminator
 }
 
+/// The rig's ATTENUATOR pads and PREAMP steps, in dB, as its `\dump_state` declares them.
+/// Both ascending, both WITHOUT the implicit `0` (off) every radio has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbSteps {
+    /// Preamp labels, in list order — the position of a label in here is what the rig is
+    /// actually told to select on an Icom, so the ORDER is data, not presentation.
+    pub preamp_db: Vec<u8>,
+    /// Attenuator pads.
+    pub attenuator_db: Vec<u8>,
+}
+
+/// Parse the PREAMP and ATTENUATOR step lists out of a rigctld `\dump_state` reply.
+///
+/// ⚠️ These are nine fields past where [`parse_dump_state_rx_ranges`] stops, which is why
+/// nothing read them before: that function returns at the RX list's all-zero terminator, and
+/// everything below is still in the reply, unexamined. Grounded in Hamlib 4.7.1
+/// `tests/rigctl_parse.c` (`declare_proto_rig(dump_state)`) and checked against real replies
+/// from Hamlib 4.5.5's own `rigctld` (`tests/fixtures/dump_state_ic7300.txt`, `…7610.txt`):
+///
+/// ```text
+/// 1                     protocol version          ─┐
+/// 3078                  rig model                  │ 3 scalars
+/// 0                     ITU region                ─┘
+/// <rx range rows…>      terminated by "0 0 0 0 0 0 0"
+/// <tx range rows…>      terminated by "0 0 0 0 0 0 0"
+/// <tuning steps…>       "<modes> <hz>" rows, terminated by "0 0"
+/// <filters…>            "<modes> <hz>" rows, terminated by "0 0"
+/// 9999                  max_rit                   ─┐
+/// 9999                  max_xit                    │ 4 scalars
+/// 0                     max_ifshift                │
+/// 0                     announces                 ─┘
+/// 12 20                 PREAMP list      ← this
+/// 6 12 18               ATTENUATOR list  ← and this
+/// 0x9c20c1013bfe        has_get_func, and five more masks
+/// ```
+///
+/// **`None` means UNKNOWN and must fail the same way the range table does** — hide the
+/// control, do not guess a ladder. An EMPTY list is a different, positive answer: this radio
+/// has no pad. A caller that cannot tell those apart will eventually offer a made-up pad.
+pub fn parse_dump_state_db_lists(reply: &str) -> Option<DbSteps> {
+    let mut lines = reply.lines().map(str::trim).filter(|l| !l.is_empty());
+    // Only the protocol versions whose field order is known — a later one may have moved
+    // the lists, and reading the wrong line here yields a plausible-looking wrong ladder.
+    if !matches!(lines.next()?.parse::<u32>().ok()?, 0 | 1) {
+        return None;
+    }
+    lines.next()?.parse::<i64>().ok()?; // rig model
+    lines.next()?.parse::<i64>().ok()?; // ITU region
+
+    // Two range lists (7 fields each), then two "<modes> <hz>" lists (2 fields each). Each
+    // ends at its own all-zero row, and a row of the wrong width means this is not the
+    // layout we were promised — refuse rather than walk on and miscount.
+    let mut skip_list = |width: usize| -> Option<()> {
+        for line in lines.by_ref() {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            if f.len() != width {
+                return None;
+            }
+            // The terminator is all-zero; `0` parses under every field's radix.
+            if f.iter()
+                .all(|v| v.trim_start_matches("0x").parse::<u64>() == Ok(0))
+            {
+                return Some(());
+            }
+        }
+        None // ran out of lines without a terminator
+    };
+    skip_list(7)?; // RX ranges
+    skip_list(7)?; // TX ranges
+    skip_list(2)?; // tuning steps
+    skip_list(2)?; // filters
+    for _ in 0..4 {
+        // max_rit, max_xit, max_ifshift, announces
+        lines.next()?.parse::<i64>().ok()?;
+    }
+
+    // Hamlib prints each list as space-separated decibels and ends it with the newline —
+    // there is no count and no terminator VALUE, so an absent list is a `0` or a bare line.
+    let list = |line: &str| -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+        for tok in line.split_whitespace() {
+            match tok.parse::<u8>().ok()? {
+                0 => break, // RIG_DBLST_END — and what our own broker emits for "none"
+                v => out.push(v),
+            }
+        }
+        Some(out)
+    };
+    let preamp_db = list(lines.next()?)?;
+    let attenuator_db = list(lines.next()?)?;
+    Some(DbSteps {
+        preamp_db,
+        attenuator_db,
+    })
+}
+
 /// Whether `hz` falls inside any of `ranges`. `ranges` empty is caller-checked, not handled here.
 pub fn ranges_cover(ranges: &[(u64, u64)], hz: u64) -> bool {
     ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&hz))
@@ -1269,6 +1365,59 @@ impl Rig {
             &format!("{}", hz.max(0.0).round() as i32),
         ))
     }
+    /// Set the TRANSMIT-MONITOR GAIN (Hamlib `MONITOR_GAIN`) as a 0.0–1.0 fraction — how
+    /// loud the rig plays your own audio back while you are talking. Its on/off half is the
+    /// `MON` func, not a level.
+    pub fn set_monitor_gain(&mut self, frac: f32) -> std::io::Result<()> {
+        self.set_rx_level("MONITOR_GAIN", frac)
+    }
+
+    /// Set the ATTENUATOR in whole dB (Hamlib `ATT`; `0` = off).
+    ///
+    /// ⚠️ NOT [`Rig::set_rx_level`], for the same reason [`Rig::set_notch_freq_hz`] is not:
+    /// that one clamps to 0..1 and prints `{:.3}`, so a 12 dB pad would leave here as
+    /// `L ATT 1.000` — well-formed, accepted, and the wrong amount of attenuation.
+    ///
+    /// The caller must offer only pads the rig declares ([`Rig::read_db_steps`]); a value
+    /// the rig does not have is refused or rounded by the backend, and neither is a thing
+    /// to discover on the air.
+    pub fn set_att_db(&mut self, db: u8) -> std::io::Result<()> {
+        self.cat(&level_line("ATT", &db.to_string()))
+    }
+    /// Set the PREAMP by its dB LABEL (Hamlib `PREAMP`; `0` = off). Same integer path and
+    /// the same reason as [`Rig::set_att_db`]. On an Icom the label is translated to a list
+    /// POSITION at the CI-V boundary — see `civ::commands::preamp_index_for_db`.
+    pub fn set_preamp_db(&mut self, db: u8) -> std::io::Result<()> {
+        self.cat(&level_line("PREAMP", &db.to_string()))
+    }
+    /// Read the attenuator in dB. Through the RAW reader, because [`Rig::read_level`]
+    /// filters to 0.0..=1.0 and would REJECT every reading except "off" — which fails
+    /// asymmetrically: the control looks healthy until the operator switches a pad in.
+    pub fn read_att_db(&mut self) -> Option<u8> {
+        self.read_meter_f32("ATT")
+            .map(|v| v.round().clamp(0.0, 255.0) as u8)
+    }
+    /// Read the preamp's dB label. Same raw-reader reason as [`Rig::read_att_db`].
+    pub fn read_preamp_db(&mut self) -> Option<u8> {
+        self.read_meter_f32("PREAMP")
+            .map(|v| v.round().clamp(0.0, 255.0) as u8)
+    }
+
+    /// The radio's own ATTENUATOR pads and PREAMP steps, off one `\dump_state`.
+    ///
+    /// An attenuator is a LIST, not a slider — the handful of pads this particular radio
+    /// has — so the control cannot be built without asking. `None` = we could not ask or
+    /// could not walk the reply, and the caller must then offer no control at all rather
+    /// than a guessed ladder (the same rule as [`Rig::read_rx_ranges`], for the same
+    /// reason: a made-up pad is commanded at the radio, not merely displayed).
+    pub fn read_db_steps(&mut self) -> Option<DbSteps> {
+        self.control.as_ref()?;
+        // Long multi-line reply, like the range table — read to the deadline, not to the
+        // first newline.
+        let reply = self.command_multiline("\\dump_state\n").ok()?;
+        parse_dump_state_db_lists(&reply)
+    }
+
     /// Set the AGC time constant by Hamlib enum int (FAST=2, MEDIUM=5, SLOW=3, OFF=0).
     pub fn set_agc(&mut self, hamlib_val: u8) -> std::io::Result<()> {
         self.cat(&level_line("AGC", &hamlib_val.to_string()))
@@ -1957,6 +2106,176 @@ mod tests {
             "the APRS channel is covered"
         );
         assert!(!ranges_cover(&r2, 14_074_000), "…but 20 m is not");
+    }
+
+    /// ⭐ THE ATTENUATOR AND PREAMP STEP LISTS COME OFF THE SAME `\dump_state` REPLY, and
+    /// until this parser existed nothing read them: [`parse_dump_state_rx_ranges`] returns at
+    /// the RX list's all-zero terminator, and the two db lists sit nine fields further down,
+    /// past the TX ranges, the tuning steps, the filters and four scalars.
+    ///
+    /// ⚠️ THIS IS WHY A STEP LIST CANNOT BE A CONSTANT. An attenuator is not a slider; it is
+    /// the handful of pads a PARTICULAR radio has, and the two rigs below disagree — 20 dB on
+    /// one, 6/12/18 dB on the other. Offering a value the rig does not own gets it NAKed or
+    /// silently rounded to a neighbour, which attenuates by an amount nobody asked for.
+    ///
+    /// The fixtures are REAL: `\dump_state` captured over TCP from Hamlib 4.5.5's own
+    /// `rigctld -m 3073` / `-m 3078` driven against a pty, saved verbatim. Nothing in them is
+    /// transcribed, which matters because the field ORDER is the whole parse.
+    #[test]
+    fn dump_state_carries_the_rigs_own_attenuator_and_preamp_steps() {
+        let ic7300 = include_str!("../tests/fixtures/dump_state_ic7300.txt");
+        let ic7610 = include_str!("../tests/fixtures/dump_state_ic7610.txt");
+
+        let a = parse_dump_state_db_lists(ic7300).expect("a real dump parses");
+        assert_eq!(a.attenuator_db, vec![20], "the IC-7300 has one 20 dB pad");
+        assert_eq!(a.preamp_db, vec![1, 2], "…and Icom's two P.AMP selectors");
+
+        let b = parse_dump_state_db_lists(ic7610).expect("a real dump parses");
+        assert_eq!(b.attenuator_db, vec![6, 12, 18], "the IC-7610's three pads");
+        assert_eq!(b.preamp_db, vec![12, 20], "…and its two preamps, in dB");
+
+        // ⭐ THE LISTS DIFFER BETWEEN RIGS. Asserted as its own statement because a parser
+        // that returned a fixed ladder, or that read the wrong line and happened to find a
+        // plausible number, would satisfy either rig's expectations taken alone.
+        assert_ne!(a.attenuator_db, b.attenuator_db);
+        assert_ne!(a.preamp_db, b.preamp_db);
+
+        // ⚠️ AND THE TWO LISTS ARE NOT INTERCHANGEABLE. They are adjacent lines, so an
+        // off-by-one in the field walk reads one as the other — and on the IC-7300 both are
+        // short, which is exactly where that would go unnoticed.
+        assert_ne!(
+            a.preamp_db, a.attenuator_db,
+            "the preamp list is the line BEFORE the attenuator list"
+        );
+        assert_eq!(
+            parse_dump_state_rx_ranges(ic7610).map(|r| r.len()),
+            Some(1),
+            "the RX ranges still parse off the same reply, unchanged"
+        );
+
+        // A rig that declares neither reads as EMPTY, which is a positive answer ("this radio
+        // has no pad") and different from the `None` an unparseable reply gives.
+        let bare = "1\n1035\n0\n\
+                    30000.000000 60000000.000000 0x1ff -1 -1 0x3 0x3\n\
+                    0 0 0 0 0 0 0\n\
+                    0 0 0 0 0 0 0\n\
+                    0 0\n0 0\n0\n0\n0\n0\n0\n0\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n";
+        let n = parse_dump_state_db_lists(bare).expect("a well-formed dump with no pads");
+        assert!(n.attenuator_db.is_empty() && n.preamp_db.is_empty());
+
+        // ⚠️ UNKNOWN IS NOT EMPTY. A reply we cannot positively walk must read `None` — the
+        // same fail-open rule the range table has. An empty list HIDES the control; `None`
+        // must too, and for the caller to make that choice it has to be able to tell them
+        // apart. A truncated dump is the realistic case: the reply arrived short.
+        assert_eq!(parse_dump_state_db_lists(""), None);
+        assert_eq!(parse_dump_state_db_lists("RPRT -11\n"), None);
+        assert_eq!(
+            parse_dump_state_db_lists("1\n1035\n0\n0 0 0 0 0 0 0\n"),
+            None,
+            "the reply stopped before the lists"
+        );
+        // A protocol version whose layout we do not know could have moved the lists.
+        let moved = ic7610.replacen("1\n", "9\n", 1);
+        assert_eq!(parse_dump_state_db_lists(&moved), None);
+    }
+
+    /// ⚠️ THE TRAP, MADE EXECUTABLE: `ATT` AND `PREAMP` MUST NOT GO THROUGH THE ORDINARY
+    /// LEVEL PATH. Every other level on this surface is a 0..1 fraction, so both the reader
+    /// and the setter are built for one — and these two are INTEGER DECIBELS.
+    ///
+    /// [`Rig::read_level`] filters its reading to `0.0..=1.0`, so a 12 dB pad is not clamped
+    /// to 1.0, it is REJECTED: the read returns an error, three of those latch the level
+    /// unsupported, and the control vanishes. And it fails ASYMMETRICALLY, which is what
+    /// makes it nasty — `0` (the pad switched off) is inside the range and reads back fine,
+    /// so the control works right up until the operator uses it.
+    ///
+    /// [`Rig::set_rx_level`] is the mirror image: it clamps to 0..1 and prints `{:.3}`, so
+    /// `set_rx_level("ATT", 12.0)` puts `L ATT 1.000` on the wire — a pad no rig has.
+    #[test]
+    fn the_decibel_levels_use_the_raw_reader_and_an_integer_setter() {
+        // A rigctld answering like a real one: `l ATT` -> "12", `l PREAMP` -> "20".
+        let (addr, log) = mock_rigctld(|line: &str| {
+            if line.starts_with("l ATT") {
+                "12\n".to_string()
+            } else if line.starts_with("l PREAMP") {
+                "20\n".to_string()
+            } else if line.starts_with('f') {
+                "14074000\n".to_string()
+            } else {
+                "RPRT 0\n".to_string()
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+
+        // ⭐ THE DISCRIMINATOR. The ordinary reader REFUSES the very reading these controls
+        // exist to carry; the raw reader takes it. Both directions asserted, because a test
+        // that only showed the raw reader working would pass just as well if someone quietly
+        // widened `read_level` and broke every fractional level in the app.
+        assert!(
+            rig.read_level("ATT").is_err(),
+            "read_level must keep rejecting a decibel reading — it is the 0..1 reader"
+        );
+        assert_eq!(rig.read_att_db(), Some(12));
+        assert_eq!(rig.read_preamp_db(), Some(20));
+
+        // The setters put WHOLE DECIBELS on the wire, not a fraction.
+        rig.set_att_db(12).unwrap();
+        rig.set_preamp_db(20).unwrap();
+        rig.set_att_db(0).unwrap();
+        // …and the monitor gain, which really IS a 0..1 fraction, still goes out as one.
+        rig.set_monitor_gain(0.5).unwrap();
+        let sent = log.lock().unwrap().clone();
+        assert!(sent.contains(&"L ATT 12".to_string()), "{sent:?}");
+        assert!(sent.contains(&"L PREAMP 20".to_string()), "{sent:?}");
+        assert!(sent.contains(&"L ATT 0".to_string()), "{sent:?}");
+        assert!(
+            sent.contains(&"L MONITOR_GAIN 0.500".to_string()),
+            "{sent:?}"
+        );
+        // ⚠️ AND NOT THE FRACTION THE GENERIC SETTER WOULD HAVE SENT. Named explicitly:
+        // `L ATT 1.000` is well-formed, is accepted by rigctld, and pads by the wrong amount.
+        assert!(
+            !sent.iter().any(|l| l.starts_with("L ATT 1.0")),
+            "the clamped-fraction form must never reach the wire: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|l| l.starts_with("L PREAMP 1.0")),
+            "{sent:?}"
+        );
+    }
+
+    /// The step lists come off ONE `\dump_state`, at the same once-per-CAT-confirmation
+    /// probe that already reads the frequency ranges — not a second round trip, and not a
+    /// constant. `None` when the rig did not answer with something we can walk, which the
+    /// caller must treat exactly as it treats unknown ranges: offer nothing.
+    #[test]
+    fn the_rig_reads_its_own_step_lists_off_dump_state() {
+        let dump = include_str!("../tests/fixtures/dump_state_ic7610.txt").to_string();
+        let (addr, log) = mock_rigctld(move |line: &str| {
+            if line.starts_with("\\dump_state") {
+                dump.clone()
+            } else {
+                "RPRT 0\n".to_string()
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let steps = rig.read_db_steps().expect("a real dump parses");
+        assert_eq!(steps.attenuator_db, vec![6, 12, 18]);
+        assert_eq!(steps.preamp_db, vec![12, 20]);
+        assert_eq!(
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.contains("dump_state"))
+                .count(),
+            1,
+            "one round trip, not one per list"
+        );
+
+        // A rig that will not answer reads as UNKNOWN, never as an empty ladder.
+        let (addr2, _) = mock_rigctld(|_: &str| "RPRT -11\n".to_string());
+        assert_eq!(Rig::rigctld(&addr2).read_db_steps(), None);
+        assert_eq!(Rig::vox().read_db_steps(), None, "no CAT, nothing to ask");
     }
 
     #[test]

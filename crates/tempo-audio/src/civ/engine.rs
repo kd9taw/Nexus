@@ -432,6 +432,33 @@ pub(crate) mod tests_support {
         /// what Nexus does with a refusal. The rule here is the field report's, not a reading of
         /// Icom's CI-V document; what the tests assert is the handling of a NAK.
         pub scope_fixed: bool,
+        /// ATTENUATOR (`0x11`) — THE RAW WIRE BYTE, not a decoded dB, deliberately. The
+        /// real register is BCD decibels, so a fixture that decoded on the way in would
+        /// accept a raw-hex encoder and hand a test back the number it asked for: 12 dB
+        /// would store 12 whether the wire said `0x12` or `0x0c`. Keeping the byte makes
+        /// the encoding itself assertable.
+        pub att_raw: u8,
+        /// THE `0x16` REGISTER FILE, sub-command → its byte. One map rather than a field
+        /// per control, because that is what the family is on a real Icom: NB (`22`), NR
+        /// (`40`), ANF (`41`), COMP (`44`), MON (`45`), VOX (`46`), MN (`48`), the PREAMP
+        /// selector (`02`) and AGC (`12`) are all "read the sub-command, write the
+        /// sub-command plus a byte".
+        ///
+        /// ⚠️ It holds a BYTE, not a bool. Most of these are on/off, but the preamp is a
+        /// 3-state POSITION and AGC is a speed enum, and a fixture that stored `bool` would
+        /// quietly turn "select preamp 2" into "preamp on" — and then read back a 1 where
+        /// the radio would have said 2. Satellite mode (`5A`) keeps its own field above: it
+        /// has fault injection this map has no place for.
+        pub funcs: std::collections::BTreeMap<u8, u8>,
+        /// THE `0x14` LEVEL FILE, sub-command → the level as 0..255, decoded from the
+        /// 2-byte BCD the wire carries: RFPOWER (`0A`), MICGAIN (`0B`), NR (`06`), COMP
+        /// (`0E`), MONITOR_GAIN (`15`), AF/RF/SQL (`01`/`02`/`03`).
+        ///
+        /// ⚠️ THE BCD IS DECODED HERE BY HAND, on purpose. Calling the encoder's own
+        /// [`super::super::commands`] helper would make every round trip tautological — a
+        /// transposed nibble would encode and decode symmetrically and the test would pass.
+        /// A second, independent implementation is what makes the read-back evidence.
+        pub levels: std::collections::BTreeMap<u8, u16>,
         /// Every command frame received, as (cmd, data) — lets a test assert a
         /// verb was NOT sent (e.g. "no `0F` under the satellite-mode contract").
         pub log: Vec<(u8, Vec<u8>)>,
@@ -482,6 +509,9 @@ pub(crate) mod tests_support {
                         nak_satmode_set: 0,
                         drop_satmode_reads: 0,
                         scope_fixed: false,
+                        att_raw: 0,
+                        funcs: std::collections::BTreeMap::new(),
+                        levels: std::collections::BTreeMap::new(),
                         log: Vec::new(),
                     })),
                     mute: false,
@@ -632,6 +662,60 @@ pub(crate) mod tests_support {
                             None => Some((0x1A, vec![0x06, u8::from(r.data_mode), 0x01])),
                         },
                         (0x15, Some(0x02)) => Some((0x15, vec![0x02, 0x01, 0x20])), // raw 120 = S9
+                        // THE `0x14` LEVEL FAMILY — see [`Regs::levels`]. A bare
+                        // sub-command reads; a sub-command plus two BCD bytes writes.
+                        (0x14, Some(sub)) => match (f.data.get(1), f.data.get(2)) {
+                            (Some(&hi), Some(&lo)) => {
+                                // Two decimal digits per byte, big-endian: `01 27` = 127.
+                                let dig = |b: u8| {
+                                    let (h, l) = (b >> 4, b & 0x0F);
+                                    u16::from(if h > 9 { 0 } else { h }) * 10
+                                        + u16::from(if l > 9 { 0 } else { l })
+                                };
+                                r.levels.insert(sub, dig(hi) * 100 + dig(lo));
+                                None // ack
+                            }
+                            _ => {
+                                let v = r.levels.get(&sub).copied().unwrap_or(0).min(9999);
+                                let bcd = |d: u16| {
+                                    let d = (d % 100) as u8;
+                                    ((d / 10) << 4) | (d % 10)
+                                };
+                                Some((0x14, vec![sub, bcd(v / 100), bcd(v % 100)]))
+                            }
+                        },
+                        // ATTENUATOR (`0x11`): a bare frame reads, one payload byte writes.
+                        // The byte is stored and echoed UNTOUCHED — see [`Regs::att_raw`].
+                        (0x11, None) => Some((0x11, vec![r.att_raw])),
+                        (0x11, Some(v)) => {
+                            r.att_raw = v;
+                            None // ack
+                        }
+                        // THE REST OF THE `0x16` FAMILY — see [`Regs::funcs`]. Read is the
+                        // bare sub-command, write carries the byte after it, exactly as
+                        // satellite mode does above (and this arm sits AFTER it, so `5A`
+                        // keeps its own field and its fault injection).
+                        //
+                        // ⚠️ Keeping read and write apart is load-bearing, not tidiness: a
+                        // read swallowed as a write would set the register to the
+                        // sub-command's own value and answer nothing — switching the preamp
+                        // or the monitor to something nobody asked for, in the fixture that
+                        // is supposed to be the witness.
+                        // ⛔ `5A` NEVER reaches here. A rig configured `no_satmode` must
+                        // answer satellite mode with a NAK — an honest "this rig has no such
+                        // mode", which is the capability probe the 7300-family relies on.
+                        // Without this exclusion the arm above falls through on exactly that
+                        // configuration and the generic map ACKS it, turning a single-band
+                        // rig into one that claims satellite mode.
+                        (0x16, Some(sub)) if sub != 0x5A => match f.data.get(1) {
+                            Some(&v) => {
+                                r.funcs.insert(sub, v);
+                                None // ack
+                            }
+                            None => {
+                                Some((0x16, vec![sub, r.funcs.get(&sub).copied().unwrap_or(0)]))
+                            }
+                        },
                         // Scope CENTER/FIXED (`27 14`) — remembered so the span below can be
                         // refused. The mode is the LAST payload byte on both frame shapes
                         // (`27 14 <fixed>` single-scope, `27 14 <main_sub> <fixed>` dual).
