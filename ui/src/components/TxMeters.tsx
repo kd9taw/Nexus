@@ -95,7 +95,17 @@ export function compBar(db: number): { frac: number; value: string; zone: Zone }
   return { frac, value: `${Math.round(db)} dB`, zone }
 }
 
-type MeterRow = { label: string; title: string; bar: ReturnType<typeof swrBar> }
+/** One row of the panel. `bar` null = no reading, which the row prints as a dash — see the
+ *  panel's note on the two different kinds of nothing a dash can mean. `key` is stable across
+ *  that and across the SWR label's verified/unverified flip, so the "has this rig ever
+ *  reported this meter" memory below cannot be fooled by a label change. */
+type MeterKey = 'swr' | 'alc' | 'po' | 'comp'
+type MeterRow = {
+  key: MeterKey
+  label: string
+  title: string
+  bar: ReturnType<typeof swrBar> | null
+}
 
 export function TxMeters({
   radio,
@@ -114,9 +124,18 @@ export function TxMeters({
   // A plain ref (not state): the poll re-renders us anyway, and retention must never
   // itself cause a render. Unconditional hook — declared before any early return.
   const lastRows = useRef<MeterRow[]>([])
+  // ⭐ WHICH METERS THIS RIG ACTUALLY HAS, and whether we are yet in a position to say.
+  //
+  // These fields are populated ONLY while transmitting, so a blank row means two different
+  // things at two different times: before the first over nothing is known about any meter,
+  // and after one, a meter that stayed silent through it is one the radio does not report.
+  // Telling those apart is the whole reason the row can carry a ⊘ at all — a mark hung on
+  // the first case would be writing a radio off for never having been asked.
+  const seen = useRef(new Set<MeterKey>())
+  const everRead = useRef(false)
 
   const rows: MeterRow[] = []
-  if (radio.txSwr != null) {
+  {
     // ⚠️ IS THIS NUMBER ON A SCALE NEXUS CAN STAND BEHIND? The engine takes that question
     // seriously — it refuses to arm the high-SWR cutoff without `swrScaleVerified` — and so
     // does Settings. This panel did not, which made it the loudest surface asserting a
@@ -140,23 +159,36 @@ export function TxMeters({
     // The value keeps its `:1`: the doubt is about the rig's CALIBRATION, not about which
     // quantity this is, and dropping the unit would cost readability without buying honesty.
     const verified = radio.swrScaleVerified === true
-    const bar = swrBar(radio.txSwr)
+    const bar = radio.txSwr == null ? null : swrBar(radio.txSwr)
     rows.push({
-      label: verified ? SWR : SWR_UNSCALED,
+      key: 'swr',
+      // ⚠️ THE `SWR?` MARK NEEDS A READING TO BE ABOUT. It says "do not trust this number's
+      // absolute scale", and with no number there is nothing to distrust — a blank row
+      // wearing it reads as a doubt about whether the meter EXISTS, which is the ⊘'s
+      // question and a different one.
+      label: bar == null || verified ? SWR : SWR_UNSCALED,
       title: verified ? t('meters.tx.swr.title') : t('meters.tx.swr.unverified'),
-      bar: verified ? bar : { ...bar, zone: 'unknown' },
+      bar: bar == null || verified ? bar : { ...bar, zone: 'unknown' },
     })
   }
-  if (radio.txAlc != null)
-    rows.push({
-      label: ALC,
-      title: t('meters.tx.alc.title'),
-      bar: alcBar(radio.txAlc),
-    })
-  if (radio.txPoW != null)
-    rows.push({ label: PO, title: t('meters.tx.po.title'), bar: poBar(radio.txPoW) })
-  if (radio.txCompDb != null)
-    rows.push({ label: COMP, title: t('meters.tx.comp.title'), bar: compBar(radio.txCompDb) })
+  rows.push({
+    key: 'alc',
+    label: ALC,
+    title: t('meters.tx.alc.title'),
+    bar: radio.txAlc == null ? null : alcBar(radio.txAlc),
+  })
+  rows.push({
+    key: 'po',
+    label: PO,
+    title: t('meters.tx.po.title'),
+    bar: radio.txPoW == null ? null : poBar(radio.txPoW),
+  })
+  rows.push({
+    key: 'comp',
+    label: COMP,
+    title: t('meters.tx.comp.title'),
+    bar: radio.txCompDb == null ? null : compBar(radio.txCompDb),
+  })
 
   // ON AIR via the ARBITER, not the FT slot flag (#57): `transmitting` is written only by
   // the slot/beacon path, so a voice or CW over — the overs Phone/CW actually key — never
@@ -164,25 +196,39 @@ export function TxMeters({
   // readings were sitting in the snapshot unshown. `txBusyReason` is Some for all seven
   // TX owners.
   const onAir = radio.transmitting || radio.txBusyReason != null || radio.rigKeyed === true
-  const live = onAir && rows.length > 0
-  if (live) lastRows.current = rows
-
-  const pin = pinned || inline
-  const variant = `${pin ? ' pinned' : ''}${inline ? ' inline' : ''}`
-  if (!pin) {
-    // Default (Phone/CW): appear only while keyed, exactly as before.
-    if (!onAir || rows.length === 0) return null
-  } else if (!live && lastRows.current.length === 0) {
-    // Pinned but no reading has EVER arrived (rig reports no meters, or hasn't keyed yet):
-    // a fixed-height hint keeps the panel discoverable without inventing numbers.
-    return (
-      <div className={`ph-txmeters${variant} idle`} role="group" aria-label={t('meters.tx.aria')}>
-        <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
-      </div>
-    )
+  const reading = rows.some((r) => r.bar != null)
+  const live = onAir && reading
+  if (live) {
+    lastRows.current = rows
+    everRead.current = true
+    for (const r of rows) if (r.bar != null) seen.current.add(r.key)
   }
 
-  const shown = live || !pin ? rows : lastRows.current
+  const pin = pinned || inline
+  if (!pin) {
+    // Default (Phone/CW's old shape): appear only while keyed, exactly as before. It has no
+    // caller left in the app — both cockpits pass `pinned` — so it deliberately does NOT
+    // inherit the always-four-rows contract, which was decided for the dock and is about the
+    // dock's height.
+    if (!onAir || !reading) return null
+  }
+
+  // ⭐ FOUR ROWS, ALWAYS, and COMPACT UNTIL KEYED (operator, 2026-09-20).
+  //
+  // The panel used to be 0-4 rows tall depending on the radio and on whether it had keyed
+  // yet, in a BOTTOM-ANCHORED dock above the PTT button — so every one of those transitions
+  // moved the dock's top edge, and the key-down ones moved it while the operator was holding
+  // the button. Fixed at four there is nothing left to move, and the idle/keyed switch below
+  // is then free to be a real size change: the reading you squint at is the one you are
+  // making right now.
+  //
+  // It is a VARIANT SWITCH over CSS that already exists — `.pinned` is the compact geometry
+  // (6px bars, smaller type) and the bare class is the full one (10px) — not new geometry.
+  // `inline` keeps the compact geometry THROUGH a key-down: that cell is fixed-width chrome
+  // in the Operate strip and the anti-bounce ruling is that the TX cycle costs it nothing.
+  const compact = inline || !live
+  const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}`
+  const shown = live || lastRows.current.length === 0 ? rows : lastRows.current
   return (
     <div
       className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}`}
@@ -190,17 +236,36 @@ export function TxMeters({
       aria-label={t('meters.tx.aria')}
     >
       {shown.map((r) => (
-        <div key={r.label} className="ph-txmeter" title={r.title}>
+        <div key={r.key} className="ph-txmeter" title={r.title}>
           <span className="ph-txmeter-label">{r.label}</span>
           <div className="ph-txmeter-track">
             <div
               className="ph-txmeter-fill"
-              style={{ width: `${Math.round(r.bar.frac * 100)}%`, background: ZONE_COLOR[r.bar.zone] }}
+              style={{
+                width: `${Math.round((r.bar?.frac ?? 0) * 100)}%`,
+                background: ZONE_COLOR[r.bar?.zone ?? 'unknown'],
+              }}
             />
           </div>
-          <span className="ph-txmeter-value">{r.bar.value}</span>
+          <span className="ph-txmeter-value">{r.bar?.value ?? '—'}</span>
+          {/* ⊘ ONLY ONCE WE COULD HAVE KNOWN. The rig has keyed and this meter stayed
+              silent through it, so it is one the radio does not report — as against the
+              blank rows before the first over, which say nothing about the radio and are
+              answered by the hint below instead. */}
+          {everRead.current && !seen.current.has(r.key) && (
+            <span className="ph-unavail" role="note" title={t('phone.unavail.meter', { meter: r.label })}>
+              <span aria-hidden="true">⊘</span> {t('phone.unavail.mark')}
+            </span>
+          )}
         </div>
       ))}
+      {/* Before the first over nothing is known about any meter — these fields are populated
+          only while transmitting — so the panel says WHEN it reads rather than letting four
+          dashes read as four missing features. It goes once a reading has arrived, because
+          from then on each row answers for itself. */}
+      {pin && !everRead.current && (
+        <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
+      )}
     </div>
   )
 }

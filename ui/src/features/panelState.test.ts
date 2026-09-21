@@ -351,7 +351,7 @@ describe('cockpit vocabularies (TX-safety: the STOP line)', () => {
   it('lists the expected content panels per cockpit', () => {
     expect([...SSTV_PANELS.panelIds]).toEqual(['scope', 'txcompose', 'gallery'])
     expect([...PHONE_PANELS.panelIds]).toEqual([
-      'scope', 'rigscope', 'txmeters', 'dsp', 'dspLevels', 'bandActivity', 'voiceKeyer',
+      'scope', 'rigscope', 'txmeters', 'receiver', 'transmitter', 'bandActivity', 'voiceKeyer',
     ])
     expect([...RTTY_PANELS.panelIds]).toEqual(['scope', 'stream'])
     expect([...CW_PANELS.panelIds]).toEqual([

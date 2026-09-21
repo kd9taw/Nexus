@@ -20,6 +20,9 @@ import { setRigFunc } from '../api'
 import type { AppSnapshot } from '../types'
 
 vi.mock('../api', () => ({
+  // The Phone cockpit reads the FM repeater shift from Settings — it is the only surface
+  // that carries it, and the transmit contract will not state a frequency without it.
+  getSettings: vi.fn(async () => ({})),
   setPtt: vi.fn(async () => ({})),
   setTxEnabled: vi.fn(async () => ({})),
   setRfPower: vi.fn(async () => {}),
@@ -70,6 +73,10 @@ function snapWith(radio: Record<string, unknown>): AppSnapshot {
       dialMhz: 14.2,
       band: '20m',
       sideband: 'USB',
+      // ⚠️ catOk, EXPLICITLY. Every case here is about what the RADIO reports; a dead CAT
+      // link is a different question with its own answer (the pane banner), and it would
+      // otherwise swallow every one of these by explaining them all at once.
+      catOk: true,
       transmitting: false,
       txEnabled: false,
       txAllowed: true,
@@ -111,33 +118,88 @@ describe('#95 — the controls that were missing', () => {
   })
 })
 
-describe('#95 — and the dead controls it must not create', () => {
-  it('shows NO notch-frequency slider on a rig that does not report one', () => {
-    // The other half of the report: a control that does nothing is worse than none. An
-    // auto-notch-only radio must not grow a frequency slider with nothing behind it.
+// ⭐ THESE FOUR USED TO PIN THE OPPOSITE, THE REASON THEY GAVE WAS OVERRULED, AND THE
+// ANSWER WAS THEN REFINED AGAIN. Both moves are recorded, because the second one looks from
+// a distance like the first being undone.
+//
+// What they said, verbatim: *"a control that does nothing is worse than none. An
+// auto-notch-only radio must not grow a frequency slider with nothing behind it."*
+//
+// OPERATOR RULING, 2026-09-20: overruled. A control that VANISHES is indistinguishable from
+// one that was never built — the operator learns nothing about whether his radio lacks it,
+// whether his CAT backend lacks it, or whether Nexus simply never wrote it, and the third
+// reading is the one he acts on. #95 was filed in exactly that confusion.
+//
+// ⛔ AND THEN, 2026-09-21: the ruling does NOT reach a feature this radio family does not
+// have. A grey row per missing control makes a cockpit a wall of grey — an IC-7300 would
+// open to four of them — so absence COLLAPSES into one line at the pane's foot: "Not on this
+// radio: NOTCH · COMP". The operator still sees that Nexus knows the control exists, which
+// is the whole thing the ruling was protecting, and the old argument gets most of what it
+// wanted back: no dead slider.
+//
+// What the ruling still governs, and what the `atuStartTuneUnsupported` case is the model
+// of, is "the rig can do it, THIS PATH cannot" — where the control stays, disabled, with its
+// reason. The pane-wide version of that is the no-CAT banner.
+describe('#95 — and the dead controls it must not HIDE SILENTLY', () => {
+  /** The pane-foot line that names what this radio does not have. */
+  const footLine = () => document.querySelector('[data-pane="receiver"] .ph-chain-absent')?.textContent ?? ''
+  const txFootLine = () => document.querySelector('[data-pane="transmitter"] .ph-chain-absent')?.textContent ?? ''
+
+  /** Collapsed, not vanished: no row, and the control's PLATE named at the pane's foot. Two
+   *  things, and the second is the one that keeps the ruling's promise. */
+  function collapsed(el: HTMLElement | null, plate: string, foot: () => string, what: string) {
+    expect(el, `${what}: still drawing a row this radio cannot drive`).toBeNull()
+    expect(foot(), `${what}: gone from the pane and named nowhere — that is the vanishing the ruling forbids`).toContain(plate)
+  }
+
+  it('collapses the notch-frequency row, and names NOTCH at the pane foot', () => {
     mount({ notch: true })
-    expect(screen.queryByLabelText('Manual notch frequency in hertz')).toBeNull()
+    collapsed(screen.queryByLabelText('Manual notch frequency in hertz'), 'NOTCH', footLine, 'notch frequency')
   })
 
-  it('shows NO compressor slider on a rig that does not report one', () => {
+  it('collapses the compressor row, and names COMP at the transmit pane foot', () => {
     mount({ comp: true })
-    expect(screen.queryByLabelText('Speech processor depth')).toBeNull()
+    collapsed(screen.queryByLabelText('Speech processor depth'), 'COMP', txFootLine, 'compressor depth')
   })
 
-  it('shows NO manual-notch button on a rig with only the automatic notch', () => {
+  it('collapses the manual notch while the AUTOMATIC one stays live', () => {
+    // The pair still has to be told apart, which is what this case was always about: the
+    // automatic notch is reported and live, the manual one is not — so one is a working
+    // button and the other is a name in the foot line, which no operator can confuse.
     mount({ notch: true })
-    expect(screen.getByRole('button', { name: 'Auto notch' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Manual notch' })).toBeNull()
+    const auto = screen.getByRole('button', { name: 'Auto notch' }) as HTMLButtonElement
+    expect(auto.getAttribute('aria-disabled'), 'the automatic notch is dead on a rig that reports it').toBeNull()
+    collapsed(screen.queryByRole('button', { name: 'Manual notch' }), 'Manual notch', footLine, 'manual notch')
   })
 
-  it('control: a bare rig grows none of them', () => {
-    // Without this, every "queryBy … toBeNull" above would pass on a component that renders
-    // nothing at all, which is the failure mode of a negative assertion.
+  it('control: a bare rig names them all at the foot, and draws none of them', () => {
+    // The direction this control guards has inverted twice. It first stopped the
+    // "queryBy-toBeNull" assertions passing on a component that rendered nothing; then it
+    // stopped every control rendering LIVE over a radio that reports none. It now stops the
+    // third failure, which is the one the collapse makes possible: rows quietly disappearing
+    // with nothing at the foot to say they were ever there.
     mount({})
-    expect(screen.queryByLabelText('Manual notch frequency in hertz')).toBeNull()
-    expect(screen.queryByLabelText('Speech processor depth')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Manual notch' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Auto notch' })).toBeNull()
+    for (const [el, plate] of [
+      [screen.queryByLabelText('Manual notch frequency in hertz'), 'NOTCH'],
+      [screen.queryByRole('button', { name: 'Manual notch' }), 'Manual notch'],
+      [screen.queryByRole('button', { name: 'Auto notch' }), 'Auto notch'],
+    ] as const) {
+      collapsed(el as HTMLElement | null, plate, footLine, plate)
+    }
+    collapsed(screen.queryByLabelText('Speech processor depth'), 'COMP', txFootLine, 'compressor depth')
+  })
+
+  it('control: the foot line is EMPTY on a rig that reports everything', () => {
+    // Without this, every assertion above passes against a cockpit that lists every control
+    // as missing on every radio — the collapse turned into a blanket apology.
+    mount({
+      notch: true, manualNotch: true, notchFreqHz: 1500, comp: true, compLevel: 0.4,
+      nb: true, nr: true, nrLevel: 0.3, agc: 'fast', rfGain: 1, afGain: 0.5, squelch: 0,
+      micGain: 0.5, vox: false,
+    })
+    expect(footLine(), 'a fully-reporting rig was told it is missing something').toBe('')
+    expect(txFootLine()).toBe('')
+    expect(screen.getByLabelText('Manual notch frequency in hertz')).toBeTruthy()
   })
 })
 

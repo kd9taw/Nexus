@@ -69,6 +69,10 @@ function snapWith(radio: Record<string, unknown>): AppSnapshot {
       dialMhz: 14.2,
       band: '20m',
       sideband: 'USB',
+      // ⚠️ catOk, EXPLICITLY. Every case here is about what the RADIO reports; a dead CAT
+      // link is a different question with its own answer (the pane banner), and it would
+      // otherwise swallow every one of these by explaining them all at once.
+      catOk: true,
       transmitting: false,
       txEnabled: false,
       txAllowed: true,
@@ -120,44 +124,89 @@ describe('the analog levels a voice operator rides', () => {
 
   it('keeps RF gain and transmit power apart', () => {
     // `RF` and `RFPOWER` are different Hamlib levels and different knobs on the radio.
-    // Reporting only RF gain must not put a value into the header's transmit-power slider.
+    // Reporting only RF gain must not put a value into the transmit-power slider.
+    //
+    // ⚠️ REWRITTEN WITH THE 2026-09-20 RULING, because its old second line used the ABSENCE
+    // of the AF slider as its proxy — and under the ruling nothing is absent any more, so
+    // the proxy would have gone permanently red while saying nothing about RF-versus-power.
+    // What it was always reaching for is asserted directly instead: this rig's 0.3 RF gain
+    // reads on the RF control and NOWHERE ELSE. 30% appearing on the power slider would mean
+    // the receive gain had been plumbed into the transmitter — which is the whole case.
     mount({ rfGain: 0.3 })
-    expect(screen.getByLabelText('RF gain')).toBeTruthy()
-    expect(screen.queryByLabelText('AF gain')).toBeNull()
+    expect((screen.getByLabelText('RF gain') as HTMLInputElement).value).toBe('30')
+    const power = screen.getByLabelText('Power') as HTMLInputElement
+    expect(power.value, 'the receive RF gain reached the transmit-power slider').not.toBe('30')
+    // …and they are not even in the same place any more: RF gain is a receive control and
+    // lives in the receive chain, while power stays in the header with the transmit chrome.
+    expect(screen.getByLabelText('RF gain').closest('[data-pane]')!.getAttribute('data-pane')).toBe('receiver')
+    expect(power.closest('[data-pane]'), 'the power slider drifted into a pane').toBeNull()
   })
 })
 
-describe('and the dead controls it must not create', () => {
-  it('shows NO AF slider on a rig that does not report one', () => {
+// ⭐ THESE FOUR USED TO PIN THE OPPOSITE, THE REASON WAS OVERRULED, AND THE ANSWER WAS THEN
+// REFINED. Both moves are recorded, because the second looks like the first being undone.
+//
+// The reason, quoted from this file's twin: *"a control that does nothing is worse than
+// none."* It applied here unchanged — a live AF slider over a radio with no CAT AF gain is a
+// lie about the radio.
+//
+// OPERATOR RULING, 2026-09-20: overruled. A control that VANISHES is indistinguishable from
+// one that was never built, and of the three things an absent AF slider could mean — the
+// radio has no CAT AF gain, the backend does not expose it, Nexus never wrote it — the
+// operator acts on the third, because it is the only one he can do anything about.
+//
+// ⛔ AND THEN, 2026-09-21: the ruling does NOT reach a feature this radio family does not
+// have. One grey row per missing control makes a wall of grey, so absence COLLAPSES into a
+// single line at the pane's foot — "Not on this radio: AF · RF · SQL". The operator still
+// sees Nexus knows the control exists, which is what the ruling was protecting, and the old
+// argument gets back what it most wanted: no dead slider sitting in the chain.
+describe('and the dead controls it must not HIDE SILENTLY', () => {
+  const footLine = () => document.querySelector('[data-pane="receiver"] .ph-chain-absent')?.textContent ?? ''
+
+  /** Collapsed, not vanished: no row, and the PLATE named at the pane's foot. */
+  function collapsed(el: HTMLElement | null, plate: string, what: string) {
+    expect(el, `${what}: still drawing a row this radio cannot drive`).toBeNull()
+    expect(footLine(), `${what}: gone from the pane and named nowhere`).toContain(plate)
+  }
+
+  it('collapses the AF row while its two neighbours stay live', () => {
+    // One each way in ONE render, which is what makes this able to differ: a build that
+    // collapsed the whole pane would pass the first line alone.
     mount({ rfGain: 0.5, squelch: 0.5 })
-    expect(screen.queryByLabelText('AF gain')).toBeNull()
+    collapsed(screen.queryByLabelText('AF gain'), 'AF', 'AF gain')
+    expect((screen.getByLabelText('RF gain') as HTMLInputElement).disabled).toBe(false)
+    expect((screen.getByLabelText('Squelch') as HTMLInputElement).disabled).toBe(false)
   })
 
-  it('shows NO RF gain slider on a rig that does not report one', () => {
+  it('collapses the RF gain row while AF stays live', () => {
     mount({ afGain: 0.5, squelch: 0.5 })
-    expect(screen.queryByLabelText('RF gain')).toBeNull()
+    collapsed(screen.queryByLabelText('RF gain'), 'RF', 'RF gain')
+    expect((screen.getByLabelText('AF gain') as HTMLInputElement).disabled).toBe(false)
   })
 
-  it('shows NO squelch slider on a rig that does not report one', () => {
+  it('collapses the squelch row while AF stays live', () => {
     mount({ afGain: 0.5, rfGain: 0.5 })
-    expect(screen.queryByLabelText('Squelch')).toBeNull()
+    collapsed(screen.queryByLabelText('Squelch'), 'SQL', 'squelch')
+    expect((screen.getByLabelText('AF gain') as HTMLInputElement).disabled).toBe(false)
   })
 
-  it('control: a bare rig grows none of them', () => {
-    // Without this, every queryBy-toBeNull above would pass on a component that rendered
-    // nothing at all, which is the failure mode of a negative assertion.
+  it('control: a bare rig names all three at the foot and draws none of them', () => {
+    // The direction this control guards has inverted twice — first against a component that
+    // rendered nothing, then against one that rendered everything LIVE, and now against rows
+    // that quietly disappear with nothing at the foot to say they were ever there.
     mount({})
-    expect(screen.queryByLabelText('AF gain')).toBeNull()
-    expect(screen.queryByLabelText('RF gain')).toBeNull()
-    expect(screen.queryByLabelText('Squelch')).toBeNull()
+    collapsed(screen.queryByLabelText('AF gain'), 'AF', 'AF gain')
+    collapsed(screen.queryByLabelText('RF gain'), 'RF', 'RF gain')
+    collapsed(screen.queryByLabelText('Squelch'), 'SQL', 'squelch')
   })
 
-  it('control: the pane still exists for a rig whose ONLY level is one of the new ones', () => {
-    // The #95 lesson from the other side — the pane's existence test is a separate boolean
-    // from the control's, so a rig reporting squelch and no NR and no AGC would have had the
-    // control built and then never rendered.
+  it('control: a rig whose ONLY level is one of these still gets it, live and unlisted', () => {
+    // The #95 lesson from the other side. It used to be about the PANE's existence being a
+    // separate boolean from the control's; that boolean is gone (the chain panes always
+    // render), so what is left is the control and the foot line disagreeing about it.
     mount({ squelch: 0.2, nrLevel: undefined, agc: undefined })
-    expect(screen.getByLabelText('Squelch')).toBeTruthy()
+    expect((screen.getByLabelText('Squelch') as HTMLInputElement).disabled).toBe(false)
+    expect(footLine(), 'a control that is on screen was also listed as missing').not.toContain('SQL')
   })
 })
 

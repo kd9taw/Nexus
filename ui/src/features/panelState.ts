@@ -639,8 +639,11 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
 }
 
 /** Phone cockpit's removable panels (Phase 3) — the scope strip plus the panes under it.
- *  The whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT/mic/BW) and the PTT row
- *  are NOT panels: each hosts a way to STOP a transmission, which is THE RULE. The log strip
+ *  The whole CockpitHeader (mode/band/power/Tune/StopTX/split/CAT) and the PTT row
+ *  are NOT panels: each hosts a way to STOP a transmission, which is THE RULE. (The header's
+ *  list is shorter than it was: mic gain, AF gain and BW moved into the two chain panes in
+ *  the 2026-09-20 rebuild. None of the three ever stopped anything, so the rule is untouched
+ *  — but a stale list here is how somebody later "restores" a control into the header.) The log strip
  *  is not one either, for a different reason — it holds a QSO the operator is part-way
  *  through typing, and a tick that drops unsaved work is its own kind of harm.
  *
@@ -668,12 +671,24 @@ export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
  *  the operator did not ask for reads as a dropout. A hideable sender whose hide ends
  *  nothing — Operate's Tx messages, its decode panes, its rosters — warns about nothing,
  *  and must not. */
+/*  ⭐ `receiver` AND `transmitter` REPLACED `dsp` AND `dspLevels` (operator, 2026-09-20).
+ *
+ *  The two they replace were named after their IMPLEMENTATION — which Hamlib call a function
+ *  and which a level — so the receive chain was split across both of them (NB/NR/notch in one,
+ *  the NR level/AGC/RF/squelch in the other) while the two TRANSMIT controls that happened to
+ *  be Hamlib "functions" sat among the receive ones. A voice operator asks two questions and
+ *  no others: what goes out when I key, and what am I hearing. One pane each, and nothing in
+ *  this vocabulary is named after the wire any more.
+ *
+ *  Nothing about the STOP LINE changes: both are ordinary removable panes, neither holds a
+ *  stop control, and the ids are swept the moment they are listed here — `stop-line.test.tsx`
+ *  drives Phone's case off `PHONE_PANEL_IDS` itself rather than a copy of it. */
 export const PHONE_PANEL_IDS = [
   SCOPE_PANEL_ID,
   'rigscope',
   'txmeters',
-  'dsp',
-  'dspLevels',
+  'receiver',
+  'transmitter',
   'bandActivity',
   'voiceKeyer',
 ] as const

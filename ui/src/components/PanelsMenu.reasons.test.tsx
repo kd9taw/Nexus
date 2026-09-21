@@ -28,7 +28,7 @@
 // operator's preference across the moment the station starts feeding it. A presence test on
 // a source string would pass against a menu that never received the reason at all.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act, within } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 import { TX_METERS_WHEN } from './TxMeters'
@@ -269,8 +269,18 @@ async function openCw(radio: Record<string, unknown> = {}, state: Partial<Record
 }
 
 /** The checkbox for one menu entry (its accessible name is the entry label alone — the
- *  reason lives outside the <label> so it never joins the name a screen reader speaks). */
-const entry = (label: string) => screen.getByLabelText(label) as HTMLInputElement
+ *  reason lives outside the <label> so it never joins the name a screen reader speaks).
+ *
+ *  ⚠️ SCOPED TO THE POPOVER. A cockpit's pane frames carry their own titles as accessible
+ *  names, so a bare `screen.getByLabelText` matches the entry AND the pane it names whenever
+ *  the two read the same — which Phone's `Receiver`/`Transmitter` do, deliberately: an entry
+ *  that called the pane something else would be a second name for one thing. The older
+ *  entries escaped it only by the Title Case / sentence case accident (`DSP Functions` vs
+ *  `DSP functions`), which is not a rule anybody agreed to and not one to lean on. */
+const entry = (label: string) =>
+  within(document.querySelector('.panels-menu-pop') as HTMLElement).getByLabelText(
+    label,
+  ) as HTMLInputElement
 
 /**
  * EVERY entry, explained or not, is a plain operable checkbox — no `disabled`, no
@@ -377,20 +387,55 @@ describe('⊞ Panels — the rig-scope entry follows the scope that is actually 
 })
 
 describe('⊞ Panels — the DSP entries follow what the rig reports over CAT', () => {
-  it('Phone, a rig that reports no DSP functions: both DSP entries carry the reason', async () => {
+  // ⭐ PHONE'S TWO ENTRIES LEFT THIS RULE ON 2026-09-20, and the three cases below say so
+  // rather than being deleted. They used to pin the apology — "your radio is not reporting
+  // DSP functions over CAT" under a `DSP Functions` tick that hid an empty box — and that
+  // was right while a pane could be empty. Phone's `receiver` and `transmitter` panes never
+  // are: every control renders whatever the rig says, disabled and carrying its own ⊘ when
+  // the rig cannot drive it. An availability note on either entry would now be FALSE, and a
+  // reason the operator can see is wrong is worse than none.
+  //
+  // So the apology did not disappear, it got finer: one whole-pane note became one mark per
+  // control, which says the same thing about strictly more of the radio. CW is unchanged and
+  // its cases below are untouched — it still has the panes this rule was written for.
+  it('Phone, a rig that reports nothing: the two chain entries carry NO reason', async () => {
     await openPhone(BARE_RIG)
-    expectExplained('DSP Functions', NO_DSP_FUNCS_REASON)
-    expectExplained('RX DSP Levels', NO_DSP_LEVELS_REASON)
-    expect(pane('dsp')).toBeNull()
-    expect(pane('dspLevels')).toBeNull()
+    expectUnexplained('Receiver')
+    expectUnexplained('Transmitter')
+    // …because both panes really are on screen with something in them. That is the fact the
+    // absent note is claiming, so it is the fact that gets checked.
+    expect(pane('receiver')).not.toBeNull()
+    expect(pane('transmitter')).not.toBeNull()
+    // And the apology is where it moved to: ONE line at the pane's foot naming the controls
+    // this radio does not have — not a note on the menu entry, and not a grey row each.
+    const foot = document.querySelector('[data-pane="receiver"] .ph-chain-absent')?.textContent ?? ''
+    expect(foot, 'the note left the menu and arrived nowhere').toContain('NB')
+    expect(foot).toContain('AGC')
+    expect(
+      document.querySelector('[data-chain="NB"]'),
+      'a control this radio lacks is still drawing a grey row',
+    ).toBeNull()
   })
 
-  it('Phone, a rig that reports them: no reason on either, and both panes mount', async () => {
+  it('Phone, a rig that reports them: the entries read exactly the same', async () => {
+    // THE PAIR, and the point of it: this render and the one above must be INDISTINGUISHABLE
+    // at the menu. An entry that quietly went back to apologising on a bare rig would pass
+    // the case above on its own only if that case were the only one.
     await openPhone()
-    expectUnexplained('DSP Functions')
-    expectUnexplained('RX DSP Levels')
-    expect(pane('dsp')).not.toBeNull()
-    expect(pane('dspLevels')).not.toBeNull()
+    expectUnexplained('Receiver')
+    expectUnexplained('Transmitter')
+    expect(pane('receiver')).not.toBeNull()
+    expect(pane('transmitter')).not.toBeNull()
+    // The difference between the two rigs shows HERE instead. This fixture reports NB/NR, an
+    // NR level and AGC, so those four DRAW where the bare rig's were collapsed — asserted
+    // per control rather than as a count, because the foot line still names the controls
+    // this rig does not report either (RF gain, AF, squelch…), so two counts would both be
+    // non-zero and prove nothing.
+    const foot = document.querySelector('[data-pane="receiver"] .ph-chain-absent')?.textContent ?? ''
+    for (const chain of ['NB', 'NR', 'NRLVL', 'AGC']) {
+      expect(document.querySelector(`[data-chain="${chain}"]`), `${chain}: collapsed over a rig that reports it`).not.toBeNull()
+    }
+    expect(foot, 'a control this rig reports was listed as missing').not.toContain('AGC')
   })
 
   it('CW, a rig that reports no DSP functions: both DSP entries carry the reason', async () => {
@@ -409,15 +454,25 @@ describe('⊞ Panels — the DSP entries follow what the rig reports over CAT', 
     expect(cwGroup('rxdsp')).not.toBeNull()
   })
 
-  it('Phone: the two DSP entries are gated INDEPENDENTLY', async () => {
-    // A rig with NB/NR but no readable NR level or AGC (common over Hamlib): the toggles
-    // pane mounts, the levels pane cannot. One entry each way in ONE render is what stops
-    // a future "any DSP at all" shortcut from apologising for a pane the operator can see.
+  it('Phone: the CONTROLS are marked independently, one each way in one render', async () => {
+    // The case this replaces proved the two Phone ENTRIES were gated independently — that a
+    // future "any DSP at all" shortcut could not apologise for a pane the operator can see.
+    // Nothing gates those entries any more, so the same hazard moved down a level: a
+    // shortcut that marked a whole PANE unavailable because one of its controls is. The rig
+    // here is the common Hamlib case — NB/NR readable, NR level and AGC not — and one
+    // control each way in ONE render is what catches it.
     await openPhone({ nrLevel: null, agc: null })
-    expectUnexplained('DSP Functions')
-    expectExplained('RX DSP Levels', NO_DSP_LEVELS_REASON)
-    expect(pane('dsp')).not.toBeNull()
-    expect(pane('dspLevels')).toBeNull()
+    expectUnexplained('Receiver')
+    const live = document.querySelector('[data-chain="NB"] .ph-dsp-btn') as HTMLButtonElement
+    expect(live, 'no NB toggle at all').toBeTruthy()
+    expect(live.disabled, 'NB is dead on a rig that reports it').toBe(false)
+    // …and the two it cannot read are collapsed into the foot line, named, in the same
+    // render. One each way is what catches a shortcut that judges the whole pane at once.
+    const foot = document.querySelector('[data-pane="receiver"] .ph-chain-absent')?.textContent ?? ''
+    expect(document.querySelector('[data-chain="NRLVL"]'), 'the unreadable NR level still draws a row').toBeNull()
+    expect(document.querySelector('[data-chain="AGC"]'), 'the unreadable AGC still draws a row').toBeNull()
+    expect(foot, 'the unreadable NR level is named nowhere').toContain('NR')
+    expect(foot, 'the unreadable AGC is named nowhere').toContain('AGC')
   })
 })
 

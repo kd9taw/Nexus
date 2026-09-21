@@ -20,7 +20,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // and stay in the code.
 import { useEffect, useState, useRef } from 'react'
 import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
-import { panelHost, NO_DSP_FUNCS_REASON, NO_DSP_LEVELS_REASON } from '../features/panelHost'
+import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
 import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
@@ -37,6 +37,20 @@ import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { VoiceKeyer } from './VoiceKeyer'
 import { LiveLevelMeter, useSmeterDb } from './LiveMeters'
+import { formatDialMhz } from './FrequencyReadout'
+// ⊘ — the shared unavailable mark. Its own module so `CockpitHeader` can print the same
+// one without an import cycle through this file; see the note there.
+import { Unavailable } from './UnavailableMark'
+import {
+  RIG_CONTROLS,
+  causeFor,
+  rendersRow,
+  absentPlates,
+  deadControlProps,
+  guard,
+  type ControlState,
+  type RigControl,
+} from '../features/rigControls'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
@@ -59,7 +73,7 @@ import { latestOnly } from '../remote-web/latest-only'
 import { RotorStrip } from './RotorStrip'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { setFrequency, openPanelWindow } from '../api'
+import { setFrequency, openPanelWindow, getSettings } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
@@ -72,7 +86,8 @@ import type { MessageKey } from '../i18n'
 /** This cockpit's INVARIANT vocabulary — the words that are technical tokens rather than
  *  prose, gathered here so the i18n guard reads them as the deliberate constants they are:
  *  the rig's own control-group names, the units the readouts print, and the two plates. */
-const DSP = 'DSP'
+// `DSP` itself is gone with the pane that was named after it: the toggles now live under
+// Receiver and Transmitter, which say what they are FOR rather than what they are made of.
 const NR = 'NR'
 const AGC = 'AGC'
 // The rig's own names for the two controls #95 completed. COMP is the speech processor
@@ -88,6 +103,15 @@ const BW = 'BW'
 const DB = 'dB'
 const DBM = 'dBm'
 const REC = 'REC'
+/** The transmit contract's own plates. `TX`, `SPLIT` and `XIT` are the rig's words and
+ *  `simplex` is the mode term the DTO itself uses — all four are technical vocabulary rather
+ *  than prose, so they are printed from here in every locale. */
+const TX = 'TX'
+const SPLIT = 'SPLIT'
+const XIT = 'XIT'
+const SIMPLEX = 'simplex'
+/** The keying-source plate — the rig's own word, and a warning by its presence alone. */
+const VOX_ON = 'VOX'
 /** The mode picker's AUTO face — the word and the sideband it resolved to, both tokens. */
 const autoPlate = (sideband: string) => `AUTO·${sideband}`
 
@@ -198,8 +222,8 @@ const phonePanelLabels = (): Record<PhonePanelId, string> => ({
   scope: t('phone.panel.scope'),
   rigscope: t('phone.panel.rigscope'),
   txmeters: t('phone.panel.txmeters'),
-  dsp: t('phone.panel.dsp'),
-  dspLevels: t('phone.panel.dspLevels'),
+  receiver: t('phone.panel.receiver'),
+  transmitter: t('phone.panel.transmitter'),
   bandActivity: t('phone.panel.bandActivity'),
   voiceKeyer: t('phone.panel.voiceKeyer'),
 })
@@ -272,18 +296,71 @@ export const VOICE_KEYER_UNDO_ENDS =
  * carry the explanation; these two words are the invariant token the sentence refers to.
  * `PhoneCockpit.notch.test.tsx` pins the pair by pressing each and reading the rig function back,
  * so a future re-inversion is a red test rather than a third report. */
-const DSP_FUNCS = [
-  { key: 'nb', label: 'NB', titleKey: 'phone.dsp.nb.title' },
-  { key: 'nr', label: 'NR', titleKey: 'phone.dsp.nr.title' },
-  { key: 'notch', label: 'Auto notch', titleKey: 'phone.dsp.notch.title' },
-  { key: 'comp', label: 'COMP', titleKey: 'phone.dsp.comp.title' },
-  { key: 'vox', label: 'VOX', titleKey: 'phone.dsp.vox.title' },
+/** ⚠️ SPLIT BY THE QUESTION THEY ANSWER, not by what Hamlib calls them (2026-09-20). These
+ *  six were one list because they are one Hamlib concept — a rig FUNCTION, a boolean at an
+ *  index — and that is an implementation fact about the wire, not about operating. Four of
+ *  them shape what the operator HEARS and two shape what GOES OUT when they key, so they sit
+ *  in different panes now and the list is two lists.
+ *
+ *  `chain` is the control's anchor in its pane: the ⊘ mark hangs off it, so it must be ONE
+ *  control per anchor. The notch pair is the reason that matters — `notch` (ANF) and
+ *  `manualNotch` (MN) are separately reported, and a shared anchor would make a rig with the
+ *  automatic one look exactly like a rig with neither. */
+const RX_FUNCS = [
+  { key: 'nb', label: 'NB', chain: 'NB', titleKey: 'phone.dsp.nb.title' },
+  { key: 'nr', label: 'NR', chain: 'NR', titleKey: 'phone.dsp.nr.title' },
+  { key: 'notch', label: 'Auto notch', chain: 'ANF', titleKey: 'phone.dsp.notch.title' },
   // #95. TWO notches, and they are different controls: `notch` above is the AUTOMATIC
   // notch (Hamlib ANF), which hunts a carrier on its own; this is the MANUAL one you
-  // park on a heterodyne, and it is what most operators mean by "notch". Each renders
-  // only when the rig reports it, so a radio with one shows one button.
-  { key: 'manualNotch', label: 'Manual notch', titleKey: 'phone.dsp.manualNotch.title' },
-] as const
+  // park on a heterodyne, and it is what most operators mean by "notch".
+  { key: 'manualNotch', label: 'Manual notch', chain: 'MN', titleKey: 'phone.dsp.manualNotch.title' },
+] as const satisfies readonly PhoneFunc[]
+
+/** The two that key the transmitter's audio rather than filtering the receiver's. COMP is the
+ *  speech processor (PROC on a Yaesu front panel); VOX is hands-free keying — a KEYING-SOURCE
+ *  control, and deliberately NOT a stop: switching VOX off changes what keys the rig, it does
+ *  not end an over in flight (THE STOP LINE, features/panelState.ts). */
+const TX_FUNCS = [
+  { key: 'comp', label: 'COMP', chain: 'COMP', titleKey: 'phone.dsp.comp.title' },
+  { key: 'vox', label: 'VOX', chain: 'VOX', titleKey: 'phone.dsp.vox.title' },
+] as const satisfies readonly PhoneFunc[]
+
+interface PhoneFunc {
+  key: 'nb' | 'nr' | 'notch' | 'manualNotch' | 'comp' | 'vox'
+  label: string
+  chain: string
+  titleKey: MessageKey
+}
+
+/** ✓rig · ⌁cmd · ⊘ — HOW WELL THIS NUMBER IS KNOWN, which on a transmit readout is half the
+ *  number's meaning.
+ *
+ *  `rig` is a genuine read-back. `cmd` is Nexus's own command with no way to confirm it: RIT,
+ *  XIT and VFO A/B are write-only and optimistic (engine.rs:5558, :18262), so an offset the
+ *  operator dialled on the radio's own clarifier knob is invisible to this app entirely. `off`
+ *  is "there is no value here", with the reason in the tooltip.
+ *
+ *  ⚠️ A COMMANDED VALUE IS NEVER RENDERED AS THOUGH IT WERE READ. That is the whole rule, and
+ *  it is why the emission's mark falls to `cmd` the moment XIT is non-zero — the figure is
+ *  still the engine's, but part of it is now something nobody read back.
+ *
+ *  ⚠️ TEXT, NEVER COLOUR ALONE. The glyph is aria-hidden decoration; the WORD beside it is
+ *  what a screen reader speaks and what a monochrome display shows. */
+function TruthMark({ kind, title, word }: { kind: 'rig' | 'cmd' | 'off'; title: string; word?: string }) {
+  const glyph = kind === 'rig' ? '✓' : kind === 'cmd' ? '⌁' : '⊘'
+  // Each key written out as a literal `t()` call rather than one call over a computed key:
+  // the catalog guard extracts keys by reading the source, so a computed one is invisible to
+  // it and the entry it names reads as an orphan nobody references.
+  const text =
+    word ?? (kind === 'off' ? t('phone.unavail.mark') : kind === 'rig' ? t('phone.truth.rig.mark') : t('phone.truth.cmd.mark'))
+  return (
+    <span className={`ph-truth ph-truth--${kind}`} title={title}>
+      <span aria-hidden="true">{glyph}</span>
+      {kind === 'off' ? ' ' : ''}
+      {text}
+    </span>
+  )
+}
 
 /** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
  *  is the rig's: RF offset from the dial, dial at the 1/9 mark and the sideband filling the
@@ -695,12 +772,11 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       /* ignore */
     }
   }, [tuneStep])
+  // The last output power the rig actually measured — see the transmit contract below.
+  const lastPoW = useRef<number | null>(null)
   const scopeRef = useRef<HTMLDivElement>(null)
   // Cockpit root: the scope-height splitter measures + writes its CSS var here.
   const cockpitRef = useRef<HTMLElement>(null)
-  // Which DSP funcs this rig has EVER reported this session — see the sticky note at the DSP pane.
-  const seenDspFuncs = useRef<string[]>([])
-  const seenDspLevels = useRef(false)
   useWheelTune(scopeRef, {
     remoteFrequency: true,
     radioId: snap.activeRadioId,
@@ -1011,43 +1087,58 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // FM case is excluded rather than merely ranked lower.
   const squelchMutesDecode = snap.radio.squelch != null &&
     Math.round(snap.radio.squelch * 100) >= DECODE_MUTE_PCT && commandedMode !== 'FM'
-  const liveDspFuncs = DSP_FUNCS.filter((f) => snap.radio[f.key] != null)
-  // Whether each rig-gated pane CAN render at all on this station, independent of the ⊞
-  // tick. Computed here, above the menu, so the entry's note and the pane read ONE boolean
-  // each and cannot drift apart — which is the whole failure the notes exist to answer.
-  // CAPABILITY, not the learned flag: the sticky learns just below only run while the pane
-  // is SHOWN, so keying availability off the ref alone would leave an operator who unticked
-  // before the rig first reported stuck with a dead entry once it does.
-  const canDsp = liveDspFuncs.length > 0 || seenDspFuncs.current.length > 0
-  const canDspLevels =
-    seenDspLevels.current ||
-    snap.radio.nrLevel != null ||
-    snap.radio.agc != null ||
-    // #95's two, and leaving them out is not a detail: this boolean decides whether the pane
-    // EXISTS. A rig reporting a speech-processor depth or a notch frequency but no NR and no
-    // AGC would have had both new controls built and then never rendered — the dead-entry
-    // failure this whole block is written against, arriving from the other side. Caught by
-    // PhoneCockpit.notch.test.tsx before it shipped.
-    snap.radio.compLevel != null ||
-    snap.radio.notchFreqHz != null ||
-    // The two analog levels that live in this pane, for the same reason: a rig reporting RF
-    // gain or squelch and nothing else would have had both controls built and then never
-    // rendered. (compLevel/notchFreqHz above have the same latent gap in the STICKY below,
-    // which #95 left and this change does not widen.)
-    snap.radio.rfGain != null ||
-    snap.radio.squelch != null
+  // ⭐ DOES THIS RIG DRIVE THIS CONTROL — and it is STICKY, which is the half that is easy
+  // to drop and expensive to lose.
+  //
+  // `null` means BOTH "this rig lacks it" and "we don't know right now": the radio loop
+  // clears every reading to null on a CAT re-confirmation, which a QSY triggers. Reading the
+  // live value alone used to make the whole DSP group VANISH the moment you clicked a spot
+  // (operator report, 2026-07-25). Since the 2026-09-20 ruling nothing vanishes any more —
+  // but without the sticky the controls would go dead-and-⊘ under the operator's hand for a
+  // poll or two on every QSY, which is the same lie in a new costume. So: once a rig has
+  // reported a field this session, it keeps the control.
+  //
+  // ⚠️ IT LEARNS UNCONDITIONALLY NOW. The old pair of refs learned only while their pane was
+  // SHOWN, and the reason was the column budget — a hidden pane must not silently widen it.
+  // Nothing here feeds a column budget any longer (both chain panes always render), and a
+  // ⊞-hidden pane that forgot what the rig could do would come back dead.
+  //
+  // ⚠️ AND IT COVERS EVERY FIELD, closing the gap #95 left: `compLevel` and `notchFreqHz` had
+  // no sticky at all, so the two controls that report went away on a QSY while NB/NR stayed.
+  const seenFields = useRef(new Set<string>())
+  // ⚠️ …BUT ONE RIG CANNOT VOUCH FOR ANOTHER. A handoff to a second radio is not a momentary
+  // null, and this cockpit does NOT remount on one — so without this the new radio would
+  // inherit the old one's capabilities and wear live-looking controls it has nothing behind,
+  // which is the exact failure the ⊘ exists to prevent, arriving through the back door. The
+  // two refs this replaces had the same hole; widening the memory to every field is what
+  // makes it worth closing.
+  const seenRadio = useRef(snap.activeRadioId)
+  if (seenRadio.current !== snap.activeRadioId) {
+    seenFields.current = new Set()
+    seenRadio.current = snap.activeRadioId
+  }
+  /** Reported now, or reported at some point on THIS radio. Mutating during render matches
+   *  what the two refs this replaces already did, and for the same reason: the answer has to
+   *  be available to the very render that asks. */
+  const reports = (field: string): boolean => {
+    if ((snap.radio as unknown as Record<string, unknown>)[field] != null) seenFields.current.add(field)
+    return seenFields.current.has(field)
+  }
   // ⊞ Panels. `main`/`side` are unused here (Phone has no two-column pane grid), so the
   // host is only supplying `shown` + the menu items.
   //
-  // Five notes, of two different kinds — see panelHost's `notes` doc, which is why they
+  // Three notes, of two different kinds — see panelHost's `notes` doc, which is why they
   // share one field.
   //
-  // FOUR ARE "nothing on screen behind this box" — the dead-checkbox the operator hit on
-  // 2026-08-03. Three of those are conditional on the STATION and clear by themselves the
-  // moment the rig can feed them: the rig-scope pane needs the RADIO's own panadapter
-  // streaming, and the two DSP panes need the rig to report those fields over CAT (the same
-  // capability gate the DSP row itself has always applied to its buttons). The fourth, TX
-  // Meters, mounts fine and reads only while keyed.
+  // TWO ARE "nothing on screen behind this box" — the dead-checkbox the operator hit on
+  // 2026-08-03. The rig-scope pane needs the RADIO's own panadapter streaming; TX Meters
+  // mounts fine and reads only while keyed.
+  //
+  // ⭐ THE TWO DSP NOTES ARE GONE WITH THE PANES THEY DESCRIBED. `receiver` and
+  // `transmitter` always have something on screen — that is the whole point of the 2026-09-20
+  // ruling — so an availability note on either would be false. What used to be one note for a
+  // whole empty pane is now one ⊘ mark per control that cannot be driven, which says the same
+  // thing about strictly more of the radio.
   //
   // THE FIFTH IS A CONSEQUENCE. Unticking Voice Keyer ends a message and discards a
   // recording. Not the price of its being hideable — nothing had to buy that (THE STOP LINE:
@@ -1068,8 +1159,6 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         labels: phonePanelLabels(),
         notes: {
           rigscope: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
-          dsp: canDsp ? undefined : NO_DSP_FUNCS_REASON,
-          dspLevels: canDspLevels ? undefined : NO_DSP_LEVELS_REASON,
           txmeters: TX_METERS_WHEN,
         },
         // The ONE hide in the app that ends something in flight. In `endsOnHide` rather
@@ -1082,25 +1171,18 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // The pane's own ✕ — the SAME setPanelState the ⊞ tick makes. `{}` with no panel record
   // (the remote observer), so the button simply is not there rather than being dead.
   const closeProps = (id: PhonePanelId) => (host ? host.closeProps(id) : {})
-  if (shown('dsp') && liveDspFuncs.length > 0) seenDspFuncs.current = liveDspFuncs.map((f) => f.key)
-  const dspFuncs =
-    liveDspFuncs.length > 0
-      ? liveDspFuncs
-      : DSP_FUNCS.filter((f) => seenDspFuncs.current.includes(f.key))
-  // Same sticky rule for the NR/AGC levels pane: a CAT re-confirmation nulls these too,
-  // and unmounting on that made the pane flicker away on every QSY.
-  if (shown('dspLevels') && (snap.radio.nrLevel != null || snap.radio.agc != null ||
-    snap.radio.rfGain != null || snap.radio.squelch != null))
-    seenDspLevels.current = true
 
   // Which panes CAN render right now — the exact conditions that gate them in the JSX,
   // hoisted because the region's column budget (maxCols) depends on them.
+  //
+  // ⚠️ THE TWO CHAIN PANES HAVE NO CAPABILITY GATE, and that is the ruling rather than an
+  // omission: `shown(id)` is the operator's tick and nothing else may take a pane away.
   const hasBandPane = onWorkSpot != null && shown('bandActivity')
   const hasKeyerPane = shown('voiceKeyer')
   const hasRigScopePane = shown('rigscope') && (civScope || flexScope)
-  const hasDspPane = shown('dsp') && canDsp
-  const hasDspLevelsPane = shown('dspLevels') && canDspLevels
-  const auxPresent = hasRigScopePane || hasDspPane || hasDspLevelsPane
+  const hasReceiverPane = shown('receiver')
+  const hasTransmitterPane = shown('transmitter')
+  const auxPresent = hasRigScopePane || hasReceiverPane || hasTransmitterPane
   // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
   // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
   // scope can have the operator untick its way to an empty leading track — a `minmax(0,1fr)`
@@ -1117,6 +1199,150 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(
     auxPresent && hasBandPane ? 3 : leadPresent ? 2 : 1,
   )
+
+  // ── WHAT THIS RIG DRIVES, one boolean per control ────────────────────────────────────
+  // Read through `reports`, so each one is "reporting now, or reported at some point this
+  // session" and a QSY's momentary null cannot kill a live control. These are CAPABILITY
+  // only; the PERMISSION half (a remote observer, a lease that is not ours) stays with
+  // `levels.can(…)` / `dspControl.can…` at each control, and both disable it.
+  // ── THE REGISTRY ANSWERS FOR EVERY CONTROL ────────────────────────────────────────
+  // One table decides whether a control may be driven, which of several causes is the one
+  // to NAME, and whether it gets a row at all (features/rigControls.ts). Thirteen inline
+  // ternaries used to do this, each free to drift.
+  const chainState: ControlState = {
+    catOk,
+    // The STICKY answer, never the raw `!= null` — a QSY blanks every reading, and the
+    // registry must never read that flicker as a radio losing a feature.
+    reported: (c: RigControl) => (c.field ? reports(c.field) : false),
+    mode: commandedMode,
+    // ⚠️ `caps` is deliberately absent: the capability model (\dump_state → RadioStatus.caps)
+    // is a BACKEND job that has not landed. Until it does, absence is inferred from "never
+    // reported on this radio", which is what the sticky above supplies.
+  }
+  const control_ = (id: string) => RIG_CONTROLS.find((c) => c.id === id)!
+  /** Can this control be driven right now? CAPABILITY only — the permission half (a remote
+   *  observer, a lease that is not ours) stays with `levels.can(…)` at each control. */
+  const dead = (id: string) => causeFor(control_(id), chainState) !== null
+  const show = (id: string) => rendersRow(control_(id), chainState)
+  /** One id per pane, so a row can point `aria-describedby` at the banner that explains it
+   *  rather than repeating one sentence thirteen times. */
+  const NOCAT = { rx: 'ph-nocat-rx', tx: 'ph-nocat-tx' } as const
+  const describedBy = (chain: 'rx' | 'tx') => (catOk ? undefined : NOCAT[chain])
+  /** The pane-level banner: ONE sentence for a fact true of every control in the pane at
+   *  once. It is also why no row carries a ⊘ for a dead link. */
+  const noCatBanner = (chain: 'rx' | 'tx') =>
+    catOk ? null : (
+      <p className="ph-chain-banner" id={NOCAT[chain]} role="note">
+        {t('phone.chain.noCat')}
+      </p>
+    )
+  /** ⛔ THE COLLAPSE. Controls this radio does not have do not each get a grey row — their
+   *  plates go in ONE line at the pane's foot, so nothing vanishes silently, the operator
+   *  sees that Nexus knows the control exists, and an IC-7300 does not open to four dead
+   *  rows. A control Nexus has built no path for appears in neither place. */
+  const absentLine = (chain: 'rx' | 'tx') => {
+    const plates = absentPlates(chain, chainState)
+    return plates.length === 0 ? null : (
+      <p className="ph-chain-absent" role="note">
+        {t('phone.chain.absent', { plates: plates.join(' · ') })}
+      </p>
+    )
+  }
+  // ⛔ THE FM REPEATER SHIFT — the one thing `tx_emission_mhz` does NOT fold in, verified
+  // rather than assumed: `Engine::tx_emission_mhz` (engine.rs:17677) is `verdict base +
+  // xit_offset` and there is no `rptr` in it at all. The shift lives in
+  // `settings.rptr_shift` / `rptr_offset_hz()` and is applied on the rig-CONFIGURATION path
+  // (:7720, :15339), so on FM through a repeater the engine's figure is the dial the
+  // operator is LISTENING on while the transmitter is a whole shift away.
+  //
+  // Settings is the only surface that carries it, and reading it here is the pattern CW and
+  // APRS already use. `null` = not read yet, or a station whose settings carry no shift —
+  // and that resolves to UNKNOWN, never to simplex: resolving an absent value to "no shift"
+  // is the one default that puts the confident wrong number back.
+  const [rptrShift, setRptrShift] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    void getSettings()
+      .then((s) => {
+        if (alive) setRptrShift(typeof s?.rptrShift === 'string' ? s.rptrShift : null)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+    // Re-read on the two events that change it: the operator switching to FM, and a memory
+    // recall (which lands as a band change and rewrites the shift in the same patch).
+  }, [commandedMode, snap.radio.band])
+
+  // ── THE TRANSMIT CONTRACT — read, never computed ───────────────────────────────────
+  // `txEmissionMhz` is `Engine::tx_emission_mhz()`, which resolves `tx_freq_verdict()` — THE
+  // one decision about which frequency the next over is emitted on — and folds XIT in. It is
+  // printed verbatim. Adding a dial to an offset here would be a SECOND answer to that
+  // question, free to disagree with the one the licence gate actually judges.
+  const txEmission = snap.radio.txEmissionMhz ?? null
+  const xitHz = snap.radio.xitHz ?? 0
+  // ⚠️ XIT DEMOTES THE WHOLE FIGURE. It rides INTO the emission and its path is write-only
+  // and optimistic, so with a clarifier offset in play the number contains a component
+  // nothing read back — and calling that a read-back is exactly the lie the marks exist to
+  // stop. No CAT link demotes it for the plainer reason.
+  const emissionRead = catOk && xitHz === 0
+  // ⛔ AND ON FM THE FIGURE MAY NOT BE THE EMISSION AT ALL. Anything but a shift we have
+  // READ and found to be simplex disqualifies it — including not having read one yet.
+  //
+  // ⚠️ IT IS NOT FIXED BY ADDING THE SHIFT ON HERE. `rptr_offset_hz()` is an override or a
+  // BAND-CONVENTION TABLE in Rust (settings.rs:360); re-deriving that in the UI would be a
+  // second copy of engine arithmetic, free to drift — the same defect as the wrong number,
+  // arriving later. The fix belongs in `tx_emission_mhz`; until it lands, the strip says
+  // nothing here rather than something wrong.
+  const repeaterUnknown = observedMode === 'FM' && rptrShift !== 'simplex'
+  const splitTxMhz = snap.radio.splitTxMhz ?? null
+  // Formatting two reported numbers, not deciding anything: the engine already put the split
+  // into the emission above. This cell only says WHY that figure differs from the dial.
+  const splitOffsetKhz = splitTxMhz == null ? null : (splitTxMhz - snap.radio.dialMhz) * 1000
+  // The watts the rig last actually measured. `txPoW` is present only while transmitting, so
+  // between overs this is a memory and the word "last" is what says so. A ref, not state:
+  // the poll re-renders anyway and retention must never itself cause a render (TxMeters).
+  if (snap.radio.txPoW != null) lastPoW.current = snap.radio.txPoW
+  const powerPct = snap.radio.rfPower == null ? null : Math.round(snap.radio.rfPower * 100)
+  /** BW on FM is the ONE per-row mark left in the panes: mode-inapplicability is not a
+   *  fault in the radio and not a feature it lacks, so it keeps its slot rather than
+   *  collapsing into the foot line. The visible mark is the MODE — an invariant token — and
+   *  the sentence is the tooltip. */
+  const bwNotOnMode = causeFor(control_('BW'), chainState) === 'notOnMode'
+  /** One rig-FUNCTION toggle. Both chain panes draw theirs through this, so the receive four
+   *  and the transmit two cannot drift apart in behaviour the way they just did in place. */
+  const funcToggle = (f: PhoneFunc) => {
+    if (!show(f.chain)) return null
+    const isDead = dead(f.chain)
+    const on = snap.radio[f.key] === true
+    const chain = RIG_CONTROLS.find((c) => c.id === f.chain)!.chain
+    const press = () =>
+      void dspControl.changeFunction(f.key, !on)
+        .then((s) => s && onSnap?.(s))
+        .catch(() => pushToast(t('phone.dsp.toggleFailed', { func: f.label }), 'error'))
+    return (
+      <span className="ph-chain-item" data-chain={f.chain} key={f.key}>
+        {/* A BUTTON stays focusable when it is dead — `disabled` takes it out of the tab
+            order, so a screen-reader operator would never reach the reason. `guard` is the
+            other half: aria-disabled does not prevent activation by itself. */}
+        <button
+          {...(isDead
+            ? deadControlProps('button', describedBy(chain))
+            : { disabled: !dspControl.canFunction(f.key) })}
+          type="button"
+          className={`ph-dsp-btn${on ? ' on' : ''}${isDead ? ' dead' : ''}`}
+          // UNKNOWN IS NOT "OFF". A rig that has never reported this function has no state
+          // to announce, and `aria-pressed="false"` announces one — to a screen reader that
+          // is the same lie the missing button used to tell an eye.
+          aria-pressed={isDead ? undefined : on}
+          title={t(f.titleKey)}
+          onClick={guard(isDead, press)}
+        >
+          {f.label}
+        </button>
+      </span>
+    )
+  }
 
   const bandPane =
     hasBandPane && onWorkSpot ? (
@@ -1268,65 +1494,67 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
         </CockpitPaneFrame>
       )}
 
-      {hasDspPane && (
-        <CockpitPaneFrame title={t('phone.pane.dsp.title')} paneId="dsp" fit="content" {...closeProps('dsp')}>
-          <div className="ph-dsp" role="group" aria-label={t('phone.dsp.aria')}>
-            <span className="ph-dsp-label">{DSP}</span>
-            {dspFuncs.map((f) => {
-              const on = snap.radio[f.key] === true
-              return (
-                <button disabled={!dspControl.canFunction(f.key)}
-                  key={f.key}
-                  type="button"
-                  className={`ph-dsp-btn${on ? ' on' : ''}`}
-                  aria-pressed={on}
-                  title={t(f.titleKey)}
-                  onClick={() =>
-                    void dspControl.changeFunction(f.key, !on)
-                      .then((s) => s && onSnap?.(s))
-                      .catch(() => pushToast(t('phone.dsp.toggleFailed', { func: f.label }), 'error'))
-                  }
-                >
-                  {f.label}
-                </button>
-              )
-            })}
-          </div>
-        </CockpitPaneFrame>
-      )}
+      {hasReceiverPane && (
+        <CockpitPaneFrame title={t('phone.pane.receiver.title')} paneId="receiver" fit="content" {...closeProps('receiver')}>
+          <div className="ph-chain" role="group" aria-label={t('phone.chain.receiver.aria')}>
+            {noCatBanner('rx')}
+            {/* ── IF: the passband ──────────────────────────────────────────────────
+                MOVED OUT OF THE HEADER (operator ruling, 2026-09-20). BW is an IF control
+                and it belongs with the rest of the receive chain; the header it came from
+                already wraps at 1024, and a filter width sitting between a band picker and a
+                power slider answers neither of this cockpit's two questions.
 
-      {/* RX DSP levels — NR level slider + AGC speed, each shown only when the rig reports it. */}
-      {hasDspLevelsPane && (
-        <CockpitPaneFrame title={t('phone.pane.dspLevels.title')} paneId="dspLevels" fit="content" {...closeProps('dspLevels')}>
-          <div className="ph-dsp-levels" role="group" aria-label={t('phone.rxDsp.aria')}>
-            {snap.radio.nrLevel != null && (
-              <label className="ph-dsplev" title={t('phone.rxDsp.nr.title')}>
-                <span>{NR}</span>
-                <input {...levels.input('nr')} disabled={!levels.can('nr')}
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={shownNr}
-                  onChange={(e) => changeNr(Number(e.target.value))}
-                  onPointerDown={() => {
-                    nrDragging.current = true
-                    levels.input('nr').onPointerDown()
-                  }}
-                  onPointerUp={() => {
-                    nrDragging.current = false
-                    levels.input('nr').onPointerUp()
-                  }}
-                  aria-label={t('phone.rxDsp.nr.aria')}
+                ⚠️ ITS GATE IS NOT ITS READ-BACK. `filterWidthHz` null means "unknown or the
+                rig's default" — the stepper still commands the rig perfectly well from its
+                2.4 kHz base and only the READOUT is blank, so marking it unavailable would
+                take away a control that works. What stops it is a dead CAT link; what makes
+                it meaningless is FM, whose passband is fixed. */}
+            {show('BW') && (
+            <div className="ph-chain-item" data-chain="BW">
+              <div className="ph-filter" title={t('phone.filter.title')}>
+                <span className="ph-filter-lbl">{BW}</span>
+                <button disabled={dead('BW') || !filterControl.allowed}
+                  aria-describedby={describedBy('rx')}
+                  type="button"
+                  className="ph-filter-step"
+                  onClick={() => bumpFilter(-FILTER_STEP_HZ)}
+                  title={t('phone.filter.narrower.title', { step: FILTER_STEP_HZ })}
+                >
+                  −
+                </button>
+                <span className="ph-filter-val mono">
+                  {filterHz ? `${(filterHz / 1000).toFixed(1)}k` : '—'}
+                </span>
+                <button disabled={dead('BW') || !filterControl.allowed}
+                  aria-describedby={describedBy('rx')}
+                  type="button"
+                  className="ph-filter-step"
+                  onClick={() => bumpFilter(FILTER_STEP_HZ)}
+                  title={t('phone.filter.wider.title', { step: FILTER_STEP_HZ })}
+                >
+                  +
+                </button>
+              </div>
+              {/* The visible mark is the MODE — a token, the same in every locale — and the
+                  sentence is its tooltip. */}
+              {bwNotOnMode && (
+                <Unavailable
+                  mark={commandedMode}
+                  title={t('phone.unavail.notOnMode', { plate: BW, mode: commandedMode })}
                 />
-                <span className="ph-power-val">{shownNr}%</span>
-              </label>
+              )}
+            </div>
             )}
-            {/* RF GAIN — receive front-end gain. Not the header's Pwr slider, which is
+
+            {/* ── FRONT END ────────────────────────────────────────────────────────
+                RF GAIN — receive front-end gain. Not the header's Pwr slider, which is
                 transmit power; they are `RF` and `RFPOWER` to Hamlib for that reason. */}
-            {snap.radio.rfGain != null && (
+            {show('RF') && (
+            <div className="ph-chain-item" data-chain="RF">
               <label className="ph-dsplev" title={t('phone.analog.rf.title')}>
                 <span>{RF}</span>
-                <input {...levels.input('rfGain')} disabled={!levels.can('rfGain')}
+                <input {...levels.input('rfGain')} disabled={dead('RF') || !levels.can('rfGain')}
+                  aria-describedby={describedBy('rx')}
                   type="range"
                   min={0}
                   max={100}
@@ -1342,70 +1570,59 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   }}
                   aria-label={t('phone.analog.rf.aria')}
                 />
-                <span className="ph-power-val">{shownRfg}%</span>
+                <span className="ph-power-val">{dead('RF') ? '—' : `${shownRfg}%`}</span>
               </label>
+            </div>
             )}
-            {/* SQUELCH — correct operating on FM, and the classic silently-deaf fault
-                everywhere else, which is why the warning excludes FM rather than ranking
-                it. See the decode-audio note where `squelchMutesDecode` is computed. */}
-            {snap.radio.squelch != null && (
-              <label className="ph-dsplev" title={t('phone.analog.sql.title')}>
-                <span>{SQL}</span>
-                <input {...levels.input('squelch')} disabled={!levels.can('squelch')}
+
+            {/* ── DSP: the four that shape what you HEAR ───────────────────────────
+                The two that shape what goes OUT (COMP, VOX) are in the transmitter pane;
+                they were in this row only because Hamlib calls all six a "function". */}
+            {funcToggle(RX_FUNCS[0])}
+            {funcToggle(RX_FUNCS[1])}
+            {show('NRLVL') && (
+            <div className="ph-chain-item" data-chain="NRLVL">
+              <label className="ph-dsplev" title={t('phone.rxDsp.nr.title')}>
+                <span>{NR}</span>
+                <input {...levels.input('nr')} disabled={dead('NRLVL') || !levels.can('nr')}
+                  aria-describedby={describedBy('rx')}
                   type="range"
                   min={0}
                   max={100}
-                  value={shownSql}
-                  onChange={(e) => changeSql(Number(e.target.value))}
+                  value={shownNr}
+                  onChange={(e) => changeNr(Number(e.target.value))}
                   onPointerDown={() => {
-                    sqlDragging.current = true
-                    levels.input('squelch').onPointerDown()
+                    nrDragging.current = true
+                    levels.input('nr').onPointerDown()
                   }}
                   onPointerUp={() => {
-                    sqlDragging.current = false
-                    levels.input('squelch').onPointerUp()
+                    nrDragging.current = false
+                    levels.input('nr').onPointerUp()
                   }}
-                  aria-label={t('phone.analog.sql.aria')}
+                  aria-label={t('phone.rxDsp.nr.aria')}
                 />
-                <span className="ph-power-val">{shownSql}%</span>
-                {squelchMutesDecode && (
-                  <span className="ph-lvl-warn" role="status" title={t('phone.analog.sql.mutesDecode.title')}>
-                    {t('phone.analog.sql.mutesDecode.label')}
-                  </span>
-                )}
+                <span className="ph-power-val">{dead('NRLVL') ? '—' : `${shownNr}%`}</span>
               </label>
+            </div>
             )}
-            {/* #95: the speech processor's DEPTH. The toggle switched PROC on and there was
-                no way to say how hard it worked, which is the half that matters. */}
-            {snap.radio.compLevel != null && (
-              <label className="ph-dsplev" title={t('phone.rxDsp.comp.title')}>
-                <span>{COMP}</span>
-                <input {...levels.input('compression')} disabled={!levels.can('compression')}
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={shownComp}
-                  onChange={(e) => changeComp(Number(e.target.value))}
-                  onPointerDown={() => {
-                    compDragging.current = true
-                    levels.input('compression').onPointerDown()
-                  }}
-                  onPointerUp={() => {
-                    compDragging.current = false
-                    levels.input('compression').onPointerUp()
-                  }}
-                  aria-label={t('phone.rxDsp.comp.aria')}
-                />
-                <span className="ph-power-val">{shownComp}%</span>
-              </label>
-            )}
-            {/* #95: WHERE the manual notch sits. Shown only when the rig reports NOTCHF, so a
-                radio with an auto-notch and nothing else never grows a slider that does
-                nothing. Hz, not a percentage — you are placing it on a tone you can hear. */}
-            {snap.radio.notchFreqHz != null && (
+            {funcToggle(RX_FUNCS[2])}
+            {funcToggle(RX_FUNCS[3])}
+
+            {/* #95: WHERE the manual notch sits. Hz, not a percentage — you are placing it on
+                a tone you can hear.
+
+                ⭐ ITS REASON NAMES THE BACKEND, NOT THE RADIO, and the difference is the
+                whole point of saying anything: Hamlib's Icom backend exposes no NOTCHF for
+                ANY natively-driven model, so on those rigs the notch is real and reachable
+                from the radio's own knob while the FREQUENCY is simply not on the wire. A
+                reason that said "your radio does not have this" would be false about the
+                radio, and the operator would go looking for a fault that is not there. */}
+            {show('NOTCHF') && (
+            <div className="ph-chain-item" data-chain="NOTCHF">
               <label className="ph-dsplev" title={t('phone.rxDsp.notchFreq.title')}>
                 <span>{NOTCH}</span>
-                <input {...levels.input('notch')} disabled={!levels.can('notch')}
+                <input {...levels.input('notch')} disabled={dead('NOTCHF') || !levels.can('notch')}
+                  aria-describedby={describedBy('rx')}
                   type="range"
                   min={300}
                   max={3400}
@@ -1422,25 +1639,166 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
                   }}
                   aria-label={t('phone.rxDsp.notchFreq.aria')}
                 />
-                <span className="ph-power-val">{shownNotch} {HZ}</span>
+                <span className="ph-power-val">{dead('NOTCHF') ? '—' : `${shownNotch} ${HZ}`}</span>
               </label>
+            </div>
             )}
-            {snap.radio.agc != null && (
+
+            {show('AGC') && (
+            <div className="ph-chain-item" data-chain="AGC">
               <div className="ph-agc" role="group" aria-label={t('phone.rxDsp.agc.aria')} title={t('phone.rxDsp.agc.title')}>
                 <span className="ph-dsplev-lbl">{AGC}</span>
                 {AGC_CHIPS.map(({ id, labelKey }) => (
-                  <button disabled={!dspControl.canAgc}
+                  <button disabled={dead('AGC') || !dspControl.canAgc}
+                    aria-describedby={describedBy('rx')}
                     key={id}
                     type="button"
                     className={`theme-chip${agc === id ? ' active' : ''}`}
-                    aria-pressed={agc === id}
+                    // UNKNOWN is not "not this speed": a rig that reports no AGC has no
+                    // selection to announce, and `aria-pressed="false"` on five chips
+                    // announces one.
+                    aria-pressed={dead('AGC') ? undefined : agc === id}
                     onClick={() => changeAgc(id)}
                   >
                     {t(labelKey)}
                   </button>
                 ))}
               </div>
+            </div>
             )}
+
+            {/* ── AUDIO: the end of the chain, and the two that go quietly wrong ───
+                Both carry the decode-audio warning. See the note where `afMutesDecode` and
+                `squelchMutesDecode` are computed: it NOTIFIES AND NEVER ACTS. */}
+            {show('AF') && (
+            <div className="ph-chain-item" data-chain="AF">
+              <label className="ph-dsplev" title={t('phone.analog.af.title')}>
+                <span>{AF}</span>
+                <input {...levels.input('afGain')} disabled={dead('AF') || !levels.can('afGain')}
+                  aria-describedby={describedBy('rx')}
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={shownAf}
+                  onChange={(e) => changeAf(Number(e.target.value))}
+                  onPointerDown={() => {
+                    afDragging.current = true
+                    levels.input('afGain').onPointerDown()
+                  }}
+                  onPointerUp={() => {
+                    afDragging.current = false
+                    levels.input('afGain').onPointerUp()
+                  }}
+                  aria-label={t('phone.analog.af.aria')}
+                />
+                <span className="ph-power-val">{dead('AF') ? '—' : `${shownAf}%`}</span>
+                {afMutesDecode && (
+                  <span className="ph-lvl-warn" role="status" title={t('phone.analog.af.mutesDecode.title')}>
+                    {t('phone.analog.af.mutesDecode.label')}
+                  </span>
+                )}
+              </label>
+            </div>
+            )}
+            {show('SQL') && (
+            <div className="ph-chain-item" data-chain="SQL">
+              <label className="ph-dsplev" title={t('phone.analog.sql.title')}>
+                <span>{SQL}</span>
+                <input {...levels.input('squelch')} disabled={dead('SQL') || !levels.can('squelch')}
+                  aria-describedby={describedBy('rx')}
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={shownSql}
+                  onChange={(e) => changeSql(Number(e.target.value))}
+                  onPointerDown={() => {
+                    sqlDragging.current = true
+                    levels.input('squelch').onPointerDown()
+                  }}
+                  onPointerUp={() => {
+                    sqlDragging.current = false
+                    levels.input('squelch').onPointerUp()
+                  }}
+                  aria-label={t('phone.analog.sql.aria')}
+                />
+                <span className="ph-power-val">{dead('SQL') ? '—' : `${shownSql}%`}</span>
+                {squelchMutesDecode && (
+                  <span className="ph-lvl-warn" role="status" title={t('phone.analog.sql.mutesDecode.title')}>
+                    {t('phone.analog.sql.mutesDecode.label')}
+                  </span>
+                )}
+              </label>
+            </div>
+            )}
+            {absentLine('rx')}
+          </div>
+        </CockpitPaneFrame>
+      )}
+
+      {hasTransmitterPane && (
+        <CockpitPaneFrame title={t('phone.pane.transmitter.title')} paneId="transmitter" fit="content" {...closeProps('transmitter')}>
+          <div className="ph-chain" role="group" aria-label={t('phone.chain.transmitter.aria')}>
+            {noCatBanner('tx')}
+            {/* MIC gain came out of the header for a sharper reason than BW did: it sat
+                DIRECTLY BESIDE the AF slider there — a transmit level and a receive level,
+                adjacent, with nothing on screen saying which was which. */}
+            {show('MIC') && (
+            <div className="ph-chain-item" data-chain="MIC">
+              <label className="ph-dsplev" title={t('phone.mic.title')}>
+                <span>{t('phone.mic.label')}</span>
+                <input {...levels.input('micGain')} disabled={dead('MIC') || !levels.can('micGain')}
+                  aria-describedby={describedBy('tx')}
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={shownMic}
+                  onChange={(e) => changeMic(Number(e.target.value))}
+                  onPointerDown={() => {
+                    micDragging.current = true
+                    levels.input('micGain').onPointerDown()
+                  }}
+                  onPointerUp={() => {
+                    micDragging.current = false
+                    levels.input('micGain').onPointerUp()
+                  }}
+                  aria-label={t('phone.mic.aria')}
+                />
+                <span className="ph-power-val">{dead('MIC') ? '—' : `${shownMic}%`}</span>
+              </label>
+            </div>
+            )}
+
+            {/* #95: the speech processor's toggle and its DEPTH, which are separately
+                reported and so are separately marked — the report was precisely that the
+                toggle arrived without the level. */}
+            {funcToggle(TX_FUNCS[0])}
+            {show('COMPLVL') && (
+            <div className="ph-chain-item" data-chain="COMPLVL">
+              <label className="ph-dsplev" title={t('phone.rxDsp.comp.title')}>
+                <span>{COMP}</span>
+                <input {...levels.input('compression')} disabled={dead('COMPLVL') || !levels.can('compression')}
+                  aria-describedby={describedBy('tx')}
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={shownComp}
+                  onChange={(e) => changeComp(Number(e.target.value))}
+                  onPointerDown={() => {
+                    compDragging.current = true
+                    levels.input('compression').onPointerDown()
+                  }}
+                  onPointerUp={() => {
+                    compDragging.current = false
+                    levels.input('compression').onPointerUp()
+                  }}
+                  aria-label={t('phone.rxDsp.comp.aria')}
+                />
+                <span className="ph-power-val">{dead('COMPLVL') ? '—' : `${shownComp}%`}</span>
+              </label>
+            </div>
+            )}
+            {funcToggle(TX_FUNCS[1])}
+            {absentLine('tx')}
           </div>
         </CockpitPaneFrame>
       )}
@@ -1588,13 +1946,21 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             {t('phone.rigMismatch.chip', { mode: modeMismatch })}
           </span>
         )}
-        {catOk && (
-          <SplitControl
-            snap={snap}
-            onSnap={onSnap}
-            onError={(m) => pushToast(m, 'error')}
-          />
-        )}
+        {/* ⭐ SPLIT IS NO LONGER GATED ON `catOk` (2026-09-20 ruling). It used to vanish with
+            the link, which told the operator nothing about whether this cockpit HAS a split
+            control — and split is the one thing a DX chaser looks for first. It stays and
+            says why it is dead; the reason rides INTO the control rather than sitting beside
+            it, so its three buttons are disabled by the same fact that prints the mark. */}
+        <SplitControl
+          snap={snap}
+          onSnap={onSnap}
+          onError={(m) => pushToast(m, 'error')}
+          unavailable={
+            catOk
+              ? undefined
+              : { mark: t('phone.unavail.mark'), title: t('phone.unavail.noCat', { plate: SPLIT }) }
+          }
+        />
         {!catOk && (
           <span
             className="ph-nocat"
@@ -1602,79 +1968,6 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           >
             {t('phone.noCat.label')}
           </span>
-        )}
-        {snap.radio.micGain != null && (
-          <label className="ph-power" title={t('phone.mic.title')}>
-            <span>{t('phone.mic.label')}</span>
-            <input {...levels.input('micGain')} disabled={!levels.can('micGain')}
-              type="range"
-              min={0}
-              max={100}
-              value={shownMic}
-              onChange={(e) => changeMic(Number(e.target.value))}
-              onPointerDown={() => {
-                micDragging.current = true
-                levels.input('micGain').onPointerDown()
-              }}
-              onPointerUp={() => {
-                micDragging.current = false
-                levels.input('micGain').onPointerUp()
-              }}
-              aria-label={t('phone.mic.aria')}
-            />
-            <span className="ph-power-val">{shownMic}%</span>
-          </label>
-        )}
-        {snap.radio.afGain != null && (
-          <label className="ph-power" title={t('phone.analog.af.title')}>
-            <span>{AF}</span>
-            <input {...levels.input('afGain')} disabled={!levels.can('afGain')}
-              type="range"
-              min={0}
-              max={100}
-              value={shownAf}
-              onChange={(e) => changeAf(Number(e.target.value))}
-              onPointerDown={() => {
-                afDragging.current = true
-                levels.input('afGain').onPointerDown()
-              }}
-              onPointerUp={() => {
-                afDragging.current = false
-                levels.input('afGain').onPointerUp()
-              }}
-              aria-label={t('phone.analog.af.aria')}
-            />
-            <span className="ph-power-val">{shownAf}%</span>
-            {afMutesDecode && (
-              <span className="ph-lvl-warn" role="status" title={t('phone.analog.af.mutesDecode.title')}>
-                {t('phone.analog.af.mutesDecode.label')}
-              </span>
-            )}
-          </label>
-        )}
-        {catOk && commandedMode !== 'FM' && (
-          <div className="ph-filter" title={t('phone.filter.title')}>
-            <span className="ph-filter-lbl">{BW}</span>
-            <button disabled={!filterControl.allowed}
-              type="button"
-              className="ph-filter-step"
-              onClick={() => bumpFilter(-FILTER_STEP_HZ)}
-              title={t('phone.filter.narrower.title', { step: FILTER_STEP_HZ })}
-            >
-              −
-            </button>
-            <span className="ph-filter-val mono">
-              {filterHz ? `${(filterHz / 1000).toFixed(1)}k` : '—'}
-            </span>
-            <button disabled={!filterControl.allowed}
-              type="button"
-              className="ph-filter-step"
-              onClick={() => bumpFilter(FILTER_STEP_HZ)}
-              title={t('phone.filter.wider.title', { step: FILTER_STEP_HZ })}
-            >
-              +
-            </button>
-          </div>
         )}
         {onRecallMemory && (
           // The ★-favorites quick-recall strip (bounded + wrapping — the old
@@ -1930,6 +2223,115 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
           then unkey the rig. Pinning removes the mount/unmount but not the growth: the hint
           is one line and the readings are up to four rows, so the panel still changes height
           on key-down. Above the row, that growth leaves the row's screen position fixed. */}
+      {/* ⭐ THE TRANSMIT CONTRACT — "what goes out when I key?", in one line that is always
+          there and never moves (operator, 2026-09-20).
+ 
+          The answer used to be scattered across four places and none of them was the
+          emission: the dial is in the header, the split offset is a chip beside it, XIT is in
+          the tuning strip, and under split the RX dial is not a conservative stand-in for the
+          TX frequency — it is an unrelated number. XIT moves the transmitter without moving
+          anything on screen at all.
+ 
+          ⚠️ ABOVE THE METERS, so it is above the PTT row. The dock is bottom-anchored and a
+          child that GROWS below the row pushes the button out from under a held pointer,
+          which fires onPointerLeave and drops the transmission mid-over. This strip is one
+          fixed line either way; its position is the belt to that brace.
+ 
+          ⚠️ NO ⊞ ID AND NO CONTROLS. It is a readout, so it is not in the vocabulary (nothing
+          can hide it) and it holds nothing that could be mistaken for a way to stop or start
+          a transmission — THE STOP LINE is untouched by it in both directions. */}
+      <div className="ph-txcontract" role="group" aria-label={t('phone.txContract.aria')}>
+        <span className="ph-txc-cell" data-txc="freq" title={t('phone.txContract.freq.title')}>
+          <span className="ph-txc-lbl">{TX}<span aria-hidden="true">▸</span></span>
+          {txEmission == null || repeaterUnknown ? (
+            <>
+              <span className="ph-txc-val mono">—</span>
+              <TruthMark
+                kind="off"
+                word={repeaterUnknown ? t('phone.tx.repeaterMark') : undefined}
+                title={repeaterUnknown ? t('phone.txContract.repeaterShift.title') : t('phone.txContract.noEmission.title')}
+              />
+            </>
+          ) : (
+            <>
+              {/* The header's OWN formatter, so the dock and the readout can never print one
+                  frequency two different ways. */}
+              <span className="ph-txc-val mono">{formatDialMhz(txEmission)}</span>
+              <TruthMark
+                kind={emissionRead ? 'rig' : 'cmd'}
+                title={emissionRead ? t('phone.prov.rig') : t('phone.txContract.freq.commanded.title')}
+              />
+            </>
+          )}
+        </span>
+        <span className="ph-txc-cell" data-txc="mode" title={t('phone.txContract.mode.title')}>
+          <span className="ph-txc-val">{observedMode}</span>
+          {/* The SAME read-back gate the log writes through (`rigReadPhoneMode`): catOk, a
+              non-empty rig mode, and a mode this cockpit can name. What the operator is told
+              here and what Nexus writes into the record cannot disagree. */}
+          <TruthMark
+            kind={rigReadPhoneMode != null ? 'rig' : 'cmd'}
+            title={rigReadPhoneMode != null ? t('phone.prov.rig') : t('phone.prov.cmd', { plate: observedMode })}
+          />
+        </span>
+        <span className="ph-txc-cell" data-txc="split" title={t('phone.txContract.split.title')}>
+          <span className="ph-txc-lbl">{SPLIT}</span>
+          {splitOffsetKhz == null ? (
+            <span className="ph-txc-val">{SIMPLEX}</span>
+          ) : (
+            <>
+              <span className="ph-txc-val mono">
+                {splitOffsetKhz >= 0 ? `+${splitOffsetKhz.toFixed(1)}` : splitOffsetKhz.toFixed(1)}
+              </span>
+              {/* ⚠️ ALWAYS `cmd`, AND THAT IS A GAP IN THE DTO rather than a judgement about
+                  the radio. `Engine::tx_freq_verdict` DOES distinguish a split we commanded
+                  and the rig acknowledged from one the rig merely reported, and refuses
+                  outright when it cannot say where — but none of that reaches the snapshot:
+                  `txEmissionMhz` collapses SplitUnverified onto the dial and the verdict
+                  itself is not a field. Until it is, "Nexus commanded this" is the most this
+                  strip may claim, and claiming more is the one thing it must never do. */}
+              <TruthMark kind="cmd" title={t('phone.txContract.split.commanded.title')} />
+            </>
+          )}
+        </span>
+        <span className="ph-txc-cell" data-txc="xit" title={t('phone.txContract.xit.title')}>
+          <span className="ph-txc-lbl">{XIT}</span>
+          <span className="ph-txc-val mono">{xitHz >= 0 ? `+${xitHz}` : String(xitHz)}</span>
+          {/* `cmd` EVEN AT ZERO. Write-only means Nexus cannot see an offset dialled at the
+              radio, so "+0" states what Nexus commanded and not where the transmitter is. */}
+          <TruthMark kind="cmd" title={t('phone.txContract.xit.commanded.title')} />
+        </span>
+        <span className="ph-txc-cell" data-txc="power" title={t('phone.txContract.power.title')}>
+          <span className="ph-txc-val mono">{powerPct == null ? '—' : `${powerPct}%`}</span>
+          {/* NO MARK ON POWER, deliberately: `rfPower` is documented as the rig read-back
+              WHEN CAT REPORTS ONE and the last commanded value otherwise, and the snapshot
+              does not say which it is — so neither mark would be supportable. The measured
+              watts beside it are evidence of their own and need none. */}
+          {lastPoW.current != null && (
+            <span className="ph-txc-sub">{t('phone.tx.lastOver', { watts: Math.round(lastPoW.current) })}</span>
+          )}
+        </span>
+        {/* ⚠️ VOX IS A SAFETY LINE, not a status one, and it belongs on the contract because
+            it changes the answer to "what happens when I key": with VOX on the operator does
+            not key at all — the radio does, from the microphone. Stop TX halts what NEXUS is
+            doing and cannot unkey a transmitter the operator's own voice is holding up.
+            A KEYING-SOURCE fact, never a stop control: it is a readout here and the VOX
+            toggle itself lives in the transmit chain (THE STOP LINE, features/panelState.ts). */}
+        {snap.radio.vox === true && (
+          <span className="ph-txc-cell ph-txc-warn" data-txc="vox" title={t('phone.tx.voxWarn')}>
+            {VOX_ON}
+          </span>
+        )}
+        {/* WHO HOLDS THE TRANSMITTER, in the arbiter's own words — `tx_owner()` covers all
+            seven owners, and a second wording here could disagree with the one that really
+            holds the rig. Absent when nobody does: an idle transmitter is not news. */}
+        {snap.radio.txBusyReason && (
+          <span className="ph-txc-cell ph-txc-busy" data-txc="busy" title={snap.radio.txBusyReason}>
+            {snap.radio.txBusyReason}
+          </span>
+        )}
+      </div>
+
       {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
       {/* ⚠️ NOTHING IN THIS ROW IS MIGRATED, and that is the whole of why this file is on the

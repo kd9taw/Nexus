@@ -8552,16 +8552,87 @@ export const EN = {
   'phone.panel.scope': 'Scope',
   'phone.panel.rigscope': 'Rig Scope Controls',
   'phone.panel.txmeters': 'TX Meters',
-  'phone.panel.dsp': 'DSP Functions',
-  'phone.panel.dspLevels': 'RX DSP Levels',
+  'phone.panel.receiver': 'Receiver',
+  'phone.panel.transmitter': 'Transmitter',
   'phone.panel.bandActivity': 'Band Activity',
   'phone.panel.voiceKeyer': 'Voice Keyer',
   'phone.pane.bandActivity.title': 'Band activity',
   'phone.pane.voiceKeyer.title': 'Voice keyer',
   'phone.pane.rigscope.title': 'Rig scope controls',
-  'phone.pane.dsp.title': 'DSP functions',
-  'phone.pane.dspLevels.title': 'RX DSP levels',
+  'phone.pane.receiver.title': 'Receiver',
+  'phone.pane.transmitter.title': 'Transmitter',
+  // ── ⊘ — THE UNAVAILABLE VOCABULARY (spec catalogue, 2026-09-21) ─────────────────────
+  // ONE KEY PER CAUSE, and the control interpolates its own plate and token — so two
+  // controls failing the same way cannot describe it two different ways, which is the drift
+  // the ⊘ mark exists to prevent. Sentence case, em-dash, and each one NAMES THE REMEDY
+  // rather than the mechanism (the house rule `micdax.test.tsx` pins). Plates and tokens are
+  // invariant and arrive as values.
+  //
+  // `absent` has no per-control wording on purpose: it collapses into `phone.chain.absent`
+  // at the pane's foot, so an IC-7300 does not open to four grey rows.
+  'phone.unavail.mark': 'not reported',
+  'phone.unavail.noCat':
+    '{{plate}} needs CAT control — this radio is set up for VOX or serial PTT only. Add rig ' +
+    'control in Settings \u25B8 Radio to get it.',
+  'phone.unavail.notOnMode': '{{plate}} does not apply on {{mode}}.',
+  'phone.chain.noCat':
+    'No rig control on this radio — the receiver and transmitter controls need CAT. ' +
+    'Settings \u25B8 Radio.',
+  'phone.chain.absent': 'Not on this radio: {{plates}}',
+  'phone.chain.receiver.aria': 'Receiver chain — what you are hearing',
+  'phone.chain.transmitter.aria': 'Transmitter chain — how your voice goes out',
   'phone.pane.log.title': 'Log',
+
+  // ── Phone ▸ THE TRANSMIT CONTRACT (the dock's top line) ─────────────────────────────
+  // `TX`, `SPLIT`, `XIT` and `simplex` are the rig's own vocabulary and are printed from the
+  // code; every figure on the strip is a measurement and is formatted there too.
+  'phone.txContract.aria': 'Transmit contract — what goes out when you key',
+  'phone.txContract.freq.title':
+    'The frequency your next over will actually be emitted on — the engine\u2019s own answer, ' +
+    'with any confirmed split and any XIT offset already in it. Under split this is NOT your ' +
+    'receive dial.',
+  'phone.txContract.freq.commanded.title':
+    'Nexus worked this frequency out from what it commanded and cannot confirm all of it ' +
+    'against the radio — either there is no CAT link, or XIT is in play and the clarifier is ' +
+    'write-only, so an offset dialled at the radio would not show here.',
+  'phone.txContract.noEmission.title':
+    'This station is not reporting a transmit frequency. Nexus will not print your receive ' +
+    'dial in its place — under split they are unrelated numbers.',
+  'phone.txContract.repeaterShift.title':
+    'Nexus cannot state your transmit frequency on FM through a repeater — the shift is ' +
+    'applied by the radio and is not in the frequency the engine reports, so printing one ' +
+    'here would be your listening frequency wearing a transmit label. Check the shift in ' +
+    'Settings \u25B8 Radio, or read it off the radio.',
+  'phone.txContract.mode.title':
+    'The mode your next over goes out in, and where Nexus got it. This is the same read-back ' +
+    'the logbook writes, so what you see here and what gets recorded cannot disagree.',
+  'phone.txContract.split.title': 'How far your transmit frequency sits from your receive dial (kHz)',
+  'phone.txContract.split.commanded.title':
+    'Nexus asked the radio for this split. The snapshot does not carry the radio\u2019s own ' +
+    'confirmation, so it is shown as commanded rather than read back — check the radio if the ' +
+    'pile-up is not hearing you where you expect.',
+  'phone.txContract.xit.title': 'Transmit incremental tuning — the offset added to your transmit frequency (Hz)',
+  'phone.txContract.xit.commanded.title':
+    'Nexus cannot read XIT back from any radio, so this is what Nexus commanded — not ' +
+    'necessarily where the transmitter is. An offset set on the radio\u2019s own clarifier ' +
+    'knob will not appear here.',
+  'phone.txContract.power.title':
+    'Your power setting, and the output the radio last actually measured. No mark: the ' +
+    'setting is the radio\u2019s read-back when CAT reports one and the last commanded value ' +
+    'otherwise, and nothing says which.',
+  'phone.tx.lastOver': '{{watts}} W on the last over',
+  'phone.tx.repeaterMark': 'repeater shift',
+  // A SAFETY line, not a status one: Stop TX halts what NEXUS is doing, and a VOX-held
+  // transmitter is being keyed by the operator's own voice into the microphone.
+  'phone.tx.voxWarn':
+    'VOX is on — the radio keys itself from the mic. Stop TX cannot unkey a VOX-held ' +
+    'transmitter.',
+  'phone.truth.rig.mark': 'rig',
+  'phone.prov.rig': 'Confirmed by the radio.',
+  'phone.truth.cmd.mark': 'cmd',
+  'phone.prov.cmd':
+    'As commanded — this radio does not report {{plate}} back over CAT, so this is what ' +
+    'Nexus last sent.',
 
   // ── Phone ▸ the header: the mode picker, split, mic gain, filter and REC ─────────────
   // `AUTO`, `USB`, `LSB` and `FM` are mode names — the buttons print them from the code and
@@ -8715,7 +8786,6 @@ export const EN = {
   // them with plain function names, the same on every rig AND in every locale, which is what
   // keeps them out of here. See DSP_FUNCS in `PhoneCockpit.tsx`; the two titles below are the
   // translated half, and they name those two words as the invariant tokens they are.
-  'phone.dsp.aria': 'Rig DSP functions',
   'phone.dsp.nb.title': 'Noise Blanker — kills impulse/ignition noise (RX)',
   'phone.dsp.nr.title': 'Noise Reduction — pulls voice out of broadband hiss (RX, DSP)',
   'phone.dsp.notch.title': 'Auto-Notch (ANF) — nulls carriers/heterodynes (RX, DSP)',
@@ -8724,7 +8794,6 @@ export const EN = {
     'Manual notch — the one you place yourself on a whistle, using the notch frequency slider. Distinct from Auto notch, which hunts a carrier automatically.',
   'phone.dsp.vox.title': 'Voice-Operated Transmit — hands-free keying (TX)',
   'phone.dsp.toggleFailed': 'Could not toggle {{func}}',
-  'phone.rxDsp.aria': 'RX DSP levels',
   'phone.rxDsp.nr.title':
     'Noise-reduction depth — raise until the noise floor drops, back off if audio gets watery',
   'phone.rxDsp.nr.aria': 'Noise-reduction level',
@@ -9236,6 +9305,9 @@ export const EN = {
   // interpolated rather than repeated so the panel and the menu cannot drift. It is still
   // written in `TxMeters.tsx`; see the note there for why it has not moved yet.
   'meters.tx.idle': 'TX meters — {{when}}',
+  // A meter the radio stayed silent about THROUGH an over — so it is one this radio does not
+  // report, as against the blank rows before the first over, which the line above answers.
+  'phone.unavail.meter': 'Your radio does not report {{meter}} over CAT — the bar stays empty.',
   'meters.tx.swr.title': 'Antenna match — keep it under 2:1',
   // ⚠️ THE SAME READING, ON A SCALE NEXUS CANNOT VOUCH FOR (2026-09-20). `swrScaleVerified`
   // is false — the rig is outside the two paths whose meter curve we can point at — so the

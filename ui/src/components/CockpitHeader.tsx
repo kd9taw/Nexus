@@ -330,21 +330,37 @@ export function CockpitHeader({
               </button>
             )}
 
-            {/* The RADIO's own ATU, beside the carrier Tune it is so often confused with. Shown ONLY
-                when the rig reports a tuner (`radio.atu` non-null) — an ATU button on a radio with no
-                ATU is worse than no button. Disabled on the licence lockout exactly like Tune; every
-                other refusal (TX off, transmitter busy) comes back from the backend WITH ITS REASON
-                and is shown, because a control that keys the transmitter must never fail silently.
+            {/* The RADIO's own ATU, beside the carrier Tune it is so often confused with.
+                Disabled on the licence lockout exactly like Tune; every other refusal (TX off,
+                transmitter busy) comes back from the backend WITH ITS REASON and is shown,
+                because a control that keys the transmitter must never fail silently.
 
-                ⭐ DISABLED, NOT HIDDEN, when this CAT path cannot START a tune (Hamlib's Icom and
-                Kenwood backends clamp `set_func TUNER 2` to "tuner in line" — `icom.c:7085`). The
-                rig's tuner and its in-line state are REAL, which is what `radio.atu` means and what
-                this button's title reports; hiding it would take that away and answer the operator's
-                "where did my ATU go?" with nothing. It is the ACTION that is unavailable, so the
-                button stays and says so — and points at the TUNER button on the radio.
+                ⭐ DISABLED, NOT HIDDEN, in BOTH the ways this button can be unavailable —
+                and the second of those is new on 2026-09-20.
 
-                ⚠️ DEFERRED (i18n): it keys the rig's own tuning carrier, exactly as SetupHealth's
-                Prove TX does. */}
+                (1) This CAT path cannot START a tune (Hamlib's Icom and Kenwood backends clamp
+                `set_func TUNER 2` to "tuner in line" — `icom.c:7085`). The rig's tuner and its
+                in-line state are REAL, which is what `radio.atu` means and what this button's
+                title reports; hiding it would take that away and answer the operator's "where
+                did my ATU go?" with nothing. It is the ACTION that is unavailable.
+
+                ⛔ (2) BUT NOT WHEN THE RADIO REPORTS NO TUNER AT ALL (`radio.atu` null): the
+                button is ABSENT, and that is a deliberate EXCEPTION to the 2026-09-20
+                disabled-with-reason ruling rather than a site nobody got to. The ruling's
+                home ground is "the rig can do it, this path cannot" — a control Nexus built,
+                unreachable through the operator's transport, which is case (1) above. Absent
+                HARDWARE is not a path problem, and this particular control KEYS THE
+                TRANSMITTER: the precaution against a rig with no tuner growing a tune-up
+                button outranks the discoverability the mark would buy. A rig that HAS a
+                tuner it cannot be asked to start keeps its button and its reason, which is
+                the case the operator actually hits.
+
+                This exception was ruled on 2026-09-20 alongside the rest, and it was briefly
+                implemented the other way before that. If you are here to "finish" the sweep,
+                this is the one that stays.
+
+                ⚠️ DEFERRED (i18n): it keys the rig's own tuning carrier, exactly as
+                SetupHealth's Prove TX does, so its words stay here with Tune's and Stop TX's. */}
             {onAtuTune && radio.atu != null && (
               <button
                 type="button"
