@@ -15317,11 +15317,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
             ));
         }
         // ⭐ A REPEATER IS WORKED ON ITS **INPUT**, so that is where the licence question is
-        // (operator, 2026-09-14). Nothing here used to ask it at all, and the key-time gate that
-        // follows cannot stand in: it judges the DIAL — the machine's OUTPUT — through
-        // `emission_allowed`'s SSB-passband model, which only approximates an FM channel and in
-        // any case is looking at the wrong frequency. A minus-shift machine near a segment edge
-        // was tuned happily and the first over went out below the edge.
+        // (operator, 2026-09-14). Nothing here used to ask it at all: a minus-shift machine near
+        // a segment edge was tuned happily and the first over went out below the edge.
+        //
+        // The key-time gate now asks the same question (`Engine::rptr_shift_mhz` puts the shift
+        // into the emission `tx_allowed` judges), so this is no longer the ONLY thing standing
+        // between the operator and an out-of-band over — but it is not redundant either, and the
+        // two are not interchangeable. This one refuses BEFORE the radio moves and can NAME the
+        // input frequency in the message; the key-time gate is the durable one, because it still
+        // holds after a knob-QSY that this verb never sees. Both, deliberately.
         //
         // Judged as PHONE explicitly, not `settings.operating_mode`: FM voice is a phone-class
         // emission whatever section the operator tuned this machine out of, and the whole point
@@ -17631,8 +17635,9 @@ contact yourself."
     /// Whether the operator's license class permits transmitting at the CURRENT dial + mode.
     /// `Open` always permits. Judges the EMITTED RF, not the bare dial: for digital the signal
     /// sits at the dial + the TX audio offset (≈+1.5 kHz on USB), so a dial just below a
-    /// higher-class-only edge can still emit inside it. Every TX path ANDs this in; the
-    /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
+    /// higher-class-only edge can still emit inside it; on an FM channel the transmitter is
+    /// moved bodily by the repeater shift, which on 70 cm is 5 MHz. Every TX path ANDs this in;
+    /// the snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
         // The rig says split and we cannot say where it transmits — refuse rather than judge
         // the dial, which under split is an unrelated number.
@@ -17666,6 +17671,40 @@ contact yourself."
         f64::from(self.xit_hz) / 1_000_000.0
     }
 
+    /// The FM repeater shift as MHz — SIGNED (`plus` is up), 0.0 when no shift is in force.
+    ///
+    /// A repeater is worked on its INPUT: the rig keys `dial ± offset`, not the output the
+    /// operator listens on. The three TUNE verbs already judge that input before they commit
+    /// (`repeater_tune`, `queue_remote_repeater`, the remote recall), but a tune-time check
+    /// cannot cover what happens AFTERWARDS — and `rptr_shift` / `phone_mode = "fm"` are written
+    /// by `repeater_tune` and reset by no QSY and no band change. So a knob-QSY to another
+    /// machine keeps the previous one's shift, `rptr_offset_hz` re-derives the MAGNITUDE from the
+    /// new dial's band convention, and the emission moves with neither asking permission again.
+    /// This is what makes the key-time gate the durable place to ask.
+    ///
+    /// ⚠️ THIS IS THE SHIFT **NEXUS COMMANDED**, exactly as [`Self::xit_offset_mhz`] is the
+    /// clarifier offset Nexus commanded: the duplex register is never read back, so a shift
+    /// dialled on the radio's own front panel is invisible here and the licence gate cannot see
+    /// it. Named rather than left implicit because it bounds the guarantee. An unknown shift must
+    /// NOT disqualify: nothing reads it back on any rig, so refusing on "cannot tell" would refuse
+    /// every FM transmission this app has ever sent.
+    fn rptr_shift_mhz(&self) -> f64 {
+        // Ask the question the RADIO LOOP asks, not a second one that could drift from it: the
+        // shift reaches the rig only when the mode policy resolves to FM (`service.rs` applies
+        // `fm_repeater_config` under exactly that condition), and `fm_repeater_config` is the
+        // accessor it applies — already answering SIMPLEX for the two cases where a stored shift
+        // must not be used (an APRS beacon, an FM bird).
+        if !matches!(self.rig_mode_effective().as_str(), "FM" | "PKTFM") {
+            return 0.0;
+        }
+        let (shift, offset_hz, _tone) = self.fm_repeater_config();
+        // The SAME normalisation the wire layer applies (`rptr_shift_line` calls this function),
+        // so the gate cannot judge a frequency the rig was never going to key. `Settings` stores
+        // `"-"` as well as `"minus"` — a match written here by hand would have read the former
+        // as simplex and under-refused.
+        f64::from(crate::settings::rptr_shift_sign(&shift)) * (offset_hz as f64 / 1e6)
+    }
+
     /// The dial the next over will actually be EMITTED on — the confirmed split TX frequency
     /// when there is one, else the operator's dial.
     ///
@@ -17686,7 +17725,19 @@ contact yourself."
         // out of the operator's segment still keyed — the same fail-open the split fix above
         // closed, arriving through the clarifier instead. RIT is deliberately absent: it moves
         // the RECEIVER and nothing else.
-        base + self.xit_offset_mhz()
+        // ⭐ AND THE FM REPEATER SHIFT, for the same reason XIT is here: it is a transmit-
+        // frequency control, and on 70 cm it is FIVE MEGAHERTZ. Judging the dial meant judging
+        // the machine's OUTPUT while the transmitter keyed its INPUT — the asymmetry
+        // `repeater_tune` was given its own tune-time check for, in the same words it uses.
+        // Near a band edge that is not an out-of-SEGMENT emission but an out-of-BAND
+        // one: a stale `minus` on a 70 cm dial below 425 MHz keys into 410–420, which is not
+        // amateur spectrum at all.
+        //
+        // Duplex AND split together is the one combination nothing here settles — a rig applies
+        // its duplex shift to the TRANSMIT VFO, so the shift is added on top of the split TX
+        // frequency, which is what the radio would do. The pair is pathological (a repeater is
+        // not worked split) and no capture in this project exercises it.
+        base + self.xit_offset_mhz() + self.rptr_shift_mhz()
     }
 
     /// THE ONE DECISION: which frequency the next over is emitted on, and how sure we are.
@@ -39103,9 +39154,10 @@ mod tests {
 
     /// ⭐ A REPEATER IS WORKED ON ITS **INPUT** (operator, 2026-09-14). `repeater_tune` parked
     /// the rig on the machine's output and checked nothing about where keying it would land,
-    /// and the key-time gate that follows judges the DIAL — the output — through an SSB
-    /// passband model that only approximates FM. So a machine whose input sits in a segment the
-    /// operator may not key was tuned, and the first over went out there.
+    /// So a machine whose input sits in a segment the operator may not key was tuned, and the
+    /// first over went out there. (The key-time gate judged the DIAL — the output — and so could
+    /// not stand in. It carries the shift now; this test still pins the TUNE-time refusal, which
+    /// is the one that can name the offending frequency before the radio has moved.)
     ///
     /// The scene is a real one: 6 m repeaters run a 1 MHz shift, and 50.000–50.100 is CW-only
     /// for every US class. A 51.000 output with a minus shift keys 50.000.
@@ -39139,6 +39191,180 @@ mod tests {
         assert!(
             e.repeater_tune(51.000, "minus", 0, 0.0).is_err(),
             "offset 0 means the 6 m convention (1 MHz) — the same illegal 50.000 input"
+        );
+    }
+
+    /// The scene the three tests below share: a legally tuned 70 cm machine, then a knob-QSY to
+    /// the weak-signal end of the band with the shift still set. Returns the engine mid-scene,
+    /// with every PRECONDITION already asserted — so a failure in a caller is a failure of the
+    /// claim under test, never of the setup.
+    fn stale_shift_after_a_knob_qsy() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("technician"); // a Technician holds ALL of 70 cm: 420-450
+        e.set_operating_mode("phone", false);
+        e.repeater_tune(447.500, "minus", 0, 0.0)
+            .expect("precondition: a 442.500 input is inside 70 cm, so the tune is legal");
+        e.observe_rig_freq(421_000_000);
+        assert!(
+            (e.settings.dial_mhz - 421.000).abs() < 1e-9,
+            "precondition: the knob-QSY landed"
+        );
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "precondition: the stale phone_mode=fm policy still commands FM up here — if this \
+             ever changes, the scenario is closed by another mechanism and these tests are moot"
+        );
+        e
+    }
+
+    /// ⭐ THE TUNE-TIME CHECK CANNOT COVER A KNOB-QSY, which is why the key-time gate carries the
+    /// shift too. `repeater_tune` writes `phone_mode = "fm"` AND `rptr_shift`, and nothing resets
+    /// either: [`crate::settings::Settings::rig_mode_at`] says so in as many words, and the
+    /// 29 MHz floor it grew for that hazard only protects HF. Above 29 MHz the stale FM policy
+    /// stands — and above 29 MHz is exactly where the shift is nonzero.
+    ///
+    /// The scene: work a legal 70 cm machine, then spin the VFO down to the weak-signal end of
+    /// the band. The shift is still `minus`, `rptr_offset_hz` still answers the 70 cm convention
+    /// of 5 MHz, and the rig keys 5 MHz below a dial only 1 MHz above the band edge. 416 MHz is
+    /// not amateur spectrum — it is federal. Nothing asks permission a second time, so the gate
+    /// consulted at the moment of keying has to be the one that knows.
+    #[test]
+    fn a_stale_repeater_shift_cannot_key_a_knob_qsy_out_of_band() {
+        let e = stale_shift_after_a_knob_qsy();
+        assert!(
+            !e.tx_allowed(),
+            "416.000 MHz is outside the amateur allocation entirely — keying here is the \
+             incident this gate exists to prevent"
+        );
+    }
+
+    /// The same scene asserted on the FREQUENCY rather than the verdict, as its own test on
+    /// purpose: a red control reports only the FIRST assertion that fires, so a gate claim and
+    /// the emission value it rests on cannot share one test body without one of them going
+    /// unproven. ([[feedback-read-which-assertion-the-control-reported]].)
+    #[test]
+    fn a_repeater_input_is_the_emission_the_gate_judges() {
+        let e = stale_shift_after_a_knob_qsy();
+        assert!(
+            (e.tx_emission_mhz() - 416.000).abs() < 1e-9,
+            "the stale minus shift still moves the transmitter, and the 5 MHz magnitude is \
+             re-derived from the NEW dial's band convention: {}",
+            e.tx_emission_mhz()
+        );
+    }
+
+    /// And the legal tune it starts from, so "the gate refuses FM outright" cannot masquerade as
+    /// a pass above. Separate for the same reason.
+    #[test]
+    fn a_legally_tuned_machine_still_keys_on_its_input() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("phone", false);
+        e.repeater_tune(447.500, "minus", 0, 0.0)
+            .expect("a 442.500 input is inside 70 cm");
+        assert!(
+            e.tx_allowed(),
+            "the machine we legally tuned must still key"
+        );
+        assert!(
+            (e.tx_emission_mhz() - 442.500).abs() < 1e-9,
+            "the emission is the INPUT, not the 447.500 we listen on: {}",
+            e.tx_emission_mhz()
+        );
+    }
+
+    /// The other half of the same guard, and the one that would hurt far more people if it were
+    /// wrong: a stored shift must NOT move the judged emission when the rig is not in FM.
+    ///
+    /// `rptr_shift` survives forever, so an operator who worked a repeater this morning still has
+    /// `minus` stored this evening. If the gate applied it unconditionally, 2 m SSB on 144.200
+    /// would be judged at 143.600 — out of band — and the operator would find themselves TX
+    /// LOCKED on a frequency they are perfectly entitled to use, with no way to discover why.
+    #[test]
+    fn a_stored_shift_does_not_move_the_emission_outside_fm() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("phone", false);
+        e.settings.rptr_shift = "minus".into(); // this morning's repeater
+        e.settings.phone_mode = "ssb".into(); // ...but this evening is weak-signal work
+        e.set_frequency(144.200, "2m", "USB");
+
+        assert_ne!(
+            e.rig_mode_effective(),
+            "FM",
+            "precondition: not an FM channel"
+        );
+        assert!(
+            (e.tx_emission_mhz() - 144.200).abs() < 1e-9,
+            "no shift is in force, so the emission is the dial: {}",
+            e.tx_emission_mhz()
+        );
+        assert!(
+            e.tx_allowed(),
+            "144.200 SSB is squarely inside a Technician's 2 m privileges"
+        );
+    }
+
+    /// `"-"` is a shift, not simplex — and `Settings` really does store it that way.
+    ///
+    /// The licence gate and the rigctld `R` line normalise through ONE function
+    /// ([`crate::settings::rptr_shift_sign`]) for this reason. A hand-written `match shift`
+    /// covering only `"plus"`/`"minus"` reads `"-"` as no-shift, and the gate then judges a
+    /// frequency the rig was never going to key — under-refusing, which is the direction that
+    /// puts a signal on the air.
+    #[test]
+    fn the_short_form_shift_is_judged_as_a_shift() {
+        for (stored, expect_mhz) in [("-", 441.000), ("minus", 441.000), ("+", 451.000)] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_license_class("technician");
+            e.set_operating_mode("phone", false);
+            e.settings.phone_mode = "fm".into();
+            e.settings.rptr_shift = stored.into();
+            e.set_frequency(446.000, "70cm", "FM");
+            assert_eq!(e.rig_mode_effective(), "FM", "precondition for {stored}");
+            assert!(
+                (e.tx_emission_mhz() - expect_mhz).abs() < 1e-9,
+                "{stored} must move the transmitter to {expect_mhz}, got {}",
+                e.tx_emission_mhz()
+            );
+        }
+    }
+
+    /// Its gate half, separated so the loop above cannot shadow it: 450 is the top of 70 cm, so
+    /// a plus shift from 446.000 keys 451.000 — land mobile, not amateur.
+    #[test]
+    fn a_short_form_plus_shift_out_of_band_is_refused() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("phone", false);
+        e.settings.phone_mode = "fm".into();
+        e.settings.rptr_shift = "+".into();
+        e.set_frequency(446.000, "70cm", "FM");
+        assert_eq!(e.rig_mode_effective(), "FM", "precondition");
+        assert!(!e.tx_allowed(), "451.000 MHz is land-mobile, not amateur");
+    }
+
+    /// The gate asks [`Engine::fm_repeater_config`], not the raw setting, and these two cases are
+    /// why: an APRS beacon and an FM bird both force SIMPLEX there. Asking `settings.rptr_shift`
+    /// directly would have applied a terrestrial repeater's stored shift to a packet beacon and
+    /// to a satellite uplink — judging a frequency neither one transmits on.
+    #[test]
+    fn aprs_and_a_bird_are_judged_simplex_whatever_shift_is_stored() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("technician");
+        e.settings.rptr_shift = "minus".into();
+        e.settings.rptr_offset_override_hz = 600_000;
+        e.aprs_tune(144.390).expect("APRS tune");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "precondition: APRS parks the rig in FM"
+        );
+        assert!(
+            (e.tx_emission_mhz() - 144.390).abs() < 1e-9,
+            "a beacon goes out on the channel, never through a shift: {}",
+            e.tx_emission_mhz()
         );
     }
 
