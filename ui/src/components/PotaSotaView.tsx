@@ -342,13 +342,16 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     ? (filtered.find((s) => s.activator === hunt.call && s.reference === hunt.reference) ?? null)
     : null
 
-  // Keep that row on screen. Keyed on the ROW — so the 60 s poll and the log re-read, which hand
-  // back fresh objects carrying the same spot, re-render without moving the list: this fires when
-  // the target CHANGES or when its row first arrives, never under the operator's own scrolling.
+  // Keep that row on screen. Keyed on WHAT THE OPERATOR IS HUNTING — the station and the
+  // reference, nothing else — so this fires when the target changes or when its row first
+  // arrives, and stays silent otherwise. Everything else the board does to that row is the
+  // board's business, not a new place to be: the 60 s poll and the log re-read hand back fresh
+  // objects for the same spot, and a QSY rewrites the row's frequency. Keying on the whole spot
+  // re-scrolled on all three, under the operator's hands, mid-scroll.
   // 'nearest' so a row already visible moves nothing at all. (jsdom has no scrollIntoView, hence
   // the optional call — the useRovingList idiom.)
   const huntedRowRef = useRef<HTMLLIElement | null>(null)
-  const huntedRowKey = huntedSpot ? spotKey(huntedSpot) : null
+  const huntedRowKey = huntedSpot ? `${huntedSpot.activator}|${huntedSpot.reference}` : null
   useEffect(() => {
     if (!huntedRowKey) return
     huntedRowRef.current?.scrollIntoView?.({ block: 'nearest' })
