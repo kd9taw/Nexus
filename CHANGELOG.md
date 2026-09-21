@@ -5,6 +5,44 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Contest serials: the station you called first is no longer forgotten when you move on.** 1.14.0
+  said that calling one station, getting no answer, working somebody else and coming back would give
+  the first station the number they already copied. That only held if you pressed **Clear** in
+  between. Typing the next callsign straight over the box was read as "you mis-copied the call", so
+  the first station's number was handed to the second and the first was forgotten — and if the
+  station you typed already had a number of their own from earlier, theirs was overwritten instead.
+  Both stations now keep what they copied, and no new number is burned either way. Two stations can
+  end up holding the same serial; both of them copied it from you, so both match at check-in.
+- **Clicking a spot during a contest now ties the serial to that station.** The callsign followed
+  the click and the serial did not, so an F-key macro went out with the new station's call and the
+  previous station's number. On phone it was worse: the cockpit showed that number as the exchange
+  to read aloud, with no macro on screen to contradict it.
+- **The transmit SWR meter no longer gives you a figure to act on for a rig it cannot calibrate.**
+  Nexus only arms the high-SWR cutoff for rigs whose SWR scale it can vouch for — but on every other
+  rig the meter was still turning red past 2:1 and advising you to keep it under 2:1. On a Xiegu,
+  1.2:1 on the radio's own panel arrives here as 6:1. The reading stays, because it still moves the
+  right way while you tune, but the colour coding and the threshold advice are gone and the label
+  reads `SWR?`.
+- **Turning Field Day on or off now re-arms the RTTY auto-sequencer after a finished contact.** The
+  sequencer rests in **Done** once a contact completes, and the switch only took effect from
+  **Idle**. So Field Day starting mid-session left every following contact going out with your
+  casual exchange — and because that exchange is not a Field Day one, those contacts were written to
+  the general logbook and never reached the contest log.
+
+### Corrections to 1.14.0
+
+A released section is history and is not rewritten, so two credits it got wrong are corrected here.
+
+- **#290** was credited as done. Only the give-up notice shipped; the catch-up sweep that ClubLog
+  has is still not available to the other connectors, and that half of the issue remains open.
+- **#334** was credited as done. Only the band-display half shipped — a rig answering `PKTUSB` on
+  its FT8 channel now matches its band-plan channel instead of reading "custom". The spontaneous
+  band jumps reported alongside it are not addressed.
+
 ## [1.14.0] — 2026-09-20
 
 ### Added
