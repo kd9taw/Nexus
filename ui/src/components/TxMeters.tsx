@@ -229,13 +229,39 @@ export function TxMeters({
   const compact = inline || !live
   const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}`
   const shown = live || lastRows.current.length === 0 ? rows : lastRows.current
+
+  // ⛔ THE FOUR-ROWS-ALWAYS CONTRACT IS THE DOCK'S, AND IT DOES NOT REACH THIS CELL.
+  //
+  // The ruling above was taken for the Phone/CW dock, for a reason that is entirely about the
+  // dock: it is BOTTOM-ANCHORED above the PTT button, so a row appearing moves the button under
+  // a held pointer. `inline` is the Operate strip's `.cq-telemetry` cell — fixed-width chrome in
+  // a TOP-anchored column, where nothing is anchored to the panel's bottom edge and the cost of
+  // a taller panel is paid by whatever sits BELOW it instead.
+  //
+  // ⚠️ AND IT WAS PAID, on public main. Making the four rows unconditional grew Operate's cell
+  // from ONE hint line to four rows plus the hint, which pushed the recall card 5 px past the
+  // fold at 1280×800 and reddened two compiled-browser shards (`cardBottom` 806 against a
+  // viewport of 800; `remote/test/browser.test.mjs:2689`). The contract was right and its SCOPE
+  // was wrong — a shared component inherited a ruling made about one of its three hosts.
+  //
+  // So the cell keeps its pre-rebuild shape: only meters that have actually read, and the hint
+  // alone until one does. `seen` rather than `bar != null` so a meter that has read once does
+  // not drop out between overs and start the bouncing again from the other direction.
+  const visible = inline ? shown.filter((r) => r.bar != null || seen.current.has(r.key)) : shown
+  if (inline && visible.length === 0) {
+    return (
+      <div className={`ph-txmeters${variant} idle`} role="group" aria-label={t('meters.tx.aria')}>
+        <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
+      </div>
+    )
+  }
   return (
     <div
       className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}`}
       role="group"
       aria-label={t('meters.tx.aria')}
     >
-      {shown.map((r) => (
+      {visible.map((r) => (
         <div key={r.key} className="ph-txmeter" title={r.title}>
           <span className="ph-txmeter-label">{r.label}</span>
           <div className="ph-txmeter-track">

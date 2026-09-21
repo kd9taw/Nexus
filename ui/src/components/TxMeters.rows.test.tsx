@@ -148,3 +148,47 @@ describe('the default variant is unchanged', () => {
     expect(labels()).toEqual(['SWR', 'ALC', 'PO', 'COMP'])
   })
 })
+
+// ⛔ THE DOCK'S CONTRACT MUST NOT REACH THE OPERATE CELL — the regression that reddened two
+// compiled-browser shards on public main (2026-09-21).
+//
+// Everything above is about the DOCK: bottom-anchored above the PTT button, so a row appearing
+// moves the button under a held pointer. `inline` is a different host — the Operate strip's
+// fixed-width `.cq-telemetry` cell, top-anchored, where a taller panel is paid for by whatever
+// sits BELOW it. Making the four rows unconditional grew that cell from one hint line to four
+// rows plus the hint, and the Operate recall card ended 5 px past the fold at 1280×800
+// (`cardBottom` 806 vs a viewport of 800 — remote/test/browser.test.mjs:2689). The contract was
+// right; its SCOPE was wrong, because one shared component has three hosts and the ruling was
+// taken about one of them.
+//
+// jsdom never lays out, so these assert the ROW COUNT the browser then has to place — which is
+// the quantity that actually moved.
+describe('the Operate cell keeps its own shape', () => {
+  it('shows the hint ALONE before any meter has read, not four empty rows', () => {
+    render(<TxMeters radio={radio()} inline />)
+    expect(rows(), 'four blank rows here are what pushed the recall card off-screen').toHaveLength(0)
+    expect(panel().querySelector('.ph-txmeters-hint')).not.toBeNull()
+  })
+
+  it('shows only the meters that actually read, not all four', () => {
+    // A rig reporting power and nothing else: one row, not four.
+    render(<TxMeters radio={keyed({ txPoW: 42 })} inline />)
+    expect(labels()).toHaveLength(1)
+    expect(labels()[0]).toContain('PO')
+  })
+
+  it('keeps a meter that has read once, so the cell does not bounce between overs', () => {
+    // The reason the filter is `seen`, not `bar != null`: dropping a row when the over ends
+    // would restart the very bouncing the dock ruling exists to stop, just in the other host.
+    const { rerender } = render(<TxMeters radio={keyed({ txPoW: 42 })} inline />)
+    expect(labels()).toHaveLength(1)
+    rerender(<TxMeters radio={radio()} inline />)
+    expect(labels(), 'PO read once; it must not vanish when the over ends').toHaveLength(1)
+  })
+
+  it('leaves the DOCK at four rows — the ruling above is untouched', () => {
+    render(<TxMeters radio={radio()} pinned />)
+    expect(rows(), 'the dock contract is not what changed').toHaveLength(4)
+  })
+})
+
