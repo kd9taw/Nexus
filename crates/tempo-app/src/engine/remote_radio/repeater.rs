@@ -2,10 +2,15 @@
 //! section's Tune) through the existing readback transaction.
 //!
 //! The repeater OFFSET moves the transmitter: the rig keys the machine's INPUT, not the output
-//! the operator listens on. So a browser gets one refusal the local button does not have — the
-//! input is judged against the licence with the station's own emission model before anything is
-//! queued. Nothing here arms or keys; the tune commits only after the owning CAT worker reads
-//! back the dial, FM mode, shift, offset and tone.
+//! the operator listens on. So the input is judged against the licence with the station's own
+//! emission model before anything is queued. Nothing here arms or keys; the tune commits only
+//! after the owning CAT worker reads back the dial, FM mode, shift, offset and tone.
+//!
+//! ⚠️ This used to read "a browser gets one refusal the local button does not have", and that
+//! stopped being true the day `Engine::repeater_tune` grew the same check (2026-09-14) — the
+//! sentence outlived the asymmetry it described by long enough to be read as evidence that the
+//! desktop path was unguarded. All three tune verbs ask the same question of the same predicate:
+//! this one, `repeater_tune`, and the remote recall.
 use super::*;
 
 /// The widest shift the grammar admits (23 cm machines use 12 MHz; 20 MHz leaves headroom for
