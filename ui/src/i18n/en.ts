@@ -8605,6 +8605,11 @@ export const EN = {
   'phone.txContract.noEmission.title':
     'This station is not reporting a transmit frequency. Nexus will not print your receive ' +
     'dial in its place — under split they are unrelated numbers.',
+  'phone.txContract.repeaterShift.title':
+    'Nexus cannot state your transmit frequency on FM through a repeater — the shift is ' +
+    'applied by the radio and is not in the frequency the engine reports, so printing one ' +
+    'here would be your listening frequency wearing a transmit label. Check the shift in ' +
+    'Settings \u25B8 Radio, or read it off the radio.',
   'phone.txContract.mode.title':
     'The mode your next over goes out in, and where Nexus got it. This is the same read-back ' +
     'the logbook writes, so what you see here and what gets recorded cannot disagree.',

@@ -24,7 +24,8 @@
 // Text marks, never colour alone; and a commanded value is never rendered as though it were
 // read, which is the assertion the XIT cases below exist for.
 import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, act } from '@testing-library/react'
+import { getSettings } from '../api'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS } from '../features/panelState'
@@ -71,8 +72,10 @@ function snapWith(radio: Record<string, unknown>): AppSnapshot {
   } as unknown as AppSnapshot
 }
 
-const mount = (radio: Record<string, unknown> = {}, panels?: PanelLayoutApi<PhonePanelId>) =>
-  render(<PhoneCockpit snap={snapWith(radio)} theme="dark" panels={panels} />)
+/** `phoneMode` is a PROP, not a snapshot field — it is what resolves the cockpit's commanded
+ *  mode to FM, and passing it is the only way to reach the FM branch. */
+const mount = (radio: Record<string, unknown> = {}, panels?: PanelLayoutApi<PhonePanelId>, phoneMode?: string) =>
+  render(<PhoneCockpit snap={snapWith(radio)} theme="dark" panels={panels} phoneMode={phoneMode} />)
 
 const strip = () => document.querySelector('.cockpit-txdock .ph-txcontract')
 /** One cell of the strip, by the part of the contract it answers for. */
@@ -175,6 +178,71 @@ describe('the frequency cell is the ENGINE’s emission, not a dial the UI added
   it('marks it ⌁cmd with no CAT link, because nothing can be read back', () => {
     mount({ txEmissionMhz: 14.226, catOk: false })
     expect(markIn('freq')!.textContent).toContain('cmd')
+  })
+})
+
+// ⛔ FM THROUGH A REPEATER — the one case where `tx_emission_mhz` is NOT the emission.
+//
+// `Engine::tx_emission_mhz` (engine.rs:17677) is `verdict base + xit_offset` and nothing
+// else: there is no `rptr` anywhere in it. The repeater shift lives in `settings.rptr_shift`
+// / `rptr_offset_hz()` and is applied on the rig-CONFIGURATION path (:7720, :15339), so on
+// FM through a repeater with a +600 kHz shift the figure the engine reports is the dial the
+// operator is LISTENING on and the transmitter is 600 kHz away.
+//
+// A panel whose entire job is "what happens when I key" cannot state a number that is wrong
+// by the whole shift on exactly the mode where the answer is least obvious. So it states
+// nothing there, and says why.
+//
+// ⚠️ IT CANNOT SIMPLY ADD THE SHIFT ON. `rptr_offset_hz()` is an override or a BAND-CONVENTION
+// TABLE in Rust (settings.rs:360) — re-deriving that here would be a second copy of engine
+// arithmetic, free to drift, which is the same defect as printing the wrong number slower.
+// The fix belongs in `tx_emission_mhz`; until it lands, silence is the honest answer and the
+// report says so.
+describe('FM through a repeater: no confident wrong number', () => {
+  /** Mount and let the settings read (the only place the shift is visible) resolve. */
+  async function mountFm(shift: unknown, radio: Record<string, unknown> = {}) {
+    vi.mocked(getSettings).mockResolvedValue(
+      (shift === undefined ? {} : { rptrShift: shift }) as never,
+    )
+    const r = mount({ txEmissionMhz: 146.94, rigMode: 'FM', ...radio }, undefined, 'fm')
+    await act(async () => { await Promise.resolve() })
+    return r
+  }
+
+  it('states NO transmit frequency on a repeater shift, and says why', async () => {
+    await mountFm('plus')
+    expect(cell('freq')!.textContent, 'the dial was printed as the emission on a repeater').not.toContain('146.94')
+    const mark = markIn('freq')
+    expect(mark, 'no frequency and no reason').not.toBeNull()
+    expect(mark!.textContent).toMatch(/⊘/)
+    expect(mark!.getAttribute('title'), 'the reason does not name the repeater shift').toMatch(/repeater/i)
+  })
+
+  it('states it normally on FM SIMPLEX — the shift is what disqualifies it, not the mode', async () => {
+    // THE PAIR. Without it, "omit on FM" would pass by omitting on 146.520 too, which would
+    // take the contract away from every simplex FM operator to fix a repeater bug.
+    await mountFm('simplex')
+    expect(cell('freq')!.textContent, 'FM simplex lost its transmit frequency').toContain('146.94')
+    expect(markIn('freq')!.textContent).not.toMatch(/⊘/)
+  })
+
+  it('states NOTHING while the shift is still unknown — unread is not simplex', async () => {
+    // The fail-safe direction. A settings read that has not landed, or a station whose
+    // settings carry no shift at all, must not be resolved to "simplex" — that is the one
+    // default that puts the confident wrong number back.
+    await mountFm(undefined)
+    expect(cell('freq')!.textContent).not.toContain('146.94')
+    expect(markIn('freq')!.textContent).toMatch(/⊘/)
+  })
+
+  it('leaves SSB alone, whatever the shift setting says', async () => {
+    // The shift is an FM setting; a stale 'plus' left in settings must not blank the
+    // contract on 20 m sideband.
+    vi.mocked(getSettings).mockResolvedValue({ rptrShift: 'plus' } as never)
+    mount({ txEmissionMhz: 14.226, rigMode: 'USB' })
+    await act(async () => { await Promise.resolve() })
+    expect(cell('freq')!.textContent).toContain('14.2260')
+    expect(markIn('freq')!.textContent).not.toMatch(/⊘/)
   })
 })
 

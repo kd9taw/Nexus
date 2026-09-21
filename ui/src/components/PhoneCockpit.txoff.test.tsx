@@ -37,6 +37,9 @@ const { setPtt, setTxEnabled, pushToast } = vi.hoisted(() => ({
 }))
 
 vi.mock('../api', () => ({
+  // The Phone cockpit reads the FM repeater shift from Settings — it is the only surface
+  // that carries it, and the transmit contract will not state a frequency without it.
+  getSettings: vi.fn(async () => ({})),
   setPtt,
   setTxEnabled,
   setRfPower: vi.fn(async () => {}),

@@ -26,6 +26,9 @@ import { PHONE_PANEL_IDS } from '../features/panelState'
 import type { PanelLayoutApi, PhonePanelId } from '../features/panelState'
 
 vi.mock('../api', () => ({
+  // The Phone cockpit reads the FM repeater shift from Settings — it is the only surface
+  // that carries it, and the transmit contract will not state a frequency without it.
+  getSettings: vi.fn(async () => ({})),
   setPtt: vi.fn(async () => {}),
   setRfPower: vi.fn(async () => {}),
   setMicGain: vi.fn(async () => {}),

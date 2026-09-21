@@ -63,7 +63,7 @@ import { latestOnly } from '../remote-web/latest-only'
 import { RotorStrip } from './RotorStrip'
 import { MemoryStrip, MemoryStripUnavailable } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { setFrequency, openPanelWindow } from '../api'
+import { setFrequency, openPanelWindow, getSettings } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
@@ -1201,6 +1201,32 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   const hasSquelch = reports('squelch')
   const hasMicGain = reports('micGain')
   const hasCompLevel = reports('compLevel')
+  // ⛔ THE FM REPEATER SHIFT — the one thing `tx_emission_mhz` does NOT fold in, verified
+  // rather than assumed: `Engine::tx_emission_mhz` (engine.rs:17677) is `verdict base +
+  // xit_offset` and there is no `rptr` in it at all. The shift lives in
+  // `settings.rptr_shift` / `rptr_offset_hz()` and is applied on the rig-CONFIGURATION path
+  // (:7720, :15339), so on FM through a repeater the engine's figure is the dial the
+  // operator is LISTENING on while the transmitter is a whole shift away.
+  //
+  // Settings is the only surface that carries it, and reading it here is the pattern CW and
+  // APRS already use. `null` = not read yet, or a station whose settings carry no shift —
+  // and that resolves to UNKNOWN, never to simplex: resolving an absent value to "no shift"
+  // is the one default that puts the confident wrong number back.
+  const [rptrShift, setRptrShift] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    void getSettings()
+      .then((s) => {
+        if (alive) setRptrShift(typeof s?.rptrShift === 'string' ? s.rptrShift : null)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+    // Re-read on the two events that change it: the operator switching to FM, and a memory
+    // recall (which lands as a band change and rewrites the shift in the same patch).
+  }, [commandedMode, snap.radio.band])
+
   // ── THE TRANSMIT CONTRACT — read, never computed ───────────────────────────────────
   // `txEmissionMhz` is `Engine::tx_emission_mhz()`, which resolves `tx_freq_verdict()` — THE
   // one decision about which frequency the next over is emitted on — and folds XIT in. It is
@@ -1213,6 +1239,15 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // nothing read back — and calling that a read-back is exactly the lie the marks exist to
   // stop. No CAT link demotes it for the plainer reason.
   const emissionRead = catOk && xitHz === 0
+  // ⛔ AND ON FM THE FIGURE MAY NOT BE THE EMISSION AT ALL. Anything but a shift we have
+  // READ and found to be simplex disqualifies it — including not having read one yet.
+  //
+  // ⚠️ IT IS NOT FIXED BY ADDING THE SHIFT ON HERE. `rptr_offset_hz()` is an override or a
+  // BAND-CONVENTION TABLE in Rust (settings.rs:360); re-deriving that in the UI would be a
+  // second copy of engine arithmetic, free to drift — the same defect as the wrong number,
+  // arriving later. The fix belongs in `tx_emission_mhz`; until it lands, the strip says
+  // nothing here rather than something wrong.
+  const repeaterUnknown = observedMode === 'FM' && rptrShift !== 'simplex'
   const splitTxMhz = snap.radio.splitTxMhz ?? null
   // Formatting two reported numbers, not deciding anything: the engine already put the split
   // into the emission above. This cell only says WHY that figure differs from the dial.
@@ -2138,10 +2173,13 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
       <div className="ph-txcontract" role="group" aria-label={t('phone.txContract.aria')}>
         <span className="ph-txc-cell" data-txc="freq" title={t('phone.txContract.freq.title')}>
           <span className="ph-txc-lbl">{TX}<span aria-hidden="true">▸</span></span>
-          {txEmission == null ? (
+          {txEmission == null || repeaterUnknown ? (
             <>
               <span className="ph-txc-val mono">—</span>
-              <TruthMark kind="off" title={t('phone.txContract.noEmission.title')} />
+              <TruthMark
+                kind="off"
+                title={repeaterUnknown ? t('phone.txContract.repeaterShift.title') : t('phone.txContract.noEmission.title')}
+              />
             </>
           ) : (
             <>

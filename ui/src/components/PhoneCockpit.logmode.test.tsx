@@ -28,6 +28,9 @@ import { logQso } from '../api'
 import type { AppSnapshot } from '../types'
 
 vi.mock('../api', () => ({
+  // The Phone cockpit reads the FM repeater shift from Settings — it is the only surface
+  // that carries it, and the transmit contract will not state a frequency without it.
+  getSettings: vi.fn(async () => ({})),
   // Phone cockpit's own seams.
   setPtt: vi.fn(async () => {}),
   setTxEnabled: vi.fn(async () => ({})),
