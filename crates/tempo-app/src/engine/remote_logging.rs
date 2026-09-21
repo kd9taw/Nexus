@@ -77,13 +77,17 @@ impl HeldQso {
 
 /// The existing journal DTO plus fields which the ordinary UI edit DTO does
 /// not carry. Legacy journals remain readable. Nothing changes the log format.
+///
+/// `timeOffUnix` used to be one of those extras and is not any more — #329 put it on
+/// [`LoggedQso`](crate::dto::LoggedQso) so the Logbook can show and edit an end time, and
+/// a sidecar of the same camelCase name beside a `flatten` writes the key twice and makes
+/// the whole journal unreadable. A journal written by an older build spells it identically,
+/// so it now lands in the flattened record instead and nothing on disk changes.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PendingRecord {
     #[serde(flatten)]
     record: crate::dto::LoggedQso,
-    #[serde(default)]
-    time_off_unix: Option<u64>,
     #[serde(default)]
     freq_rx_mhz: Option<f64>,
     /// Absent from a journal written before this build — and then [`GridSource::LookedUp`],
@@ -95,7 +99,6 @@ struct PendingRecord {
 fn pending_record(held: &HeldQso) -> PendingRecord {
     PendingRecord {
         record: held.record.clone().into(),
-        time_off_unix: held.record.time_off_unix,
         freq_rx_mhz: held.record.freq_rx_mhz,
         grid_source: held.grid_source,
     }
@@ -105,7 +108,6 @@ impl PendingRecord {
     fn into_held(self) -> HeldQso {
         let grid_source = self.grid_source;
         let mut record: QsoRecord = self.record.into();
-        record.time_off_unix = self.time_off_unix;
         record.freq_rx_mhz = self.freq_rx_mhz;
         HeldQso::new(record, grid_source)
     }
@@ -922,11 +924,36 @@ mod tests {
         let mut fixture = Fixture::new(Tier::Ft8, true);
         let identity = fixture.hold();
         let dto: crate::dto::LoggedQso = identity.record().clone().into();
-        let legacy = serde_json::to_string(&dto).unwrap();
+        let ended = identity.record().time_off_unix;
+        assert!(ended.is_some(), "fixture: the held contact has an end time");
+
+        // The OLDEST shape: a bare record DTO, written before the journal grew any extras
+        // at all. It still reads, and an end time nobody recorded stays absent.
+        let mut bare = serde_json::to_value(&dto).unwrap();
+        bare.as_object_mut().unwrap().remove("timeOffUnix");
+        let legacy = serde_json::to_string(&bare).unwrap();
         let mut restored = Engine::new("K2DEF", "FN31", 0);
         restored.load_pending_qso_json(&legacy);
         assert_eq!(restored.pending_log().unwrap().call, "W9XYZ");
         assert_eq!(restored.pending_log().unwrap().time_off_unix, None);
+
+        // And the shape the LAST build wrote: `timeOffUnix` beside the flattened record, as
+        // the sidecar #329 removed put it. Identically spelled, so it now lands in the
+        // record itself — a journal on disk when an operator upgrades keeps its end time.
+        let mut sidecar = serde_json::to_value(&dto).unwrap();
+        sidecar.as_object_mut().unwrap().remove("timeOffUnix");
+        sidecar.as_object_mut().unwrap().insert(
+            "timeOffUnix".into(),
+            serde_json::json!(ended.expect("checked above")),
+        );
+        let mut upgraded = Engine::new("K2DEF", "FN31", 0);
+        upgraded.load_pending_qso_json(&serde_json::to_string(&sidecar).unwrap());
+        assert_eq!(
+            upgraded.pending_log().unwrap().time_off_unix,
+            ended,
+            "a journal written before the sidecar was folded in keeps its end time"
+        );
+
         fixture.engine.load_pending_qso_json(&legacy);
         assert!(fixture.engine.matches_pending_log(&identity));
     }

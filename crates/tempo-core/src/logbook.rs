@@ -941,8 +941,12 @@ impl Logbook {
                         rec.state = old.state.clone();
                     }
                 }
-                // The edit form doesn't carry the contact end time — preserve the
-                // stored TIME_OFF rather than wiping it on a name/grid edit.
+                // An incoming record with no end time means LEAVE ALONE, never "clear it" —
+                // preserve the stored TIME_OFF rather than wiping it on a name/grid edit.
+                // The Logbook form does carry the field since #329, so an operator can SET
+                // and CORRECT an end time here; a producer that knows nothing about it (a
+                // per-row connector push, the remote edit, a contest merge) still cannot
+                // drop one. Clearing an end time altogether is deliberately not offered.
                 if rec.time_off_unix.is_none() {
                     rec.time_off_unix = old.time_off_unix;
                 }

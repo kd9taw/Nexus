@@ -85,6 +85,14 @@ interface DraftQso {
    * (#280). Both blank = now (a new contact) or the stored time (an edit). */
   whenDate: string
   whenTime: string
+  /** #329: when the contact ENDED (ADIF TIME_OFF), 24-hour UTC, on the contact's own date —
+   * one box, because an end time on a different day is the rollover case and `submit` reads
+   * it as one. The field was written at log time and exported all along, but nothing here
+   * showed it, so a wrong end time (Ham Radio Deluxe's 00:00) could not even be seen.
+   *
+   * ⚠️ Blank means LEAVE ALONE, not "clear it": an omitted end time is restored from the
+   * stored record by `Logbook::update_record`, so clearing one is deliberately not offered. */
+  endTime: string
   /** US state (WAS). The auto-log path fills this from the callsign/grid; a hand-logged
    * contact has no decode to derive it from, so it has to be typeable or WAS silently misses. */
   state: string
@@ -319,6 +327,7 @@ export function Logbook({
     notes: '',
     whenDate: '',
     whenTime: '',
+    endTime: '',
     state: '',
     txPower: '',
     parkTheirRef: '',
@@ -582,6 +591,8 @@ export function Logbook({
   // The same for the date box — a day that does not exist (2026-02-30) is refused, not rolled
   // forward, and the operator keeps what they typed instead of watching the box blank itself.
   const whenDateBad = draft.whenDate.trim() !== '' && parseUtcDate(draft.whenDate) === null
+  // …and the END time box (#329), which takes the same 24-hour UTC shapes as the start.
+  const endTimeBad = draft.endTime.trim() !== '' && parseUtcTime(draft.endTime) === null
   // …and for the export range below. A bound that is not a date HOLDS the export. The backend
   // refuses one (`export_general_log`: "bad export date … (expected YYYY-MM-DD)"), so the cost
   // of running anyway is a toasted error, not a wrong file — but the NATIVE control this
@@ -610,6 +621,7 @@ export function Logbook({
       notes: q.notes ?? '',
       whenDate: utcDate(q.whenUnix),
       whenTime: utcTime(q.whenUnix),
+      endTime: q.timeOffUnix != null ? utcTime(q.timeOffUnix) : '',
       state: q.state ?? '',
       txPower: q.txPower != null ? String(q.txPower) : '',
       parkTheirRef: q.ota?.theirRef ?? '',
@@ -979,6 +991,12 @@ export function Logbook({
       setErr(t('logbook.form.whenInvalid', { date: UTC_DATE_FORMAT, ...UTC_TIME_FORMATS }))
       return
     }
+    if (endTimeBad) {
+      // Named, not spread: `placeholders.test.ts` reads call sites literally and a spread is
+      // one it has to skip, which is a guard this message would quietly cost coverage for.
+      setErr(t('logbook.form.endInvalid', { short: UTC_TIME_FORMATS.short, long: UTC_TIME_FORMATS.long }))
+      return
+    }
     const freq = Number(draft.freq)
     const existing = editing?.row
     const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
@@ -1020,7 +1038,7 @@ export function Logbook({
         if (outcome.outcome === 'applied') {
           pushToast(t('remote.loggingSaved'), 'success')
           setShowForm(false)
-          setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', state: '', txPower: '', parkTheirRef: '' }))
+          setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '' }))
           remoteLog.refresh(at)
         } else if (outcome.outcome === 'rejected') pushToast(t('remote.loggingRefused'), 'error', 6000)
       } catch (e) {
@@ -1044,6 +1062,20 @@ export function Logbook({
             iota: existing?.ota?.iota ?? null,
           }
         : undefined
+    const startUnix = when ?? (existing ? existing.whenUnix : Math.floor(Date.now() / 1000))
+    // #329: the end time is a time of day on the contact's OWN UTC date, so it is resolved
+    // against the start above rather than parsed on its own. An end earlier in the day than
+    // the start is the ROLLOVER — a contact that begins 23:58 and ends 00:03 ran five minutes,
+    // not back 23h55m — which is exactly the case ADIF gives `QSO_DATE_OFF` a separate field
+    // for. A blank box yields null and the record sends no end time at all: leave alone.
+    const endTod = draft.endTime.trim() ? parseUtcTime(draft.endTime) : null
+    const endUnix = endTod
+      ? (() => {
+          const midnight = Math.floor(startUnix / 86400) * 86400
+          const end = midnight + endTod.h * 3600 + endTod.m * 60 + (endTod.s ?? 0)
+          return end < startUnix ? end + 86400 : end
+        })()
+      : null
     const record: LoggedQso = {
       call,
       grid: draft.grid.trim() || null,
@@ -1062,7 +1094,11 @@ export function Logbook({
       // The operator's typed UTC wins; otherwise keep the original (edit) or stamp now (new).
       // Hand-logging is inherently after the fact, so "now" is the wrong default whenever the
       // operator has told us when it actually happened.
-      whenUnix: when ?? (existing ? existing.whenUnix : Math.floor(Date.now() / 1000)),
+      whenUnix: startUnix,
+      // #329. Blank sends `undefined`, which the backend reads as LEAVE ALONE — the stored
+      // end time is restored by `Logbook::update_record`, so this box corrects one and never
+      // clears one. That is why an empty box is not `null`.
+      timeOffUnix: endUnix ?? undefined,
       confirmed: existing ? existing.confirmed : false,
       awardConfirmed: existing ? existing.awardConfirmed : false,
       // Upload/confirmation policy lives in the BACKEND (Logbook::update_record),
@@ -1097,7 +1133,7 @@ export function Logbook({
         }
         pushToast(t('logbook.form.updated', { call: record.call }), 'success')
         cancelForm()
-        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
+        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
         load()
       }
       return
@@ -1106,7 +1142,7 @@ export function Logbook({
     if (snap) {
       load()
       setShowForm(false)
-      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', state: '', txPower: '', myGrid: '', myRig: '' }))
+      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', myGrid: '', myRig: '' }))
       // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
       // (every log path, the engine auto-log included); outcomes toast via the
       // snapshot uploadTick.
@@ -1594,6 +1630,23 @@ export function Logbook({
                 title={t('logbook.field.when.title')}
               />
             </label>
+            {/* #329: the contact's END, beside the time it started. Desktop only — the remote
+                edit payload (`ManualRecord`) carries no end time, and a box that silently
+                dropped what was typed into it is worse than no box. */}
+            {!remoteLog && <label className="logbook-field">
+              <span>{t('logbook.field.end.label')}</span>
+              <input
+                className={`settings-input mono${endTimeBad ? ' invalid' : ''}`}
+                value={draft.endTime}
+                onChange={(e) => setField('endTime', e.target.value)}
+                placeholder={UTC_TIME_FORMATS.short}
+                maxLength={8}
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={endTimeBad}
+                title={t('logbook.field.end.title')}
+              />
+            </label>}
             <label className="logbook-field">
               <span>{t('logbook.field.state.label')}</span>
               <input
@@ -1813,6 +1866,7 @@ export function Logbook({
           {/* #239 "More columns": your side of the contact, and what the compact table leaves out. */}
           {moreColumns && (
             <>
+              <span className="log-cell" role="columnheader">{t('logbook.column.end')}</span>
               <span className="log-cell" role="columnheader">{t('logbook.column.myGrid')}</span>
               <span className="log-cell" role="columnheader">{t('logbook.column.myRig')}</span>
               <span className="log-cell" role="columnheader">{t('logbook.column.name')}</span>
@@ -1968,6 +2022,12 @@ export function Logbook({
                     idiom the callsign-recall card already uses. */}
                 {moreColumns && (
                   <>
+                    {/* #329: the contact's end time. The cell shows the time of day only —
+                        the date is already in the Time column two cells back — so the tooltip
+                        carries the full UTC instant for a contact that ran past midnight. */}
+                    <span className="log-cell mono" title={q.timeOffUnix != null ? fmtUtc(q.timeOffUnix) : ''}>
+                      {q.timeOffUnix != null ? utcTime(q.timeOffUnix) : '—'}
+                    </span>
                     <span className="log-cell mono">{q.myGrid ?? '—'}</span>
                     <span className="log-cell" title={q.myRig ?? ''}>{q.myRig ?? '—'}</span>
                     <span className="log-cell" title={q.name ?? ''}>{q.name ?? '—'}</span>

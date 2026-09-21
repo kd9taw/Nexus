@@ -37061,8 +37061,11 @@ mod tests {
 
     #[test]
     fn confirming_a_held_qso_keeps_its_end_time_and_split_leg() {
-        // #329: the popup sends the record back through the UI's `LoggedQso`, which carries
+        // #329: the popup sends the record back through the UI's `LoggedQso`, which carried
         // neither TIME_OFF nor FREQ_RX — so a confirmed contact lost both (HRD showed 00:00).
+        // The held-record merge below is still what restores FREQ_RX; TIME_OFF now also
+        // rides the DTO (see `the_logbook_dto_carries_the_contact_end_time_both_ways`), so
+        // this asserts the outcome with two mechanisms behind it rather than one.
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.settings.prompt_to_log = true;
         let dial = e.settings.dial_mhz;
@@ -37087,6 +37090,50 @@ mod tests {
         assert_eq!(saved.freq_rx_mhz, held.freq_rx_mhz, "FREQ_RX survives");
         assert_eq!(saved.grid.as_deref(), Some("EN38"), "grid edit lands");
         assert_eq!(saved.rst_rcvd.as_deref(), Some("-09"), "RST edit lands");
+    }
+
+    #[test]
+    fn the_logbook_dto_carries_the_contact_end_time_both_ways() {
+        // #329's REMAINING half. The end time was written at log time and exported, and
+        // 1.14.0 stopped Ham Radio Deluxe seeing 00:00 — but the log DTO dropped the field,
+        // so the operator still had no way to SEE a wrong end time, let alone repair one.
+        // Both directions matter and they fail differently: outbound missing = the Logbook
+        // can render nothing; inbound missing = every edit the operator makes silently
+        // depends on `update_record` putting the stored value back, which cannot carry a
+        // CHANGE, only the absence of one.
+        let e = Engine::new("K2DEF", "FN31", 0);
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        let ended = rec.when_unix + 95;
+        rec.time_off_unix = Some(ended);
+
+        let dto = crate::dto::LoggedQso::from(rec.clone());
+        assert_eq!(dto.time_off_unix, Some(ended), "the log view is handed it");
+        // The UI reads `timeOffUnix`; camelCase on the wire is the contract, not an
+        // implementation detail of serde.
+        let json = serde_json::to_value(&dto).expect("the DTO serialises");
+        assert_eq!(
+            json.get("timeOffUnix").and_then(|v| v.as_u64()),
+            Some(ended),
+            "the field reaches the front end under the name it reads"
+        );
+
+        let back = tempo_core::logbook::QsoRecord::from(dto);
+        assert_eq!(
+            back.time_off_unix,
+            Some(ended),
+            "and an edit round trip brings it home unchanged"
+        );
+
+        // A CHANGED end time is the case the `update_record` restore can never express:
+        // that guard only fills in an absent value, so without the field on the wire a
+        // correction is indistinguishable from leaving it alone.
+        let mut edited = crate::dto::LoggedQso::from(rec.clone());
+        edited.time_off_unix = Some(ended + 600);
+        assert_eq!(
+            tempo_core::logbook::QsoRecord::from(edited).time_off_unix,
+            Some(ended + 600),
+            "an operator's correction reaches the record"
+        );
     }
 
     #[test]

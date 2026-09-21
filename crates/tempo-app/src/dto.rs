@@ -2121,6 +2121,16 @@ pub struct LoggedQso {
     pub tx_power: Option<f64>,
     /// Contact time, Unix seconds (UTC).
     pub when_unix: u64,
+    /// #329: when the contact ENDED (ADIF `TIME_OFF`/`QSO_DATE_OFF`), Unix seconds (UTC),
+    /// or `None` when it was never recorded. On the DTO so the Logbook can show and edit it
+    /// — the field was written at log time and exported, but nothing in the UI read it, so
+    /// an operator had no way to see a wrong one, let alone repair it.
+    ///
+    /// ⚠️ `None` means LEAVE ALONE, not "clear it": `Logbook::update_record` puts the stored
+    /// value back when an incoming record has none, so a producer that does not fill this in
+    /// cannot wipe an end time it never knew about.
+    #[serde(default)]
+    pub time_off_unix: Option<u64>,
     /// Whether the time of day is actually KNOWN. `false` for imported
     /// date-only records: `when_unix` then anchors at midnight for ordering,
     /// no TIME_ON is written, and LoTW/eQSL sends exclude the record (both
@@ -2269,6 +2279,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             notes: r.notes,
             tx_power: r.tx_power,
             when_unix: r.when_unix,
+            time_off_unix: r.time_off_unix,
             time_known: r.time_known,
             confirmed: r.confirmed,
             award_confirmed: r.award_confirmed,
@@ -2369,7 +2380,10 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             notes: q.notes,
             tx_power: q.tx_power,
             when_unix: q.when_unix,
-            time_off_unix: None, // not carried on the DTO; set at log time / via ADIF import
+            // #329: carried both ways now, so the log form can show and repair an end time.
+            // `None` still means LEAVE ALONE rather than clear — `update_record` restores
+            // the stored value, the same rule it applies to the split leg and the park refs.
+            time_off_unix: q.time_off_unix,
             confirmed: q.confirmed,
             award_confirmed: q.award_confirmed,
             qsl_rcvd: tempo_core::logbook::QslRcvd {

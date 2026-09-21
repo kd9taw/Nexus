@@ -1890,6 +1890,14 @@ export interface LoggedQso {
   /** Contact time, seconds since the Unix epoch (UTC). */
   whenUnix: number
   /**
+   * #329: when the contact ENDED (ADIF TIME_OFF / QSO_DATE_OFF), seconds since the Unix
+   * epoch (UTC), or absent when it was never recorded.
+   *
+   * ⚠️ Sending it back absent means LEAVE ALONE, not "clear it" — `Logbook::update_record`
+   * restores the stored value, so an edit that omits the field cannot wipe an end time.
+   */
+  timeOffUnix?: number | null
+  /**
    * Whether the time of day is actually KNOWN. `false` for imported date-only
    * records — whenUnix then anchors at midnight for ordering only, and
    * LoTW/eQSL sends exclude the record (both services match on time).

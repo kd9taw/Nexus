@@ -93,6 +93,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report keeps coming, and stops only if it goes quiet for two minutes or the whole download
   passes ten. The message when it does stop says which of those happened and how much had
   arrived, instead of offering two possible causes and picking neither.
+- **The Logbook shows when a contact ended, and lets you fix it.** 1.14.0 stopped Ham Radio
+  Deluxe seeing 00:00 as the end time of a contact confirmed before logging — but Nexus itself
+  still had nowhere to show that time, so a wrong one could not be noticed, let alone repaired.
+  **More columns** now carries an **End (UTC)** column, and the edit form an **End (UTC)** box
+  beside the time the contact started: 24-hour UTC, the same plain text box as the start, on the
+  contact's own date. An end time earlier in the day than the start is read as the contact
+  running past midnight, which is what it is. Leaving the box empty keeps whatever end time the
+  record already had — correcting one is offered, clearing one is not. On a browser away from
+  the shack the column shows, but the box does not: the remote edit cannot carry an end time
+  yet, and a box that quietly dropped what you typed would be worse than none.
 - **A contact QRZ or eQSL never took now goes back when you fix the credential.** 1.14.0 made
   every upload service say so in the Connections log when it gives up on a contact after its
   retries — but only Club Log ever went back for them, so on QRZ and eQSL the contact was named

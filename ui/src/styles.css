@@ -13268,8 +13268,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* #239 "More columns": the wide log. `.log-scroll` stays the ONE scroll owner and only gains
    the horizontal axis in this mode; the sticky search + header ride inside it, so header and
-   rows scroll sideways together. 19 tracks = the 12 above with seven inserted before Notes
-   (my grid, rig, name, QTH, state, power, operator). The floor is on the scroller's CONTENT,
+   rows scroll sideways together. 20 tracks = the 12 above with eight inserted before Notes
+   (end time, my grid, rig, name, QTH, state, power, operator). The floor is on the scroller's
+   CONTENT,
    so nothing is clipped — it scrolls. Off, none of this applies and the compact table and its
    narrow-viewport column rules are exactly as they were; on, every column shows at any width,
    because the point of the mode is to see them all. */
@@ -13278,12 +13279,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .logbook-table.wide .log-sticky,
 .logbook-table.wide .log-rows {
-  min-width: 118rem;
+  /* 118rem held 19 tracks; the end-time column (#329) adds a 0.9fr one, and the floor moves
+     with it so the block keeps the share it was sized for instead of squeezing its
+     neighbours. */
+  min-width: 123rem;
 }
 .logbook-table.wide .logbook-row {
+  /* Second line = the "More columns" block. Its first track is the contact's END time
+     (#329), sized like the Time column it mirrors. `styles-logbook-actions.test.tsx` holds
+     this list to one track per cell the component renders. */
   grid-template-columns:
     1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr
-    0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr
+    0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr
     1.4fr minmax(336px, 0.8fr);
 }
 [data-viewport='sm'] .logbook-table.wide .logbook-row .log-cell,

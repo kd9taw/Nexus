@@ -1083,6 +1083,11 @@ export const EN = {
   'logbook.field.rstRcvd.label': 'RST Rcvd',
   'logbook.field.date.label': 'Date (UTC)',
   'logbook.field.time.label': 'Time (UTC)',
+  'logbook.field.end.label': 'End (UTC)',
+  'logbook.field.end.title':
+    'When the contact ENDED (ADIF TIME_OFF), as a 24-hour UTC time on the date of the contact. '
+    + 'A time earlier than the start means it ran past midnight. Blank leaves the stored end '
+    + 'time alone — it cannot be cleared here.',
   'logbook.field.when.title':
     'When the contact actually happened, in UTC. Leave blank to stamp now.',
   'logbook.field.state.label': 'State',
@@ -1138,6 +1143,8 @@ export const EN = {
   'logbook.form.callRequired': 'Callsign is required.',
   'logbook.form.whenInvalid':
     'Enter a UTC date ({{date}}) and a 24-hour time ({{short}} or {{long}}), or leave both blank.',
+  'logbook.form.endInvalid':
+    'Enter the end time as a 24-hour UTC time ({{short}} or {{long}}), or leave it blank.',
   'logbook.form.editingNote':
     'Editing — confirmations and upload state are kept, unless you change the callsign: a corrected call re-sends to every service and drops confirmations matched on the old one.',
   'logbook.form.save': 'Save',
@@ -1168,7 +1175,8 @@ export const EN = {
   // MY_GRIDSQUARE / MY_RIG are ADIF field names — tokens inside the sentence.
   'logbook.columns.more.label': 'More columns',
   'logbook.columns.more.title':
-    'Show your grid, rig, name, QTH, state, power and operator in a wider table you can scroll sideways',
+    'Show the contact end time, your grid, rig, name, QTH, state, power and operator in a wider table you can scroll sideways',
+  'logbook.column.end': 'End (UTC)',
   'logbook.column.myGrid': 'My grid',
   'logbook.column.myRig': 'Rig',
   'logbook.column.name': 'Name',
