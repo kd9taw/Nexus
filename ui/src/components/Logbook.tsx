@@ -10,6 +10,7 @@ import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedActivation, LoggedQso } from '../types'
+import { QsoDetail } from './QsoDetail'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import { modeKey } from '../features/callHistory'
@@ -196,6 +197,9 @@ const HRDLOG_LABEL = 'HL'
 // Technical product token, not prose — same ruling as the labels above.
 const WRL_LABEL = 'WRL'
 const QSL_MENU_LABEL = 'QSL▸'
+/** The detail-view button. A magnifier reads as "look at this" in every locale and is not
+ *  prose — the same invariant-token rule the labels above follow. */
+const VIEW_GLYPH = '🔍'
 
 function fmtUtc(whenUnix: number): string {
   const d = new Date(whenUnix * 1000)
@@ -417,6 +421,9 @@ export function Logbook({
   // delete above it the same index names a different contact; the target of the edit, and the
   // fields the form did not carry, come from this row. `index` only marks the row in the list.
   const [editing, setEditing] = useState<{ index: number; row: LoggedQso } | null>(null)
+  /** The contact open in the detail view (#313 — "there's no View capability"). Read-only:
+   *  the pencil beside it is still the one editing path, so there is one writer. */
+  const [viewing, setViewing] = useState<LoggedQso | null>(null)
   const editIndex = editing?.index ?? null
   // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
   // edit/delete/mark still hit the right record. Default newest-first (the get_log order is
@@ -1993,7 +2000,20 @@ export function Logbook({
                     '—'
                   )}
                 </span>
-                <span className="log-cell log-rowactions">{control && <>
+                <span className="log-cell log-rowactions">
+                  {/* ⭐ OUTSIDE the `control &&` guard below, deliberately: every other row
+                      action SENDS something (a spot, a QRZ push, a ClubLog upload) and needs
+                      station control. Reading your own log does not, and a browser watching
+                      without control is exactly the case that wants to look a contact up. */}
+                  <button
+                    type="button"
+                    className="log-rowbtn"
+                    onClick={() => setViewing(q)}
+                    title={t('logbook.row.view.title', { call: q.call })}
+                  >
+                    {VIEW_GLYPH}
+                  </button>
+                  {control && <>
                   <button
                     type="button"
                     className="log-rowbtn"
@@ -2313,6 +2333,9 @@ export function Logbook({
         freqMhz={spotSeed?.freq ?? 0}
         defaultComment={spotSeed?.mode ?? ''}
       />
+      {/* Mounted beside SpotDialog at the section root, not inside the virtualised rows:
+          the row that opened it can be recycled out from under the view while it is open. */}
+      <QsoDetail qso={viewing} onClose={() => setViewing(null)} />
     </section>
   )
 }
