@@ -71,9 +71,16 @@ const fdStatus = (over: Partial<FieldDayStatus> = {}): FieldDayStatus =>
     ...over,
   }) as unknown as FieldDayStatus
 
-/** Exactly the props `PhoneCockpit` passes (`PhoneCockpit.tsx`, the LOG pane). */
-function renderStrip(fieldDay: FieldDayStatus = fdStatus()) {
-  return render(
+/** Exactly the props `PhoneCockpit` passes (`PhoneCockpit.tsx`, the LOG pane).
+ *
+ *  ⚠️ `fieldDay` takes NO default: `strip(undefined)` would fire one, and a "no session"
+ *  case that quietly renders a session is a control that cannot fail. `renderStrip` below
+ *  keeps the default for the callers that want one. */
+function strip(
+  fieldDay: FieldDayStatus | undefined,
+  pendingWork: { call: string; ts: number } | null = null,
+) {
+  return (
     <LogEntry
       onOpenLogbook={() => {}}
       snap={snap}
@@ -82,12 +89,16 @@ function renderStrip(fieldDay: FieldDayStatus = fdStatus()) {
       exchange="terrestrial"
       titled={false}
       onSpot={() => {}}
-      pendingWork={null}
+      pendingWork={pendingWork}
       onConsumeWork={() => {}}
       fieldDay={fieldDay}
       fdMode="PH"
-    />,
+    />
   )
+}
+
+function renderStrip(fieldDay: FieldDayStatus = fdStatus()) {
+  return render(strip(fieldDay))
 }
 
 const box = (label: string) => screen.getByText(label).closest('label')!.querySelector('input')!
@@ -358,5 +369,55 @@ describe('the serial on the sent line', () => {
   it('falls back to the vector when an older station sends no composingText', () => {
     renderStrip(fdStatus())
     expect(document.querySelector('.le-fd-sent-val')!.textContent).toBe('3A WI')
+  })
+})
+
+// ⭐ **A CLICKED SPOT IS THE OTHER DOOR A SERIAL GOES OUT THROUGH — and nothing wired it
+// to one.** The prefill sets the call PROGRAMMATICALLY and focuses RST, so no blur ever
+// fires and `onCallBlur` — the only other caller of `contestWorking` in this file — never
+// runs. `CwCockpit` arms the macro peer off the same click, and `{CALL}` expands from
+// that peer: the keyer sent the NEW callsign with the PREVIOUS station's serial, and on
+// phone, where there is no macro at all, the operator read that stale number aloud off
+// this very strip.
+//
+// A clicked spot is unambiguously a NEW contact, so this path — and only this path —
+// opens the parking door before it commits. Typing over the call box stays ambiguous
+// (a busted-call correction as often as a move) and is handled by the session instead.
+describe('a clicked spot binds the serial to the station that was clicked', () => {
+  it('parks the entry and then commits the clicked call', async () => {
+    // One `fieldDay` across both renders: a fresh object each time would be a prop
+    // change of its own, and the click is the only thing under test here.
+    const fd = fdStatus()
+    const { rerender } = render(strip(fd))
+    for (const f of Object.values(api)) f.mockClear()
+
+    await act(async () => {
+      rerender(strip(fd, { call: 'K1ABC', ts: 1 }))
+    })
+
+    // The prefill itself ran, so a missing call below is a missing COMMIT rather than an
+    // effect that never fired.
+    expect(callBox().value).toBe('K1ABC')
+    expect(api.contestEntryReset).toHaveBeenCalledTimes(1)
+    expect(api.contestWorking).toHaveBeenCalledWith('K1ABC')
+    // ⚠️ THE ORDER IS THE FIX, not the pair. Committed first and parked after, the park
+    // throws away the binding just made and the clicked station holds nothing again.
+    expect(api.contestEntryReset.mock.invocationCallOrder[0]).toBeLessThan(
+      api.contestWorking.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('leaves the contest endpoints alone outside a contest', () => {
+    // The guard's other direction — one direction is half a test. With no session the
+    // ordinary log strip takes the same click and must call neither endpoint.
+    const { rerender } = render(strip(undefined))
+    for (const f of Object.values(api)) f.mockClear()
+    act(() => {
+      rerender(strip(undefined, { call: 'K1ABC', ts: 1 }))
+    })
+    // The ordinary layout's call box, which is a different input from the strip's.
+    expect((document.querySelector('input.le-call') as HTMLInputElement).value).toBe('K1ABC')
+    expect(api.contestEntryReset).not.toHaveBeenCalled()
+    expect(api.contestWorking).not.toHaveBeenCalled()
   })
 })

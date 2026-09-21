@@ -747,6 +747,24 @@ export function LogEntry({
     setLogCall(pendingWork.call.toUpperCase())
     humanCallEditRef.current = false // a clicked spot is not a human keystroke…
     settledCallRef.current = true // …but it IS a final call, so it still gets enriched
+    // ⭐ THE CONTEST SERIAL'S OTHER DOOR. This fill is programmatic, so no blur fires and
+    // `onCallBlur` — the only other caller — never runs: the clicked station was never
+    // bound to a number at all. `CwCockpit` arms the macro peer off this same click and
+    // `{CALL}` expands from that peer, so the keyer sent the NEW callsign with the
+    // PREVIOUS station's serial; on phone there is no macro and the operator read that
+    // stale number aloud off this strip.
+    //
+    // A clicked spot is unambiguously a NEW contact, so this path opens the parking door
+    // first — unlike typing over the box, which is a busted-call correction as often as
+    // a move and is left to the session to resolve. CHAINED, not two `void`s: the park
+    // has to land before the commit, or the commit is read as a correction of whatever
+    // was still in flight.
+    if (fdActive && !remoteMode) {
+      const worked = pendingWork.call.trim()
+      void contestEntryReset()
+        .then(() => contestWorking(worked))
+        .catch(() => {})
+    }
     // preventScroll: focusing the RST readies it for the report, but must NOT scroll the log
     // into view — the operator works from the decode feed/roster scrolled up, and a click
     // snapping the window down to the log every time is the reported bug.
@@ -1030,8 +1048,8 @@ export function LogEntry({
     if (!remoteMode) void setCwPeerInfo('', '', '') // clear the {HISNAME}/{HISSTATE} tokens for the next contact
     // The entry line ended WITHOUT logging (the clear button, or moving on). The serial that
     // station copied stays bound to them — come back later and they get the same one — but the
-    // live slot is released, so the next call committed is a NEW contact and not a correction
-    // of this one. That distinction is the whole of the busted-call fix.
+    // live slot is released, so the next call committed is issued a number of its own instead
+    // of inheriting the one that was in flight.
     if (fdActive && !remoteMode) void contestEntryReset().catch(() => {})
     // When the other-radio override is open, refresh its UTC time to now for the next contact
     // (a run of live V/UHF contacts each get the current time, never a silently-reused stale

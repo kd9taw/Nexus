@@ -188,16 +188,23 @@ fn a_serial_keyed_to_one_station_is_not_re_issued_to_another() {
     );
 }
 
-/// ⭐ **Correcting a busted call MOVES the number; it does not mint a second one.**
+/// ⭐ **Correcting a busted call carries the number over; it does not mint a second
+/// one.**
 ///
 /// The hazard is not symmetric between the two ends, which is why it needs its own
 /// test. At the LOG end a wrong key means no binding is found and a fresh number is
-/// issued — visible, and the run stays dense. At the BINDING end a wrong key is worse
-/// twice over: it strands a number on a call that will never be logged, AND when the
-/// right call is identified it mints a second number, while the station only ever
-/// copied the first. So a correction must re-key, and the separator that makes
-/// "corrected the call" distinguishable from "moved to another station" is the entry
-/// line's reset — not the text of the call.
+/// issued — visible, and the run stays dense. At the BINDING end a wrong key would mint
+/// a second number when the right call is identified, while the station only ever
+/// copied the first. So a correction must re-key the same number onto the corrected
+/// call, and it does so without a reset between: the corrected call inherits the
+/// exchange in flight because it holds no number of its own.
+///
+/// ⚠️ **The wrong call keeps a binding of its own** — the one thing here that changed
+/// when the keep-both ruling landed (2026-09-20), and it is why this test's positive
+/// control is about the RUN and not about the map. A stale entry on a call that will
+/// never come back is harmless and is what buys the far worse case — a station who
+/// really did copy a number being forgotten — in
+/// `moving_to_another_station_without_a_reset_keeps_the_first_stations_number` above.
 #[test]
 fn correcting_a_busted_call_keeps_the_number_that_station_copied() {
     let mut e = wpx_engine();
@@ -238,6 +245,139 @@ fn correcting_a_busted_call_keeps_the_number_that_station_copied() {
     assert!(
         line.contains(&format!("W9XYZ 599 {keyed} K1ABD")),
         "the corrected row does not carry the number that went out:\n{line}"
+    );
+}
+
+/// ⭐ **Typing the next station over the entry box must not FORGET the one before it.**
+///
+/// The operator calls K1ABC and keys the exchange — he copies 1. No answer, so the next
+/// call is typed straight over the box without touching the wipe. **That gesture is
+/// ambiguous by construction**: the same keystrokes are "K1ABD, not K1ABC" and "no
+/// answer, I've moved on", and nothing in the session can tell them apart. It was read
+/// as a correction ALWAYS, which `remove`d K1ABC's binding and handed it to the new
+/// call — so the station with a number written on his pad came back to a different one,
+/// through the gesture an operator makes most.
+///
+/// **The ruling (operator, 2026-09-20): keep BOTH bindings.** The outgoing call keeps
+/// the number it copied; if the call really was busted, the stale entry costs a
+/// `String` and a `u32` and that callsign will never call in, which is exactly the
+/// trade [`issued`](tempo_core::contest::ContestSession::issued)'s own doc makes when
+/// it says nothing is ever evicted.
+///
+/// The accepted consequence is asserted below rather than left implicit: two stations
+/// hold one serial and both rows carry it. That is correct — both partners copied that
+/// number, so both match at check-in.
+#[test]
+fn moving_to_another_station_without_a_reset_keeps_the_first_stations_number() {
+    let mut e = wpx_engine();
+    e.set_frequency(14.025, "20m", "CW");
+
+    e.contest_working("K1ABC").expect("a running session");
+    let keyed = e
+        .contest_sent_exchange()
+        .expect("a running contest session");
+
+    // ⚠️ NO `contest_entry_reset` here, and that is the whole test: every other repro in
+    // this file wipes between stations, which is the one gesture that was never broken.
+    e.contest_working("W4XYZ").expect("a running session");
+    assert!(e
+        .contest_log_manual("W4XYZ", &fields(&[("RST", "599"), ("NR", "7")]), "CW", None)
+        .unwrap());
+
+    // K1ABC answers after all. He must be given the number he already copied.
+    e.contest_working("K1ABC").expect("a running session");
+    assert_eq!(
+        e.contest_sent_exchange().as_deref(),
+        Some(keyed.as_str()),
+        "K1ABC was forgotten the moment the next call was typed over the box"
+    );
+    assert!(e
+        .contest_log_manual("K1ABC", &fields(&[("RST", "599"), ("NR", "9")]), "CW", None)
+        .unwrap());
+
+    let cab = e.export_log("cabrillo").expect("one entry");
+    let lines = qso_lines(&cab);
+    assert_eq!(lines.len(), 2, "{cab}");
+    for call in ["K1ABC", "W4XYZ"] {
+        let line = lines
+            .iter()
+            .find(|l| l.contains(call))
+            .unwrap_or_else(|| panic!("{call} was logged:\n{cab}"));
+        assert!(
+            line.contains(&format!("W9XYZ 599 {keyed} {call}")),
+            "{call}'s row does not carry the number that went out ({keyed}):\n{line}"
+        );
+    }
+
+    // POSITIVE CONTROL — keeping both bindings mints nothing: one number went out, one
+    // number was spent, and the next station takes the next one rather than the one
+    // after a burnt one.
+    e.contest_working("N0DEF").expect("a running session");
+    let next = (keyed.parse::<u32>().expect("the exchange is the serial") + 1).to_string();
+    assert_eq!(
+        e.contest_sent_exchange().as_deref(),
+        Some(next.as_str()),
+        "the ambiguous type-over minted a second number"
+    );
+}
+
+/// ⭐ **A station who already holds a number is given THEIR number — not the one in
+/// flight — and the exchange in flight is re-rendered to it.**
+///
+/// ⚠️ **The two sources have to DISAGREE or this says nothing.** With W4XYZ in flight on
+/// 2 the operator types K1ABC, who copied 1 an hour ago, over the box: the binding and
+/// the live exchange now name different numbers and exactly one of them is what K1ABC
+/// has on his pad. Before the fix the in-flight exchange was merely re-labelled — K1ABC
+/// was handed W4XYZ's 2, the strip went on showing 2, the keyer sent 2 and the row was
+/// stamped 2, a number K1ABC never copied — and W4XYZ's own binding was dropped on the
+/// way through, so he had been forgotten too.
+#[test]
+fn a_station_who_already_holds_a_number_is_given_their_own_not_the_one_in_flight() {
+    let mut e = wpx_engine();
+    e.set_frequency(14.025, "20m", "CW");
+
+    // K1ABC copies 1 and is left unlogged.
+    e.contest_working("K1ABC").expect("a running session");
+    assert_eq!(e.contest_sent_exchange().as_deref(), Some("1"));
+    e.contest_entry_reset();
+
+    // W4XYZ is called and copies 2 — the disagreeing value.
+    e.contest_working("W4XYZ").expect("a running session");
+    assert_eq!(e.contest_sent_exchange().as_deref(), Some("2"));
+
+    // K1ABC comes back and is typed over the box with W4XYZ still in flight.
+    e.contest_working("K1ABC").expect("a running session");
+    assert_eq!(
+        e.contest_sent_exchange().as_deref(),
+        Some("1"),
+        "K1ABC was handed the number in flight instead of the one he copied"
+    );
+    // The PHONE leg reads the exchange off the screen and speaks it — three of the five
+    // serial rulesets have one — so the in-flight EXCHANGE, not merely the counter, has
+    // to carry the number the binding names.
+    assert_eq!(
+        e.contest_composing_text().as_deref(),
+        Some("599 1"),
+        "the strip still reads aloud the number that was in flight"
+    );
+
+    // …and the row is stamped with it, which is the half a checker sees.
+    assert!(e
+        .contest_log_manual("K1ABC", &fields(&[("RST", "599"), ("NR", "4")]), "CW", None)
+        .unwrap());
+    let cab = e.export_log("cabrillo").expect("one entry");
+    let line = qso_lines(&cab).remove(0);
+    assert!(
+        line.contains("W9XYZ 599 1 K1ABC"),
+        "K1ABC's row does not carry the number he copied:\n{line}"
+    );
+
+    // W4XYZ was not forgotten on the way through.
+    e.contest_working("W4XYZ").expect("a running session");
+    assert_eq!(
+        e.contest_sent_exchange().as_deref(),
+        Some("2"),
+        "W4XYZ's binding was dropped when K1ABC was typed over the box"
     );
 }
 
