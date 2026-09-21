@@ -314,6 +314,25 @@ describe('power, and who holds the transmitter', () => {
     expect(cell('busy')!.textContent).toContain('the voice keyer is sending')
   })
 
+  it('warns on the contract while VOX is on — Stop TX cannot unkey that', () => {
+    // A SAFETY line rather than a status one. With VOX on the operator does not key at all:
+    // the radio does, from the microphone, and Stop TX halts what Nexus is doing. It belongs
+    // on the strip because it changes the answer to "what happens when I key".
+    mount({ vox: true })
+    expect(cell('vox'), 'VOX is on and the contract says nothing').not.toBeNull()
+    expect(cell('vox')!.getAttribute('title')).toMatch(/Stop TX cannot unkey/i)
+  })
+
+  it('says nothing about VOX when it is off, and nothing when the rig has none', () => {
+    // The pair, both arms: a standing VOX warning would be noise on every SSB contact, and
+    // `null` (a rig that does not report VOX at all) is not `true`.
+    mount({ vox: false })
+    expect(cell('vox'), 'VOX off is being warned about').toBeNull()
+    cleanup()
+    mount({})
+    expect(cell('vox'), 'a rig that reports no VOX is being warned about').toBeNull()
+  })
+
   it('says nothing about the owner when nobody holds the transmitter', () => {
     mount({ txBusyReason: null })
     expect(cell('busy'), 'an idle transmitter is being announced as busy').toBeNull()

@@ -176,180 +176,162 @@ describe('the header stops holding receive controls', () => {
   })
 })
 
-// ── DISABLED AND SAID, never gated by absence ─────────────────────────────────────────
+// ── DISABLED AND SAID — AND THE THREE PLACES IT MUST NOT REACH ───────────────────────
 //
-// THE RULE the operator ruled for (2026-09-20): a control the radio cannot drive stays on
-// screen, disabled, WITH THE REASON. The argument it overruled — "a control that does
-// nothing is worse than none" — is answered in the rewritten assertions in
-// PhoneCockpit.notch.test.tsx and PhoneCockpit.analoglevels.test.tsx; the short form is that
-// a vanishing control is indistinguishable from one that was never built, so the operator
-// cannot tell "your radio can't" from "Nexus didn't".
+// THE RULE (operator, 2026-09-20): a control the radio cannot drive stays on screen,
+// disabled, WITH THE REASON. The argument it overruled — "a control that does nothing is
+// worse than none" — is answered in the rewritten assertions in PhoneCockpit.notch.test.tsx
+// and PhoneCockpit.analoglevels.test.tsx; the short form is that a vanishing control is
+// indistinguishable from one that was never built.
 //
-// ⚠️ EVERY CASE BELOW IS A PAIR. A disabled-with-reason assertion on its own passes against a
-// component that renders a dead stub for everything, so each one states the ENABLED render
-// too: same control, rig reporting, no mark, not disabled.
-describe('a control the radio cannot drive is disabled and says why', () => {
-  /** Present AND disabled AND the reason — three things, because any two of them pass on a
-   *  half-built control. Returns the mark so a caller can read what it says. */
-  function unavailable(el: HTMLElement, what: string) {
-    expect(el, `${what}: not on screen at all — that is gating by absence`).toBeTruthy()
-    expect((el as HTMLInputElement | HTMLButtonElement).disabled, `${what}: on screen and LIVE over a radio that cannot drive it`).toBe(true)
-    const mark = el.closest('[data-chain]')?.querySelector('.ph-unavail')
-    expect(mark, `${what}: disabled with no reason anywhere — the operator cannot tell "your radio can't" from "Nexus didn't"`).not.toBeNull()
-    expect(mark!.textContent, `${what}: the mark is not TEXT`).toMatch(/\S/)
-    return mark!
-  }
-  function available(el: HTMLElement, what: string) {
-    expect(el, `${what}: not on screen`).toBeTruthy()
-    expect((el as HTMLInputElement | HTMLButtonElement).disabled, `${what}: disabled over a radio that reports it`).toBe(false)
-    expect(
-      el.closest('[data-chain]')?.querySelector('.ph-unavail'),
-      `${what}: marked unavailable over a radio that reports it`,
-    ).toBeNull()
-  }
+// ⛔ THE RULE'S HOME GROUND IS "THE RIG CAN DO IT, THIS PATH CANNOT" — a control Nexus built,
+// unreachable through the operator's transport. Three things are NOT that, and the ruling
+// was bounded away from all three on 2026-09-21, because disabled-with-reason makes a
+// cockpit fuller and without these it becomes clutter:
+//
+//   1. A control Nexus has built for NO path (TX bandwidth today; ATT, PRE and MON until the
+//      sibling's fields land). OMITTED entirely — a row greyed on every radio in the fleet
+//      reads as "broken" to a thousand operators, not as "not built yet" — and not named at
+//      the foot either, because "not on this radio" would blame the radio for Nexus.
+//   2. Absent hardware — no tuner, no amplifier. OMITTED, and the ATU is the case that
+//      matters: it KEYS THE TRANSMITTER, so the precaution outranks the discoverability.
+//      That one lives in CockpitHeader.atu.test.tsx, where the button is.
+//   3. Family-wide feature absence. COLLAPSED to one line at the pane's foot, so an IC-7300
+//      does not open to four grey rows and nothing vanishes silently.
+//
+// Mode-inapplicability is NOT one of them: BW on FM keeps its slot and says so.
+describe('a control the radio cannot drive does not simply disappear', () => {
+  const footLine = (pane: 'receiver' | 'transmitter') =>
+    document.querySelector(`[data-pane="${pane}"] .ph-chain-absent`)?.textContent ?? ''
+  const row = (chain: string) => document.querySelector(`[data-chain="${chain}"]`)
 
-  const SLIDERS: Array<[label: string, field: string, value: unknown]> = [
-    ['RF gain', 'rfGain', 0.5],
-    ['AF gain', 'afGain', 0.5],
-    ['Squelch', 'squelch', 0.4],
-    ['Noise-reduction level', 'nrLevel', 0.3],
-    ['Manual notch frequency in hertz', 'notchFreqHz', 1500],
-    ['Mic gain', 'micGain', 0.5],
-    ['Speech processor depth', 'compLevel', 0.35],
+  const COLLAPSING: Array<[label: string, field: string, value: unknown, chain: string, plate: string, pane: 'receiver' | 'transmitter']> = [
+    ['RF gain', 'rfGain', 0.5, 'RF', 'RF', 'receiver'],
+    ['AF gain', 'afGain', 0.5, 'AF', 'AF', 'receiver'],
+    ['Squelch', 'squelch', 0.4, 'SQL', 'SQL', 'receiver'],
+    ['Noise-reduction level', 'nrLevel', 0.3, 'NRLVL', 'NR', 'receiver'],
+    ['Manual notch frequency in hertz', 'notchFreqHz', 1500, 'NOTCHF', 'NOTCH', 'receiver'],
+    ['Mic gain', 'micGain', 0.5, 'MIC', 'Mic', 'transmitter'],
+    ['Speech processor depth', 'compLevel', 0.35, 'COMPLVL', 'COMP', 'transmitter'],
   ]
 
-  it.each(SLIDERS)('%s — disabled with a reason when the rig is silent, live when it reports', (label, field, value) => {
+  it.each(COLLAPSING)('%s — named at the pane foot when the rig is silent, drawn when it reports', (label, field, value, chain, plate, pane) => {
     mount({})
-    unavailable(screen.getByLabelText(label), `${label} (rig silent)`)
+    expect(row(chain), `${label}: still drawing a row this radio cannot drive`).toBeNull()
+    expect(footLine(pane), `${label}: gone from the pane and named nowhere`).toContain(plate)
     cleanup()
     mount({ [field]: value })
-    available(screen.getByLabelText(label), `${label} (rig reporting)`)
+    expect(screen.getByLabelText(label), `${label}: not drawn over a radio that reports it`).toBeTruthy()
+    expect((screen.getByLabelText(label) as HTMLInputElement).disabled, `${label}: drawn but dead`).toBe(false)
   })
 
-  const FUNCS = ['NB', 'NR', 'Auto notch', 'Manual notch', 'COMP', 'VOX'] as const
-  const FUNC_FIELD: Record<string, string> = {
-    NB: 'nb', NR: 'nr', 'Auto notch': 'notch', 'Manual notch': 'manualNotch', COMP: 'comp', VOX: 'vox',
-  }
+  const FUNCS: Array<[name: string, field: string, chain: string, plate: string, pane: 'receiver' | 'transmitter']> = [
+    ['NB', 'nb', 'NB', 'NB', 'receiver'],
+    ['NR', 'nr', 'NR', 'NR', 'receiver'],
+    ['Auto notch', 'notch', 'ANF', 'Auto notch', 'receiver'],
+    ['Manual notch', 'manualNotch', 'MN', 'Manual notch', 'receiver'],
+    ['COMP', 'comp', 'COMP', 'COMP', 'transmitter'],
+    ['VOX', 'vox', 'VOX', 'VOX', 'transmitter'],
+  ]
 
-  it.each(FUNCS)('the %s toggle — disabled with a reason when the rig is silent, live when it reports', (name) => {
+  it.each(FUNCS)('the %s toggle — named at the pane foot when the rig is silent, live when it reports', (name, field, chain, plate, pane) => {
     mount({})
-    unavailable(screen.getByRole('button', { name }), `${name} (rig silent)`)
+    expect(row(chain), `${name}: still drawing a row`).toBeNull()
+    expect(footLine(pane), `${name}: named nowhere`).toContain(plate)
     cleanup()
-    mount({ [FUNC_FIELD[name]]: false })
-    available(screen.getByRole('button', { name }), `${name} (rig reporting)`)
+    mount({ [field]: false })
+    const b = screen.getByRole('button', { name }) as HTMLButtonElement
+    expect(b.getAttribute('aria-disabled'), `${name}: dead over a radio that reports it`).toBeNull()
+    expect(b.disabled).toBe(false)
   })
 
-  it('the AGC chips — disabled with a reason when the rig is silent, live when it reports', () => {
+  it('the AGC chips collapse as one control, and come back as five', () => {
     mount({})
-    const chips = [...document.querySelectorAll<HTMLButtonElement>('.ph-agc button')]
-    expect(chips, 'the AGC row vanished on a rig that does not report AGC').toHaveLength(5)
-    expect(chips.every((c) => c.disabled), 'an AGC chip is live over a radio that reports no AGC').toBe(true)
-    expect(document.querySelector('[data-chain="AGC"] .ph-unavail'), 'AGC is dead and silent').not.toBeNull()
+    expect(document.querySelectorAll('.ph-agc button'), 'a rig with no AGC still drew the chips').toHaveLength(0)
+    expect(footLine('receiver')).toContain('AGC')
     cleanup()
     mount({ agc: 'fast' })
-    expect([...document.querySelectorAll<HTMLButtonElement>('.ph-agc button')].every((c) => !c.disabled)).toBe(true)
-    expect(document.querySelector('[data-chain="AGC"] .ph-unavail'), 'AGC marked unavailable over a rig that reports it').toBeNull()
+    const chips = [...document.querySelectorAll<HTMLButtonElement>('.ph-agc button')]
+    expect(chips).toHaveLength(5)
+    expect(chips.every((c) => !c.disabled)).toBe(true)
+    expect(footLine('receiver')).not.toContain('AGC')
   })
 
-  // ⚠️ BW'S GATE IS NOT ITS READ-BACK, and pinning the wrong one here would have written a
-  // regression into the suite. `filterWidthHz` null means "unknown or the rig's default" —
-  // the stepper still commands the rig perfectly well from its 2.4 kHz base, and only the
-  // READOUT is blank. What actually stops the control working is a dead CAT link, and what
-  // makes it meaningless is FM, whose passband is fixed. So those are the two cases.
-  const bwSteps = () => [...document.querySelectorAll<HTMLButtonElement>('.ph-filter-step')]
-
-  it('BW — disabled with a reason when CAT is down, live when it is up', () => {
-    mount({ catOk: false })
-    expect(bwSteps(), 'the BW stepper vanished').toHaveLength(2)
-    expect(bwSteps().every((b) => b.disabled)).toBe(true)
-    expect(document.querySelector('[data-chain="BW"] .ph-unavail')).not.toBeNull()
-    cleanup()
+  // ⛔ EXCEPTION 1 — a control with no path on ANY radio is named NOWHERE.
+  it('a control Nexus has built no path for is not drawn and not blamed on the radio', () => {
+    // ATT, PRE and MON are in the registry so the sibling's fields drop in, and `built:
+    // false` is what keeps them off the screen meanwhile. Listing them at the foot would
+    // tell a thousand operators their radio is missing something Nexus has not written.
     mount(FULL_RIG)
-    expect(bwSteps().every((b) => !b.disabled)).toBe(true)
-    expect(document.querySelector('[data-chain="BW"] .ph-unavail')).toBeNull()
+    for (const chain of ['ATT', 'PRE', 'MON']) {
+      expect(row(chain), `${chain} drew a row with no path behind it`).toBeNull()
+    }
+    for (const plate of ['ATT', 'PRE', 'MON']) {
+      expect(footLine('receiver'), `${plate} was blamed on the radio`).not.toContain(plate)
+      expect(footLine('transmitter'), `${plate} was blamed on the radio`).not.toContain(plate)
+    }
   })
 
-  it('BW — disabled with a reason on FM, where the passband is fixed', () => {
+  // ⛔ EXCEPTION 3 — the collapse itself, end to end.
+  it('a bare rig gets ONE line per pane, not a wall of grey rows', () => {
+    // The density requirement in its own words: an IC-7300 does not open to four grey rows.
+    mount({})
+    expect(document.querySelectorAll('[data-pane="receiver"] [data-chain]').length, 'the receive pane is a wall of dead rows').toBe(1)
+    expect(row('BW'), 'the one row left should be BW, which is commandable with no read-back').not.toBeNull()
+    expect(document.querySelectorAll('[data-pane="receiver"] .ph-chain-absent')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-pane="transmitter"] [data-chain]')).toHaveLength(0)
+    expect(document.querySelectorAll('[data-pane="transmitter"] .ph-chain-absent')).toHaveLength(1)
+  })
+
+  // ── WHAT THE RULING STILL GOVERNS ──────────────────────────────────────────────────
+  it('NO CAT: every row stays, dead, and the pane says it ONCE', () => {
+    // The pane-wide version of "the rig can do it, this path cannot". Collapsing these into
+    // "not on this radio" would tell the operator his radio lacks thirteen features when it
+    // lacks none of them; a ⊘ per row would print one sentence thirteen times.
+    mount({ catOk: false, ...FULL_RIG })
+    const banner = document.querySelector('[data-pane="receiver"] .ph-chain-banner')
+    expect(banner, 'no CAT and the pane says nothing').not.toBeNull()
+    expect(banner!.textContent).toMatch(/CAT/)
+    expect(footLine('receiver'), 'a dead link was read as a radio with no features').toBe('')
+    expect(row('RF'), 'a row vanished on a dead link').not.toBeNull()
+    expect((screen.getByLabelText('RF gain') as HTMLInputElement).disabled, 'a live control over a dead link').toBe(true)
+    // …and the row points AT the banner, so a screen reader reaches the reason from the row.
+    expect(screen.getByLabelText('RF gain').getAttribute('aria-describedby')).toBe(banner!.id)
+    // ONE sentence, not thirteen.
+    expect(document.querySelectorAll('[data-pane="receiver"] .ph-chain-banner')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-pane="receiver"] .ph-unavail')).toHaveLength(0)
+  })
+
+  it('BW on FM keeps its slot and names the MODE, not the radio', () => {
+    // Mode-inapplicability is explicitly NOT one of the three exceptions: FM's passband is
+    // fixed, which is a fact about the mode and says nothing about what the radio can do.
     mount(FULL_RIG, 'fm')
-    expect(bwSteps(), 'the BW stepper vanished on FM').toHaveLength(2)
-    expect(bwSteps().every((b) => b.disabled)).toBe(true)
+    expect(row('BW'), 'BW collapsed on FM as though the radio lacked it').not.toBeNull()
+    expect(footLine('receiver'), 'FM was read as a missing feature').not.toContain('BW')
     const mark = document.querySelector('[data-chain="BW"] .ph-unavail')
-    expect(mark, 'BW is dead on FM and does not say why').not.toBeNull()
-    // …and the reason names FM rather than blaming the radio, because the radio is fine.
-    expect(mark!.getAttribute('title')).toMatch(/FM/)
+    expect(mark, 'BW is dead on FM and says nothing').not.toBeNull()
+    expect(mark!.textContent, 'the mark does not name the mode').toContain('FM')
+    expect(mark!.getAttribute('title')).toMatch(/does not apply on FM/i)
+    expect([...document.querySelectorAll<HTMLButtonElement>('.ph-filter-step')].every((b) => b.disabled)).toBe(true)
   })
 
   it('BW still steps on a rig that reports no width — a blank readout is not a dead control', () => {
-    // The disconfirming case for the two above. A rig that never reports `filterWidthHz`
-    // reads '—' and is STILL commandable; marking it unavailable would take away a control
-    // that works, which is the same defect as hiding one, wearing the new clothes.
+    // The disconfirming case. A rig that never reports `filterWidthHz` reads '—' and is
+    // STILL commandable; collapsing it would take away a control that works, which is the
+    // same defect as hiding one, wearing the new clothes.
     mount({})
-    expect(bwSteps().every((b) => !b.disabled), 'a blank BW readout disabled a working stepper').toBe(true)
-    expect(document.querySelector('[data-chain="BW"] .ph-unavail')).toBeNull()
+    expect([...document.querySelectorAll<HTMLButtonElement>('.ph-filter-step')].every((b) => !b.disabled)).toBe(true)
+    expect(footLine('receiver'), 'a working BW was listed as missing').not.toContain('BW')
     expect(document.querySelector('.ph-filter-val')!.textContent).toBe('—')
   })
 
-  it('the manual-notch FREQUENCY names the backend, not the radio', () => {
-    // The distinction is not pedantry and it is not a Nexus gap: Hamlib's Icom backend has
-    // no NOTCHF for ANY natively-driven model, so on those rigs the notch itself is real and
-    // reachable from the radio's own knob while the FREQUENCY is not reachable over CAT.
-    // A reason that said "your radio does not have this" would be false about the radio.
-    mount({ manualNotch: true })
-    const slider = screen.getByLabelText('Manual notch frequency in hertz') as HTMLInputElement
-    expect(slider.disabled).toBe(true)
-    const mark = document.querySelector('[data-chain="NOTCHF"] .ph-unavail')!
-    expect(mark.getAttribute('title'), 'the notch-frequency reason does not name the CAT backend').toMatch(/backend/i)
-  })
-
-  it('a momentary null does NOT kill a live control — the capability is sticky', () => {
-    // `null` means both "this rig lacks it" and "we don't know right now": the radio loop
-    // clears every reading on a CAT re-confirmation, which a QSY triggers, and gating on the
-    // live value alone used to make the whole DSP group vanish the instant you clicked a
-    // spot. Nothing vanishes any more, so the same gap would now read as controls going
-    // dead-and-⊘ under the operator's hand — the same lie in a new costume.
-    const { rerender } = render(<PhoneCockpit snap={snapWith(FULL_RIG)} theme="dark" />)
-    expect(document.querySelector('[data-chain="NRLVL"] .ph-unavail')).toBeNull()
-    rerender(<PhoneCockpit snap={snapWith({})} theme="dark" />)
-    expect(
-      document.querySelector('[data-chain="NRLVL"] .ph-unavail'),
-      'a QSY-blanked reading was read as a radio that cannot do it',
-    ).toBeNull()
-    expect((screen.getByLabelText('Noise-reduction level') as HTMLInputElement).disabled).toBe(false)
-  })
-
-  it('…but a DIFFERENT RADIO starts over — one rig cannot vouch for another', () => {
-    // The other end of sticky, and the reason it cannot simply be "remember forever": a
-    // handoff to a second radio is not a momentary null, and carrying the first rig's
-    // capabilities across it would leave live-looking controls over a radio that has none of
-    // them. That is the exact failure the ⊘ exists to prevent, arriving through the back
-    // door. The cockpit does not remount on a handoff, so nothing else would clear it.
-    // `activeRadioId` is a SNAPSHOT field, not a radio one — putting it in `radio` is the
-    // mistake that made the first draft of this test pass against the unfixed component.
-    const onRadio = (id: number, radio: Record<string, unknown>) =>
-      ({ ...snapWith(radio), activeRadioId: id }) as AppSnapshot
-    const { rerender } = render(<PhoneCockpit snap={onRadio(1, FULL_RIG)} theme="dark" />)
-    expect(document.querySelector('[data-chain="NRLVL"] .ph-unavail')).toBeNull()
-    rerender(<PhoneCockpit snap={onRadio(2, {})} theme="dark" />)
-    expect(
-      document.querySelector('[data-chain="NRLVL"] .ph-unavail'),
-      'the new radio inherited the old one\u2019s capabilities',
-    ).not.toBeNull()
-    expect((screen.getByLabelText('Noise-reduction level') as HTMLInputElement).disabled).toBe(true)
-  })
-
-  it('CONTROL — a rig that reports everything wears no ⊘ mark anywhere in the two chains', () => {
-    // Without this the whole file would pass against a cockpit that marks every control
-    // unavailable forever, which is the failure mode of a negative-space assertion.
-    //
-    // ⚠️ SCOPED TO THE TWO PANES, and it was not at first: a document-wide sweep for
-    // `.ph-unavail` also catches the HEADER's ATU mark, which is correct there (FULL_RIG
-    // reports no `atu`) and has nothing to do with the receive and transmit chains. It is
-    // named rather than widened — the ATU's own pair is in CockpitHeader.atu.test.tsx.
+  it('CONTROL — a rig that reports everything gets no foot line and no marks', () => {
+    // Without this the whole file passes against a cockpit that collapses every control on
+    // every radio, which is the failure mode of a negative-space assertion.
     mount(FULL_RIG)
-    const inChains = [...document.querySelectorAll('[data-pane="receiver"] .ph-unavail, [data-pane="transmitter"] .ph-unavail')]
-    expect(
-      inChains.map((m) => m.closest('[data-chain]')?.getAttribute('data-chain')),
-      'a fully-reporting rig is being told it cannot do something',
-    ).toEqual([])
+    expect(footLine('receiver'), 'a fully-reporting rig was told it is missing something').toBe('')
+    expect(footLine('transmitter')).toBe('')
+    expect(document.querySelectorAll('[data-pane="receiver"] .ph-unavail')).toHaveLength(0)
+    expect(document.querySelectorAll('[data-pane="receiver"] .ph-chain-banner')).toHaveLength(0)
   })
 })

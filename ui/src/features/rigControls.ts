@@ -49,7 +49,9 @@ export type UnavailableCause =
 export const CAUSE_KEY: Record<UnavailableCause, string> = {
   noCat: 'phone.unavail.noCat',
   notOnMode: 'phone.unavail.notOnMode',
-  absent: 'phone.unavail.absent',
+  // `absent` is printed COLLAPSED, as the pane-foot line over a list of plates — see
+  // `absentPlates`. It is the one cause with no per-control wording, by design.
+  absent: 'phone.chain.absent',
   nativeCiv: 'phone.unavail.nativeCiv',
   backend: 'phone.unavail.backend',
   backendRawOnly: 'phone.unavail.backendRawOnly',
@@ -65,8 +67,10 @@ export interface RigControl {
    *  does not expose it" is only useful if it says WHAT, in the words the backend uses. */
   token: { hamlib: string; civ?: string }
   kind: ControlKind
-  /** The `RadioStatus` field whose non-null value means this radio drives it. */
-  field: keyof RadioStatus
+  /** The `RadioStatus` field whose non-null value means this radio drives it. ABSENT on an
+   *  unbuilt control, because there is no field yet — pointing one at a neighbour's field to
+   *  satisfy the type is how a slot quietly starts answering for the wrong thing. */
+  field?: keyof RadioStatus
   chain: 'rx' | 'tx'
   /**
    * ⛔ HAS NEXUS BUILT A PATH FOR THIS AT ALL? `false` = the row is OMITTED everywhere — not
@@ -86,13 +90,17 @@ export interface RigControl {
  * the panes render in this order and `PhoneCockpit.chain.test.tsx` pins it off the DOM.
  */
 export const RIG_CONTROLS: readonly RigControl[] = [
-  { id: 'BW', plate: 'BW', token: { hamlib: 'PASSBAND' }, kind: 'hz', field: 'filterWidthHz', chain: 'rx', built: true },
+  // ⚠️ BW HAS NO CAPABILITY FIELD, and that is not an omission. `filterWidthHz` null means
+  // "unknown or the rig's default" — the stepper still commands the rig perfectly well from
+  // its 2.4 kHz base and only the READOUT is blank, so treating a missing read-back as "this
+  // radio has no filter" would collapse a control that works into the foot line.
+  { id: 'BW', plate: 'BW', token: { hamlib: 'PASSBAND' }, kind: 'hz', chain: 'rx', built: true },
   // ⛔ NOT BUILT: a sibling is adding the attenuator, preamp and TX monitor now. They have
   // four states each (a caps bit with a step list → chips; the bit with an empty list → a dB
   // stepper; the bit clear → `backend`; a daemon without the token → `nativeCiv`), which is
   // why they are `dbSteps` and why the slots are declared before the fields exist.
-  { id: 'ATT', plate: 'ATT', token: { hamlib: 'ATT' }, kind: 'dbSteps', field: 'rfGain', chain: 'rx', built: false },
-  { id: 'PRE', plate: 'PRE', token: { hamlib: 'PREAMP' }, kind: 'dbSteps', field: 'rfGain', chain: 'rx', built: false },
+  { id: 'ATT', plate: 'ATT', token: { hamlib: 'ATT' }, kind: 'dbSteps', chain: 'rx', built: false },
+  { id: 'PRE', plate: 'PRE', token: { hamlib: 'PREAMP' }, kind: 'dbSteps', chain: 'rx', built: false },
   { id: 'RF', plate: 'RF', token: { hamlib: 'RF' }, kind: 'fraction', field: 'rfGain', chain: 'rx', built: true },
   { id: 'NB', plate: 'NB', token: { hamlib: 'NB' }, kind: 'toggle', field: 'nb', chain: 'rx', built: true },
   { id: 'NR', plate: 'NR', token: { hamlib: 'NR' }, kind: 'toggle', field: 'nr', chain: 'rx', built: true },
@@ -107,7 +115,7 @@ export const RIG_CONTROLS: readonly RigControl[] = [
   { id: 'COMP', plate: 'COMP', token: { hamlib: 'COMP' }, kind: 'toggle', field: 'comp', chain: 'tx', built: true },
   { id: 'COMPLVL', plate: 'COMP', token: { hamlib: 'COMP' }, kind: 'fraction', field: 'compLevel', chain: 'tx', built: true },
   { id: 'VOX', plate: 'VOX', token: { hamlib: 'VOX' }, kind: 'toggle', field: 'vox', chain: 'tx', built: true },
-  { id: 'MON', plate: 'MON', token: { hamlib: 'MONITOR_GAIN' }, kind: 'fraction', field: 'micGain', chain: 'tx', built: false },
+  { id: 'MON', plate: 'MON', token: { hamlib: 'MONITOR_GAIN' }, kind: 'fraction', chain: 'tx', built: false },
 ]
 
 /**
@@ -159,6 +167,9 @@ export function causeFor(c: RigControl, s: ControlState): UnavailableCause | nul
   // slot rather than disappearing into the foot line with the things the rig cannot do.
   if (c.id === 'BW' && s.mode === 'FM') return 'notOnMode'
   if (s.caps?.lacks?.includes(c.id)) return 'absent'
+  // A BUILT control with no capability field has no per-radio signal to read — BW is the
+  // one today. Nothing left to disqualify it, so it is available.
+  if (!c.field) return null
   return s.reported(c) ? null : 'absent'
 }
 

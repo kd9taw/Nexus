@@ -253,8 +253,8 @@ export function TxMeters({
               blank rows before the first over, which say nothing about the radio and are
               answered by the hint below instead. */}
           {everRead.current && !seen.current.has(r.key) && (
-            <span className="ph-unavail" role="note" title={t('meters.tx.notReported', { meter: r.label })}>
-              <span aria-hidden="true">⊘</span> {t('meters.tx.notReported.mark')}
+            <span className="ph-unavail" role="note" title={t('phone.unavail.meter', { meter: r.label })}>
+              <span aria-hidden="true">⊘</span> {t('phone.unavail.mark')}
             </span>
           )}
         </div>

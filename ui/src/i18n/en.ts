@@ -8561,33 +8561,26 @@ export const EN = {
   'phone.pane.rigscope.title': 'Rig scope controls',
   'phone.pane.receiver.title': 'Receiver',
   'phone.pane.transmitter.title': 'Transmitter',
-  // The two chain groups' accessible names. They are the pane's QUESTION, not its contents —
-  // a screen-reader user landing in the group should hear what it is for before what is in it.
+  // ── ⊘ — THE UNAVAILABLE VOCABULARY (spec catalogue, 2026-09-21) ─────────────────────
+  // ONE KEY PER CAUSE, and the control interpolates its own plate and token — so two
+  // controls failing the same way cannot describe it two different ways, which is the drift
+  // the ⊘ mark exists to prevent. Sentence case, em-dash, and each one NAMES THE REMEDY
+  // rather than the mechanism (the house rule `micdax.test.tsx` pins). Plates and tokens are
+  // invariant and arrive as values.
+  //
+  // `absent` has no per-control wording on purpose: it collapses into `phone.chain.absent`
+  // at the pane's foot, so an IC-7300 does not open to four grey rows.
+  'phone.unavail.mark': 'not reported',
+  'phone.unavail.noCat':
+    '{{plate}} needs CAT control — this radio is set up for VOX or serial PTT only. Add rig ' +
+    'control in Settings \u25B8 Radio to get it.',
+  'phone.unavail.notOnMode': '{{plate}} does not apply on {{mode}}.',
+  'phone.chain.noCat':
+    'No rig control on this radio — the receiver and transmitter controls need CAT. ' +
+    'Settings \u25B8 Radio.',
+  'phone.chain.absent': 'Not on this radio: {{plates}}',
   'phone.chain.receiver.aria': 'Receiver chain — what you are hearing',
   'phone.chain.transmitter.aria': 'Transmitter chain — how your voice goes out',
-  // ── ⊘ — THE UNAVAILABLE MARK ────────────────────────────────────────────────────────
-  // A control the radio cannot drive stays on screen, disabled, wearing this. The mark is a
-  // WORD, never the glyph alone and never a colour: the glyph is aria-hidden decoration and
-  // this text is what a screen reader and a monochrome display both get.
-  'phone.unavail.mark': 'not reported',
-  'phone.unavail.title':
-    '{{control}} is not coming back from this radio over CAT, so Nexus has nothing to set. ' +
-    'The control stays on screen and dead rather than disappearing, because a control that ' +
-    'vanishes is indistinguishable from one that was never built.',
-  // The manual-notch FREQUENCY is a backend fact, not a fact about the radio, and saying
-  // otherwise would be false: Hamlib's Icom backend exposes no NOTCHF for any natively-driven
-  // model, so the notch itself is real and reachable from the radio's own knob.
-  'phone.unavail.notchFreq.title':
-    'This radio is not reporting a manual-notch frequency over CAT. On an Icom driven ' +
-    "natively, Hamlib's backend exposes no notch frequency at all — the notch is still there, " +
-    'and you set where it sits on the radio itself.',
-  'phone.unavail.fm.mark': 'fixed on FM',
-  'phone.unavail.fm.title':
-    'FM has a fixed passband, so there is no filter width to set. The stepper comes back on SSB.',
-  'phone.unavail.noCat.mark': 'no CAT',
-  'phone.unavail.noCat.title':
-    'There is no CAT link to this radio, so nothing here can be commanded or read back. ' +
-    'Set a rigctld/CAT rig in Settings.',
   'phone.pane.log.title': 'Log',
 
   // ── Phone ▸ THE TRANSMIT CONTRACT (the dock's top line) ─────────────────────────────
@@ -8627,14 +8620,19 @@ export const EN = {
     'Your power setting, and the output the radio last actually measured. No mark: the ' +
     'setting is the radio\u2019s read-back when CAT reports one and the last commanded value ' +
     'otherwise, and nothing says which.',
-  'phone.txContract.lastWatts': '{{watts}} W last',
+  'phone.tx.lastOver': '{{watts}} W on the last over',
+  'phone.tx.repeaterMark': 'repeater shift',
+  // A SAFETY line, not a status one: Stop TX halts what NEXUS is doing, and a VOX-held
+  // transmitter is being keyed by the operator's own voice into the microphone.
+  'phone.tx.voxWarn':
+    'VOX is on — the radio keys itself from the mic. Stop TX cannot unkey a VOX-held ' +
+    'transmitter.',
   'phone.truth.rig.mark': 'rig',
-  'phone.truth.rig.title':
-    'Read back from the radio — this is what the rig says, not what Nexus asked for.',
+  'phone.prov.rig': 'Confirmed by the radio.',
   'phone.truth.cmd.mark': 'cmd',
-  'phone.truth.cmd.title':
-    'Nexus commanded this and cannot read it back, so it is what Nexus believes rather than ' +
-    'what the radio confirms.',
+  'phone.prov.cmd':
+    'As commanded — this radio does not report {{plate}} back over CAT, so this is what ' +
+    'Nexus last sent.',
 
   // ── Phone ▸ the header: the mode picker, split, mic gain, filter and REC ─────────────
   // `AUTO`, `USB`, `LSB` and `FM` are mode names — the buttons print them from the code and
@@ -9309,11 +9307,7 @@ export const EN = {
   'meters.tx.idle': 'TX meters — {{when}}',
   // A meter the radio stayed silent about THROUGH an over — so it is one this radio does not
   // report, as against the blank rows before the first over, which the line above answers.
-  'meters.tx.notReported.mark': 'not reported',
-  'meters.tx.notReported':
-    'This radio did not report {{meter}} while it was transmitting, so it has no meter for ' +
-    'it on the CAT link. The row stays so the panel is the same height on every radio — and ' +
-    'because a row that vanished would read as one Nexus never built.',
+  'phone.unavail.meter': 'Your radio does not report {{meter}} over CAT — the bar stays empty.',
   'meters.tx.swr.title': 'Antenna match — keep it under 2:1',
   // ⚠️ THE SAME READING, ON A SCALE NEXUS CANNOT VOUCH FOR (2026-09-20). `swrScaleVerified`
   // is false — the rig is outside the two paths whose meter curve we can point at — so the

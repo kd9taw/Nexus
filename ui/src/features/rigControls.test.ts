@@ -89,6 +89,15 @@ describe('which cause is the one to name', () => {
     expect(causeFor(byId('NOTCHF'), state({ reported: () => false }))).toBe('absent')
   })
 
+  it('a BUILT control with no capability field is available — BW is not its read-back', () => {
+    // The registry's own version of a trap the panes already fell into once: `filterWidthHz`
+    // null means "unknown or the rig's default", and the stepper works anyway. Reading a
+    // blank READOUT as "this radio has no filter" would collapse a working control into the
+    // foot line, which is the vanishing the whole ruling is against.
+    expect(causeFor(byId('BW'), state({ reported: () => false }))).toBeNull()
+    expect(absentPlates('rx', state({ reported: () => false })), 'BW was listed as missing').not.toContain('BW')
+  })
+
   it('the caps model, when it lands, says absent WITHOUT waiting for a silent probe', () => {
     // The stub's whole point: `lacks` is the model table's answer and does not depend on
     // whether a read ever came back. A radio reporting the field but listed as lacking it is

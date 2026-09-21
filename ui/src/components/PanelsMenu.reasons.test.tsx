@@ -406,15 +406,15 @@ describe('⊞ Panels — the DSP entries follow what the rig reports over CAT', 
     // absent note is claiming, so it is the fact that gets checked.
     expect(pane('receiver')).not.toBeNull()
     expect(pane('transmitter')).not.toBeNull()
-    // And the apology is where it moved to: on the controls, not the menu. The same four
-    // the paired case below finds LIVE on a reporting rig, so the two renders differ in
-    // exactly the place the note went.
-    for (const chain of ['NB', 'NR', 'NRLVL', 'AGC']) {
-      expect(
-        document.querySelector(`[data-chain="${chain}"] .ph-unavail`),
-        `${chain}: dead and silent — the note left the menu and arrived nowhere`,
-      ).not.toBeNull()
-    }
+    // And the apology is where it moved to: ONE line at the pane's foot naming the controls
+    // this radio does not have — not a note on the menu entry, and not a grey row each.
+    const foot = document.querySelector('[data-pane="receiver"] .ph-chain-absent')?.textContent ?? ''
+    expect(foot, 'the note left the menu and arrived nowhere').toContain('NB')
+    expect(foot).toContain('AGC')
+    expect(
+      document.querySelector('[data-chain="NB"]'),
+      'a control this radio lacks is still drawing a grey row',
+    ).toBeNull()
   })
 
   it('Phone, a rig that reports them: the entries read exactly the same', async () => {
@@ -426,17 +426,16 @@ describe('⊞ Panels — the DSP entries follow what the rig reports over CAT', 
     expectUnexplained('Transmitter')
     expect(pane('receiver')).not.toBeNull()
     expect(pane('transmitter')).not.toBeNull()
-    // The difference between the two rigs shows HERE instead. This fixture reports NB/NR and
-    // an NR level, so those three controls are live and unmarked where the bare rig's were
-    // marked — asserted per control rather than as a count, because a count over a pane
-    // whose other controls (RF gain, AF, squelch…) this rig does not report either would
-    // just be comparing two non-zero numbers.
+    // The difference between the two rigs shows HERE instead. This fixture reports NB/NR, an
+    // NR level and AGC, so those four DRAW where the bare rig's were collapsed — asserted
+    // per control rather than as a count, because the foot line still names the controls
+    // this rig does not report either (RF gain, AF, squelch…), so two counts would both be
+    // non-zero and prove nothing.
+    const foot = document.querySelector('[data-pane="receiver"] .ph-chain-absent')?.textContent ?? ''
     for (const chain of ['NB', 'NR', 'NRLVL', 'AGC']) {
-      expect(
-        document.querySelector(`[data-chain="${chain}"] .ph-unavail`),
-        `${chain}: marked unavailable over a rig that reports it`,
-      ).toBeNull()
+      expect(document.querySelector(`[data-chain="${chain}"]`), `${chain}: collapsed over a rig that reports it`).not.toBeNull()
     }
+    expect(foot, 'a control this rig reports was listed as missing').not.toContain('AGC')
   })
 
   it('CW, a rig that reports no DSP functions: both DSP entries carry the reason', async () => {
@@ -467,9 +466,13 @@ describe('⊞ Panels — the DSP entries follow what the rig reports over CAT', 
     const live = document.querySelector('[data-chain="NB"] .ph-dsp-btn') as HTMLButtonElement
     expect(live, 'no NB toggle at all').toBeTruthy()
     expect(live.disabled, 'NB is dead on a rig that reports it').toBe(false)
-    expect(document.querySelector('[data-chain="NB"] .ph-unavail'), 'NB marked unavailable while live').toBeNull()
-    expect(document.querySelector('[data-chain="NRLVL"] .ph-unavail'), 'the unreadable NR level says nothing').not.toBeNull()
-    expect(document.querySelector('[data-chain="AGC"] .ph-unavail'), 'the unreadable AGC says nothing').not.toBeNull()
+    // …and the two it cannot read are collapsed into the foot line, named, in the same
+    // render. One each way is what catches a shortcut that judges the whole pane at once.
+    const foot = document.querySelector('[data-pane="receiver"] .ph-chain-absent')?.textContent ?? ''
+    expect(document.querySelector('[data-chain="NRLVL"]'), 'the unreadable NR level still draws a row').toBeNull()
+    expect(document.querySelector('[data-chain="AGC"]'), 'the unreadable AGC still draws a row').toBeNull()
+    expect(foot, 'the unreadable NR level is named nowhere').toContain('NR')
+    expect(foot, 'the unreadable AGC is named nowhere').toContain('AGC')
   })
 })
 

@@ -8828,6 +8828,31 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: var(--space-1);
   min-width: 0;
 }
+/* The pane-level banner: ONE sentence for a fact true of every control in the pane at once
+   (no CAT link). `flex-basis: 100%` so it owns its own line above the controls it explains;
+   rows point aria-describedby at it rather than repeating it thirteen times. */
+.ph-chain-banner {
+  flex: 0 0 100%;
+  margin: 0;
+  font-size: 11px;
+  color: var(--alert-warning);
+}
+/* THE COLLAPSE — "Not on this radio: Contour · SHIFT · MON". One line at the pane's foot
+   instead of one grey row per control the radio does not have: nothing vanishes silently and
+   an IC-7300 does not open to four dead rows. Dim, because it is a fact about the station
+   rather than something to act on. */
+.ph-chain-absent {
+  flex: 0 0 100%;
+  margin: 0;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+/* A warning ON the transmit contract — VOX, which changes what keys the rig. Warning colour
+   AND a plate that reads VOX, never colour alone. */
+.ph-txc-warn {
+  font-weight: 800;
+  color: var(--alert-warning);
+}
 /* ⊘ — a control the radio cannot drive, and why. Dim rather than alarming: this is a fact
    about the station, not a fault, and it sits beside controls that are working. The glyph is
    aria-hidden in the markup and the WORD carries the meaning, so nothing here is colour-only
