@@ -46,6 +46,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { NeedTag } from '../types'
 import { getDxccEntityContinents } from '../api'
+import { CONTINENT_CODES } from './dxccGeo'
 
 /** One excludable country. `key` is the persisted identity; `entity` is the matching one. */
 export interface ExcludableCountry {
@@ -237,8 +238,10 @@ export const COUNTRY_EXCLUDE_CONTINENTS_KEY = 'nexus.decodes.countryExclude.cont
 
 /** cty.dat's six continent codes, in picker order — the only values honoured from storage. A code
  *  this list does not know has no checkbox, so honouring it would hide rows with nothing on
- *  screen to account for them. */
-export const CONTINENT_CODES: readonly string[] = ['NA', 'SA', 'EU', 'AF', 'AS', 'OC']
+ *  screen to account for them. Re-exported so this module's importers keep their existing name;
+ *  the list itself lives in `dxccGeo.ts`, shared with the Spots chips and the alert scope (#174).
+ *  One continent vocabulary across the product, not a copy per surface. */
+export { CONTINENT_CODES }
 
 function loadExcludedContinents(): ReadonlySet<string> {
   try {
@@ -273,6 +276,17 @@ function saveExcludedContinents(codes: Iterable<string>): void {
  * continent tick then hides NOTHING, the direction every ambiguity here resolves toward.
  */
 let continentTable: Promise<ReadonlyMap<string, string>> | null = null
+/**
+ * The cty.dat entity → continent table, fetched once per session and shared.
+ *
+ * ⚠️ EXPORTED AS DATA, NOT AS THIS MODULE'S FILTER. The alert scope (#174) needs the same static
+ * backend table and there is no reason to fetch or cache it twice — but it must NOT reach in for
+ * the exclusion list, which the header above scopes to the RX display and deliberately keeps out
+ * of the alert path. A table is a fact about cty.dat; the ticks are this module's own.
+ */
+export function dxccContinentTable(): Promise<ReadonlyMap<string, string>> {
+  return entityContinents()
+}
 function entityContinents(): Promise<ReadonlyMap<string, string>> {
   if (!continentTable) {
     continentTable = getDxccEntityContinents()

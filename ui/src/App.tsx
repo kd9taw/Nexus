@@ -77,6 +77,7 @@ import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
+import { useAlertGeoScope } from './features/alertGeoScope'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
@@ -1032,6 +1033,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }),
     [settings?.alertDxccBands, settings?.alertGridBands, settings?.alertRareGridBands],
   )
+  // The operator's GEOGRAPHIC alert scope (#174), resolved to cty.dat entity names. Null until
+  // they tick something, and the decode alerter treats null as "alert on everything".
+  const alertGeoScope = useAlertGeoScope(settings?.alertContinents, settings?.alertEntities)
   // The Needed board's feed — band scopes honoured, mode-feature gate neutral (see boardNeeds).
   const boardAlerts = useMemo(() => boardNeeds(needAlerts, needScopes), [needAlerts, needScopes])
   const visibleAlerts = useMemo(
@@ -1374,8 +1378,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       watchlist,
       // Current dial for the per-alert band scopes (grid alerts default to VHF+ only).
       snap.radio.dialMhz > 0 ? snap.radio.dialMhz : undefined,
+      // The operator's geographic scope (#174) — null while nothing is ticked, which is the
+      // shipped default and leaves every alert exactly as it was.
+      alertGeoScope,
     )
-  }, [snap, settings, handleCall, watchlist])
+  }, [snap, settings, handleCall, watchlist, alertGeoScope])
 
   // Bumps when a QSO is logged AND "Clear DX call after logging" is on — the
   // cockpit watches it and wipes its DX Call/Grid fields (stock WSJT-X option).

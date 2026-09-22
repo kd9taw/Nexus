@@ -2250,6 +2250,33 @@ pub struct Settings {
     /// ask, 2026-08-16 — a 'Dupe 40m' shown for a station worked on FT8 while running phone).
     #[serde(default)]
     pub b4_match_mode: bool,
+    /// Geographic scope for decode alerts — cty.dat CONTINENT CODES ("EU", "NA", …) the
+    /// operator wants to be interrupted about (#174, barnburner6503: "filter the spots and
+    /// alerts ... by country or continent ... instead of having all world spots available").
+    ///
+    /// ⚠️ EMPTY = EVERY CONTINENT ALERTS, and that is the shipped default. A capability that
+    /// needs configuring before it does anything is unfinished, so an operator who never opens
+    /// this setting must hear exactly what they heard before it existed. `#[serde(default)]`
+    /// gives an older settings.json an empty vec, which is that same everything-alerts state —
+    /// there is no migration and nothing to lose.
+    ///
+    /// The vocabulary is deliberately the one the Spots "Spotted from" chips and Band Activity's
+    /// hide-by-continent already speak, so the product has ONE way to name a place. The UI-side
+    /// predicate is `ui/src/features/dxccGeo.ts`; a row carries an entity NAME and never a
+    /// continent, so a code here is expanded through `dxcc_entity_continents`.
+    #[serde(default)]
+    pub alert_continents: Vec<String>,
+    /// Geographic scope for decode alerts — cty.dat ENTITY NAMES, the twin of
+    /// [`Settings::alert_continents`] for "France only" rather than "Europe only". Exactly the
+    /// strings `DecodeRow.country` carries (there is no numeric DXCC id in this codebase).
+    ///
+    /// UNIONS with the continent list rather than intersecting it: a decode has exactly ONE
+    /// entity, so requiring both would be unsatisfiable — ticking Europe and Japan would silence
+    /// the radio. Empty = no entity scope; both empty = everything alerts.
+    ///
+    /// Someone CALLING YOU and a watch-list hit are exempt from both lists — see `alerts.ts`.
+    #[serde(default)]
+    pub alert_entities: Vec<String>,
     /// Band scope for the rare/ultra 💎 grid alerts — separate from plain grids
     /// so an operator CAN keep the open-water gems on HF by widening it.
     ///
@@ -4191,6 +4218,10 @@ impl Default for Settings {
             pota_new_activation_alert: false,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
+            // Empty = every continent and every entity alerts, which is precisely the behaviour
+            // before this scope existed. The feature is invisible until an operator opts in.
+            alert_continents: Vec::new(),
+            alert_entities: Vec::new(),
             b4_match_mode: false,
             alert_rare_grid_bands: default_alert_grid_bands(),
             wheel_tune_sensitivity: default_wheel_tune_sensitivity(),

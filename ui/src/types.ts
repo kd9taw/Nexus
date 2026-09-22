@@ -3731,6 +3731,15 @@ export interface Settings {
   alertGridBands: string
   /** Band scope for the rare/ultra 💎 grid alerts (separate so HF-quiet keeps the gems). */
   alertRareGridBands: string
+  /** GEOGRAPHIC alert scope (#174): cty.dat continent codes ('EU', 'NA', …) worth being
+   *  interrupted about. EMPTY/absent = every continent alerts — the shipped default, and
+   *  indistinguishable from the behaviour before this setting existed. */
+  alertContinents?: string[]
+  /** The entity-name half of the geographic scope — 'France only' rather than 'Europe only'.
+   *  cty.dat entity NAMES, exactly what `DecodeRow.country` carries. UNIONS with
+   *  `alertContinents` (a decode has one entity, so requiring both would match nothing).
+   *  Someone calling you and a watch-list hit are exempt from both. See features/dxccGeo.ts. */
+  alertEntities?: string[]
   /** Mouse-wheel tuning sensitivity (1.0 = stock; <1 less sensitive, >1 more). */
   wheelTuneSensitivity?: number
   /** Screen-reader speech for arriving decodes: 'off' | 'needed' (alerts only)
