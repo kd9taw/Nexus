@@ -444,6 +444,33 @@ pub fn parse_func_reply(reply: &str) -> Option<bool> {
 /// the RX passband width (Hz) on the next. Either may be absent on a given read (a networked
 /// chain can split the two lines). Ignores `RPRT`/blank lines; a 0 width (rig's "default filter")
 /// is treated as no-value.
+/// Has a newline-terminated reply delivered all `expected_lines` of its payload?
+///
+/// `expected_lines` is the rigctld protocol's own answer length for the verb (1 for almost
+/// everything, 2 for `m` and `s`), not a guess about the rig.
+///
+/// ⚠️ **An `RPRT` line ends the reply whatever the count says.** A refusal is rigctld's ENTIRE
+/// answer — it carries none of the payload lines a success would — so waiting for a second line
+/// after `RPRT -1` would burn the deadline on a reply that is already complete, and turn every
+/// rejected `m` into a timeout that drops the connection.
+fn reply_complete(out: &[u8], expected_lines: usize) -> bool {
+    if !out.ends_with(b"\n") {
+        return false;
+    }
+    // ⚠️ THE SINGLE-LINE PATH IS THE OLD CONDITION, EXACTLY. Every verb but `m` and `s` comes
+    // through here, including the keying ones, so it must not acquire a new way to fail. Counting
+    // NON-EMPTY lines would not be identical: a reply of just "\n" has none, and would go from
+    // an immediate Ok to waiting out the deadline and dropping the connection.
+    if expected_lines <= 1 {
+        return true;
+    }
+    let text = String::from_utf8_lossy(out);
+    if text.lines().any(|l| l.trim_start().starts_with("RPRT")) {
+        return true;
+    }
+    text.lines().filter(|l| !l.trim().is_empty()).count() >= expected_lines
+}
+
 pub fn parse_mode_passband(reply: &str) -> (Option<String>, Option<u32>) {
     let mut mode = None;
     let mut passband = None;
@@ -607,13 +634,41 @@ impl Rig {
         self.command_permitted(line, deadline_ms, None)
     }
 
+    /// Like [`command`] for a verb whose reply the rigctld protocol defines as MORE THAN ONE
+    /// line — today `m` (mode + passband) and `s` (split flag + VFO).
+    ///
+    /// ⚠️ **This exists because the drain above cannot do the job alone (#CI flake, proven
+    /// 2026-09-21).** [`command_inner`] returns at the first newline, so when the two lines of
+    /// an `m` reply arrive in separate reads — the networked-chain case the drain's own comment
+    /// describes — the second line stays in the socket. The pre-command drain is NON-BLOCKING,
+    /// so it discards only what has ALREADY arrived: a straggler still in flight survives it and
+    /// is read as the NEXT command's answer. Measured: `l RFPOWER` issued right after a split
+    /// `m` returned the passband width, `raw=Some(2400.0)`, which the 0..=1 power range rejects
+    /// as `ReadingUnavailable`.
+    ///
+    /// Reading the reply the protocol's own length fixes it at the source, so nothing is left to
+    /// drain. The drain stays as the backstop it was always meant to be.
+    fn command_expecting(&mut self, line: &str, expected_lines: usize) -> std::io::Result<String> {
+        self.command_lines(line, None, None, expected_lines)
+    }
+
     fn command_permitted(
         &mut self,
         line: &str,
         deadline_ms: Option<u64>,
         permission: Option<&WritePermission>,
     ) -> std::io::Result<String> {
-        match self.command_inner(line, deadline_ms, permission) {
+        self.command_lines(line, deadline_ms, permission, 1)
+    }
+
+    fn command_lines(
+        &mut self,
+        line: &str,
+        deadline_ms: Option<u64>,
+        permission: Option<&WritePermission>,
+        expected_lines: usize,
+    ) -> std::io::Result<String> {
+        match self.command_inner(line, deadline_ms, permission, expected_lines) {
             Ok(reply) => Ok(reply),
             Err(e) => {
                 // Diagnostic: dropping the rigctld connection is what triggers the daemon's
@@ -637,6 +692,7 @@ impl Rig {
         line: &str,
         deadline_override: Option<u64>,
         permission: Option<&WritePermission>,
+        expected_lines: usize,
     ) -> std::io::Result<String> {
         if let Some(permission) = permission {
             permission
@@ -691,6 +747,14 @@ impl Rig {
         // network chain keeps the long 2.5 s window for legitimately slow replies.
         let deadline_ms = deadline_override.unwrap_or(if slow { 2_500 } else { 700 });
         let deadline = std::time::Instant::now() + Duration::from_millis(deadline_ms);
+        // For a multi-line verb: once the FIRST line is in but the rest is not, how long the
+        // straggler gets. Short because it is measuring one more segment on a link that has
+        // already answered, not the rig's thinking time — and because the fallback below is
+        // exactly the old behaviour, so this bounds the cost of a daemon that answers a
+        // multi-line verb with fewer lines than the protocol defines (none known: Hamlib's
+        // rigctld and both of Nexus's own impersonators send both lines).
+        const MULTILINE_TAIL_MS: u64 = 100;
+        let mut tail_deadline: Option<std::time::Instant> = None;
         let mut out = Vec::with_capacity(64);
         let mut buf = [0u8; 256];
         loop {
@@ -703,6 +767,18 @@ impl Rig {
                 }
                 Ok(n) => {
                     out.extend_from_slice(&buf[..n]);
+                    // Short of the expected line count: give the rest a brief window, and
+                    // shorten the per-read wait to match so the window can actually expire.
+                    if expected_lines > 1
+                        && tail_deadline.is_none()
+                        && out.ends_with(b"\n")
+                        && !reply_complete(&out, expected_lines)
+                    {
+                        tail_deadline = Some(
+                            std::time::Instant::now() + Duration::from_millis(MULTILINE_TAIL_MS),
+                        );
+                        stream.set_read_timeout(Some(Duration::from_millis(MULTILINE_TAIL_MS)))?;
+                    }
                     // TWO TERMINATORS, and only one of them is a newline. rigctld's own answers end
                     // in `\n` (`f` → "14074000\n"), but `w` (send_cmd) hands back the RIG's string
                     // terminated by a NUL and no newline at all — measured against Hamlib 4.7.0 on
@@ -711,12 +787,18 @@ impl Rig {
                     // every raw-CAT read failed silently and forced a reconnect. Accepting either
                     // terminator is version-agnostic: a daemon that does append a newline still
                     // matches the first arm, and no ordinary reply contains a NUL.
-                    if out.ends_with(b"\n") || out.ends_with(b"\0") {
+                    if out.ends_with(b"\0") || reply_complete(&out, expected_lines) {
                         return Ok(String::from_utf8_lossy(&out).to_string());
                     }
                 }
                 Err(ref e) if read_should_retry(e.kind()) => {} // nothing read — wait out the deadline
                 Err(e) => return Err(e), // hard error — caller drops the stream
+            }
+            // The straggler never came. Return the lines that DID arrive: that is precisely what
+            // this function did before it counted lines at all, so a short multi-line reply can
+            // never become an error it was not already.
+            if tail_deadline.is_some_and(|t| std::time::Instant::now() >= t) {
+                return Ok(String::from_utf8_lossy(&out).to_string());
             }
             if std::time::Instant::now() >= deadline {
                 return Err(std::io::Error::new(
@@ -1204,15 +1286,21 @@ impl Rig {
         self.read_mode_passband().0
     }
 
-    /// Read the rig's mode + RX passband (Hz) from ONE `m` reply. CAT-only. The passband is
-    /// opportunistic: present when both reply lines arrive in one read (the common path); a
-    /// networked chain that splits them just surfaces the width on a later poll (the pre-command
-    /// drain flushes the stray line so it never poisons the next command).
+    /// Read the rig's mode + RX passband (Hz) from ONE `m` reply. CAT-only.
+    ///
+    /// ⚠️ **Both lines are read here, and that is load-bearing rather than tidy.** The previous
+    /// wording called the passband "opportunistic — a networked chain that splits the two lines
+    /// just surfaces the width on a later poll (the pre-command drain flushes the stray line so
+    /// it never poisons the next command)". The parenthetical was false, and CI proved it: the
+    /// drain is non-blocking, so a second line still in flight survives it and is read as the
+    /// NEXT command's answer. See [`command_expecting`], which carries the measurement. Leaving
+    /// nothing behind is also what the [`command`] header calls a TX-safety invariant — the
+    /// desync it names is "a keyed rig read as PTT ok".
     pub fn read_mode_passband(&mut self) -> (Option<String>, Option<u32>) {
         if self.control.is_none() {
             return (None, None);
         }
-        match self.command("m\n") {
+        match self.command_expecting("m\n", 2) {
             Ok(reply) => parse_mode_passband(&reply),
             Err(_) => (None, None),
         }
@@ -1297,7 +1385,9 @@ impl Rig {
     /// means the caller must keep today's behaviour rather than guess at a state it never read.
     pub fn read_split(&mut self) -> Option<(bool, String)> {
         self.control.as_ref()?;
-        let reply = self.command("s\n").ok()?;
+        // Two lines, for the same reason `m` reads two: a split reply would otherwise leave the
+        // VFO name in the socket for the next command to read as its own answer.
+        let reply = self.command_expecting("s\n", 2).ok()?;
         let mut lines = reply.lines().map(str::trim).filter(|l| !l.is_empty());
         let on = lines.next()?.parse::<u8>().ok()? != 0;
         // A rig that answers the flag but not the VFO name is still worth believing about the
@@ -1819,6 +1909,123 @@ mod tests {
                 "RPRT 0\n".to_string()
             }
         }
+    }
+
+    /// [`mock_rigctld`], but delivering each reply ONE LINE AT A TIME with a gap — the
+    /// networked chain (rigctld → SmartSDR CAT → radio) that `command_inner`'s pre-command
+    /// drain comment describes, made deterministic.
+    fn mock_rigctld_split(
+        reply: impl Fn(&str) -> String + Send + 'static,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log_w = log.clone();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 256];
+                loop {
+                    let n = match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                    for line in text.lines() {
+                        log_w.lock().unwrap().push(line.to_string());
+                        for (i, part) in reply(line).split_inclusive('\n').enumerate() {
+                            if i > 0 {
+                                std::thread::sleep(Duration::from_millis(5));
+                            }
+                            if stream.write_all(part.as_bytes()).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// **A SPLIT TWO-LINE REPLY MUST NOT POISON THE NEXT COMMAND** (CI flake, diagnosed
+    /// 2026-09-21).
+    ///
+    /// [`Rig::command`]'s own header calls this a TX-safety invariant — "if a slow reply were
+    /// left in the socket buffer, the next command would read it as its own answer … a keyed rig
+    /// read as PTT ok". The guard installed for it, the pre-command drain, is NON-BLOCKING, so
+    /// it discards only what has already arrived and a straggler still in flight walks straight
+    /// past it. `read_mode_passband`'s own comment asserted the opposite ("the pre-command drain
+    /// flushes the stray line so it never poisons the next command") and was wrong.
+    ///
+    /// Measured before the fix: `remote_read_level_value(Power)` got `raw=Some(2400.0)` — the
+    /// passband of the preceding `m` — which the 0..=1 power range rejects as
+    /// `ReadingUnavailable`. That is how it surfaced, as an FM-receiver test failing roughly one
+    /// run in twenty.
+    ///
+    /// Both halves are asserted because either alone passes for the wrong reason: `m` must now
+    /// GET its second line, and the next command must get ITS OWN answer.
+    #[test]
+    fn a_split_mode_reply_does_not_leak_its_passband_into_the_next_command() {
+        let (addr, log) = mock_rigctld_split(|line| match line {
+            "m" => "USB\n2400\n".to_string(),
+            "l RFPOWER" => "0.500\n".to_string(),
+            _ => "RPRT 0\n".to_string(),
+        });
+        let mut rig = Rig::with_control(Some(addr), PttMode::Cat);
+        assert_eq!(
+            rig.read_mode_passband(),
+            (Some("USB".to_string()), Some(2400)),
+            "both lines of a split reply belong to the `m` that asked for them"
+        );
+        assert_eq!(
+            rig.read_meter_f32("RFPOWER"),
+            Some(0.5),
+            "the next command must read its OWN answer, not the stray passband"
+        );
+        assert_eq!(*log.lock().unwrap(), ["m", "l RFPOWER"]);
+    }
+
+    /// The other direction, and it is what keeps the fix from costing a deadline on every
+    /// refusal: an `RPRT` line is rigctld's WHOLE answer, carrying none of the payload lines a
+    /// success would. A two-line verb must return on it at once rather than wait out the tail
+    /// window for a line that is never coming.
+    #[test]
+    fn a_refused_two_line_verb_returns_at_once_rather_than_waiting_for_a_second_line() {
+        let (addr, _log) = mock_rigctld(|line| match line {
+            "m" => "RPRT -1\n".to_string(),
+            _ => "RPRT 0\n".to_string(),
+        });
+        let mut rig = Rig::with_control(Some(addr), PttMode::Cat);
+        let started = std::time::Instant::now();
+        assert_eq!(rig.read_mode_passband(), (None, None));
+        assert!(
+            started.elapsed() < Duration::from_millis(80),
+            "a refusal must not wait out the multi-line tail window: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The single-line path must stay EXACTLY the pre-change condition — "ends with a newline"
+    /// and nothing more. Every verb but `m` and `s` comes through it, keying included, so a new
+    /// way for it to say "not yet" would be a new way for CAT to fail. The bare-newline row is
+    /// the one that a non-empty-line count would silently change.
+    #[test]
+    fn counting_lines_never_changes_the_answer_for_a_single_line_verb() {
+        for body in ["RPRT 0\n", "14074000\n", "\n", "0.500\n", "USB\n2400\n"] {
+            assert_eq!(
+                reply_complete(body.as_bytes(), 1),
+                body.ends_with('\n'),
+                "single-line completion must be the old newline test: {body:?}"
+            );
+        }
+        assert!(!reply_complete(b"14074000", 1), "no newline, not complete");
+        // Two-line verbs are the only ones that count, and an RPRT ends them early.
+        assert!(!reply_complete(b"USB\n", 2), "one of two lines is not done");
+        assert!(reply_complete(b"USB\n2400\n", 2), "both lines present");
+        assert!(
+            reply_complete(b"RPRT -1\n", 2),
+            "a refusal is the whole reply"
+        );
     }
 
     /// EINTR IS NOT "THE PEER WENT QUIET". A signal can cut a blocking read short before it
