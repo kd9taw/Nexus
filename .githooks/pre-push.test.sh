@@ -142,6 +142,49 @@ ENVV="NEXUS_CONTRIBUTORS=$ALLOW" \
   expect PASS "  ... same commit passes once allowlisted" origin goodcontrib:refs/heads/contribok
 git checkout -q main; git branch -qD goodcontrib
 
+# Role awareness (the split landed 2026-09-21; these tests did not, and the prefix went out
+# untested on a gate whose own contributors file calls it "LOAD-BEARING"). A plain entry admits
+# an identity as author AND committer; `committer:<email>` admits it as COMMITTER ONLY. The
+# distinction is the whole point: GitHub's web-merge stamp legitimately appears as the committer
+# on this repo's merge commits and must never be able to sign an AUTHOR line. Pooled into one
+# list — which is what this check did before — admitting a committer silently admitted an author.
+#
+# Three cases, because two would not be enough. The PASS alone would also pass on a hook that
+# ignored committers entirely, so the third case is what proves the committer list is consulted
+# at all. Unlisted/BLOCK cases run before the PASS for the same reason the pair above does: a
+# passed push lands the commit on the remote and empties the next range.
+ROLES="$LAB/contributors-roles"
+printf '%s\n' 'contrib@example.org' 'committer:bot@example.org' > "$ROLES"
+
+git checkout -qb botauthor
+echo ok > b1.txt; git add b1.txt
+GIT_AUTHOR_EMAIL="bot@example.org" GIT_AUTHOR_NAME="A Bot" \
+  GIT_COMMITTER_EMAIL="contrib@example.org" GIT_COMMITTER_NAME="A Contributor" \
+  git commit -qm "chore: authored by the machine identity"
+ENVV="NEXUS_CONTRIBUTORS=$ROLES" \
+  expect BLOCK "a committer: entry does NOT admit authorship" origin botauthor:refs/heads/roleno
+git checkout -q main; git branch -qD botauthor
+
+# The committer list really is consulted — without this, the PASS below proves nothing.
+git checkout -qb badcommitter
+echo ok > b3.txt; git add b3.txt
+GIT_AUTHOR_EMAIL="contrib@example.org" GIT_AUTHOR_NAME="A Contributor" \
+  GIT_COMMITTER_EMAIL="stranger@example.org" GIT_COMMITTER_NAME="A Stranger" \
+  git commit -qm "chore: committed by nobody listed"
+ENVV="NEXUS_CONTRIBUTORS=$ROLES" \
+  expect BLOCK "  ... and an unlisted COMMITTER still refuses" origin badcommitter:refs/heads/rolebad
+git checkout -q main; git branch -qD badcommitter
+
+# ... but the SAME machine identity passes in the one role it is listed for.
+git checkout -qb botcommitter
+echo ok > b2.txt; git add b2.txt
+GIT_AUTHOR_EMAIL="contrib@example.org" GIT_AUTHOR_NAME="A Contributor" \
+  GIT_COMMITTER_EMAIL="bot@example.org" GIT_COMMITTER_NAME="A Bot" \
+  git commit -qm "chore: committed by the machine identity"
+ENVV="NEXUS_CONTRIBUTORS=$ROLES" \
+  expect PASS "  ... but DOES admit it as a committer" origin botcommitter:refs/heads/roleok
+git checkout -q main; git branch -qD botcommitter
+
 # THE ONE THAT MATTERS: the maintainer's other identity is denied BEFORE the allowlist is
 # consulted, so listing it cannot readmit it. If this ever reports PASS, the deny/allow
 # ordering in check 3 has been reversed and the gate no longer does its job.

@@ -570,6 +570,21 @@ jobs:
       - name: scripts/gates still derives the gate list from this workflow
         run: node --test scripts/gates.test.mjs
 
+      # Exactly the same argument, one file over. `.githooks/pre-push` is the one gate in this
+      # project that is mechanism rather than prose — wrong-remote, release-tag, identity, the
+      # per-commit content scrub and the licence/NOTICE guard — and `.githooks/pre-push.test.sh`
+      # is its regression suite, whose own header calls it "the one that has to be provable".
+      # It ran in no workflow either. A suite that only runs when somebody remembers cannot
+      # catch the change that stops remembering, and the hook is the last thing between a
+      # private identity and public history.
+      #
+      # Cheap and hermetic, which is why there is no excuse: ~2.5 s, no network (verified under
+      # a network-less namespace), no `gh`. It builds a throwaway bare remote under $TMPDIR,
+      # stubs the CI-evidence predicate, and uses STAND-IN leak patterns, never the real
+      # private ones — so it is safe in a public repo and needs no secret to run here.
+      - name: The pre-push hook still refuses what it must
+        run: ./.githooks/pre-push.test.sh
+
       # scripts/require-green-ci is the predicate that decides whether a release may
       # publish — release.yml's ci-evidence job, publish.yml's resolve job and the
       # pre-push release-tag gate all call THIS ONE FILE. It is therefore the piece of
