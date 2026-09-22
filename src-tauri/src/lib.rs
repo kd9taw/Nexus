@@ -8078,6 +8078,32 @@ static SAT_TRACK: Mutex<Option<SatTrackDto>> = Mutex::new(None);
 #[cfg(test)]
 pub(crate) static TEST_SAT_TRACK: Mutex<()> = Mutex::new(());
 
+/// Exclusive use of the badge above for the length of one test — **the one implementation**,
+/// here beside the statics it guards so no module can grow a second convention for the same
+/// mutex.
+///
+/// ⚠️ It lives here because it did not, and that cost a flake. The guard used to be a private
+/// `alone()` in `remote_service::operations::tests`, reachable only by the three test files
+/// beside it, while `remote_service::tests` and this file's own pass tests reached the same
+/// statics by other routes. Measured 2026-09-21: `a_stop_is_admitted_while_the_stations_sends_
+/// are_stuck_on_a_slow_link` bumped `SAT_TRACK_GEN` from an unguarded thread while
+/// `a_rotor_that_stops_answering…` was flying a pass, the pass bailed on the generation check
+/// and skipped its LOS handback, and the dial was never handed back.
+///
+/// Each test module keeps a one-line `alone()` that delegates here, so the name the guard-on-the-
+/// guard scanner looks for is the same everywhere.
+///
+/// TAKE IT ONCE, at the top of the test body, and never again inside anything that body calls:
+/// `std::sync::Mutex` is not reentrant, so a second take deadlocks rather than flakes.
+#[cfg(test)]
+pub(crate) fn sat_track_alone() -> std::sync::MutexGuard<'static, ()> {
+    let guard = TEST_SAT_TRACK.lock().unwrap_or_else(|e| e.into_inner());
+    // Start from an idle badge, so "no track is running" is a fact this test established rather
+    // than whatever the previous one happened to leave behind.
+    *SAT_TRACK.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    guard
+}
+
 /// Occupy the live-track badge without flying a pass.
 ///
 /// `SAT_TRACK.is_some()` is what "a track is live" MEANS to every reader of it — the stop path's

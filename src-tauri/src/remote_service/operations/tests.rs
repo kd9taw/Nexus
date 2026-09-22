@@ -111,11 +111,7 @@ fn id() -> String {
 /// starts the test from an idle badge, so "no track is running" is a fact the test established
 /// rather than whatever the previous one happened to leave behind.
 fn alone() -> std::sync::MutexGuard<'static, ()> {
-    let guard = crate::TEST_SAT_TRACK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    *crate::SAT_TRACK.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    guard
+    crate::sat_track_alone()
 }
 
 /// ⭐ THE GUARD ON THE GUARD — [`alone`] is a convention, and a convention nobody can see is one
@@ -123,15 +119,41 @@ fn alone() -> std::sync::MutexGuard<'static, ()> {
 /// tests reach the badge: every `#[test]` whose body writes it (a Stop) or reads it (a rotator
 /// point) must hold the guard.
 ///
-/// It is here rather than in any one of them because the rule spans all three, and because the
+/// It is here rather than in any one of them because the rule spans all of them, and because the
 /// collision it prevents is invisible until it flakes — it did, in two different agents' gate
 /// runs and again in a third, before anyone went looking.
+///
+/// ⚠️ **WHAT THIS RULE STILL CANNOT REACH, and one misleading error on the way out.**
+///
+/// A test can touch the badge **transitively**, through a product function, with its body naming
+/// nothing to match on. `query::navigation::tests::connect_uses_the_actual_prediction…` calls
+/// `connect()`, which reaches `navigation::live`, which does
+/// `crate::SAT_TRACK.try_lock().map_err(|_| "applicationBusy")` — so **`applicationBusy` on that
+/// path is not always about the application being busy; a lost `try_lock` on the badge produces
+/// the same word.** That test was seen red once in 60 oversubscribed runs on 2026-09-21 for
+/// exactly that reason, and it is NOT covered below: a text predicate cannot see a lock taken two
+/// calls away. Left as a known member of this family rather than papered over — chasing it with a
+/// wider predicate would match half the suite.
+///
+/// Measured the same day, for whoever picks that up: guarding one more test added exactly ONE
+/// `SAT_TRACK` acquisition per run (25 bodies calling `alone()` → 26) against a floor of 237 from
+/// `disarm_sat_track_locked` alone, plus one per pass tick. The guard's own hold is unchanged —
+/// a statement-scoped temporary, as it always was.
 #[test]
 fn every_test_that_touches_the_track_badge_takes_the_guard() {
-    const SOURCES: [(&str, &str); 3] = [
+    // ⚠️ FIVE FILES, NOT THREE. The list was the three beside this one, and a Stop in a fourth
+    // walked straight past it: `remote_service/tests.rs`'s
+    // `a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link` bumped
+    // `SAT_TRACK_GEN` unguarded and killed a pass flying in `lib.rs` (measured 2026-09-21 — the
+    // disarm and the pass's bail-out were caught on adjacent lines, named by thread). A rule
+    // enforced over a subset of the files it applies to is the shape of every flake this guard
+    // was built to stop, so the list is now every file that has a test reaching the badge.
+    const SOURCES: [(&str, &str); 5] = [
         ("transmit_tests.rs", include_str!("transmit_tests.rs")),
         ("satellite_tests.rs", include_str!("satellite_tests.rs")),
         ("rotator_tests.rs", include_str!("rotator_tests.rs")),
+        ("remote_service/tests.rs", include_str!("../tests.rs")),
+        ("lib.rs", include_str!("../../lib.rs")),
     ];
     /// The two ways a test's outcome depends on the process-wide badge. Named for the rule, not
     /// for one of its halves: a reader is caught by exactly the same convention.
@@ -147,14 +169,26 @@ fn every_test_that_touches_the_track_badge_takes_the_guard() {
     /// never refused that way and needs no guard for reading.
     ///
     /// These are the shapes each reaches the badge in; a new shape belongs here beside them.
+    /// ⚠️ **THE WIRE SPELLING IS A SHAPE OF ITS OWN, and leaving it out is what let the fourth
+    /// file through.** A test that sends the Stop as JSON says `"stopTransmit"`, not the Rust
+    /// enum's `StopTransmit`, so a case-sensitive match on the enum name saw nothing while the
+    /// request reached `stop_station` exactly as any other Stop does. `run_simulated_pass` and
+    /// `test_live_sat_track` are the shapes `lib.rs` reaches it in.
     fn touches_badge(body: &str) -> bool {
         body.contains("StopTransmit")
+            || body.contains("\"stopTransmit\"")
             || body.contains("stop_request(")
             || body.contains("stop_v4(")
             || body.contains("rotator.point")
+            || body.contains("test_live_sat_track")
+            || body.contains("run_simulated_pass")
     }
+    /// `run_simulated_pass` counts as guarded: its helper takes the same mutex around the whole
+    /// pass (`lib.rs`, `run_simulated_pass_as`). That is a DIFFERENT shape from `alone()` — taken
+    /// in the callee rather than the body — and it is admitted here rather than silently, so the
+    /// next reader knows there are two and why.
     fn guarded(body: &str) -> bool {
-        body.contains("alone()")
+        body.contains("alone()") || body.contains("run_simulated_pass")
     }
 
     let mut bodies: Vec<(&str, String, String)> = Vec::new();
