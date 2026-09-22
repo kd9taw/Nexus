@@ -10,6 +10,7 @@ import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedActivation, LoggedQso } from '../types'
+import { QsoDetail } from './QsoDetail'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import { modeKey } from '../features/callHistory'
@@ -417,6 +418,9 @@ export function Logbook({
   // delete above it the same index names a different contact; the target of the edit, and the
   // fields the form did not carry, come from this row. `index` only marks the row in the list.
   const [editing, setEditing] = useState<{ index: number; row: LoggedQso } | null>(null)
+  /** The contact open in the detail view (#313 — "there's no View capability"). Read-only:
+   *  the pencil beside it is still the one editing path, so there is one writer. */
+  const [viewing, setViewing] = useState<LoggedQso | null>(null)
   const editIndex = editing?.index ?? null
   // Column sort — purely a VIEW concern; the backend `get_log` index is kept on each row so
   // edit/delete/mark still hit the right record. Default newest-first (the get_log order is
@@ -1837,6 +1841,17 @@ export function Logbook({
                 return (
                   <div
                     className={`log-row logbook-row${editIndex === i ? ' editing' : ''}`}
+                    // ⛔ DOUBLE-CLICK, NOT A TENTH BUTTON. A view button in the action cluster
+                    // was built first and MEASURED: ten controls need ~318 px of button plus
+                    // nine gaps against a 336 px track floor, and the harness reported
+                    // `fits: false` at EVERY viewport, including the 1024 support floor.
+                    // Widening the track takes that width from the columns at the narrowest
+                    // size the app claims to support. Double-click costs no width, keeps the
+                    // callsign selectable so it can still be copied, and is the idiom this app
+                    // already uses in the decoded text (#262). The row title carries it,
+                    // because the affordance is otherwise invisible.
+                    onDoubleClick={() => setViewing(q)}
+                    title={t('logbook.row.view.title', { call: q.call })}
                     role="row"
                     // The backend index `i` is unique per record → collision-proof even for two
                     // identical QSOs (double-clicked Log in the same second). Rows are stateless
@@ -2313,6 +2328,9 @@ export function Logbook({
         freqMhz={spotSeed?.freq ?? 0}
         defaultComment={spotSeed?.mode ?? ''}
       />
+      {/* Mounted beside SpotDialog at the section root, not inside the virtualised rows:
+          the row that opened it can be recycled out from under the view while it is open. */}
+      <QsoDetail qso={viewing} onClose={() => setViewing(null)} />
     </section>
   )
 }

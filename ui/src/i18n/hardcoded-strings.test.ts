@@ -105,6 +105,8 @@ const MIGRATED = [
   // around them moves. It also carried nine of the tree's hand-rolled plurals, which is what
   // proves the `{{count}}` path on real shipped counts rather than on a fixture.
   'components/Logbook.tsx',
+  // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
+  'components/QsoDetail.tsx',
   'components/LogEntry.tsx',
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',

@@ -24618,3 +24618,47 @@ tr.sel .aprs-sym {
 /* App owns the remote Phone/CW keep-alive hosts, beside its other view hosts. */
 .remote-contact-host { display: contents; }
 .remote-contact-host[hidden] { display: none; }
+
+/* THE QSO DETAIL VIEW (#313) — one contact, everything the record holds. A definition list
+   in two columns: label left, value right, so a long comment wraps under its own label
+   instead of shoving the next field sideways. Sections are omitted entirely when empty
+   (see QsoDetail.tsx), so nothing here has to style an absent field. */
+.qso-detail-dialog {
+  max-width: 44rem;
+}
+.qso-detail-section + .qso-detail-section {
+  margin-top: var(--space-4);
+}
+.qso-detail-heading {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 0 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 2px;
+}
+.qso-detail-fields {
+  display: grid;
+  grid-template-columns: minmax(7rem, max-content) 1fr;
+  gap: 2px var(--space-3);
+  margin: 0;
+}
+.qso-detail-field {
+  display: contents;
+}
+.qso-detail-fields dt {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+.qso-detail-fields dd {
+  margin: 0;
+  /* An imported comment can be long and an ADIF extra can be a single unbroken token;
+     neither may push the dialog wider than the window. */
+  overflow-wrap: anywhere;
+}
+.qso-detail-bare {
+  color: var(--text-dim);
+  margin: 0;
+}
