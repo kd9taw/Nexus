@@ -487,13 +487,30 @@ jobs:
         env:
           WRANGLER_SEND_METRICS: "false"
         run: npm --prefix remote run build
+      # The suite carries 53 `if(artifacts)` capture sites behind
+      # NEXUS_REMOTE_BROWSER_ARTIFACTS, and nothing in this repo ever set it — so every
+      # screenshot it knows how to take was dead code HERE, in the one place the failures
+      # actually happen. A `remote-nexus-tempo-failure.png` was written for exactly the v10
+      # red on 2026-09-22 and went nowhere, which is why attributing that red took an
+      # afternoon of re-runs. A guard that cannot deliver its evidence is not instrumentation.
       - name: Compiled browser sign-in, approval, observation and responsive layouts
         env:
           NEXUS_BROWSER_SHARD: ${{ matrix.shard }}
           NEXUS_BROWSER_SHARDS: "3"   # must equal the matrix length above — guarded by scripts/gates.test.mjs
+          NEXUS_REMOTE_BROWSER_ARTIFACTS: browser-artifacts
         run: |
           google-chrome --version
           npm --prefix remote run test:browser
+      # Only on failure: a green run writes the passing captures too and they are not worth
+      # storing. `if-no-files-found: ignore` because a job that dies before the first capture
+      # must report ITS failure, not a second one about a missing upload.
+      - name: The failing scenario's screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-shard-${{ matrix.shard }}-failure
+          path: remote/browser-artifacts/
+          if-no-files-found: ignore
 
 
   # Job 2 — Web UI (Vite + React + TypeScript). `npm run build` is `tsc -b &&
