@@ -77,6 +77,11 @@ export const FD_BONUSES: FdBonus[] = [
   { id: 'safety-officer',     label: 'Safety Officer',              points: 100 },
   { id: 'social-media',       label: 'Social Media',               points: 100 },
   { id: 'educational',        label: 'Educational Activity',        points: 100 },
+  // ARRL 7.3.8: "100 bonus points for successfully completing at least one QSO via an
+  // amateur radio satellite during the Field Day period." One bonus however many birds
+  // you work — "You do not receive an additional bonus for contacting different
+  // satellites" — so it is a single box like the rest, not a per-bird tally.
+  { id: 'satellite',          label: 'Satellite QSO',               points: 100 },
 ]
 
 /**
@@ -1450,7 +1455,7 @@ export function ContestView({ fieldDay, onSetMode, fdActive = false, fdRuleset =
   const log = fieldDay?.log ?? []
   const [exportError, setExportError] = useState<string | null>(null)
   const [busy, setBusy] = useState<ExportFormat | null>(null)
-  // The 15 bonuses are worth ~1450 points — more than most clubs' QSO points — and they
+  // The 16 bonuses are worth ~1550 points — more than most clubs' QSO points — and they
   // sat behind a collapsed disclosure an operator had to know was there. Once the event is
   // running the panel opens itself, ONCE: `openedForRun` means a club that deliberately
   // closes it is not fought on the next snapshot.

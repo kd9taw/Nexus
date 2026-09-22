@@ -236,8 +236,25 @@ fn record_for(log: &FieldDayLog, q: &LoggedQso, qid: String) -> QsoRecord {
         upload: UploadState::default(),
         ota: crate::logbook::Ota::default(),
         dxcc: None,
-        prop_mode: None,
-        sat_name: None,
+        // ⭐ **THE BIRD SURVIVES THE MERGE.** These were hardcoded `None`, which was true
+        // of every contest row there had ever been — and became a silent data loss the
+        // moment the satellite strip could log into a running Field Day session: the
+        // contest log is the only copy of that contact, so a pair dropped here is LoTW
+        // satellite credit the operator never gets and a grid Nexus's own Satellite VUCC
+        // and needs boards (`qso_is_sat` reads `PROP_MODE`) never see. Worse on a metre
+        // band than a plain omission — an untagged 2 m pass contact is credited to
+        // TERRESTRIAL VUCC, which is a wrong award, not a missing one.
+        //
+        // ⚠️ **BOTH OR NEITHER, by construction** — one `Option`, read twice. TQSL
+        // hard-errors on a lone member and through the `-a compliant` funnel would wedge
+        // the whole upload batch as Rejected. [`SatLeg::name`] is `None` for a bird LoTW
+        // does not list, and then this row is an ordinary one exactly as before.
+        prop_mode: q
+            .sat
+            .as_ref()
+            .and_then(|s| s.name.as_ref())
+            .map(|_| "SAT".to_string()),
+        sat_name: q.sat.as_ref().and_then(|s| s.name.clone()),
         operator: None,
         my_grid: None,
         my_rig: None,
@@ -293,6 +310,8 @@ mod tests {
         by_sent_fields: &[],
         mode_class_groups: &[],
         log_dupes: false,
+        satellite_is_a_band: false,
+        fm_satellite_once: false,
     };
 
     /// A unique scratch path under the OS temp dir — the shape `logbook.rs`'s own

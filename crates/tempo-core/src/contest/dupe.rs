@@ -18,6 +18,15 @@
 //! [ CALL ]  [ BAND ]  [ MODE CLASS ]  [ by_fields… ]  [ by_sent_fields… ]
 //! ```
 //!
+//! ⭐ **A SATELLITE CONTACT ADDS NO COMPONENT — it changes what two of them SAY.** ARRL
+//! Field Day: *"Satellite QSOs also count for regular QSO credit. Show them listed
+//! separately on the summary sheet as a separate 'band.'"* So with
+//! [`DupeRule::satellite_is_a_band`] the BAND position carries `SAT/<bird>` instead of
+//! the band, and with [`DupeRule::fm_satellite_once`] the MODE CLASS position of a
+//! single-channel FM bird's row is empty — *"Stations are limited to one (1) completed
+//! QSO on any single channel FM satellite."* The key's LENGTH and ORDER never move, which
+//! is what lets the club's pre-joined keys and the UI's verdict keep reading it.
+//!
 //! with four rules that are each there because their absence is a bug:
 //!
 //! * a `bool` component is **omitted entirely** when its flag is false — never pushed
@@ -92,12 +101,72 @@ pub struct DupeRule {
     /// verdict reads the same as it always did — what changed is only what happens when
     /// the operator commits anyway.
     pub log_dupes: bool,
+    /// ⭐ **A BIRD IS ITS OWN BAND.** ARRL Field Day, rule 7.3.8: *"Satellite QSOs also
+    /// count for regular QSO credit. Show them listed separately on the summary sheet as
+    /// a separate 'band.'"*
+    ///
+    /// `true` puts `SAT/<bird>` in the key's BAND position for a contact worked through
+    /// a satellite, so a station worked on 70 cm terrestrially and again through a 70 cm
+    /// bird is two contacts and both count. `false` — every ruleset that has not asked
+    /// for it, which is all of them but ARRL Field Day — is the shipped behaviour
+    /// exactly: the band travels, and a satellite row is indistinguishable from a
+    /// terrestrial one on the same band.
+    ///
+    /// ⚠️ It needs [`by_band`](Self::by_band): with no band position there is nowhere to
+    /// put it, and the rules loader refuses the combination rather than reading a flag
+    /// that silently does nothing.
+    pub satellite_is_a_band: bool,
+    /// ⭐ **ONE QSO PER SINGLE-CHANNEL FM SATELLITE.** ARRL Field Day: *"Stations are
+    /// limited to one (1) completed QSO on any single channel FM satellite."*
+    ///
+    /// `true` drops the MODE CLASS out of the key for a row whose bird is a single
+    /// channel — on one channel there is no second mode to work the same station in, so
+    /// keeping it would let one bird yield two contacts. [`satellite_is_a_band`] already
+    /// refuses a repeat in the SAME mode; this is the part it does not reach.
+    ///
+    /// ⛔ **It applies to a single-channel bird and to nothing else.** The same sponsor
+    /// sentence says the additional QSOs through a LINEAR transponder *"may be counted
+    /// for QSO credit"*, and a limit applied to one of those refuses a contact the rules
+    /// allow — on the only copy of it there is. Which birds are which is a fact about the
+    /// bird ([`SatLeg::single_channel_fm`](crate::fieldday::SatLeg::single_channel_fm)),
+    /// stated by the satellite catalogue, never inferred here.
+    ///
+    /// ⚠️ It needs [`satellite_is_a_band`](Self::satellite_is_a_band). Without it the
+    /// band position still holds the real band, and an emptied mode class would make an
+    /// FM satellite contact collide with a TERRESTRIAL one on the same band — a legal
+    /// contact refused, which is the direction this module refuses to fail in. The rules
+    /// loader refuses the combination, and [`build`](Self::build) checks it again rather
+    /// than trusting a hand-built rule.
+    pub fm_satellite_once: bool,
+}
+
+/// ⭐ **What the dupe key needs to know about the bird a contact was worked through** —
+/// a borrowed view, so the key builder never has to own a satellite type.
+///
+/// [`Default`] is the TERRESTRIAL contact (`bird: ""`), which is what nearly every caller
+/// passes and what every ruleset but ARRL Field Day ignores entirely.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SatKey<'a> {
+    /// The satellite's own name — never the transponder's, because ARRL's limit is per
+    /// SATELLITE and a bird with a voice repeater and a packet digipeater is one bird.
+    /// Empty = a terrestrial contact, and then neither satellite flag can change the key.
+    pub bird: &'a str,
+    /// A single-channel FM satellite rather than a linear transponder — see
+    /// [`DupeRule::fm_satellite_once`].
+    pub single_channel_fm: bool,
 }
 
 impl DupeRule {
     /// The key for a logged row.
     pub fn key(&self, row: &crate::fieldday::LoggedQso) -> Vec<String> {
-        self.key_of(&row.call, &row.band, &row.mode, &row.rx, &row.tx)
+        self.key_of(
+            &row.call,
+            &row.band,
+            &row.mode,
+            &row.rx,
+            &row.tx,
+            row.sat_key(),
+        )
     }
 
     /// The key for a contact that is not a row yet — the while-typing verdict and the
@@ -110,11 +179,13 @@ impl DupeRule {
         mode_class: &str,
         rx: &[FieldValue],
         tx: &[FieldValue],
+        sat: SatKey<'_>,
     ) -> Vec<String> {
         self.build(
             call,
             band,
             mode_class,
+            sat,
             &|k| Some(field(rx, k).to_string()),
             &|k| Some(field(tx, k).to_string()),
         )
@@ -138,8 +209,9 @@ impl DupeRule {
         mode_class: &str,
         rcvd: &[(String, String)],
         sent: &[(String, String)],
+        sat: SatKey<'_>,
     ) -> Option<Vec<String>> {
-        self.build(call, band, mode_class, &|k| pair(rcvd, k), &|k| {
+        self.build(call, band, mode_class, sat, &|k| pair(rcvd, k), &|k| {
             pair(sent, k)
         })
     }
@@ -152,18 +224,47 @@ impl DupeRule {
         call: &str,
         band: &str,
         mode_class: &str,
+        sat: SatKey<'_>,
         rx: &dyn Fn(&str) -> Option<String>,
         tx: &dyn Fn(&str) -> Option<String>,
     ) -> Option<Vec<String>> {
         let mut k = Vec::with_capacity(3 + self.by_fields.len() + self.by_sent_fields.len());
+        // A contact worked through a bird, under a ruleset that asks for it. Resolved
+        // once: both components below read it, and they must agree about whether this
+        // row is a satellite row at all.
+        let bird = sat.bird.trim();
+        let via_sat = self.satellite_is_a_band && self.by_band && !bird.is_empty();
         if self.by_call {
             k.push(norm(call));
         }
         if self.by_band {
-            k.push(norm(band));
+            // ⭐ A BIRD IS ITS OWN BAND (ARRL 7.3.8). The band POSITION is unchanged —
+            // what it says is the bird. `SAT/` prefixed so it can never be read as, or
+            // collide with, a band label.
+            k.push(if via_sat {
+                norm(&format!("SAT/{bird}"))
+            } else {
+                norm(band)
+            });
         }
         if self.by_mode_class {
-            k.push(self.mode_key(&norm(mode_class)));
+            // ⭐ ONE CHANNEL, ONE QSO. Emptied IN POSITION rather than omitted — the key
+            // must keep its length, and this cannot collide with anything: the band
+            // component beside it already says `SAT/<bird>`, so the only row an empty
+            // mode class here can match is another contact through the same bird.
+            //
+            // ⛔ `via_sat` is load-bearing and not belt-and-braces: with the real band
+            // still in the position above, an emptied mode class would make this row
+            // collide with a TERRESTRIAL contact on the same band and refuse a legal
+            // QSO. The rules loader refuses that combination too; a hand-built rule
+            // cannot reach it either.
+            k.push(
+                if via_sat && self.fm_satellite_once && sat.single_channel_fm {
+                    String::new()
+                } else {
+                    self.mode_key(&norm(mode_class))
+                },
+            );
         }
         for key in self.by_fields {
             k.push(norm(&rx(key)?));
@@ -237,6 +338,8 @@ mod tests {
         by_sent_fields: &[],
         mode_class_groups: &[],
         log_dupes: false,
+        satellite_is_a_band: false,
+        fm_satellite_once: false,
     };
 
     /// The QSO-party rule: a mobile in a new county is a new station, in BOTH
@@ -249,6 +352,8 @@ mod tests {
         by_sent_fields: &["QTH"],
         mode_class_groups: &[],
         log_dupes: false,
+        satellite_is_a_band: false,
+        fm_satellite_once: false,
     };
 
     fn fv(key: &'static str, raw: &str) -> FieldValue {
@@ -262,7 +367,14 @@ mod tests {
     #[test]
     fn field_days_key_is_exactly_the_shipped_tuple() {
         assert_eq!(
-            FD.key_of("w1aw", " 20m ", "cw", &[], &[]),
+            FD.key_of(
+                "w1aw",
+                " 20m ",
+                "cw",
+                &[],
+                &[],
+                crate::contest::SatKey::default()
+            ),
             vec!["W1AW", "20M", "CW"]
         );
     }
@@ -286,10 +398,21 @@ mod tests {
             by_sent_fields: &["QTH"],
             mode_class_groups: &[&["CW", "DIG"]],
             log_dupes: false,
+            satellite_is_a_band: false,
+            fm_satellite_once: false,
         };
         let rx = [fv("QTH", "COOK")];
         let tx = [fv("QTH", "COOK")];
-        let key = |r: &DupeRule, m: &str| join(&r.key_of("W9AWE", "40m", m, &rx, &tx));
+        let key = |r: &DupeRule, m: &str| {
+            join(&r.key_of(
+                "W9AWE",
+                "40m",
+                m,
+                &rx,
+                &tx,
+                crate::contest::SatKey::default(),
+            ))
+        };
         assert_eq!(
             key(&ILQP, "CW"),
             key(&ILQP, "DIG"),
@@ -318,7 +441,14 @@ mod tests {
         // A grouped class keys as the group's FIRST member, whichever member the row
         // carries — the mode component, in its own position, and nothing else moves.
         assert_eq!(
-            ILQP.key_of("W9AWE", "40m", "DIG", &rx, &tx),
+            ILQP.key_of(
+                "W9AWE",
+                "40m",
+                "DIG",
+                &rx,
+                &tx,
+                crate::contest::SatKey::default()
+            ),
             vec!["W9AWE", "40M", "CW", "COOK", "COOK"]
         );
         // And the fold is case- and whitespace-insensitive like every other component.
@@ -337,13 +467,29 @@ mod tests {
             by_sent_fields: &[],
             mode_class_groups: &[],
             log_dupes: false,
+            satellite_is_a_band: false,
+            fm_satellite_once: false,
         };
         assert_eq!(
-            ss.key_of("W1AW", "20m", "CW", &[fv("QTH", "CT")], &[]),
+            ss.key_of(
+                "W1AW",
+                "20m",
+                "CW",
+                &[fv("QTH", "CT")],
+                &[],
+                crate::contest::SatKey::default()
+            ),
             vec!["W1AW", "CT"]
         );
         assert_ne!(
-            join(&ss.key_of("W1AW", "20m", "CW", &[fv("QTH", "CT")], &[])),
+            join(&ss.key_of(
+                "W1AW",
+                "20m",
+                "CW",
+                &[fv("QTH", "CT")],
+                &[],
+                crate::contest::SatKey::default()
+            )),
             join(&[
                 "W1AW".to_string(),
                 String::new(),
@@ -366,9 +512,18 @@ mod tests {
             by_sent_fields: &["C"],
             mode_class_groups: &[],
             log_dupes: false,
+            satellite_is_a_band: false,
+            fm_satellite_once: false,
         };
         assert_eq!(
-            r.key_of("W1AW", "", "", &[fv("B", "bee")], &[fv("C", "see")]),
+            r.key_of(
+                "W1AW",
+                "",
+                "",
+                &[fv("B", "bee")],
+                &[fv("C", "see")],
+                crate::contest::SatKey::default()
+            ),
             vec!["W1AW", "", "BEE", "SEE"]
         );
     }
@@ -383,8 +538,22 @@ mod tests {
         let pairs_rx = [("QTH".to_string(), "fran".to_string())];
         let pairs_tx = [("QTH".to_string(), "davi".to_string())];
         assert_eq!(
-            QSO_PARTY.key_of_pairs("w8xyz", "40m", "CW", &pairs_rx, &pairs_tx),
-            Some(QSO_PARTY.key_of("W8XYZ", "40M", "cw", &rx, &tx)),
+            QSO_PARTY.key_of_pairs(
+                "w8xyz",
+                "40m",
+                "CW",
+                &pairs_rx,
+                &pairs_tx,
+                crate::contest::SatKey::default()
+            ),
+            Some(QSO_PARTY.key_of(
+                "W8XYZ",
+                "40M",
+                "cw",
+                &rx,
+                &tx,
+                crate::contest::SatKey::default()
+            )),
         );
     }
 
@@ -395,7 +564,14 @@ mod tests {
     fn a_row_that_cannot_supply_a_named_slot_declines() {
         let tx = [("QTH".to_string(), "DAVI".to_string())];
         assert_eq!(
-            QSO_PARTY.key_of_pairs("W8XYZ", "40m", "CW", &[], &tx),
+            QSO_PARTY.key_of_pairs(
+                "W8XYZ",
+                "40m",
+                "CW",
+                &[],
+                &tx,
+                crate::contest::SatKey::default()
+            ),
             None,
             "no received county — no exact key"
         );
@@ -405,7 +581,8 @@ mod tests {
                 "40m",
                 "CW",
                 &[("QTH".to_string(), "   ".to_string())],
-                &tx
+                &tx,
+                crate::contest::SatKey::default(),
             ),
             None,
             "a blank county is not a county"
@@ -413,16 +590,46 @@ mod tests {
         // POSITIVE CONTROL: a rule naming no exchange slot — Field Day's — always
         // keys, so the decline above is about the missing slot and not about a
         // builder that never answers.
-        assert!(FD.key_of_pairs("W8XYZ", "40m", "CW", &[], &[]).is_some());
+        assert!(FD
+            .key_of_pairs(
+                "W8XYZ",
+                "40m",
+                "CW",
+                &[],
+                &[],
+                crate::contest::SatKey::default()
+            )
+            .is_some());
     }
 
     /// §4.1 direction 1 — I work somebody else's mobile.
     #[test]
     fn working_someone_elses_mobile_moves_the_key_and_working_them_twice_does_not() {
         let mine = [fv("QTH", "FRAN")];
-        let k1 = QSO_PARTY.key_of("W8XYZ", "40m", "CW", &[fv("QTH", "FRAN")], &mine);
-        let k2 = QSO_PARTY.key_of("W8XYZ", "40m", "CW", &[fv("QTH", "FAIR")], &mine);
-        let k3 = QSO_PARTY.key_of("W8XYZ", "40m", "CW", &[fv("QTH", "FRAN")], &mine);
+        let k1 = QSO_PARTY.key_of(
+            "W8XYZ",
+            "40m",
+            "CW",
+            &[fv("QTH", "FRAN")],
+            &mine,
+            crate::contest::SatKey::default(),
+        );
+        let k2 = QSO_PARTY.key_of(
+            "W8XYZ",
+            "40m",
+            "CW",
+            &[fv("QTH", "FAIR")],
+            &mine,
+            crate::contest::SatKey::default(),
+        );
+        let k3 = QSO_PARTY.key_of(
+            "W8XYZ",
+            "40m",
+            "CW",
+            &[fv("QTH", "FRAN")],
+            &mine,
+            crate::contest::SatKey::default(),
+        );
         assert_ne!(k1, k2, "the mobile moved — a new contact");
         assert_eq!(k1, k3, "same county, same station — a dupe");
     }
@@ -432,9 +639,30 @@ mod tests {
     #[test]
     fn being_the_mobile_moves_the_key_from_the_sent_side_alone() {
         let theirs = [fv("QTH", "TX")];
-        let davi = QSO_PARTY.key_of("K4ABC", "20m", "CW", &theirs, &[fv("QTH", "DAVI")]);
-        let will = QSO_PARTY.key_of("K4ABC", "20m", "CW", &theirs, &[fv("QTH", "WILL")]);
-        let again = QSO_PARTY.key_of("K4ABC", "20m", "CW", &theirs, &[fv("QTH", "WILL")]);
+        let davi = QSO_PARTY.key_of(
+            "K4ABC",
+            "20m",
+            "CW",
+            &theirs,
+            &[fv("QTH", "DAVI")],
+            crate::contest::SatKey::default(),
+        );
+        let will = QSO_PARTY.key_of(
+            "K4ABC",
+            "20m",
+            "CW",
+            &theirs,
+            &[fv("QTH", "WILL")],
+            crate::contest::SatKey::default(),
+        );
+        let again = QSO_PARTY.key_of(
+            "K4ABC",
+            "20m",
+            "CW",
+            &theirs,
+            &[fv("QTH", "WILL")],
+            crate::contest::SatKey::default(),
+        );
         assert_ne!(davi, will, "I crossed the county line — a new contact");
         assert_eq!(will, again, "same county, same station — a dupe");
         // POSITIVE CONTROL: with the sent half dropped from the rule the two are
@@ -445,8 +673,22 @@ mod tests {
             ..QSO_PARTY
         };
         assert_eq!(
-            received_only.key_of("K4ABC", "20m", "CW", &theirs, &[fv("QTH", "DAVI")]),
-            received_only.key_of("K4ABC", "20m", "CW", &theirs, &[fv("QTH", "WILL")]),
+            received_only.key_of(
+                "K4ABC",
+                "20m",
+                "CW",
+                &theirs,
+                &[fv("QTH", "DAVI")],
+                crate::contest::SatKey::default()
+            ),
+            received_only.key_of(
+                "K4ABC",
+                "20m",
+                "CW",
+                &theirs,
+                &[fv("QTH", "WILL")],
+                crate::contest::SatKey::default()
+            ),
         );
     }
 }

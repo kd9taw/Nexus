@@ -26,10 +26,10 @@ it('uses the real event boards and disclosures without native loaders or station
   fireEvent.change(op,{target:{value:'K9NEW'}});fireEvent.blur(op)
   expect(test.container.querySelector('.fd-export')).toBeNull()
   const actions=[...test.container.querySelectorAll<HTMLButtonElement>('.fd-role-btn,.fd-power-chip,.fd-bonus-plan')]
-  expect(actions).toHaveLength(20)
+  expect(actions).toHaveLength(21)
   expect(actions.every(e=>e.disabled)).toBe(true)
   const bonuses=[...test.container.querySelectorAll<HTMLInputElement>('.fd-bonus-row input')]
-  expect(bonuses).toHaveLength(15)
+  expect(bonuses).toHaveLength(16)
   expect(bonuses.every(e=>e.disabled)).toBe(true)
   expect(test.container.querySelector('[data-bonus-state=planned]')?.textContent).toContain('Natural Power')
   fireEvent.click(test.container.querySelector('.fd-bonuses-toggle')!)

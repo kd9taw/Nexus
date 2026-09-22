@@ -106,6 +106,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A satellite contact made during Field Day now scores for the club, on the bird's band.** The
+  log strip in the Satellites section was the one strip that never switched to the Field Day
+  entry, so a pass contact typed there during FD went into your general log and earned the club
+  nothing — with Field Day visibly running everywhere else in the app. It switches now, sharing
+  the same exchange and the same dupe check as every other position. The part that is not just
+  wiring is the band: everywhere else the FD log stamps each contact with the band the radio is
+  on at the moment you type it, so wiring this strip up the ordinary way would have filed a 70 cm
+  pass written up after LOS on whatever HF band the club had gone back to — in the Cabrillo, and
+  on the N1MM / N3FJP wire. Here the band, the frequency and the satellite tag come from the
+  transponder you were holding, so you can work the pass with both hands on the rotator and log
+  it once the bird has set. The `PROP_MODE` / `SAT_NAME` pair survives into the contest export
+  and into your lifetime log when you merge, so a Field Day pass contact still earns LoTW
+  satellite credit and still reaches the Sat VUCC and satellite-needs boards.
+
+- **Field Day now scores satellite contacts the way ARRL's rules actually read.** Three things
+  that were simply not modelled before. A bird counts as **its own band**, so a station worked
+  through RS-44 and again on 70 cm from the ground is two contacts and both count — the dupe
+  check used to refuse the second one, and the club lost a QSO that was always legal. A
+  **single-channel FM satellite is limited to one contact per station** whatever the mode, which
+  is ARRL's own limit; a *linear* transponder is not, so RS-44 on SSB and again on CW is still
+  two contacts, and Nexus tells the two kinds apart from the satellite catalogue's record of each
+  transponder rather than guessing from its passband. And the **100-point satellite bonus** is on
+  the Field Day checklist as a sixteenth box — you tick it yourself, like every other Field Day
+  bonus, and it is one bonus however many birds you work.
 - **A previous contact's comment can be read in the callsign card without hovering it.** The
   "Previous contacts" list in the lookup card clipped each comment to one line and put the rest
   in a tooltip, which is the same dead end the Logbook's Comment column had before it opened in

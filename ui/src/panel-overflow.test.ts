@@ -143,7 +143,7 @@ describe('Field Day: the Bonuses list cannot crush the Sections board', () => {
     const v = winner('.fd-bonuses-list', 'overflow-y') ?? winner('.fd-bonuses-list', 'overflow')
     expect(
       v,
-      'a capped box with no scroller just clips: the 15 bonus rows must reach the operator ' +
+      'a capped box with no scroller just clips: the 16 bonus rows must reach the operator ' +
         'inside their own list, which is what stops the growth reaching the sections board.',
     ).toBe('auto')
   })

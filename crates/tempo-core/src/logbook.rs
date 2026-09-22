@@ -1472,8 +1472,16 @@ impl Logbook {
                 &r.call,
                 &r.band,
                 crate::contest::mode_class(&r.mode),
+                // ⚠️ TERRESTRIAL, because a general-log record cannot name a bird the
+                // contest key would recognise: `SAT_NAME` is the LoTW designator
+                // ("SO-50") and the contest row's identity is the catalogue name
+                // ("SAUDISAT 1C (SO-50)"). Keying a satellite record under its band
+                // instead leaves it out of the exact set for a ruleset that lists a bird
+                // as a separate band — the §3.1 direction again: this is the ADVISORY
                 rcvd,
                 sent,
+                // half, and the refusal that matters is the contest log's own.
+                crate::contest::SatKey::default(),
             ) {
                 out.exact.insert(k);
             }
@@ -7808,6 +7816,8 @@ mod tests {
             by_sent_fields: &[],
             mode_class_groups: &[],
             log_dupes: false,
+            satellite_is_a_band: false,
+            fm_satellite_once: false,
         };
         let mut lb = Logbook::new();
         // Last year's contact — outside the window.
@@ -7878,6 +7888,8 @@ mod tests {
             by_sent_fields: &[],
             mode_class_groups: &[],
             log_dupes: false,
+            satellite_is_a_band: false,
+            fm_satellite_once: false,
         };
         let mut lb = Logbook::new();
         for i in 0..50 {

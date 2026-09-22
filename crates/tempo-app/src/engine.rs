@@ -1630,7 +1630,17 @@ impl SessionB4 {
         self.exact.contains(
             &self
                 .rule
-                .key_of(call_upper, &self.band, &self.mode_class, &[], &[]),
+                // Terrestrial: this advisory set is keyed from a band and a mode class
+                // and has no bird to name — see `FieldDayLog::worked_key`, which makes
+                // the same call for the same reason.
+                .key_of(
+                    call_upper,
+                    &self.band,
+                    &self.mode_class,
+                    &[],
+                    &[],
+                    tempo_core::contest::SatKey::default(),
+                ),
         )
     }
 
@@ -4265,6 +4275,18 @@ struct SatTune {
     transponder: tempo_core::doppler::Transponder,
     state: tempo_core::doppler::DopplerState,
     sent: tempo_core::doppler::SentTuning,
+    /// ⭐ **A single-channel FM satellite** (an FM voice repeater or a packet
+    /// digipeater) rather than a linear transponder — the fact ARRL Field Day's
+    /// one-QSO-per-bird limit turns on, carried onto every contact logged through this
+    /// hold ([`tempo_core::fieldday::SatLeg::single_channel_fm`]).
+    ///
+    /// ⚠️ **Set by the pick, not derived here**, and [`Engine::set_sat_transponder`]
+    /// clears it on every pick exactly as it clears the alternate-uplink list. A
+    /// half-width of zero would have been free and is NOT a sound test: a linear
+    /// transponder whose catalogue record is missing its passband reads as a channel
+    /// too, and that mistake fails in the direction that refuses a legal contact. The
+    /// satellite catalogue answers it exactly — see [`Engine::set_sat_single_channel_fm`].
+    single_channel_fm: bool,
 }
 
 /// How far off a CHANNELISED bird's own frequency a rig-reported dial may be
@@ -9933,6 +9955,111 @@ impl Engine {
         Ok(logged)
     }
 
+    /// ⭐ **Where a contest contact worked THROUGH A BIRD happened** — the band, the
+    /// frequency and the bird's LoTW name, taken from the PASS rather than from the
+    /// radio's present state. `None` when there is no pass to take them from.
+    ///
+    /// ⚠️ **THE DOWNLINK, and the same two sources [`Self::log_qso`]'s satellite stamp
+    /// reads**: the transponder HELD, and after the LOS handback (or the operator's
+    /// "None", or a track stop) the bird LAST worked — which is the guide's promise that
+    /// you can log once your hands are free. One answer for both ledgers, because two
+    /// emitters disagreeing about what frequency a contact was worked on is a contact
+    /// the operator cannot reconcile afterwards.
+    ///
+    /// `band_for_dial` returning `None` — a downlink on a segment this build has no
+    /// label for — yields `None` here and the caller falls back to the dial. Fail
+    /// closed: inventing a band for the contest log is worse than the dial's.
+    fn sat_leg_for_log(&self) -> Option<tempo_core::fieldday::SatLeg> {
+        let st = self.sat_tune.as_ref().or(self.sat_last_worked.as_ref())?;
+        let centre = st.transponder.downlink_centre_hz;
+        if centre == 0 {
+            return None;
+        }
+        // The DIAL while the pass still owns it: that is the Doppler-corrected downlink
+        // the operator is actually listening on, and it is what the general log records
+        // for the same contact. Once the dial has been handed back it describes wherever
+        // the operator went next, and the transponder's own centre is what is left that
+        // is true. (Both sit inside the passband, so either satisfies `log_qso`'s gate.)
+        let down_hz = match self.sat_dial_owner.as_ref() {
+            Some((owner, _)) if *owner == st.label && self.settings.dial_mhz > 0.0 => {
+                (self.settings.dial_mhz * 1e6).round() as u64
+            }
+            _ => centre,
+        };
+        let band = crate::bandplan::band_for_dial(down_hz as f64 / 1e6)?;
+        Some(tempo_core::fieldday::SatLeg {
+            band: band.to_string(),
+            down_hz,
+            // THE BIRD, not the transponder: the label is `"<name>|<description>"`, and
+            // ARRL's limit is per SATELLITE — a bird with a voice repeater and a packet
+            // digipeater is still one bird. Same split `sat_designator` reads.
+            bird: st.label.split('|').next().unwrap_or("").trim().to_string(),
+            // Told to the engine by the pick, never guessed here — see
+            // [`Self::set_sat_single_channel_fm`] and `SatLeg::single_channel_fm`.
+            single_channel_fm: st.single_channel_fm,
+            // `None` for a bird LoTW does not list, and then no satellite pair is
+            // written anywhere — the row is still filed on the bird's band, because
+            // where the contact was worked is true either way.
+            name: Self::lotw_sat_name(&st.label).map(str::to_string),
+        })
+    }
+
+    /// ⭐ **Log a contest contact worked THROUGH A BIRD** — the Satellites strip's path
+    /// into a running Field Day session.
+    ///
+    /// ⚠️ **IT DOES NOT TAKE THE BAND OFF THE DIAL, AND THAT IS THE WHOLE POINT.**
+    /// [`contest_log_manual`](Self::contest_log_manual) opens with
+    /// [`sync_fd_band`](Self::sync_fd_band), which is right for its own job — a knob-QSY
+    /// between contacts must stamp the REAL band — and wrong for a pass: an operator
+    /// turning a rotator by hand writes the contact up when their hands are free, which
+    /// is after LOS with the radio back on the HF run. Through that path a 70 cm pass
+    /// entered the contest log, and went out to N1MM and N3FJP, on 20 m.
+    /// [`sat_leg_for_log`](Self::sat_leg_for_log) is where it comes from instead.
+    ///
+    /// **With no bird in hand this IS [`contest_log_manual`](Self::contest_log_manual)**,
+    /// by delegation rather than by imitation. There is no pass, so the dial is where the
+    /// contact was made — and refusing to log would lose a contact, which is the one
+    /// outcome worse than a wrong band.
+    pub fn contest_log_satellite(
+        &mut self,
+        call: &str,
+        fields: &[(String, String)],
+        mode: &str,
+        submode: Option<&str>,
+    ) -> Result<bool, String> {
+        let Some(leg) = self.sat_leg_for_log() else {
+            return self.contest_log_manual(call, fields, mode, submode);
+        };
+        // The log's own band/dial are kept in step exactly as every other path keeps
+        // them — the ROW is what departs from them, not the log. Skipping this would
+        // leave the next ordinary contact reading a band nothing had refreshed.
+        self.sync_fd_band();
+        let now = now_unix_secs();
+        // The phone mode behind a "PH" class, on the same terms as the two paths above:
+        // the sideband a satellite contact was worked on is the rig's read-back like any
+        // other, and the strip's three entry points must not record it differently.
+        let submode = submode.or(self.contest_phone_submode(mode, submode));
+        let Mode::FieldDay { station, .. } = &mut self.mode else {
+            return Err("Contest mode is not active".into());
+        };
+        // The serial binding, on the same terms and for the same reason as
+        // `contest_log_manual` — a pass contact in a serial contest copies a number too.
+        station.log.session.working(call, now);
+        let logged = station.log.log_satellite_at(
+            call,
+            fields,
+            mode,
+            submode.unwrap_or_default(),
+            &leg,
+            now,
+        );
+        station.log.session.logged(call);
+        if logged {
+            self.persist_fd_log(); // journal every contact — a crash loses nothing
+        }
+        Ok(logged)
+    }
+
     /// ⭐ **The operator committed a callsign on the contest entry line** — the door a
     /// contest serial is issued through, and the only thing that binds a number to the
     /// station that copies it.
@@ -10473,6 +10600,12 @@ impl Engine {
                 sub: q.submode.clone(),
                 when: q.when_unix,
                 op: op.clone(),
+                // ⭐ THE BIRD, because the HOST builds this row's dupe key from what
+                // this position sends. ARRL lists a satellite as a separate band, so a
+                // key built without it would have the club board judging every
+                // position's pass contacts as terrestrial ones on the downlink band.
+                sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
+                sat_fm: q.sat.as_ref().is_some_and(|s| s.single_channel_fm),
             })
             .collect();
         rows.sort_by_key(|r| r.seq);
@@ -13412,6 +13545,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     transponder: t,
                     state: tempo_core::doppler::DopplerState::default(),
                     sent: tempo_core::doppler::SentTuning::default(),
+                    // Cleared by the pick and re-stated by the command layer for the
+                    // new one, on the same terms as `sat_alt_uplinks` above — the
+                    // classification belongs to the transponder just chosen, and the
+                    // outgoing one's must never outlive it. `false` is the safe
+                    // default: it treats an unclassified bird as a linear transponder,
+                    // which under-reports the limit instead of refusing a legal QSO.
+                    single_channel_fm: false,
                 });
                 // Remembered past this hold's release — see `sat_last_worked`.
                 self.sat_last_worked = self.sat_tune.clone();
@@ -13484,6 +13624,40 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Call it AFTER [`Self::set_sat_transponder`], which clears the list.
     pub fn set_sat_alt_uplinks(&mut self, uplinks: Vec<u64>) {
         self.sat_alt_uplinks = uplinks;
+    }
+
+    /// ⭐ **Tell the engine the held bird is a SINGLE-CHANNEL FM satellite** — an FM
+    /// voice repeater or a packet digipeater, as against a linear transponder.
+    ///
+    /// ARRL Field Day: *"Stations are limited to one (1) completed QSO on any single
+    /// channel FM satellite."* That limit is expressed in the rules data
+    /// ([`DupeRule::fm_satellite_once`](tempo_core::contest::DupeRule::fm_satellite_once));
+    /// this is the fact it needs about the bird, and it is the one thing the engine
+    /// cannot work out for itself.
+    ///
+    /// ⚠️ **It is NOT `half_width_hz == 0`.** That says "a channel", which a linear
+    /// transponder whose SatNOGS record is missing its passband also says — and applying
+    /// the limit to a linear bird silently refuses a contact the sponsor allows, on the
+    /// one copy of it there is. The catalogue answers it exactly (`is_transponder` plus
+    /// `downlink_class`), so the command layer states it.
+    ///
+    /// Call it AFTER [`Self::set_sat_transponder`], which clears it, exactly as
+    /// [`Self::set_sat_alt_uplinks`] is called after the pick that clears the list.
+    ///
+    /// ⭐ **It reaches `sat_last_worked` too**, guarded by the label. That clone is taken
+    /// inside the pick, before this can run, and it is what a contact written up after
+    /// LOS is filed against — so a fact that only reached the live hold would have the
+    /// late entry judged by a different rule from the live one. The guard means it can
+    /// never stamp a different bird.
+    pub fn set_sat_single_channel_fm(&mut self, on: bool) {
+        let Some(st) = self.sat_tune.as_mut() else {
+            return;
+        };
+        st.single_channel_fm = on;
+        let label = st.label.clone();
+        if let Some(last) = self.sat_last_worked.as_mut().filter(|l| l.label == label) {
+            last.single_channel_fm = on;
+        }
     }
 
     /// QSY to the HELD transponder's nominal centres — the click-to-tune half of
@@ -35335,6 +35509,8 @@ mod tests {
             sub: "FT8".into(),
             when: 1_782_583_500,
             op: "OP1".into(),
+            sat: String::new(),
+            sat_fm: false,
         });
         let board = e.fd_board_snapshot().expect("host role → Some");
         assert_eq!(board.call, "W9ABC");
@@ -35943,7 +36119,8 @@ mod tests {
         .iter()
         .map(|b| b.id.to_string())
         .collect();
-        assert_eq!(all.len(), 15, "the whole menu is planned below");
+        // 16 since 2026-09-22: ARRL 7.3.8's satellite bonus joined the fifteen.
+        assert_eq!(all.len(), 16, "the whole menu is planned below");
         {
             let mut s = e.settings().clone();
             s.fd_active = true;
@@ -35984,7 +36161,7 @@ mod tests {
         );
         assert_eq!(
             e.settings().fd_bonuses_planned.len(),
-            15,
+            16,
             "earning a bonus does not empty the chase list"
         );
     }
@@ -36196,24 +36373,31 @@ mod tests {
     }
 
     /// ⚠️ "ADD IT TO THE FD LOG AFTERWARDS" STAMPS THE BAND YOU ARE ON THEN,
-    /// NOT THE BAND YOU WORKED — pinned because the Field Day guide sends an
-    /// operator down that path for satellite contacts (the Satellites section's
-    /// log strip is not wired to Field Day).
+    /// NOT THE BAND YOU WORKED — still true of `fd_log_manual`, which is what
+    /// this pins, and still what docs/guide/contesting-pota.md warns about.
     ///
     /// `fd_log_manual` opens with `sync_fd_band()`, which is right for its own
     /// job — a knob QSY between contacts must stamp the REAL band rather than
     /// the one FD was entered on — but it makes the contest log a LIVE-band
-    /// recorder with no way to say "this one was on 70 cm". So a satellite QSO
-    /// caught up on after the pass files under the current dial: wrong band in
-    /// the Cabrillo, and wrong on the N1MM / N3FJP wire (`band_for_interop`
-    /// reads this same field). Documented in docs/guide/contesting-pota.md;
-    /// goes red the day a caller can name the band.
+    /// recorder with no way to say "this one was on 70 cm". So a contact caught
+    /// up on later files under the current dial: wrong band in the Cabrillo, and
+    /// wrong on the N1MM / N3FJP wire (`band_for_interop` reads this same
+    /// field). A POTA or HF catch-up entry has nothing to take a better band
+    /// from, so the caveat stands for it.
     ///
-    /// The band field itself is NOT missing — `LoggedQso::band` is real and is
-    /// written per contact, which is how the ADIF below carries two of them.
-    /// What is missing is any way for a caller to supply one: every entry point
-    /// funnels into `log_submode_at`, which stamps `self.band`. Pinned at that
-    /// site by tempo-core's
+    /// ⭐ **THE SATELLITE CASE IS CLOSED (2026-09-22)** and is no longer an
+    /// example of this: the Satellites strip logs through
+    /// [`Engine::contest_log_satellite`], which takes the band and the frequency
+    /// from the transponder that was held —
+    /// `a_field_day_satellite_contact_keeps_the_birds_band_after_the_pass`,
+    /// directly below, is that path's twin of this test. The guide's satellite
+    /// caveat went with it.
+    ///
+    /// The band field itself was never missing — `LoggedQso::band` is real and
+    /// is written per contact, which is how the ADIF below carries two of them.
+    /// What was missing is any way for a caller to supply one; exactly one
+    /// caller can now (`FieldDayLog::log_satellite_at`), and every path this
+    /// test drives still stamps `self.band`. Pinned at that site by tempo-core's
     /// `every_contact_carries_a_band_and_it_is_always_the_logs_own`.
     #[test]
     fn a_contact_added_to_the_fd_log_later_is_stamped_with_the_current_band() {
@@ -36242,6 +36426,193 @@ mod tests {
             "the catch-up contact is filed on the dial's band, not 70 cm — \
              if a caller can now name the band, delete the guide's caveat: {adif}"
         );
+    }
+
+    /// ⭐ **A FIELD DAY SATELLITE CONTACT TYPED UP AFTER THE PASS KEEPS THE BIRD'S
+    /// BAND** — the fix for the divergence the test above pins for the terrestrial
+    /// paths.
+    ///
+    /// The Satellites strip reaches the contest log through
+    /// [`Engine::contest_log_satellite`], which does not take the band off the dial: the
+    /// band and the frequency come from the transponder the operator held, so an
+    /// operator turning a rotator by hand can write the contact up with their hands free
+    /// — which is after LOS, with the radio already back on the HF run.
+    ///
+    /// ⚠️ Asserted against a radio that has MOVED, and on the ADIF and the merged
+    /// general-log record BY VALUE. With the dial left on the bird, every assertion here
+    /// would pass on the broken code too.
+    #[test]
+    fn a_field_day_satellite_contact_keeps_the_birds_band_after_the_pass() {
+        use tempo_core::doppler::Transponder;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(436.795, "70cm", "USB"); // working the bird
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        // SO-50 held for the pass, then handed back at LOS.
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        e.set_sat_transponder(None);
+        // The pass is over and the club is back on the 20 m run.
+        e.set_frequency(14.250, "20m", "USB");
+
+        let ex = vec![
+            ("CLASS".to_string(), "1D".to_string()),
+            ("SECTION".to_string(), "IL".to_string()),
+        ];
+        assert!(e
+            .contest_log_satellite("W1AW", &ex, "PH", None)
+            .expect("Field Day is running"));
+
+        let adif = e.field_day_log_adif().expect("an FD log to flush");
+        assert!(
+            adif.contains("<BAND:4>70cm"),
+            "the club's satellite QSO entered the contest log on the HF dial: {adif}"
+        );
+        assert!(
+            !adif.contains("<BAND:3>20m"),
+            "…and it is the ONLY row, so a 20m band here is the bug: {adif}"
+        );
+        assert!(
+            adif.contains("<FREQ:10>436.795000"),
+            "the frequency came off the dial too: {adif}"
+        );
+        // The satellite identity the general-log path already gives this contact must
+        // not be the price of scoring it for the club.
+        assert!(adif.contains("<PROP_MODE:3>SAT"), "{adif}");
+        assert!(adif.contains("<SAT_NAME:5>SO-50"), "{adif}");
+
+        // ⭐ AND THE RECORD THAT ACTUALLY REACHES LoTW, QRZ AND THE AWARD BOARDS — the
+        // contest log is the only copy of this contact, so the merge is where it would
+        // be lost. Asserted on the record, never on the export it came through.
+        e.fd_merge_to_general().expect("the merge runs in FD mode");
+        let rec = e
+            .get_log()
+            .iter()
+            .find(|r| r.call == "W1AW")
+            .cloned()
+            .expect("the contest row reached the general log");
+        assert_eq!(rec.band, "70cm", "the merged record is filed on 20 m");
+        assert!((rec.freq_mhz - 436.795).abs() < 1e-6, "{}", rec.freq_mhz);
+        assert_eq!(rec.prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(rec.sat_name.as_deref(), Some("SO-50"));
+        assert_eq!(
+            rec.freq_rx_mhz, None,
+            "a satellite contact is not a same-band split"
+        );
+    }
+
+    /// The fallback, and it is a data-safety decision rather than a convenience: with no
+    /// bird held and none last worked there IS no pass to take a band from, and the dial
+    /// is where this contact was made. Refusing to log would lose a contact, which is
+    /// the one outcome worse than a wrong band.
+    #[test]
+    fn a_satellite_log_with_no_bird_in_hand_falls_back_to_the_dial() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(14.250, "20m", "USB");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        let ex = vec![
+            ("CLASS".to_string(), "1D".to_string()),
+            ("SECTION".to_string(), "IL".to_string()),
+        ];
+        assert!(e.contest_log_satellite("W1AW", &ex, "PH", None).unwrap());
+        let adif = e.field_day_log_adif().expect("an FD log to flush");
+        assert!(adif.contains("<BAND:3>20m"), "{adif}");
+        assert!(
+            !adif.contains("<PROP_MODE:"),
+            "a contact with no bird behind it claimed satellite propagation: {adif}"
+        );
+    }
+
+    /// ⭐ **THE TWO HALVES, MEETING** — the engine builds the leg, the rules data names
+    /// the satellite dimension, and ARRL's rules come out the other end.
+    ///
+    /// The core tests pin each half against a hand-built leg; this is the only place
+    /// that proves the leg the ENGINE builds is the one the RULE reads. Between them
+    /// sit the label split that yields the bird and
+    /// [`Engine::set_sat_single_channel_fm`], neither of which any core test can see.
+    #[test]
+    fn a_pass_contact_and_a_terrestrial_one_on_the_same_band_both_count() {
+        use tempo_core::doppler::Transponder;
+        // ARRL 7.3.8: "Satellite QSOs also count for regular QSO credit. Show them
+        // listed separately on the summary sheet as a separate 'band.'"
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(435.643, "70cm", "USB");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        let ex = vec![
+            ("CLASS".to_string(), "1D".to_string()),
+            ("SECTION".to_string(), "IL".to_string()),
+        ];
+        // The club's UHF station works W1AW on 70 cm, terrestrially.
+        assert!(e.fd_log_manual("W1AW", "1D", "IL", "PH").unwrap());
+        // The satellite station works the SAME station, on the SAME band and mode
+        // class, through RS-44 — a LINEAR transponder, so no per-bird limit applies.
+        e.set_sat_transponder(Some((
+            "RS-44|SSB/CW linear transponder".into(),
+            0,
+            Transponder {
+                uplink_centre_hz: 145_965_000,
+                downlink_centre_hz: 435_640_000,
+                invert: true,
+                half_width_hz: 30_000,
+            },
+        )));
+        e.set_sat_single_channel_fm(false);
+        assert!(
+            e.contest_log_satellite("W1AW", &ex, "PH", None).unwrap(),
+            "the pass contact was refused as a dupe of the terrestrial one"
+        );
+        assert_eq!(
+            e.fd_score().map(|(q, _, _)| q),
+            Some(2),
+            "one scored nothing"
+        );
+
+        // ⭐ AND THE LIMIT, on the bird it applies to. SO-50 is a single-channel FM
+        // repeater, so ARRL allows one QSO per station however many modes are tried.
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        e.set_sat_single_channel_fm(true);
+        assert!(e.contest_log_satellite("K1ABC", &ex, "PH", None).unwrap());
+        assert!(
+            !e.contest_log_satellite("K1ABC", &ex, "DIG", Some("FT8"))
+                .unwrap(),
+            "a second QSO with the same station on a single-channel FM bird was admitted"
+        );
+
+        // …and the classification survives the LOS handback, which is the whole reason
+        // `set_sat_single_channel_fm` reaches `sat_last_worked`: a contact written up
+        // after the bird sets must be judged by the same rule as one written during it.
+        e.set_sat_transponder(None);
+        assert!(
+            !e.contest_log_satellite("K1ABC", &ex, "CW", None).unwrap(),
+            "after LOS the bird stopped being a single-channel FM one"
+        );
+        // The control: a station NOT yet worked through it still logs after LOS, so the
+        // refusals above are the limit and not a path that stopped logging at all.
+        assert!(e.contest_log_satellite("W4XYZ", &ex, "PH", None).unwrap());
     }
 
     /// ⭐ **A CONTEST PHONE CONTACT RECORDS THE MODE THAT WAS ACTUALLY ON THE AIR**

@@ -43,6 +43,15 @@ const api = vi.hoisted(() => ({
   fetchTlesNow: vi.fn(() => Promise.resolve(null)),
   // LogEntry's surface (it renders REAL here — it is half the thing under test).
   fdLogManual: vi.fn(async () => ({})),
+  // The contest half, live since the section was wired to Field Day. A
+  // `vi.mock` factory does not fall through to the real module, so every export
+  // LogEntry imports has to stand here or the first render throws.
+  contestLogManual: vi.fn(async () => ({})),
+  contestLogSatellite: vi.fn(async () => ({})),
+  contestWorking: vi.fn(async () => ({})),
+  contestEntryReset: vi.fn(async () => ({})),
+  contestZoneHint: vi.fn(async () => ({})),
+  contestIMoved: vi.fn(async () => ({})),
   logQso: vi.fn(async () => ({})),
   getLog: vi.fn(async () => [] as LoggedQso[]),
   lookupPark: vi.fn(async () => null),
@@ -200,6 +209,8 @@ beforeEach(() => {
   api.getSatTransponder.mockImplementation(() => Promise.resolve(held()))
   api.logQso.mockClear()
   api.fdLogManual.mockClear()
+  api.contestLogManual.mockClear()
+  api.contestLogSatellite.mockClear()
   api.qrzLookup.mockClear()
 })
 afterEach(cleanup)
@@ -215,6 +226,20 @@ async function logCall(call: string) {
   })
   await waitFor(() => expect(api.logQso).toHaveBeenCalled())
   return lastLoggedRecord()
+}
+
+/** The arguments of the last `contestLogSatellite` call — `(call, fields, mode,
+ *  submode)`, exactly as the strip sent them to the backend. Shaped like
+ *  `lastLoggedRecord` below and for the same reason: the assertion is on what
+ *  went over the wire, never on what the panel rendered. */
+function lastContestArgs(): [string, [string, string][], string, string | undefined] {
+  const calls = api.contestLogSatellite.mock.calls as unknown as [
+    string,
+    [string, string][],
+    string,
+    string | undefined,
+  ][]
+  return calls[calls.length - 1]
 }
 
 /** The record handed to `logQso` — what the backend (and then ADIF, and then
@@ -652,20 +677,109 @@ describe('Satellites — logging the contact you just made', () => {
     }
   })
 
-  it('logs to the ORDINARY log during Field Day — the disclosed FD divergence, NOT YET fixed', async () => {
-    // App.tsx passes `fieldDay` to CwCockpit and PhoneCockpit, each of which
-    // adds its own literal `fdMode` ("CW" / "PH") on the way down to LogEntry,
-    // so those strips route through `fdLogManual` into the contest log while FD
-    // runs. This section gets neither, so a satellite contact made during Field
-    // Day lands in the general log and earns the club nothing — with FD visibly
-    // running everywhere else in the app.
+  it('logs into a RUNNING Field Day session, on the BIRD — the FD divergence, now fixed', async () => {
+    // ⚠️ THIS ASSERTION INVERTED ON 2026-09-22, AND THE OLD ONE IS WORTH READING.
+    //
+    // It said: App.tsx passes `fieldDay` to CwCockpit and PhoneCockpit, each of
+    // which adds its own literal `fdMode` ("CW" / "PH") on the way down to
+    // LogEntry, so those strips route into the contest log while FD runs. This
+    // section got neither, so a satellite contact made during Field Day landed
+    // in the general log and earned the club nothing — with FD visibly running
+    // everywhere else in the app.
+    //
+    // The section now passes both. THE HALF THAT IS NOT JUST WIRING is the
+    // command it routes to: `contestLogSatellite`, not `contestLogManual`. The
+    // ordinary contest path stamps the band the radio is on at the moment you
+    // type, and an operator turning a rotator by hand logs when their hands are
+    // free — after LOS, with the radio back on the HF run. Wiring FD in through
+    // that path would have shipped the exact bug the guide warned about: a
+    // 70 cm pass filed on 20 m in the Cabrillo and on the N1MM / N3FJP wire.
+    // The band's real source is the engine's held transponder and is pinned in
+    // Rust (`a_field_day_satellite_contact_keeps_the_birds_band_after_the_pass`),
+    // which is where the band exists; what is pinned HERE is that this strip
+    // reaches that path at all, and never the dial-band one.
     render(<SatellitesView focusSat="RS-44" snap={snap({}, { fieldDay: fieldDay() })} />)
-    const rec = await logCall('W1AW')
-    expect(rec.call).toBe('W1AW')
+    // ⚠️ THE CALL BOX IS FOUND BY A DIFFERENT PLACEHOLDER HERE, AND THAT IS THE
+    // FIRST EVIDENCE THE SWAP HAPPENED: the contest layout labels it with the
+    // example callsign, not the word "Call". A `findByPlaceholderText('Call')`
+    // that still resolved would mean the strip never went FD-aware.
+    expect(screen.queryByPlaceholderText('Call'), 'the strip is still the general one').toBeNull()
+    const strip = await screen.findByPlaceholderText('W1AW')
+    await act(async () => {
+      fireEvent.change(strip, { target: { value: 'W1AW' } })
+    })
+    // The contest layout, and it is the shared one: Call plus a box per received
+    // slot. The exchange has to be complete or `logIt` bails before any command.
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('1D'), { target: { value: '1D' } })
+    })
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('WI'), { target: { value: 'IL' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Log FD' }))
+    })
+    await waitFor(() => expect(api.contestLogSatellite).toHaveBeenCalled())
+
+    // The contact went to the CONTEST log, and to the satellite-aware command.
+    const [call, fields, mode] = lastContestArgs()
+    expect(call).toBe('W1AW')
+    expect(fields).toEqual([
+      ['CLASS', '1D'],
+      ['SECTION', 'IL'],
+    ])
+    // SSB is the scoring class PH — the strip folds its ADIF mode to the three
+    // Field Day classes rather than sending the ADIF name.
+    expect(mode).toBe('PH')
+
+    // And NOT to the general log, nor to the dial-band contest path — either
+    // would be the bug, one in a different place.
+    expect(api.logQso, 'the contact went to the general log during Field Day').not.toHaveBeenCalled()
     expect(
-      api.fdLogManual,
-      'the Satellites strip reached the Field Day log — delete the "not yet" note in the guide and the CHANGELOG',
+      api.contestLogManual,
+      'the satellite strip used the dial-band contest path — a pass typed up after LOS files on the HF run',
     ).not.toHaveBeenCalled()
+  })
+
+  it('folds a digital tier to the DIG class and names the mode that was on the air', async () => {
+    // The `DIG` half of the fold, and it is a scoring correctness matter: the
+    // engine fills a bare `DIG` from `FieldDayLog::current_submode`, which
+    // tracks the FT tier alone, so a Q65 pass logged as bare `DIG` exports as
+    // "FT8" — the wrong mode in ADIF, "DG" where ARRL wants the real one.
+    render(
+      <SatellitesView
+        focusSat="RS-44"
+        snap={snap({ operatingMode: 'digital' }, { fieldDay: fieldDay(), link: { tier: 'Q65' } })}
+      />,
+    )
+    const strip = await screen.findByPlaceholderText('W1AW')
+    await act(async () => {
+      fireEvent.change(strip, { target: { value: 'W1AW' } })
+    })
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('1D'), { target: { value: '1D' } })
+    })
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('WI'), { target: { value: 'IL' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Log FD' }))
+    })
+    await waitFor(() => expect(api.contestLogSatellite).toHaveBeenCalled())
+    const [, , mode, submode] = lastContestArgs()
+    expect(mode).toBe('DIG')
+    expect(submode, 'a Q65 pass would be exported as FT8').toBe('Q65')
+  })
+
+  it('still logs an ordinary contact when Field Day is NOT running', async () => {
+    // The control for the two above, and the one that keeps the wiring from
+    // being a one-way door: with no session the strip is exactly what it was —
+    // the general logbook, the Grid box, no contest command touched.
+    render(<SatellitesView focusSat="RS-44" snap={snap()} />)
+    expect((await logCall('W1AW')).call).toBe('W1AW')
+    expect(api.contestLogSatellite).not.toHaveBeenCalled()
+    expect(api.contestLogManual).not.toHaveBeenCalled()
+    expect(screen.getByPlaceholderText('Grid')).toBeTruthy()
   })
 
   it('takes TWO Enters on a fresh call: the first looks it up, the second logs', async () => {

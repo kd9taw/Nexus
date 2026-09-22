@@ -183,6 +183,30 @@ function adifModeFromStation(
   return 'SSB'
 }
 
+/** ⭐ **The Field Day SCORING CLASS a pass contact is logged under**, and — for `DIG`
+ *  alone — the mode that was actually on the air behind it.
+ *
+ *  Field Day scores three classes and only three, so this is a fold of
+ *  [`adifModeFromStation`]'s answer rather than a second reading of the station: two
+ *  functions deciding what mode a contact was worked on is how the general log and the
+ *  contest log come to describe one contact differently.
+ *
+ *  ⚠️ **`DIG` NEEDS THE SUBMODE NAMED.** The engine fills a bare `DIG` from
+ *  `FieldDayLog::current_submode`, which tracks the FT tier alone — so a Q65 or
+ *  TempoFast pass logged as bare `DIG` would export as "FT8". `adifModeFromStation`
+ *  already returns the tier's own registered name on a digital section, which is
+ *  exactly what this class wants said. */
+function fdClassForLogMode(logMode: string): {
+  fdMode: 'CW' | 'PH' | 'DIG'
+  fdSubmode?: string
+} {
+  if (logMode === 'CW') return { fdMode: 'CW' }
+  // SSB, FM and AM are one scoring class — `PH` covers all three, and the engine
+  // records which of them from the rig, exactly as it does for the Phone cockpit.
+  if (logMode === 'SSB' || logMode === 'FM' || logMode === 'AM') return { fdMode: 'PH' }
+  return { fdMode: 'DIG', fdSubmode: logMode }
+}
+
 /** 8-wind compass label for a pass direction ("NW→SE"). */
 function wind8(az: number): string {
   const w = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -4291,12 +4315,31 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                 measured: the strip is 48 px SHORTER than 0.28.1's, which is
                 what he asked for one message earlier — "make it smaller so
                 the logging and az/el map are visable together". */}
+            {/* ⭐ `fieldDay` + `fdMode`: the section logs into a RUNNING Field Day
+                session, the way the Phone and CW strips already do. Until 2026-09-22 it
+                got neither, so a satellite contact made during FD landed in the general
+                log and scored the club nothing — with FD visibly running everywhere
+                else in the app.
+
+                The strip swaps to the contest layout exactly as it does in the two
+                cockpits (Call + the received exchange; `asksForGrid` is already
+                `exchange === 'satellite' && !fdActive`, so the Grid box stands down on
+                its own — during Field Day the exchange IS class + section, not a grid).
+
+                ⚠️ The band a pass contact is filed on comes from the TRANSPONDER, not
+                the dial — `contestLogSatellite`, routed inside LogEntry off this same
+                `exchange` prop. Without that the wiring would ship the bug the guide
+                warned about: a 70 cm pass typed up after LOS, with the radio back on
+                the HF run, filed on 20 m in the Cabrillo and on the N1MM / N3FJP
+                wire. */}
             <LogEntry
               onOpenLogbook={onOpenLogbook}
               snap={snap}
               mode={logMode}
               defaultRst={logMode === 'CW' ? '599' : '59'}
               exchange="satellite"
+              fieldDay={snap.fieldDay}
+              {...fdClassForLogMode(logMode)}
             />
             <p
               className="sats-log-note"

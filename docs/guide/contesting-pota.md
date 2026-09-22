@@ -54,16 +54,20 @@ show the whole sum (**QSO pts 903 × power ×2 = 1806 + bonuses 400 = 2206**), a
 board marks what has been worked out of 83. The per-contact exchange — class and section — is
 typed in the cockpit log strips and lists under this panel.*
 
-The one strip that does **not** switch is the log strip in the
-[Satellites](satellites.md) section: it is not wired to Field Day yet, so a
-contact typed there during FD goes into your general log and scores the club
-nothing. Log satellite contacts from the CW or Phone cockpit **while you are
-still on the bird** — the FD log stamps each contact with the band the radio is
-on at the moment you type it, so one entered after you have QSY'd away files on
-the wrong band, both in the Cabrillo and on the N1MM / N3FJP wire.
+The log strip in the [Satellites](satellites.md) section switches too, and it is
+the one strip that does **not** take the band off your dial. It files each
+contact on the band of the transponder you were holding, so you can work the
+pass, turn the rotator by hand, and write the contact up once your hands are
+free — the band, the frequency and the satellite tag all come from the bird, not
+from whatever the radio moved to afterwards.
+
+Everywhere else, **log as you work**: the FD log stamps each contact with the
+band the radio is on at the moment you type it, so a contact entered after you
+have QSY'd away files on the wrong band, both in the Cabrillo and on the
+N1MM / N3FJP wire.
 
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
-power multiplier + a 15-item ARRL bonus checklist = total. **Winter Field Day
+power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day
 deliberately shows raw counts only** — its objectives math isn't ARRL's, and
 Nexus won't display a fake total.
 

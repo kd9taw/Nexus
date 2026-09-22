@@ -1194,6 +1194,28 @@ struct DupeSpec {
     /// score by admitting one.
     #[serde(default)]
     log_dupes: bool,
+    /// ⭐ **A BIRD IS ITS OWN BAND** — ARRL Field Day 7.3.8: *"Satellite QSOs also count
+    /// for regular QSO credit. Show them listed separately on the summary sheet as a
+    /// separate 'band.'"* See
+    /// [`DupeRule::satellite_is_a_band`](crate::contest::DupeRule::satellite_is_a_band).
+    ///
+    /// ⚠️ `#[serde(default)]`, on the `log_dupes` precedent directly above and for the
+    /// same reason: absent is a DECISION. `false` is what every ruleset written before
+    /// this key existed means, and it is exactly what this build already did for all of
+    /// them. The direction is the safe one too — omitting the key can only merge a
+    /// satellite contact into its band's bucket, never split a terrestrial one out.
+    #[serde(default)]
+    satellite_is_a_band: bool,
+    /// ⭐ **ONE QSO PER SINGLE-CHANNEL FM SATELLITE** — ARRL Field Day: *"Stations are
+    /// limited to one (1) completed QSO on any single channel FM satellite."* See
+    /// [`DupeRule::fm_satellite_once`](crate::contest::DupeRule::fm_satellite_once).
+    ///
+    /// ⚠️ `#[serde(default)]` on the same precedent — and here the direction matters
+    /// most of all: a ruleset that omits the key admits one extra contact the sponsor
+    /// would not have counted, where one that set it wrongly would REFUSE a legal QSO
+    /// through a linear transponder. `false` is the side to be wrong on.
+    #[serde(default)]
+    fm_satellite_once: bool,
 }
 
 /// The mode classes a dupe rule may group — the vocabulary
@@ -1883,6 +1905,24 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 ));
             }
         }
+        // ⭐ THE SATELLITE DIMENSION (ARRL Field Day 7.3.8). Both refusals are a rules
+        // file that reads as a satellite rule and is not one — and the second is the
+        // dangerous shape: an emptied mode class with the real band still in the key
+        // makes an FM satellite contact collide with a TERRESTRIAL one on that band, so
+        // a legal QSO is refused and only the contest log ever held it.
+        if r.dupe.satellite_is_a_band && !r.dupe.by_band {
+            return Err(format!(
+                "{tag}: dupe.satellite_is_a_band is set but by_band is false \
+(there is no band position to put the bird in)"
+            ));
+        }
+        if r.dupe.fm_satellite_once && !r.dupe.satellite_is_a_band {
+            return Err(format!(
+                "{tag}: dupe.fm_satellite_once is set but satellite_is_a_band is false \
+(dropping the mode class while the band still travels would make an FM satellite \
+contact a duplicate of a terrestrial one on the same band)"
+            ));
+        }
         // ⭐ MODE-CLASS GROUPS (ILQP's "phone and CW/digital"). Each refusal is a rule
         // that would silently count a different number of modes than the sponsor does.
         if !r.dupe.mode_class_groups.is_empty() && !r.dupe.by_mode_class {
@@ -2550,6 +2590,8 @@ fn build(spec: FileSpec) -> RulesTable {
                             .into_boxed_slice(),
                     ),
                     log_dupes: r.dupe.log_dupes,
+                    satellite_is_a_band: r.dupe.satellite_is_a_band,
+                    fm_satellite_once: r.dupe.fm_satellite_once,
                 },
                 tempo_fd: r.tempo_fd,
                 banned_modes: Box::leak(
@@ -2895,7 +2937,8 @@ mod tests {
             ]),
             150,
         );
-        assert_eq!(rs.bonuses.len(), 15, "the full ARRL bonus menu");
+        // 16 since 2026-09-22: rule 7.3.8's satellite bonus joined the fifteen.
+        assert_eq!(rs.bonuses.len(), 16, "the full ARRL bonus menu");
     }
 
     #[test]
@@ -3229,6 +3272,36 @@ mod tests {
         }
     }
 
+    /// ⭐ **THE SATELLITE BONUS IS ON THE ARRL MENU** — rule 7.3.8: *"100 bonus points
+    /// for successfully completing at least one QSO via an amateur radio satellite
+    /// during the Field Day period."*
+    ///
+    /// It is a box the operator TICKS, like the other fifteen, because that is what a
+    /// Field Day bonus is on this sponsor's summary sheet — ARRL claims none of them
+    /// from a log, and Nexus models the two kinds apart ([`Bonus`] is ticked,
+    /// [`BonusStation`] is earned from the rows).
+    ///
+    /// ⚠️ **Asserted by VALUE, not by presence.** A bonus that existed at the wrong
+    /// points silently mis-scores a submitted entry, and a menu entry that scored
+    /// nothing would pass a "the id is there" check.
+    #[test]
+    fn the_arrl_menu_carries_the_satellite_bonus_at_its_own_points() {
+        let rs = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR);
+        assert_eq!(
+            rs.bonus("satellite"),
+            Some(100),
+            "ARRL 7.3.8's satellite bonus is not on the menu, or is not worth 100"
+        );
+        // …and it reaches a claimed score, which is the only thing the operator sees.
+        assert_eq!(rs.bonus_points(&["satellite".to_string()]), 100);
+        // Winter Field Day runs its own objectives and is NOT given ARRL's bonus.
+        assert_eq!(
+            ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR).bonus("satellite"),
+            None,
+            "ARRL's satellite bonus leaked into Winter Field Day's menu"
+        );
+    }
+
     /// SAME GUARD for the hand-mirrored bonus menu: the seed's bonus menu vs
     /// the `FD_BONUSES` table in ui/src/components/ContestView.tsx. Ids and
     /// points only — the LABELS deliberately differ (the seed labels are the
@@ -3278,7 +3351,7 @@ mod tests {
             "bonus id(s) {missing_in_rust:?} exist in ContestView.tsx but NOT in \
              the seed's bonus menu — a claimed checkbox that scores nothing"
         );
-        assert_eq!(ts.len(), 15, "the full ARRL bonus menu, both sides");
+        assert_eq!(ts.len(), 16, "the full ARRL bonus menu, both sides");
         for (i, (rust, ts_row)) in bonuses.iter().zip(&ts).enumerate() {
             assert_eq!(
                 (rust.id, rust.points),

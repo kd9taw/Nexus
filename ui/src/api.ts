@@ -683,6 +683,35 @@ export async function contestLogManual(
   })
 }
 
+/** ⭐ **`contestLogManual` for a contact worked THROUGH A BIRD** — the Satellites
+ * section's strip, and the only caller.
+ *
+ * ⚠️ **The difference is where the row's band comes from, and it is the whole reason
+ * this exists.** The ordinary path stamps the band the radio is on at the moment you
+ * type — right for a knob-QSY between contacts, wrong for a pass. An operator turning a
+ * rotator by hand logs when their hands are free, which is after LOS with the radio back
+ * on the HF run, so a 70 cm pass entered the contest log — and went out to N1MM and
+ * N3FJP — on 20 m. Here the band and frequency come from the transponder that was held.
+ *
+ * With no bird held and none last worked the engine falls back to `contestLogManual`
+ * itself: there is no pass, the dial IS where the contact was made, and refusing to log
+ * would lose a contact.
+ *
+ * `mode` and `submode` mean exactly what they mean there. */
+export async function contestLogSatellite(
+  call: string,
+  fields: [string, string][],
+  mode: 'CW' | 'PH' | 'DIG',
+  submode?: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('contest_log_satellite', {
+    call,
+    fields,
+    mode,
+    submode: submode ?? null,
+  })
+}
+
 /** ⚠️ ADDING AN EXPORT HERE BREAKS TEST SUITES, AND THE SUITE WILL TELL YOU IT PASSED.
  *
  *  `vi.mock('../api', () => ({ … }))` factories enumerate every export they stand in for and do
