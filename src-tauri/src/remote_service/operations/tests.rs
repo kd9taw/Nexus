@@ -1364,3 +1364,91 @@ fn band_selection_requires_v3_and_a_later_native_owner_receipt() {
         assert!(f.engine.lock().unwrap().take_remote_radio().is_none());
     }
 }
+
+/// **A REPLAY IS ANSWERED FROM ITS RECEIPT, AND THE ENGINE HAS NOTHING TO DO WITH IT.**
+///
+/// A duplicate request's whole answer is a stored `Receipt`, which Core guards and the Engine
+/// never touches — but `handle_version` took `shared_engine.try_lock()` 160 lines before the
+/// receipt lookup, so a replay was refused `stationBusy` for a lock it never needed, whenever
+/// the station's own radio loop held the Engine for a tick. The browser could then not retrieve
+/// the receipt for an operation that had ALREADY applied.
+///
+/// This is the deterministic form of a CI flake: `native.test.mjs:782` replays a `logManual` and
+/// asserts it gets the identical response back, and that assertion lost a race with a ~20 ms
+/// radio-loop tick.
+///
+/// That the refusal was never intended is recorded in `Receipt::value`: a replay whose write is
+/// still in flight answers `remoteBusy`, "so it waits rather than appending or posting twice".
+/// The design has a considered answer for a contended replay, and `stationBusy` is not it.
+///
+/// Both directions, because one is half a test: the replay must be served while the Engine is
+/// held, AND a genuinely new write must still be refused — this must not turn real contention
+/// into a false success.
+#[test]
+fn a_replay_is_served_from_its_receipt_while_the_engine_is_busy() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let command = f.command(&f.acquire(now));
+    let applied = f.run(&command, now).expect("the first write applies");
+    // Built before the lock is taken: reading state needs the Engine too.
+    let fresh = f.command(&f.state(now));
+
+    let held = f.engine.lock().unwrap();
+    assert_eq!(
+        f.run(&command, now),
+        Ok(applied),
+        "a replay's answer is its receipt; the Engine is not involved"
+    );
+    assert_eq!(
+        f.run(&fresh, now),
+        Err("stationBusy"),
+        "a genuinely new write still needs the Engine and must still be refused"
+    );
+    drop(held);
+}
+
+/// **THE FINGERPRINT LIST MUST COVER EXACTLY THE RECEIPT-BEARING ARM'S OR-PATTERN.**
+///
+/// `handle_version` matches `LogManual | StationControl | LogChange` in ONE arm, and that arm
+/// now reads its fingerprint from `replay_fingerprint`. A variant missing from that helper's
+/// list gets `None` and the shared arm refuses it `invalidRequest` — which is exactly what the
+/// first cut of the replay fix did, breaking twelve unrelated tests at once because it listed
+/// `LogManual` alone.
+///
+/// A comment cannot hold that correspondence down; this can. Both directions: every variant the
+/// arm serves must have one, and a request from a different arm must NOT gain a receipt lookup
+/// it never had.
+#[test]
+fn every_variant_of_the_receipt_bearing_arm_has_a_replay_fingerprint() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    // v2 acquire: `control_request` needs the controls context the version-2 capture adds.
+    let state = acquire_controls(&f, now);
+    let change: Request = serde_json::from_value(json!({"type":"logChange","requestId":id(),
+        "stationBootId":state["stationBootId"],"leaseId":state["leaseId"],
+        "expectedRevision":state["revision"],"commandWindowId":state["commandWindowId"],
+        "clientSequence":state["nextSequence"],
+        "change":{"kind":"delete","target":{"call":"W1AW","whenUnix":1,"key":"0".repeat(64)}}}))
+    .expect("a logChange request");
+    for request in [
+        f.command(&state),
+        control_request(&state, json!({"action":"decoder.clear","receiver":"rtty"})),
+        change,
+    ] {
+        assert!(
+            Authority::replay_fingerprint(&request)
+                .expect("a well-formed request serializes")
+                .is_some(),
+            "{} shares the receipt-bearing arm and needs a fingerprint",
+            request.id()
+        );
+    }
+    // The other direction: an arm that keeps no receipt must not gain a lookup.
+    let state_request = Request::State { request_id: id() };
+    assert!(
+        Authority::replay_fingerprint(&state_request)
+            .expect("a well-formed request serializes")
+            .is_none(),
+        "a request whose arm keeps no receipt must not gain a replay lookup"
+    );
+}

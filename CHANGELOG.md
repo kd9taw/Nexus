@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Nexus Remote: re-sending a logging request no longer reports the station as busy when the
+  contact had already been logged.** If a browser's reply went missing and it asked again, the
+  station answered the repeat with "the station was busy" instead of the receipt for the entry
+  it had already written — so the browser could not find out whether the contact was in the log.
+  The repeat was being made to wait for the radio, which it never needed: the answer was already
+  on file. It is now served from that record straight away, and only genuinely new work waits
+  for the radio.
 - **The waterfall now says "TRANSMITTING — display held" during a tune, too.** On RTTY, PSK, JS8
   and SSTV the receive picture freezes while the radio is keyed, and since 1.13.0 a label has
   said so — but only for a message you sent. Pressing Tune froze it exactly the same way with

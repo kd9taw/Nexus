@@ -40,9 +40,14 @@ for (const tier of ['FT8', 'FT4']) for (const prompt of [false, true]) test(`act
       socket.send({ type: 'operationRequest', operationVersion: 4, request })
       return { request, response: await socket.take(v => v.type === 'operationResponse' && v.requestId === request.requestId) }
     }
-    // stationBusy means the native Engine was held and the request was refused before anything
-    // changed, so an operator clicks again: retry once (each attempt re-reads its state). Any other
-    // refusal, or a second stationBusy, still fails the case.
+    // stationBusy means the request was refused before anything changed, so an operator clicks
+    // again: retry once (each attempt re-reads its state). Any other refusal, or a second
+    // stationBusy, still fails the case.
+    // ⚠️ It does NOT only mean "the native Engine was held", which this comment used to claim.
+    // TWO unrelated producers send the same string: `operations.rs` when the Engine `try_lock`
+    // fails, and `transport.rs` when another operation is already in flight on this connection —
+    // which never touches the Engine at all. Nothing on the wire tells them apart, so a log
+    // naming this error names neither.
     const settle = async attempt => {
       let sent = await attempt()
       if (sent.response.error === 'stationBusy') {
@@ -759,10 +764,15 @@ for (const operationVersion of [1, 2, 3, 4]) test(`actual cloud and native opera
   const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send(envelope(request));
     try{return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
     catch(error){throw new Error(`operation ${request.type}/${request.action?.action??''} v${operationVersion} timed out; socket closed=${socket.closed} code=${socket.closeCode} reason=${socket.closeReason}`,{cause:error})}}
-  // stationBusy means the native Engine was held and the request was refused before anything changed, so an
-  // operator clicks again. A request the device is allowed to make retries once; `again` re-reads state first
-  // when the request carries a command window. Any other refusal, or a second stationBusy, stands. Refusals
-  // this case expects (localPermissionRequired, staleContext) are never wrapped.
+  // stationBusy means the request was refused before anything changed, so an operator clicks again. A request
+  // the device is allowed to make retries once; `again` re-reads state first when the request carries a command
+  // window. Any other refusal, or a second stationBusy, stands. Refusals this case expects
+  // (localPermissionRequired, staleContext) are never wrapped.
+  // ⚠️ It does NOT only mean "the native Engine was held", which this comment used to claim. TWO unrelated
+  // producers send the same string: `operations.rs` when the Engine `try_lock` fails, and `transport.rs` when
+  // another operation is already in flight on this connection, which never touches the Engine. Nothing on the
+  // wire tells them apart. The REPLAY below is deliberately not wrapped in this: a duplicate request must come
+  // back from its receipt, and as of the fix in `operations.rs` that no longer needs the Engine at all.
   const allowed=async(first,again=first)=>{let sent=await first();if(sent.response.error==='stationBusy'){console.log('stationBusy, retrying once:',sent.request.type,sent.request.action?.action??'');await delay(300);sent=await again()}return sent}
 
   // The approval granted station control and logging; Turn on restores them once the service lists
