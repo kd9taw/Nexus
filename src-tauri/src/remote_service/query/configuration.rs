@@ -49,8 +49,10 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "activeRadio",
     "aiCwEnabled",
     "alertConfirmTier",
+    "alertContinents",
     "alertCq",
     "alertDxccBands",
+    "alertEntities",
     "alertGridBands",
     "alertMyCall",
     "alertNew",
@@ -675,6 +677,10 @@ pub(super) const WRITE_DENIED_KEYS: &[&str] = &[
     "alertDxccBands",
     "alertGridBands",
     "alertRareGridBands",
+    // The geographic alert scope (#174) joins its band-scope siblings: a browser may SEE which
+    // continents and entities the station alerts on, and changes them at the station.
+    "alertContinents",
+    "alertEntities",
     "potaNewActivationAlert",
     "satPassAlertSoundOff",
     // Network, feeds and integrations, including a contest declaration that stops the spot feeds.
@@ -1014,6 +1020,8 @@ impl Serialize for SettingsView<'_> {
         out.serialize_field("alertConfirmTier", &self.0.alert_confirm_tier)?;
         out.serialize_field("alertDxccBands", &self.0.alert_dxcc_bands)?;
         out.serialize_field("alertGridBands", &self.0.alert_grid_bands)?;
+        out.serialize_field("alertContinents", &self.0.alert_continents)?;
+        out.serialize_field("alertEntities", &self.0.alert_entities)?;
         out.serialize_field("b4MatchMode", &self.0.b4_match_mode)?;
         out.serialize_field("alertRareGridBands", &self.0.alert_rare_grid_bands)?;
         out.serialize_field("wheelTuneSensitivity", &self.0.wheel_tune_sensitivity)?;

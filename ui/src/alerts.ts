@@ -21,6 +21,7 @@ import { pushToast } from './toast'
 import { announce } from './announce'
 import { t } from './i18n'
 import { matchWatchlist, watchLabel, type WatchFilter } from './watchlist'
+import { scopeAllows } from './features/dxccGeo'
 
 // ⭐ TWO SETS, DELIBERATELY. The "once ever" dedups (a new DXCC, a new grid, a
 // watch-list hit) must NEVER be evicted by churn from the repeating kinds — that
@@ -247,6 +248,11 @@ export function processDecodes(
   watchlist?: WatchFilter[],
   // Current dial (MHz) for the per-alert band scopes; absent = band unknown (permissive).
   dialMhz?: number,
+  // The operator's GEOGRAPHIC alert scope (#174), already resolved to cty.dat entity NAMES by
+  // `features/dxccGeo.ts` — the same vocabulary the Spots "Spotted from" chips and Band
+  // Activity's hide-by-continent speak. `null`/absent = no scope, which is the shipped default
+  // and must stay indistinguishable from the behaviour before this argument existed.
+  geoScope?: ReadonlySet<string> | null,
 ): void {
   const partner = qso?.dxcall?.toUpperCase() ?? null
 
@@ -409,6 +415,21 @@ export function processDecodes(
       kind = 'newgrid'
     else if (settings.alertCq && d.isCq) kind = 'cq'
     if (!kind) continue
+
+    // Geographic scope (#174): the operator narrowed which entities are worth INTERRUPTING them
+    // about ("Europe only", "France only"). Two kinds are deliberately exempt, and both mirror
+    // `isHiddenByCountry`'s own protections:
+    //   - `mycall` — someone calling YOU outranks any filter. Narrowing alerts to Europe is not
+    //     a request to miss the JA station answering your CQ.
+    //   - a WATCH-LIST hit, which `continue`d above before ever reaching here: the operator typed
+    //     that call in, which is a louder statement of intent than any scope.
+    // A station cty.dat could not place is admitted too (`scopeAllows`) — absence is not a match.
+    //
+    // ⚠️ PLACED BEFORE THE DEDUP BOOKKEEPING BELOW, so a refused decode does not burn its key.
+    // The scope can widen mid-session, and the alert the operator then expects is exactly the
+    // one that was refused a moment ago — the same reason the partner skip above is documented
+    // as "skipped WITHOUT consuming the dedup key".
+    if (kind !== 'mycall' && !scopeAllows(d.country, geoScope)) continue
 
     // Rarity escalation: a NEEDED rare/water-only grid is a hunting moment and
     // earns the loudness plain new-grids gave up (the "too chatty" fix) — but

@@ -136,6 +136,9 @@ const SETTINGS_KEYS: &[&str] = &[
     "alertDxccBands",
     "alertGridBands",
     "alertRareGridBands",
+    // The geographic alert scope (#174), beside the band scopes it sits with in Settings.
+    "alertContinents",
+    "alertEntities",
     "bandEdgeTones",
     "blockedCalls",
     "companionAddr",

@@ -147,6 +147,9 @@ import {
 } from '../api'
 import { AssistanceNote } from './AssistanceNote'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
+import { getDxccEntityNames } from '../api'
+import { CONTINENT_CODES } from '../features/dxccGeo'
+import { continentName } from './CountryExclude'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
 import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
@@ -1114,6 +1117,12 @@ export function SettingsPanel({
   // LABEL, not the model number this field stores). A11y here is always-on, never a mode
   // (0.9.6 design rule), so searchability arrives as a filter field that narrows the options.
   const [rigFilter, setRigFilter] = useState('')
+  // The alert scope's entity picker (#174). A FILTER over real <option>s, never an <input list>
+  // — the same a11y ruling as the rig picker directly above: a datalist's suggestion popup is
+  // browser chrome, not DOM, so it never reaches the screen-reader bridge. The full DXCC table
+  // is fetched lazily, only once the operator types, so nobody pays for a picker they never open.
+  const [alertEntityFilter, setAlertEntityFilter] = useState('')
+  const [dxccEntityNames, setDxccEntityNames] = useState<string[]>([])
   const [serialPorts, setSerialPorts] = useState<string[]>([])
   /** Findings from the last save attempt — warnings stay visible after a save that proceeded. */
   const [rigChecks, setRigChecks] = useState<RigCheck[]>([])
@@ -1721,6 +1730,50 @@ export function SettingsPanel({
       }
       next.alertNew = ALERT_SCOPE_KEYS.some((k) => (next[k] ?? 'off') !== 'off')
       return next
+    })
+  }
+
+  // The GEOGRAPHIC alert scope (#174). Both halves are plain add/remove on a list, and both
+  // default EMPTY — which is "alert on everywhere", the behaviour before this setting existed.
+  // There is deliberately no master toggle: the lists ARE the state, so there is no hidden
+  // "armed with nothing selected" flag of the kind `alertNew` had to be rescued from above.
+  const toggleAlertContinent = (code: string) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const cur = prev.alertContinents ?? []
+      // Stored in CONTINENT_CODES order, so the saved value is stable however it was ticked.
+      const next = new Set(cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code])
+      return { ...prev, alertContinents: CONTINENT_CODES.filter((c) => next.has(c)) }
+    })
+  }
+  // Fetch the ~340-entity table the first time the operator types into the filter.
+  useEffect(() => {
+    if (alertEntityFilter.trim() === '' || dxccEntityNames.length > 0) return
+    let live = true
+    void getDxccEntityNames()
+      .then((names) => live && setDxccEntityNames(names))
+      .catch(() => {}) // older core: the filter simply offers nothing, and says so below
+    return () => {
+      live = false
+    }
+  }, [alertEntityFilter, dxccEntityNames.length])
+  /** Entities matching the filter, minus the ones already chosen. Capped: a one-letter filter
+   *  matches most of the table, and a 300-row listbox is not a picker. */
+  const alertEntityMatches = useMemo(() => {
+    const q = alertEntityFilter.trim().toUpperCase()
+    if (!q) return []
+    const chosen = new Set(form?.alertEntities ?? [])
+    return dxccEntityNames.filter((n) => !chosen.has(n) && n.toUpperCase().includes(q)).slice(0, 40)
+  }, [alertEntityFilter, dxccEntityNames, form?.alertEntities])
+
+  const toggleAlertEntity = (entity: string) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const cur = prev.alertEntities ?? []
+      const next = cur.includes(entity) ? cur.filter((e) => e !== entity) : [...cur, entity].sort()
+      return { ...prev, alertEntities: next }
     })
   }
 
@@ -8814,6 +8867,70 @@ export function SettingsPanel({
                   </select>
                 </label>
                 <span className="settings-hint">{t('settings.alerts.rareGrid.hint')}</span>
+              </div>
+
+              {/* WHERE, not which band (#174). Nothing ticked = every continent and every
+                  country alerts, which is exactly what this panel did before the setting
+                  existed — so an operator who never opens it notices nothing. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.alerts.geo.label')}</span>
+                {CONTINENT_CODES.map((code) => (
+                  <label className="settings-check" key={code}>
+                    <input disabled={remote}
+                      type="checkbox"
+                      checked={(form.alertContinents ?? []).includes(code)}
+                      onChange={() => toggleAlertContinent(code)}
+                    />
+                    <span>{`${continentName(code)} (${code})`}</span>
+                  </label>
+                ))}
+                <span className="settings-hint">{t('settings.alerts.geo.hint')}</span>
+              </div>
+
+              <div className="settings-field">
+                <label>
+                  <span className="settings-label">{t('settings.alerts.geo.entities.label')}</span>
+                  <input disabled={remote}
+                    className="settings-input"
+                    type="text"
+                    value={alertEntityFilter}
+                    placeholder={t('settings.alerts.geo.entities.placeholder')}
+                    onChange={(e) => setAlertEntityFilter(e.target.value)}
+                  />
+                </label>
+                {/* Real <option>s, not a datalist — see the `alertEntityFilter` note. Choosing
+                    one adds it and clears the filter, so several can be added in a row. */}
+                {alertEntityFilter.trim() !== '' && (
+                  <select disabled={remote}
+                    className="settings-input"
+                    size={6}
+                    value=""
+                    aria-label={t('settings.alerts.geo.entities.aria')}
+                    onChange={(e) => {
+                      if (!e.target.value) return
+                      toggleAlertEntity(e.target.value)
+                      setAlertEntityFilter('')
+                    }}
+                  >
+                    {alertEntityMatches.map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                )}
+                {/* The chosen set, always visible and each one click from gone. A scope whose
+                    members are only visible while searching is how "why am I not hearing X"
+                    becomes unanswerable. Unticking removes. */}
+                {(form.alertEntities ?? []).map((n) => (
+                  <label className="settings-check" key={n}>
+                    <input disabled={remote}
+                      type="checkbox"
+                      checked
+                      onChange={() => toggleAlertEntity(n)}
+                    />
+                    <span>{n}</span>
+                  </label>
+                ))}
+                <span className="settings-hint">{t('settings.alerts.geo.entities.hint')}</span>
               </div>
 
             </div>
