@@ -5035,6 +5035,12 @@ impl Engine {
         let live_rtty_profiles = std::mem::take(&mut self.settings.macros.rtty_profiles);
         let live_active_rtty_profile =
             std::mem::take(&mut self.settings.macros.active_rtty_profile);
+        // …and the PSK cockpit's, added with its editor (#316). Held here for the same reason and
+        // not one inherited from RTTY: the Settings panel's snapshot carries `macros` WHOLE, so
+        // without this an unrelated Save writes back the empty `pskProfiles` it loaded with and
+        // every key the operator wrote is gone, with no error and nothing to notice.
+        let live_psk_profiles = std::mem::take(&mut self.settings.macros.psk_profiles);
+        let live_active_psk_profile = std::mem::take(&mut self.settings.macros.active_psk_profile);
         // Start at sign-in and Remote's one-time offer to switch it on: the same ONE-WRITER shape
         // as the beta channel. `launch_at_login` mirrors the operating system's login entry, which
         // only `set_launch_at_login` changes, so a payload's copy would make the switch disagree
@@ -5127,6 +5133,8 @@ impl Engine {
             self.settings.remote_autostart_offer_answered = live_remote_autostart_offer_answered;
             self.settings.macros.rtty_profiles = live_rtty_profiles;
             self.settings.macros.active_rtty_profile = live_active_rtty_profile;
+            self.settings.macros.psk_profiles = live_psk_profiles;
+            self.settings.macros.active_psk_profile = live_active_psk_profile;
         }
         // Start at sign-in is kept on EVERY path, restore and factory reset included: it mirrors
         // the operating system's login entry, which neither of them changes, so taking the
@@ -5522,6 +5530,28 @@ impl Engine {
         let fields = macros.as_object_mut().ok_or(Reason::InvalidAction)?;
         fields.insert("rttyProfiles".into(), profiles);
         fields.insert("activeRttyProfile".into(), active);
+        let mut values = serde_json::Map::new();
+        values.insert("macros".into(), macros);
+        self.save_remote_preferences(&values, &["macros"])
+    }
+
+    /// ⛔ **THE ONE WRITER of the PSK cockpit's macro sets** — `macros.pskProfiles` and
+    /// `macros.activePskProfile` (#316). [`Self::save_rtty_macros`] for PSK's own storage, and
+    /// every word of its contract applies here: never a form save (`apply_settings` advances
+    /// `tx_gate_gen`, so an over the operator had just queued would not key, and it revokes
+    /// Remote actuation), the copy required to round-trip EXACTLY so a malformed entry is refused
+    /// rather than silently dropped, and nothing changed by a refused or failed save.
+    pub fn save_psk_macros(
+        &mut self,
+        profiles: serde_json::Value,
+        active: serde_json::Value,
+    ) -> Result<(), crate::remote_control::Reason> {
+        use crate::remote_control::Reason;
+        let mut macros =
+            serde_json::to_value(&self.settings.macros).map_err(|_| Reason::InvalidAction)?;
+        let fields = macros.as_object_mut().ok_or(Reason::InvalidAction)?;
+        fields.insert("pskProfiles".into(), profiles);
+        fields.insert("activePskProfile".into(), active);
         let mut values = serde_json::Map::new();
         values.insert("macros".into(), macros);
         self.save_remote_preferences(&values, &["macros"])
@@ -27982,11 +28012,11 @@ mod tests {
         assert_eq!(macros["activeRttyProfile"], serde_json::json!(""));
 
         // RESTORED BACKUP — the bundle's own sets, not this station's.
-        use crate::settings::{RttyMacro, RttyMacroProfile};
+        use crate::settings::{KeyboardMacro, KeyboardMacroProfile};
         let mut bundle = Settings::default();
-        bundle.macros.rtty_profiles = vec![RttyMacroProfile {
+        bundle.macros.rtty_profiles = vec![KeyboardMacroProfile {
             name: "everyday".into(),
-            macros: vec![RttyMacro {
+            macros: vec![KeyboardMacro {
                 key: "F5".into(),
                 label: "Rig".into(),
                 text: "RIG HERE IS 100W".into(),
@@ -28034,6 +28064,130 @@ mod tests {
         let bad = serde_json::json!([{"name": "contest", "macros": [{"key": "F1", "label": 5}]}]);
         assert!(e
             .save_rtty_macros(bad, serde_json::json!("contest"))
+            .is_err());
+        assert_eq!(
+            serde_json::to_value(e.settings()).unwrap(),
+            expected,
+            "a refused save changed something"
+        );
+
+        // POSITIVE CONTROL for the generation check: a form save does advance it.
+        let s = e.settings().clone();
+        e.apply_settings(s);
+        assert_ne!(e.tx_gate_gen, generation);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// An engine whose atomic preference store is a scratch file — the store the PSK macro verb
+    /// persists through. Its own directory, never RTTY's: two suites sharing one scratch path
+    /// would read each other's file.
+    fn psk_macro_engine(tag: &str) -> (Engine, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("nexus-psk-macros-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.configure_remote_settings_store(path.clone());
+        (e, path)
+    }
+
+    fn psk_contest_f1_edit() -> serde_json::Value {
+        serde_json::json!([{"name": "contest", "macros": [
+            {"key": "F1", "label": "Run", "text": "cq test {MYCALL} {MYCALL} cq"}
+        ]}])
+    }
+
+    /// ⛔ **A Settings-panel save cannot revert a PSK macro edit made in the cockpit** (#316).
+    /// RTTY's carve-out above, for PSK's field — and written as its own test rather than an
+    /// assertion added to RTTY's, because the failure it guards is per-field: a seam that holds
+    /// `rtty_profiles` and forgets `psk_profiles` passes every RTTY test there is while silently
+    /// wiping the PSK editor's work on the next unrelated Save.
+    #[test]
+    fn a_settings_panel_save_cannot_revert_a_psk_macro_edit() {
+        let (mut e, path) = psk_macro_engine("form");
+        let mut panel = e.settings().clone(); // read BEFORE the cockpit edit
+        e.save_psk_macros(psk_contest_f1_edit(), serde_json::json!("contest"))
+            .expect("the cockpit edit saves");
+
+        panel.op_name = "Edited in the panel".into();
+        e.apply_settings(panel);
+        assert_eq!(
+            e.settings().op_name,
+            "Edited in the panel",
+            "control: the panel's own edit landed, so the save really ran"
+        );
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            macros["pskProfiles"],
+            psk_contest_f1_edit(),
+            "a stale Settings-panel save reverted the operator's PSK macro edit"
+        );
+        assert_eq!(macros["activePskProfile"], serde_json::json!("contest"));
+
+        // POSITIVE CONTROL: a restore or factory reset is the opposite contract, so the same
+        // fields DO move there — the preservation is scoped to the form path.
+        e.apply_restored_settings(Settings::default());
+        let macros = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(macros["pskProfiles"], serde_json::json!([]));
+        assert_eq!(macros["activePskProfile"], serde_json::json!(""));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The PSK macro save is two fields in one atomic write and NOTHING a form save does — and
+    /// it moves PSK'S OWN FIELDS: a verb that wrote `rttyProfiles` would persist, round-trip and
+    /// pass a test that only re-read what it wrote, while the PSK dock came back to its built-ins
+    /// and the RTTY dock came back holding PSK's messages.
+    #[test]
+    fn saving_psk_macros_writes_psks_own_two_fields_and_no_transmit_state() {
+        let (mut e, path) = psk_macro_engine("atomic");
+        // RTTY holds a set of its own first, so "PSK wrote RTTY's field" is visible as a CHANGE
+        // rather than as two empty lists that agree.
+        e.save_rtty_macros(contest_f1_edit(), serde_json::json!("contest"))
+            .unwrap();
+        let generation = e.tx_gate_gen;
+        let mut expected = serde_json::to_value(e.settings()).unwrap();
+        expected["macros"]["pskProfiles"] = psk_contest_f1_edit();
+        expected["macros"]["activePskProfile"] = serde_json::json!("everyday");
+
+        e.save_psk_macros(psk_contest_f1_edit(), serde_json::json!("everyday"))
+            .unwrap();
+        assert_eq!(
+            e.tx_gate_gen, generation,
+            "a macro save advanced the TX gate generation — a queued over would not key"
+        );
+        // Named first, so a verb pointed at the wrong field says WHICH field moved rather than
+        // printing two truncated copies of the whole settings struct.
+        let live = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            live["pskProfiles"],
+            psk_contest_f1_edit(),
+            "save_psk_macros did not write macros.pskProfiles"
+        );
+        assert_eq!(live["activePskProfile"], serde_json::json!("everyday"));
+        assert_eq!(
+            live["rttyProfiles"],
+            contest_f1_edit(),
+            "the PSK save rewrote the RTTY dock's sets — the two verbs share a field"
+        );
+        assert_eq!(live["activeRttyProfile"], serde_json::json!("contest"));
+        // Then byte-for-byte against the whole struct: nothing ELSE moved either.
+        assert_eq!(serde_json::to_value(e.settings()).unwrap(), expected);
+        let on_disk = serde_json::to_value(Settings::load(&path)).unwrap();
+        assert_eq!(
+            on_disk["macros"]["pskProfiles"],
+            psk_contest_f1_edit(),
+            "persisted"
+        );
+        assert_eq!(
+            on_disk["macros"]["rttyProfiles"],
+            contest_f1_edit(),
+            "the PSK save rewrote RTTY's sets on disk"
+        );
+
+        let bad = serde_json::json!([{"name": "contest", "macros": [{"key": "F1", "label": 5}]}]);
+        assert!(e
+            .save_psk_macros(bad, serde_json::json!("contest"))
             .is_err());
         assert_eq!(
             serde_json::to_value(e.settings()).unwrap(),

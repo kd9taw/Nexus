@@ -3443,6 +3443,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 theme={theme}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={pskPanels}
+                macros={settings?.macros}
+                onMacrosSaved={(macros) => setSettings((prev) => (prev ? { ...prev, macros } : prev))}
               />
             </div>
           )}

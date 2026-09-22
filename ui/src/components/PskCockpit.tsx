@@ -6,7 +6,7 @@
 // under `psk.*`; the sub-mode names and their hints live in `pskModes.ts` and move with that
 // module, and the baud, AFC and cursor figures are invariant tokens that stay in the code.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSnapshot, BandChannel, PskState } from '../types'
+import type { AppSnapshot, BandChannel, KeyboardMacroProfile, PskState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PanelsMenu } from './PanelsMenu'
@@ -30,6 +30,7 @@ import {
   pskSetMode,
   pskStop,
   pskType,
+  setPskMacros,
   setRfPower,
   setTune,
 } from '../api'
@@ -43,6 +44,17 @@ import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
 import { t } from '../i18n'
 import { useStationCapability, useStationControl, useStationData } from '../stationAccess'
 import { RemoteRecallEntry } from '../remote-web/RemoteRecall'
+import { PskMacroButton, PskMacroEditor, PskMacroSetSwitch, isEmptyPskSlot } from './PskMacroEditor'
+import {
+  expandPskMacro,
+  pskSetId,
+  resolvePskSet,
+  withPskEntry,
+  withPskSetReset,
+  type PskMacroKey,
+  type PskMacroSlot,
+  type PskSetId,
+} from '../features/pskMacros'
 
 interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
@@ -71,17 +83,22 @@ interface Props {
   /** Panel visibility record — host-owned (App) so it survives remounts. Optional: without it
    *  the decode stream shows and there's no ⊞ menu. */
   panels?: PanelLayoutApi<PskPanelId>
+  /** The persisted macros (App's settings mirror), for the F-key sets in `pskProfiles` /
+   *  `activePskProfile`. Passed down rather than fetched here, so this cockpit adds no settings
+   *  read of its own — RTTY's shape. Absent ⇒ every key is its built-in. */
+  macros?: Settings['macros'] | null
+  /** The engine saved the macro sets: here is the `macros` it now holds, for the mirror. */
+  onMacrosSaved?: (macros: Settings['macros']) => void
 }
 
 /** This cockpit's INVARIANT vocabulary — the mode's own technical tokens, gathered as
  *  constants so the i18n guard reads them as the deliberate tokens they are: the baud
- *  symbol beside the sub-mode name, the RX/TX direction plates, the polarity control's own
- *  name, and the Q-code the CQ macro is named for. */
+ *  symbol beside the sub-mode name, the RX/TX direction plates and the polarity control's
+ *  own name. (The F-key captions moved with the sets to `features/pskMacros.ts`, which is
+ *  on the migrated list and states which of them are invariant tokens.) */
 const BAUD_SYMBOL = 'Bd'
 const RX_PLATE = 'RX ▼'
 const TX_PLATE = 'TX ▲'
-const CQ = 'CQ'
-const SEVENTY_THREE = '73'
 
 /** Display labels for the PSK removable panels (the ⊞ Panels menu). Resolved when the menu
  *  is BUILT — a module constant would freeze the first locale loaded. */
@@ -90,24 +107,6 @@ const pskPanelLabels = (): Record<PskPanelId, string> => ({
   scope: t('psk.panel.waterfall'),
   stream: t('psk.panel.stream'),
 })
-
-/** Standard casual PSK31 F-key set — mixed case on purpose (full-ASCII
- * varicode is the point over Baudot; lowercase-heavy text also runs SHORTER
- * on the wire, the frequency-ordered code table). The engine re-validates
- * every gate (TX-enable, privileges, the Keyboard section) on each send.
- *
- * `text` is what goes ON THE AIR and is invariant. The LABELS are mixed, exactly as RTTY's
- * are: `CQ` is a Q-code and `73` a number, both invariant; the other two are words. */
-const MACROS: { key: string; label: () => string; text: string }[] = [
-  { key: 'F1', label: () => CQ, text: 'CQ CQ CQ de {MYCALL} {MYCALL} pse k' },
-  { key: 'F2', label: () => t('psk.macro.answer.label'), text: '{CALL} de {MYCALL} {MYCALL} k' },
-  {
-    key: 'F3',
-    label: () => t('psk.macro.exchange.label'),
-    text: '{CALL} de {MYCALL} ur 599 599 btu k',
-  },
-  { key: 'F4', label: () => SEVENTY_THREE, text: '{CALL} de {MYCALL} tnx qso 73 sk' },
-]
 
 /** "+12 Hz" (signed) AFC readout. */
 function fmtAfc(hz: number): string {
@@ -137,7 +136,7 @@ function fmtAfc(hz: number): string {
  * Mounted in a keep-alive host (like RTTY/SSTV) so the decoded stream keeps
  * accumulating while the operator is on another section.
  */
-export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
+export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels, macros, onMacrosSaved }: Props) {
   const frequencyControl = useStationCapability('frequency')
   const control = useStationControl(), receiverControl = useStationCapability('decoder')
   const dataAvailable = useStationData()
@@ -363,21 +362,174 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     el.addEventListener('beforeinput', onBeforeInput)
     return () => el.removeEventListener('beforeinput', onBeforeInput)
   }, [latched, control])
-  // Esc stops PSK from anywhere in the cockpit — bound only while this is the
-  // VISIBLE view (the cockpit stays mounted in the keep-alive host, so an
-  // unconditional listener would fire Stop TX from inside another section).
+
+  // --- THE F1–F8 MACROS (#316) ------------------------------------------------------------
+  // Two built-in sets, Everyday and Contest, with the operator's saved keys folded over them
+  // (`features/pskMacros.ts`). The saved sets are App's settings mirror; a save goes through
+  // `setPskMacros` — the engine's atomic one-writer save, NEVER the settings form, which would
+  // advance the TX gate generation (an over just queued would not key) — and the engine's answer
+  // is what renders afterwards, here and in App. RTTY's shape throughout, deliberately: an
+  // operator who works both modes must not have to learn this dock twice.
+  const [macroSets, setMacroSets] = useState(() => ({
+    profiles: macros?.pskProfiles ?? [],
+    active: macros?.activePskProfile ?? '',
+  }))
+  useEffect(() => {
+    setMacroSets({ profiles: macros?.pskProfiles ?? [], active: macros?.activePskProfile ?? '' })
+  }, [macros?.pskProfiles, macros?.activePskProfile])
+  const macroSet = pskSetId(macroSets.active)
+  const slots = resolvePskSet(macroSets.profiles, macroSet, t)
+  const [editing, setEditing] = useState<PskMacroKey | null>(null)
+  const [editorLeft, setEditorLeft] = useState(0)
+  const [confirmSetReset, setConfirmSetReset] = useState(false)
+  const [savingMacros, setSavingMacros] = useState(false)
+  const dockRef = useRef<HTMLDivElement | null>(null)
+  const openEditor = (key: PskMacroKey) => {
+    if (!control) return
+    // Layout units (`offsetLeft`, against the dock — the key's nearest positioned ancestor), so
+    // the app's zoom cancels out; the editor clamps itself against the dock's right edge.
+    const el = dockRef.current?.querySelector<HTMLElement>(`[data-psk-macro="${key}"]`)
+    setEditorLeft(el?.offsetLeft ?? 0)
+    setConfirmSetReset(false)
+    setEditing(key)
+  }
+  const closeEditor = () => {
+    const key = editing
+    setEditing(null)
+    setConfirmSetReset(false)
+    // The caret goes back to the key the editor was opened from, not to the top of the page.
+    if (key) {
+      dockRef.current
+        ?.querySelector<HTMLElement>(`[data-psk-macro="${key}"] .cw-macro`)
+        ?.focus({ preventScroll: true })
+    }
+  }
+  const saveMacroSets = async (profiles: KeyboardMacroProfile[], activeSet: string): Promise<boolean> => {
+    if (!control) return false
+    setSavingMacros(true)
+    const saved = await withErrorToast(
+      () => setPskMacros(profiles, activeSet),
+      t('psk.macros.saveFailed'),
+    )
+    setSavingMacros(false)
+    if (!saved) return false
+    setMacroSets({ profiles: saved.pskProfiles ?? [], active: saved.activePskProfile ?? '' })
+    onMacrosSaved?.(saved)
+    return true
+  }
+  const saveMacro = async (slot: PskMacroSlot, label: string, message: string) => {
+    if (label === slot.label && message === slot.text) {
+      closeEditor()
+      return
+    }
+    const next = withPskEntry(macroSets.profiles, macroSet, slot.key, { label, text: message })
+    if (await saveMacroSets(next, macroSets.active)) closeEditor()
+  }
+  const resetMacro = async (key: PskMacroKey) => {
+    const next = withPskEntry(macroSets.profiles, macroSet, key, null)
+    if (await saveMacroSets(next, macroSets.active)) closeEditor()
+  }
+  const switchMacroSet = (id: PskSetId) => {
+    setEditing(null)
+    setConfirmSetReset(false)
+    void saveMacroSets(macroSets.profiles, id)
+  }
+  const resetMacroSet = () => {
+    setEditing(null)
+    void saveMacroSets(withPskSetReset(macroSets.profiles, macroSet), macroSets.active)
+  }
+  // A MACRO GOES OUT THROUGH `send()`, THE SAME PATH A TYPED LINE DOES — there is no second way
+  // to `psk_send` to keep honest. The tokens are expanded HERE rather than in `send()`, and that
+  // is the one deliberate difference from RTTY: PSK31's varicode carries braces, so text typed
+  // in the compose bar has always gone on the air exactly as typed, braces and all, and it still
+  // does. Only a macro is token-checked, because only a macro's braces were meant as tokens.
+  const sendMacro = (slot: PskMacroSlot) => {
+    if (!control || isEmptyPskSlot(slot)) return
+    // {EXCH} IS THE RUNNING CONTEST'S SENT EXCHANGE, off the session itself — never Field Day's
+    // two Settings fields. Empty outside a contest, so an empty one is "there is none": refused
+    // like a missing {CALL}, rather than sent as a message with a hole where the exchange goes.
+    const exch = snapRef.current?.fieldDay?.sentExchange?.trim()
+    const expanded = expandPskMacro(slot.text, {
+      mycall: snapRef.current?.mycall ?? '',
+      call: hisCall,
+      exch: exch ? exch : null,
+    })
+    if ('unknown' in expanded) {
+      pushToast(t('psk.send.unknownToken', { token: expanded.unknown }), 'info', 3500)
+      return
+    }
+    if ('missing' in expanded) {
+      if (expanded.missing === 'mycall') pushToast(t('psk.send.noCallsign'), 'info', 3500)
+      else if (expanded.missing === 'call') pushToast(t('psk.send.noTheirCall'), 'info', 3000)
+      else pushToast(t('psk.send.noExchange'), 'info', 3500)
+      return
+    }
+    send(expanded.text)
+  }
+  /** A key's hover text: the message with what is known filled in, tokens left where not. */
+  const macroTitle = (message: string) => {
+    const mycall = snap?.mycall?.trim() || '{MYCALL}'
+    const call = hisCall.trim().toUpperCase() || '{CALL}'
+    const filled = message
+      .replace(/\{MYCALL\}/gi, mycall)
+      .replace(/\{CALL\}/gi, call)
+      .replace(/\{RST\}/gi, '599')
+    return `${filled}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`
+  }
+
+  // THE KEYBOARD — Esc, and F1–F8. Bound only while this is the VISIBLE view: the cockpit stays
+  // mounted in the keep-alive host, so an unconditional listener would fire from inside another
+  // section. One listener bound per visit, reading the live state through `keys`.
+  //
+  // Esc stops PSK from anywhere in the cockpit — with ONE exception, and it is the macro
+  // editor's: while the editor (or the reset-set question) is open and NOTHING is live, Esc
+  // closes it and stops nothing. A stop there is `haltTx`, which turns TX off, over a key the
+  // operator meant as "cancel". "Live" is the Esc/Stop macro's own predicate — an over on the air
+  // or queued (`sending`) or continuous TX latched. Anything live, Esc stops, editor or no editor.
+  //
+  // ⚠️ F1–F8 ARE BOUND HERE FOR THE FIRST TIME. The dock has drawn "F1"…"F4" on its keys since
+  // Phase 2 and carried the Mac Fn-key hint in their tooltips, but no handler ever read them:
+  // pressing F2 did nothing, and on Mac it worked the media key. They now send through the same
+  // `sendMacro` → `send()` → `psk_send` a click does. They work with the caret in the compose
+  // bar, the Call box or the log strip; not while the editor is open; not on a held key's repeats
+  // (one press, one over); and never with Alt, Ctrl or Cmd, which belong to the system (Alt+F4).
+  // A bound F-key's default is cancelled even while the editor is open, so the webview's own
+  // F-key actions never fire from this view.
+  const keys = useRef({ editorOpen: false, live: false, slots, closeEditor, sendMacro })
+  keys.current = {
+    editorOpen: editing !== null || confirmSetReset,
+    live: sending || latched,
+    slots,
+    closeEditor,
+    sendMacro,
+  }
   useEffect(() => {
     if (!control || !active) return
     const onKey = (e: KeyboardEvent) => {
+      const k = keys.current
       if (e.key === 'Escape') {
         e.preventDefault()
-        stop()
+        if (k.editorOpen && !k.live) k.closeEditor()
+        else stop()
+        return
       }
+      if (!/^F[1-8]$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
+      e.preventDefault()
+      if (e.repeat || k.editorOpen) return
+      const slot = k.slots.find((s) => s.key === e.key)
+      if (slot) k.sendMacro(slot)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, control])
+  // An editor is operator state for THIS station: a lost control hand closes it.
+  useEffect(() => {
+    if (!control) {
+      setEditing(null)
+      setConfirmSetReset(false)
+    }
+  }, [control])
 
   const centerHz = psk?.centerHz ?? 1000
   const text_rx = psk?.text ?? ''
@@ -723,8 +875,33 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           (keyboard-only, census-only). A FIFTH stop reaches a latched over with no
           control pressed: the engine's per-tick gate re-check, which unkeys within one
           tick on a section change, a QSY out of privileges, a tune, or a radio handoff. */}
-      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`}>
-      <div className="cw-macros psk-macros" role="group" aria-label={t('psk.macros.aria')}>
+      <div className={`cockpit-txdock${control ? '' : ' remote-observer-dock'}`} ref={dockRef}>
+      {/* THE KEYS AND THE FIXED ROW, which share one line where the dock is wide enough for
+          both and fold into two where it is not. RTTY's `.rtty-dock-keys` structure and its
+          class names verbatim — the eight-key row was measured in a real browser there, and
+          jsdom cannot see layout, so PSK inherits the measured result rather than a guess. */}
+      <div className="rtty-dock-keys psk-dock-keys">
+      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest. Senders,
+          every one — the rule is indifferent to senders, and none of them may be captioned as a
+          stop (the editor refuses it). Default Mac keyboards eat bare F-keys as media keys, so
+          each key's tooltip carries the cure there. */}
+      <div className="cw-macros rtty-macros psk-macros" role="group" aria-label={t('psk.macros.aria')}>
+        {slots.map((slot) => (
+          <PskMacroButton
+            key={slot.key}
+            slot={slot}
+            control={control}
+            editing={editing === slot.key}
+            title={macroTitle(slot.text)}
+            onSend={() => sendMacro(slot)}
+            onEdit={() => openEditor(slot.key)}
+          />
+        ))}
+      </div>
+
+      {/* THE FIXED ROW: the Call box, the set switch, and — at the right, together, outside
+          every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}
+      <div className="rtty-dock-row psk-dock-row">
         <input
           disabled={!control}
           className="settings-input rtty-hiscall"
@@ -735,23 +912,15 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           autoComplete="off"
           spellCheck={false}
         />
-        {MACROS.map((m) => (
-          <button
-            disabled={!control}
-            key={m.key}
-            type="button"
-            className="cw-macro"
-            onClick={() => send(m.text)}
-            title={`${m.text
-              .replace(/\{MYCALL\}/g, snap?.mycall ?? '{MYCALL}')
-              .replace(/\{CALL\}/g, hisCall.trim().toUpperCase() || '{CALL}')}${
-              IS_MAC ? `\n${FN_KEY_HINT}` : ''
-            }`}
-          >
-            <span className="cw-macro-key">{m.key}</span>
-            <span className="cw-macro-label">{m.label()}</span>
-          </button>
-        ))}
+        <PskMacroSetSwitch
+          set={macroSet}
+          control={control}
+          customized={slots.some((s) => s.custom)}
+          confirming={confirmSetReset}
+          onConfirming={setConfirmSetReset}
+          onSwitch={switchMacroSet}
+          onReset={resetMacroSet}
+        />
         {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
             tooltip is the wording that states what clicking it off does NOT do (it lets
             what was typed finish keying). Label and tooltips move with the stop line. */}
@@ -787,6 +956,24 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           <span className="cw-macro-label">Stop</span>
         </button>
       </div>
+      </div>
+
+      {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so it
+          moves and covers no control in the dock; non-modal, so Stop TX in the header stays one
+          click away. Esc is decided by the cockpit's keyboard handler above, never here. */}
+      {control && editing && (
+        <PskMacroEditor
+          key={editing}
+          slot={slots.find((s) => s.key === editing)!}
+          left={editorLeft}
+          saving={savingMacros}
+          onSave={(label, message) =>
+            void saveMacro(slots.find((s) => s.key === editing)!, label, message)
+          }
+          onCancel={closeEditor}
+          onReset={() => void resetMacro(editing)}
+        />
+      )}
 
       <div className="cw-send">
         <input

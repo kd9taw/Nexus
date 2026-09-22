@@ -3071,17 +3071,19 @@ export interface UpdateInfo {
   downloadUrl: string
 }
 
-/** One RTTY F-key macro as the operator saved it (Rust `RttyMacro`). */
-export interface RttyMacro {
+/** One keyboard-mode F-key macro as the operator saved it (Rust `KeyboardMacro`) — RTTY's
+ *  sets and PSK's alike; the modes differ in their built-ins and their on-air conventions,
+ *  never in what a saved key IS. */
+export interface KeyboardMacro {
   key: string
   label: string
   text: string
 }
 
-/** One RTTY macro set's saved overrides (Rust `RttyMacroProfile`). */
-export interface RttyMacroProfile {
+/** One keyboard-mode macro set's saved overrides (Rust `KeyboardMacroProfile`). */
+export interface KeyboardMacroProfile {
   name: string
-  macros: RttyMacro[]
+  macros: KeyboardMacro[]
 }
 
 /** Persistent operator + radio settings. */
@@ -3856,9 +3858,16 @@ export interface Settings {
     /** The RTTY cockpit's F1–F8 sets by name (`everyday`, `contest`), each holding ONLY the keys
      * the operator changed — a key with no entry is the built-in, and an empty list is the whole
      * built-in set. Written only by `setRttyMacros`; a Settings save keeps the live value. */
-    rttyProfiles?: RttyMacroProfile[]
+    rttyProfiles?: KeyboardMacroProfile[]
     /** The RTTY set the cockpit shows: `contest`, or Everyday for anything else. */
     activeRttyProfile?: string
+    /** The PSK cockpit's F1–F8 sets, exactly as `rttyProfiles` above — and SEPARATE STORAGE on
+     * purpose: the two modes' built-in texts differ (PSK is mixed-case full ASCII), so one
+     * shared field would make an edit in one cockpit rewrite the other's keys. Written only by
+     * `setPskMacros`; a Settings save keeps the live value. */
+    pskProfiles?: KeyboardMacroProfile[]
+    /** The PSK set the cockpit shows: `contest`, or Everyday for anything else. */
+    activePskProfile?: string
   }
   // --- dual-radio ---
   /** Configured radios (dual-radio). Migrated to a single profile for a one-radio station; the flat

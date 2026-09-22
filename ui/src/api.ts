@@ -21,7 +21,7 @@ import type {
   MeterReadout,
   SkimHit,
   PskState,
-  RttyMacroProfile,
+  KeyboardMacroProfile,
   RttyState,
   SstvState,
   ClubLogPushResult,
@@ -2792,10 +2792,21 @@ export async function setFdOperator(call: string): Promise<AppSnapshot> {
  * payload must round-trip exactly or the save is refused, and a Settings-panel save keeps the
  * live value. Resolves with the saved `macros`, for the caller's settings mirror. */
 export async function setRttyMacros(
-  profiles: RttyMacroProfile[],
+  profiles: KeyboardMacroProfile[],
   active: string,
 ): Promise<Settings['macros']> {
   return invoke<Settings['macros']>('set_rtty_macros', { profiles, active })
+}
+
+/** Save the PSK cockpit's macro sets and which one it shows (#316) — `setRttyMacros`' twin over
+ * `macros.pskProfiles` + `macros.activePskProfile`, with every word of its contract: narrow,
+ * atomic and never the settings form. Separate storage, so a PSK edit cannot rewrite the RTTY
+ * dock's keys. Resolves with the saved `macros`, for the caller's settings mirror. */
+export async function setPskMacros(
+  profiles: KeyboardMacroProfile[],
+  active: string,
+): Promise<Settings['macros']> {
+  return invoke<Settings['macros']>('set_psk_macros', { profiles, active })
 }
 
 /** Load persisted operator + radio settings. */
