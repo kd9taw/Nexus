@@ -322,6 +322,13 @@ export const NEWER_SETTINGS = {
   // A station that predates the per-radio rating reports none, and the meter scale it was
   // drawing all along is the 100 W full scale that `default_rated_watts` still gives it.
   ratedWatts: 100,
+  // A station that predates the alert geography scopes alerts by band alone, which is the same
+  // behaviour an empty scope gives: EVERY continent and entity. Empty is not "nothing selected",
+  // it is "no restriction" — the shipped default, so an operator who never opens the setting is
+  // unchanged. Both halves must be here: a page that knew only one of them would offer an edit
+  // for a key such a station cannot store.
+  alertContinents: [],
+  alertEntities: [],
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
