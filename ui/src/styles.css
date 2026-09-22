@@ -13105,7 +13105,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-note-flag {
   flex: none;
-  margin-right: var(--space-1);
+  /* #162: a toggle, like the comment beside it — same button reset as `.log-note-text`, so
+     nothing about it reads as a control until it is one. */
+  margin: 0 var(--space-1) 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 .log-note-text {
   flex: 1 1 auto;
@@ -13127,10 +13135,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .log-note.expanded {
   align-items: flex-start;
   white-space: normal;
+  /* #162: so the private note can take a line of its own under the comment. */
+  flex-wrap: wrap;
 }
 .log-note.expanded .log-note-text {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+/* #162: the private note, rendered only while the cell is open. `pre-wrap` because it is the
+   one multi-line field in the log — an operator's paragraphs are how it was typed. */
+.log-note-private {
+  flex: 1 0 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-top: var(--space-1);
+  color: var(--text-dim);
 }
 .log-country {
   overflow: hidden;

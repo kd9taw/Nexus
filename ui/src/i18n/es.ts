@@ -2075,7 +2075,7 @@ export const ES: PartialCatalog = {
   "logbook.qsl.via.electronic": "electrónica",
   "logbook.row.delete": "Eliminar {{call}}",
   "logbook.row.edit": "Editar {{call}}",
-  "logbook.row.notes.aria": "tiene una nota privada",
+  "logbook.row.notes.readAria": "Nota privada — ábrela en la fila",
   "logbook.row.notes.private": "Nota privada",
   "logbook.row.notes.title": "Comentario (se comparte en la QSL)",
   "logbook.row.park.mine": "Mi activación: {{program}} {{ref}}",

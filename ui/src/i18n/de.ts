@@ -5984,7 +5984,7 @@ export const DE: PartialCatalog = {
   "logbook.row.view.title": "View everything recorded for {{call}}",
   "logbook.qsl.cardCleared": "QSL-Karte für {{call}} zurückgenommen",
   "logbook.qsl.cardMarked": "QSL-Karte für {{call}} eingetragen",
-  "logbook.row.notes.aria": "hat eine private Notiz",
+  "logbook.row.notes.readAria": "Private Notiz — in der Zeile öffnen",
   "logbook.row.notes.private": "Private Notiz",
   "logbook.row.notes.title": "Kommentar (wird auf der QSL geteilt)",
   "logbook.row.qslRcvd.card": "Karte erhalten",

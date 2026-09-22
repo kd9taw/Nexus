@@ -1135,7 +1135,7 @@ export const EN = {
   'logbook.row.view.title': 'View everything recorded for {{call}}',
   'logbook.row.notes.title': 'Comment (shared on the QSL)',
   'logbook.row.notes.private': 'Private note',
-  'logbook.row.notes.aria': 'has a private note',
+  'logbook.row.notes.readAria': 'Private note — open it in the row',
   'logbook.field.comment.label': 'Comment',
   'logbook.field.comment.placeholder': 'Shared on the QSL',
   'logbook.field.notes.label': 'Notes',

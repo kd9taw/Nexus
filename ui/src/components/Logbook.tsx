@@ -2046,10 +2046,21 @@ export function Logbook({
                     .filter(Boolean)
                     .join('\n\n')}
                 >
+                  {/* #162: so is the 📝 flag. The private note was a marker and a tooltip and
+                      nothing else — the one thing in this cell with no way to read it in the
+                      row, which is the half of the issue the comment fix left open. It opens
+                      the same cell the comment does, because the cell is the clip container:
+                      one row, one open state, and a row holding both shows both. */}
                   {(q.notes ?? '').trim() && (
-                    <span className="log-note-flag" aria-label={t('logbook.row.notes.aria')}>
+                    <button
+                      type="button"
+                      className="log-note-flag"
+                      aria-expanded={openComments.has(`${q.call}-${q.whenUnix}-${i}`)}
+                      aria-label={t('logbook.row.notes.readAria')}
+                      onClick={() => toggleComment(`${q.call}-${q.whenUnix}-${i}`)}
+                    >
                       📝
-                    </span>
+                    </button>
                   )}
                   {/* #162: the comment is its own toggle — its text is the accessible name, and
                       aria-expanded says whether the row shows it whole. */}
@@ -2066,6 +2077,13 @@ export function Logbook({
                     ''
                   ) : (
                     '—'
+                  )}
+                  {/* #162: the note itself, and only when the cell is open. Collapsed it is
+                      not rendered at all, so the single line the column gets still belongs to
+                      the comment — the note is multi-line free text and would win a fight for
+                      it. Open, it takes a line of its own below (`flex: 1 0 100%`). */}
+                  {openComments.has(`${q.call}-${q.whenUnix}-${i}`) && (q.notes ?? '').trim() && (
+                    <span className="log-note-private">{(q.notes ?? '').trim()}</span>
                   )}
                 </span>
                 <span className="log-cell log-rowactions">{control && <>

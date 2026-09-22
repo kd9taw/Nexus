@@ -93,6 +93,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report keeps coming, and stops only if it goes quiet for two minutes or the whole download
   passes ten. The message when it does stop says which of those happened and how much had
   arrived, instead of offering two possible causes and picking neither.
+- **A private note in the log opens in its row, the way a long comment already does.** 1.13.0
+  gave the Comment column a click-to-open; the private **Note** beside it stayed a 📝 marker
+  with its text only in a hover tooltip — the same "there is no way to read this" the comment
+  fix answered. Clicking 📝 now opens the note to its full length in that row, line breaks and
+  all, because a note is the one field in the log you type paragraphs into; clicking again
+  folds it. A row carrying both shows both: the comment keeps the line it had and the note
+  takes one underneath it.
 - **The Logbook shows when a contact ended, and lets you fix it.** 1.14.0 stopped Ham Radio
   Deluxe seeing 00:00 as the end time of a contact confirmed before logging — but Nexus itself
   still had nowhere to show that time, so a wrong one could not be noticed, let alone repaired.

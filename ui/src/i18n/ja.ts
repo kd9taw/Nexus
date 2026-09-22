@@ -765,7 +765,7 @@ export const JA: PartialCatalog = {
   "logbook.row.view.title": "View everything recorded for {{call}}",
   "logbook.row.notes.title": "コメント（QSLで共有）",
   "logbook.row.notes.private": "非公開メモ",
-  "logbook.row.notes.aria": "非公開メモあり",
+  "logbook.row.notes.readAria": "非公開メモ — 行内で開く",
   "logbook.field.comment.label": "コメント",
   "logbook.field.comment.placeholder": "QSLに記載されます",
   "logbook.field.notes.label": "メモ",

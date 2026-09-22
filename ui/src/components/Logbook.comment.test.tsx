@@ -45,7 +45,7 @@ const LONG =
   'Worked him on the 40 m long path at sunrise, running 5 W into a wire vertical; he asked for a ' +
   'card via the bureau and mentioned a DXpedition to the Pacific next spring'
 
-function qso(comment: string | null) {
+function qso(comment: string | null, notes: string | null = null) {
   return {
     call: 'K1ABC',
     grid: 'FN31',
@@ -57,7 +57,7 @@ function qso(comment: string | null) {
     name: null,
     qth: null,
     comment,
-    notes: null,
+    notes,
     country: 'United States',
     whenUnix: 1_700_000_000,
     confirmed: false,
@@ -69,8 +69,8 @@ function qso(comment: string | null) {
   }
 }
 
-async function commentCell(comment: string | null): Promise<HTMLElement> {
-  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([qso(comment)])
+async function commentCell(comment: string | null, notes: string | null = null): Promise<HTMLElement> {
+  ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([qso(comment, notes)])
   const { container } = render(<Logbook defaultBand="40m" defaultFreqMhz={7.074} defaultMode="FT8" />)
   return waitFor(() => {
     const c = container.querySelector('.logbook-row:not(.head) .log-note')
@@ -101,5 +101,55 @@ describe('logbook comment column (#162)', () => {
     const cell = await commentCell(null)
     expect(cell.querySelector('button')).toBeNull()
     expect(cell.textContent).toBe('—')
+  })
+})
+
+// #162's OTHER half. The comment fix left the private Note exactly where it was: a 📝 marker
+// and a hover tooltip, with no way to read it in the row — which is the same complaint the
+// comment half answered ("how else do you remember the things you talked about in the last
+// QSOs?"). The flag is a toggle now, opening the same cell the comment opens, because the cell
+// is the clip container: one row, one open state.
+const NOTE =
+  'He is rebuilding a Drake TR-4 and asked me to look out for a spare VFO; his son is\n' +
+  'studying for Extra and wants a sked on 2 m when he passes'
+
+/** The note text as it renders inside the cell, or null when it is not rendered at all. */
+const noteText = (cell: HTMLElement) => cell.querySelector('.log-note-private')?.textContent ?? null
+
+describe('logbook private note (#162)', () => {
+  it('the 📝 flag opens the note to its full text in the row, and folds it back', async () => {
+    const cell = await commentCell(null, NOTE)
+    const flag = cell.querySelector('.log-note-flag') as HTMLButtonElement | null
+    expect(flag, 'the note marker is not a control').not.toBeNull()
+    expect(flag!.tagName).toBe('BUTTON')
+    expect(flag!.getAttribute('aria-expanded')).toBe('false')
+    expect(noteText(cell), 'closed, the note is not in the row at all').toBeNull()
+
+    fireEvent.click(flag!)
+    expect(flag!.getAttribute('aria-expanded')).toBe('true')
+    expect(cell.classList.contains('expanded')).toBe(true)
+    expect(noteText(cell)).toBe(NOTE)
+
+    fireEvent.click(flag!)
+    expect(flag!.getAttribute('aria-expanded')).toBe('false')
+    expect(noteText(cell), 'and it folds back out of the row').toBeNull()
+  })
+
+  it('a row holding both shows both once it is open, the comment still on the first line', async () => {
+    const cell = await commentCell(LONG, NOTE)
+    const flag = cell.querySelector('.log-note-flag') as HTMLButtonElement
+    const comment = cell.querySelector('.log-note-text') as HTMLElement
+    expect(comment.textContent, 'closed, the line belongs to the comment').toBe(LONG)
+    expect(noteText(cell)).toBeNull()
+
+    fireEvent.click(flag)
+    expect(comment.textContent).toBe(LONG)
+    expect(noteText(cell)).toBe(NOTE)
+  })
+
+  it('control: a row with a comment and no note has no flag to open', async () => {
+    const cell = await commentCell(LONG, null)
+    expect(cell.querySelector('.log-note-flag')).toBeNull()
+    expect(noteText(cell)).toBeNull()
   })
 })
