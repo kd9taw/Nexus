@@ -780,11 +780,15 @@ pub struct Logbook {
     minter: Minter,
 }
 
+mod edit;
 mod id;
+pub mod migrate;
+pub mod mirror;
 mod op;
 mod records;
 pub mod sqlite;
 pub mod writer;
+pub use edit::{OtaEdit, QsoEdit};
 pub use id::{Minter, RecordId};
 pub use op::{Effects, LogOp, UploadService};
 pub use records::OpClass;
@@ -1619,6 +1623,15 @@ impl Logbook {
         let bak = path.with_extension("adi.bak");
         if bak.exists() {
             copies.push(bak);
+        }
+        // The pre-conversion copy ([`migrate`]) lives beside the log and is NEVER rotated, so
+        // nothing else will ever revisit it. A pre-1.11 log can carry a service's echoed API
+        // key, and an unswept copy of one keeps that key at rest for as long as the operator
+        // keeps the file — which is the point of the file, forever. Named from the one
+        // function that owns the name, so the two cannot drift apart.
+        let pre_sqlite = migrate::pre_sqlite_path(path);
+        if pre_sqlite.exists() {
+            copies.push(pre_sqlite);
         }
         if let Some(parent) = path.parent() {
             let dir = parent.join("backups");

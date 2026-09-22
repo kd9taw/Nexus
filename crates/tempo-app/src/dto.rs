@@ -2081,6 +2081,14 @@ impl From<UploadStateDto> for tempo_core::logbook::UploadState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoggedQso {
+    /// The row's stable identity (`APP_NEXUS_ID`), as its canonical text — OPAQUE to the UI,
+    /// which carries it back as an address and never parses or constructs one.
+    ///
+    /// `None` for a row that is not in a log yet (a form's draft) and for one served by a
+    /// station older than 1.14, which minted no ids. Outbound only: see the conversion back
+    /// for why an incoming id is deliberately ignored.
+    #[serde(default)]
+    pub id: Option<String>,
     pub call: String,
     pub grid: Option<String>,
     /// DXCC entity name (country), resolved from the callsign — the key DXer field.
@@ -2099,6 +2107,13 @@ pub struct LoggedQso {
     pub state: Option<String>,
     pub band: String,
     pub freq_mhz: f64,
+    /// ADIF `FREQ_RX` — the receive frequency of a SPLIT contact (MHz), present only when it
+    /// differs from `freqMhz`. On the DTO so the Logbook can show it: the field was recorded
+    /// and exported, but nothing in the UI read it, so a split contact looked simplex.
+    ///
+    /// Outbound only, for the same reason `id` is — the edit form has no control for it.
+    #[serde(default)]
+    pub freq_rx_mhz: Option<f64>,
     /// Mode / tier label ("TempoFast" | "FT8" | "CW" | "SSB" | "USB" | "LSB" | "FM" …).
     pub mode: String,
     /// Signal report sent / received as a string: CW "599" / phone "59" / digital "-12".
@@ -2262,6 +2277,7 @@ impl From<tempo_core::logbook::LoggedActivation> for LoggedActivationDto {
 impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
     fn from(r: tempo_core::logbook::QsoRecord) -> Self {
         LoggedQso {
+            id: r.id.map(|id| id.to_string()),
             call: r.call,
             grid: r.grid,
             country: r.country,
@@ -2270,6 +2286,7 @@ impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
             state: r.state,
             band: r.band,
             freq_mhz: r.freq_mhz,
+            freq_rx_mhz: r.freq_rx_mhz,
             mode: r.mode,
             rst_sent: r.rst_sent,
             rst_rcvd: r.rst_rcvd,
@@ -2359,6 +2376,13 @@ impl From<QslSentDto> for tempo_core::logbook::QslSent {
 impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
     fn from(q: LoggedQso) -> Self {
         tempo_core::logbook::QsoRecord {
+            // ⚠️ An incoming id is DROPPED, and that is the safe direction rather than an
+            // oversight. This conversion builds records that are APPENDED as well as ones
+            // that replace an existing row, and a payload echoing back an id it was shown
+            // would put a second row under an identity the log already holds. Identity is
+            // the log's to assign (`Logbook::add`) and, on an edit, to preserve
+            // (`update_record` restores the stored id). A command that means to address an
+            // existing row names it in a target argument, never inside the record.
             id: None,
             call: q.call,
             grid: q.grid,
@@ -2366,10 +2390,12 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             state: q.state,
             band: q.band,
             freq_mhz: q.freq_mhz,
-            // The SPLIT receive leg is not on this wire and does not need to be: the edit
-            // form has no control for it, and `Logbook::update_record` restores the stored
-            // value when an incoming record leaves it empty (the same rule it applies to
-            // TIME_OFF and the park refs). A manually logged contact has no split leg.
+            // The SPLIT receive leg now rides the wire OUTBOUND, so the Logbook can show it,
+            // but it is still dropped on the way in: the edit form has no control for it, and
+            // `Logbook::update_record` restores the stored value when an incoming record
+            // leaves it empty (the same rule it applies to TIME_OFF and the park refs). A
+            // manually logged contact has no split leg. Reading it back here would let a
+            // display field become a write path without a control ever having been built.
             freq_rx_mhz: None,
             mode: q.mode,
             rst_sent: q.rst_sent,

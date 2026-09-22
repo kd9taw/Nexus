@@ -625,6 +625,20 @@ impl LogDb {
         Ok(())
     }
 
+    /// How many records the store holds.
+    ///
+    /// Written for [`super::migrate`], where it IS the resume watermark: a migration inserts
+    /// in file order, one transaction per chunk, so a crash leaves whole chunks and the count
+    /// names exactly how far it got. A separately stored counter could disagree with the rows
+    /// — it would be a second transaction — and a watermark that runs ahead of the data is how
+    /// a resume drops records.
+    pub fn row_count(&self) -> Result<u64> {
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM qso", [], |r| r.get(0))?;
+        Ok(n.max(0) as u64)
+    }
+
     /// Store one record.
     pub fn insert<'a>(&mut self, rec: &'a QsoRecord, resolved: Resolved<'a>) -> Result<()> {
         self.insert_all([(rec, resolved)])
