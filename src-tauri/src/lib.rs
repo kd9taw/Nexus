@@ -20874,6 +20874,34 @@ fn contest_log_manual(
     Ok(eng.snapshot())
 }
 
+/// ⭐ **Log a contest contact worked THROUGH A BIRD** — the Satellites section's strip.
+///
+/// Identical to [`contest_log_manual`] except for where the row's band and frequency
+/// come from: the transponder the operator held, never the dial. An operator turning a
+/// rotator by hand writes the contact up when their hands are free, which is after LOS
+/// with the radio already back on the HF run — through the ordinary path a 70 cm pass
+/// entered the contest log, and went out to N1MM and N3FJP, on 20 m.
+///
+/// A separate command rather than a flag on the one above because the CALLER is what
+/// knows this: the strip in the Satellites section says a contact was worked through
+/// the bird, and no amount of engine state can infer that from a contact typed into the
+/// Phone cockpit while a transponder happens to still be held.
+#[tauri::command(async)]
+fn contest_log_satellite(
+    state: State<'_, SharedEngine>,
+    call: String,
+    fields: Vec<(String, String)>,
+    mode: String,
+    submode: Option<String>,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if !eng.contest_log_satellite(&call, &fields, &mode, sub)? {
+        return Err(format!("{call} is a dupe on this band/mode"));
+    }
+    Ok(eng.snapshot())
+}
+
 /// ⭐ **The operator committed a callsign on the contest entry line.**
 ///
 /// The door a contest serial is issued through: the number the entry strip shows, and
@@ -25120,6 +25148,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             clear_hunt_target,
             fd_log_manual,
             contest_log_manual,
+            contest_log_satellite,
             contest_working,
             contest_entry_reset,
             fd_merge_to_general,

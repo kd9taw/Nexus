@@ -256,15 +256,12 @@ to a record that already carries it is not needed. Check the Awards screen's
 
 *The Sat VUCC card on the Awards screen in Nexus 1.10.3.*
 
-#### One thing this strip does not do yet
+#### Where a pass contact ends up
 
-Not a decision that satellite work should stay this way — it is the price of
-dropping the Phone/CW log strip in unchanged rather than building a
-satellite-aware one, and it is meant to be closed. (Two earlier entries here
-have since closed: satellite tagging, 2026-08-10 — Nexus stamps the pair
-automatically — and the mode fold on data tiers, same date: on a digital
-section the strip now records your tier's own mode, `FT4` on an FT4 pass,
-never `SSB`.)
+This heading used to read "one thing this strip does not do yet", and the list
+under it is now empty. All three entries closed: satellite tagging and the mode
+fold on data tiers on 2026-08-10 — on a digital section the strip records your
+tier's own mode, `FT4` on an FT4 pass, never `SSB` — and Field Day below.
 
 **Your satellite grids land where they belong.** A tagged pass contact counts
 toward the **Satellite VUCC** totals on the Awards screen and the satellite
@@ -273,15 +270,31 @@ bird QSOs from. An untagged contact (an ISS QSO, or an import without the
 fields) still lands in the terrestrial tracker for its band; hand-add both
 fields to move it.
 
-**During Field Day, this strip logs to the ordinary log, not the contest log.**
-The Phone and CW strips switch to the Field Day log while a session is running;
-this one is not wired to Field Day yet, so a satellite contact made during FD
-goes into your general log and scores the club nothing. Until it is wired, log
-satellite contacts made during Field Day from the Phone or CW cockpit *while you
-are still on the bird*. Catching up afterwards does not work cleanly: the FD log
-stamps every contact with the band the radio is on at the moment you type it, so
-a 70 cm pass entered later goes into the contest log — and out to N1MM or
-N3FJP — on whatever band you have since moved to.
+**During Field Day, this strip logs to the contest log, on the bird's band.**
+It switches to the Field Day entry — call plus class and section, sharing the
+same dupe check as every other position — exactly as the Phone and CW strips do
+while a session is running.
+
+The band is the one thing it does differently, and it is what the old caveat
+here was about. Everywhere else in Nexus the FD log stamps each contact with the
+band the radio is on *at the moment you type it*, so a 70 cm pass written up
+afterwards went into the contest log — and out to N1MM or N3FJP — on whatever
+band you had since moved to. Here the band, the frequency and the satellite tag
+come from the transponder you were holding. **You can work the pass with both
+hands on the rotator and log when the bird has set.** If you had no transponder
+held and none from an earlier pass, there is nothing to take a band from and the
+contact files on your dial like any other.
+
+Field Day's own exchange replaces the grid box while a session runs: on FD you
+are copying a class and a section, not a grid. Outside Field Day the strip is
+unchanged.
+
+⚠️ **Nexus does not claim ARRL's satellite bonus for you.** ARRL Field Day pays
+a bonus for working a bird, and limits repeat contacts through the same
+satellite; neither rule is in the rules data Nexus scores from, so neither shows
+up in the score panel or the dupe check. Your satellite contacts are logged,
+scored as ordinary QSOs on their own band, and exported correctly — claim the
+bonus on your summary sheet yourself, and watch your own repeats.
 
 **If you ran 0.24.0 through 0.27.x, check your log.** In those versions a
 contact logged while a transponder was held picked up `PROP_MODE=SAT` and a

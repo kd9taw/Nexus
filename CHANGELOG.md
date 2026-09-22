@@ -71,6 +71,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A satellite contact made during Field Day now scores for the club, on the bird's band.** The
+  log strip in the Satellites section was the one strip that never switched to the Field Day
+  entry, so a pass contact typed there during FD went into your general log and earned the club
+  nothing — with Field Day visibly running everywhere else in the app. It switches now, sharing
+  the same exchange and the same dupe check as every other position. The part that is not just
+  wiring is the band: everywhere else the FD log stamps each contact with the band the radio is
+  on at the moment you type it, so wiring this strip up the ordinary way would have filed a 70 cm
+  pass written up after LOS on whatever HF band the club had gone back to — in the Cabrillo, and
+  on the N1MM / N3FJP wire. Here the band, the frequency and the satellite tag come from the
+  transponder you were holding, so you can work the pass with both hands on the rotator and log
+  it once the bird has set. The `PROP_MODE` / `SAT_NAME` pair survives into the contest export
+  and into your lifetime log when you merge, so a Field Day pass contact still earns LoTW
+  satellite credit and still reaches the Sat VUCC and satellite-needs boards. Nexus does not
+  claim ARRL's satellite bonus for you and does not enforce its repeat-contact limit — neither
+  rule is in the rules data it scores from — so claim the bonus on your summary sheet yourself.
 - **A previous contact's comment can be read in the callsign card without hovering it.** The
   "Previous contacts" list in the lookup card clipped each comment to one line and put the rest
   in a tooltip, which is the same dead end the Logbook's Comment column had before it opened in

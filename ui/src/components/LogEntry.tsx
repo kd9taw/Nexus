@@ -14,7 +14,7 @@ import type {
   LoggedQso,
 } from '../types'
 import { t } from '../i18n'
-import { contestEntryReset, contestIMoved, contestLogManual, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
+import { contestEntryReset, contestIMoved, contestLogManual, contestLogSatellite, contestWorking, contestZoneHint, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { NO_LOG, useSharedLog } from '../features/logStore'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDateTimeToUnix } from '../features/utcLog'
@@ -1170,8 +1170,15 @@ export function LogEntry({
       // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
       // that class so a CW or phone contact can never acquire one it has no meaning for.
       const fsub = fmode === 'DIG' ? fdSubmode : undefined
+      // ⭐ THE SATELLITE EXCHANGE TAKES ITS BAND OFF THE PASS, NOT THE DIAL. The
+      // ordinary command stamps the band the radio is on at the moment you type, which
+      // for a bird is whatever HF run the club went back to after LOS. `exchange` is
+      // already the prop that says which surface this strip is on, so the routing is
+      // the one fact the strip knows and the engine cannot infer: a transponder still
+      // held does not make a contact typed into the Phone cockpit a satellite contact.
+      const logToContest = exchange === 'satellite' ? contestLogSatellite : contestLogManual
       const r = await withErrorToast(
-        () => contestLogManual(call, ex, fmode, fsub),
+        () => logToContest(call, ex, fmode, fsub),
         t('logEntry.fd.failed'),
       )
       if (r) {

@@ -9933,6 +9933,104 @@ impl Engine {
         Ok(logged)
     }
 
+    /// ⭐ **Where a contest contact worked THROUGH A BIRD happened** — the band, the
+    /// frequency and the bird's LoTW name, taken from the PASS rather than from the
+    /// radio's present state. `None` when there is no pass to take them from.
+    ///
+    /// ⚠️ **THE DOWNLINK, and the same two sources [`Self::log_qso`]'s satellite stamp
+    /// reads**: the transponder HELD, and after the LOS handback (or the operator's
+    /// "None", or a track stop) the bird LAST worked — which is the guide's promise that
+    /// you can log once your hands are free. One answer for both ledgers, because two
+    /// emitters disagreeing about what frequency a contact was worked on is a contact
+    /// the operator cannot reconcile afterwards.
+    ///
+    /// `band_for_dial` returning `None` — a downlink on a segment this build has no
+    /// label for — yields `None` here and the caller falls back to the dial. Fail
+    /// closed: inventing a band for the contest log is worse than the dial's.
+    fn sat_leg_for_log(&self) -> Option<tempo_core::fieldday::SatLeg> {
+        let st = self.sat_tune.as_ref().or(self.sat_last_worked.as_ref())?;
+        let centre = st.transponder.downlink_centre_hz;
+        if centre == 0 {
+            return None;
+        }
+        // The DIAL while the pass still owns it: that is the Doppler-corrected downlink
+        // the operator is actually listening on, and it is what the general log records
+        // for the same contact. Once the dial has been handed back it describes wherever
+        // the operator went next, and the transponder's own centre is what is left that
+        // is true. (Both sit inside the passband, so either satisfies `log_qso`'s gate.)
+        let down_hz = match self.sat_dial_owner.as_ref() {
+            Some((owner, _)) if *owner == st.label && self.settings.dial_mhz > 0.0 => {
+                (self.settings.dial_mhz * 1e6).round() as u64
+            }
+            _ => centre,
+        };
+        let band = crate::bandplan::band_for_dial(down_hz as f64 / 1e6)?;
+        Some(tempo_core::fieldday::SatLeg {
+            band: band.to_string(),
+            down_hz,
+            // `None` for a bird LoTW does not list, and then no satellite pair is
+            // written anywhere — the row is still filed on the bird's band, because
+            // where the contact was worked is true either way.
+            name: Self::lotw_sat_name(&st.label).map(str::to_string),
+        })
+    }
+
+    /// ⭐ **Log a contest contact worked THROUGH A BIRD** — the Satellites strip's path
+    /// into a running Field Day session.
+    ///
+    /// ⚠️ **IT DOES NOT TAKE THE BAND OFF THE DIAL, AND THAT IS THE WHOLE POINT.**
+    /// [`contest_log_manual`](Self::contest_log_manual) opens with
+    /// [`sync_fd_band`](Self::sync_fd_band), which is right for its own job — a knob-QSY
+    /// between contacts must stamp the REAL band — and wrong for a pass: an operator
+    /// turning a rotator by hand writes the contact up when their hands are free, which
+    /// is after LOS with the radio back on the HF run. Through that path a 70 cm pass
+    /// entered the contest log, and went out to N1MM and N3FJP, on 20 m.
+    /// [`sat_leg_for_log`](Self::sat_leg_for_log) is where it comes from instead.
+    ///
+    /// **With no bird in hand this IS [`contest_log_manual`](Self::contest_log_manual)**,
+    /// by delegation rather than by imitation. There is no pass, so the dial is where the
+    /// contact was made — and refusing to log would lose a contact, which is the one
+    /// outcome worse than a wrong band.
+    pub fn contest_log_satellite(
+        &mut self,
+        call: &str,
+        fields: &[(String, String)],
+        mode: &str,
+        submode: Option<&str>,
+    ) -> Result<bool, String> {
+        let Some(leg) = self.sat_leg_for_log() else {
+            return self.contest_log_manual(call, fields, mode, submode);
+        };
+        // The log's own band/dial are kept in step exactly as every other path keeps
+        // them — the ROW is what departs from them, not the log. Skipping this would
+        // leave the next ordinary contact reading a band nothing had refreshed.
+        self.sync_fd_band();
+        let now = now_unix_secs();
+        // The phone mode behind a "PH" class, on the same terms as the two paths above:
+        // the sideband a satellite contact was worked on is the rig's read-back like any
+        // other, and the strip's three entry points must not record it differently.
+        let submode = submode.or(self.contest_phone_submode(mode, submode));
+        let Mode::FieldDay { station, .. } = &mut self.mode else {
+            return Err("Contest mode is not active".into());
+        };
+        // The serial binding, on the same terms and for the same reason as
+        // `contest_log_manual` — a pass contact in a serial contest copies a number too.
+        station.log.session.working(call, now);
+        let logged = station.log.log_satellite_at(
+            call,
+            fields,
+            mode,
+            submode.unwrap_or_default(),
+            &leg,
+            now,
+        );
+        station.log.session.logged(call);
+        if logged {
+            self.persist_fd_log(); // journal every contact — a crash loses nothing
+        }
+        Ok(logged)
+    }
+
     /// ⭐ **The operator committed a callsign on the contest entry line** — the door a
     /// contest serial is issued through, and the only thing that binds a number to the
     /// station that copies it.
@@ -36162,24 +36260,31 @@ mod tests {
     }
 
     /// ⚠️ "ADD IT TO THE FD LOG AFTERWARDS" STAMPS THE BAND YOU ARE ON THEN,
-    /// NOT THE BAND YOU WORKED — pinned because the Field Day guide sends an
-    /// operator down that path for satellite contacts (the Satellites section's
-    /// log strip is not wired to Field Day).
+    /// NOT THE BAND YOU WORKED — still true of `fd_log_manual`, which is what
+    /// this pins, and still what docs/guide/contesting-pota.md warns about.
     ///
     /// `fd_log_manual` opens with `sync_fd_band()`, which is right for its own
     /// job — a knob QSY between contacts must stamp the REAL band rather than
     /// the one FD was entered on — but it makes the contest log a LIVE-band
-    /// recorder with no way to say "this one was on 70 cm". So a satellite QSO
-    /// caught up on after the pass files under the current dial: wrong band in
-    /// the Cabrillo, and wrong on the N1MM / N3FJP wire (`band_for_interop`
-    /// reads this same field). Documented in docs/guide/contesting-pota.md;
-    /// goes red the day a caller can name the band.
+    /// recorder with no way to say "this one was on 70 cm". So a contact caught
+    /// up on later files under the current dial: wrong band in the Cabrillo, and
+    /// wrong on the N1MM / N3FJP wire (`band_for_interop` reads this same
+    /// field). A POTA or HF catch-up entry has nothing to take a better band
+    /// from, so the caveat stands for it.
     ///
-    /// The band field itself is NOT missing — `LoggedQso::band` is real and is
-    /// written per contact, which is how the ADIF below carries two of them.
-    /// What is missing is any way for a caller to supply one: every entry point
-    /// funnels into `log_submode_at`, which stamps `self.band`. Pinned at that
-    /// site by tempo-core's
+    /// ⭐ **THE SATELLITE CASE IS CLOSED (2026-09-22)** and is no longer an
+    /// example of this: the Satellites strip logs through
+    /// [`Engine::contest_log_satellite`], which takes the band and the frequency
+    /// from the transponder that was held —
+    /// `a_field_day_satellite_contact_keeps_the_birds_band_after_the_pass`,
+    /// directly below, is that path's twin of this test. The guide's satellite
+    /// caveat went with it.
+    ///
+    /// The band field itself was never missing — `LoggedQso::band` is real and
+    /// is written per contact, which is how the ADIF below carries two of them.
+    /// What was missing is any way for a caller to supply one; exactly one
+    /// caller can now (`FieldDayLog::log_satellite_at`), and every path this
+    /// test drives still stamps `self.band`. Pinned at that site by tempo-core's
     /// `every_contact_carries_a_band_and_it_is_always_the_logs_own`.
     #[test]
     fn a_contact_added_to_the_fd_log_later_is_stamped_with_the_current_band() {
@@ -36207,6 +36312,115 @@ mod tests {
             adif.contains("<BAND:3>20m"),
             "the catch-up contact is filed on the dial's band, not 70 cm — \
              if a caller can now name the band, delete the guide's caveat: {adif}"
+        );
+    }
+
+    /// ⭐ **A FIELD DAY SATELLITE CONTACT TYPED UP AFTER THE PASS KEEPS THE BIRD'S
+    /// BAND** — the fix for the divergence the test above pins for the terrestrial
+    /// paths.
+    ///
+    /// The Satellites strip reaches the contest log through
+    /// [`Engine::contest_log_satellite`], which does not take the band off the dial: the
+    /// band and the frequency come from the transponder the operator held, so an
+    /// operator turning a rotator by hand can write the contact up with their hands free
+    /// — which is after LOS, with the radio already back on the HF run.
+    ///
+    /// ⚠️ Asserted against a radio that has MOVED, and on the ADIF and the merged
+    /// general-log record BY VALUE. With the dial left on the bird, every assertion here
+    /// would pass on the broken code too.
+    #[test]
+    fn a_field_day_satellite_contact_keeps_the_birds_band_after_the_pass() {
+        use tempo_core::doppler::Transponder;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(436.795, "70cm", "USB"); // working the bird
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        // SO-50 held for the pass, then handed back at LOS.
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        e.set_sat_transponder(None);
+        // The pass is over and the club is back on the 20 m run.
+        e.set_frequency(14.250, "20m", "USB");
+
+        let ex = vec![
+            ("CLASS".to_string(), "1D".to_string()),
+            ("SECTION".to_string(), "IL".to_string()),
+        ];
+        assert!(e
+            .contest_log_satellite("W1AW", &ex, "PH", None)
+            .expect("Field Day is running"));
+
+        let adif = e.field_day_log_adif().expect("an FD log to flush");
+        assert!(
+            adif.contains("<BAND:4>70cm"),
+            "the club's satellite QSO entered the contest log on the HF dial: {adif}"
+        );
+        assert!(
+            !adif.contains("<BAND:3>20m"),
+            "…and it is the ONLY row, so a 20m band here is the bug: {adif}"
+        );
+        assert!(
+            adif.contains("<FREQ:10>436.795000"),
+            "the frequency came off the dial too: {adif}"
+        );
+        // The satellite identity the general-log path already gives this contact must
+        // not be the price of scoring it for the club.
+        assert!(adif.contains("<PROP_MODE:3>SAT"), "{adif}");
+        assert!(adif.contains("<SAT_NAME:5>SO-50"), "{adif}");
+
+        // ⭐ AND THE RECORD THAT ACTUALLY REACHES LoTW, QRZ AND THE AWARD BOARDS — the
+        // contest log is the only copy of this contact, so the merge is where it would
+        // be lost. Asserted on the record, never on the export it came through.
+        e.fd_merge_to_general().expect("the merge runs in FD mode");
+        let rec = e
+            .get_log()
+            .iter()
+            .find(|r| r.call == "W1AW")
+            .cloned()
+            .expect("the contest row reached the general log");
+        assert_eq!(rec.band, "70cm", "the merged record is filed on 20 m");
+        assert!((rec.freq_mhz - 436.795).abs() < 1e-6, "{}", rec.freq_mhz);
+        assert_eq!(rec.prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(rec.sat_name.as_deref(), Some("SO-50"));
+        assert_eq!(
+            rec.freq_rx_mhz, None,
+            "a satellite contact is not a same-band split"
+        );
+    }
+
+    /// The fallback, and it is a data-safety decision rather than a convenience: with no
+    /// bird held and none last worked there IS no pass to take a band from, and the dial
+    /// is where this contact was made. Refusing to log would lose a contact, which is
+    /// the one outcome worse than a wrong band.
+    #[test]
+    fn a_satellite_log_with_no_bird_in_hand_falls_back_to_the_dial() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(14.250, "20m", "USB");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        let ex = vec![
+            ("CLASS".to_string(), "1D".to_string()),
+            ("SECTION".to_string(), "IL".to_string()),
+        ];
+        assert!(e.contest_log_satellite("W1AW", &ex, "PH", None).unwrap());
+        let adif = e.field_day_log_adif().expect("an FD log to flush");
+        assert!(adif.contains("<BAND:3>20m"), "{adif}");
+        assert!(
+            !adif.contains("<PROP_MODE:"),
+            "a contact with no bird behind it claimed satellite propagation: {adif}"
         );
     }
 
