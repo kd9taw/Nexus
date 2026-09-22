@@ -123,7 +123,8 @@ PRIVATE_IDENT="${NEXUS_PRIVATE_IDENT-$(git config --global user.email 2>/dev/nul
 
 # Scratch for the allowlist; removed on exit however the hook leaves.
 tmp_allow=$(mktemp "${TMPDIR:-/tmp}/nexus-prepush-allow.XXXXXX")
-trap 'rm -f "$tmp_allow"' EXIT
+tmp_allow_c=$(mktemp "${TMPDIR:-/tmp}/nexus-prepush-allowc.XXXXXX")
+trap 'rm -f "$tmp_allow" "$tmp_allow_c"' EXIT
 
 # Third-party licence BODY text: phrases that appear in a licence itself and never in our own
 # source. Verified 2026-08-07 across the whole tree — the only files that match are the nine
@@ -224,7 +225,10 @@ while read -r _lref lsha rref rsha; do
   #    everyone else: it refused every external contribution, and could not be worked
   #    around, because any branch built on main carries the contributor commits already in
   #    main's history. It blocked PR #13 and PR #22 on 2026-08-08.
-  ids=$(git log --format='%ae%n%ce' "${rspec[@]}" 2>/dev/null | sort -u)
+  authors=$(git log --format='%ae' "${rspec[@]}" 2>/dev/null | sort -u)
+  committers=$(git log --format='%ce' "${rspec[@]}" 2>/dev/null | sort -u)
+  # 3a below denies on the POOLED set: the private identity must be refused in either role.
+  ids=$(printf '%s\n%s\n' "$authors" "$committers" | sort -u)
 
   # 3a. DENY FIRST — the maintainer's OTHER identity (the global gitconfig is a work
   #     identity). Read from the machine at runtime so the value is never written into this
@@ -239,13 +243,36 @@ Fix the history (rebase/amend) — a follow-up commit does not unpublish an auth
 
   # 3b. ALLOW — the project identity, plus identities named in .githooks/contributors.
   #     Anything else still refuses the push: an unexpected author is worth stopping on.
-  allow="$tmp_allow"
+  #
+  #     ROLE-AWARE, and the distinction is the point. A plain entry admits an identity as
+  #     BOTH author and committer — that is what a human contributor needs. An entry written
+  #     `committer:<email>` admits it ONLY as a committer, never as an author. That exists for
+  #     machine identities such as GitHub's web-merge stamp, which legitimately appears as the
+  #     committer on this repo's own merge commits but must never be able to sign an author
+  #     line. Pooling the two roles into one list (which this check did until 2026-09-21) made
+  #     admitting a committer silently admit an author too.
+  allow="$tmp_allow"; allow_c="$tmp_allow_c"
   printf '%s\n' "$IDENT" > "$allow"
-  [ -f "$CONTRIB" ] && sed -e 's/#.*//' -e 's/[[:space:]]//g' "$CONTRIB" | grep -v '^$' >> "$allow"
-  bad=$(printf '%s\n' "$ids" | grep -vFxf "$allow" || true)
-  [ -n "$bad" ] && fail "unknown identity in outgoing commits: $(printf '%s' "$bad" | tr '\n' ' ')
+  if [ -f "$CONTRIB" ]; then
+    entries=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$CONTRIB" | grep -v '^$' || true)
+    printf '%s\n' "$entries" | grep -v '^committer:' | grep -v '^$' >> "$allow"
+    printf '%s\n' "$entries" | sed -n 's/^committer://p' > "$allow_c"
+  else
+    : > "$allow_c"
+  fi
+  # Committers may match either list; authors only the author list.
+  cat "$allow" >> "$allow_c"
+
+  bad_a=$(printf '%s\n' "$authors" | grep -vFxf "$allow" || true)
+  [ -n "$bad_a" ] && fail "unknown AUTHOR in outgoing commits: $(printf '%s' "$bad_a" | tr '\n' ' ')
 Your own commits must be KD9TAW <$IDENT> (check the repo-local user.email).
-A genuine outside contributor is added, deliberately, to .githooks/contributors."
+A genuine outside contributor is added, deliberately, to .githooks/contributors.
+A machine identity that may only ever COMMIT is added as 'committer:<email>'."
+
+  bad_c=$(printf '%s\n' "$committers" | grep -vFxf "$allow_c" || true)
+  [ -n "$bad_c" ] && fail "unknown COMMITTER in outgoing commits: $(printf '%s' "$bad_c" | tr '\n' ' ')
+Add it to .githooks/contributors — as 'committer:<email>' if it is a machine identity that
+must never appear as an author."
 
   # 4a. Metadata + commit messages, PER COMMIT across the range (whole text — a pattern here
   #     is a leak whichever way it points).
