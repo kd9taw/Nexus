@@ -21,6 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A decode addressed to *you* is now never hidden by −B4, in either pane, whatever the logbook
   says: a station putting your callsign on the air is traffic for you, not clutter. −B4 still
   hides a worked station calling CQ, which is what it is for. (#268)
+- **A repeater tone the radio refused is now sent again instead of being written off as done.**
+  Nexus pushes the shift, the offset and the CTCSS tone once, on change, and then stops — but it
+  recorded that as done the instant the commands were *sent*, not when the radio took them. So a
+  single refusal, from a rig busy on a band change or a momentary CAT hiccup, left you working the
+  machine with no tone for the rest of the session, and restarting Nexus was the only thing that
+  cleared it. It now waits for the radio's own answer, retries a refusal on the next pass, and if
+  the radio keeps saying no it says so on the status line rather than leaving you to find out by
+  being unheard. (#319)
+- **Nexus stops asking a transmitting radio for meters it has never answered.** While you are
+  keyed, SWR, ALC, power and compression are read in turn several times a second. Every other
+  reading Nexus takes gives up on a radio that will not answer it — these four did not, so on a
+  rig whose CAT has no such meter Nexus kept firing unanswered commands at it for the whole of
+  every over, for the whole session. Three tries each and it leaves that meter alone, then quietly
+  checks again later while you are receiving, so a meter lost to one busy over comes back. Nothing
+  changes on a radio that answers, and there is nothing new to configure. (#331)
+- **When the radio refuses CAT CW keying, the warning now quotes what the radio said.** It used to
+  be one fixed sentence, which read the same whether the rig's Hamlib backend has no keying command
+  at all or the reply simply never arrived — two different faults needing two different answers.
+  (#332)
 - **FT4 contacts now export as ADIF the way WSJT-X writes them, so LoTW and the rest accept
   them.** FT4 is not an ADIF mode in its own right — it is a submode of MFSK, as Q65, FST4 and
   FST4W are — and Nexus was writing a bare `MODE=FT4`. That spelling is not in the mode list

@@ -162,9 +162,11 @@ is why a rig on 40 m lands in CW-L rather than CW-U.
 **When nothing goes out**, the cockpit names the backend that failed rather than
 leaving you guessing:
 
-- **CAT** — "Your rig didn't accept CAT CW keying (Hamlib `send_morse`)." Many
-  Hamlib backends serve frequency, mode and PTT but not keying. Move to WinKeyer
-  or Soundcard.
+- **CAT** — "Your rig didn't accept CAT CW keying (Hamlib `send_morse`)", followed
+  by what the radio actually answered. Many Hamlib backends serve frequency, mode
+  and PTT but not keying; the quoted answer is how you tell a refusal (`RPRT -11`,
+  the backend has no keying command) from a reply that never arrived. Move to
+  WinKeyer or Soundcard.
 - **Serial** — the operating system's own error on the port, verbatim, with the
   reminder that CAT or another program may be holding it.
 - **Soundcard** — "the rig didn't accept PTT". Audio-routing faults cannot be
