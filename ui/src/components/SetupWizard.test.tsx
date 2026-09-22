@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
 import { SetupWizard } from './SetupWizard'
 import * as api from '../api'
 import { memoriesStore, emptyBank, addMemory } from '../features/memories'
@@ -11,6 +11,7 @@ vi.mock('../api', () => ({
   discoverFlex: vi.fn(() => Promise.resolve([])),
   getAudioDevices: vi.fn(() => Promise.resolve({ input: [], output: [] })),
   getRigModels: vi.fn(() => Promise.resolve([])),
+  getAllRigModels: vi.fn(() => Promise.resolve([])),
   probeCatPorts: vi.fn(() => Promise.resolve({ found: false, detail: 'no rig answered' })),
   addRadio: vi.fn(() => Promise.resolve(null)),
   getSettings: vi.fn(() => Promise.resolve({ radios: [] })),
@@ -154,6 +155,42 @@ describe('SetupWizard rig-step pipeline (setup re-envisioning, 2026-08-09)', () 
     expect(draft.pttMethod).toBe('cat')
     expect(draft.serialPort).toBe('COM9')
   })
+  it('reaches an extended-tier rig — the curated list is not the whole catalog', async () => {
+    // The IC-7600 was reported missing and was in the catalog the whole time, in the
+    // extended tier. Settings has always had a box to reveal that tier; the wizard had
+    // none, so here those models were not hidden — they were UNREACHABLE.
+    vi.mocked(api.getRigModels).mockResolvedValue([[1042, 'Yaesu FTDX10']] as never)
+    vi.mocked(api.getAllRigModels).mockResolvedValue([
+      [1042, 'Yaesu FTDX10'],
+      [3063, 'Icom IC-7600'],
+    ] as never)
+    renderWizard()
+    clickNext()
+    vi.mocked(api.probeCatPorts).mockResolvedValue({
+      found: true,
+      portName: 'COM5',
+      baud: 38400,
+      model: 1042,
+      modelName: 'Yaesu FTDX10',
+      freqMhz: 14.074,
+      detail: 'found',
+      modelSeeded: true,
+    } as never)
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-test my ports/ }))
+    const select = (await screen.findByLabelText(/Which radio is this/)) as HTMLSelectElement
+
+    // Unticked, the curated tier is still the default — the box does not silently widen
+    // the list. The FTDX10 assertion is this test's own positive control: it proves the
+    // select is POPULATED, so "IC-7600 absent" cannot pass on an empty dropdown.
+    expect(within(select).getByText('Yaesu FTDX10')).toBeTruthy()
+    expect(within(select).queryByText('Icom IC-7600')).toBeNull()
+
+    fireEvent.click(screen.getByLabelText(/Show all Hamlib rig models/))
+    await waitFor(() => expect(within(select).getByText('Icom IC-7600')).toBeTruthy())
+    // ...and the curated entry survives the widening rather than being replaced.
+    expect(within(select).getByText('Yaesu FTDX10')).toBeTruthy()
+  })
+
 })
 
 describe('SetupWizard second-radio card', () => {
