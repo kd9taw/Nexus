@@ -182,17 +182,24 @@ impl Peer {
                     .set_read_timeout(Some(Duration::from_millis(20)))
                     .unwrap();
                 let mut socket = BufReader::new(socket);
+                // ⚠️ OUTSIDE THE LOOP, AND THAT IS THE WHOLE FIX. `read_line` APPENDS what it
+                // has already consumed from the socket before it returns a timeout, so a
+                // command split across the 20 ms read window above left its first half in here
+                // — and while this was declared inside the loop, the retry dropped it. The tail
+                // was then parsed as a whole command, this peer answered `RPRT -1` to a
+                // fragment, and the client's read came back empty as
+                // `Reason::ReadingUnavailable`, for whichever verb happened to be cut. That is
+                // why the failing member moved from run to run while the reason held.
+                let mut line = String::new();
                 while !finished.load(Ordering::SeqCst) {
-                    let mut line = String::new();
                     match socket.read_line(&mut line) {
                         Ok(0) => break,
                         Ok(_) => {
                             observed.lock().unwrap().push(line.trim_end().to_string());
-                            if socket
-                                .get_mut()
-                                .write_all(reply(line.trim_end()).as_bytes())
-                                .is_err()
-                            {
+                            let answer = reply(line.trim_end());
+                            // Only a COMPLETE command is consumed; a retry above keeps its half.
+                            line.clear();
+                            if socket.get_mut().write_all(answer.as_bytes()).is_err() {
                                 break;
                             }
                         }
@@ -941,4 +948,51 @@ pub(crate) fn level_peer(
         }
         None
     })
+}
+
+/// **THE PEER MUST NOT LOSE HALF A COMMAND.**
+///
+/// ⚠️ CI flake, diagnosed 2026-09-22, and it is a SECOND cause wearing the same reason as the
+/// multi-line desync fixed in `rig.rs`. `BufReader::read_line` APPENDS what it has already
+/// consumed from the socket before it returns a timeout, and the `String` it appended into was
+/// created *inside* the read loop — so a command split across the peer's 20 ms read window had
+/// its first half consumed and then dropped by the retry. The tail was then parsed as a whole
+/// command, the peer answered `RPRT -1` to a fragment, and the client's read came back empty:
+/// `Reason::ReadingUnavailable`, for whichever verb happened to be cut.
+///
+/// That is why the failing member MOVED between runs — `Level(Power)` on one, `Filter` on the
+/// next — while the reason stayed the same, and why the identical SHA went green as a branch and
+/// red on main. It is a harness fault that reads exactly like a product one.
+#[test]
+fn a_command_split_across_the_read_window_is_not_half_lost() {
+    use std::io::Write;
+    let peer = Peer::new(|line| match line {
+        "f" => "14074000\n".to_string(),
+        _ => "RPRT -1\n".to_string(),
+    });
+    let mut client = std::net::TcpStream::connect(&peer.address).expect("connect");
+    client
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    // Send `f\n` in two writes, with a gap LONGER than the peer's 20 ms read window, so the
+    // first half is consumed by a `read_line` that then times out.
+    client.write_all(b"f").unwrap();
+    client.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(60));
+    client.write_all(b"\n").unwrap();
+    client.flush().unwrap();
+
+    let mut reply = String::new();
+    BufReader::new(client.try_clone().unwrap())
+        .read_line(&mut reply)
+        .expect("the peer answered");
+    assert_eq!(
+        reply, "14074000\n",
+        "the peer must answer the whole command `f`, not a fragment of it"
+    );
+    assert_eq!(
+        *peer.lines.lock().unwrap(),
+        ["f"],
+        "the peer must have SEEN `f`, not the tail left after a dropped half"
+    );
 }
