@@ -53,6 +53,10 @@ pub mod clockdiag;
 /// keyline, serial PTT): the baud ladder that heals a rig refusing a given rate.
 /// Pure fallback logic, unit-tested; the real open rides the `serial` feature.
 pub mod control_line;
+/// Whether a radio has a SECOND RECEIVER, and how its two receivers may be paired — a
+/// vendor-sourced table, because Hamlib's VFO list says what can be ADDRESSED and not what
+/// can RECEIVE. Three-state; UNKNOWN is never "no". Pure; tested.
+pub mod dualrx;
 /// FlexRadio native DAX RX audio orchestrator (Phase 2) — same VITA-49 path as flexspectrum.
 #[cfg(feature = "device")]
 pub mod flexdax;
