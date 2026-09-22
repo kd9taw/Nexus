@@ -7016,7 +7016,19 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 /* RTTY's stream carries no `panel` class, so `.pane-body > .panel`'s card-flatten misses
    it and it renders as a bordered box inside a bordered frame. */
-.pane-body > .rtty-stream {
+.pane-body > /* OUR OWN KEYED TEXT in the RTTY transcript. The sent over rides in the SAME stream as the
+   received copy, in the order it happened — the interleaving is the whole feature — so it
+   needs to be tellable apart at a glance without being louder than the copy it sits beside.
+   A left border plus the accent colour, not colour alone: the project's rule is that colour
+   never carries a fact by itself, and the span also carries a title saying it was sent.
+   Both themes define --accent, checked before use. */
+.rtty-sent {
+  color: var(--accent);
+  border-left: 2px solid var(--accent);
+  padding-left: 2px;
+  opacity: 0.95;
+}
+.rtty-stream {
   padding: 0;
   border: 0;
   background: transparent;

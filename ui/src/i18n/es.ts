@@ -3629,6 +3629,7 @@ export const ES: PartialCatalog = {
   "rtty.seq.idle": "En reposo",
   "rtty.stream.idle": "Arma RX para decodificar RTTY del audio de recepción",
   "rtty.stream.listening": "escuchando…",
+  "rtty.stream.sent.title": "Sent by this station",
   "rtty.stream.title": "Texto RTTY decodificado — los caracteres tenues son copia de baja confianza (la métrica blanda del demodulador)",
   "rtty.type.failed": "Escritura en RTTY rechazada",
   "rtty.waterfall.hint": "clic para enganchar el decodificador",

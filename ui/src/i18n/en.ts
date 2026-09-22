@@ -7819,6 +7819,7 @@ export const EN = {
   'rtty.clear.label': 'Clear',
   'rtty.clear.title': 'Clear the decoded transcript',
   'rtty.stream.listening': 'listening…',
+  'rtty.stream.sent.title': 'Sent by this station',
   'rtty.stream.idle': 'Arm RX to decode RTTY from the receive audio',
 
   // ── RTTY ▸ the auto-sequencer row ───────────────────────────────────────────────────
