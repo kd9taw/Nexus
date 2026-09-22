@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The setup wizard can now reach every rig in the catalog, not just the common ones.** The
+  wizard's radio list showed about fifty curated rigs and had no way to see past them, so if
+  yours was not among them there was nothing you could do in the wizard about it — Settings has
+  always had a "Show all models" box, and the wizard simply did not. That is what was behind
+  "my radio is missing": radios reported as absent were in the catalog the whole time, just out
+  of reach on the one screen a new operator actually meets. The same box is now on both of the
+  wizard's radio pickers, unticked by default so the short list stays the default, and the full
+  Hamlib catalog loads the first time you tick it.
 - **Nexus Remote: re-sending a logging request no longer reports the station as busy when the
   contact had already been logged.** If a browser's reply went missing and it asked again, the
   station answered the repeat with "the station was busy" instead of the receipt for the entry

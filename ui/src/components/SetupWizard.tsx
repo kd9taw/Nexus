@@ -17,6 +17,7 @@ import {
   addRadio,
   detectRigs,
   discoverFlex,
+  getAllRigModels,
   getAudioDevices,
   getRigModels,
   getSettings,
@@ -220,6 +221,27 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   // The Hamlib model catalog for the confirm dropdown ("found the port but not the
   // exact model" — an FT-991A answers the FTDX10 seed, so the GUESS must be confirmable).
   const [models, setModels] = useState<[number, string][]>([])
+  // ...and the SAME escape hatch Settings has always had. Without it the wizard showed the
+  // curated tier ONLY, so the ~46 extended-tier rigs were not merely hidden here the way they
+  // are behind Settings' unticked box — they were UNREACHABLE, with no control to reveal them.
+  // That is what filed "the IC-7600 is missing": it was in the catalog the whole time.
+  // Fetched lazily on first tick, exactly as Settings does, so the common path stays fast.
+  const [allModels, setAllModels] = useState<[number, string][]>([])
+  const [allModelsLoading, setAllModelsLoading] = useState(false)
+  const [showAllModels, setShowAllModels] = useState(false)
+  const onToggleShowAllModels = (checked: boolean) => {
+    setShowAllModels(checked)
+    if (checked && allModels.length === 0 && !allModelsLoading) {
+      setAllModelsLoading(true)
+      getAllRigModels()
+        .then(setAllModels)
+        .catch(() => {})
+        .finally(() => setAllModelsLoading(false))
+    }
+  }
+  // Every model picker in this wizard reads THIS, never `models` — two pickers exist (the
+  // primary confirm and the second-radio confirm) and a fix applied to one is not a fix.
+  const modelList = showAllModels ? allModels : models
   // The seeded-probe flag: the port+baud are proven, the model is a guess — the dropdown
   // below becomes REQUIRED reading until the operator picks (Settings refuses to persist
   // seeded models; the wizard is finally the control that accepts a real one).
@@ -784,7 +806,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                   value={rigModel ?? 0}
                   onChange={(e) => {
                     const num = Number(e.target.value)
-                    const name = models.find(([m]) => m === num)?.[1] ?? ''
+                    const name = modelList.find(([m]) => m === num)?.[1] ?? ''
                     pickModel(num, name)
                   }}
                 >
@@ -792,17 +814,30 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                     {t('setup.rig.model.placeholder')}
                   </option>
                   {/* Keep an out-of-catalog preselection visible rather than blanking it. */}
-                  {rigModel != null && !models.some(([m]) => m === rigModel) && (
+                  {rigModel != null && !modelList.some(([m]) => m === rigModel) && (
                     <option value={rigModel}>
                       {rigModelName ?? t('setup.rig.model.unnamed', { model: rigModel })}
                     </option>
                   )}
-                  {models.map(([num, name]) => (
+                  {modelList.map(([num, name]) => (
                     <option key={num} value={num}>
                       {name}
                     </option>
                   ))}
                 </select>
+                {/* Reuses Settings' own tokens deliberately: one affordance in the product, not two
+                    dialects for the same box, and no new string for six locales to drift on. */}
+                <span className="wizard-field-hint">
+                  <input
+                    type="checkbox"
+                    checked={showAllModels}
+                    onChange={(e) => onToggleShowAllModels(e.target.checked)}
+                    aria-label={t('settings.rigControl.rigModel.showAll.aria')}
+                  />{' '}
+                  {t('settings.rigControl.rigModel.showAll.hint', {
+                    loading: allModelsLoading ? t('settings.rigControl.rigModel.showAll.loading') : '',
+                  })}
+                </span>
                 <span
                   className={`wizard-field-hint${modelSeeded ? ' bad' : ''}`}
                   role={modelSeeded ? 'alert' : undefined}
@@ -956,24 +991,37 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                     value={second.model ?? 0}
                     onChange={(e) => {
                       const num = Number(e.target.value)
-                      const name = models.find(([m]) => m === num)?.[1] ?? ''
+                      const name = modelList.find(([m]) => m === num)?.[1] ?? ''
                       void pickSecondModel(num, name)
                     }}
                   >
                     <option value={0} disabled>
                       {t('setup.rig.second.model.placeholder')}
                     </option>
-                    {second.model != null && !models.some(([m]) => m === second.model) && (
+                    {second.model != null && !modelList.some(([m]) => m === second.model) && (
                       <option value={second.model}>
                         {second.modelName ?? t('setup.rig.model.unnamed', { model: second.model })}
                       </option>
                     )}
-                    {models.map(([num, name]) => (
+                    {modelList.map(([num, name]) => (
                       <option key={num} value={num}>
                         {name}
                       </option>
                     ))}
                   </select>
+                  {/* Reuses Settings' own tokens deliberately: one affordance in the product, not two
+                      dialects for the same box, and no new string for six locales to drift on. */}
+                  <span className="wizard-field-hint">
+                    <input
+                      type="checkbox"
+                      checked={showAllModels}
+                      onChange={(e) => onToggleShowAllModels(e.target.checked)}
+                      aria-label={t('settings.rigControl.rigModel.showAll.aria')}
+                    />{' '}
+                    {t('settings.rigControl.rigModel.showAll.hint', {
+                      loading: allModelsLoading ? t('settings.rigControl.rigModel.showAll.loading') : '',
+                    })}
+                  </span>
                   <span className="wizard-field-hint bad" role="alert">
                     {t('setup.rig.second.model.seeded')}
                   </span>
