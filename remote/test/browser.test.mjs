@@ -3255,6 +3255,19 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
         await settledLayout()
         for (const target of ['.message-scroll .bubble-row:first-child .bubble-text','.message-scroll .bubble-row:last-child .bubble-text','.grid-stations .station-open','.composer-input']) {
           if(target.includes('first-child')) {
+            // Trace every scroll of the feed through this sequence. The v10 red on 2026-09-22
+            // measured the first bubble at top -3040 AFTER a scrollIntoView that should have put
+            // it at the top edge, i.e. the scroll was UNDONE — and nothing recorded what undid
+            // it, so seven runs later it was still unattributed. usePinnedScroll's re-pin snaps
+            // to scrollHeight, so a re-pin shows up here as an entry whose top jumps to h-c with
+            // atBottom true; anything else that moves the feed shows up as one that does not.
+            await evaluate(`(()=>{const e=document.querySelector('.message-scroll');if(!e)return;
+              window.__scrollTrace=[];
+              window.__scrollMark=(why)=>window.__scrollTrace.push({why,t:Math.round(performance.now()),
+                top:Math.round(e.scrollTop),h:e.scrollHeight,c:e.clientHeight,
+                atBottom:e.scrollHeight-e.scrollTop-e.clientHeight<=40});
+              if(!window.__scrollTraceBound){e.addEventListener('scroll',()=>window.__scrollMark('scroll'),{passive:true});window.__scrollTraceBound=true}
+              window.__scrollMark('armed')})()`)
             // A real wheel gesture leaves the native "follow newest" state
             // before inspecting old history while live snapshots keep arriving.
             await evaluate(scrolledIntoView(`document.querySelector('.message-scroll')`,{block:'center',behavior:'instant'}))
@@ -3262,18 +3275,25 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             const point=await evaluate(`(()=>{const e=document.querySelector('.message-scroll'),r=e.getBoundingClientRect(),x=r.left+r.width/2,ys=[];for(let y=Math.max(1,r.top+1);y<Math.min(innerHeight-1,r.bottom);y+=5)if(e.contains(document.elementFromPoint(x,y)))ys.push(y);return ys.length?{x,y:ys[Math.floor(ys.length/2)]}:null})()`)
             assert.ok(point,'the conversation has a reachable wheel-scroll surface')
             await browser.call('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY:-180},session)
-            try { await until(`(()=>{const e=document.querySelector('.message-scroll');return e.scrollHeight-e.clientHeight-e.scrollTop>50})()`) }
+            try { await until(`(()=>{const e=document.querySelector('.message-scroll');return e.scrollHeight-e.clientHeight-e.scrollTop>50})()`); await evaluate(`window.__scrollMark?.('after-wheel')`) }
             catch(error){console.log('Wheel diagnostic',JSON.stringify({width,height,zoom,theme,point,session:await sessionDiagnostic(),state:await evaluate(`(()=>{const e=document.querySelector('.message-scroll');return {top:e.scrollTop,client:e.clientHeight,height:e.scrollHeight}})()`)}));throw error}
           }
           // Match the native pin helper's instant positioning. A smooth trip
           // through 52 messages is not settled by a layout-only animation frame.
           await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'}))
           await settledLayout()
+          if(target.includes('first-child'))await evaluate(`window.__scrollMark?.('after-scrollIntoView')`)
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
           const clipped=await evaluate(`(()=>{const result=[];for(let e=document.querySelector('${target}').parentElement;e;e=e.parentElement){const c=getComputedStyle(e);if(['hidden','clip'].includes(c.overflowY)&&e.scrollHeight>e.clientHeight+1)result.push({class:e.className,scroll:e.scrollHeight,client:e.clientHeight,y:c.overflowY})}return result})()`)
           const reachable=shape.docW<=width+1&&shape.docH<=height+1&&shape.width>0&&shape.height>0&&shape.top<height&&shape.bottom>0&&shape.reachable&&clipped.length===0
-          if(!reachable){console.log('Tempo observation diagnostic',withheld,{...applicationTraffic,nativeSnapshotAge:performance.now()-(sentAt.get('get_snapshot')??0)},JSON.stringify(await sessionDiagnostic()));if(artifacts){const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-tempo-failure.png'),Buffer.from(shot.data,'base64'))}}
+          if(!reachable){console.log('Tempo observation diagnostic',withheld,{...applicationTraffic,nativeSnapshotAge:performance.now()-(sentAt.get('get_snapshot')??0)},JSON.stringify(await sessionDiagnostic()));
+            // The scroll history is the whole point: it says whether the feed was RE-PINNED
+            // (top jumps to h-c, atBottom true) or moved by something else. Logged as well as
+            // written, because a job that dies before the upload step still has its log.
+            const scrollTrace=await evaluate(`(()=>{try{window.__scrollMark?.('at-measure');return JSON.stringify(window.__scrollTrace??[])}catch(e){return '["trace unavailable: '+e.message+'"]'}})()`)
+            console.log('Tempo scroll trace',target,JSON.stringify({width,height,zoom,theme}),scrollTrace)
+            if(artifacts){await mkdir(artifacts,{recursive:true});const shot=await browser.call('Page.captureScreenshot',{format:'png'},session);await writeFile(join(artifacts,'remote-nexus-tempo-failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(artifacts,'remote-nexus-tempo-failure.scroll.json'),scrollTrace+'\n')}}
           assert.ok(reachable,`Tempo content remains reachable by user input: ${JSON.stringify({target,width,height,zoom,theme,shape,clipped})}`)
           results.push({tempo:true,target,width,height,zoom,theme,shape})
         }
