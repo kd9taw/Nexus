@@ -1257,6 +1257,18 @@ export const EN = {
   'logbook.row.edit': 'Edit {{call}}',
   'logbook.row.delete': 'Delete {{call}}',
 
+  // The satellite tag. The <select>'s VALUES are LoTW's own satellite names and stay in the
+  // code — only these labels are prose. "Clear" is a separate entry and not a blank box on
+  // purpose: the edit form treats a blank field as "leave alone", so removing a tag has to be
+  // something the operator chooses rather than something a form submits by omission.
+  'logbook.row.sat.title':
+    'Record which satellite {{call}} was worked through, or clear a tag added by mistake. Only satellites LoTW accepts are offered.',
+  'logbook.row.sat.aria': 'Set satellite for {{call}}',
+  'logbook.row.sat.clear': 'Not via satellite',
+  'logbook.sat.tagged': '{{call}} tagged as worked via {{sat}}',
+  'logbook.sat.cleared': 'Satellite tag cleared for {{call}}',
+  'logbook.sat.failed': 'Could not change the satellite tag',
+
   // The QSL-request note. Four whole sentences instead of a stem plus " via …" and " on …"
   // tails: both stamps land in a different place in different languages. `{{date}}` is a
   // UTC calendar date, already formatted invariantly by the call site.

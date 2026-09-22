@@ -116,11 +116,16 @@ const spacing = (v: string | null) => (v && /var\(--space-1\)/.test(v) ? SPACE_1
 //   (DejaVu Sans; Liberation Sans 322.2, FreeSans 322.2, Bitstream Charter 320.2, Ubuntu
 //   313.5 — an 11.1px spread). The sheet's floor is that requirement plus one spread, so a
 //   wider face than any of them still fits.
-const MEASURED_REQUIREMENT = 324.6
-const MEASURED_FACE_SPREAD = 11.1
+//
+// RE-TAKEN 2026-09-22, same harness, when the satellite-tag menu joined the cluster and made
+// it ten controls: requiredInkW 372.6px, spread 11.3 (361.3 .. 372.6), floor 336 -> 384. The
+// delta is exactly the 44px the sheet pins a `select.log-rowbtn` to plus one 4px gap —
+// measured, not assumed, which is the step this file exists to stop anyone skipping.
+const MEASURED_REQUIREMENT = 372.6
+const MEASURED_FACE_SPREAD = 11.3
 /** The controls the row renders, in order, with station control held (the desktop default,
  *  and the widest case). If this changes, the measurement above is stale. */
-const EXPECTED_LABELS = ['📢', 'QRZ', 'QRZ✎', 'CL', 'HL', 'WRL', 'QSL▸', '✎', '✕']
+const EXPECTED_LABELS = ['📢', 'QRZ', 'QRZ✎', 'CL', 'HL', 'WRL', 'QSL▸', 'SAT▸', '✎', '✕']
 const EXPECTED_FONT_SIZE = '0.8rem'
 /** A per-character advance chosen BELOW every face measured — the narrowest observed was
  *  Ubuntu's `CL` at 7.2px/char at this size. It builds a LOWER bound only, so every face that
@@ -149,7 +154,7 @@ function clusterLowerBound(): number {
   const selW = Math.max(box, pxOf(winner(['select.log-rowbtn'], 'width')))
   return (
     EXPECTED_LABELS.reduce((sum, label) => {
-      if (label === 'QSL\u25B8') return sum + selW
+      if (label === 'QSL\u25B8' || label === 'SAT\u25B8') return sum + selW
       return sum + Math.max(box, 2 * padX + 2 * border + [...label].length * MIN_ADVANCE_PX)
     }, 0) +
     gap * (EXPECTED_LABELS.length - 1)
@@ -178,6 +183,11 @@ vi.mock('./api', () => {
     deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
+    // ⚠️ NON-EMPTY, unlike the sibling Logbook suites: the satellite menu renders only
+    // when the backend hands it names, and a cluster measured without it is a cluster
+    // no operator sees. The names are LoTW's own (Engine::LOTW_SAT_NAMES).
+    lotwSatNames: vi.fn(async () => ['AO-91', 'ARISS', 'SO-50']),
+    setSatTag: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),
     logQso: noop(), markQslSent: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
@@ -197,6 +207,8 @@ async function renderRow(moreColumns = false): Promise<HTMLElement> {
       rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,
       country: 'United States', whenUnix: 1_700_000_000, confirmed: false,
       awardConfirmed: false, qslRcvd: null, qslSent: null, ota: null, upload: undefined,
+      // Tagged, so the satellite menu carries its removal entry too — the widest it gets.
+      propMode: 'SAT', satName: 'SO-50',
     },
   ])
   const { container } = render(

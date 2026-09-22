@@ -13146,9 +13146,9 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      had, divided 1.0/0.6 — `2026-09-14` against `00:58`, the ratio of the two strings — so no
      neighbour gives up a share and the tail floor is untouched. The one real cost is a
      thirteenth track's worth of `.log-row`'s `gap: 10px`: 10px more fixed overhead per row,
-     taken off the fr pool, which at the 336px floor's worst case (1366px) is ~1% of the
+     taken off the fr pool, which at the 384px floor's worst case (1366px) is ~1% of the
      row. Not measured in a browser — arithmetic off the sheet. */
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(336px, 0.8fr);
+  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(384px, 0.8fr);
 }
 .log-note {
   /* Flex so the comment toggle (#162) can ellipsize beside the 📝 flag: a <button> is an atomic
@@ -13322,7 +13322,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    again silently. */
 [data-viewport='sm'] .logbook-row,
 [data-viewport='xs'] .logbook-row {
-  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 1fr minmax(336px, 0.8fr);
+  grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 1fr minmax(384px, 0.8fr);
 }
 /* Freq, mode, sent, rcvd, DATE, TIME, park. #239 split one Time column into two, so this list
    grew by one and the template below did NOT: the narrow row shows the same six cells it
@@ -13375,7 +13375,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-columns:
     1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr
     0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr
-    1.4fr minmax(336px, 0.8fr);
+    1.4fr minmax(384px, 0.8fr);
 }
 [data-viewport='sm'] .logbook-table.wide .logbook-row .log-cell,
 [data-viewport='xs'] .logbook-table.wide .logbook-row .log-cell {

@@ -295,14 +295,30 @@ Existing records are left exactly as they are. Nexus will not rewrite contacts
 you already logged: some of them really were satellite QSOs that want the name
 corrected, and some were terrestrial contacts that want the tag gone, and
 nothing in the record tells the two apart — only you know which pass you were
-actually on. To find them, your general log is a plain ADIF file
-(`~/.config/tempo/log.adi`, or `%APPDATA%\tempo\log.adi` on Windows): search it
-for `SAT_NAME`. Fix them there, with Nexus closed — correct the name, or delete
-both fields from the record. There is no way to do it from inside Nexus: the
-logbook's edit form does not carry these two fields, and an edit that leaves
-them blank deliberately *preserves* what is stored, so that an ordinary
-busted-call fix cannot silently strip a satellite tag off a record that earned
-it.
+actually on. So the repair is yours to make, one contact at a time — but you
+make it in the Logbook now, not in a text editor.
+
+Open the Logbook and find the contact. Its row carries a **SAT▸** menu beside
+the QSL one. Pick a satellite to set — or correct — the name, or pick **Not via
+satellite** to take the tag off a contact that never earned it. Both ADIF fields
+move together either way: `PROP_MODE` and `SAT_NAME` are written as a pair and
+removed as a pair, because TQSL rejects a record carrying one without the other
+and one rejected record can take a whole signed batch with it.
+
+The menu offers only the satellites LoTW accepts, which is why it is a list and
+not a box you type into: TQSL matches `SAT_NAME` against its own designators and
+refuses anything else — `AO7` where it wanted `AO-7` — and a logged contact is a
+permanent record of whatever you typed. A bird Nexus cannot name still cannot be
+named from inside it; that is the same fail-closed rule the automatic tagging
+follows.
+
+**Why the tag is not on the edit form.** The row's ✎ form carries neither field,
+and it stays that way on purpose: an edit that leaves a field blank *preserves*
+what is stored, so fixing a busted callsign cannot silently strip a satellite
+tag off a record that earned it. A blank box on that form would have to mean
+"leave this alone" and "clear this" at the same time. Removing a tag is a
+decision, so it has its own menu entry and cannot happen as a side effect of
+saving the form.
 
 ### Pin the radio a pass uses
 

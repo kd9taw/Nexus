@@ -62,6 +62,9 @@ vi.mock('./api', () => {
     logOperators: () => Promise.resolve([]), exportLogForOperator: fn(),
     logActivations: () => Promise.resolve([]), exportLogForActivation: fn(),
     logQso: fn(), markQslSent: fn(), purgeLog: fn(), qrzLookup: fn(),
+    // Empty list => no satellite picker rendered; this suite is about the manual form's
+    // submit staying reachable, not about the row cluster's width.
+    lotwSatNames: () => Promise.resolve([] as string[]), setSatTag: fn(),
     syncLotwReport: fn(), uploadLotwReport: fn(), qrzPushQso: fn(),
     clublogPushQso: fn(), hrdlogPushQso: fn(),
     downloadLotwReport: fn(), syncQrz: fn(), importPotaAdif: fn(),

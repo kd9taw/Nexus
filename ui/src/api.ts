@@ -989,6 +989,27 @@ export async function markQslCard(target: LoggedQso, received: boolean): Promise
   return invoke<LoggedQso>('mark_qsl_card', { target, received })
 }
 
+/** Set — or REMOVE — the satellite tag on `target` (ADIF `PROP_MODE=SAT` + `SAT_NAME`).
+ *
+ *  ⭐ Its own command, and NOT two boxes on the edit form. That form reads a blank field as
+ *  LEAVE ALONE, which is what stops a busted-call fix silently stripping a satellite tag off a
+ *  contact that earned it; add the boxes and a blank one would mean "leave it" and "clear it"
+ *  at once. Removal has to be an act the operator chooses, like `markQslSent(target, null)`.
+ *
+ *  `satName: null` REMOVES the tag — both fields together, because TQSL validates them as a
+ *  pair and a lone member is rejected. Any other value must be a name LoTW accepts (see
+ *  `lotwSatNames`); an empty string is an error, never a removal. Returns the row as stored. */
+export async function setSatTag(target: LoggedQso, satName: string | null): Promise<LoggedQso> {
+  return invoke<LoggedQso>('set_sat_tag', { target, satName })
+}
+
+/** The satellite names LoTW accepts, for the tag picker. The backend owns the table, so what
+ *  the operator can choose is exactly what the writer will store — a typed name is a permanent
+ *  record of a guess, and TQSL rejects one it does not list ("AO7" for "AO-7"). */
+export async function lotwSatNames(): Promise<string[]> {
+  return invoke<string[]>('lotw_sat_names')
+}
+
 /** Delete the contact `target` (the row as `getLog()` showed it — see `editQso`). */
 export async function deleteQso(target: LoggedQso): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('delete_qso', { target })

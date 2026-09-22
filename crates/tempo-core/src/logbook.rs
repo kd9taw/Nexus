@@ -1091,6 +1091,64 @@ impl Logbook {
         }
     }
 
+    /// Set — or REMOVE — the satellite tag on `index`: ADIF `PROP_MODE=SAT` + `SAT_NAME`.
+    ///
+    /// `Some(name)` tags the contact as worked through that bird, `None` removes the tag, and
+    /// NOT CALLING THIS leaves it alone. That third state is the point. The edit form reads a
+    /// blank field as "leave alone" on purpose — so that a busted-call fix cannot silently
+    /// strip a satellite tag off a contact that earned it (see [`Self::update_record`]) — and
+    /// two more boxes on that form would give a blank box two meanings at once. A removal has
+    /// to be something the operator SAYS, not something a form submits by omission, which is
+    /// the same shape as [`Self::mark_qsl_sent`]'s withdrawal and [`Self::mark_qsl_card`]'s
+    /// untick: an operator-declared fact, reversible only by the operator.
+    ///
+    /// ⚠️ **BOTH FIELDS OR NEITHER, in both directions.** TQSL validates the two as a PAIR
+    /// and hard-errors on a lone member; through the `-a compliant` funnel a lone field would
+    /// wedge the whole signed batch as Rejected. So this writes the pair or removes the pair,
+    /// and refuses a blank name rather than leaving `PROP_MODE=SAT` standing on its own.
+    ///
+    /// ⚠️ It does NOT vet the name against LoTW's accepted list — that table lives with the
+    /// catalog that feeds it (`Engine::LOTW_SAT_NAMES`), and this crate has no business
+    /// holding a second copy of it. The caller gates the name; this stores what it is given.
+    ///
+    /// Returns false when `index` names no row, and when the name is blank.
+    pub fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
+        let name = match sat_name {
+            // A tag with no name is the lone `PROP_MODE=SAT` TQSL rejects. Refused here
+            // rather than written, for the same reason an empty QSL-sent code is an error
+            // and not a withdrawal: an empty control is a non-choice, not a decision.
+            Some(n) if n.trim().is_empty() => return false,
+            Some(n) => Some(n.trim().to_string()),
+            None => None,
+        };
+        match self.records.write_as(OpClass::Key).get_mut(index) {
+            Some(rec) => {
+                let rec = Arc::make_mut(rec);
+                match name {
+                    Some(n) => {
+                        rec.prop_mode = Some("SAT".into());
+                        rec.sat_name = Some(n);
+                    }
+                    None => {
+                        rec.sat_name = None;
+                        // Only OUR tag. A contact carrying `PROP_MODE=EME`/`MS`/`TEP` and a
+                        // stray `SAT_NAME` is making a different claim about how it got
+                        // there, and that claim is not this op's to withdraw.
+                        if rec
+                            .prop_mode
+                            .as_deref()
+                            .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
+                        {
+                            rec.prop_mode = None;
+                        }
+                    }
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Remove the record at `index` (a mis-logged contact). Returns false if out of
     /// range. NOTE: this shifts the indices of all later records — callers that hold
     /// indices must reload after a delete.
@@ -6171,6 +6229,148 @@ mod tests {
             "CQ-WW-RTTY",
             "an incoming block still wins"
         );
+    }
+
+    /// ⭐ THE MIS-TAG AN OPERATOR COULD NOT UNDO. A contact wrongly carrying
+    /// `PROP_MODE`/`SAT_NAME` could be repaired only by closing Nexus and hand-editing
+    /// `log.adi` — the edit form carries neither field, and the test below shows why it must
+    /// not start to: a blank box would then be ambiguous between "leave it alone" and "clear
+    /// it", and the first reading is what stops a busted-call fix stripping a tag the contact
+    /// earned. So the way out is not a box on the form but an act the operator can only reach
+    /// by SAYING SO — `Some(name)` tags, `None` REMOVES, and not calling it leaves it alone.
+    ///
+    /// ⚠️ BOTH FIELDS OR NEITHER, in both directions. TQSL validates the two as a pair and
+    /// hard-errors on a lone member, which through the `-a compliant` funnel wedges the whole
+    /// signed batch — so a half-written or half-cleared tag is worse than either state.
+    #[test]
+    fn an_operator_can_correct_or_remove_a_satellite_tag_by_saying_so() {
+        let mut lb = Logbook::new();
+        let mut wrong = rec("K1ABC", "70cm", 1_782_583_600);
+        wrong.prop_mode = Some("SAT".into());
+        wrong.sat_name = Some("RS-44".into());
+        lb.add(wrong);
+
+        // 1. CORRECT a wrong designator. The stored name and the new one DISAGREE, so the
+        //    assertion fails if the write is a no-op.
+        assert!(lb.set_sat_tag(0, Some("AO-91")));
+        assert_eq!(lb.records()[0].sat_name.as_deref(), Some("AO-91"));
+        assert_eq!(
+            lb.records()[0].prop_mode.as_deref(),
+            Some("SAT"),
+            "a tag is the PAIR — TQSL hard-errors on a lone member"
+        );
+
+        // 2. REMOVE the tag from a contact that never earned it. Both fields go, together.
+        assert!(lb.set_sat_tag(0, None));
+        assert_eq!(
+            lb.records()[0].sat_name,
+            None,
+            "the operator said remove it and it is still there"
+        );
+        assert_eq!(
+            lb.records()[0].prop_mode,
+            None,
+            "SAT_NAME went and PROP_MODE=SAT stayed — the lone member TQSL rejects"
+        );
+
+        // 3. TAG a contact that has none (the bird our table could not name at log time —
+        //    the guide's "add it by hand" case, now in the app).
+        lb.add(rec("W9XYZ", "2m", 1_782_583_700));
+        assert!(lb.set_sat_tag(1, Some("SO-50")));
+        assert_eq!(lb.records()[1].sat_name.as_deref(), Some("SO-50"));
+        assert_eq!(lb.records()[1].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(
+            lb.records()[0].sat_name,
+            None,
+            "and no other contact was touched"
+        );
+
+        // 4. A NON-SATELLITE prop mode is not this op's to remove. Clearing the satellite
+        //    tag off a meteor-scatter contact that also carried a stray SAT_NAME must take
+        //    the name and leave `PROP_MODE=MS` — it is a different claim about the contact.
+        let mut ms = rec("DL1ABC", "6m", 1_782_583_800);
+        ms.prop_mode = Some("MS".into());
+        ms.sat_name = Some("RS-44".into());
+        lb.add(ms);
+        assert!(lb.set_sat_tag(2, None));
+        assert_eq!(lb.records()[2].sat_name, None);
+        assert_eq!(
+            lb.records()[2].prop_mode.as_deref(),
+            Some("MS"),
+            "a meteor-scatter contact is not a satellite tag to clear"
+        );
+
+        // 5. An index that names no row changes nothing and says so.
+        assert!(!lb.set_sat_tag(9, Some("AO-91")), "out-of-range is false");
+        assert!(!lb.set_sat_tag(9, None), "out-of-range is false");
+    }
+
+    /// ⭐ THE INVARIANT THE OP ABOVE EXISTS TO PRESERVE (`docs/guide/satellites.md`): an
+    /// edit that leaves the satellite fields blank *preserves* what is stored, so an ordinary
+    /// busted-call fix cannot silently strip a satellite tag off a record that earned it.
+    ///
+    /// This is the reason `set_sat_tag` is a separate act and not two more boxes on the edit
+    /// form. Add the boxes and a blank one has two meanings at once; the form submits blanks
+    /// for every field the operator did not touch, so the tag would come off contacts nobody
+    /// was editing the tag of.
+    #[test]
+    fn an_edit_that_carries_no_satellite_fields_preserves_the_stored_tag() {
+        let mut lb = Logbook::new();
+        let mut earned = rec("K1ABC", "70cm", 1_782_583_600);
+        earned.prop_mode = Some("SAT".into());
+        earned.sat_name = Some("SO-50".into());
+        lb.add(earned);
+
+        // An ORDINARY edit (fixing the received report). The form carries neither field.
+        let mut edit = rec("K1ABC", "70cm", 1_782_583_600);
+        edit.rst_rcvd = Some("-08".into());
+        edit.prop_mode = None;
+        edit.sat_name = None;
+        assert!(lb.update_record(0, edit));
+        assert_eq!(
+            lb.records()[0].sat_name.as_deref(),
+            Some("SO-50"),
+            "an ordinary edit stripped a satellite tag the contact earned"
+        );
+        assert_eq!(lb.records()[0].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(
+            lb.records()[0].rst_rcvd.as_deref(),
+            Some("-08"),
+            "the edited field still took effect"
+        );
+
+        // A CALLSIGN correction — THE case the guide names. It clears the confirmations and
+        // upload stamps the busted call earned, and must still not touch these two: what the
+        // contact was worked THROUGH does not change because the call was mistyped.
+        let mut fix = rec("K1ABD", "70cm", 1_782_583_600);
+        fix.prop_mode = None;
+        fix.sat_name = None;
+        assert!(lb.update_record(0, fix));
+        assert_eq!(
+            lb.records()[0].sat_name.as_deref(),
+            Some("SO-50"),
+            "a busted-call fix stripped a satellite tag"
+        );
+        assert_eq!(lb.records()[0].prop_mode.as_deref(), Some("SAT"));
+        assert_eq!(lb.records()[0].call, "K1ABD", "the correction took effect");
+
+        // Positive control, with DISAGREEING values: a payload that DOES carry the fields
+        // still wins, so neither assertion above can pass by the field being unwritable.
+        let mut carries = rec("K1ABD", "70cm", 1_782_583_600);
+        carries.prop_mode = Some("SAT".into());
+        carries.sat_name = Some("AO-91".into());
+        assert!(lb.update_record(0, carries));
+        assert_eq!(
+            lb.records()[0].sat_name.as_deref(),
+            Some("AO-91"),
+            "an incoming satellite name still wins"
+        );
+
+        // …and the explicit op is the ONLY way from tagged to untagged. Asserted here, in
+        // the preserve test, so the two halves of the decision are read together.
+        assert!(lb.set_sat_tag(0, None));
+        assert_eq!(lb.records()[0].sat_name, None);
+        assert_eq!(lb.records()[0].prop_mode, None);
     }
 
     #[test]
