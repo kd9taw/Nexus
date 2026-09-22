@@ -21,7 +21,7 @@ use tempo_app::engine::{
     Engine, LogWriteOutcome,
 };
 use tempo_app::remote_control::{Evidence, Outcome, Reason};
-use tempo_core::logbook::{adif_record, QslVia, QsoRecord};
+use tempo_core::logbook::{adif_record_own_log, QslVia, QsoRecord};
 
 pub(super) enum Work {
     Append(LogWriteOutcome),
@@ -522,6 +522,11 @@ pub(crate) fn locate(engine: &mut Engine, target: &Target) -> Option<usize> {
 
 pub(super) enum ChangeWork {
     /// A proven rewrite: the file must hold exactly `count` copies of `expected` afterwards.
+    ///
+    /// `expected` is matched against `log.adi` ITSELF, so it must be built with
+    /// `adif_record_own_log` — the operator's own bytes, private note included. Build it
+    /// with the outbound serializer and every edit to a record carrying a private note
+    /// would look for text the file does not hold.
     Rewrite {
         path: Option<PathBuf>,
         expected: String,
@@ -620,11 +625,13 @@ pub(super) fn prepare_change(
     let copies = |records: &[std::sync::Arc<QsoRecord>], of: &QsoRecord, text: &str| {
         records
             .iter()
-            .filter(|r| r.call == of.call && r.when_unix == of.when_unix && adif_record(r) == text)
+            .filter(|r| {
+                r.call == of.call && r.when_unix == of.when_unix && adif_record_own_log(r) == text
+            })
             .count()
     };
     let (expected, count) = if let Change::Delete { .. } = change {
-        let text = adif_record(&stored);
+        let text = adif_record_own_log(&stored);
         if !engine.delete_qso(index) {
             return Err(ChangeReason::ContextChanged);
         }
@@ -657,7 +664,7 @@ pub(super) fn prepare_change(
             .get(index)
             .cloned()
             .ok_or(ChangeReason::ContextChanged)?;
-        let text = adif_record(&written);
+        let text = adif_record_own_log(&written);
         let count = copies(engine.log_records(), &written, &text);
         (text, count)
     };

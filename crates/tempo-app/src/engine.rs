@@ -11038,7 +11038,11 @@ impl Engine {
     /// Build the HRD Logbook datagram for a record: its ADIF plus the operator's station
     /// fields (HRD attributes the contact with these). Pure; the socket send is the shell's.
     pub fn hrd_datagram(&self, rec: &QsoRecord) -> String {
-        let mut adif = tempo_core::logbook::adif_record(rec);
+        // Same ruling as the DXKeeper push, and NOT the same destination as HRDLog.net:
+        // this is the HRD Logbook program on the operator's own machine, so it gets their
+        // own record, private note included. `hrdlog_push_qso_impl` is the WEB service and
+        // takes the withheld one.
+        let mut adif = tempo_core::logbook::adif_record_own_log(rec);
         let tag = |name: &str, val: &str| -> String {
             let v = val.trim();
             if v.is_empty() {
@@ -49200,6 +49204,130 @@ mod amp_tests {
         assert_eq!(
             super::reports_comment("FT8", Some(""), Some("-01")).as_deref(),
             Some("FT8  Rcvd: -01")
+        );
+    }
+}
+
+/// ⭐ **The private-note boundary, for the four outbound paths that do NOT live in
+/// `tempo-core`** — the LoTW batch and the HRD Logbook datagram built here, and the DXKeeper
+/// and WSJT-X wire formats in `tempo-net`. The logbook-service bodies are held down beside
+/// their builders in `tempo_core::logbook::private_note_tests`; this is the rest of the
+/// perimeter, so that "which paths are outbound" is asserted in two places and guessed in
+/// none.
+///
+/// Every absence assertion carries its positive control in the same invocation: the shared
+/// `COMMENT` marker must be PRESENT in the very bytes the private marker is absent from.
+#[cfg(test)]
+mod private_note_boundary_tests {
+    use super::*;
+
+    const PRIVATE: &str = "ZZPRIVATEZZ";
+    const SHARED: &str = "ZZSHAREDZZ";
+
+    fn noted() -> QsoRecord {
+        QsoRecord {
+            id: None,
+            call: "W1AW".into(),
+            grid: None,
+            country: None,
+            state: None,
+            band: "20m".into(),
+            freq_mhz: 14.074,
+            freq_rx_mhz: None,
+            mode: "FT8".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            qth: None,
+            comment: Some(format!("{SHARED} nice signal")),
+            notes: Some(format!("{PRIVATE} he is going through a divorce")),
+            tx_power: None,
+            when_unix: 1_700_000_000,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: vec![],
+            credit_submitted: vec![],
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            my_grid: None,
+            my_rig: None,
+            station_callsign: None,
+            extra: Vec::new(),
+            contest: None,
+        }
+    }
+
+    fn assert_withheld(what: &str, body: &str) {
+        assert!(
+            body.contains(SHARED),
+            "{what}: POSITIVE CONTROL FAILED — the shared COMMENT is missing too, so this \
+             cannot tell a privacy fix from an empty payload: {body}"
+        );
+        assert!(
+            !body.contains(PRIVATE),
+            "{what}: the operator's PRIVATE note is on the wire: {body}"
+        );
+    }
+
+    fn assert_carried(what: &str, body: &str) {
+        assert!(
+            body.contains(SHARED),
+            "{what}: POSITIVE CONTROL FAILED — the payload has no comment either: {body}"
+        );
+        assert!(
+            body.contains(PRIVATE),
+            "{what} is the operator's own logger and must keep their note: {body}"
+        );
+    }
+
+    /// LoTW goes to ARRL through TQSL. Both signing modes, because they take different
+    /// branches (`adif_record_with_station` vs `adif_record`) and only one of them was
+    /// exercised by the fix.
+    #[test]
+    fn the_lotw_batch_withholds_the_private_note_in_both_signing_modes() {
+        for adif_location in [false, true] {
+            let mut e = Engine::new("KD9TAW", "EN37", 0);
+            e.settings.lotw_use_adif_location = adif_location;
+            e.log_qso(noted());
+            assert_withheld(
+                &format!("the LoTW batch (adif_location={adif_location})"),
+                &e.lotw_upload_adif(&[0]),
+            );
+        }
+    }
+
+    /// The WSJT-X UDP sink BROADCASTS to every configured target, remote ones included — see
+    /// the ruling at the `send_logged_contact` call site.
+    #[test]
+    fn the_wsjtx_logged_adif_broadcast_withholds_the_private_note() {
+        let adif = tempo_core::logbook::adif_record(&noted());
+        let bytes = tempo_net::wsjtx::encode_logged_adif("Nexus", &adif);
+        assert_withheld(
+            "the WSJT-X LoggedADIF datagram",
+            &String::from_utf8_lossy(&bytes),
+        );
+    }
+
+    /// ⭐ The deliberate exceptions, asserted rather than left to a comment: a logger the
+    /// operator nominated, running on their own machine, gets their own record. If this ever
+    /// flips, it should flip because someone decided to — not by drifting.
+    #[test]
+    fn the_operators_own_local_loggers_still_receive_the_private_note() {
+        let e = Engine::new("KD9TAW", "EN37", 0);
+        assert_carried("the HRD Logbook datagram", &e.hrd_datagram(&noted()));
+
+        let own = tempo_core::logbook::adif_record_own_log(&noted());
+        assert_carried(
+            "the DXKeeper ExternalLog message",
+            &tempo_net::dxkeeper::build_externallog(&own, false),
         );
     }
 }
