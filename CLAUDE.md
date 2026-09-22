@@ -56,7 +56,35 @@ only trigger is somebody remembering is not a gate. Never pipe a gate into `grep
 | UI typecheck is `tsc -b` | Not `--noEmit` (project references). Build = `tsc -b && vite build`; tests = `npm test` (vitest) in `ui/` |
 | Toolchain pinned 1.93.1 | CI pins exact stable; match it locally for clippy parity |
 | CI is the source of truth | `.github/workflows/ci.yml` — its comments document known traps, and `scripts/gates` derives the runnable list from it. Read them before changing build wiring. When you learn a new trap, encode it there (or here), not in session memory. |
+| jsdom **never lays out** | Every fast UI gate — `npm test` in `ui/`, the cockpit suites, `scripts/gates --job ui` — runs in jsdom, where every box is zero-sized, nothing stacks over anything and `elementFromPoint` answers nothing. "The control moved", "something else is on top of it" and "the click no longer reaches the row" are invisible to all of them, and they stay green while an operator-visible regression ships. **Any change under `ui/` runs `scripts/browser-probe` before it is pushed** (below). A `--job ui` pass is not a substitute: CI's `remote-browser` job builds all of `ui/`, so every `ui/` change is also a Remote change. |
 | Windows and macOS are only gated by CI | `windows-cross` needs a MinGW FFTW3f build (`crates/tempo-fast-sys/build.rs` prints the configure line; `FFTW_MINGW_PREFIX`, default `/tmp/fftw-mingw`), `macos-check` needs a Mac. A `#[cfg(windows)]` body is type-checked by neither a Linux compile nor a local run. Push and read the run. |
+
+### Any change under `ui/` — probe a real browser before you push
+
+`scripts/browser-probe` runs ONE scenario of CI's `remote-browser` sweep against real Chrome —
+measured at 92 s end to end on a warm tree, against ~48 minutes for the whole job. It builds the
+hosted UI bundle and the Worker (the sweep loads the *built* worker, never the source), then
+drives sign-in, device approval, observation and the viewport checks with real boxes, real
+stacking and real hit-testing. `--scenario <name>` picks a different
+one — match by NAME, never by shard index, because inserting an application version renumbers
+every scenario after it.
+
+It exists because on 2026-09-22 a log row's comment cell became a full-width button with
+`stopPropagation()`. Both halves were reasonable alone; together the button covered the row and
+swallowed the click that opens the station's lookup card, so a shipped behaviour silently stopped
+working. The UI suite, `tsc -b` and `scripts/gates --job ui` were all green; three separate
+reviews flagged geometry as unverifiable and filed it as a caveat rather than a blocker; CI found
+it on the push, and attributing the red then cost most of an afternoon. Ninety seconds would
+have caught it, and the instrument already existed — it needed a name and one command.
+
+**A green probe is not a green `remote-browser` job.** It is one scenario of the sweep — it
+prints the ratio and what it did not cover on every run; CI remains the gate. **One scenario
+also runs in a fresh process, and CI's shards run nine in series in one**, so a failure that
+needs accumulated state, load or elapsed time cannot appear here at all; when CI's browser job
+is red and the probe is green, reproduce CI's shard with `--shard <n>`, not the scenario. **A
+red probe is not proof your change caused it** — check out `origin/main` in a throwaway
+worktree, run the same scenario there, and attribute only then. Red on both is not yours. During the incident
+above four different causes were named confidently and all four died to exactly that control.
 
 <!-- BEGIN GENERATED operating-rules — DO NOT EDIT INSIDE THIS BLOCK.
      These rules are generated from the maintainer's rule source and re-emitted verbatim;
@@ -189,7 +217,9 @@ only trigger is somebody remembering is not a gate. Never pipe a gate into `grep
 The window-sizing bug class that plagued 0.4–0.21 is dead only while these rules hold. The spec
 is the header comment of `ui/src/cockpit-panes.css`; enforcement is `cockpit-panes.test.ts`,
 `cockpit-shells.test.ts`, `responsive-vocab.test.ts` (they **compute cascade winners** — never
-add a regex-presence CSS test, that is how dead fixes shipped twice).
+add a regex-presence CSS test, that is how dead fixes shipped twice). **None of them lay out** — they
+read the cascade, not the screen, so geometry, stacking and hit-testing are checked only by
+`scripts/browser-probe` and CI's `remote-browser` job.
 
 - A cockpit shell has four child kinds only: header, scope, ONE pane region, one TX dock.
   Every operator-content block renders through `CockpitPaneFrame` with a **role**:

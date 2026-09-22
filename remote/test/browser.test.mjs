@@ -59,7 +59,7 @@ const APPLICATION_VERSIONS = (await readFile(new URL('../../ui/src/remote-web/ap
 if (!APPLICATION_VERSIONS.length || APPLICATION_VERSIONS.some(Number.isNaN)) throw new Error('could not read APPLICATION_VERSIONS')
 const NEWEST_APPLICATION_VERSION = Math.max(...APPLICATION_VERSIONS)
 // Every scenario this suite runs. Extracted from the `for` head on 2026-09-20 so CI can
-// shard it: 17 application versions plus 11 feature scenarios is 28 full compiled-browser
+// shard it: 17 application versions plus 10 feature scenarios is 27 full compiled-browser
 // runs — PKCE, device approval, observation and viewport checks each — and in series that
 // was 47.7 of the Remote job's 50 minutes, which made it the workflow's critical path.
 const SCENARIOS = [...APPLICATION_VERSIONS.map(applicationVersion=>({applicationVersion,operating:false})),{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,ftOperating:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,sessionLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,quickLayout:true,quickMode:'cw'},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,contactContinuity:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,workSpot:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedTier:true},{applicationVersion:NEWEST_APPLICATION_VERSION,operating:true,radioSelection:true,routedWorkspace:true}]
