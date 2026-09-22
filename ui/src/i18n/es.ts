@@ -3434,6 +3434,7 @@ export const ES: PartialCatalog = {
   "recall.need.title": "Vale la pena trabajarla — un nuevo para tu log",
   "recall.note.title": "Tu nota más reciente sobre esta estación",
   "recall.qrz.error": "No se pudo abrir {{call}} en QRZ",
+  "recall.log.comment.readAria": "Comentario — ábrelo en la fila",
   "recall.qrz.title": "Abrir {{call}} en QRZ (navegador)",
   "recall.where.empty": "Tab o pulsa Consultar para nombre / QTH",
   "reveal.enable": "Activar",

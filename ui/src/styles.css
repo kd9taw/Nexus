@@ -8151,14 +8151,31 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* #162: the ONLY control in this cell, and it is deliberately narrow. The text beside it is a
+   plain span so a click on it falls through to the row, which opens the Logbook filtered to this
+   call (#192). A full-width button here swallowed that click and the regression was invisible to
+   every jsdom test. */
+.recall-log-cmt-toggle {
+  flex: 0 0 auto;
+  width: 1.1em;
+  align-self: center;
   margin: 0;
   padding: 0;
   border: 0;
   background: none;
   color: inherit;
   font: inherit;
-  text-align: left;
+  line-height: 1;
   cursor: pointer;
+  opacity: 0.7;
+}
+.recall-log-cmt-toggle::before {
+  content: '▾';
+  display: inline-block;
+}
+.recall-log-cmt.expanded .recall-log-cmt-toggle::before {
+  transform: rotate(180deg);
 }
 /* #162: opened, the comment wraps to its full length inside its row. Only the row grows —
    the list's column template is untouched, and the list is already a bounded scroller. The

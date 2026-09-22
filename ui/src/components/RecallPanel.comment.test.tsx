@@ -62,7 +62,16 @@ describe('a prior contact’s comment opens in the lookup card (#162)', () => {
     const { cell } = card(LONG)
     const toggle = cell.querySelector('button')
     expect(toggle, 'no way to read a long comment except hovering it').not.toBeNull()
-    expect(toggle!.textContent).toBe(LONG)
+    // ⚠️ THE TEXT IS NOT THE BUTTON, and that is now load-bearing. It WAS the button, and a
+    // comment-shaped control spanning this cell sat on top of the row's own click target — so
+    // opening the Logbook from a prior contact (#192) stopped working wherever a comment
+    // existed. Only the compiled-browser suite could see it; jsdom does not lay out.
+    expect(
+      cell.querySelector('.recall-log-cmt-text')?.textContent,
+      'the comment text must be plain text, not the control — a click on it belongs to the row',
+    ).toBe(LONG)
+    expect(toggle!.textContent, 'the toggle must not carry the comment text').toBe('')
+    expect(toggle!.getAttribute('aria-label')).toBeTruthy()
     expect(toggle!.getAttribute('aria-expanded')).toBe('false')
     expect(cell.classList.contains('expanded')).toBe(false)
 

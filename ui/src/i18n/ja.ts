@@ -2947,6 +2947,7 @@ export const JA: PartialCatalog = {
   "program.chirp.link": "CHIRPを入手 ↗",
   "program.chirp.dontShow": "今後は表示しない — ファイルの保存のみ行う",
   "program.chirp.save": "CSVを保存",
+  "recall.log.comment.readAria": "コメント — 行内で開く",
   "recall.qrz.title": "{{call}} をQRZで開く（ブラウザ）",
   "recall.qrz.error": "{{call}} をQRZで開けませんでした",
   "recall.where.empty": "Tabキーまたは Lookup で名前・QTHを取得",

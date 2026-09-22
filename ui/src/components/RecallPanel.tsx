@@ -447,20 +447,31 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
                     title={cmt}
                   >
                     {cmt && (
-                      <button
-                        type="button"
-                        className="recall-log-cmt-text"
-                        aria-expanded={openCmts.has(`${q.whenUnix}-${i}`)}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleCmt(`${q.whenUnix}-${i}`)
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
-                        }}
-                      >
-                        {cmt}
-                      </button>
+                      <>
+                        <span className="recall-log-cmt-text">{cmt}</span>
+                        {/* ⚠️ THE TEXT IS NOT THE CONTROL, AND THAT IS THE POINT. It was, and it
+                            broke #192: the row underneath opens the Logbook filtered to this
+                            call, a comment-shaped button spanning the cell put itself under that
+                            click, and `stopPropagation` then swallowed it — so clicking a prior
+                            contact stopped opening the Logbook wherever a comment existed. The
+                            compiled-browser suite caught it; nothing in jsdom could, because
+                            jsdom does not lay out and the defect was a button covering a click
+                            target. A small affordance takes the click for itself and leaves the
+                            rest of the row doing what it has always done. */}
+                        <button
+                          type="button"
+                          className="recall-log-cmt-toggle"
+                          aria-expanded={openCmts.has(`${q.whenUnix}-${i}`)}
+                          aria-label={t('recall.log.comment.readAria')}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleCmt(`${q.whenUnix}-${i}`)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
+                          }}
+                        />
+                      </>
                     )}
                   </span>
                 </div>
