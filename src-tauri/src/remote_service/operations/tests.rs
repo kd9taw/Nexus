@@ -1452,3 +1452,42 @@ fn every_variant_of_the_receipt_bearing_arm_has_a_replay_fingerprint() {
         "a request whose arm keeps no receipt must not gain a replay lookup"
     );
 }
+
+/// **A `Result` REQUEST IS A PURE RECEIPT READ, AND THE ENGINE HAS NOTHING TO DO WITH IT.**
+///
+/// The sibling of the replay defect, one arm over. `Request::Result` reads `c.receipts`, the
+/// grants and `device` — Core and nothing else — yet it sat behind the same
+/// `shared_engine.try_lock()`, so a browser asking for the answer already on file was refused
+/// `stationBusy` whenever the station's own radio loop held the Engine for a tick.
+///
+/// No CI failure was ever attributed to this one; it is fixed because it is the same mechanism,
+/// not because it was observed. The red below is real all the same.
+///
+/// Both directions, as for the replay: the receipt must be served while the Engine is held, and
+/// a request that genuinely needs the Engine must still be refused.
+#[test]
+fn a_result_request_is_served_from_its_receipt_while_the_engine_is_busy() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let command = f.command(&f.acquire(now));
+    let applied = f.run(&command, now).expect("the first write applies");
+    let result = Request::Result {
+        request_id: id(),
+        operation_id: command.id().into(),
+    };
+    // Built before the lock is taken: reading state needs the Engine too.
+    let fresh = f.command(&f.state(now));
+
+    let held = f.engine.lock().unwrap();
+    assert_eq!(
+        f.run(&result, now),
+        Ok(applied),
+        "a Result request reads a receipt; the Engine is not involved"
+    );
+    assert_eq!(
+        f.run(&fresh, now),
+        Err("stationBusy"),
+        "a genuinely new write still needs the Engine and must still be refused"
+    );
+    drop(held);
+}

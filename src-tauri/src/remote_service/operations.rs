@@ -1096,6 +1096,14 @@ impl Authority {
         //
         // Only the fingerprint moves. The size bound and every other check stay where they
         // were in the arm, so no error keeps a different precedence than before.
+        //
+        // ⚠️ WHAT BOTH EARLY ANSWERS BELOW DO SKIP is `self.context(&mut c, &engine)`, which
+        // runs after the lock and, when the station context has changed, clears the command
+        // windows and advances the revision. That is unavoidable — it needs the very Engine
+        // these two do not take — and it is safe, because it is housekeeping a READ cannot
+        // make unsafe: the next request that actually writes takes the lock, runs `context`
+        // itself, and refuses on `staleContext` / `windowExpired` exactly as before. Receipt
+        // ageing is unaffected; `reconcile` above already ran.
         let replay = Self::replay_fingerprint(request)?;
         if let Some((_, fingerprint)) = replay.as_ref() {
             if let Some(r) = c.receipts.iter().find(|r| r.id == request.id()) {
@@ -1108,6 +1116,35 @@ impl Authority {
                     Err("requestConflict")
                 };
             }
+        }
+        // …and so is a `Result` request, for the identical reason: it is a pure receipt READ.
+        // It reads `c.receipts`, `c.grants`/`c.control_grants` and `device` — Core and nothing
+        // else — so the Engine lock below was refusing `stationBusy` to a browser that only
+        // wanted the answer already on file. No failure was ever attributed to this one; it is
+        // the same defect as the replay above, one arm over, and swept with it rather than
+        // left to be rediscovered with a smaller window.
+        if let Request::Result { operation_id, .. } = request {
+            if !identifier(operation_id)
+                || !(c.grants.contains(device) || version >= 2 && c.control_grants.contains(device))
+            {
+                return Err("localPermissionRequired");
+            }
+            return c
+                .receipts
+                .iter()
+                .find(|r| {
+                    r.id == *operation_id
+                        && r.device == device
+                        && (version >= 2 || r.control.is_none())
+                })
+                .ok_or("resultExpired")
+                .and_then(|receipt| {
+                    if version < receipt.result_version {
+                        Err("stationUnsupported")
+                    } else {
+                        receipt.value()
+                    }
+                });
         }
         // Capture context and execute under the same engine lock. There is no
         // queue whose work could migrate into a later radio/profile context.
@@ -1216,29 +1253,7 @@ impl Authority {
                 }
                 self.state(&mut c, session, device, now, control)
             }
-            Request::Result { operation_id, .. } => {
-                if !identifier(operation_id)
-                    || !(c.grants.contains(device)
-                        || version >= 2 && c.control_grants.contains(device))
-                {
-                    return Err("localPermissionRequired");
-                }
-                c.receipts
-                    .iter()
-                    .find(|r| {
-                        r.id == *operation_id
-                            && r.device == device
-                            && (version >= 2 || r.control.is_none())
-                    })
-                    .ok_or("resultExpired")
-                    .and_then(|receipt| {
-                        if version < receipt.result_version {
-                            Err("stationUnsupported")
-                        } else {
-                            receipt.value()
-                        }
-                    })
-            }
+            Request::Result { .. } => unreachable!("handled before the Engine lock"),
             Request::LogManual {
                 station_boot_id,
                 lease_id,
