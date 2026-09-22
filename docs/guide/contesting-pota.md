@@ -67,7 +67,7 @@ have QSY'd away files on the wrong band, both in the Cabrillo and on the
 N1MM / N3FJP wire.
 
 The scoreboard shows its work: QSO points (phone 1, CW/digital 2) × the legal
-power multiplier + a 15-item ARRL bonus checklist = total. **Winter Field Day
+power multiplier + a 16-item ARRL bonus checklist = total. **Winter Field Day
 deliberately shows raw counts only** — its objectives math isn't ARRL's, and
 Nexus won't display a fake total.
 

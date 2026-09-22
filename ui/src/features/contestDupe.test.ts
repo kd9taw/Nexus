@@ -48,6 +48,57 @@ describe('contestDupe — the own-log hard block', () => {
   })
 })
 
+describe('contestDupe — a bird is its own band (ARRL Field Day 7.3.8)', () => {
+  /** The same session, but W1AW was worked through RS-44 rather than terrestrially —
+   *  same call, same band, same mode class, under a rule that names the satellite. */
+  const viaBird = (rule: Record<string, unknown> = {}) =>
+    fd({
+      log: [
+        {
+          call: 'W1AW',
+          class: '1D',
+          section: 'CT',
+          band: '20m',
+          mode: 'PH',
+          submode: '',
+          sat: 'RS-44',
+        },
+      ],
+      dupeRule: {
+        byCall: true,
+        byBand: true,
+        byModeClass: true,
+        byFields: [],
+        bySentFields: [],
+        modeClassGroups: [],
+        logDupes: false,
+        satelliteIsABand: true,
+        fmSatelliteOnce: true,
+        ...rule,
+      },
+    } as unknown as Partial<FieldDayStatus>)
+
+  it('does NOT call a fresh terrestrial contact a dupe of a PASS contact on that band', () => {
+    // ARRL: "Satellite QSOs also count for regular QSO credit. Show them listed
+    // separately on the summary sheet as a separate 'band.'" The engine keys it that
+    // way, so a badge that said DUPE here would talk the operator out of a contact the
+    // log is about to accept — the over-reporting direction this module refuses.
+    expect(contestDupe(viaBird(), 'W1AW', '20m', 'PH')).toBe('none')
+  })
+
+  it('CONTROL — the same row under a rule with no satellite dimension still fires', () => {
+    // Without this the test above proves nothing: it would pass on a verdict that had
+    // simply stopped matching the row for some other reason.
+    expect(contestDupe(viaBird({ satelliteIsABand: false }), 'W1AW', '20m', 'PH')).toBe('own')
+  })
+
+  it('CONTROL — a terrestrial row in the same log still fires under the same rule', () => {
+    // And the dimension must not switch the whole verdict off: `fd()`'s own row carries
+    // no bird, so it is still this contact.
+    expect(contestDupe(fd({ dupeRule: viaBird().dupeRule }), 'W1AW', '20m', 'PH')).toBe('own')
+  })
+})
+
 describe('contestDupe — mode classes a contest counts as ONE', () => {
   // ILQP: "once per band and mode (phone and CW/digital)" — CW and DIG are one class there.
   const ilqp = fd({

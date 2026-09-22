@@ -83,6 +83,8 @@ impl Engine {
                     mode: q.mode.clone(),
                     submode: q.submode.clone(),
                     when_unix: q.when_unix,
+                    // The bird, for the while-typing verdict — see `FieldDayQso::sat`.
+                    sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
                     // ⭐ THE ROW'S OWN SENT EXCHANGE (§3.3). Rendered from the
                     // row by the one function that renders one, so an emitter
                     // looping over these rows has the right value in hand and

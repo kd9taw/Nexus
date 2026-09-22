@@ -96,12 +96,12 @@ describe('the three-state model', () => {
 describe('ONLY EARNED BONUSES SCORE', () => {
   it('the score line ignores a fully planned menu', async () => {
     const { container } = await mount({ fdBonuses: [], fdBonusesPlanned: ALL_IDS })
-    // 6 QSO pts × 2 = 12, and 1450 points of plan add exactly nothing.
-    expect(ALL_POINTS).toBe(1450)
+    // 6 QSO pts × 2 = 12, and 1550 points of plan add exactly nothing.
+    expect(ALL_POINTS).toBe(1550)
     const math = container.querySelector('.fd-score-math')!.textContent!
     expect(math).toContain('bonuses 0')
     expect(math).toContain('= 12')
-    expect(math).not.toContain('1450')
+    expect(math).not.toContain('1550')
   })
 
   it('the downloaded score summary claims nothing that was only planned', async () => {
@@ -178,7 +178,7 @@ describe('the two halves of the score are on one surface', () => {
   })
 })
 
-describe('the 15 bonuses are impossible to miss during a running event', () => {
+describe('the 16 bonuses are impossible to miss during a running event', () => {
   it('opens the checklist itself once the event is running', async () => {
     await mount({}, { ...FD, running: true })
     expect(screen.getByRole('group', { name: 'Claimed FD bonuses' })).toBeTruthy()

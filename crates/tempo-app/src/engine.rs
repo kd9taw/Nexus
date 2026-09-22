@@ -1630,7 +1630,17 @@ impl SessionB4 {
         self.exact.contains(
             &self
                 .rule
-                .key_of(call_upper, &self.band, &self.mode_class, &[], &[]),
+                // Terrestrial: this advisory set is keyed from a band and a mode class
+                // and has no bird to name — see `FieldDayLog::worked_key`, which makes
+                // the same call for the same reason.
+                .key_of(
+                    call_upper,
+                    &self.band,
+                    &self.mode_class,
+                    &[],
+                    &[],
+                    tempo_core::contest::SatKey::default(),
+                ),
         )
     }
 
@@ -4265,6 +4275,18 @@ struct SatTune {
     transponder: tempo_core::doppler::Transponder,
     state: tempo_core::doppler::DopplerState,
     sent: tempo_core::doppler::SentTuning,
+    /// ⭐ **A single-channel FM satellite** (an FM voice repeater or a packet
+    /// digipeater) rather than a linear transponder — the fact ARRL Field Day's
+    /// one-QSO-per-bird limit turns on, carried onto every contact logged through this
+    /// hold ([`tempo_core::fieldday::SatLeg::single_channel_fm`]).
+    ///
+    /// ⚠️ **Set by the pick, not derived here**, and [`Engine::set_sat_transponder`]
+    /// clears it on every pick exactly as it clears the alternate-uplink list. A
+    /// half-width of zero would have been free and is NOT a sound test: a linear
+    /// transponder whose catalogue record is missing its passband reads as a channel
+    /// too, and that mistake fails in the direction that refuses a legal contact. The
+    /// satellite catalogue answers it exactly — see [`Engine::set_sat_single_channel_fm`].
+    single_channel_fm: bool,
 }
 
 /// How far off a CHANNELISED bird's own frequency a rig-reported dial may be
@@ -9968,6 +9990,13 @@ impl Engine {
         Some(tempo_core::fieldday::SatLeg {
             band: band.to_string(),
             down_hz,
+            // THE BIRD, not the transponder: the label is `"<name>|<description>"`, and
+            // ARRL's limit is per SATELLITE — a bird with a voice repeater and a packet
+            // digipeater is still one bird. Same split `sat_designator` reads.
+            bird: st.label.split('|').next().unwrap_or("").trim().to_string(),
+            // Told to the engine by the pick, never guessed here — see
+            // [`Self::set_sat_single_channel_fm`] and `SatLeg::single_channel_fm`.
+            single_channel_fm: st.single_channel_fm,
             // `None` for a bird LoTW does not list, and then no satellite pair is
             // written anywhere — the row is still filed on the bird's band, because
             // where the contact was worked is true either way.
@@ -10571,6 +10600,12 @@ impl Engine {
                 sub: q.submode.clone(),
                 when: q.when_unix,
                 op: op.clone(),
+                // ⭐ THE BIRD, because the HOST builds this row's dupe key from what
+                // this position sends. ARRL lists a satellite as a separate band, so a
+                // key built without it would have the club board judging every
+                // position's pass contacts as terrestrial ones on the downlink band.
+                sat: q.sat.as_ref().map(|s| s.bird.clone()).unwrap_or_default(),
+                sat_fm: q.sat.as_ref().is_some_and(|s| s.single_channel_fm),
             })
             .collect();
         rows.sort_by_key(|r| r.seq);
@@ -13481,6 +13516,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     transponder: t,
                     state: tempo_core::doppler::DopplerState::default(),
                     sent: tempo_core::doppler::SentTuning::default(),
+                    // Cleared by the pick and re-stated by the command layer for the
+                    // new one, on the same terms as `sat_alt_uplinks` above — the
+                    // classification belongs to the transponder just chosen, and the
+                    // outgoing one's must never outlive it. `false` is the safe
+                    // default: it treats an unclassified bird as a linear transponder,
+                    // which under-reports the limit instead of refusing a legal QSO.
+                    single_channel_fm: false,
                 });
                 // Remembered past this hold's release — see `sat_last_worked`.
                 self.sat_last_worked = self.sat_tune.clone();
@@ -13553,6 +13595,40 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Call it AFTER [`Self::set_sat_transponder`], which clears the list.
     pub fn set_sat_alt_uplinks(&mut self, uplinks: Vec<u64>) {
         self.sat_alt_uplinks = uplinks;
+    }
+
+    /// ⭐ **Tell the engine the held bird is a SINGLE-CHANNEL FM satellite** — an FM
+    /// voice repeater or a packet digipeater, as against a linear transponder.
+    ///
+    /// ARRL Field Day: *"Stations are limited to one (1) completed QSO on any single
+    /// channel FM satellite."* That limit is expressed in the rules data
+    /// ([`DupeRule::fm_satellite_once`](tempo_core::contest::DupeRule::fm_satellite_once));
+    /// this is the fact it needs about the bird, and it is the one thing the engine
+    /// cannot work out for itself.
+    ///
+    /// ⚠️ **It is NOT `half_width_hz == 0`.** That says "a channel", which a linear
+    /// transponder whose SatNOGS record is missing its passband also says — and applying
+    /// the limit to a linear bird silently refuses a contact the sponsor allows, on the
+    /// one copy of it there is. The catalogue answers it exactly (`is_transponder` plus
+    /// `downlink_class`), so the command layer states it.
+    ///
+    /// Call it AFTER [`Self::set_sat_transponder`], which clears it, exactly as
+    /// [`Self::set_sat_alt_uplinks`] is called after the pick that clears the list.
+    ///
+    /// ⭐ **It reaches `sat_last_worked` too**, guarded by the label. That clone is taken
+    /// inside the pick, before this can run, and it is what a contact written up after
+    /// LOS is filed against — so a fact that only reached the live hold would have the
+    /// late entry judged by a different rule from the live one. The guard means it can
+    /// never stamp a different bird.
+    pub fn set_sat_single_channel_fm(&mut self, on: bool) {
+        let Some(st) = self.sat_tune.as_mut() else {
+            return;
+        };
+        st.single_channel_fm = on;
+        let label = st.label.clone();
+        if let Some(last) = self.sat_last_worked.as_mut().filter(|l| l.label == label) {
+            last.single_channel_fm = on;
+        }
     }
 
     /// QSY to the HELD transponder's nominal centres — the click-to-tune half of
@@ -35399,6 +35475,8 @@ mod tests {
             sub: "FT8".into(),
             when: 1_782_583_500,
             op: "OP1".into(),
+            sat: String::new(),
+            sat_fm: false,
         });
         let board = e.fd_board_snapshot().expect("host role → Some");
         assert_eq!(board.call, "W9ABC");
@@ -36007,7 +36085,8 @@ mod tests {
         .iter()
         .map(|b| b.id.to_string())
         .collect();
-        assert_eq!(all.len(), 15, "the whole menu is planned below");
+        // 16 since 2026-09-22: ARRL 7.3.8's satellite bonus joined the fifteen.
+        assert_eq!(all.len(), 16, "the whole menu is planned below");
         {
             let mut s = e.settings().clone();
             s.fd_active = true;
@@ -36048,7 +36127,7 @@ mod tests {
         );
         assert_eq!(
             e.settings().fd_bonuses_planned.len(),
-            15,
+            16,
             "earning a bonus does not empty the chase list"
         );
     }
@@ -36422,6 +36501,84 @@ mod tests {
             !adif.contains("<PROP_MODE:"),
             "a contact with no bird behind it claimed satellite propagation: {adif}"
         );
+    }
+
+    /// ⭐ **THE TWO HALVES, MEETING** — the engine builds the leg, the rules data names
+    /// the satellite dimension, and ARRL's rules come out the other end.
+    ///
+    /// The core tests pin each half against a hand-built leg; this is the only place
+    /// that proves the leg the ENGINE builds is the one the RULE reads. Between them
+    /// sit the label split that yields the bird and
+    /// [`Engine::set_sat_single_channel_fm`], neither of which any core test can see.
+    #[test]
+    fn a_pass_contact_and_a_terrestrial_one_on_the_same_band_both_count() {
+        use tempo_core::doppler::Transponder;
+        // ARRL 7.3.8: "Satellite QSOs also count for regular QSO credit. Show them
+        // listed separately on the summary sheet as a separate 'band.'"
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_frequency(435.643, "70cm", "USB");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        let ex = vec![
+            ("CLASS".to_string(), "1D".to_string()),
+            ("SECTION".to_string(), "IL".to_string()),
+        ];
+        // The club's UHF station works W1AW on 70 cm, terrestrially.
+        assert!(e.fd_log_manual("W1AW", "1D", "IL", "PH").unwrap());
+        // The satellite station works the SAME station, on the SAME band and mode
+        // class, through RS-44 — a LINEAR transponder, so no per-bird limit applies.
+        e.set_sat_transponder(Some((
+            "RS-44|SSB/CW linear transponder".into(),
+            0,
+            Transponder {
+                uplink_centre_hz: 145_965_000,
+                downlink_centre_hz: 435_640_000,
+                invert: true,
+                half_width_hz: 30_000,
+            },
+        )));
+        e.set_sat_single_channel_fm(false);
+        assert!(
+            e.contest_log_satellite("W1AW", &ex, "PH", None).unwrap(),
+            "the pass contact was refused as a dupe of the terrestrial one"
+        );
+        assert_eq!(
+            e.fd_score().map(|(q, _, _)| q),
+            Some(2),
+            "one scored nothing"
+        );
+
+        // ⭐ AND THE LIMIT, on the bird it applies to. SO-50 is a single-channel FM
+        // repeater, so ARRL allows one QSO per station however many modes are tried.
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            Transponder::channel(145_850_000, 436_795_000),
+        )));
+        e.set_sat_single_channel_fm(true);
+        assert!(e.contest_log_satellite("K1ABC", &ex, "PH", None).unwrap());
+        assert!(
+            !e.contest_log_satellite("K1ABC", &ex, "DIG", Some("FT8"))
+                .unwrap(),
+            "a second QSO with the same station on a single-channel FM bird was admitted"
+        );
+
+        // …and the classification survives the LOS handback, which is the whole reason
+        // `set_sat_single_channel_fm` reaches `sat_last_worked`: a contact written up
+        // after the bird sets must be judged by the same rule as one written during it.
+        e.set_sat_transponder(None);
+        assert!(
+            !e.contest_log_satellite("K1ABC", &ex, "CW", None).unwrap(),
+            "after LOS the bird stopped being a single-channel FM one"
+        );
+        // The control: a station NOT yet worked through it still logs after LOS, so the
+        // refusals above are the limit and not a path that stopped logging at all.
+        assert!(e.contest_log_satellite("W4XYZ", &ex, "PH", None).unwrap());
     }
 
     /// ⭐ **A CONTEST PHONE CONTACT RECORDS THE MODE THAT WAS ACTUALLY ON THE AIR**

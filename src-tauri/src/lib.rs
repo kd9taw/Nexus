@@ -7637,6 +7637,26 @@ fn pick_sat_transponder(
     )));
     // AFTER the pick, which clears the list — see `Engine::set_sat_alt_uplinks`.
     eng.set_sat_alt_uplinks(alt_uplinks);
+    // ⭐ AND WHAT KIND OF BIRD THIS IS, on the same terms and for the same reason: the
+    // pick clears it, so the outgoing transponder's classification can never outlive it.
+    //
+    // ARRL Field Day limits a SINGLE-CHANNEL FM satellite to one QSO per station and
+    // allows the additional contact through a linear transponder, so the contest log
+    // needs the two told apart. Both halves are already in hand and already used above:
+    // `is_linear` reads SatNOGS's own `type`, and `downlink_class` is the same
+    // classification that decides what mode the RADIO is put in — which folds the whole
+    // packet family (AFSK/FSK/GMSK, the ISS digipeater) into FM, correctly, since those
+    // are single-channel FM traffic too.
+    //
+    // ⛔ NOT `half == 0`, which was free and is not the same question. A linear
+    // transponder whose record is missing its passband computes a zero half-width
+    // above, and reading that as "FM channel" would apply the limit to a bird the
+    // sponsor exempts — silently refusing a contact whose only copy is the contest log.
+    // `is_linear` is the answer to ask because it already carries that case: with no
+    // declared `type` it falls back to "an uplink passband wider than a channel" rather
+    // than to the zero. A CW/telemetry beacon is excluded for free — `downlink_class`
+    // puts it in the SSB class, not FM.
+    eng.set_sat_single_channel_fm(!tp.is_linear() && class.is_fm());
     // TUNE ON PICK — the click IS the consent for the dial, exactly as it is for
     // a spot, a repeater favourite or a band-map click. The hold is set FIRST so
     // the tune reads the transponder it is tuning to; a refused tune (Doppler

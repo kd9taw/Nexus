@@ -145,6 +145,22 @@ pub struct WireQso {
     /// Operator at the key when logged ("" = unrecorded).
     #[serde(default)]
     pub op: String,
+    /// ⭐ **The BIRD this contact was worked through** — the satellite's own catalogue
+    /// name, `""` for the terrestrial contact that is almost every row.
+    ///
+    /// On the wire because it is part of the DUPE KEY under ARRL Field Day's rule (a
+    /// satellite is listed as a separate band), and the host builds that key from what
+    /// the position sends. A v1/v2 position sends neither this nor `sat_fm`, and both
+    /// default — which is exactly what that position meant, since it could not log a
+    /// satellite contact into a contest at all.
+    #[serde(default)]
+    pub sat: String,
+    /// A single-channel FM satellite rather than a linear transponder (ARRL limits the
+    /// first to one QSO per station). Defaulted, and `false` is the safe side: it
+    /// under-reports the limit rather than refusing a legal contact through a linear
+    /// bird.
+    #[serde(default)]
+    pub sat_fm: bool,
 }
 
 /// One band-board row: where a position is and how it is doing. Host-computed;
@@ -988,6 +1004,8 @@ mod tests {
                 sub: "FT8".into(),
                 when: 1_782_583_500,
                 op: "KD9TAW".into(),
+                sat: String::new(),
+                sat_fm: false,
             }),
             Msg::Ack { seq: 38 },
             Msg::Pos {
@@ -1298,6 +1316,8 @@ mod tests {
             sub: "FT8".into(),
             when: 1_782_583_500,
             op: "OP".into(),
+            sat: String::new(),
+            sat_fm: false,
         })
     }
 
@@ -1803,6 +1823,8 @@ mod tests {
                     sub: String::new(),
                     when: 1_782_583_500,
                     op: "OP".into(),
+                    sat: String::new(),
+                    sat_fm: false,
                 })
                 .collect()
         }
@@ -1851,6 +1873,8 @@ mod tests {
             sub: String::new(),
             when: 1,
             op: String::new(),
+            sat: String::new(),
+            sat_fm: false,
         });
         club.calls.lock().unwrap().clear(); // the seed above is not wire traffic
         let (addr, host_sd) = start_host(club.clone());

@@ -2748,6 +2748,11 @@ export interface FieldDayQso {
    *  no CAT read-back to say which sideband — Nexus never guesses one from the band. */
   submode?: string
   whenUnix?: number
+  /** ⭐ The BIRD this contact was worked through — the satellite's own catalogue name,
+   *  `''`/absent for the terrestrial contact that is almost every row. The while-typing
+   *  verdict needs it: under a ruleset that lists a bird as a separate band, a satellite
+   *  row must not read as a duplicate of a terrestrial one on the downlink's band. */
+  sat?: string
   /** ⭐ The exchange THIS CONTACT SENT, rendered in Rust from the row itself.
    *
    *  It is on the row because it MOVES: a mobile station changes county mid-session, and
@@ -2811,6 +2816,18 @@ export interface DupeRule {
    *  twice the contact. So a card must not tell an operator in one of these ten contests
    *  that the contact "will be refused"; that advises the one thing the sponsor forbids. */
   logDupes: boolean
+  /** ⭐ **A BIRD IS ITS OWN BAND** — ARRL Field Day 7.3.8: *"Satellite QSOs also count for
+   *  regular QSO credit. Show them listed separately on the summary sheet as a separate
+   *  'band.'"* So a station worked on 70 cm terrestrially and again through a 70 cm bird
+   *  is two contacts, and a verdict that compared only the band would call the second a
+   *  dupe the engine is about to accept. Absent on a station too old to send it, which
+   *  means exactly what `false` does: the shipped behaviour. */
+  satelliteIsABand?: boolean
+  /** ⭐ **ONE QSO PER SINGLE-CHANNEL FM SATELLITE** — ARRL: *"Stations are limited to one
+   *  (1) completed QSO on any single channel FM satellite."* Carried for a surface that
+   *  wants to explain the refusal; the verdict below does not need it, because a contact
+   *  typed into a log strip is judged terrestrial either way. */
+  fmSatelliteOnce?: boolean
 }
 
 /** Field Day operating + scoring status. */

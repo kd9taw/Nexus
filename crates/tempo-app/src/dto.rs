@@ -1429,6 +1429,16 @@ pub struct FieldDayQso {
     /// Unix seconds when logged (drives interop-push timestamps).
     #[serde(default)]
     pub when_unix: u64,
+    /// ⭐ **The BIRD this contact was worked through** — the satellite's own catalogue
+    /// name, empty for the terrestrial contact that is almost every row.
+    ///
+    /// The UI's while-typing verdict needs it: under ARRL Field Day's rule a satellite
+    /// is a separate band, so a row worked through a bird must NOT read as a duplicate
+    /// of a terrestrial contact on the downlink's band. Without it the badge would say
+    /// DUPE for a contact the engine is about to accept, which is the over-reporting
+    /// direction `contest::dupe` refuses to fail in.
+    #[serde(default)]
+    pub sat: String,
     /// ⭐ **The exchange THIS CONTACT SENT** — rendered from the row by
     /// [`sent_exchange_string`](tempo_core::contest::sent_exchange_string) and from
     /// nothing else (spec §3.3).

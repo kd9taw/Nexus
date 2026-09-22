@@ -83,9 +83,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transponder you were holding, so you can work the pass with both hands on the rotator and log
   it once the bird has set. The `PROP_MODE` / `SAT_NAME` pair survives into the contest export
   and into your lifetime log when you merge, so a Field Day pass contact still earns LoTW
-  satellite credit and still reaches the Sat VUCC and satellite-needs boards. Nexus does not
-  claim ARRL's satellite bonus for you and does not enforce its repeat-contact limit — neither
-  rule is in the rules data it scores from — so claim the bonus on your summary sheet yourself.
+  satellite credit and still reaches the Sat VUCC and satellite-needs boards.
+
+- **Field Day now scores satellite contacts the way ARRL's rules actually read.** Three things
+  that were simply not modelled before. A bird counts as **its own band**, so a station worked
+  through RS-44 and again on 70 cm from the ground is two contacts and both count — the dupe
+  check used to refuse the second one, and the club lost a QSO that was always legal. A
+  **single-channel FM satellite is limited to one contact per station** whatever the mode, which
+  is ARRL's own limit; a *linear* transponder is not, so RS-44 on SSB and again on CW is still
+  two contacts, and Nexus tells the two kinds apart from the satellite catalogue's record of each
+  transponder rather than guessing from its passband. And the **100-point satellite bonus** is on
+  the Field Day checklist as a sixteenth box — you tick it yourself, like every other Field Day
+  bonus, and it is one bonus however many birds you work.
 - **A previous contact's comment can be read in the callsign card without hovering it.** The
   "Previous contacts" list in the lookup card clipped each comment to one line and put the rest
   in a tooltip, which is the same dead end the Logbook's Comment column had before it opened in

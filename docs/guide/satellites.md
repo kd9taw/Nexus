@@ -289,12 +289,27 @@ Field Day's own exchange replaces the grid box while a session runs: on FD you
 are copying a class and a section, not a grid. Outside Field Day the strip is
 unchanged.
 
-⚠️ **Nexus does not claim ARRL's satellite bonus for you.** ARRL Field Day pays
-a bonus for working a bird, and limits repeat contacts through the same
-satellite; neither rule is in the rules data Nexus scores from, so neither shows
-up in the score panel or the dupe check. Your satellite contacts are logged,
-scored as ordinary QSOs on their own band, and exported correctly — claim the
-bonus on your summary sheet yourself, and watch your own repeats.
+**A bird counts as its own band, so nothing you work on it is a duplicate of
+anything you worked on the ground.** ARRL's rule is that satellite contacts are
+listed separately on the summary sheet as a separate band, and Nexus's dupe
+check follows it: work a station through RS-44 and again on 70 cm terrestrially
+and both count, and the same station through two different birds is two
+contacts. Work them twice through the *same* bird on the same mode and the
+second is refused, as it always was.
+
+**Through an FM bird you get one contact per station, whatever the mode.** ARRL
+limits a single-channel FM satellite to one completed QSO, so the mode drops out
+of the dupe check for SO-50, AO-91, the TEVELs and the packet digipeaters. A
+*linear* transponder is not limited that way and Nexus does not pretend
+otherwise — RS-44 on SSB and again on CW is two contacts. Nexus tells the two
+apart from the satellite catalogue's own record of each transponder, not from a
+guess about its passband.
+
+**The 100-point satellite bonus is on the checklist.** ARRL pays it for
+completing at least one satellite QSO during the period. It is a box you tick,
+like the other fifteen — Nexus does not tick it for you, because every Field Day
+bonus is something you claim on your own summary sheet. One bonus however many
+birds you work: ARRL pays nothing extra for contacting different satellites.
 
 **If you ran 0.24.0 through 0.27.x, check your log.** In those versions a
 contact logged while a transponder was held picked up `PROP_MODE=SAT` and a

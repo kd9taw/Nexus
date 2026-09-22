@@ -84,7 +84,7 @@ pub use callsign::{
 
 pub use constant_sent::ConstantSentMismatch;
 
-pub use dupe::{DupeRule, KEY_SEP};
+pub use dupe::{DupeRule, SatKey, KEY_SEP};
 
 pub use render::{role_for, sent_exchange, sent_exchange_string};
 

@@ -310,6 +310,8 @@ mod tests {
         by_sent_fields: &[],
         mode_class_groups: &[],
         log_dupes: false,
+        satellite_is_a_band: false,
+        fm_satellite_once: false,
     };
 
     /// A unique scratch path under the OS temp dir — the shape `logbook.rs`'s own

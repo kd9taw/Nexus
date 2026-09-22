@@ -20,6 +20,10 @@ const LEGACY_TRIPLE: DupeRule = {
   byFields: [],
   bySentFields: [],
   modeClassGroups: [],
+  // A build that old had no satellite dimension at all, and a station that cannot send
+  // the flag means the same thing.
+  satelliteIsABand: false,
+  fmSatelliteOnce: false,
   // A build that old predates dupe logging entirely — every contest refused one then.
   logDupes: false,
 }
@@ -79,9 +83,24 @@ export function contestDupe(
   // — neither band nor mode class is in its key); CQ WW and WPX count one contact per band
   // either mode. Requiring all three made both of those answer "new" for a contact the log
   // was about to refuse.
+  // ⭐ A BIRD IS ITS OWN BAND, so a row worked through one is NOT this contact.
+  //
+  // ARRL Field Day 7.3.8 lists a satellite as a separate band, and the engine keys it
+  // that way. This function is handed a call, a band and a mode class and no bird — so
+  // the contact being typed is judged TERRESTRIAL, which is exactly right in the Phone
+  // and CW cockpits and under-reports on the satellite strip.
+  //
+  // ⚠️ THE DIRECTION IS THE POINT, and both halves of it matter. Skipping satellite rows
+  // stops the badge calling a fresh terrestrial contact a dupe of a pass contact on the
+  // same band — over-reporting, which this module's header refuses to do because it
+  // talks the operator out of a QSO that would have scored. What it costs is the other
+  // way: on the satellite strip a genuine repeat through one bird shows no badge until
+  // the engine refuses it at log time, where the leg IS in hand and the answer is exact.
+  const sameSat = (q: { sat?: string }): boolean => !rule.satelliteIsABand || !(q.sat ?? '')
   const own = (fieldDay.log ?? []).some(
     (q) =>
       (!rule.byCall || q.call.trim().toUpperCase() === typed) &&
+      sameSat(q) &&
       (!rule.byBand || (q.band ?? '') === band) &&
       (!rule.byModeClass || fold(q.mode ?? '') === fold(modeClass)),
   )

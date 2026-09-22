@@ -98,6 +98,26 @@ pub struct MergedRow {
     /// Operator at the key, stamped by the position when the row was built.
     #[serde(default)]
     pub operator: String,
+    /// ⭐ **The BIRD this contact was worked through** — the satellite's own catalogue
+    /// name, empty for the terrestrial contact that is almost every row.
+    ///
+    /// It is here because it is part of the DUPE KEY under ARRL Field Day's rule
+    /// (*"Show them listed separately on the summary sheet as a separate 'band'"*), and
+    /// [`dkey`](Self::dkey) is one of the four sites that must build the identical key.
+    /// Without it the host would judge every position's satellite contacts as
+    /// terrestrial ones on the downlink's band — the same collision the rule removes,
+    /// one layer out.
+    ///
+    /// ⚠️ `#[serde(default)]`, on this type's own standing rule: one required field
+    /// added here and the whole pre-upgrade journal decodes as nothing, silently.
+    #[serde(default)]
+    pub sat: String,
+    /// A single-channel FM satellite rather than a linear transponder — the other half
+    /// of the key's satellite input. Defaulted for the same reason, and `false` is the
+    /// safe side: it under-reports ARRL's one-QSO limit instead of refusing a legal
+    /// contact through a linear bird.
+    #[serde(default)]
+    pub sat_fm: bool,
 }
 
 impl MergedRow {
@@ -117,6 +137,8 @@ impl MergedRow {
             submode: q.sub.clone(),
             when_unix: q.when,
             operator: q.op.clone(),
+            sat: q.sat.clone(),
+            sat_fm: q.sat_fm,
         }
     }
 
@@ -174,6 +196,10 @@ impl MergedRow {
             &self.mode_class,
             &from_wire_fields(&self.ex, spec),
             &from_wire_fields(&self.mex, spec),
+            tempo_core::contest::SatKey {
+                bird: &self.sat,
+                single_channel_fm: self.sat_fm,
+            },
         )
     }
 }
@@ -877,6 +903,8 @@ mod tests {
             },
             when,
             op: "OP".into(),
+            sat: String::new(),
+            sat_fm: false,
         }
     }
 
@@ -1082,6 +1110,8 @@ mod tests {
                         submode: String::new(),
                         when_unix: last_year + seq,
                         operator: "KD9TAW".into(),
+                        sat: String::new(),
+                        sat_fm: false,
                     },
                     last_year,
                 );
@@ -1115,6 +1145,8 @@ mod tests {
                     submode: String::new(),
                     when_unix: now + seq,
                     operator: "KD9TAW".into(),
+                    sat: String::new(),
+                    sat_fm: false,
                 },
                 now,
             );
@@ -1148,6 +1180,8 @@ mod tests {
                 submode: String::new(),
                 when_unix: now,
                 operator: "KD9TAW".into(),
+                sat: String::new(),
+                sat_fm: false,
             },
             now,
         );
@@ -1355,6 +1389,8 @@ mod tests {
             submode: String::new(),
             when_unix: 1_782_579_600,
             operator: "KD9TAW".into(),
+            sat: String::new(),
+            sat_fm: false,
         })
         .unwrap();
         let as_v1: V1MergedRow =
