@@ -6753,6 +6753,11 @@ export const EN = {
   'settings.workspace.theme.label': 'Theme',
   'settings.workspace.theme.hint':
     'Light reads best outdoors in daylight; the top bar’s Field chip boosts contrast and size in whichever theme you use.',
+  'settings.workspace.field.label': 'Field mode',
+  'settings.workspace.field.on': 'On',
+  'settings.workspace.field.off': 'Off',
+  'settings.workspace.field.hint':
+    'Maximum contrast and larger type in one switch — for daylight outdoors, and for any screen that is hard to read. The same control as the Field chip in the top bar.',
   'settings.workspace.scale.label': 'UI scale',
   'settings.workspace.scale.mode.aria': 'UI scale mode',
   'settings.workspace.scale.auto': 'Auto (fit)',

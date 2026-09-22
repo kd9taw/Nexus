@@ -527,7 +527,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'workspace',
     label: 'Workspace',
     tab: 'appearance',
+    // #215: the words an operator actually types when the screen is hard to read. The size
+    // half was findable ('text size', 'zoom'); the contrast half was not searchable at all,
+    // which is half of why the reporter went hunting and gave up. NOT bare 'field' — the
+    // configurations section already owns that word for home/field station presets, and an
+    // exact keyword outranks everything but a label.
     keywords: ['theme', 'dark', 'light', 'ui scale', 'text size', 'font size', 'zoom',
+      'contrast', 'high contrast', 'field mode', 'accessibility', 'large text', 'readable',
+      'daylight', 'sunlight',
       'density', 'compact', 'pane', 'layout', 'globe', 'logbook globe', 'clock', 'local time', 'time zone', 'utc'],
   },
   {

@@ -2922,6 +2922,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onRerunWizard={() => setShowWizard(true)}
             theme={theme}
             onThemeChange={setTheme}
+            fieldMode={fieldMode}
+            onFieldModeChange={setFieldMode}
           />
         </main>
       )

@@ -243,6 +243,13 @@ interface Props {
    * optional so hosts/tests without theme wiring render the tab unchanged. */
   theme?: 'light' | 'dark'
   onThemeChange?: (t: 'light' | 'dark') => void
+  /** #215: Field mode — maximum contrast plus larger type (`useFieldMode`). It shipped as a
+   *  chip in the top bar only, which is the other half of why the operator who asked for a
+   *  high-contrast, large-text setting could not find one: the two halves of the answer were
+   *  Settings ▸ Workspace ▸ UI scale and a chip named for the field, and nothing in Settings
+   *  pointed at it. Same optional shape as the theme above. */
+  fieldMode?: boolean
+  onFieldModeChange?: (on: boolean) => void
 }
 
 /** Display order for the Features section's category groups. */
@@ -928,6 +935,8 @@ export function SettingsPanel({
   onRerunWizard,
   theme,
   onThemeChange,
+  fieldMode = false,
+  onFieldModeChange,
 }: Props) {
   const configuration=useNavigation<SettingsConfiguration>('settings')
   const remote=configuration.remote
@@ -3376,6 +3385,40 @@ export function SettingsPanel({
                   <span className="settings-label">{t('settings.workspace.theme.label')}</span>
                   <ThemeSwitcher theme={theme} onChange={onThemeChange} />
                   <span className="settings-hint">{t('settings.workspace.theme.hint')}</span>
+                </div>
+              )}
+              {/* #215: Field mode, BETWEEN theme and scale, because it is both — maximum
+                  contrast and larger type in one switch. It has been in the app since
+                  2026-08-09 and reachable only as a chip named "Field" in the top bar, so an
+                  operator who came to Settings for a high-contrast or large-text setting found
+                  the scale half and not the contrast half. The chip stays: this is the same
+                  boolean (`useFieldMode`), not a second one. */}
+              {onFieldModeChange && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.field.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.workspace.field.label')}
+                  >
+                    <button
+                      type="button"
+                      className={`theme-chip${!fieldMode ? ' active' : ''}`}
+                      aria-pressed={!fieldMode}
+                      onClick={() => onFieldModeChange(false)}
+                    >
+                      {t('settings.workspace.field.off')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-chip${fieldMode ? ' active' : ''}`}
+                      aria-pressed={fieldMode}
+                      onClick={() => onFieldModeChange(true)}
+                    >
+                      {t('settings.workspace.field.on')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">{t('settings.workspace.field.hint')}</span>
                 </div>
               )}
               <div className="settings-field">
