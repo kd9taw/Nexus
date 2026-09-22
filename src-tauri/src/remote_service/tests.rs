@@ -1009,6 +1009,12 @@ fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
         server.abort();
     });
 }
+/// Exclusive use of the process-wide satellite track badge — the crate's one implementation,
+/// delegated to so the guard-on-the-guard scanner sees the same `alone()` name in every test
+/// module that reaches the badge. See `crate::sat_track_alone`.
+fn alone() -> std::sync::MutexGuard<'static, ()> {
+    crate::sat_track_alone()
+}
 
 /// The class: something slow held something shared. Every send used to be awaited inline on the
 /// socket loop, so while one drained, nothing was read — including Stop. A first application
@@ -1020,6 +1026,12 @@ fn an_unparseable_service_message_reconnects_and_never_turns_remote_off() {
 /// it, before the relay reads a byte.
 #[test]
 fn a_stop_is_admitted_while_the_stations_sends_are_stuck_on_a_slow_link() {
+    // ⚠️ THIS STOP REACHES THE SATELLITE TRACK BADGE. `stopTransmit` → `stop_station` →
+    // `satellite::disarm_track` → `disarm_sat_track_locked`, which bumps the process-wide
+    // `SAT_TRACK_GEN`. Measured 2026-09-21: without this guard the bump landed inside
+    // `a_rotor_that_stops_answering…`'s pass, the pass bailed on its generation check and
+    // skipped the LOS handback, and that test failed on "the dial is the operator's again".
+    let _alone = alone();
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
     const PIPE: usize = 4096;
