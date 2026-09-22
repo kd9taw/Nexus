@@ -78,9 +78,12 @@ it on the push, and attributing the red then cost most of an afternoon. Ninety s
 have caught it, and the instrument already existed — it needed a name and one command.
 
 **A green probe is not a green `remote-browser` job.** It is one scenario of the sweep — it
-prints the ratio and what it did not cover on every run; CI remains the gate. **A red probe is
-not proof your change caused it** — check out `origin/main` in a throwaway worktree, run the
-same scenario there, and attribute only then. Red on both is not yours. During the incident
+prints the ratio and what it did not cover on every run; CI remains the gate. **One scenario
+also runs in a fresh process, and CI's shards run nine in series in one**, so a failure that
+needs accumulated state, load or elapsed time cannot appear here at all; when CI's browser job
+is red and the probe is green, reproduce CI's shard with `--shard <n>`, not the scenario. **A
+red probe is not proof your change caused it** — check out `origin/main` in a throwaway
+worktree, run the same scenario there, and attribute only then. Red on both is not yours. During the incident
 above four different causes were named confidently and all four died to exactly that control.
 
 <!-- BEGIN GENERATED operating-rules — DO NOT EDIT INSIDE THIS BLOCK.

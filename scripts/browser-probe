@@ -24,8 +24,15 @@
 #
 # WHAT IT PROVES, and the line matters: that the compiled hosted browser still builds, mounts,
 # signs in, and lays out — with real boxes, real stacking and real hit-testing. It is a SMOKE
-# test of the geometry, not coverage of it. It runs 1 of 28 scenarios and says so on every run.
-# A green here is not a green `remote-browser` job; CI is still the gate for that.
+# test of the geometry, not coverage of it. It runs ONE of the suite's scenarios and prints the
+# ratio on every run. A green here is not a green `remote-browser` job; CI is still the gate.
+#
+# ⚠️ WHAT IT CANNOT PROVE, and this is not theoretical. One scenario runs in a fresh process.
+# CI's shards run NINE in series in ONE process, so anything needing accumulated state, load or
+# elapsed time to show up is invisible to a single-scenario run. Found the day this was written:
+# CI's shard 0 went red on a Tempo reachability assertion at v10, and that same scenario passed
+# here twice — on the same tree, and on origin/main. **When CI's browser job is red and this is
+# green, reproduce CI's SHARD, not the scenario.** That is what `--shard N` is for.
 #
 # IF IT COMES BACK RED, PROBE `origin/main` BEFORE CONCLUDING ANYTHING. A red proves the tree
 # you ran it on fails, not that your change caused it — that is this project's most-repeated
@@ -51,6 +58,11 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         'radio selection', 'routed decoder', 'routed workspace'.
                         Match by NAME, never by shard index — inserting an
                         application version renumbers every scenario after it.
+  --shard <n>           run CI's shard <n> of 3 entire — all nine of its scenarios
+                        in one process, exactly as the remote-browser job does
+                        (~15-20 min). The ONLY local run that can reproduce a
+                        failure caused by state or timing accumulating ACROSS
+                        scenarios; a single --scenario run cannot see one.
   --no-build            reuse the existing bundles — ONLY valid if nothing has
                         changed under ui/ or remote/ since the last build, because
                         the sweep loads the BUILT worker, never the source
@@ -60,10 +72,13 @@ USAGE
 }
 
 SCENARIO='v4'
+SHARD=''
 BUILD=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --scenario) [ $# -ge 2 ] || { usage; exit 2; }; SCENARIO="$2"; shift 2 ;;
+    --shard)    [ $# -ge 2 ] || { usage; exit 2; }; SHARD="$2"; shift 2
+                case "$SHARD" in 0|1|2) ;; *) echo "browser-probe: --shard takes 0, 1 or 2 (CI runs three)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
@@ -91,7 +106,11 @@ if [ "$BUILD" = 1 ]; then
 fi
 
 LOG="$(mktemp -t browser-probe.XXXXXX.log)"
-echo "browser-probe: running scenario pattern '$SCENARIO' against $(google-chrome --version 2>/dev/null || echo Chrome)"
+if [ -n "$SHARD" ]; then
+  echo "browser-probe: running CI SHARD $SHARD of 3 entire against $(google-chrome --version 2>/dev/null || echo Chrome)"
+else
+  echo "browser-probe: running scenario pattern '$SCENARIO' against $(google-chrome --version 2>/dev/null || echo Chrome)"
+fi
 
 # SHARDS=1 registers every scenario and --test-name-pattern selects among them by NAME.
 # The pipe here is deliberate and does NOT discard the status: PIPESTATUS[0] is the runner's
@@ -99,8 +118,16 @@ echo "browser-probe: running scenario pattern '$SCENARIO' against $(google-chrom
 # gate must never be piped into grep/tail and judged by the pipeline's status — the log is read
 # AFTER the real code is captured, and only to tell "0 tests ran" from "1 test passed".)
 cd "$ROOT/remote" || exit 2
-NEXUS_BROWSER_SHARDS=1 NEXUS_BROWSER_SHARD=0 \
-  node --test --test-name-pattern="$SCENARIO" "$SUITE" 2>&1 | tee "$LOG"
+if [ -n "$SHARD" ]; then
+  # Exactly what the remote-browser job runs, env and all — no name pattern, nine scenarios in
+  # this one process. Mirroring CI's command surface is the point; a paraphrase of it is not
+  # evidence about CI.
+  NEXUS_BROWSER_SHARDS=3 NEXUS_BROWSER_SHARD="$SHARD" \
+    node --test "$SUITE" 2>&1 | tee "$LOG"
+else
+  NEXUS_BROWSER_SHARDS=1 NEXUS_BROWSER_SHARD=0 \
+    node --test --test-name-pattern="$SCENARIO" "$SUITE" 2>&1 | tee "$LOG"
+fi
 RC=${PIPESTATUS[0]}
 
 # A pattern that matches nothing exits 0 with every test skipped, and THE RUNNER'S OWN SUMMARY
@@ -121,7 +148,7 @@ FAILED=$(scenario_lines fail)
 PASSED=$((RAN - FAILED))
 echo
 if [ "$RAN" = 0 ]; then
-  echo "browser-probe: NO TEST MATCHED '$SCENARIO' — nothing ran, so nothing is proven." >&2
+  echo "browser-probe: NOTHING RAN for '${SHARD:+shard }${SHARD:-$SCENARIO}', so nothing is proven." >&2
   echo "browser-probe: the scenario names are in remote/test/browser.test.mjs (see --help)." >&2
   rm -f "$LOG"; exit 2
 fi
@@ -131,9 +158,14 @@ fi
 # one rots silently. (The suite's own header comment said 28 while the table held 27.)
 TOTAL=$(sed -n 's/.*browser shard [0-9]* of [0-9]*: running [0-9]* of \([0-9]*\) scenarios.*/\1/p' "$LOG" | tail -1)
 if [ "$RC" = 0 ]; then
-  echo "browser-probe: PASS — ${PASSED} of ${TOTAL:-?} scenarios, matching '$SCENARIO', in a real browser."
-  echo "browser-probe: NOT COVERED — every other scenario, every other application version, and"
-  echo "browser-probe: everything outside remote/. CI's remote-browser job is the gate, not this."
+  echo "browser-probe: PASS — ${PASSED} of ${TOTAL:-?} scenarios, in a real browser."
+  if [ -n "$SHARD" ]; then
+    echo "browser-probe: NOT COVERED — CI's other two shards, and everything outside remote/."
+  else
+    echo "browser-probe: NOT COVERED — every other scenario, every other application version, and"
+    echo "browser-probe: everything outside remote/. A failure that needs state or timing to build"
+    echo "browser-probe: up ACROSS scenarios cannot appear here; use --shard N for that."
+  fi
 else
   echo "browser-probe: FAIL (exit $RC) — ${FAILED:-?} scenario(s) red. Full log: $LOG" >&2
   echo "browser-probe: before blaming your change, run the SAME scenario on origin/main:" >&2
