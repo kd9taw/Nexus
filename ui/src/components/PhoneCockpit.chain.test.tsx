@@ -20,11 +20,12 @@
 // ⚠️ jsdom NEVER LAYS OUT. Every assertion here is structure, text or an attribute — DOM
 // order, pane membership, `disabled`, accessible names. Nothing reads geometry, because
 // nothing here could.
-import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from 'vitest'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot } from '../types'
 import { PHONE_PANEL_IDS } from '../features/panelState'
+import { setAttDb, setPreampDb } from '../api'
 
 // Auto-mock every api export rather than listing the ones this file uses: the REAL
 // CockpitHeader is mounted (this file asserts what is NO LONGER in it, which a stub could
@@ -51,6 +52,16 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
 })
 afterEach(cleanup)
+
+// The api module is auto-mocked above, so every export is already a `vi.fn`. These two are
+// the ones a pad chip commands, and they are cleared per test because several cases below
+// assert a call COUNT or that nothing was sent at all.
+const mockSetAttDb = setAttDb as unknown as ReturnType<typeof vi.fn>
+const mockSetPreampDb = setPreampDb as unknown as ReturnType<typeof vi.fn>
+beforeEach(() => {
+  mockSetAttDb.mockClear()
+  mockSetPreampDb.mockClear()
+})
 
 /**
  * A Phone snapshot reporting exactly the surface given.
@@ -87,9 +98,20 @@ function snapWith(radio: Record<string, unknown>): AppSnapshot {
 const mount = (radio: Record<string, unknown>, phoneMode?: string) =>
   render(<PhoneCockpit snap={snapWith(radio)} theme="dark" phoneMode={phoneMode} />)
 
-/** Everything a rig could report, so the ENABLED half of every pair below is real. */
+/** Everything a rig could report, so the ENABLED half of every pair below is real.
+ *
+ *  ⚠️ THE PADS ARE TWO FIELDS, NOT ONE, and a fixture carrying only the reading would be a
+ *  rig that has published no list — which is a DIFFERENT state (`noSteps`) and not the
+ *  "reports everything" this constant is for. `attStepsDb` is what the radio DECLARED;
+ *  `attDb` is which of those is in. Both, or the positive half of these cases is not real.
+ *  The numbers are an IC-7610's (6/12/18 dB of pad, two preamp positions). */
 const FULL_RIG = {
   filterWidthHz: 2400,
+  attStepsDb: [6, 12, 18],
+  attDb: 0,
+  preampStepsDb: [1, 2],
+  preampDb: 0,
+  monitorGain: 0.4,
   rfGain: 1,
   afGain: 0.5,
   squelch: 0,
@@ -143,14 +165,23 @@ describe('one region per question', () => {
     expect(
       [...pane.querySelectorAll('[data-chain]')].map((r) => r.getAttribute('data-chain')),
       'the receive chain is not in the approved order',
-    ).toEqual(['BW', 'RF', 'NB', 'NR', 'NRLVL', 'ANF', 'MN', 'NOTCHF', 'AGC', 'AF', 'SQL'])
+    // ATT and PRE joined on 2026-09-22 and they sit where the SIGNAL puts them — ahead of
+    // RF gain, because the pad and the preamp act on the antenna before anything else in
+    // this pane does, and an operator fighting a strong neighbour reaches for ATT first.
+    ).toEqual(['BW', 'ATT', 'PRE', 'RF', 'NB', 'NR', 'NRLVL', 'ANF', 'MN', 'NOTCHF', 'AGC', 'AF', 'SQL'])
   })
 
-  it('the TRANSMIT chain holds the controls that shape what goes out', () => {
+  it('the TRANSMIT chain holds the controls that shape what goes out — MON included', () => {
+    // ⚠️ MON IS HERE AND NOT IN THE RECEIVE PANE. It is the rig playing your own audio back
+    // while you TALK: it shapes the over, and it is silent while receiving. Putting it under
+    // "what you are hearing" would also sit it beside the AF slider — the exact adjacency
+    // (a transmit level next to a receive level, nothing saying which) that split these two
+    // panes apart in the first place.
     mount(FULL_RIG)
     const pane = document.querySelector('[data-pane="transmitter"]')!
     expect([...pane.querySelectorAll('[data-chain]')].map((r) => r.getAttribute('data-chain')))
-      .toEqual(['MIC', 'COMP', 'COMPLVL', 'VOX'])
+      .toEqual(['MIC', 'COMP', 'COMPLVL', 'VOX', 'MON'])
+    expect(paneOf(screen.getByLabelText('Monitor level')), 'MON drifted into the receive chain').toBe('transmitter')
   })
 })
 
@@ -213,6 +244,10 @@ describe('a control the radio cannot drive does not simply disappear', () => {
     ['Manual notch frequency in hertz', 'notchFreqHz', 1500, 'NOTCHF', 'NOTCH', 'receiver'],
     ['Mic gain', 'micGain', 0.5, 'MIC', 'Mic', 'transmitter'],
     ['Speech processor depth', 'compLevel', 0.35, 'COMPLVL', 'COMP', 'transmitter'],
+    // MON collapses on the ordinary rule — it is a plain level with a reporting field, and
+    // a rig that never reports one genuinely does not have a transmit monitor. The two
+    // STEPPED controls are the exception and get their own block below.
+    ['Monitor level', 'monitorGain', 0.4, 'MON', 'MON', 'transmitter'],
   ]
 
   it.each(COLLAPSING)('%s — named at the pane foot when the rig is silent, drawn when it reports', (label, field, value, chain, plate, pane) => {
@@ -257,27 +292,21 @@ describe('a control the radio cannot drive does not simply disappear', () => {
     expect(footLine('receiver')).not.toContain('AGC')
   })
 
-  // ⛔ EXCEPTION 1 — a control with no path on ANY radio is named NOWHERE.
-  it('a control Nexus has built no path for is not drawn and not blamed on the radio', () => {
-    // ATT, PRE and MON are in the registry so the sibling's fields drop in, and `built:
-    // false` is what keeps them off the screen meanwhile. Listing them at the foot would
-    // tell a thousand operators their radio is missing something Nexus has not written.
-    mount(FULL_RIG)
-    for (const chain of ['ATT', 'PRE', 'MON']) {
-      expect(row(chain), `${chain} drew a row with no path behind it`).toBeNull()
-    }
-    for (const plate of ['ATT', 'PRE', 'MON']) {
-      expect(footLine('receiver'), `${plate} was blamed on the radio`).not.toContain(plate)
-      expect(footLine('transmitter'), `${plate} was blamed on the radio`).not.toContain(plate)
-    }
-  })
-
   // ⛔ EXCEPTION 3 — the collapse itself, end to end.
   it('a bare rig gets ONE line per pane, not a wall of grey rows', () => {
     // The density requirement in its own words: an IC-7300 does not open to four grey rows.
+    //
+    // ⚠️ THREE ROWS, NOT ONE, SINCE 2026-09-22, and the two extra are deliberate. A rig that
+    // has published no pad list is not a rig without pads — so ATT and PRE keep their rows,
+    // dead, saying which unknown that is (`noSteps`), while everything the rig genuinely
+    // does not report still collapses. A rig that DOES publish (the FULL_RIG cases above)
+    // shows no such row at all, so this is bounded at two and only on rigs Nexus could not
+    // read. If that density ever reads wrong on a real radio, the fix is a ruling about
+    // `noSteps`, not a quiet collapse back into "not on this radio".
     mount({})
-    expect(document.querySelectorAll('[data-pane="receiver"] [data-chain]').length, 'the receive pane is a wall of dead rows').toBe(1)
-    expect(row('BW'), 'the one row left should be BW, which is commandable with no read-back').not.toBeNull()
+    const rxRows = [...document.querySelectorAll('[data-pane="receiver"] [data-chain]')].map((r) => r.getAttribute('data-chain'))
+    expect(rxRows, 'the receive pane is a wall of dead rows').toEqual(['BW', 'ATT', 'PRE'])
+    expect(row('BW'), 'the one commandable row left should be BW, which needs no read-back').not.toBeNull()
     expect(document.querySelectorAll('[data-pane="receiver"] .ph-chain-absent')).toHaveLength(1)
     expect(document.querySelectorAll('[data-pane="transmitter"] [data-chain]')).toHaveLength(0)
     expect(document.querySelectorAll('[data-pane="transmitter"] .ph-chain-absent')).toHaveLength(1)
@@ -333,5 +362,103 @@ describe('a control the radio cannot drive does not simply disappear', () => {
     expect(footLine('transmitter')).toBe('')
     expect(document.querySelectorAll('[data-pane="receiver"] .ph-unavail')).toHaveLength(0)
     expect(document.querySelectorAll('[data-pane="receiver"] .ph-chain-banner')).toHaveLength(0)
+  })
+})
+
+// ── THE TWO STEPPED STAGES (2026-09-22) ──────────────────────────────────────────────
+//
+// `setAttDb` / `setPreampDb` shipped with the CAT path in 9271de6c and NO operator control
+// at all. They are not sliders, and that is the whole of why they needed their own shape:
+// an attenuator is the handful of pads THIS radio has — one 20 dB on an IC-7300, 6/12/18 on
+// an IC-7610 — and `set_att_db` REJECTS any dB that is not on the published list, because a
+// pad the rig does not hold is NAKed or silently rounded to a neighbour and the front end
+// then moves by an amount nobody chose.
+//
+// So the capability answer is the LIST (`attStepsDb`), not the reading, and it is genuinely
+// three-state. Each state is asserted here by what the operator SEES, and the three are
+// mutually exclusive — a test that could not tell them apart would be no coverage at all.
+//
+// ⚠️ jsdom NEVER LAYS OUT. Whether two more chip groups still fit the receive pane's wrap at
+// 1024 is a browser question and is answered nowhere in this file.
+describe('the attenuator and the preamp are picked from the list the RADIO publishes', () => {
+  const chips = (chain: 'ATT' | 'PRE') =>
+    [...document.querySelectorAll<HTMLButtonElement>(`[data-chain="${chain}"] .theme-chip`)]
+  const faces = (chain: 'ATT' | 'PRE') => chips(chain).map((c) => c.textContent)
+  const footLine = (pane: 'receiver' | 'transmitter') =>
+    document.querySelector(`[data-pane="${pane}"] .ph-chain-absent`)?.textContent ?? ''
+
+  it('PUBLISHED: one chip per pad the rig declared, plus the Off every rig has', () => {
+    // `attStepsDb` omits the implicit 0 deliberately (types.ts), so Off is prepended by the
+    // cockpit — asserting the faces catches either half going wrong.
+    mount({ ...FULL_RIG, attStepsDb: [6, 12, 18] })
+    expect(faces('ATT'), 'the chips are not the pads this radio published').toEqual(['Off', '6 dB', '12 dB', '18 dB'])
+    expect(chips('ATT').every((c) => !c.getAttribute('aria-disabled')), 'a published pad was dead').toBe(true)
+  })
+
+  it('commands the pad the operator picked, and only that one', () => {
+    mount({ ...FULL_RIG, attStepsDb: [6, 12, 18], attDb: 0 })
+    fireEvent.click(chips('ATT')[2]) // 12 dB
+    expect(mockSetAttDb, 'the chip did not command the radio').toHaveBeenCalledTimes(1)
+    expect(mockSetAttDb.mock.calls[0], 'a pad other than the one clicked was commanded').toEqual([12])
+    expect(mockSetPreampDb, 'the attenuator drove the preamp').not.toHaveBeenCalled()
+  })
+
+  it('the chip that is IN is the one the radio reports, and none is when it reports nothing', () => {
+    // UNKNOWN is not "off". A rig that publishes pads but has not said which is in has no
+    // selection to announce, and `aria-pressed="false"` on every chip announces one.
+    mount({ ...FULL_RIG, attStepsDb: [6, 12], attDb: 12 })
+    expect(chips('ATT').map((c) => c.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true'])
+    cleanup()
+    mount({ ...FULL_RIG, attStepsDb: [6, 12], attDb: undefined })
+    expect(chips('ATT').map((c) => c.getAttribute('aria-pressed')), 'an unread pad was announced as Off').toEqual([null, null, null])
+  })
+
+  it('EMPTY LIST: the rig says it has no pad — the row collapses to the foot line', () => {
+    // The positive answer, and the one the backend is explicit about: "Empty is the
+    // different, positive answer: no pad fitted" (`Engine::observe_rig_db_steps`). An IC-905
+    // has no preamp at all, and this is the shape that says so without a grey row.
+    mount({ ...FULL_RIG, attStepsDb: [], preampStepsDb: [] })
+    expect(document.querySelector('[data-chain="ATT"]'), 'a rig with no pad still drew the chips').toBeNull()
+    expect(footLine('receiver'), 'a declared absence was not named anywhere').toContain('ATT')
+    expect(footLine('receiver')).toContain('PRE')
+  })
+
+  it('⛔ NO LIST: the row STAYS, dead, and says which unknown it is', () => {
+    // THE ONE THIS DESIGN EXISTS FOR. A rig whose `\dump_state` Nexus could not read may
+    // well have a 20 dB pad — so "Not on this radio: ATT" would be a confident wrong answer
+    // about the radio, and vanishing would be the silence the ⊘ ruling overturned. Note the
+    // reading IS present here (`attDb: 0`, pad out): before this landed that was enough to
+    // draw a live control with no chips in it.
+    mount({ ...FULL_RIG, attStepsDb: undefined, preampStepsDb: undefined, attDb: 0 })
+    expect(document.querySelector('[data-chain="ATT"]'), 'the row vanished instead of saying why').not.toBeNull()
+    expect(footLine('receiver'), 'a rig that published nothing was told it has nothing').not.toContain('ATT')
+    const mark = document.querySelector('[data-chain="ATT"] .ph-unavail')
+    expect(mark, 'the row is dead and says nothing').not.toBeNull()
+    expect(mark!.getAttribute('title'), 'the reason does not say what is missing').toMatch(/publish/i)
+    // Dead means dead: aria-disabled (a disabled button leaves the tab order and the reason
+    // with it) AND the handler swallowed, which aria-disabled does not do by itself.
+    expect(chips('ATT').every((c) => c.getAttribute('aria-disabled') === 'true'), 'the chips were live').toBe(true)
+    fireEvent.click(chips('ATT')[0])
+    expect(mockSetAttDb, 'a dead chip still commanded the radio').not.toHaveBeenCalled()
+  })
+
+  it('⚠️ THE PREAMP CARRIES NO UNIT — on an Icom its steps are NAMES, not decibels', () => {
+    // `set_preamp_db` takes the LABEL this radio gives each position; on an IC-7300 they are
+    // 1 and 2 (P.AMP1/P.AMP2). Printing "1 dB" beside a 1 that means "first preamp" is a
+    // wrong number on the screen, not a cosmetic — so only ATT may say dB.
+    mount({ ...FULL_RIG, preampStepsDb: [1, 2], attStepsDb: [6] })
+    expect(faces('PRE'), 'the preamp positions were printed as gains').toEqual(['Off', '1', '2'])
+    expect(faces('ATT'), 'the attenuator lost its unit').toEqual(['Off', '6 dB'])
+  })
+
+  it('NO CAT beats the lists — both rows stay, dead, under the pane’s ONE banner', () => {
+    // Ordering, and it matters here more than elsewhere: a breaker trip CLEARS the step
+    // lists (`clear_rig_db_steps`), so without noCat winning first every pad row would swap
+    // the banner for "could not read the steps" at the moment the link died.
+    mount({ ...FULL_RIG, catOk: false })
+    expect(document.querySelector('[data-chain="ATT"]'), 'a pad row vanished on a dead link').not.toBeNull()
+    expect(document.querySelectorAll('[data-chain="ATT"] .ph-unavail'), 'a dead link was reported as a missing list').toHaveLength(0)
+    expect(footLine('receiver'), 'a dead link was read as a radio with no pads').toBe('')
+    expect(chips('ATT').every((c) => c.getAttribute('aria-disabled') === 'true')).toBe(true)
   })
 })
