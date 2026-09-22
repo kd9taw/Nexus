@@ -13093,8 +13093,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      real Chrome: the nine content-sized controls need 324.6px at --space-scale 1, on the
      widest of the five sans faces installed on that box; the spread across those faces is
      11.1px. 336 = that requirement plus one spread, so a wider face on Windows still fits.
-     styles-logbook-actions.test.tsx fails if the cluster outgrows it again. */
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 1.4fr minmax(336px, 0.8fr);
+     styles-logbook-actions.test.tsx fails if the cluster outgrows it again.
+
+     #239 split the Time column into Date + Time. The pair is given the 1.6fr the one column
+     had, divided 1.0/0.6 — `2026-09-14` against `00:58`, the ratio of the two strings — so no
+     neighbour gives up a share and the tail floor is untouched. The one real cost is a
+     thirteenth track's worth of `.log-row`'s `gap: 10px`: 10px more fixed overhead per row,
+     taken off the fr pool, which at the 336px floor's worst case (1366px) is ~1% of the
+     row. Not measured in a browser — arithmetic off the sheet. */
+  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(336px, 0.8fr);
 }
 .log-note {
   /* Flex so the comment toggle (#162) can ellipsize beside the 📝 flag: a <button> is an atomic
@@ -13270,18 +13277,24 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 [data-viewport='xs'] .logbook-row {
   grid-template-columns: 1fr 1.3fr 0.7fr 0.7fr 1fr minmax(336px, 0.8fr);
 }
+/* Freq, mode, sent, rcvd, DATE, TIME, park. #239 split one Time column into two, so this list
+   grew by one and the template below did NOT: the narrow row shows the same six cells it
+   always did — call, country, band, QSL, notes, actions. 1024×768, the supported floor, is
+   `sm` (classifyViewport: < 1100), so the new column costs that width nothing. */
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(4),
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(5),
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(6),
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(7),
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(8),
 [data-viewport='sm'] .logbook-row .log-cell:nth-child(9),
+[data-viewport='sm'] .logbook-row .log-cell:nth-child(10),
 [data-viewport='xs'] .logbook-row .log-cell:nth-child(4),
 [data-viewport='xs'] .logbook-row .log-cell:nth-child(5),
 [data-viewport='xs'] .logbook-row .log-cell:nth-child(6),
 [data-viewport='xs'] .logbook-row .log-cell:nth-child(7),
 [data-viewport='xs'] .logbook-row .log-cell:nth-child(8),
-[data-viewport='xs'] .logbook-row .log-cell:nth-child(9) {
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(9),
+[data-viewport='xs'] .logbook-row .log-cell:nth-child(10) {
   display: none;
 }
 /* keep edit/delete reachable on touch (no hover) */
@@ -13291,7 +13304,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* #239 "More columns": the wide log. `.log-scroll` stays the ONE scroll owner and only gains
    the horizontal axis in this mode; the sticky search + header ride inside it, so header and
-   rows scroll sideways together. 20 tracks = the 12 above with eight inserted before Notes
+   rows scroll sideways together. 21 tracks = the 13 above with eight inserted before Notes
    (end time, my grid, rig, name, QTH, state, power, operator). The floor is on the scroller's
    CONTENT,
    so nothing is clipped — it scrolls. Off, none of this applies and the compact table and its
@@ -13304,7 +13317,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .logbook-table.wide .log-rows {
   /* 118rem held 19 tracks; the end-time column (#329) adds a 0.9fr one, and the floor moves
      with it so the block keeps the share it was sized for instead of squeezing its
-     neighbours. */
+     neighbours. #239's Date/Time split does NOT move it again: the pair divides the 1.6fr the
+     single column had, so the row's fr total is what this number was taken against. */
   min-width: 123rem;
 }
 .logbook-table.wide .logbook-row {
@@ -13312,7 +13326,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      (#329), sized like the Time column it mirrors. `styles-logbook-actions.test.tsx` holds
      this list to one track per cell the component renders. */
   grid-template-columns:
-    1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr
+    1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr
     0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr
     1.4fr minmax(336px, 0.8fr);
 }
