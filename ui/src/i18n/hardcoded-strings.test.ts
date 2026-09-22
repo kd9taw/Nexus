@@ -83,6 +83,14 @@ const MIGRATED = [
   // PARTIAL for its stop controls; nothing here stops a transmission.
   'components/RttyMacroEditor.tsx',
   'features/rttyMacros.ts',
+  // PSK's F-key surface (#316), and the components the two modes now share. `MacroEditor.tsx`
+  // holds NO string of its own — every caption arrives resolved from a mode's own wrapper,
+  // because this scanner and the orphan check read LITERAL `t('key')` call sites and a key
+  // composed from a mode prefix would report its whole namespace as unused. Nothing in any of
+  // the three stops a transmission; PskCockpit.tsx stays on PARTIAL for its stop controls.
+  'components/MacroEditor.tsx',
+  'components/PskMacroEditor.tsx',
+  'features/pskMacros.ts',
   'components/SettingsClusterNodes.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',

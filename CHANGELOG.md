@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **PSK now has editable F-key macros, the way RTTY does.** The PSK dock's four macro keys were
+  fixed in place: the messages could not be changed, there was no way to add one of your own, and
+  the keys drawn on them — F1, F2, F3, F4 — did nothing when you actually pressed them, so the one
+  thing the buttons were labelled for was the one thing they would not do. There are now eight
+  keys, in two sets you switch between: Everyday, which starts as the four messages PSK has always
+  sent plus four blanks to fill, and Contest, a run and search-and-pounce set laid out on the same
+  keys as RTTY's so working both modes does not mean learning two keyboards. Click the pencil on a
+  key to write its title and its message, with buttons that drop in your callsign, theirs, the
+  report and your contest exchange. Press F1 to F8 and the message goes out — from anywhere in the
+  cockpit, including while you are typing in the compose bar. Your keys are saved as you make them
+  and are there at the next start, and any key, or a whole set, can be put back to what it shipped
+  with. (#316)
+
 - **A contact's full record is now one double-click away.** The logbook was a list of contacts
   with no way to open one, so everything the table has no column for was being logged and then
   hidden: the other station's name and QTH, their grid, the rig and antenna they gave you, your

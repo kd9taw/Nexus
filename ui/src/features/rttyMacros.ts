@@ -1,6 +1,9 @@
-// THE RTTY F-KEY MACROS — the two built-in sets, the operator's saved entries folded over them,
-// and the token expander. Pure: the cockpit renders the slots, sends through its own `send()`
-// (the one path to `rtty_send` a click and an F-key share), and saves through `setRttyMacros`.
+// THE RTTY F-KEY MACROS — the two built-in sets, the token expander, and the on-air framing.
+// Pure: the cockpit renders the slots, sends through its own `send()` (the one path to
+// `rtty_send` a click and an F-key share), and saves through `setRttyMacros`. The SET MODEL —
+// folding saved entries over built-ins, writing one key, resetting one set, scanning for an
+// unknown brace token — is `features/macroSets.ts`, shared with PSK (#316); what is RTTY's own
+// is below.
 //
 // ⚠️ NOT `cw::expand`, and not a copy of it. The CW expander sends `!` as the worked call and
 // `{RST}` as 5NN — both CW conventions. RTTY reports 599 in figures, and `!` is a character an
@@ -10,24 +13,30 @@
 // them — so an unknown `{TOKEN}` would not fail anywhere downstream: the keyboard filter drops
 // the braces and the bare word goes on the air.
 
-import type { MessageKey } from '../i18n'
-import type { RttyMacroProfile } from '../types'
+import type { KeyboardMacroProfile } from '../types'
+import {
+  MACRO_KEYS,
+  isStopLikeLabel,
+  knownTokenPattern,
+  macroSetId,
+  resolveMacroSet,
+  unknownTokens,
+  withMacroEntry,
+  withMacroSetReset,
+  type BuiltinMacro,
+  type MacroKey,
+  type MacroRefusal,
+  type MacroSetId,
+  type MacroSlot,
+} from './macroSets'
 
-export const RTTY_MACRO_KEYS = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'] as const
-export type RttyMacroKey = (typeof RTTY_MACRO_KEYS)[number]
+export { isStopLikeLabel }
+
+export const RTTY_MACRO_KEYS = MACRO_KEYS
+export type RttyMacroKey = MacroKey
 
 /** The two built-in sets, by the id `macros.activeRttyProfile` stores. */
-export type RttySetId = 'everyday' | 'contest'
-
-/** A built-in slot. `label` is on-air shorthand and an invariant token (CQ, 73, TU); `labelKey`
- *  is a catalog caption for a word, resolved when the row renders. Neither is an empty slot.
- *  Every character of `text` goes on the air and is invariant. */
-interface BuiltinMacro {
-  key: RttyMacroKey
-  label?: string
-  labelKey?: MessageKey
-  text: string
-}
+export type RttySetId = MacroSetId
 
 /** EVERYDAY — the casual set the cockpit shipped with (F1–F4, texts unchanged), and four empty
  *  keys for the operator's own. */
@@ -58,82 +67,58 @@ const CONTEST: BuiltinMacro[] = [
   { key: 'F8', label: 'B4', text: '{CALL} QSO B4 TU {MYCALL}' },
 ]
 
+const RTTY_BUILTINS: Record<RttySetId, BuiltinMacro[]> = { everyday: EVERYDAY, contest: CONTEST }
+
 /** The set `macros.activeRttyProfile` names: `contest`, or Everyday for anything else. */
-export function rttySetId(active: string | null | undefined): RttySetId {
-  return active === 'contest' ? 'contest' : 'everyday'
-}
+export const rttySetId = macroSetId
 
 /** One key as the dock renders it. `custom` — the operator's saved entry replaced the built-in,
  *  so "Reset this button" has something to reset. */
-export interface RttyMacroSlot {
-  key: RttyMacroKey
-  label: string
-  text: string
-  custom: boolean
-}
+export type RttyMacroSlot = MacroSlot
 
 /** The eight keys of `set`: the operator's saved entry for a key where there is one — their own
  *  words, never translated — else the built-in, whose caption `translate` resolves. */
 export function resolveRttySet(
-  profiles: RttyMacroProfile[] | undefined,
+  profiles: KeyboardMacroProfile[] | undefined,
   set: RttySetId,
-  translate: (key: MessageKey) => string,
+  translate: Parameters<typeof resolveMacroSet>[3],
 ): RttyMacroSlot[] {
-  const saved = profiles?.find((p) => p.name === set)?.macros ?? []
-  return (set === 'contest' ? CONTEST : EVERYDAY).map((b) => {
-    const own = saved.find((m) => m.key === b.key)
-    if (own) return { key: b.key, label: own.label, text: own.text, custom: true }
-    const label = b.labelKey ? translate(b.labelKey) : (b.label ?? '')
-    return { key: b.key, label, text: b.text, custom: false }
-  })
+  return resolveMacroSet(profiles, set, RTTY_BUILTINS, translate)
 }
 
 /** `profiles` with `key`'s saved entry in `set` replaced — or removed, for `null`, which puts the
  *  built-in back. Every other set, and every other key (unknown ones included), is left as it
  *  was; a set's entries stay in F-key order so the file reads the way the dock does. */
 export function withRttyEntry(
-  profiles: RttyMacroProfile[],
+  profiles: KeyboardMacroProfile[],
   set: RttySetId,
   key: RttyMacroKey,
   entry: { label: string; text: string } | null,
-): RttyMacroProfile[] {
-  const rank = (k: string) => {
-    const i = (RTTY_MACRO_KEYS as readonly string[]).indexOf(k)
-    return i < 0 ? RTTY_MACRO_KEYS.length : i
-  }
-  const edit = (macros: RttyMacroProfile['macros']) =>
-    [...macros.filter((m) => m.key !== key), ...(entry ? [{ key, ...entry }] : [])].sort(
-      (a, b) => rank(a.key) - rank(b.key),
-    )
-  return profiles.some((p) => p.name === set)
-    ? profiles.map((p) => (p.name === set ? { name: p.name, macros: edit(p.macros) } : p))
-    : [...profiles, { name: set, macros: edit([]) }]
+): KeyboardMacroProfile[] {
+  return withMacroEntry(profiles, set, key, entry)
 }
 
 /** `profiles` with `set` back to its built-ins: the empty list. */
-export function withRttySetReset(profiles: RttyMacroProfile[], set: RttySetId): RttyMacroProfile[] {
-  return profiles.some((p) => p.name === set)
-    ? profiles.map((p) => (p.name === set ? { name: p.name, macros: [] } : p))
-    : profiles
+export function withRttySetReset(
+  profiles: KeyboardMacroProfile[],
+  set: RttySetId,
+): KeyboardMacroProfile[] {
+  return withMacroSetReset(profiles, set)
 }
 
 /** The tokens the expander fills, as the editor lists them. */
 export const RTTY_TOKENS = ['{MYCALL}', '{CALL}', '{RST}', '{EXCH}'] as const
 
-const KNOWN = /\{(MYCALL|CALL|RST|EXCH)\}/gi
+const KNOWN = knownTokenPattern(RTTY_TOKENS)
 
 /** What `text` holds that the expander cannot fill, once each, in order: every `{…}` it does not
  *  know, and a stray `{` or `}` left over. Token names are matched without regard to case. */
 export function unknownRttyTokens(text: string): string[] {
-  const rest = text.replace(KNOWN, ' ')
-  const found = rest.match(/\{[^{}]*\}|[{}]/g) ?? []
-  return [...new Set(found)]
+  return unknownTokens(text, KNOWN)
 }
 
 /** Why a macro cannot be sent as it stands. */
-export type RttyRefusal =
-  | { missing: 'mycall' | 'call' | 'exch' }
-  | { unknown: string }
+export type RttyRefusal = MacroRefusal
 
 /** `text` with every token filled — `{RST}` is always 599, the RTTY report — or the reason it
  *  cannot be. `exch` is the running contest's sent exchange WITHOUT the report, and null outside
@@ -153,13 +138,6 @@ export function expandRttyMacro(
   if (uses('EXCH') && !exch) return { missing: 'exch' }
   const value: Record<string, string> = { MYCALL: mycall, CALL: call, RST: '599', EXCH: exch }
   return { text: text.replace(KNOWN, (_, token: string) => value[token.toUpperCase()]) }
-}
-
-/** A caption that reads as a STOP. The macros are senders, and a sender captioned Stop, Esc or
- *  Abort is the one control an operator reaching for a stop would press — so the editor refuses
- *  it. The dock's real Esc/Stop is fixed and outside the editable set. */
-export function isStopLikeLabel(label: string): boolean {
-  return /\b(stop|esc|escape|abort)\b/i.test(label)
 }
 
 /** How an F-key message goes on the air: on a line of its own and ending in a space — the
