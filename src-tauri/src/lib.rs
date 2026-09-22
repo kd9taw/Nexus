@@ -13899,6 +13899,22 @@ fn set_rtty_macros(
     Ok(eng.settings().macros.clone())
 }
 
+/// The PSK cockpit's macro editor and its Everyday/Contest switch (#316) — `set_rtty_macros`'
+/// twin over `macros.pskProfiles` + `macros.activePskProfile`, through `Engine::save_psk_macros`
+/// and NEVER the settings form, for the same two transmit-path reasons. Separate storage, so a
+/// PSK edit cannot rewrite the RTTY dock's keys. Returns the saved `macros` for the UI's mirror.
+#[tauri::command(async)]
+fn set_psk_macros(
+    state: State<'_, SharedEngine>,
+    profiles: serde_json::Value,
+    active: serde_json::Value,
+) -> Result<tempo_app::settings::Macros, String> {
+    let mut eng = engine_lock(&state);
+    eng.save_psk_macros(profiles, active)
+        .map_err(|reason| format!("PSK macros were not saved ({reason:?})"))?;
+    Ok(eng.settings().macros.clone())
+}
+
 /// Default inner size (CSS px) a pop-out OPENS at, per panel slug — "give this panel
 /// plenty of room", not a content minimum. The Operate cockpit (waterfall + Band
 /// Activity + roster) needs more room than the narrower insight panels; the band map is
@@ -25116,6 +25132,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_hold_tx_freq,
             set_blocked_calls,
             set_rtty_macros,
+            set_psk_macros,
             set_beta_updates,
             set_launch_at_login,
             answer_remote_autostart_offer,
@@ -26654,26 +26671,15 @@ mod tests {
         }
     }
 
-    /// The RTTY cockpit's macro editor saves through `set_rtty_macros` — defined, registered, and
-    /// routed through `Engine::save_rtty_macros` rather than any form save (`set_settings`
-    /// advances the TX gate generation, so a queued over would not key). Source-scanned for the
-    /// same reason as the auto-arm test above: registration is what is under test.
+    /// Each keyboard cockpit's macro editor saves through its OWN command — defined, registered,
+    /// and routed through the matching `Engine::save_*_macros` rather than any form save
+    /// (`set_settings` advances the TX gate generation, so a queued over would not key).
+    /// Source-scanned for the same reason as the auto-arm test above: registration is what is
+    /// under test. Both modes in one loop, so PSK's copy (#316) cannot drift from RTTY's — and
+    /// each is checked for the OTHER's verb, which is the copy-paste this loop invites.
     #[test]
-    fn the_rtty_macro_save_command_is_registered_and_never_a_form_save() {
+    fn the_macro_save_commands_are_registered_and_never_a_form_save() {
         let src = include_str!("lib.rs");
-        let body = src
-            .split_once("\nfn set_rtty_macros(")
-            .expect("the command the RTTY cockpit invokes must exist")
-            .1;
-        let body = body.split_once("\n}\n").expect("the end of the command").0;
-        assert!(
-            body.contains("save_rtty_macros("),
-            "it saves through the atomic verb"
-        );
-        assert!(
-            !body.contains("apply_settings") && !body.contains("apply_and_persist"),
-            "the macro save must never run the form-save path"
-        );
         let list = src
             .split_once("tauri::generate_handler![")
             .expect("the handler list")
@@ -26681,10 +26687,30 @@ mod tests {
             .split_once("])")
             .expect("the end of the handler list")
             .0;
-        assert!(
-            list.lines().any(|l| l.trim() == "set_rtty_macros,"),
-            "set_rtty_macros is not registered — the cockpit's save would fail at runtime"
-        );
+        for (mode, other) in [("rtty", "psk"), ("psk", "rtty")] {
+            let body = src
+                .split_once(&format!("\nfn set_{mode}_macros("))
+                .unwrap_or_else(|| panic!("the command the {mode} cockpit invokes must exist"))
+                .1;
+            let body = body.split_once("\n}\n").expect("the end of the command").0;
+            assert!(
+                body.contains(&format!("save_{mode}_macros(")),
+                "set_{mode}_macros does not save through its atomic verb"
+            );
+            assert!(
+                !body.contains(&format!("save_{other}_macros(")),
+                "set_{mode}_macros saves through {other}'s verb — one cockpit would rewrite the other's keys"
+            );
+            assert!(
+                !body.contains("apply_settings") && !body.contains("apply_and_persist"),
+                "the {mode} macro save must never run the form-save path"
+            );
+            assert!(
+                list.lines()
+                    .any(|l| l.trim() == format!("set_{mode}_macros,")),
+                "set_{mode}_macros is not registered — the cockpit's save would fail at runtime"
+            );
+        }
     }
 
     /// The advisory DTO carries the ruleset's facts verbatim — and pins the 2026

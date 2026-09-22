@@ -221,7 +221,13 @@ describe('call sites agree with their catalog entries', () => {
     // number is pinned rather than ignored, and it was raised from 40 only after listing what
     // the new ones were: 24 files, all key tables, no call site hidden behind a variable by
     // accident. Raise it again the same way — by looking first.
-    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(90)
+    //
+    // 90 as of #316, and the one added was LOOKED AT: `t(hintKey)` in `PskMacroEditor.tsx`,
+    // PSK's copy of the token table `RttyMacroEditor.tsx` has carried since 2026-09-17 — the
+    // same registry shape this comment describes, measured by replacing it with a literal and
+    // watching the count fall back to 89. The keys themselves stay checked: they are literals
+    // in a `hintKey` table, which `findKeys` reads.
+    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(91)
   })
 
   it('supplies every value its entry asks for', () => {

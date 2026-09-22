@@ -660,6 +660,14 @@ describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0
     ['rtty-cockpit', 'rtty-dock-keys (F1–F8, Call, TX latch, Esc/Stop)', ['rtty-dock-keys']],
     ['rtty-cockpit', 'cw-macros.rtty-auto-row (auto-sequencer)', ['cw-macros', 'rtty-auto-row']],
     ['rtty-cockpit', 'cw-send (compose bar)', ['cw-send']],
+    // PSK, which had NO entry here at all until #316 — the one keyboard cockpit whose dock
+    // rows nothing pinned, while Phone's, CW's, RTTY's and JS8's all were. Its dock took
+    // RTTY's `.rtty-dock-keys` structure with that change (the eight keys on one line with
+    // the Call box, set switch, TX latch and Esc/Stop, folding to two by width), so it is the
+    // same row that must not squeeze — and listing it here is what makes a future
+    // shell-scoped rule that wins for one cockpit and not the other visible.
+    ['psk-cockpit', 'rtty-dock-keys (F1–F8, Call, TX latch, Esc/Stop)', ['rtty-dock-keys']],
+    ['psk-cockpit', 'cw-send (compose bar)', ['cw-send']],
     ['js8-cockpit', 'js8-dock-row (compose + beacon rows)', ['js8-dock-row']],
   ]
   for (const [shell, name, rowClasses] of ROWS) {

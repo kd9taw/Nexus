@@ -2836,16 +2836,26 @@ pub struct Macros {
     /// Index into `cw_profiles` of the active set. Clamped in range on load.
     #[serde(default)]
     pub active_cw_profile: usize,
-    /// The RTTY cockpit's F1–F8 sets, by name — see [`RttyMacroProfile`]. Empty = every set is
+    /// The RTTY cockpit's F1–F8 sets, by name — see [`KeyboardMacroProfile`]. Empty = every set is
     /// the cockpit's built-in. ONE WRITER, `Engine::save_rtty_macros`: a form save keeps the live
     /// value (`apply_settings_inner`), so a Settings panel opened before a cockpit edit cannot
     /// revert it. Loaded entry by entry ([`lenient_list`]).
     #[serde(default, deserialize_with = "lenient_list")]
-    pub rtty_profiles: Vec<RttyMacroProfile>,
+    pub rtty_profiles: Vec<KeyboardMacroProfile>,
     /// The set the RTTY cockpit shows: `contest`, or Everyday for anything else (empty included).
     /// Same one writer as `rtty_profiles`.
     #[serde(default, deserialize_with = "lenient_string")]
     pub active_rtty_profile: String,
+    /// The PSK cockpit's F1–F8 sets — the same shape and the same contract as `rtty_profiles`,
+    /// and SEPARATE STORAGE on purpose: the two modes' built-in texts differ (PSK is mixed-case
+    /// full ASCII, RTTY is Baudot upper), so one shared field would make an edit in one cockpit
+    /// silently rewrite the other's keys. ONE WRITER, `Engine::save_psk_macros`.
+    #[serde(default, deserialize_with = "lenient_list")]
+    pub psk_profiles: Vec<KeyboardMacroProfile>,
+    /// The set the PSK cockpit shows: `contest`, or Everyday for anything else (empty included).
+    /// Same one writer as `psk_profiles`.
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub active_psk_profile: String,
 }
 
 /// One customizable CW F-key macro.
@@ -2895,11 +2905,12 @@ fn lenient_string<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::
     })
 }
 
-/// One RTTY F-key macro as the operator saved it. Every field defaults, so an entry missing one
-/// loads as that field blank.
+/// One keyboard-mode F-key macro as the operator saved it — RTTY's sets and PSK's alike; the
+/// two differ in their built-ins and their on-air conventions, never in what a saved key IS.
+/// Every field defaults, so an entry missing one loads as that field blank.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct RttyMacro {
+pub struct KeyboardMacro {
     #[serde(default)]
     pub key: String,
     #[serde(default)]
@@ -2908,7 +2919,7 @@ pub struct RttyMacro {
     pub text: String,
 }
 
-/// One RTTY macro set — `name` is its id, `everyday` or `contest` — holding ONLY THE KEYS THE
+/// One keyboard-mode macro set — `name` is its id, `everyday` or `contest` — holding ONLY THE KEYS THE
 /// OPERATOR CHANGED. An entry replaces that key's built-in (an entry with an empty label and
 /// text is a slot deliberately emptied); a key with no entry IS the built-in, whose caption the
 /// cockpit translates, while a saved caption is the operator's own words and never is. So an
@@ -2916,11 +2927,11 @@ pub struct RttyMacro {
 /// and "Reset this button" removes one entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct RttyMacroProfile {
+pub struct KeyboardMacroProfile {
     #[serde(default)]
     pub name: String,
     #[serde(default, deserialize_with = "lenient_list")]
-    pub macros: Vec<RttyMacro>,
+    pub macros: Vec<KeyboardMacro>,
 }
 
 impl Default for Macros {
@@ -2938,6 +2949,8 @@ impl Default for Macros {
             active_cw_profile: 0,
             rtty_profiles: Vec::new(),
             active_rtty_profile: String::new(),
+            psk_profiles: Vec::new(),
+            active_psk_profile: String::new(),
         }
     }
 }
@@ -8108,6 +8121,163 @@ mod tests {
         // POSITIVE CONTROL: the file really is otherwise loadable only because of the leniency —
         // a type error anywhere ELSE still takes the `.corrupt` path, so this test is not passing
         // on a load that forgives everything.
+        file["dialMhz"] = serde_json::json!("fourteen");
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        assert_eq!(Settings::load(&path).license_class, LicenseClass::Open);
+        assert!(path.with_extension("json.corrupt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The PSK cockpit's F1–F8 sets (#316), on the wire keys `ui/src/types.ts` hand-writes
+    /// (`macros.pskProfiles`, `macros.activePskProfile`) — RTTY's test above, for PSK's own
+    /// storage. The round trip is the point: a `#[serde(default)]` that does not survive it
+    /// turns a load into a SILENT RESET of everything the operator typed into the editor.
+    #[test]
+    fn psk_macro_sets_default_and_wire_keys() {
+        let v = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(
+            v["macros"]["pskProfiles"],
+            serde_json::json!([]),
+            "missing or non-empty wire key macros.pskProfiles — empty means every set built in"
+        );
+        assert_eq!(
+            v["macros"]["activePskProfile"],
+            serde_json::json!(""),
+            "missing wire key macros.activePskProfile"
+        );
+        // An upgrader's file predates both keys: built-ins, Everyday.
+        let old: Settings = serde_json::from_str(r#"{"macros":{"band":["73"]}}"#).unwrap();
+        let old = serde_json::to_value(old).unwrap();
+        assert_eq!(old["macros"]["pskProfiles"], serde_json::json!([]));
+        assert_eq!(old["macros"]["activePskProfile"], serde_json::json!(""));
+        // …and an edited set survives the round trip byte for byte.
+        let edited = serde_json::json!({"macros": {
+            "pskProfiles": [{"name": "contest", "macros": [{"key": "F1", "label": "CQ", "text": "cq test {MYCALL} cq"}]}],
+            "activePskProfile": "contest"
+        }});
+        let back =
+            serde_json::to_value(serde_json::from_value::<Settings>(edited.clone()).unwrap())
+                .unwrap();
+        assert_eq!(
+            back["macros"]["pskProfiles"],
+            edited["macros"]["pskProfiles"]
+        );
+        assert_eq!(
+            back["macros"]["activePskProfile"],
+            edited["macros"]["activePskProfile"]
+        );
+    }
+
+    /// ⛔ **THE TWO MODES DO NOT SHARE STORAGE.** The fields have the same shape, so a copy-paste
+    /// that pointed PSK's serde at `rttyProfiles` would round-trip, keep its defaults and pass
+    /// every test above — and an edit in one cockpit would rewrite the other's keys. Writing one
+    /// set here must leave the other exactly as it was, in BOTH directions.
+    #[test]
+    fn psk_and_rtty_macro_sets_are_separate_storage() {
+        let both = serde_json::json!({"macros": {
+            "rttyProfiles": [{"name": "everyday", "macros": [{"key": "F1", "label": "CQ", "text": "CQ DE {MYCALL} K"}]}],
+            "activeRttyProfile": "everyday",
+            "pskProfiles": [{"name": "contest", "macros": [{"key": "F3", "label": "TU", "text": "tu {MYCALL} cq"}]}],
+            "activePskProfile": "contest"
+        }});
+        let s: Settings = serde_json::from_value(both).unwrap();
+        // The discriminating read first, and BY VALUE: the two fields differ in every part, so a
+        // field wired to the other's wire key shows up here as the wrong set rather than as a
+        // length that happens to agree.
+        let set = |ps: &[KeyboardMacroProfile], active: &str| {
+            (
+                ps.iter()
+                    .map(|p| {
+                        (
+                            p.name.clone(),
+                            p.macros.iter().map(|m| m.key.clone()).collect(),
+                        )
+                    })
+                    .collect::<Vec<(String, Vec<String>)>>(),
+                active.to_string(),
+            )
+        };
+        assert_eq!(
+            set(&s.macros.rtty_profiles, &s.macros.active_rtty_profile),
+            (
+                vec![("everyday".into(), vec!["F1".into()])],
+                "everyday".into()
+            ),
+            "RTTY's field did not load RTTY's set — the two modes share storage"
+        );
+        assert_eq!(
+            set(&s.macros.psk_profiles, &s.macros.active_psk_profile),
+            (
+                vec![("contest".into(), vec!["F3".into()])],
+                "contest".into()
+            ),
+            "PSK's field did not load PSK's set — the two modes share storage"
+        );
+        // Each field on its own: the other stays at its default rather than picking the value up.
+        let psk_only: Settings = serde_json::from_value(serde_json::json!({"macros": {
+            "pskProfiles": [{"name": "everyday", "macros": [{"key": "F5", "label": "Rig", "text": "rig here is 100w"}]}],
+            "activePskProfile": "everyday"
+        }}))
+        .unwrap();
+        assert!(
+            psk_only.macros.rtty_profiles.is_empty(),
+            "a PSK-only file put PSK's sets into RTTY's field — the two share storage"
+        );
+        assert_eq!(psk_only.macros.active_rtty_profile, "");
+        assert_eq!(psk_only.macros.psk_profiles.len(), 1);
+    }
+
+    /// ⛔ **A damaged PSK macro costs that macro — never the settings file.** RTTY's leniency
+    /// test above, for PSK's field: `lenient_list` / `lenient_string`, entry by entry.
+    #[test]
+    fn a_malformed_psk_macro_entry_does_not_discard_the_settings_file() {
+        let dir = scratch_dir_ready("psk_macro_malformed");
+        let path = dir.join("settings.json");
+        let good = Settings {
+            mycall: "W9XYZ".into(),
+            license_class: LicenseClass::Technician,
+            ..Settings::default()
+        };
+        let mut file = serde_json::to_value(&good).unwrap();
+        file["macros"]["pskProfiles"] = serde_json::json!([
+            {"name": "contest", "macros": [
+                {"key": "F1", "label": "CQ", "text": "cq test {MYCALL} {MYCALL} cq"},
+                {"key": "F2", "label": 5, "text": null},
+                "not a macro",
+                {"key": "F3"}
+            ]},
+            "not a set",
+            {"name": "everyday", "macros": "not a list"}
+        ]);
+        file["macros"]["activePskProfile"] = serde_json::json!(1);
+        std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+
+        let back = Settings::load(&path);
+        assert!(
+            !path.with_extension("json.corrupt").exists(),
+            "one bad macro set the WHOLE settings file aside"
+        );
+        assert_eq!(back.mycall, "W9XYZ", "identity survived");
+        assert_eq!(
+            back.license_class,
+            LicenseClass::Technician,
+            "the TX lockout survived — not reset to Open"
+        );
+        let v = serde_json::to_value(&back).unwrap();
+        assert_eq!(
+            v["macros"]["pskProfiles"],
+            serde_json::json!([
+                {"name": "contest", "macros": [
+                    {"key": "F1", "label": "CQ", "text": "cq test {MYCALL} {MYCALL} cq"},
+                    {"key": "F3", "label": "", "text": ""}
+                ]},
+                {"name": "everyday", "macros": []}
+            ]),
+            "the good entries survive, a missing field defaults, and only the bad ones went"
+        );
+        assert_eq!(v["macros"]["activePskProfile"], serde_json::json!(""));
+        // POSITIVE CONTROL: the leniency is what saved the file, not a load that forgives
+        // everything — a type error anywhere else still takes the `.corrupt` path.
         file["dialMhz"] = serde_json::json!("fourteen");
         std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
         assert_eq!(Settings::load(&path).license_class, LicenseClass::Open);

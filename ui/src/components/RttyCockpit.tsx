@@ -9,7 +9,7 @@
 // invariant too) live in `features/rttyMacros.ts`, and their buttons and editor in the migrated
 // `RttyMacroEditor.tsx`.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSnapshot, BandChannel, RttyMacroProfile, RttyState, Settings } from '../types'
+import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { LogEntry } from './LogEntry'
@@ -576,7 +576,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         ?.focus({ preventScroll: true })
     }
   }
-  const saveMacroSets = async (profiles: RttyMacroProfile[], activeSet: string): Promise<boolean> => {
+  const saveMacroSets = async (profiles: KeyboardMacroProfile[], activeSet: string): Promise<boolean> => {
     if (!control) return false
     setSavingMacros(true)
     const saved = await withErrorToast(

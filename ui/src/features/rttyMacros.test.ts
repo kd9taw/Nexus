@@ -9,7 +9,7 @@ import {
   withRttyEntry,
   withRttySetReset,
 } from './rttyMacros'
-import type { RttyMacroProfile } from '../types'
+import type { KeyboardMacroProfile } from '../types'
 
 // Only example callsigns here (W1AW, K1ABC, W9XYZ, N0CALL).
 
@@ -51,7 +51,7 @@ describe('the built-in sets', () => {
 })
 
 describe('saved entries fold over the built-ins', () => {
-  const saved: RttyMacroProfile[] = [
+  const saved: KeyboardMacroProfile[] = [
     { name: 'contest', macros: [{ key: 'F2', label: 'Run exch', text: '{CALL} 599 05 05' }] },
     { name: 'everyday', macros: [{ key: 'F5', label: 'Rig', text: 'RIG HERE IS 100W' }] },
   ]
