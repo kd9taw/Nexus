@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { TuningStrip } from './TuningStrip'
-import { setFrequency } from '../api'
+import { setFrequency, setVfo, swapVfo } from '../api'
 import { pushToast } from '../toast'
 import type { AppSnapshot } from '../types'
 
@@ -27,11 +27,14 @@ vi.mock('../api', () => ({
   setRit: vi.fn(() => Promise.resolve(null)),
   setXit: vi.fn(() => Promise.resolve(null)),
   setVfo: vi.fn(() => Promise.resolve(null)),
+  swapVfo: vi.fn(() => Promise.resolve(null)),
 }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 
 const mockSetFreq = setFrequency as unknown as ReturnType<typeof vi.fn>
 const mockToast = pushToast as unknown as ReturnType<typeof vi.fn>
+const mockSwapVfo = swapVfo as unknown as ReturnType<typeof vi.fn>
+const mockSetVfo = setVfo as unknown as ReturnType<typeof vi.fn>
 
 const snapWith = (over: Record<string, unknown> = {}) =>
   ({
@@ -61,6 +64,8 @@ function typeDial(mhz: string) {
 beforeEach(() => {
   mockSetFreq.mockClear()
   mockToast.mockClear()
+  mockSwapVfo.mockClear()
+  mockSetVfo.mockClear()
 })
 afterEach(cleanup)
 
@@ -147,5 +152,55 @@ describe('the read-out’s TX-blocked paint', () => {
     cleanup()
     const outOfBand = mount(snapWith({ dialMhz: 9.6, txAllowed: false }))
     expect(outOfBand.container.querySelector('.readout.blocked')).not.toBeNull()
+  })
+})
+
+// ── A⇄B (2026-09-22) ─────────────────────────────────────────────────────────────────
+//
+// The A and B buttons have always been here and `activeVfo` has always been read back; the
+// one thing missing was the SWAP, and `swapVfo` sat in api.ts with no caller at all. It is
+// the gesture a split operator makes constantly — listen on B, work on A, put them back.
+//
+// ⛔ SWAP ONLY. A=B (copy the active VFO onto the other) is a DIFFERENT rig verb, it
+// OVERWRITES a dial rather than exchanging two, and it is not offered here (operator,
+// 2026-09-22). The census below is what holds that, rather than a grep for a name.
+//
+// ⚠️ jsdom NEVER LAYS OUT, so nothing here reads geometry: whether three buttons still fit
+// the strip's row at 1024 is a browser question and is not answered in this file.
+describe('the A⇄B swap', () => {
+  const swap = () => screen.getByRole('button', { name: 'Swap VFO A and B' }) as HTMLButtonElement
+
+  it('swaps the two VFOs — and does NOT select one, which is the other verb', () => {
+    // The discriminating pair. `setVfo('A')` would also "do something about the VFO" and
+    // would leave a station that was on B still on B; only `swapVfo` exchanges them, so the
+    // assertion has to name both or it cannot tell a swap from a select.
+    mount(snapWith({ activeVfo: 'B' }))
+    fireEvent.click(swap())
+    expect(mockSwapVfo, 'the swap button did not command a swap').toHaveBeenCalledTimes(1)
+    expect(mockSetVfo, 'the swap selected a VFO instead of exchanging them').not.toHaveBeenCalled()
+  })
+
+  it('sits with the A and B buttons, and those three are the WHOLE VFO group', () => {
+    // Placement is the point of the control — beside the pair it acts on. The count is the
+    // A=B guard: a fourth button in this group is a copy control that nobody approved, and
+    // this fails by NUMBER rather than by looking for a name a copy might not use.
+    mount(snapWith({ activeVfo: 'A' }))
+    const group = screen.getByRole('group', { name: 'Active VFO' })
+    const names = [...group.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') ?? b.textContent)
+    expect(names, 'the VFO group is no longer exactly A, B and the swap').toEqual(['A', 'B', 'Swap VFO A and B'])
+  })
+
+  it('CAT DOWN: it is disabled and commands nothing — a swap over a dead link is a lie', () => {
+    mount(snapWith({ catOk: false }))
+    expect(swap().disabled, 'the swap was offered with no CAT link').toBe(true)
+    fireEvent.click(swap())
+    expect(mockSwapVfo).not.toHaveBeenCalled()
+  })
+
+  it('POSITIVE CONTROL — with CAT up it is live, and so are the A/B buttons beside it', () => {
+    // Without this the disabled case above passes against a button that is ALWAYS dead.
+    mount(snapWith({ catOk: true }))
+    expect(swap().disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'A' }) as HTMLButtonElement).disabled).toBe(false)
   })
 })

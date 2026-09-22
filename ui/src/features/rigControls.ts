@@ -42,6 +42,23 @@ export type UnavailableCause =
   | 'backendRawOnly'
   /** The radio is not answering reads on this token. NOT YET DETECTABLE (needs an age). */
   | 'silent'
+  /**
+   * ATT/PRE ONLY, and it is the third state of the step list rather than a fault.
+   *
+   * ⛔ THESE TWO ARE COMMANDED FROM A LIST, NOT SET TO A NUMBER. `set_att_db` rejects any dB
+   * that is not one of `radio.attStepsDb`, because a pad the rig does not hold is NAKed or
+   * silently rounded to a neighbour and the front end then moves by an amount nobody chose
+   * (`observe_rig_db_steps`, service.rs: "`None` = unknown, and the cockpit must then offer
+   * nothing rather than a guessed ladder"). So with no list there is no value to offer and
+   * the control cannot be drawn live — which is a fact about what NEXUS could read, not
+   * about what the radio has.
+   *
+   * ⚠️ WHICH IS WHY IT IS NOT `absent`. Collapsing it there would print "Not on this radio:
+   * ATT" at the pane's foot over a rig that may well have a 20 dB pad and merely answered no
+   * `\dump_state` — the confident wrong answer the three-state model exists to stop. It
+   * keeps its row, dead, and says which of the two it is.
+   */
+  | 'noSteps'
 
 /** The catalogue key each cause prints. One key per cause; the control supplies `{plate}`,
  *  `{token}`, `{mode}` or `{model}`. Kept beside the cause union so adding a cause without a
@@ -56,6 +73,7 @@ export const CAUSE_KEY: Record<UnavailableCause, string> = {
   backend: 'phone.unavail.backend',
   backendRawOnly: 'phone.unavail.backendRawOnly',
   silent: 'phone.unavail.silent',
+  noSteps: 'phone.unavail.noSteps',
 }
 
 export interface RigControl {
@@ -95,12 +113,13 @@ export const RIG_CONTROLS: readonly RigControl[] = [
   // its 2.4 kHz base and only the READOUT is blank, so treating a missing read-back as "this
   // radio has no filter" would collapse a control that works into the foot line.
   { id: 'BW', plate: 'BW', token: { hamlib: 'PASSBAND' }, kind: 'hz', chain: 'rx', built: true },
-  // ⛔ NOT BUILT: a sibling is adding the attenuator, preamp and TX monitor now. They have
-  // four states each (a caps bit with a step list → chips; the bit with an empty list → a dB
-  // stepper; the bit clear → `backend`; a daemon without the token → `nativeCiv`), which is
-  // why they are `dbSteps` and why the slots are declared before the fields exist.
-  { id: 'ATT', plate: 'ATT', token: { hamlib: 'ATT' }, kind: 'dbSteps', chain: 'rx', built: false },
-  { id: 'PRE', plate: 'PRE', token: { hamlib: 'PREAMP' }, kind: 'dbSteps', chain: 'rx', built: false },
+  // ⭐ BUILT 2026-09-22, and their capability answer is the STEP LIST, never the read-back.
+  // `attStepsDb` / `preampStepsDb` are what this radio declared in `\dump_state`, so the
+  // three states fall straight out of it: a list with entries → chips; an EMPTY list → the
+  // rig positively has no pad fitted, which is `absent`; no list at all → `noSteps`.
+  // `field` is still declared, because the READING is what the active chip is drawn from.
+  { id: 'ATT', plate: 'ATT', token: { hamlib: 'ATT' }, kind: 'dbSteps', field: 'attDb', chain: 'rx', built: true },
+  { id: 'PRE', plate: 'PRE', token: { hamlib: 'PREAMP' }, kind: 'dbSteps', field: 'preampDb', chain: 'rx', built: true },
   { id: 'RF', plate: 'RF', token: { hamlib: 'RF' }, kind: 'fraction', field: 'rfGain', chain: 'rx', built: true },
   { id: 'NB', plate: 'NB', token: { hamlib: 'NB' }, kind: 'toggle', field: 'nb', chain: 'rx', built: true },
   { id: 'NR', plate: 'NR', token: { hamlib: 'NR' }, kind: 'toggle', field: 'nr', chain: 'rx', built: true },
@@ -115,7 +134,10 @@ export const RIG_CONTROLS: readonly RigControl[] = [
   { id: 'COMP', plate: 'COMP', token: { hamlib: 'COMP' }, kind: 'toggle', field: 'comp', chain: 'tx', built: true },
   { id: 'COMPLVL', plate: 'COMP', token: { hamlib: 'COMP' }, kind: 'fraction', field: 'compLevel', chain: 'tx', built: true },
   { id: 'VOX', plate: 'VOX', token: { hamlib: 'VOX' }, kind: 'toggle', field: 'vox', chain: 'tx', built: true },
-  { id: 'MON', plate: 'MON', token: { hamlib: 'MONITOR_GAIN' }, kind: 'fraction', chain: 'tx', built: false },
+  // ⚠️ MON IS A TRANSMIT CONTROL AND STAYS ONE. It is the rig playing YOUR OWN audio back
+  // while you talk (`setMonitorGain`, api.ts), heard only while transmitting — so it shapes
+  // what the over sounds like, not what the receiver hears, and it belongs beside MIC/COMP.
+  { id: 'MON', plate: 'MON', token: { hamlib: 'MONITOR_GAIN' }, kind: 'fraction', field: 'monitorGain', chain: 'tx', built: true },
 ]
 
 /**
@@ -149,9 +171,25 @@ export interface RigCapsDto {
   /** Hamlib level tokens, likewise (`RF`, `AF`, `NOTCHF`, `AGC`…). */
   levelGet?: readonly string[]
   levelSet?: readonly string[]
-  /** The attenuator and preamp STEP LISTS in dB, straight from `\dump_state`. Present and
-   *  non-empty ⇒ chips; present and EMPTY ⇒ the rig has the stage but no step list, so a
-   *  plain dB stepper; absent ⇒ that dimension is unknown. */
+  /**
+   * The attenuator and preamp STEP LISTS in dB, straight from `\dump_state` — the live
+   * `RadioStatus.attStepsDb` / `preampStepsDb`, which is where the engine puts them
+   * (`observe_rig_db_steps`). Ascending, and WITHOUT the implicit 0 (off) every rig has.
+   *
+   * ⚠️ AN EMPTY LIST MEANS NO PAD FITTED — corrected 2026-09-22 against the shipped
+   * backend, which this comment had wrong in the other direction ("the rig has the stage but
+   * no step list, so a plain dB stepper"). Three sources say otherwise and none says that:
+   * `Engine::observe_rig_db_steps` ("Empty is the different, positive answer: no pad
+   * fitted"), `RadioStatus.attStepsDb` in types.ts (the same sentence), and the CI-V broker,
+   * which returns None for both the read and the write of PREAMP when the model's list is
+   * empty (broker.rs) — an IC-905 has no preamp at all. There is no path that produces an
+   * empty list for a rig that HAS the stage, so a bare dB stepper would have had nothing to
+   * step and no value the rig would accept.
+   *
+   *   non-empty ⇒ PRESENT, and these are the only values that may be commanded
+   *   EMPTY     ⇒ ABSENT — the rig declared it has none
+   *   absent    ⇒ UNKNOWN — nothing was declared, so nothing may be claimed (`noSteps`)
+   */
   attDb?: readonly number[]
   preampDb?: readonly number[]
 }
@@ -168,14 +206,24 @@ export type CapState = 'present' | 'absent' | 'unknown'
  */
 export function capStateFor(c: RigControl, caps?: RigCapsDto): CapState {
   if (!caps || !c.built) return 'unknown'
+  // ⭐ ATT/PRE ANSWER FROM THEIR STEP LIST, not from a level mask, and that IS this
+  // function's question: the list is the set of values the operator may drive this control
+  // to. A rig can be in the `ATT` level mask and still be undrivable here — a mask says the
+  // token exists, a list says which pads do — so the list is the stricter and the right one.
+  if (c.kind === 'dbSteps') {
+    const steps = stepsFor(c, caps)
+    if (!steps) return 'unknown'
+    return steps.length > 0 ? 'present' : 'absent'
+  }
   const mask = c.kind === 'toggle' ? caps.funcSet : caps.levelSet
   // The mask itself missing is UNKNOWN, not an empty set of capabilities.
   if (!mask) return 'unknown'
   return mask.includes(c.token.hamlib) ? 'present' : 'absent'
 }
 
-/** The dB step list for a stepped control (ATT/PRE), or `undefined` when unknown. Empty
- *  means the rig has the stage with no steps to choose from — a different thing. */
+/** The dB step list for a stepped control (ATT/PRE), or `undefined` when the radio declared
+ *  nothing. EMPTY is the different, positive answer — no pad fitted — and the two must stay
+ *  distinguishable here, because `capStateFor` reads one as ABSENT and the other as UNKNOWN. */
 export function stepsFor(c: RigControl, caps?: RigCapsDto): readonly number[] | undefined {
   if (!caps) return undefined
   return c.id === 'ATT' ? caps.attDb : c.id === 'PRE' ? caps.preampDb : undefined
@@ -219,6 +267,14 @@ export function causeFor(c: RigControl, s: ControlState): UnavailableCause | nul
   // is all this has ever had. ⚠️ Never treat unknown as absent: that is the default that
   // manufactures a confident wrong answer.
   //
+  // ⛔ AND FOR ATT/PRE THE OBSERVED FALLBACK CANNOT RESCUE IT. Everything below this line
+  // reasons "the rig has answered about this before, so offer it" — sound for a control you
+  // set to a NUMBER, and wrong for one you pick from a LIST. A rig can report `attDb: 0`
+  // (pad off) all day and still have told us no step list, and there is then no value the
+  // control could command: `set_att_db` rejects anything not in `attStepsDb`. So it keeps
+  // its row and says WHICH unknown this is, rather than drawing a live control with no
+  // chips in it or claiming the radio has no pad.
+  if (c.kind === 'dbSteps') return 'noSteps'
   // A BUILT control with no capability field has no per-radio signal at all — BW is the one
   // today. Nothing left to disqualify it, so it is available.
   if (!c.field) return null

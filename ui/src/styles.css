@@ -8845,7 +8845,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-weight: 800;
   color: var(--text-dim);
 }
-.ph-agc {
+/* Chip rows: the AGC speeds, and the attenuator / preamp steps the radio publishes. Same
+   shape, so one rule — a row of chips beside its plate, and no height of its own (the chain
+   pane is fit="content" and the wrap IS the height). */
+.ph-agc,
+.ph-steps {
   display: flex;
   align-items: center;
   gap: var(--space-1);

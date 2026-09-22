@@ -51,11 +51,28 @@ describe('the registry is a table, and the table is the contract', () => {
     expect(RIG_CONTROLS.filter((c) => c.chain === 'rx').map((c) => c.id)).toEqual([
       'BW', 'ATT', 'PRE', 'RF', 'NB', 'NR', 'NRLVL', 'ANF', 'MN', 'NOTCHF', 'AGC', 'AF', 'SQL',
     ])
-    // MON is in the table and NOT built — the slot is declared so the sibling's field drops
-    // in, and `built: false` is what keeps it off the screen meanwhile.
+    // ⚠️ MON IS ON THE TRANSMIT CHAIN AND THAT IS NOT A FILING ACCIDENT. It is the rig
+    // playing YOUR OWN audio back while you talk — heard only while transmitting — so it
+    // shapes the over, not what the receiver hears, and it belongs beside MIC and COMP.
+    // Moving it to `rx` would put transmitted audio in the pane labelled "what you are
+    // hearing" and sit it next to AF gain, which is the adjacency the two panes were split
+    // up to end.
     expect(RIG_CONTROLS.filter((c) => c.chain === 'tx').map((c) => c.id)).toEqual([
       'MIC', 'COMP', 'COMPLVL', 'VOX', 'MON',
     ])
+  })
+
+  it('every control has a path built behind it, and the stepped pair has its reading field', () => {
+    // ATT, PRE and MON were the last three `built: false` slots and landed 2026-09-22. The
+    // table is now wholly built — which is a fact worth pinning, because `built: false` is
+    // an EXCEPTION whose test below now has to supply its own fixture.
+    expect(RIG_CONTROLS.filter((c) => !c.built).map((c) => c.id)).toEqual([])
+    // ⛔ AND `field` IS NOT OPTIONAL FOR THESE TWO. It is where the ACTIVE chip is read
+    // from; pointing one at a neighbour's field, or leaving it off to satisfy the type, is
+    // how a row starts answering for the wrong stage.
+    expect(byId('ATT').field).toBe('attDb')
+    expect(byId('PRE').field).toBe('preampDb')
+    expect(byId('MON').field).toBe('monitorGain')
   })
 })
 
@@ -129,15 +146,71 @@ describe('which cause is the one to name', () => {
     for (const c of RIG_CONTROLS) expect(capStateFor(c, undefined), c.id).toBe('unknown')
   })
 
-  it('the step lists are three-state too: chips, a bare stepper, or nothing known', () => {
-    // ATT/PRE's four states hang off this. A list with entries picks chips; an EMPTY list
-    // means the rig has the stage but offers no steps, which is a dB stepper and NOT the
-    // same as not knowing; absent means unknown.
+  it('the step lists are three-state too: chips, no pad fitted, or nothing known', () => {
+    // ⚠️ WORDING CORRECTED 2026-09-22 against the shipped backend. This used to read "an
+    // EMPTY list means the rig has the stage but offers no steps, which is a dB stepper",
+    // and three sources say otherwise: `Engine::observe_rig_db_steps` ("Empty is the
+    // different, positive answer: no pad fitted"), the same sentence on
+    // `RadioStatus.attStepsDb`, and the CI-V broker, which refuses both the read and the
+    // write of PREAMP when the model's list is empty — an IC-905 has no preamp at all.
+    // `stepsFor` is unchanged: it is the ACCESSOR, and keeping `[]` and `undefined` apart is
+    // exactly what lets `capStateFor` below read one as ABSENT and the other as UNKNOWN.
     expect(stepsFor(byId('ATT'), { attDb: [6, 12] })).toEqual([6, 12])
     expect(stepsFor(byId('ATT'), { attDb: [] }), 'an empty step list was read as unknown').toEqual([])
     expect(stepsFor(byId('ATT'), {}), 'a missing step list was read as empty').toBeUndefined()
     expect(stepsFor(byId('PRE'), { preampDb: [10] })).toEqual([10])
     expect(stepsFor(byId('RF'), { attDb: [6] }), 'a step list leaked to a control with no steps').toBeUndefined()
+  })
+
+  it('⛔ ATT/PRE ARE JUDGED BY THEIR STEP LIST, and the three states stay three', () => {
+    // The question `capStateFor` answers is "may the operator drive it", and for a pad that
+    // is the list of values the radio will accept — not a level mask, which only says the
+    // token exists. Each of the three is asserted BY VALUE, so a collapse in either
+    // direction fails here rather than at a rendered row.
+    expect(capStateFor(byId('ATT'), { attDb: [6, 12, 18] }), 'a published pad list was not PRESENT').toBe('present')
+    expect(capStateFor(byId('PRE'), { preampDb: [1, 2] })).toBe('present')
+    // EMPTY is the positive "no pad fitted" — the IC-905's preamp, the rig with no ATT.
+    expect(capStateFor(byId('ATT'), { attDb: [] }), 'an empty list was not read as no pad fitted').toBe('absent')
+    expect(capStateFor(byId('PRE'), { preampDb: [] })).toBe('absent')
+    // …and NOTHING PUBLISHED is UNKNOWN. This is the collapse the whole model exists to
+    // stop: a rig whose `\dump_state` Nexus could not read may well have a 20 dB pad.
+    expect(capStateFor(byId('ATT'), {}), 'unknown collapsed into absent').toBe('unknown')
+    expect(capStateFor(byId('PRE'), { attDb: [6] }), 'ATT’s list answered for PRE').toBe('unknown')
+    // CONTROL — a level mask does NOT settle a stepped control, in either direction. Without
+    // this the assertions above would pass against a capStateFor that still read the masks.
+    expect(capStateFor(byId('ATT'), { levelSet: ['ATT'] }), 'a level mask stood in for the pad list').toBe('unknown')
+  })
+
+  it('no list published: the row STAYS and says which unknown it is — never "not on this radio"', () => {
+    // ⛔ THE ONE THAT COST A NEW CAUSE. `set_att_db` rejects any dB not on the published
+    // list, so with no list there is no value to command — but that is a fact about what
+    // Nexus could READ, and printing "Not on this radio: ATT" over a rig that has a pad is
+    // the confident wrong answer the three-state model is built against.
+    const s = state({ caps: {} })
+    expect(causeFor(byId('ATT'), s)).toBe('noSteps')
+    expect(rendersRow(byId('ATT'), s), 'the row vanished instead of saying why').toBe(true)
+    expect(absentPlates('rx', s), 'a rig that published nothing was blamed for having nothing').not.toContain('ATT')
+
+    // ⚠️ AND THE OBSERVED FALLBACK MUST NOT RESCUE IT. `reported` is true here — a rig can
+    // report `attDb: 0` (pad out) all day and still have published no list — and the pre-
+    // 2026-09-22 path would have called that available and drawn a live control with no
+    // chips in it. This is the assertion that pins the difference.
+    expect(causeFor(byId('ATT'), state({ caps: {}, reported: () => true }))).toBe('noSteps')
+
+    // CONTROL — publish a list and it is live; publish an EMPTY one and it collapses to the
+    // foot line as a genuine absence. Three different answers from one control.
+    expect(causeFor(byId('ATT'), state({ caps: { attDb: [20] } })), 'a published pad was not offered').toBeNull()
+    const none = state({ caps: { attDb: [], preampDb: [] } })
+    expect(causeFor(byId('ATT'), none)).toBe('absent')
+    expect(absentPlates('rx', none), 'a rig that says it has no pad should say so at the foot').toContain('ATT')
+  })
+
+  it('a dead CAT link still beats the step lists — one explanation, not three', () => {
+    // Ordering, and it matters more now than it did: on a breaker trip the engine CLEARS the
+    // step lists (`clear_rig_db_steps`), so without `noCat` winning first every pad row
+    // would swap its banner for "could not read the steps" at the moment the link died.
+    expect(causeFor(byId('ATT'), state({ catOk: false, caps: {} }))).toBe('noCat')
+    expect(causeFor(byId('PRE'), state({ catOk: false, caps: { preampDb: [] } }))).toBe('noCat')
   })
 
   it('the four undetectable causes never fire today', () => {
@@ -158,7 +231,13 @@ describe('which cause is the one to name', () => {
             }
     expect([...seen].filter((c) => unreachable.includes(c))).toEqual([])
     // …and the sweep really did exercise the reachable ones, or it proves nothing.
-    expect([...seen].sort()).toEqual(['absent', 'noCat', 'notOnMode'])
+    //
+    // ⚠️ `noSteps` JOINED THIS LIST 2026-09-22, deliberately and with a wording behind it
+    // (`phone.unavail.noSteps`). None of the `caps` shapes swept above carries a step list,
+    // so every pass over ATT/PRE lands on it — which is what this line is for: a cause
+    // becoming reachable turns this red and names it, and the author then has to say
+    // whether that was the intent. It was.
+    expect([...seen].sort()).toEqual(['absent', 'noCat', 'noSteps', 'notOnMode'])
   })
 })
 
@@ -166,13 +245,25 @@ describe('which controls get a row, and which collapse to the foot line', () => 
   it('a control Nexus has built no path for gets no row and NO mention', () => {
     // Exception 1. A row greyed on every radio in the fleet reads as "broken", and naming it
     // in a line that says "not on this radio" would blame the radio for Nexus.
-    const unbuilt = RIG_CONTROLS.filter((c) => !c.built).map((c) => c.id)
-    expect(unbuilt, 'the fixture has no unbuilt control, so this proves nothing').not.toEqual([])
-    for (const id of unbuilt) {
-      expect(rendersRow(byId(id), state()), `${id} drew a row with no path behind it`).toBe(false)
+    //
+    // ⚠️ THE FIXTURE IS SYNTHETIC NOW, AND THAT IS THE HONEST SHAPE. This used to read the
+    // real table for a `built: false` row and guarded itself with "the fixture has no
+    // unbuilt control, so this proves nothing" — which fired when ATT/PRE/MON were built on
+    // 2026-09-22 and left the table wholly built. The rule still governs the NEXT slot
+    // declared ahead of its path, so the behaviour is tested against a control that has that
+    // shape rather than deleted for want of a live example. That the real table currently
+    // holds none is asserted separately, above, so the two facts cannot be confused.
+    const unbuilt: RigControl = {
+      id: 'SHIFT', plate: 'SHIFT', token: { hamlib: 'IF' }, kind: 'hz', chain: 'rx', built: false,
     }
-    expect(absentPlates('rx', state()), 'an unbuilt control was blamed on the radio').toEqual([])
-    expect(absentPlates('tx', state())).toEqual([])
+    expect(causeFor(unbuilt, state()), 'an unbuilt control was not absent').toBe('absent')
+    expect(rendersRow(unbuilt, state()), 'a control with no path behind it drew a row').toBe(false)
+    // …and the foot line is computed off the REAL table, which must name neither an unbuilt
+    // control nor, on a rig that reports everything, anything at all.
+    expect(absentPlates('rx', state()), 'an unbuilt control was blamed on the radio').not.toContain('SHIFT')
+    // CONTROL — the same control WITH a path built is judged on its merits instead, so the
+    // assertions above are about `built` and not about the id being unknown to the table.
+    expect(causeFor({ ...unbuilt, built: true }, state()), 'built made no difference').toBeNull()
   })
 
   it('a control this radio lacks gets no row, and its PLATE goes to the foot line', () => {

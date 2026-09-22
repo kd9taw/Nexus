@@ -48,7 +48,9 @@ import {
   absentPlates,
   deadControlProps,
   guard,
+  stepsFor,
   type ControlState,
+  type RigCapsDto,
   type RigControl,
 } from '../features/rigControls'
 import { SMeter } from './SMeter'
@@ -67,6 +69,9 @@ import {
   atuTune,
   haltTx,
   setTxEnabled,
+  setAttDb,
+  setPreampDb,
+  setMonitorGain,
 } from '../api'
 import { pushToast } from '../toast'
 import { controlFailureMessage } from '../remote-web/control-failure'
@@ -101,6 +106,8 @@ const RF = 'RF'
 const SQL = 'SQL'
 const HZ = 'Hz'
 const BW = 'BW'
+/** The transmit monitor's own plate, as it is printed on a front panel. */
+const MON = 'MON'
 const DB = 'dB'
 const DBM = 'dBm'
 const REC = 'REC'
@@ -333,6 +340,20 @@ interface PhoneFunc {
   titleKey: MessageKey
 }
 
+/** What a stepped row needs said about it. The two WORDINGS arrive already resolved, from
+ *  literal `t('phone.chain.att.*')` calls at the row's own JSX — deliberately, because a
+ *  `t(table[id].aria)` lookup is invisible to `hardcoded-strings.test.ts` and its four keys
+ *  read to that guard as entries nothing references (it caught exactly that here).
+ *
+ *  `unit` is the one behavioural difference and it is not cosmetic: an attenuator's steps
+ *  are decibels, a preamp's are whatever THIS radio calls each position (`1`/`2` on an
+ *  Icom), so only one of the two may ever carry dB. */
+interface StepRowText {
+  aria: string
+  title: string
+  unit: boolean
+}
+
 /** ✓rig · ⌁cmd · ⊘ — HOW WELL THIS NUMBER IS KNOWN, which on a transmit readout is half the
  *  number's meaning.
  *
@@ -553,6 +574,44 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
     if (!levels.can('micGain')) return
     if (control) setMic(pct)
     void levels.change('micGain', pct / 100).catch(error => pushToast(String(error), 'error'))
+  }
+  // ── THE TX MONITOR'S LEVEL (2026-09-22) ──────────────────────────────────────────────
+  // Same optimistic shape as MIC above, and deliberately NOT through `useRadioLevels`:
+  // `MONITOR_GAIN` is not one of the remote protocol's `RadioLevel`s, and inventing an entry
+  // for it would widen the station-operation surface a browser observer may command — a
+  // trust decision, not a cockpit one. So it is LOCAL ONLY, and a remote observer gets the
+  // slider disabled rather than a control that would be refused at the far end.
+  const [mon, setMon] = useState(0) // % TX-monitor level — pushed to the rig once touched
+  const monDragging = useRef(false)
+  useEffect(() => {
+    const rb = snap.radio.monitorGain
+    if (rb != null && !monDragging.current) {
+      const pct = Math.round(rb * 100)
+      setMon((m) => (Math.abs(m - pct) >= 2 ? pct : m))
+    }
+  }, [snap.radio.monitorGain])
+  const shownMon = control ? mon : Math.round((snap.radio.monitorGain ?? 0) * 100)
+  const changeMon = (pct: number) => {
+    if (!control) return
+    setMon(pct)
+    void setMonitorGain(pct / 100)
+      .then((s) => s && onSnap?.(s))
+      .catch((error) => pushToast(controlFailureMessage(error), 'error'))
+  }
+  /**
+   * ⛔ A PAD IS PICKED, NOT SET, so this sends the operator's chip and nothing else.
+   *
+   * `set_att_db` / `set_preamp_db` REJECT any value that is not in the radio's own step
+   * list — deliberately, because a rig NAKs an unheld pad or silently substitutes its
+   * neighbour, and either way the front end moves by an amount nobody chose. The chips are
+   * rendered FROM that list, so a refusal here means the list changed under a press (a
+   * radio handoff mid-click); it is said rather than swallowed.
+   */
+  const pickStep = (which: 'ATT' | 'PRE', db: number) => {
+    if (!control) return
+    void (which === 'ATT' ? setAttDb(db) : setPreampDb(db))
+      .then((s) => s && onSnap?.(s))
+      .catch((error) => pushToast(controlFailureMessage(error), 'error'))
   }
   const [nr, setNr] = useState(30) // % noise-reduction level — pushed once touched
   const nrDragging = useRef(false)
@@ -1229,15 +1288,28 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
   // One table decides whether a control may be driven, which of several causes is the one
   // to NAME, and whether it gets a row at all (features/rigControls.ts). Thirteen inline
   // ternaries used to do this, each free to drift.
+  const caps: RigCapsDto = {
+    attDb: snap.radio.attStepsDb ?? undefined,
+    preampDb: snap.radio.preampStepsDb ?? undefined,
+  }
   const chainState: ControlState = {
     catOk,
     // The STICKY answer, never the raw `!= null` — a QSY blanks every reading, and the
     // registry must never read that flicker as a radio losing a feature.
     reported: (c: RigControl) => (c.field ? reports(c.field) : false),
     mode: commandedMode,
-    // ⚠️ `caps` is deliberately absent: the capability model (\dump_state → RadioStatus.caps)
-    // is a BACKEND job that has not landed. Until it does, absence is inferred from "never
-    // reported on this radio", which is what the sticky above supplies.
+    // ⭐ THE FIRST CAPS THE REGISTRY HAS EVER BEEN GIVEN (2026-09-22), and only the half the
+    // backend actually ships: `attStepsDb` / `preampStepsDb`, the pads and preamps this
+    // radio DECLARED in its own `\dump_state` (`Engine::observe_rig_db_steps`, read once per
+    // CAT confirmation). The func/level masks are still a backend job that has not landed,
+    // so they stay absent and every OTHER control falls through to the sticky above exactly
+    // as before — this widens nothing but ATT and PRE.
+    //
+    // ⚠️ `?? undefined` IS LOAD-BEARING. The DTO's `null` and its absence both mean "the
+    // radio never told us", and `capStateFor` reads `undefined` as UNKNOWN — passing `null`
+    // through would hit the `!steps` branch as well but by accident of falsiness, and the
+    // three states are too close together to leave one resting on that.
+    caps,
   }
   const control_ = (id: string) => RIG_CONTROLS.find((c) => c.id === id)!
   /** Can this control be driven right now? CAPABILITY only — the permission half (a remote
@@ -1330,6 +1402,61 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
    *  collapsing into the foot line. The visible mark is the MODE — an invariant token — and
    *  the sentence is the tooltip. */
   const bwNotOnMode = causeFor(control_('BW'), chainState) === 'notOnMode'
+  /**
+   * ONE STEPPED PAD — the attenuator or the preamp, drawn FROM THE LIST THE RADIO PUBLISHED.
+   *
+   * ⛔ THE LIST IS THE CONTROL. An attenuator is not a slider: it is the handful of pads this
+   * particular rig has, an IC-7300's one 20 dB against an IC-7610's 6/12/18, and `set_att_db`
+   * rejects anything that is not on it. So the chips ARE `attStepsDb` and there is no path
+   * here that can invent a step — which is why the registry answers `noSteps` rather than
+   * `absent` when the radio published nothing, and why that row is dead instead of missing.
+   *
+   * ⚠️ `0` IS NOT IN THE PUBLISHED LIST AND IS ALWAYS OFFERED. Every rig can switch the stage
+   * out, and the DTO omits the implicit off deliberately (types.ts) — so the Off chip is
+   * prepended here rather than expected from the radio.
+   *
+   * ⚠️ AND NO UNIT ON THE PREAMP. ATT is decibels; PRE is whatever THIS radio calls each
+   * position, and on an Icom those are `1` and `2` (P.AMP1/P.AMP2) — names, not gains.
+   * Printing "1 dB" beside a 1 that means "first preamp" is a wrong number, not a cosmetic.
+   */
+  const stepRow = (id: 'ATT' | 'PRE', spec: StepRowText) => {
+    if (!show(id)) return null
+    const c = control_(id)
+    const isDead = dead(id)
+    const now = snap.radio[c.field!] as number | null | undefined
+    return (
+      <span className="ph-chain-item" data-chain={id} key={id}>
+        <div className="ph-steps" role="group" aria-label={spec.aria} title={spec.title}>
+          <span className="ph-dsplev-lbl">{c.plate}</span>
+          {[0, ...(stepsFor(c, caps) ?? [])].map((db) => (
+            <button
+              {...(isDead
+                ? deadControlProps('button', describedBy('rx'))
+                : { disabled: !control })}
+              key={db}
+              type="button"
+              className={`theme-chip${now === db ? ' active' : ''}${isDead ? ' dead' : ''}`}
+              // UNKNOWN IS NOT "OFF". A rig that has never reported which pad is in has no
+              // selection to announce, and `aria-pressed="false"` on every chip announces
+              // one — the same lie the AGC chips are careful about two rows down.
+              aria-pressed={isDead || now == null ? undefined : now === db}
+              onClick={guard(isDead, () => pickStep(id, db))}
+            >
+              {db === 0 ? t('phone.chain.off') : spec.unit ? `${db} ${DB}` : `${db}`}
+            </button>
+          ))}
+        </div>
+        {/* The radio published no list. It keeps its row and says WHICH unknown this is —
+            "not on this radio" would blame a rig that may well have the pad. */}
+        {causeFor(c, chainState) === 'noSteps' && (
+          <Unavailable
+            mark={t('phone.unavail.mark')}
+            title={t('phone.unavail.noSteps', { plate: c.plate })}
+          />
+        )}
+      </span>
+    )
+  }
   /** One rig-FUNCTION toggle. Both chain panes draw theirs through this, so the receive four
    *  and the transmit two cannot drift apart in behaviour the way they just did in place. */
   const funcToggle = (f: PhoneFunc) => {
@@ -1573,7 +1700,26 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             )}
 
             {/* ── FRONT END ────────────────────────────────────────────────────────
-                RF GAIN — receive front-end gain. Not the header's Pwr slider, which is
+                The two STEPPED stages come first because they are first in the signal: the
+                pad and the preamp act on the antenna before anything else in this pane
+                does, and an operator fighting a strong neighbour reaches for ATT before he
+                touches RF gain. Registry order (`RIG_CONTROLS`) puts them here for that
+                reason and this is what renders it. */}
+            {stepRow('ATT', {
+              aria: t('phone.chain.att.aria'),
+              title: t('phone.chain.att.title'),
+              unit: true,
+            })}
+            {stepRow('PRE', {
+              // ⛔ NO UNIT. On an Icom the preamp labels are `1`/`2` (P.AMP1/P.AMP2) — the
+              // names of two positions, not two gains — and Nexus cannot tell those from a
+              // rig whose positions really are decibels. So neither gets a dB.
+              aria: t('phone.chain.pre.aria'),
+              title: t('phone.chain.pre.title'),
+              unit: false,
+            })}
+
+            {/* RF GAIN — receive front-end gain. Not the header's Pwr slider, which is
                 transmit power; they are `RF` and `RFPOWER` to Hamlib for that reason. */}
             {show('RF') && (
             <div className="ph-chain-item" data-chain="RF">
@@ -1824,6 +1970,36 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             </div>
             )}
             {funcToggle(TX_FUNCS[1])}
+
+            {/* ── THE MONITOR — the last thing in the transmit chain, and the only one of
+                these you hear rather than send. It is the rig playing YOUR OWN audio back
+                while you talk, which is how an operator catches his own splatter, a stuck
+                VOX or a processor wound too far.
+
+                ⚠️ IT IS NOT AF GAIN AND THE TOOLTIP SAYS SO. This one is heard only while
+                TRANSMITTING, so turning it to zero can never silence the audio a decoder is
+                listening to — which is exactly the trap the AF slider in the receive pane
+                carries a warning about. Two controls, opposite hazards, so neither wording
+                may be reused for the other. */}
+            {show('MON') && (
+            <div className="ph-chain-item" data-chain="MON">
+              <label className="ph-dsplev" title={t('phone.chain.mon.title')}>
+                <span>{MON}</span>
+                <input disabled={dead('MON') || !control}
+                  aria-describedby={describedBy('tx')}
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={shownMon}
+                  onChange={(e) => changeMon(Number(e.target.value))}
+                  onPointerDown={() => { monDragging.current = true }}
+                  onPointerUp={() => { monDragging.current = false }}
+                  aria-label={t('phone.chain.mon.aria')}
+                />
+                <span className="ph-power-val">{dead('MON') ? '—' : `${shownMon}%`}</span>
+              </label>
+            </div>
+            )}
             {absentLine('tx')}
           </div>
         </CockpitPaneFrame>

@@ -7,7 +7,7 @@ import { useStationCapability, useStationControl } from '../stationAccess'
 // VFO letters are invariant and stay in the code, as do the four button names below.
 import { useContext, useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
-import { setFrequency, setRit, setXit, setVfo } from '../api'
+import { setFrequency, setRit, setXit, setVfo, swapVfo } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
@@ -25,6 +25,9 @@ const RIT = 'RIT'
 const XIT = 'XIT'
 const VFO_A = 'A'
 const VFO_B = 'B'
+/** The swap arrows, the same mark the rigs put on the A⇄B key. A SYMBOL, not prose — its
+ *  name is `cockpit.tuning.vfo.swap.aria`, like the clarifiers' − and + beside it. */
+const VFO_SWAP = '⇄'
 
 /** Tuning steps (Hz). The `×10` buttons jump ten of the selected step. The labels are
  *  measurements, so they stay written here. */
@@ -224,6 +227,23 @@ export function TuningStrip({
           title={t('cockpit.tuning.vfo.title', { vfo: VFO_B })}
         >
           {VFO_B}
+        </button>
+        {/* SWAP ONLY, and A=B is deliberately not here (operator, 2026-09-22): a copy
+            OVERWRITES the other dial, needs a rig verb this app does not have, and wants a
+            bench pass before it is offered. A swap is reversible by pressing it again.
+
+            It carries the SAME gate as the two buttons it sits beside — `vfoXitAllowed`
+            because it moves the transmitter's VFO as well as the receiver's, and `catOk`
+            because with no CAT link there is nothing to swap. A control offered over a dead
+            link would be a button that lies. */}
+        <button
+          type="button"
+          disabled={!vfoXitAllowed || !catOk}
+          onClick={() => apply(swapVfo())}
+          title={t('cockpit.tuning.vfo.swap.title')}
+          aria-label={t('cockpit.tuning.vfo.swap.aria')}
+        >
+          {VFO_SWAP}
         </button>
       </span>
       <span className={`tuning-clar${rit !== 0 ? ' on' : ''}`}>
