@@ -919,7 +919,9 @@ export function Js8Cockpit({
           theme={theme}
           active={active}
           transmitting={snap?.radio.transmitting ?? false}
-          keyed={sending} // #230: JS8 paints no dark band either, so its held picture says so
+          // #230: JS8 paints no dark band either, so its held picture says so — including
+          // under a tune carrier, which holds it the same way (see RttyCockpit's note).
+          keyed={sending || (snap?.radio.tuning ?? false)}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
           txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
           onTune={(hz, target) => {
