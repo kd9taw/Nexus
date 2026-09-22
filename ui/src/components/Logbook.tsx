@@ -1857,6 +1857,13 @@ export function Logbook({
           {th(t('logbook.column.mode'), 'mode')}
           {th(t('logbook.column.sent'), 'sent')}
           {th(t('logbook.column.rcvd'), 'rcvd')}
+          {/* #239 (swinn): "put the time and dates in their own fields". One column printed the
+              whole instant, so a column of dates could not be read down and the time of day sat
+              wherever the date's width left it. Both headers sort on the SAME key, because a
+              record carries ONE instant: there is no ordering by time of day that ignores the
+              date, and a header that looks like its neighbours while doing nothing is worse
+              than two that say they order the same thing. */}
+          {th(t('logbook.column.date'), 'time')}
           {th(t('logbook.column.time'), 'time')}
           {th(t('logbook.column.park'), 'park')}
           {/* The QSL column's header is the Q-code itself, not a word for it. */}
@@ -1948,7 +1955,21 @@ export function Logbook({
                 <span className="log-cell">{q.mode}</span>
                 <span className="log-cell mono">{fmtReport(q.rstSent)}</span>
                 <span className="log-cell mono">{fmtReport(q.rstRcvd)}</span>
-                <span className="log-cell mono">{fmtUtc(q.whenUnix)}</span>
+                <span className="log-cell mono">{utcDate(q.whenUnix)}</span>
+                {/* #239: the time of day, no `Z` — the header says UTC and the End column
+                    (#329) next door already prints a bare `utcTime`.
+                    ⚠️ `timeKnown: false` is an imported record whose source carried a DATE and
+                    no time; `whenUnix` anchors it at midnight FOR ORDERING and its clock
+                    reading is an artefact. The combined column printed that artefact as fact —
+                    a column of its own cannot. `QsoDetail` already refuses the same thing, and
+                    a bare 00:00 read as fact is what leaves those contacts unmatched at LoTW
+                    and eQSL forever. */}
+                <span
+                  className="log-cell mono"
+                  title={q.timeKnown === false ? t('logbook.row.time.dateOnly') : ''}
+                >
+                  {q.timeKnown === false ? '—' : utcTime(q.whenUnix)}
+                </span>
                 <span
                   className="log-cell mono log-park"
                   title={
@@ -2023,8 +2044,8 @@ export function Logbook({
                 {moreColumns && (
                   <>
                     {/* #329: the contact's end time. The cell shows the time of day only —
-                        the date is already in the Time column two cells back — so the tooltip
-                        carries the full UTC instant for a contact that ran past midnight. */}
+                        the date is already in the Date column — so the tooltip carries the
+                        full UTC instant for a contact that ran past midnight. */}
                     <span className="log-cell mono" title={q.timeOffUnix != null ? fmtUtc(q.timeOffUnix) : ''}>
                       {q.timeOffUnix != null ? utcTime(q.timeOffUnix) : '—'}
                     </span>

@@ -232,7 +232,9 @@ describe('the Logbook row-action cluster fits its grid track', () => {
       'the compact template must have one track per rendered cell',
     ).toBe(cells)
 
-    // …and the narrow one, which hides six columns. A template SHORTER than the cell count
+    // …and the narrow one, which hides seven columns (six until #239 split Date from Time —
+    // the count is computed below, so only this sentence had to move). A template SHORTER
+    // than the cell count
     // auto-places the tail cell onto a second GRID ROW — the action cluster rendered beneath
     // the callsign instead of beside it. That is what shipped from 2026-08-23, when the Notes
     // column landed and was added to neither the hide list nor this template.
