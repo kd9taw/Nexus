@@ -978,7 +978,7 @@ jobs:
   #
   # NOTE: a green build proves the .deb COMPILES and PACKAGES. It does not prove the
   # app RENDERS. The webview smoke test (waterfall, map/globe, Settings) still has to
-  # run on real hardware before a base is called supported — see tasks/pi-trixie-plan.md.
+  # run on real hardware before a base is called supported.
   pi-deb:
     name: Raspberry Pi .deb (${{ matrix.base }})
     runs-on: ubuntu-24.04-arm
