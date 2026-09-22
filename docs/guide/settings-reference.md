@@ -1870,6 +1870,11 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 - **Theme** — Light or Dark. Light reads best outdoors in daylight. Either way,
   the top bar's **Field** chip boosts contrast and size on top of the theme you
   picked.
+- **Field mode** — Off or On. On gives maximum contrast and larger type in one
+  switch, on top of whichever theme you are using. It was built for reading the
+  screen in daylight, and it is also the one to reach for if the default is hard
+  on your eyes indoors. It is the same switch as the **Field** chip in the top
+  bar — flipping either one moves both.
 - **UI scale** — **Auto (fit)** scales the whole interface to the window so
   nothing is cut off, with **Max scale** cap chips so auto never overshoots on a
   big monitor. A cap this window can't reach is disabled and its tooltip says

@@ -160,6 +160,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-merge duplicating your log. If you merged a contest on 1.14.0 or earlier, those rows keep the
   band without the dial, and their phone contacts keep plain `SSB`. Repairing them means editing
   the rows; nothing in this release does it for you.
+- **The Phone and CW scope's frequency numbers grow with the UI scale too (#215).** 1.13.0 fixed
+  this on the FT8 waterfall and left the scope beside it alone, so on Phone and CW the DIAL plate
+  and the kHz figures along the bottom — the ones that tell you where a click will land — still
+  painted at the same size whatever you set Settings ▸ Appearance ▸ Workspace ▸ UI scale to, and
+  looked smaller the further you scaled up. They now follow the scale like the waterfall's do.
+- **Field mode is in Settings, beside Theme and UI scale (#215).** Maximum contrast and larger
+  type have been one click away since 1.1.0 — but only as a chip marked **Field** in the top bar,
+  named for operating outdoors, and Settings said nothing about it. An operator who went looking
+  for a high-contrast or large-text setting found the size half under UI scale and no contrast at
+  all, and searching Settings for "contrast" returned nothing. There is now a **Field mode** row in
+  Appearance ▸ Workspace, and the same words find it. It is the same switch as the chip, not a
+  second one: flipping either moves both.
 
 ### Corrections to 1.14.0
 

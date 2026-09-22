@@ -34,6 +34,7 @@ import {
   spanDb as rowSpanDb,
   axisAbsoluteHz,
   axisTicks,
+  overlayTextScale,
 } from '../waterfall'
 import { boxEdges, boxWidthFor, clampBoxCenterHz, clickTuneTarget, dialFromBoxCenter } from '../tuneSnap'
 import type { ScopeTuneRequest } from '../useScopeTune'
@@ -462,6 +463,13 @@ export function PhoneScope({
     let cssW = 1
     let cssH = 1
     let scaleY = 1
+    // #215: this scope's overlay text — the DIAL plates and the frequency scale — follows the
+    // UI scale, exactly as the Operate waterfall's axis digits do. `scaleY` alone does NOT
+    // carry it: both it and the rect it divides are measured post-zoom on Chromium, so the
+    // zoom cancels and a `10 * scaleY` font stays the same physical size at every UI scale
+    // while the scope around it grows. `overlayTextScale` recovers the zoom from rect ÷ layout
+    // width, and reads 1 on an engine that already carries it (see its own doc comment).
+    let textScale = 1
     const measure = (entry?: ResizeObserverEntry): { dW: number; dH: number } => {
       const dpcb = entry?.devicePixelContentBoxSize?.[0]
       if (dpcb) return { dW: Math.max(1, dpcb.inlineSize), dH: Math.max(1, dpcb.blockSize) }
@@ -473,6 +481,7 @@ export function PhoneScope({
       if ((canvas.offsetParent === null || rect.width < 2 || rect.height < 2) && devW > 0) return
       cssW = Math.max(1, rect.width)
       cssH = Math.max(1, rect.height)
+      textScale = overlayTextScale(rect.width, canvas.offsetWidth)
       const { dW, dH } = measure(entry)
       scaleY = dH / cssH
       if (dW === devW && dH === devH) return
@@ -651,6 +660,10 @@ export function PhoneScope({
       }
 
       const Wd = devW
+      // #215: device px per unit of OVERLAY TEXT — the pixel ratio `scaleY` carries, times the
+      // UI scale it does not. Only the plates and the frequency scale use it; the rules, ticks
+      // and the trace stay on `scaleY`, because they are graphics the operator does not read.
+      const textPx = scaleY * textScale
       // 3D maximize hides the trace so the stacked-spectrum hill fills the whole panel.
       const dssOn = dssRef.current
       const traceHd = dssOn ? 0 : Math.max(1, Math.round(devH * TRACE_FRAC))
@@ -840,10 +853,10 @@ export function PhoneScope({
         ctx.lineTo(cx, devH)
         ctx.stroke()
         ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
-        ctx.font = `${Math.max(8, Math.round(10 * scaleY))}px system-ui, sans-serif`
+        ctx.font = `${Math.max(8, Math.round(10 * textPx))}px system-ui, sans-serif`
         ctx.textAlign = 'left'
         ctx.textBaseline = 'top'
-        ctx.fillText(DIAL_PLATE, cx + 3 * scaleY, 2 * scaleY)
+        ctx.fillText(DIAL_PLATE, cx + 3 * textPx, 2 * textPx)
       }
 
       // ---- Dial line (native RF panadapter): where the VFO actually is ----
@@ -887,10 +900,10 @@ export function PhoneScope({
           ctx.lineTo(dx, devH)
           ctx.stroke()
           ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
-          ctx.font = `${Math.max(8, Math.round(10 * scaleY))}px system-ui, sans-serif`
+          ctx.font = `${Math.max(8, Math.round(10 * textPx))}px system-ui, sans-serif`
           ctx.textAlign = 'left'
           ctx.textBaseline = 'top'
-          ctx.fillText(DIAL_PLATE, dx + 3 * scaleY, 2 * scaleY)
+          ctx.fillText(DIAL_PLATE, dx + 3 * textPx, 2 * textPx)
         }
       }
 
@@ -924,15 +937,15 @@ export function PhoneScope({
           ctx.lineTo(tx, devH)
           ctx.stroke()
           ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
-          ctx.font = `${Math.max(8, Math.round(9 * scaleY))}px system-ui, sans-serif`
+          ctx.font = `${Math.max(8, Math.round(9 * textPx))}px system-ui, sans-serif`
           ctx.textBaseline = 'bottom'
           // Three decimals of MHz is the kHz an operator dials. Nudged inward at the edges so a
           // label is never half-clipped — a truncated frequency is a misleading one.
           const label = (abs / 1e6).toFixed(3)
           const w = ctx.measureText(label).width
           ctx.textAlign = 'left'
-          const lx = Math.min(Wd - w - 2 * scaleY, Math.max(2 * scaleY, tx + 3 * scaleY))
-          ctx.fillText(label, lx, devH - 2 * scaleY)
+          const lx = Math.min(Wd - w - 2 * textPx, Math.max(2 * textPx, tx + 3 * textPx))
+          ctx.fillText(label, lx, devH - 2 * textPx)
         }
       }
 
