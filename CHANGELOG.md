@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and are there at the next start, and any key, or a whole set, can be put back to what it shipped
   with. (#316)
 
+- **Alerts can now be kept to the parts of the world you actually chase.** Settings ▸ Spots &
+  Alerts has continent boxes and a country search, and anything you pick there narrows the
+  new-one, new-grid and CQ alerts to those places — Europe only, or Europe plus Japan, or just
+  France. It is the same way of naming a place the Spots panel's "Spotted from" chips and Band
+  Activity's hide-by-continent already use, so there is one idea to learn rather than three. Two
+  things always get through regardless of what you have picked: a station calling YOU, and
+  anything on your watch list. Leave every box clear and nothing changes — that is how it ships,
+  and an operator who never opens the setting hears exactly what they heard before. (#174)
 - **A contact's full record is now one double-click away.** The logbook was a list of contacts
   with no way to open one, so everything the table has no column for was being logged and then
   hidden: the other station's name and QTH, their grid, the rig and antenna they gave you, your

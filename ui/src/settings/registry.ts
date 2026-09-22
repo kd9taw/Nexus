@@ -368,7 +368,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Alerts',
     tab: 'spots',
     keywords: ['alert', 'notify', 'my call', 'cq', 'new dxcc', 'new grid', 'rare', 'watch list',
-      'wanted', 'sound', 'lotw', 'confirm', 'confirmation', 'confirm tier'],
+      'wanted', 'sound', 'lotw', 'confirm', 'confirmation', 'confirm tier',
+      // The geographic alert scope (#174). An operator narrowing their alerts searches for the
+      // PLACE ("europe", "country"), never for the word the label uses.
+      'continent', 'europe', 'country', 'entity', 'dxcc', 'region', 'only'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------

@@ -19,8 +19,10 @@ import { getDxccEntityNames } from '../api'
 import { t } from '../i18n'
 
 /** A continent code's catalog name (#229). One literal `t()` per key, so the catalog guard can
- *  see every entry used; an unknown code shows as itself. */
-function continentName(code: string): string {
+ *  see every entry used; an unknown code shows as itself. Exported because the alert scope in
+ *  Settings (#174) names the same six places, and two spellings of "Oceania" in one product is
+ *  exactly the drift the shared vocabulary exists to prevent. */
+export function continentName(code: string): string {
   switch (code) {
     case 'NA':
       return t('hideCountries.continent.na')

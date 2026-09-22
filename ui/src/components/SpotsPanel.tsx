@@ -15,6 +15,7 @@ import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs'
+import { CONTINENT_CODES } from '../features/dxccGeo'
 import { compileTerm, searchTerms } from '../searchQuery'
 import { t } from '../i18n'
 
@@ -24,8 +25,9 @@ type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 // in the current spots.
 const COMMON_BANDS = ['160m', '80m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m']
 /** cty.dat's continent codes, in the order the spotted-from chips show them (#174). Tokens,
- * not prose: the same two letters in every language. */
-const CONTINENT_ORDER = ['NA', 'SA', 'EU', 'AF', 'AS', 'OC']
+ * not prose: the same two letters in every language. The shared list — Band Activity's
+ * hide-by-continent and the decode alert scope read the same one. */
+const CONTINENT_ORDER = CONTINENT_CODES
 
 /** Compact age string from seconds-since-received (−1 = unknown). A number and its unit
  * letter, with no prose in it at all — a measurement, so it is not a catalog string. */

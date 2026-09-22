@@ -2967,6 +2967,14 @@ export const EN = {
   'settings.alerts.rareGrid.aria': 'Rare grid alert bands',
   'settings.alerts.rareGrid.hint':
     'The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) — separate from plain grids so silencing HF chatter keeps the gems. Covers their GRID icon too.',
+  'settings.alerts.geo.label': 'Alert only about these continents',
+  'settings.alerts.geo.hint':
+    'Leave every box clear to be alerted about the whole world — that is the default and what this panel has always done. Tick one or more and the new-one, new-grid and CQ alerts are kept to those continents. Someone calling YOU, and anything on your watch list, always alerts wherever they are.',
+  'settings.alerts.geo.entities.label': 'Add a country',
+  'settings.alerts.geo.entities.placeholder': 'type to search, e.g. France',
+  'settings.alerts.geo.entities.aria': 'Matching DXCC entities',
+  'settings.alerts.geo.entities.hint':
+    'Countries added here alert as well as the continents ticked above, so you can follow all of Europe plus Japan. Untick one to drop it. Names are the DXCC list\u2019s own, so Germany appears as Fed. Rep. of Germany.',
   'settings.alerts.watchlist.label': 'Watch list',
 
   // ── POTA / SOTA (the hunter board and your own activation) ──────────────────────────
