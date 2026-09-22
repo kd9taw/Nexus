@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A contact's full record is now one double-click away.** The logbook was a list of contacts
+  with no way to open one, so everything the table has no column for was being logged and then
+  hidden: the other station's name and QTH, their grid, the rig and antenna they gave you, your
+  own power and mode, the comment you typed at the time, which services the contact has been
+  uploaded to and which have confirmed it, and any ADIF fields that arrived with an imported log
+  and had nowhere to go. Double-click a row and it is all there, laid out and read-only. Fields
+  the contact does not carry are left out rather than shown blank, so a sparse record reads as a
+  short card instead of a page of dashes. (#313)
+- **The RTTY decoded-text window now shows what you sent, alongside what you received.** Your own
+  keyed text went to the air and nowhere else, so the one window that is supposed to be the
+  record of the contact held only half of it — you could read their side of an exchange but not
+  your own, and there was no way to check what actually went out. Sent text now appears in the
+  same window as it keys, marked as yours so the two are never confused.
+
 ### Fixed
 
 - **The waterfall now says "TRANSMITTING — display held" during a tune, too.** On RTTY, PSK, JS8
@@ -29,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cleared it. It now waits for the radio's own answer, retries a refusal on the next pass, and if
   the radio keeps saying no it says so on the status line rather than leaving you to find out by
   being unheard. (#319)
+- **One missed reading no longer costs a radio its S-meter for the rest of the session.** A rig
+  that failed to answer a single poll — busy on a band change, or a momentary CAT hiccup — could
+  be written off as having no S-meter at all, and the reading stayed blank until Nexus was
+  restarted. A transient miss is now treated as what it is, and the meter comes back on the next
+  successful read.
 - **Nexus stops asking a transmitting radio for meters it has never answered.** While you are
   keyed, SWR, ALC, power and compression are read in turn several times a second. Every other
   reading Nexus takes gives up on a radio that will not answer it — these four did not, so on a
