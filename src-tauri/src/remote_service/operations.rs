@@ -1008,6 +1008,29 @@ impl Authority {
         }
         Ok(value)
     }
+    /// The serialized size and fingerprint a replay is matched on.
+    ///
+    /// ⚠️ **This list must be exactly the variants of the receipt-bearing arm in
+    /// [`Self::handle_version`], which is an OR-PATTERN over three of them.** Writing
+    /// `LogManual` alone here — as the first cut of this did — leaves `StationControl` and
+    /// `LogChange` with no fingerprint, and the arm they share then refuses them
+    /// `invalidRequest`. Twelve tests said so at once.
+    ///
+    /// `None` for every other request, deliberately: one whose arm keeps no receipt must not
+    /// acquire a lookup it never had. The size is returned rather than bounded here so the
+    /// 4 KiB refusal keeps its old position inside the arm.
+    fn replay_fingerprint(request: &Request) -> Result<Option<(usize, Vec<u8>)>, &'static str> {
+        if !matches!(
+            request,
+            Request::LogManual { .. } | Request::StationControl { .. } | Request::LogChange { .. }
+        ) {
+            return Ok(None);
+        }
+        let bytes = serde_json::to_vec(request).map_err(|_| "invalidRequest")?;
+        let fingerprint = digest(&SHA256, &bytes).as_ref().to_vec();
+        Ok(Some((bytes.len(), fingerprint)))
+    }
+
     pub fn handle(
         &self,
         connection: u64,
@@ -1055,6 +1078,73 @@ impl Authority {
         // request arm below repeats its own check, so nothing more is allowed.
         if !permitted(&c, version, device, request) {
             return Err("localPermissionRequired");
+        }
+        // ⚠️ A REPLAY IS ANSWERED BEFORE THE ENGINE LOCK, AND THAT ORDER IS THE WHOLE FIX.
+        //
+        // A duplicate request's entire answer is a stored [`Receipt`]: Core guards `receipts`
+        // and the Engine is not consulted for one. The `try_lock` below fails the WHOLE call
+        // whenever the station's own radio loop holds the Engine for a tick, so while this
+        // lookup sat 160 lines downstream a replay was refused `stationBusy` for a lock it
+        // never needed — and a browser could not retrieve the receipt for an operation that
+        // had ALREADY applied. It reached CI as a flaky `logManual` replay
+        // (`remote/test/native.test.mjs:782`), which is a race against a ~20 ms tick.
+        //
+        // That the refusal was never intended is recorded one screen up in [`Receipt::value`]:
+        // a replay whose write is still in flight answers `remoteBusy`, "so it waits rather
+        // than appending or posting twice". The design already has a considered answer for a
+        // contended replay, and `stationBusy` is not it.
+        //
+        // Only the fingerprint moves. The size bound and every other check stay where they
+        // were in the arm, so no error keeps a different precedence than before.
+        //
+        // ⚠️ WHAT BOTH EARLY ANSWERS BELOW DO SKIP is `self.context(&mut c, &engine)`, which
+        // runs after the lock and, when the station context has changed, clears the command
+        // windows and advances the revision. That is unavoidable — it needs the very Engine
+        // these two do not take — and it is safe, because it is housekeeping a READ cannot
+        // make unsafe: the next request that actually writes takes the lock, runs `context`
+        // itself, and refuses on `staleContext` / `windowExpired` exactly as before. Receipt
+        // ageing is unaffected; `reconcile` above already ran.
+        let replay = Self::replay_fingerprint(request)?;
+        if let Some((_, fingerprint)) = replay.as_ref() {
+            if let Some(r) = c.receipts.iter().find(|r| r.id == request.id()) {
+                return if r.session == session
+                    && r.device == device
+                    && r.fingerprint == *fingerprint
+                {
+                    r.value()
+                } else {
+                    Err("requestConflict")
+                };
+            }
+        }
+        // …and so is a `Result` request, for the identical reason: it is a pure receipt READ.
+        // It reads `c.receipts`, `c.grants`/`c.control_grants` and `device` — Core and nothing
+        // else — so the Engine lock below was refusing `stationBusy` to a browser that only
+        // wanted the answer already on file. No failure was ever attributed to this one; it is
+        // the same defect as the replay above, one arm over, and swept with it rather than
+        // left to be rediscovered with a smaller window.
+        if let Request::Result { operation_id, .. } = request {
+            if !identifier(operation_id)
+                || !(c.grants.contains(device) || version >= 2 && c.control_grants.contains(device))
+            {
+                return Err("localPermissionRequired");
+            }
+            return c
+                .receipts
+                .iter()
+                .find(|r| {
+                    r.id == *operation_id
+                        && r.device == device
+                        && (version >= 2 || r.control.is_none())
+                })
+                .ok_or("resultExpired")
+                .and_then(|receipt| {
+                    if version < receipt.result_version {
+                        Err("stationUnsupported")
+                    } else {
+                        receipt.value()
+                    }
+                });
         }
         // Capture context and execute under the same engine lock. There is no
         // queue whose work could migrate into a later radio/profile context.
@@ -1163,29 +1253,7 @@ impl Authority {
                 }
                 self.state(&mut c, session, device, now, control)
             }
-            Request::Result { operation_id, .. } => {
-                if !identifier(operation_id)
-                    || !(c.grants.contains(device)
-                        || version >= 2 && c.control_grants.contains(device))
-                {
-                    return Err("localPermissionRequired");
-                }
-                c.receipts
-                    .iter()
-                    .find(|r| {
-                        r.id == *operation_id
-                            && r.device == device
-                            && (version >= 2 || r.control.is_none())
-                    })
-                    .ok_or("resultExpired")
-                    .and_then(|receipt| {
-                        if version < receipt.result_version {
-                            Err("stationUnsupported")
-                        } else {
-                            receipt.value()
-                        }
-                    })
-            }
+            Request::Result { .. } => unreachable!("handled before the Engine lock"),
             Request::LogManual {
                 station_boot_id,
                 lease_id,
@@ -1214,20 +1282,15 @@ impl Authority {
                 if !permitted(&c, version, device, request) {
                     return Err("localPermissionRequired");
                 }
-                let bytes = serde_json::to_vec(request).map_err(|_| "invalidRequest")?;
-                if bytes.len() > 4096 {
+                // Both computed by `replay_fingerprint` before the Engine lock, where the
+                // receipt lookup that used to live here now runs — see the note there. The
+                // size bound stays in this position so its precedence is unchanged, and
+                // reaching this line means no receipt carried this request id.
+                let Some((size, fingerprint)) = replay else {
                     return Err("invalidRequest");
-                }
-                let fingerprint = digest(&SHA256, &bytes).as_ref().to_vec();
-                if let Some(r) = c.receipts.iter().find(|r| r.id == request.id()) {
-                    return if r.session == session
-                        && r.device == device
-                        && r.fingerprint == fingerprint
-                    {
-                        r.value()
-                    } else {
-                        Err("requestConflict")
-                    };
+                };
+                if size > 4096 {
+                    return Err("invalidRequest");
                 }
                 if c.boot.as_deref() != Some(station_boot_id.as_str()) {
                     return Err("staleStation");
