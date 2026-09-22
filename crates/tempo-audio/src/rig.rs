@@ -1029,25 +1029,29 @@ impl Rig {
     }
 
     /// Apply FM repeater settings: shift direction (`R`), offset magnitude (`O`), and
-    /// CTCSS tone (`C`). Best-effort — a rig that supports shift but not CTCSS (or has no
-    /// repeater support) rejects individual commands harmlessly, so each is sent and its
-    /// per-command error swallowed. No-op without a CAT control channel; `tone_hz` 0
-    /// disables CTCSS. Call after a successful FM `set_mode` (the connection is live).
-    pub fn set_fm_repeater(
-        &mut self,
-        shift: &str,
-        offset_hz: i64,
-        tone_hz: f32,
-    ) -> std::io::Result<()> {
+    /// CTCSS tone (`C`). Every command is still ATTEMPTED whatever the one before it
+    /// answered — a rig that supports shift but not CTCSS must still get its shift — but
+    /// the outcome is now REPORTED: `true` only when every command sent was accepted.
+    /// No-op (and `true`) without a CAT control channel; `tone_hz` 0 disables CTCSS.
+    /// Call after a successful FM `set_mode` (the connection is live).
+    ///
+    /// ⚠️ IT USED TO SWALLOW ALL THREE RESULTS AND ALWAYS ANSWER `Ok(())`, which is what
+    /// made #319 ("TONE stopped working on the VHF memories, a restart cleared it")
+    /// possible: the radio loop records the config as applied the instant it is sent, so a
+    /// tone the rig refused — or never answered — was booked as delivered and never sent
+    /// again for the rest of the session. A restart was the only thing that cleared the
+    /// belief, which is exactly what the reporter found. The caller needs to be able to
+    /// tell "the machine's settings are current" from "we said the words".
+    pub fn set_fm_repeater(&mut self, shift: &str, offset_hz: i64, tone_hz: f32) -> bool {
         if self.control.is_none() {
-            return Ok(());
+            return true;
         }
-        let _ = self.command(&rptr_shift_line(shift));
-        if offset_hz > 0 {
-            let _ = self.command(&rptr_offset_line(offset_hz));
-        }
-        let _ = self.command(&ctcss_line(tone_hz));
-        Ok(())
+        // Bound to locals FIRST so every one is sent: a `&&` chain would stop at the first
+        // refusal and leave the tone unsaid on a rig that merely has no repeater shift.
+        let shift_ok = self.cat(&rptr_shift_line(shift)).is_ok();
+        let offset_ok = offset_hz <= 0 || self.cat(&rptr_offset_line(offset_hz)).is_ok();
+        let tone_ok = self.cat(&ctcss_line(tone_hz)).is_ok();
+        shift_ok && offset_ok && tone_ok
     }
 
     /// Whether a CAT control channel is configured (so the freq/mode/CAT verbs are

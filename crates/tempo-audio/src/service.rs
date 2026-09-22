@@ -784,6 +784,10 @@ const AUDIO_REBUILD_DEBOUNCE_MS: f64 = 5_000.0;
 /// more than one blocking CAT read lands per loop tick. RX health polling is suspended while
 /// keyed, so this reuses that bus headroom.
 const TX_METER_POLL_MS: f64 = 150.0;
+/// The transmit meters the keyed poll round-robins over, in cycle order. Named once so the
+/// poll, the capability ladder and its reset cannot disagree about the order.
+const TX_METERS: [&str; 4] = ["SWR", "ALC", "RFPOWER_METER_WATTS", "COMP_METER"];
+const N_TX_METERS: usize = TX_METERS.len();
 /// The tune-time meter read's deadline. A tune carrier is fed one chunk per tick from a lead of
 /// [`TUNE_LEAD_MS`]; a meter read blocks the loop, so it may take at most this long before the
 /// ring would run dry. Past it the read is abandoned, never waited for.
@@ -922,6 +926,11 @@ const SMETER_FAST_POLL_MS: f64 = 2.0 * FREQ_POLL_MS;
 /// doesn't permanently kill read-back; small enough that a truly dead link still stops the loop
 /// blocking within ~2 s.
 const FREQ_MISS_LIMIT: u32 = 3;
+/// Consecutive refused FM repeater pushes before the loop gives up on that config (#319). The
+/// `smeter_misses` tolerance, and for the same reason: a rig that is merely busy — mid band
+/// change, a USB-serial spike — must not lose its CTCSS for the session, while a rig with no
+/// repeater support at all must not be sent three commands on every tick forever.
+const FM_PUSH_MISS_LIMIT: u8 = 3;
 /// First re-probe delay after the CAT breaker trips (ms). Short enough that a transient stall —
 /// a band-stack switch, a USB-serial spike, the reconnect churn a refused command causes — costs
 /// a couple of seconds of read-back, not the whole session.
@@ -2921,9 +2930,15 @@ struct RadioLoop {
     /// held until then, so at most one word sits in the rig's keyer buffer (Stop TX drops
     /// the rest). 0.0 = idle / ready to send now.
     cw_busy_until: f64,
-    /// Last FM repeater config (shift, offset Hz, CTCSS Hz) applied — so the shift/offset/
-    /// CTCSS commands only fire on change, not every loop. `None` when not in FM.
+    /// Last FM repeater config (shift, offset Hz, CTCSS Hz) the RIG ACCEPTED — so the
+    /// shift/offset/CTCSS commands only fire on change, not every loop. `None` when not
+    /// in FM. ⚠️ It is set from the rig's answer, never from the fact that the commands
+    /// were sent: see the #319 note at the push site.
     last_fm: Option<(String, i64, f32)>,
+    /// Consecutive refused pushes of the CURRENT repeater config. At
+    /// [`FM_PUSH_MISS_LIMIT`] the loop gives up on it (and says so) rather than re-sending
+    /// three commands every tick at a rig that has no repeater support to begin with.
+    fm_push_misses: u8,
     /// A partial Remote tune must not become an automatic native retry after
     /// a later dial poll changes band/mode/repeater policy. Reads and unkeying
     /// continue; a new explicit retune or confirmed Remote adoption clears it.
@@ -3382,6 +3397,29 @@ struct RadioLoop {
     level_supported: [Option<bool>; N_LEVELS],
     /// Consecutive get-miss counters per extended level — same tolerance as `smeter_misses`.
     level_misses: [u8; N_LEVELS],
+    /// Per-TRANSMIT-meter capability, indexed by [`TX_METERS`] — the `level_supported` ladder,
+    /// and the ONE poll in this loop that had never had it.
+    ///
+    /// ⚠️ WHY IT MATTERS MORE HERE THAN ANYWHERE ELSE (#331 — an operator's KN-990 freezes on
+    /// transmit and needs a power cycle). Every other read in this loop gives up on a rig that
+    /// will not answer: the S-meter after three misses, each func, each extended level. The
+    /// transmit meters did not. They round-robin every [`TX_METER_POLL_MS`] for as long as the
+    /// radio is keyed, and an over's read carries NO deadline (only a tune's does), so on a rig
+    /// whose backend refuses `SWR`/`ALC`/`COMP_METER` Nexus was issuing an unanswerable CAT read
+    /// into a TRANSMITTING radio several times a second, for the whole over, every over, for
+    /// the life of the session. That is the CAT traffic the report describes, and no rig should
+    /// have to survive it. Three strikes per meter and we stop asking; the heavy RX poll re-arms
+    /// it on the funcs' doubling backoff, so a meter lost to one busy over comes back.
+    ///
+    /// It needs no operator setting and takes nothing away: a meter that is never answered has
+    /// no reading to lose.
+    tx_meter_supported: [Option<bool>; N_TX_METERS],
+    /// Consecutive miss counters per transmit meter — same tolerance as `smeter_misses`.
+    tx_meter_misses: [u8; N_TX_METERS],
+    /// Earliest `rig_poll_ticks` at which a given-up transmit meter is re-probed, and the
+    /// backoff applied when it fails again — `func_retry_at`/`func_retry_backoff`'s pair.
+    tx_meter_retry_at: [u32; N_TX_METERS],
+    tx_meter_retry_backoff: [u32; N_TX_METERS],
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -3512,6 +3550,7 @@ impl RadioLoop {
             last_winkeyer_wpm: 0, // 0 = unset → the open pushes the speed
             cw_busy_until: 0.0,
             last_fm: None,
+            fm_push_misses: 0,
             remote_retune_uncertain: false,
             #[cfg(feature = "serial")]
             winkeyer: None,
@@ -3629,6 +3668,10 @@ impl RadioLoop {
             meter_feed: cfg.meter_feed.clone(),
             level_supported: [None; N_LEVELS],
             level_misses: [0; N_LEVELS],
+            tx_meter_supported: [None; N_TX_METERS],
+            tx_meter_misses: [0; N_TX_METERS],
+            tx_meter_retry_at: [0; N_TX_METERS],
+            tx_meter_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS],
 
             clock_offset_ms: 0,
             clock_jump: tempo_app::clocksync::ClockJumpDetector::new(),
@@ -4982,6 +5025,7 @@ impl RadioLoop {
         self.psk_stream = None;
         self.slot_tx_until_ms = 0.0; // the other radio's over is not ours to protect
         self.last_fm = None;
+        self.fm_push_misses = 0;
         self.manual_ptt_applied = false;
         self.last_rf_power = None;
         self.last_mic_gain = None;
@@ -5040,6 +5084,10 @@ impl RadioLoop {
         self.tuner_probed = false;
         self.level_supported = [None; N_LEVELS];
         self.level_misses = [0; N_LEVELS];
+        self.tx_meter_supported = [None; N_TX_METERS];
+        self.tx_meter_misses = [0; N_TX_METERS];
+        self.tx_meter_retry_at = [0; N_TX_METERS];
+        self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -6332,9 +6380,9 @@ impl RadioLoop {
 
             // FM repeater: once the mode policy is FM, push the shift / offset / CTCSS —
             // ON CHANGE only, so the CAT link isn't spammed every loop. Leaving FM clears
-            // the tracker so the next FM entry re-applies. Best-effort (a rig without
-            // repeater or CTCSS support no-ops the unsupported command). Same mid-TX guard
-            // as the retune above.
+            // the tracker so the next FM entry re-applies. All three commands are always
+            // attempted (a rig with shift but no CTCSS must still get its shift). Same
+            // mid-TX guard as the retune above.
             // Read-only launch: the FM repeater config (shift/offset/CTCSS) must not be
             // pushed before the first genuine assert — with last_fm starting None it
             // would otherwise fire on the first FM tick with no operator action, i.e. a
@@ -6346,18 +6394,52 @@ impl RadioLoop {
             // ever tells it to stop), so this was churn rather than a dropped shift; it is still
             // a CAT write into the seconds right after an over, and the tracker is supposed to
             // mean "the machine's settings are current".
+            //
+            // ⭐ #319 — "THE TONE STOPPED WORKING ON THE VHF MEMORIES; A RESTART CLEARED IT."
+            // The tracker used to be set from the fact that the commands were SENT, because
+            // `set_fm_repeater` swallowed all three results and could not answer anything
+            // else. So a push the rig refused (or never answered) was booked as applied and
+            // never repeated: the operator transmitted through the machine with no tone for
+            // the rest of the session, and an app restart — which is the only other thing
+            // that clears `last_fm` — was the cure, exactly as reported. Now the tracker
+            // latches on the rig's own answer, so a refused push is retried on the next tick.
+            // `FM_PUSH_MISS_LIMIT` is the stop: a rig with no repeater support at all refuses
+            // every time, and re-sending three commands per tick forever would be its own bug
+            // (the `smeter_misses` ladder, same tolerance). Reaching it SAYS so — silence
+            // over a repeater is the complaint, and the operator can act on a sentence.
             if can_retune
                 && !self.remote_retune_uncertain
                 && mode_is_fm_family(&md)
                 && self.rig_asserted
             {
                 if self.last_fm.as_ref() != Some(&fm) {
-                    let _ = rig.set_fm_repeater(&fm.0, fm.1, fm.2);
-                    self.last_fm = Some(fm);
-                    retuned = true;
+                    if rig.set_fm_repeater(&fm.0, fm.1, fm.2) {
+                        self.last_fm = Some(fm);
+                        self.fm_push_misses = 0;
+                        // Only a push the rig TOOK is evidence the link is alive: `retuned`
+                        // promotes `cat_ok` to Some(true) and zeroes `freq_misses` below.
+                        retuned = true;
+                    } else {
+                        self.fm_push_misses = self.fm_push_misses.saturating_add(1);
+                        if self.fm_push_misses >= FM_PUSH_MISS_LIMIT {
+                            // Give up on THIS config so the loop stops re-sending it, and
+                            // say why once — a dropped CTCSS is inaudible from here.
+                            self.last_fm = Some(fm);
+                            let ok = self.cat_ok;
+                            let mut eng = engine_lock(engine);
+                            eng.set_cat_status(
+                                ok,
+                                "the radio didn't accept the repeater shift/offset/tone — \
+                                 check the tone and duplex at the rig before you transmit \
+                                 through the machine"
+                                    .to_string(),
+                            );
+                        }
+                    }
                 }
             } else if !mode_is_fm_family(&md) {
                 self.last_fm = None;
+                self.fm_push_misses = 0;
             }
 
             // Live READ-BACK of the rig's actual dial, so a manual VFO knob turn (or another
@@ -6413,6 +6495,10 @@ impl RadioLoop {
                     self.tuner_probed = false;
                     self.level_supported = [None; N_LEVELS];
                     self.level_misses = [0; N_LEVELS];
+                    self.tx_meter_supported = [None; N_TX_METERS];
+                    self.tx_meter_misses = [0; N_TX_METERS];
+                    self.tx_meter_retry_at = [0; N_TX_METERS];
+                    self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
                     // The level give-ups are a rate limit, not a verdict: a write refused while
                     // the link was half-open must be retried once the link is proven alive.
                     self.rf_power_giveup = None;
@@ -6506,6 +6592,19 @@ impl RadioLoop {
                         self.func_misses[i] = 0;
                     }
                 }
+                // …and the TRANSMIT meters, on the same ladder. This is the release path for
+                // them: `rig_poll_ticks` only advances while RECEIVING, so a meter given up
+                // during one over is re-armed by the receive time before the next — a rig that
+                // was merely busy gets its SWR bar back, while one that has no such meter pays
+                // a progressively longer-spaced single read instead of one every 600 ms of TX.
+                for i in 0..N_TX_METERS {
+                    if self.tx_meter_supported[i] == Some(false)
+                        && self.rig_poll_ticks >= self.tx_meter_retry_at[i]
+                    {
+                        self.tx_meter_supported[i] = None;
+                        self.tx_meter_misses[i] = 0;
+                    }
+                }
                 let remote_read = self.remote_read(engine);
                 match rig.read_freq() {
                     Ok(hz) => {
@@ -6533,6 +6632,10 @@ impl RadioLoop {
                             self.tuner_probed = false;
                             self.level_supported = [None; N_LEVELS];
                             self.level_misses = [0; N_LEVELS];
+                            self.tx_meter_supported = [None; N_TX_METERS];
+                            self.tx_meter_misses = [0; N_TX_METERS];
+                            self.tx_meter_retry_at = [0; N_TX_METERS];
+                            self.tx_meter_retry_backoff = [FUNC_RETRY_BACKOFF_BASE; N_TX_METERS];
                             self.agc_giveup = None; // the refusal may have been the dead link
                             self.rf_power_giveup = None; // …and so may these three have been
                             self.mic_gain_giveup = None;
@@ -7863,14 +7966,22 @@ impl RadioLoop {
                             self.last_cat_wpm = wpm;
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
-                        let cw_err = rig.send_morse(&text).is_err();
+                                                    // QUOTE WHAT THE RIG SAID (#332). The sentence alone was
+                                                    // undiagnosable: an FT-710 operator reported this warning on a rig
+                                                    // whose model is NOT on the unproven list, and nobody could tell a
+                                                    // refusal ("RPRT -11", the backend has no send_morse) from a read
+                                                    // that timed out — two different faults with two different answers.
+                                                    // The serial keyline's sibling ten lines above has said the system's
+                                                    // own error verbatim since the FTX-1 report, for exactly this reason.
+                        let cw_err = rig.send_morse(&text).err();
                         {
                             let mut eng = engine_lock(engine);
-                            eng.set_cw_keyer_error(cw_err.then(|| {
-                                "Your rig didn't accept CAT CW keying (Hamlib send_morse). \
-                                 Use the WinKeyer keyer, or the Soundcard keyer (which needs \
-                                 Nexus's audio routed to the rig)."
-                                    .to_string()
+                            eng.set_cw_keyer_error(cw_err.map(|e| {
+                                format!(
+                                    "Your rig didn't accept CAT CW keying (Hamlib send_morse) \
+                                     — {e}. Use the WinKeyer keyer, or the Soundcard keyer \
+                                     (which needs Nexus's audio routed to the rig)."
+                                )
                             }));
                         }
                     }
@@ -9334,24 +9445,43 @@ impl RadioLoop {
                     // daemon answers both with calibrated watts. So `tx_po_w` is watts on both.
                     // Tune-time reads are deadline-bounded (see `meters_now`); an over's are not.
                     let deadline = self.tuning_keyed.then_some(TUNE_METER_DEADLINE_MS);
-                    let (swr, alc, po, comp) = match self.tx_meter_idx % 4 {
-                        0 => (rig.read_meter_f32_within("SWR", deadline), None, None, None),
-                        1 => (None, rig.read_meter_f32_within("ALC", deadline), None, None),
-                        2 => (
-                            None,
-                            None,
-                            rig.read_meter_f32_within("RFPOWER_METER_WATTS", deadline),
-                            None,
-                        ),
-                        _ => (
-                            None,
-                            None,
-                            None,
-                            rig.read_meter_f32_within("COMP_METER", deadline),
-                        ),
-                    };
+                    let i = self.tx_meter_idx % N_TX_METERS;
                     self.tx_meter_idx = self.tx_meter_idx.wrapping_add(1);
                     self.last_tx_meter_poll = now;
+                    // ⭐ #331. A meter this rig has been PROVEN not to answer is not asked
+                    // again — the ladder every other reader in this loop already has. The
+                    // cycle still turns (the index advanced above), so the remaining meters
+                    // keep their cadence and a rig that answers none of them is simply left
+                    // alone while it transmits. See `tx_meter_supported`.
+                    let mut reading = None;
+                    if self.tx_meter_supported[i] != Some(false) {
+                        reading = rig.read_meter_f32_within(TX_METERS[i], deadline);
+                        note_ext_read(
+                            &mut self.tx_meter_supported[i],
+                            &mut self.tx_meter_misses[i],
+                            reading.is_some(),
+                        );
+                        if self.tx_meter_supported[i] == Some(false) {
+                            // Just gave up: arm the re-probe and double the wait for the one
+                            // after (capped) — the funcs' ladder, verbatim.
+                            self.tx_meter_retry_at[i] = self
+                                .rig_poll_ticks
+                                .saturating_add(self.tx_meter_retry_backoff[i]);
+                            self.tx_meter_retry_backoff[i] = self.tx_meter_retry_backoff[i]
+                                .saturating_mul(2)
+                                .min(FUNC_RETRY_BACKOFF_MAX);
+                        } else if reading.is_some() {
+                            // A real answer clears the backoff: a meter that works now must
+                            // recover full responsiveness if it ever drops.
+                            self.tx_meter_retry_backoff[i] = FUNC_RETRY_BACKOFF_BASE;
+                        }
+                    }
+                    let (swr, alc, po, comp) = match i {
+                        0 => (reading, None, None, None),
+                        1 => (None, reading, None, None),
+                        2 => (None, None, reading, None),
+                        _ => (None, None, None, reading),
+                    };
                     // The same reading, asked a question as well as rendered. `None` (this
                     // cycle read another meter, or the rig reports no Po at all) can never
                     // raise anything — see [`TxRfWatch`].
@@ -14934,6 +15064,76 @@ mod tests {
             !rig.keyed,
             "the failed backend owns the word — it must not be re-keyed through the CAT \
              keyer, whose own error would then misdiagnose this: {err}"
+        );
+    }
+
+    /// ⭐ #332 — an FT-710 operator reports the CAT-CW warning on a rig that is NOT on the
+    /// unproven-keyer list, and nobody could say why.
+    ///
+    /// The warning they saw is not that list's. It is this one, raised the moment a real
+    /// `send_morse` fails — and it threw the rig's own answer away, so a backend that
+    /// REFUSED the verb ("RPRT -11", no CAT keyer at all) and a read that simply never came
+    /// back produced the identical sentence. Those are two different faults with two
+    /// different answers, and the serial keyline ten lines above has quoted the system's
+    /// error verbatim since the FTX-1 report for exactly this reason.
+    ///
+    /// Both directions, because the sentence appearing is only half the claim.
+    #[test]
+    fn a_refused_cat_cw_keying_quotes_what_the_rig_actually_said() {
+        let arm = |refuse: &'static [&'static str]| -> Option<String> {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                e.set_cw_keyer("cat", 600.0);
+                e.set_operating_mode("cw", false);
+                e.set_frequency(7.03, "40m", "CW");
+                e.send_cw("TEST");
+            }
+            let (addr, log) = mock_rigctld_refusing(7_030_000, refuse);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    100.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            // POSITIVE CONTROL: the word must actually have been keyed at the rig, or a
+            // missing error proves nothing and a present one is about something else.
+            assert!(
+                log.lock().unwrap().iter().any(|l| l.starts_with("b TEST")),
+                "control: the CAT keyer must have sent the word — {:?}",
+                log.lock().unwrap()
+            );
+            let said = engine.lock().unwrap().cw_keyer_error();
+            said
+        };
+
+        let err = arm(&["b"]).expect("a rig that refuses send_morse must SAY so");
+        assert!(
+            err.contains("RPRT -11"),
+            "the rig's own answer is the whole diagnosis — a refusal and a timeout must not \
+             read the same: {err}"
+        );
+        assert!(
+            err.contains("Soundcard keyer"),
+            "…and the operator still gets told what to do instead: {err}"
+        );
+        assert_eq!(
+            arm(&[]),
+            None,
+            "control: a rig that TAKES the word raises nothing — otherwise the assertion \
+             above would pass on a warning that is always on"
         );
     }
 
@@ -22043,6 +22243,172 @@ mod tests {
         );
     }
 
+    /// A rigctld that REFUSES the verbs named in `refuse` (matched on the first token) with
+    /// `RPRT -11` — Hamlib's "function not available", which is what a backend with no
+    /// repeater or CTCSS support really answers — and accepts everything else. `f` returns
+    /// `dial_hz`. Naming WHICH verb is refused is the point: a stub that refuses everything
+    /// cannot tell a dropped tone from a dead link, and the two need different answers.
+    fn mock_rigctld_refusing(
+        dial_hz: u64,
+        refuse: &'static [&'static str],
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let verb = l.split_whitespace().next().unwrap_or("").to_string();
+                    let dial = format!("{dial_hz}\n");
+                    let reply = if l == "f" {
+                        dial.as_str()
+                    } else if refuse.contains(&verb.as_str()) {
+                        "RPRT -11\n"
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// An engine parked on a 2 m machine with a minus shift and a 103.5 Hz tone — what the
+    /// Program section's machine pick calls (`repeater_tune`), in one step.
+    fn repeater_engine() -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.repeater_tune(145.310, "minus", 600_000, 103.5)
+                .expect("a 2 m machine well inside Extra privileges");
+        }
+        engine
+    }
+
+    /// Every `C 1035` (the 103.5 Hz CTCSS push) the radio was sent.
+    fn tone_pushes(log: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.as_str() == "C 1035")
+            .cloned()
+            .collect()
+    }
+
+    /// ⭐ #319 — *"TONE stopped working on the VHF/UHF memories; a full computer restart
+    /// cleared it."*
+    ///
+    /// The tracker that stops the loop re-sending the repeater config was written from the
+    /// fact that the three commands had been SENT, because `set_fm_repeater` swallowed all
+    /// three results and could not answer anything else. So one refusal — a rig busy on a
+    /// band change, a USB-serial spike, a NAK — booked the tone as applied, and the operator
+    /// transmitted through the machine with no tone for the rest of the session. A restart
+    /// is the ONLY other thing that clears `last_fm`, which is exactly the cure reported.
+    ///
+    /// Measured as the rigctld command log, because what was wrong is WHAT THE RADIO WAS
+    /// ASKED — a snapshot field cannot tell "we said it once" from "the rig has it".
+    #[test]
+    fn a_repeater_tone_the_rig_refuses_is_re_sent_rather_than_booked_as_applied() {
+        let engine = repeater_engine();
+        let (addr, log) = mock_rigctld_refusing(145_310_000, &["C"]);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        for i in 1..=10 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    f64::from(i) * 500.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        let sent = log.lock().unwrap().clone();
+        // POSITIVE CONTROL: the push must have HAPPENED at all, or counting its retries is
+        // counting nothing — a scene that never entered FM would pass "the tone was not
+        // latched" for the wrong reason.
+        assert!(
+            sent.iter().any(|l| l == "R -"),
+            "control: the repeater push must reach the radio at all — {sent:?}"
+        );
+        assert_eq!(
+            tone_pushes(&log).len(),
+            FM_PUSH_MISS_LIMIT as usize,
+            "a refused tone is re-sent (it was NOT applied), and the loop stops after \
+             FM_PUSH_MISS_LIMIT tries rather than re-sending it every tick forever — {sent:?}"
+        );
+        assert!(
+            engine
+                .lock()
+                .unwrap()
+                .snapshot()
+                .radio
+                .cat_detail
+                .contains("repeater shift/offset/tone"),
+            "and giving up SAYS so: a dropped CTCSS is inaudible from the operator's chair"
+        );
+    }
+
+    /// The other direction, and the one that keeps the fix above from becoming CAT churn:
+    /// a radio that TAKES the config is told once and never again. Without this the retry
+    /// would be indistinguishable from a loop that simply re-sends three commands a tick.
+    #[test]
+    fn a_repeater_config_the_rig_accepts_is_pushed_once_and_not_again() {
+        let engine = repeater_engine();
+        let (addr, log) = mock_rigctld_refusing(145_310_000, &[]);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        for i in 1..=10 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    f64::from(i) * 500.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            tone_pushes(&log).len(),
+            1,
+            "the rig accepted it, so the tracker holds and the tone is never re-sent — {:?}",
+            log.lock().unwrap()
+        );
+    }
+
     /// ⚠️ THE OTHER HALF OF A CLASS-WIDE CAT CHANGE: what a rig that does NOT know `PKTFM`
     /// gets. It must be plain FM — the mode the very same FM authority commanded while idle —
     /// and never a sideband.
@@ -22379,6 +22745,173 @@ mod tests {
             !meter_reads(&log, mark).is_empty(),
             "the poll resumes with a healthy lead"
         );
+    }
+
+    /// A rigctld for a radio keyed AT THE RIG (`t` answers 1, the mic-PTT case the transmit
+    /// meters exist to cover) whose CAT meters either answer or do not. `RPRT 0` to an
+    /// `l NAME` is what a rig with no such meter really sends, and it parses to no number —
+    /// which is exactly a miss. A keyed-at-the-rig scene rather than a tune-up because a tune
+    /// has its own wall-clock ceiling and its own lead gate; this one just stays keyed.
+    fn mock_rigctld_keyed(dial_hz: u64, meters_answer: bool) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let dial = format!("{dial_hz}\n");
+                    let reply = if l == "f" {
+                        dial.as_str()
+                    } else if l == "t" {
+                        "1\n" // the operator is holding the mic key
+                    } else if meters_answer && l.starts_with("l ") {
+                        "1.5\n"
+                    } else {
+                        "RPRT 0\n"
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// Every `l <METER>` the radio was asked for, in order.
+    fn tx_meter_reads(log: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| {
+                TX_METERS
+                    .iter()
+                    .any(|m| l.as_str() == format!("l {m}").as_str())
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// ⭐ #331 — *"my KN-990 freezes on transmit and needs a power cycle"*, filed as a request
+    /// for a switch to turn the meter polling off.
+    ///
+    /// The switch is not the fix, and the polling is not a preference: it is the ONE reader in
+    /// this loop that had no give-up. The S-meter stops after three misses, so does every func
+    /// and every extended level — but the transmit meters were re-asked every
+    /// `TX_METER_POLL_MS` for as long as the radio was keyed, whether or not the rig had ever
+    /// answered one, and an over's read carries no deadline. On a radio whose backend refuses
+    /// them that is an unanswerable CAT read into a TRANSMITTING rig several times a second,
+    /// for every over of the session.
+    ///
+    /// Measured as the command log, because what was wrong is WHAT THE RADIO WAS ASKED while
+    /// it was transmitting. NEEDS-BENCH for the radio itself: that this traffic is what wedges
+    /// a KN-990 is the reporter's observation, not something provable here.
+    #[test]
+    fn a_rig_that_answers_no_transmit_meter_stops_being_asked_for_it() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (addr, log) = mock_rigctld_keyed(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        // ~4 s of a held mic key: far more than the 12 reads (4 meters x 3 strikes) the
+        // ladder allows, so a loop that never gives up would be unmistakable here.
+        let mut t = 0.0;
+        for _ in 0..80 {
+            t += 50.0;
+            run(&mut state, &mut rig, &mut backend, t);
+        }
+        assert!(
+            state.rig_keyed,
+            "control: the radio must actually be keyed, or no meter is polled at all and \
+             every count below is zero for the wrong reason"
+        );
+        let reads = tx_meter_reads(&log);
+        assert!(
+            !reads.is_empty(),
+            "control: the meters must have been polled at all — {:?}",
+            log.lock().unwrap()
+        );
+        for m in TX_METERS {
+            let n = reads.iter().filter(|r| *r == &format!("l {m}")).count();
+            assert_eq!(
+                n, 3,
+                "{m} was never answered, so it is asked three times and then left alone — \
+                 it was asked {n} times. reads={reads:?}"
+            );
+        }
+        // …and the tail of the over is SILENT, which is the operator-visible half: the radio
+        // is transmitting and Nexus is not talking to it.
+        let mark = log.lock().unwrap().len();
+        for _ in 0..40 {
+            t += 50.0;
+            run(&mut state, &mut rig, &mut backend, t);
+        }
+        let late: Vec<String> = log.lock().unwrap()[mark..]
+            .iter()
+            .filter(|l| l.starts_with("l "))
+            .cloned()
+            .collect();
+        assert!(
+            late.is_empty(),
+            "two more seconds of the same over must cost the keyed radio no meter reads at \
+             all — {late:?}"
+        );
+    }
+
+    /// The other direction, and without it the test above proves only that something stopped:
+    /// a radio that DOES answer keeps its meters for the whole over. The give-up must be
+    /// caused by the silence, never by the clock.
+    #[test]
+    fn a_rig_that_answers_its_transmit_meters_keeps_being_polled() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (addr, log) = mock_rigctld_keyed(14_074_000, true);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, b: &mut MockBackend, t: f64| {
+            state
+                .step(&engine, b, rig, &sinks, t, &mut ra, &mut rr, &mut station)
+                .unwrap();
+        };
+        let mut t = 0.0;
+        for _ in 0..80 {
+            t += 50.0;
+            run(&mut state, &mut rig, &mut backend, t);
+        }
+        assert!(state.rig_keyed, "control: the radio must actually be keyed");
+        let reads = tx_meter_reads(&log);
+        for m in TX_METERS {
+            let n = reads.iter().filter(|r| *r == &format!("l {m}")).count();
+            assert!(
+                n > 3,
+                "{m} answers, so it must keep being read for the whole over — it was read \
+                 {n} times. reads={reads:?}"
+            );
+        }
     }
 
     /// The SECOND starvation source at the same site, and it is not a meter: the RF-power

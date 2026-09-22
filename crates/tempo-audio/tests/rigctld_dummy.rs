@@ -525,16 +525,19 @@ fn real_rprt_rejection_framing_parses_as_err() {
 
 #[test]
 fn fm_repeater_lines_are_real_hamlib_protocol_not_just_our_belief() {
-    // set_fm_repeater sends R/O/C best-effort and SWALLOWS per-command errors —
-    // so a wrong line format would never surface in production. Verify against
-    // the real daemon that each command actually lands: shift, offset, tone.
+    // set_fm_repeater sends R/O/C and reports whether the rig took them — a wrong line
+    // format would otherwise never surface in production. Verify against the real daemon
+    // that each command actually lands: shift, offset, tone.
     let bin = require_rigctld!();
     let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
     let mut d = DummyRig::spawn(&bin);
     let mut rig = connect_settled(&d.addr);
     rig.set_mode("FM", 0).expect("FM first (live connection)");
-    rig.set_fm_repeater("-", 600_000, 103.5)
-        .expect("repeater setup");
+    assert!(
+        rig.set_fm_repeater("-", 600_000, 103.5),
+        "a daemon that accepts all three must report the config APPLIED — the radio loop \
+         latches `last_fm` on this answer and stops re-sending (#319)"
+    );
     assert_eq!(d.observe("r"), "-", "shift direction reached the rig");
     assert_eq!(d.observe("o"), "600000", "offset magnitude reached the rig");
     assert_eq!(
