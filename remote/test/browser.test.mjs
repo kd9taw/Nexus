@@ -208,6 +208,43 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
     // measure the previous viewport on a busy renderer. Wait through the update
     // and its layout frame; all pixel/overflow assertions below stay unchanged.
     const settledLayout=()=>evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
+    // settledLayout proves a PAINT happened, not that the geometry stopped moving, and the Tempo
+    // feed keeps resizing after its first paint. A CI failure on 2026-09-22 traced .message-scroll
+    // shrinking clientHeight 260 -> 214 BETWEEN arming the trace and the wheel gesture; because
+    // scrollIntoView({block:'nearest'}) asks for the MINIMUM scroll, against a box whose height is
+    // still changing it resolved to 89 px of a 3710 px range and left the first bubble 3040 px
+    // above the viewport — which read as "unreachable" and was nothing of the kind. Wait for the
+    // scroller's own numbers to hold still across consecutive frames before measuring against them.
+    const settledScroller=(selector,timeout=4000)=>evaluate(`new Promise(resolve=>{
+      const deadline=performance.now()+${timeout};let last='',stable=0;
+      const tick=()=>{const e=document.querySelector(${JSON.stringify(selector)});
+        if(!e)return resolve(null);
+        const now=e.clientHeight+'x'+e.scrollHeight;
+        if(now===last){if(++stable>=3)return resolve(now)}else{stable=0;last=now}
+        if(performance.now()>deadline)return resolve(now);
+        requestAnimationFrame(tick)};
+      tick()})`)
+    // scrollIntoView can no-op against a settling box, so do not trust that it landed: drive the
+    // scroller the remaining distance and say whether the row actually arrived. Returns the final
+    // offset of the row from the container's top edge, which the trace then records.
+    const scrollRowToTop=(container,row,tries=6)=>evaluate(`(()=>{
+      const c=document.querySelector(${JSON.stringify(container)});if(!c)return null;
+      for(let i=0;i<${tries};i++){
+        const r=document.querySelector(${JSON.stringify(row)});if(!r)return null;
+        const delta=r.getBoundingClientRect().top-c.getBoundingClientRect().top;
+        if(Math.abs(delta)<=1)return 0;
+        const before=c.scrollTop;
+        // scrollTo({behavior:'instant'}), never scrollTop+=: .message-scroll carries CSS
+        // scroll-behavior: smooth, so a plain assignment starts an ANIMATION and reading
+        // scrollTop straight back returns the OLD value. The first draft of this helper did
+        // exactly that, saw before===after, concluded "clamped" and gave up on iteration one --
+        // reporting a -3997 px miss it had itself caused. usePinnedScroll's snapToBottom
+        // documents the same trap and is why it uses scrollTo.
+        c.scrollTo({top:before+delta,behavior:'instant'});
+        if(Math.abs(c.scrollTop-before)<0.5)return delta;
+      }
+      const r=document.querySelector(${JSON.stringify(row)});
+      return r?r.getBoundingClientRect().top-c.getBoundingClientRect().top:null})()`)
     const sessionDiagnostic=()=>evaluate(`(()=>{const e=document.querySelector('.app');let fiber=e?.[Object.keys(e).find(k=>k.startsWith('__reactFiber$'))],client;while(fiber){client=fiber.memoizedProps?.connection?.application;if(client)break;fiber=fiber.return}return {now:performance.now(),stale:e?.dataset.remoteStale,phase:client?.getPhase(),snapshotAge:client?.age('get_snapshot'),topics:client?.stream?.topics,waiting:client?.stream?.waiting?[...client.stream.waiting.keys()]:null,interests:client?.stream?.interests?[...client.stream.interests].map(([name,at])=>({name,age:performance.now()-at})):null,closures:window.__socketClosures,trace:window.__protocolTrace}})()`)
     async function until(expression,timeout=12000) { for(let i=0;i<Math.ceil(timeout/100);i++){ if(providerFailure)throw new Error('Simulated provider failed'); if(await evaluate(expression))return;await sleep(100) } if(operating)console.log('Operation diagnostic',expression,operationWire.slice(-30),loggedRequests.map(r=>({call:r.record.call,mode:r.record.mode})),await evaluate(`({status:document.querySelector('.remote-application-status')?.textContent,entries:[...document.querySelectorAll('.remote-log-entry')].map(e=>({text:e.textContent,error:e.dataset.operationError}))})`));throw new Error('Expected browser state did not appear') }
     const button=name=>`[...document.querySelectorAll('button')].find(e=>e.textContent===${JSON.stringify(name)})`
@@ -3261,6 +3298,7 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
             // it, so seven runs later it was still unattributed. usePinnedScroll's re-pin snaps
             // to scrollHeight, so a re-pin shows up here as an entry whose top jumps to h-c with
             // atBottom true; anything else that moves the feed shows up as one that does not.
+            await settledScroller('.message-scroll')
             await evaluate(`(()=>{const e=document.querySelector('.message-scroll');if(!e)return;
               window.__scrollTrace=[];
               window.__scrollMark=(why)=>window.__scrollTrace.push({why,t:Math.round(performance.now()),
@@ -3282,7 +3320,13 @@ for (const {applicationVersion,operating,sessionLayout,quickLayout,quickMode='ph
           // through 52 messages is not settled by a layout-only animation frame.
           await evaluate(scrolledIntoView(`document.querySelector('${target}')`,{block:'nearest',inline:'nearest',behavior:'instant'}))
           await settledLayout()
-          if(target.includes('first-child'))await evaluate(`window.__scrollMark?.('after-scrollIntoView')`)
+          if(target.includes('first-child')){
+            await evaluate(`window.__scrollMark?.('after-scrollIntoView')`)
+            await settledScroller('.message-scroll')
+            const landed=await scrollRowToTop('.message-scroll',target)
+            await settledLayout()
+            await evaluate(`window.__scrollMark?.('after-drive:'+${JSON.stringify(String(landed))})`)
+          }
           if(!await evaluate(`!!document.querySelector('${target}')`))console.log('SESSION MISSING',target,JSON.stringify({session:await sessionDiagnostic(),documents:await evaluate('window.__queryTrace'),availability:await evaluate('window.__availabilityTrace')}));
           const shape=await evaluate(`(()=>{const e=document.querySelector('${target}'),r=e.getBoundingClientRect();return {docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,top:r.top,bottom:r.bottom,width:r.width,height:r.height,reachable:e.contains(document.elementFromPoint(r.left+r.width/2,Math.min(r.bottom,innerHeight-1)-Math.min(r.height/2,20)))}})()`)
           const clipped=await evaluate(`(()=>{const result=[];for(let e=document.querySelector('${target}').parentElement;e;e=e.parentElement){const c=getComputedStyle(e);if(['hidden','clip'].includes(c.overflowY)&&e.scrollHeight>e.clientHeight+1)result.push({class:e.className,scroll:e.scrollHeight,client:e.clientHeight,y:c.overflowY})}return result})()`)
