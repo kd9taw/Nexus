@@ -30,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   things always get through regardless of what you have picked: a station calling YOU, and
   anything on your watch list. Leave every box clear and nothing changes — that is how it ships,
   and an operator who never opens the setting hears exactly what they heard before. (#174)
+- **The attenuator, the preamp and the transmit monitor are now controls you can reach.** Nexus
+  has been able to drive all three over CAT for a while, and there was nothing on screen to drive
+  them with — so an operator fighting a strong neighbour on a crowded band had to reach past the
+  app to the radio's own front panel for the one control that fixes it. The pad and the preamp
+  now sit at the head of the Phone cockpit's Receiver pane, where the signal meets them, and the
+  monitor level sits at the end of the Transmitter pane with the rest of what shapes your audio.
+  The pad and preamp are offered as the steps your radio actually has — one 20 dB pad on some
+  rigs, 6/12/18 dB on others — rather than a slider, because a radio will refuse or quietly round
+  a pad it does not hold. A radio that tells Nexus it has no attenuator says so in one line at
+  the foot of the pane; a radio that never published its list keeps the control on screen and
+  explains why it cannot be offered, instead of leaving you guessing whether the feature is
+  missing from your radio or from Nexus.
+- **VFO A and B can now be swapped from the tuning strip.** The A and B buttons were there and
+  the swap was not, so the one gesture split operating is built on — listen on B, work on A, put
+  them back — meant two presses and a lost frequency, or a trip to the radio. The new A⇄B button
+  sits with the pair it acts on; both VFOs keep their frequencies and simply change places.
 - **A contact's full record is now one double-click away.** The logbook was a list of contacts
   with no way to open one, so everything the table has no column for was being logged and then
   hidden: the other station's name and QTH, their grid, the rig and antenna they gave you, your

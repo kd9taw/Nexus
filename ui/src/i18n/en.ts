@@ -8661,12 +8661,38 @@ export const EN = {
     '{{plate}} needs CAT control — this radio is set up for VOX or serial PTT only. Add rig ' +
     'control in Settings \u25B8 Radio to get it.',
   'phone.unavail.notOnMode': '{{plate}} does not apply on {{mode}}.',
+  // ATT/PRE only. NOT "your radio does not have it" — the radio published no step list, and
+  // a pad it does not hold cannot be commanded, so the row says which unknown this is. The
+  // list is asked for once each time rig control connects, so reconnecting really is the
+  // remedy.
+  'phone.unavail.noSteps':
+    '{{plate}} is picked from the pads this radio publishes, and it has not published any — '
+    + 'Nexus will not command one it might not have. Reconnect rig control in Settings ▸ '
+    + 'Radio to ask again.',
   'phone.chain.noCat':
     'No rig control on this radio — the receiver and transmitter controls need CAT. ' +
     'Settings \u25B8 Radio.',
   'phone.chain.absent': 'Not on this radio: {{plates}}',
   'phone.chain.receiver.aria': 'Receiver chain — what you are hearing',
   'phone.chain.transmitter.aria': 'Transmitter chain — how your voice goes out',
+  // ── THE FRONT-END PADS AND THE TX MONITOR (2026-09-22) ──────────────────────────────
+  // ⚠️ ATT is decibels and PRE IS NOT. On an Icom the preamp labels are `1`/`2` (P.AMP1 /
+  // P.AMP2) — names for a position, not a gain — so no wording here may put a unit on one.
+  // The chip faces are the rig's own numbers and are printed from the code.
+  'phone.chain.off': 'Off',
+  'phone.chain.att.aria': 'Attenuator',
+  'phone.chain.att.title':
+    'The input pad, in decibels — the front-end attenuator this radio publishes. Use it '
+    + 'when a strong neighbour is pumping the AGC; it costs you weak signals too.',
+  'phone.chain.pre.aria': 'Preamp',
+  'phone.chain.pre.title':
+    'The receive preamp, by the name this radio gives each position — on some rigs they '
+    + 'are numbered rather than decibels. Worth it on a quiet band; on a noisy one it lifts '
+    + 'the noise with the signal.',
+  'phone.chain.mon.aria': 'Monitor level',
+  'phone.chain.mon.title':
+    'How loud the radio plays your own voice back while you are transmitting. It is heard '
+    + 'only on transmit, so turning it down can never silence a decoder — that is AF.',
   'phone.pane.log.title': 'Log',
 
   // ── Phone ▸ THE TRANSMIT CONTRACT (the dock's top line) ─────────────────────────────
@@ -9593,6 +9619,12 @@ export const EN = {
   'cockpit.tuning.step.label': 'Tuning step',
   'cockpit.tuning.vfo.aria': 'Active VFO',
   'cockpit.tuning.vfo.title': 'Use VFO {{vfo}}',
+  // SWAP, not copy. A⇄B exchanges the two dials; A=B would overwrite one of them and is a
+  // separate rig verb, deliberately not offered here.
+  'cockpit.tuning.vfo.swap.aria': 'Swap VFO A and B',
+  'cockpit.tuning.vfo.swap.title':
+    'Swap VFO A and B — each dial keeps its frequency and they change places, so the one '
+    + 'you were listening on is a press away.',
   'cockpit.tuning.rit.title': 'RIT clarifier — click to clear',
   'cockpit.tuning.rit.down.aria': 'RIT down',
   'cockpit.tuning.rit.up.aria': 'RIT up',

@@ -192,10 +192,16 @@ describe('#95 — and the dead controls it must not HIDE SILENTLY', () => {
   it('control: the foot line is EMPTY on a rig that reports everything', () => {
     // Without this, every assertion above passes against a cockpit that lists every control
     // as missing on every radio — the collapse turned into a blanket apology.
+    // ⚠️ "REPORTS EVERYTHING" IS A MOVING LIST, and it moved on 2026-09-22: ATT, PRE and MON
+    // went from `built: false` (drawn nowhere, named nowhere) to real controls, so a fixture
+    // that omits them is a rig with no transmit monitor — and the TX foot line said so,
+    // correctly. The pads need BOTH halves: `attStepsDb` is what the radio published and is
+    // what decides whether the control exists at all, `attDb` is which pad is in.
     mount({
       notch: true, manualNotch: true, notchFreqHz: 1500, comp: true, compLevel: 0.4,
       nb: true, nr: true, nrLevel: 0.3, agc: 'fast', rfGain: 1, afGain: 0.5, squelch: 0,
       micGain: 0.5, vox: false,
+      attStepsDb: [6, 12, 18], attDb: 0, preampStepsDb: [1, 2], preampDb: 0, monitorGain: 0.4,
     })
     expect(footLine(), 'a fully-reporting rig was told it is missing something').toBe('')
     expect(txFootLine()).toBe('')
