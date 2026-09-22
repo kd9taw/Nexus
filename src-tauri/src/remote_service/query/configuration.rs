@@ -26,8 +26,18 @@ pub(super) fn build(kind: Collection, engine: &crate::SharedEngine) -> Result<Va
     }
 }
 
-// Explicit borrowed fields make a future native credential field private by
-// default. The schema-coverage test requires reviewing every new field.
+// Explicit borrowed fields make a future native field — credential or not — private by DEFAULT:
+// these serializers are hand-written `serialize_field` lists, so a field nobody wrote a line for
+// has no way onto the wire. That is the whole guarantee, and it is structural rather than
+// remembered.
+//
+// ⭐ 2026-09-21, operator: "invert the default to withheld." The schema-coverage test used to
+// demand COMPLETENESS — every native field named on an exposed or a withheld list, CI red until
+// somebody classified it. That was a per-field tax on work that had nothing to do with Remote,
+// and it is gone. What the test asserts now is the thing that matters: the document carries
+// EXACTLY the exposed list and nothing else. An unclassified field is simply not sent, so the
+// failure direction is a field you wanted visible being invisible — never a field you forgot
+// leaking.
 struct SettingsView<'a>(&'a Settings);
 struct RadioView<'a>(&'a RadioProfile);
 
@@ -315,6 +325,23 @@ pub(super) const SETTINGS_KEYS: &[&str] = &[
     "wsjtxUdpAddr",
     "yaesuRfScope",
 ];
+/// Settings this station DECLARES it is holding back, published on the wire beside the document
+/// so a browser can refuse one that contradicts it (`ui/src/remote-web/configuration.ts`: a key
+/// declared withheld and then sent is a station contradicting itself, and is refused).
+///
+/// ⚠️ **DECLARED, NOT EXHAUSTIVE — and that changed on 2026-09-21.** While the schema-coverage
+/// test demanded completeness, this list happened to be every native field the document did not
+/// carry. Now that an unclassified field is withheld by default without being listed, it is no
+/// longer a full account of what stays home: it is the set somebody deliberately decided to
+/// withhold. Nothing the browser relies on moved — its check is that the station declares at
+/// least every key THIS browser holds secret, and that nothing declared is also sent, and an
+/// unlisted field satisfies both by never being sent at all. Read it as "what we chose to keep",
+/// not "everything we keep".
+///
+/// It is deliberately NOT derived at runtime from "native keys minus emitted keys". Enumerating
+/// the native key names means serializing the whole `Settings` struct — every credential VALUE
+/// included — into a buffer on the Remote read path, to read nothing but its labels. A more
+/// complete array is not worth that, on this path of all paths.
 pub(super) const WITHHELD_KEYS: &[&str] = &[
     "lotwUsername",
     "lotwLastQsl",
@@ -342,14 +369,15 @@ pub(super) const WITHHELD_KEYS: &[&str] = &[
     "remoteAutostartOfferAnswered",
 ];
 /// The per-radio projection, under the same rule as `SETTINGS_KEYS`: a new `RadioProfile` field
-/// is PRIVATE by default, and the schema-coverage test refuses to go green until it is named on
-/// exactly one of these two lists.
+/// is PRIVATE by default — `RadioView` is a hand-written `serialize_field` list, so a field with
+/// no line cannot be sent. Since 2026-09-21 the test no longer demands that every field be named
+/// here or on `RADIO_WITHHELD_KEYS`; it asserts that each radio carries EXACTLY this list.
 ///
 /// Before this existed, `radios` sat inside `SETTINGS_KEYS` and so fell under the blanket
 /// `view[key] == expected[key]` equality - which asserted that `RadioView` reproduces the WHOLE
-/// serde serialization of `RadioProfile`. That is the inverse of the rule everywhere else here:
-/// adding a field to `Settings` fails the test until somebody classifies it, and withholding is a
-/// legal answer; adding one to `RadioProfile` failed the test until somebody EXPOSED it. Nothing
+/// serde serialization of `RadioProfile`. That was the inverse of the rule everywhere else here:
+/// adding a field to `Settings` failed the test until somebody classified it, and withholding was
+/// a legal answer; adding one to `RadioProfile` failed until somebody EXPOSED it. Nothing
 /// leaks today - all 39 fields are ids, model and port names, gains and band state - but
 /// `RadioProfile` is the struct that grows every time a per-radio capability is added, and the
 /// first per-radio credential would have arrived with CI pushing it onto the wire.
@@ -1166,6 +1194,38 @@ mod tests {
             .unwrap();
         }
     }
+    /// The privacy guard for the settings document: it carries EXACTLY the exposed list, every
+    /// other native field stays at the station, and the values that do go out are the operator's
+    /// own choices unaltered.
+    ///
+    /// ⭐ **FIVE ASSERTIONS, AND EACH WAS WATCHED TO RED ON ITS OWN.** An absence check cannot
+    /// tell a working filter from a serializer that emits nothing, and a red control only ever
+    /// validates the assertion it reached first — so each of these was proven to fire separately,
+    /// against the REAL serializer, on 2026-09-21. Do the same again if you change this test:
+    ///
+    /// 1. **`leaked` — the privacy assertion.** Add one line to `SettingsView`,
+    ///    `out.serialize_field("probeUnclassified", &self.0.cw_wpm)?;` →
+    ///    *"These keys reached a browser without being on SETTINGS_KEYS … `["probeUnclassified"]`"*.
+    ///    That is the whole guarantee: an unclassified native field cannot reach a browser, and
+    ///    if one ever did, this names it.
+    /// 2. **`absent` — the other direction, which is what stops the first from passing over an
+    ///    empty document.** Delete `out.serialize_field("mygrid", …)` →
+    ///    *"SETTINGS_KEYS names keys the document does not carry … `["mygrid"]`"*. The exposed
+    ///    keys are also checked BY VALUE below (`cwWpm == 27`, `ampFollowBand == true`, and the
+    ///    per-key equality against the native serialization).
+    /// 3. **The withholding anchor.** Make `unexposed` empty → *"every native field is exposed,
+    ///    so this document withholds nothing"*. Without it, 1 and 2 would both stay green over a
+    ///    station that had quietly exposed everything.
+    /// 4. **`leaked_radio` — the per-radio privacy assertion**, and the one that catches the
+    ///    first per-radio credential. Add `out.serialize_field("probeRadioSecret", …)` to
+    ///    `RadioView` → *"These reached a browser without being on RADIO_KEYS …
+    ///    `["probeRadioSecret"]`"*.
+    /// 5. **`absent_radio`.** Delete `out.serialize_field("name", …)` from `RadioView` →
+    ///    *"RADIO_KEYS names keys no radio carries … `["name"]`"*.
+    ///
+    /// A fourth assertion was written and then REMOVED: a per-key loop over the unexposed set
+    /// asserting each is absent. It can never fail on its own — any such key trips `leaked`
+    /// first — and an assertion that cannot fire reads like coverage without being any.
     #[test]
     fn explicit_settings_schema_preserves_choices_and_omits_private_fields_before_serialization() {
         let mut s = Settings {
@@ -1183,23 +1243,52 @@ mod tests {
         let expected: Value = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
         let result = settings(&s).unwrap();
         let view = result["settings"].as_object().unwrap();
-        let actual_keys: std::collections::BTreeSet<&str> = expected
+        let native_keys: std::collections::BTreeSet<&str> = expected
             .as_object()
             .unwrap()
             .keys()
             .map(String::as_str)
             .collect();
-        let classified: std::collections::BTreeSet<&str> = SETTINGS_KEYS
-            .iter()
-            .chain(WITHHELD_KEYS)
-            .copied()
-            .filter(|k| actual_keys.contains(k))
-            .collect();
-        assert_eq!(
-            actual_keys, classified,
-            "a new native setting needs an explicit privacy classification"
+        // ⭐ THE RULE, INVERTED (operator, 2026-09-21). This used to assert COMPLETENESS — every
+        // field of the native struct had to be named on `SETTINGS_KEYS` or `WITHHELD_KEYS`, and
+        // CI stayed red until somebody classified it. That obligation is gone; what replaces it
+        // is the assertion that was always the one that mattered.
+        //
+        // The emitted document must be EXACTLY the exposed list. Nothing else can reach a
+        // browser, whoever forgot whatever: an unclassified field is withheld by construction,
+        // because `SettingsView` is a hand-written list of `serialize_field` calls and a field
+        // with no line has no way out. The failure direction is the safe one — a field somebody
+        // wanted visible is merely invisible, instead of a field nobody classified leaking.
+        //
+        // Asserted as two NAMED differences rather than one set equality, because the equality's
+        // panic prints both 275-key sets and buries the one key that moved.
+        let emitted: std::collections::BTreeSet<&str> = view.keys().map(String::as_str).collect();
+        let exposed: std::collections::BTreeSet<&str> = SETTINGS_KEYS.iter().copied().collect();
+        let leaked: Vec<&str> = emitted.difference(&exposed).copied().collect();
+        assert!(
+            leaked.is_empty(),
+            "THE PRIVACY ASSERTION. These keys reached a browser without being on SETTINGS_KEYS, \
+             so nobody classified them: {leaked:?}"
         );
-        assert_eq!(view.len(), SETTINGS_KEYS.len());
+        let absent: Vec<&str> = exposed.difference(&emitted).copied().collect();
+        assert!(
+            absent.is_empty(),
+            "SETTINGS_KEYS names keys the document does not carry — a stale entry or a dropped \
+             serialize_field line: {absent:?}"
+        );
+        // …and the station must still be withholding SOMETHING. This anchor is the one check
+        // here with independent value: if a later change exposed every native field, `leaked`
+        // and `absent` would both stay green over a station that withholds nothing at all.
+        // (A per-key "unexposed field is absent" loop was written here and then removed — it
+        // could never fail on its own, because any such key trips `leaked` first. An assertion
+        // that cannot fire reads like coverage and is not.)
+        let unexposed: std::collections::BTreeSet<&str> =
+            native_keys.difference(&exposed).copied().collect();
+        assert!(
+            !unexposed.is_empty(),
+            "every native field is exposed, so this document withholds nothing — the guard \
+             above would stay green over a station with no privacy at all"
+        );
         for key in SETTINGS_KEYS {
             if *key == "radios" {
                 // Compared field-by-field below. Left in the blanket equality, this line asserted
@@ -1217,19 +1306,25 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(profile).unwrap()).unwrap();
         let expected_radio = expected_radio.as_object().unwrap();
         let actual_radio = view["radios"][0].as_object().unwrap();
-        let radio_keys: std::collections::BTreeSet<&str> =
-            expected_radio.keys().map(String::as_str).collect();
-        let radio_classified: std::collections::BTreeSet<&str> = RADIO_KEYS
-            .iter()
-            .chain(RADIO_WITHHELD_KEYS)
-            .copied()
-            .filter(|k| radio_keys.contains(k))
-            .collect();
-        assert_eq!(
-            radio_keys, radio_classified,
-            "a new per-radio setting needs an explicit privacy classification"
+        let emitted_radio: std::collections::BTreeSet<&str> =
+            actual_radio.keys().map(String::as_str).collect();
+        let exposed_radio: std::collections::BTreeSet<&str> = RADIO_KEYS.iter().copied().collect();
+        let leaked_radio: Vec<&str> = emitted_radio.difference(&exposed_radio).copied().collect();
+        assert!(
+            leaked_radio.is_empty(),
+            "THE PER-RADIO PRIVACY ASSERTION. These reached a browser without being on \
+             RADIO_KEYS: {leaked_radio:?}"
         );
-        assert_eq!(actual_radio.len(), RADIO_KEYS.len());
+        let absent_radio: Vec<&str> = exposed_radio.difference(&emitted_radio).copied().collect();
+        assert!(
+            absent_radio.is_empty(),
+            "RADIO_KEYS names keys no radio carries: {absent_radio:?}"
+        );
+        // ⚠️ NO withholding anchor on this one, and that is not an oversight: every
+        // `RadioProfile` field is exposed today (`RADIO_WITHHELD_KEYS` is empty by design — see
+        // its doc), so asserting otherwise would be a false statement. `leaked_radio` is what
+        // holds the guarantee here: an unexposed per-radio field that acquired a `RadioView`
+        // line shows up in it, which is exactly how the first per-radio credential gets caught.
         for key in RADIO_KEYS {
             assert_eq!(actual_radio[*key], expected_radio[*key], "radios[].{key}");
         }
