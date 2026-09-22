@@ -407,6 +407,19 @@ pub fn looks_like_call(s: &str) -> bool {
     is_valid_hashed(s) || is_compound(s) || is_callsign(s)
 }
 
+/// Can `s` occupy a CALLSIGN FIELD of a standard message? [`looks_like_call`], plus — when
+/// `leading` — the three tokens upstream lets stand in the first field instead of a call.
+///
+/// `DE`/`CQ`/`QRZ` are exempt there and nowhere else, exactly as `pack77_1` has it
+/// (`libtempo/vendor/wsjtx/lib/77bit/packjt77.f90:1178-1179`): a bare Tempo broadcast
+/// ("DE KD9TAW 73") must keep naming its sender, because the decode row's `from` and the
+/// cluster spot builder both read `Msg::sender()`. Restricting the exemption to the FIRST
+/// field is what keeps the #303 shape out — that one needs a real call in front and a
+/// non-call behind it ("KD9TAW DE EM73").
+fn is_call_field(s: &str, leading: bool) -> bool {
+    looks_like_call(s) || (leading && matches!(s, "DE" | "CQ" | "QRZ"))
+}
+
 impl Msg {
     /// The same message with any i3=4 HASHED callsign resolved to the plain call it stands for.
     ///
@@ -593,7 +606,23 @@ impl Msg {
                 grid: String::new(),
             };
         }
-        if t.len() == 3 {
+        // ⛔ BOTH CALLSIGN FIELDS, OR IT IS NOT A STANDARD MESSAGE (#303). The arms below
+        // validate the PAYLOAD token and used to take whatever the first two words were, so
+        // free text ending in a report/grid/signoff was typed as a message addressed to
+        // whoever the first word named: "KR4FQG AGN 73" became a 73 to KR4FQG from a station
+        // called "AGN". `directed_to_me` then bypassed the Rx-Frequency pane's ±50 Hz window
+        // (a JS8 directed frame leads with the destination callsign and rides the FT8
+        // waveform, so our FT8 decoder produces exactly this shape), and — the part that is
+        // not a display bug — the auto-sequencer does not re-check the sender either, so
+        // "KD9TAW DE EM73" left CallingCq and queued "<DE> KD9TAW -12" for the air.
+        //
+        // Upstream refuses the same way at the same two words: `pack77_1`
+        // (libtempo/vendor/wsjtx/lib/77bit/packjt77.f90:1175-1182) `chkcall`s w(1) and w(2)
+        // and returns unless both pass, exempting DE/CQ/QRZ in the first slot and a hashed
+        // `<...>` in either. `chkcall.f90:3-4` IS this predicate. WSJT-X never meets the bug
+        // because it never re-parses text — the 77-bit frame carries its own TYPE, and free
+        // text (i3=0) is a distinct type addressed to nobody.
+        if t.len() == 3 && is_call_field(t[0], true) && is_call_field(t[1], false) {
             let to = t[0].to_string();
             let de = t[1].to_string();
             let p = t[2];
@@ -627,7 +656,13 @@ impl Msg {
             }
         }
         // ARRL Field Day exchange: "<to> <de> [R] <class> <section>".
-        if t.len() == 4 || t.len() == 5 {
+        // Same two-callsign gate as the three-token arm above, and upstream's Field Day
+        // packer (packjt77.f90:983-986) has no first-slot exemption at all — a Field Day
+        // exchange is always call-to-call — so neither does this.
+        if (t.len() == 4 || t.len() == 5)
+            && is_call_field(t[0], false)
+            && is_call_field(t[1], false)
+        {
             let class_idx = if t.len() == 5 && t[2] == "R" {
                 Some(3)
             } else if t.len() == 4 {
@@ -656,11 +691,16 @@ impl Msg {
     /// construction (it rides the parse, never a substring scan), so a `DM73` grid or
     /// a callsign containing 73 never classifies. `RRR` is excluded on purpose: it
     /// rogers the report but promises a 73 still to come, so the frequency isn't
-    /// freeing yet. HONEST LIMIT: the parse's three-token Bye73 arm does not verify
-    /// the addressees are callsigns (inbox.rs documents the same trap), so free-text
-    /// signoffs like "HPE CUAGN 73" count — correct for "the frequency is freeing",
-    /// wrong for "identified station signed"; a consumer needing the latter gates on
-    /// looks_like_call itself. Drives the Band Activity CQ+73 filter chip.
+    /// freeing yet. Drives the Band Activity CQ+73 filter chip.
+    ///
+    /// ⚠️ THE OLD HONEST LIMIT IS GONE, and its loss was chosen (operator, #303). The
+    /// three-token arm used to match on the FINAL token alone, so free-text signoffs like
+    /// "HPE CUAGN 73" counted — right for "the frequency is freeing", wrong for "an
+    /// identified station signed". The arm now requires both callsign fields to be
+    /// callsigns, because the same missing check let free text be typed as a message
+    /// ADDRESSED to the reader and reach the auto-sequencer. Those free-text signoffs
+    /// therefore stop lighting the CQ+73 chip; a signoff between two real callsigns, which
+    /// is what the chip is for, is unaffected.
     pub fn is_signoff(&self) -> bool {
         matches!(self, Msg::Rr73 { .. } | Msg::Bye73 { .. })
     }
@@ -1086,16 +1126,123 @@ mod fidelity_tests {
         // three-token Bye73 arm either.
         assert!(!Msg::parse("K2DEF W9XYZ R73").is_signoff());
         assert!(!Msg::parse("TNX FER QSO 73").is_signoff());
-        // HONEST LIMIT, pinned deliberately: the parser's three-token arm matches on
-        // the FINAL token alone and does not require the first two to be callsigns
-        // (the trap inbox.rs:101-104 documents and defends against chunk-side).
-        // So three-token free text ending in the bare 73 token IS a Bye73/signoff:
-        // "HPE CUAGN 73" — and for this consumer that is the RIGHT call (a free-text
-        // 73 is a signoff; the frequency is about to open). Any future consumer that
-        // needs callsign-verified signoffs must gate on looks_like_call itself —
-        // is_signoff() answers "does this message end a QSO", not "who ended it".
-        assert!(Msg::parse("HPE CUAGN 73").is_signoff());
-        assert!(Msg::parse("TNX QSO 73").is_signoff());
+        // ⚠️ THIS PAIR IS INVERTED FROM WHAT IT USED TO ASSERT, and the inversion is the
+        // point of #303 rather than a test bent to fit. The arm used to match on the FINAL
+        // token alone, so three-token free text ending in a bare 73 WAS a signoff — the
+        // "honest limit" this block pinned, and the same missing check that let
+        // "KR4FQG AGN 73" be typed as a message addressed to KR4FQG and reach the
+        // auto-sequencer. Requiring both callsign fields to be callsigns (upstream
+        // `pack77_1`'s own rule) costs these two, and the operator took that cost
+        // deliberately: a free-text 73 no longer lights the CQ+73 chip.
+        assert!(!Msg::parse("HPE CUAGN 73").is_signoff());
+        assert!(!Msg::parse("TNX QSO 73").is_signoff());
+        // …and what the chip is actually for still works, which is why the cost is payable.
+        assert!(Msg::parse("K2DEF W9XYZ 73").is_signoff());
+    }
+
+    /// #303 — A STANDARD MESSAGE NEEDS TWO CALLSIGNS, NOT JUST A PAYLOAD TOKEN.
+    ///
+    /// The three-token arm validated only the LAST token. So free text whose first word
+    /// happened to be the reader's own callsign and whose last word was a report, a grid or
+    /// a signoff was typed as a structured message ADDRESSED TO THEM — with a sender that is
+    /// not a callsign at all. A JS8 directed frame leads with the destination callsign and
+    /// rides the FT8 waveform, so the FT8 decoder recovers exactly that shape (KR4FQG's
+    /// report: JS8 traffic in the FT8 Rx Frequency box, "even though it was a different
+    /// freq" — `directed_to_me` bypasses the pane's ±50 Hz window).
+    ///
+    /// It is not a display bug. `Msg::parse` feeds the FT auto-sequencer (`qso.rs`), which
+    /// does not re-check the sender either: while calling CQ, "KD9TAW DE EM73" left
+    /// CallingCq and queued "<DE> KD9TAW -12" for transmission — an over addressed to a
+    /// station that does not exist, and the CQ run abandoned.
+    ///
+    /// UPSTREAM DOES THIS, and at the same two words. `pack77_1`
+    /// (libtempo/vendor/wsjtx/lib/77bit/packjt77.f90:1175-1182) runs `chkcall` on w(1) AND
+    /// w(2) and REFUSES to pack a Type 1/2 standard message unless both pass, exempting only
+    /// DE/CQ/QRZ in the first slot and a hashed `<...>` in either. The ARRL Field Day packer
+    /// (983-986) does the same with no exemption at all, and `chkcall.f90:3-4` is this
+    /// predicate: "Check w to see if it could be a valid standard callsign or a valid
+    /// compound callsign." `looks_like_call` is our spelling of it.
+    ///
+    /// The rule was already proven HERE, in one consumer: `inbox.rs`'s `is_standard` gates on
+    /// `looks_like_call` over sender AND addressee for this exact reason ("A FREE-TEXT frame
+    /// can masquerade as a structured one"). This moves it to the parse, where every other
+    /// consumer gets it too.
+    #[test]
+    fn a_standard_message_needs_both_callsigns_to_be_callsigns() {
+        // THE REPORT. Three-token free text of the shape a JS8 directed frame produces.
+        // Each has a real callsign in the TO slot and a non-callsign in the FROM slot.
+        for text in [
+            "KR4FQG AGN 73",
+            "KR4FQG TNX 73",
+            "KR4FQG HI -07",
+            "KR4FQG DE EM73",
+            "KR4FQG SNR -12",
+            "KR4FQG OM RRR",
+        ] {
+            let m = Msg::parse(text);
+            assert!(
+                matches!(m, Msg::Other(_)),
+                "{text:?} is free text, not a message from a station called {:?}",
+                m.sender()
+            );
+            assert_eq!(m.addressee(), None, "{text:?} addresses nobody");
+        }
+
+        // CONTROL — real traffic is untouched, one per arm the gate now guards.
+        assert!(matches!(Msg::parse("KR4FQG W1ABC -07"), Msg::Report { .. }));
+        assert!(matches!(
+            Msg::parse("KR4FQG W1ABC R-07"),
+            Msg::RReport { .. }
+        ));
+        assert!(matches!(Msg::parse("KR4FQG W1ABC FN31"), Msg::Grid { .. }));
+        assert!(matches!(Msg::parse("KR4FQG W1ABC RR73"), Msg::Rr73 { .. }));
+        assert!(matches!(Msg::parse("KR4FQG W1ABC RRR"), Msg::Rrr { .. }));
+        assert!(matches!(Msg::parse("KR4FQG W1ABC 73"), Msg::Bye73 { .. }));
+        // …and a Letter-Digit-Digit DX call is a REAL roger (inbox.rs names this one).
+        assert!(Msg::parse("A79AA K2DEF 73").is_signoff());
+
+        // CONTROL — compound and i3=4 hashed calls are callsigns. `looks_like_call`, not
+        // `is_callsign`: a hashed/compound QSO frame must stay standard.
+        assert!(matches!(
+            Msg::parse("<W9XYZ> PJ4/K1ABC R-10"),
+            Msg::RReport { .. }
+        ));
+        assert!(matches!(
+            Msg::parse("PJ4/K1ABC <W9XYZ> -10"),
+            Msg::Report { .. }
+        ));
+
+        // CONTROL — the UNRESOLVED hash is a callsign field too, and this one is load-
+        // bearing on the air: a station answering several callers at once sends its call
+        // hashed, and the receiver that has not learned it yet decodes `<...>`. Upstream
+        // admits it by the same token shape (`index(w(1),'>').ge.5`), and `is_valid_hashed`
+        // spells `...` out. If it ever stopped, a live QSO would stall with the frames
+        // silently reclassified as free text.
+        assert!(matches!(Msg::parse("<...> KD9TAW -12"), Msg::Report { .. }));
+        assert!(matches!(Msg::parse("KD9TAW <...> RR73"), Msg::Rr73 { .. }));
+        // …but arbitrary brackets are not a hash, and must not become one.
+        assert!(matches!(Msg::parse("KD9TAW <HI> -12"), Msg::Other(_)));
+
+        // CONTROL — the upstream exemption, kept: DE/CQ/QRZ may lead. A Tempo bare
+        // broadcast ("DE <CALL> 73") still names its sender, which the decode row and the
+        // spot builder both read. (inbox.rs routes it to chat on its own filter regardless.)
+        assert_eq!(Msg::parse("DE KD9TAW 73").sender(), Some("KD9TAW"));
+        assert_eq!(Msg::parse("QRZ W1ABC FN31").sender(), Some("W1ABC"));
+        // …but the exemption is FIRST-SLOT ONLY, or the reported shape walks back in.
+        assert!(matches!(Msg::parse("KD9TAW DE EM73"), Msg::Other(_)));
+
+        // Field Day: the same gate, on the arm that has the same hole (upstream 983-986
+        // exempts nothing here, and a Field Day exchange is always call-to-call).
+        assert!(matches!(
+            Msg::parse("W9XYZ K2DEF 3A WI"),
+            Msg::FieldDay { .. }
+        ));
+        assert!(matches!(
+            Msg::parse("W9XYZ K2DEF R 3A WI"),
+            Msg::FieldDay { .. }
+        ));
+        assert!(matches!(Msg::parse("KR4FQG TNX 3A WI"), Msg::Other(_)));
+        assert!(matches!(Msg::parse("HPE OM R 3A WI"), Msg::Other(_)));
     }
 
     #[test]
