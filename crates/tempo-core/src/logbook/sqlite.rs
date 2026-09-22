@@ -45,6 +45,10 @@
 //! - **`credit_granted` / `credit_submitted` / the five `ota_*` columns / `contest_qid` were
 //!   absent from §v3.11 entirely**, and without them the round trip destroys award credit,
 //!   every POTA/SOTA/IOTA tag, and the merge identity.
+//! - **`qso_contest_adif` is absent from §v3.11 entirely**, and without it a Field Day or
+//!   QSO-party contact loses its section, class and state on every export after a restart —
+//!   for a QSO party totally, the merge leaving `state: None` so the contacted station's
+//!   state exists ONLY as the directed column. See the table for why it is not `qso_extra`.
 //! - **`id` is `NOT NULL`.** SQLite lets a non-INTEGER `PRIMARY KEY` hold NULLs.
 //!
 //! The report that accompanies this commit states each one in full.
@@ -219,6 +223,32 @@ CREATE TABLE IF NOT EXISTS contest_exchange (
   domain TEXT,                        -- always NULL from the general log, whose pairs carry none
   raw    TEXT NOT NULL,
   PRIMARY KEY (qso_id, side, ord)
+);
+
+-- The exchange's own DIRECTED standard columns ([`ContestFields::adif`]) — `ARRL_SECT` and
+-- `CLASS` for the section and class they sent, `MY_ARRL_SECT` for the one I sent, `STATE` for
+-- a QSO party. `contest::adif::directed_columns` is the ONLY producer, at merge time, which is
+-- why no fixture built by `parse_adif` can prove this table works: the parser never populates
+-- the field, by design.
+--
+-- ⚠️ **Its own table rather than `qso_extra`, and that is correctness, not tidiness.** Seven of
+-- the fifteen tags `directed_columns` can emit — `NAME`, `QTH`, `RST_RCVD`, `RST_SENT`,
+-- `STATE`, `STX`, `SRX` — are tags the PARSER MODELS into their own fields, so the passthrough
+-- is precisely where they do not belong. Putting them there would (1) risk a `PRIMARY KEY
+-- (qso_id, name)` collision with a name already in `extra`, which fails the whole transaction
+-- and LOSES THE CONTACT; (2) re-emit them last and `ORDER BY name`, instead of inside the
+-- contest block in the role order `directed_columns` chose; and (3) blind the ADIF writer's
+-- duplicate-`STATE` guard, which reads `contest.adif` and would then write the tag twice —
+-- the "undefined territory" LoTW/TQSL reject.
+--
+-- Keyed on `ord`, never on `tag`: `ord` is unique by construction, so a ruleset that declared
+-- one tag twice cannot violate the key, and no colliding row can destroy a QSO.
+CREATE TABLE IF NOT EXISTS qso_contest_adif (
+  qso_id TEXT NOT NULL REFERENCES qso(id) ON DELETE CASCADE,
+  ord    INTEGER NOT NULL,
+  tag    TEXT NOT NULL,
+  value  TEXT NOT NULL,
+  PRIMARY KEY (qso_id, ord)
 );
 
 CREATE INDEX IF NOT EXISTS qso_worked   ON qso(call_norm, band_norm, mode_norm);
@@ -545,9 +575,10 @@ impl LogDb {
         // the alternative to waiting is an immediate SQLITE_BUSY the caller has to retry by
         // hand. Bounded so a stuck writer surfaces as an error rather than a hang.
         conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
-        // ON, so `ON DELETE CASCADE` on the three child tables is real: deleting a QSO takes
-        // its passthrough, its upload stamps and its exchange with it. Off (SQLite's default)
-        // those clauses are decoration and a delete orphans every child row.
+        // ON, so `ON DELETE CASCADE` on the four child tables is real: deleting a QSO takes
+        // its passthrough, its upload stamps, its exchange and its directed contest columns
+        // with it. Off (SQLite's default) those clauses are decoration and a delete orphans
+        // every child row.
         conn.pragma_update(None, "foreign_keys", true)?;
         // ⚠️ The version is read and claimed BEFORE the rest of the schema is applied. A
         // database a LATER build wrote is refused, and refusing it has to mean touching
@@ -621,6 +652,9 @@ impl LogDb {
                 "INSERT INTO contest_exchange (qso_id, contest_id, side, ord, slot, domain, raw)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
+            let mut cadif = tx.prepare(
+                "INSERT INTO qso_contest_adif (qso_id, ord, tag, value) VALUES (?1, ?2, ?3, ?4)",
+            )?;
             for (rec, resolved) in rows {
                 let id = rec
                     .id
@@ -629,7 +663,7 @@ impl LogDb {
                     })?
                     .to_string();
                 qso.execute(params_from_iter(bind_qso(&id, rec, resolved)))?;
-                bind_children(&mut extra, &mut upload, &mut exch, &id, rec)?;
+                bind_children(&mut extra, &mut upload, &mut exch, &mut cadif, &id, rec)?;
             }
         }
         tx.commit()?;
@@ -642,10 +676,11 @@ impl LogDb {
     /// path that can CHANGE or REMOVE a row — [`LogDb::insert_all`] is the bulk load, and its
     /// plain `INSERT` is deliberately the one that fails on a duplicate id.
     ///
-    /// **An upsert replaces the row and all three of its child tables.** It has to: a record's
-    /// passthrough, stamps and exchange are lists, and a list is changed by being rewritten,
-    /// not by having a row updated. The three deletes are index probes that find nothing for a
-    /// row being inserted for the first time, which is why one path serves both cases.
+    /// **An upsert replaces the row and all four of its child tables.** It has to: a record's
+    /// passthrough, stamps, exchange and directed contest columns are lists, and a list is
+    /// changed by being rewritten, not by having a row updated. The four deletes are index
+    /// probes that find nothing for a row being inserted for the first time, which is why one
+    /// path serves both cases.
     pub fn apply(&mut self, b: Batch<'_>) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
@@ -665,6 +700,8 @@ impl LogDb {
                 let mut drop_extra = tx.prepare("DELETE FROM qso_extra WHERE qso_id = ?1")?;
                 let mut drop_upload = tx.prepare("DELETE FROM qso_upload WHERE qso_id = ?1")?;
                 let mut drop_exch = tx.prepare("DELETE FROM contest_exchange WHERE qso_id = ?1")?;
+                let mut drop_cadif =
+                    tx.prepare("DELETE FROM qso_contest_adif WHERE qso_id = ?1")?;
                 let mut extra =
                     tx.prepare("INSERT INTO qso_extra (qso_id, name, value) VALUES (?1, ?2, ?3)")?;
                 let mut upload = tx.prepare(
@@ -675,13 +712,18 @@ impl LogDb {
                     "INSERT INTO contest_exchange (qso_id, contest_id, side, ord, slot, domain, raw)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 )?;
+                let mut cadif = tx.prepare(
+                    "INSERT INTO qso_contest_adif (qso_id, ord, tag, value)
+                     VALUES (?1, ?2, ?3, ?4)",
+                )?;
                 for w in b.upsert {
                     let id = w.id()?.to_string();
                     qso.execute(params_from_iter(bind_qso(&id, &w.rec, w.resolution())))?;
                     drop_extra.execute([&id])?;
                     drop_upload.execute([&id])?;
                     drop_exch.execute([&id])?;
-                    bind_children(&mut extra, &mut upload, &mut exch, &id, &w.rec)?;
+                    drop_cadif.execute([&id])?;
+                    bind_children(&mut extra, &mut upload, &mut exch, &mut cadif, &id, &w.rec)?;
                 }
             }
             if let Some(m) = b.marks {
@@ -713,6 +755,7 @@ impl LogDb {
         let extra = self.load_extra()?;
         let mut upload = self.load_uploads()?;
         let mut exchange = self.load_exchange()?;
+        let mut directed = self.load_contest_adif()?;
 
         let sql = format!("SELECT {} FROM qso ORDER BY rowid", QSO_COLUMNS.join(", "));
         let mut stmt = self.conn.prepare(&sql)?;
@@ -730,6 +773,9 @@ impl LogDb {
             {
                 c.sent = sent;
                 c.rcvd = rcvd;
+            }
+            if let (Some(c), Some(adif)) = (rec.contest.as_deref_mut(), directed.remove(&id)) {
+                c.adif = adif;
             }
             // The same emptiness test `parse_contest` applies, for the same reason: a `Some`
             // here is a claim that this contact belonged to a contest, and an all-empty block
@@ -749,6 +795,24 @@ impl LogDb {
         let mut stmt = self
             .conn
             .prepare("SELECT qso_id, name, value FROM qso_extra ORDER BY qso_id, name")?;
+        let mut rows = stmt.query([])?;
+        let mut out: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            out.entry(row.get(0)?)
+                .or_default()
+                .push((row.get(1)?, row.get(2)?));
+        }
+        Ok(out)
+    }
+
+    /// The directed contest columns, `ORDER BY ord` — which is the ROLE order
+    /// `contest::adif::directed_columns` chose (everything I sent, then everything they
+    /// sent). Alphabetical, the way [`Self::load_extra`] reads, would reorder the contest
+    /// block of every export.
+    fn load_contest_adif(&self) -> Result<HashMap<String, Vec<(String, String)>>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT qso_id, tag, value FROM qso_contest_adif ORDER BY qso_id, ord")?;
         let mut rows = stmt.query([])?;
         let mut out: HashMap<String, Vec<(String, String)>> = HashMap::new();
         while let Some(row) = rows.next()? {
@@ -859,6 +923,7 @@ fn bind_children(
     extra: &mut rusqlite::Statement<'_>,
     upload: &mut rusqlite::Statement<'_>,
     exch: &mut rusqlite::Statement<'_>,
+    cadif: &mut rusqlite::Statement<'_>,
     id: &str,
     rec: &QsoRecord,
 ) -> Result<()> {
@@ -894,6 +959,12 @@ fn bind_children(
                     raw
                 ])?;
             }
+        }
+        // The DIRECTED standard columns, in the role order `directed_columns` chose — `ord`
+        // is what carries that order, since the tag cannot (the read side would otherwise
+        // have to sort, and alphabetical is not it).
+        for (ord, (tag, value)) in c.adif.iter().enumerate() {
+            cadif.execute(params![id, ord as i64, tag, value])?;
         }
     }
     Ok(())
@@ -1072,10 +1143,17 @@ fn record_from_row(row: &rusqlite::Row<'_>) -> Result<QsoRecord> {
         srx_string: text(61)?,
         sent: Vec::new(),
         rcvd: Vec::new(),
-        // Not stored, and not a gap: `ContestFields::adif` is DERIVED at export from the slots
-        // plus the spec, and it is already not repopulated when a record is read back out of
-        // `log.adi`. A record loaded from here is in exactly the state one loaded from the file
-        // is in.
+        // Filled by `all_records` from `qso_contest_adif`, not from a column here.
+        //
+        // ⚠️ This used to be left empty, on the claim that `ContestFields::adif` is "derived at
+        // export" and that a record loaded here "is in exactly the state one loaded from
+        // `log.adi` is in". Both halves were measured and are FALSE. `directed_columns` derives
+        // the vector at MERGE time, where the exchange spec is in hand, and nothing downstream
+        // can redo it; and the file round trip does not lose the values, it MOVES them — the
+        // tags are written into `log.adi` and come back in [`QsoRecord::state`] and
+        // [`QsoRecord::extra`], which is what that field's own doc comment describes. A merged
+        // row that never went through a file has them in neither place, so dropping them here
+        // was a real loss of the section, class and (for a QSO party) the state.
         adif: Vec::new(),
         qid: text(57)?.unwrap_or_default(),
     };
@@ -1144,6 +1222,9 @@ fn contest_is_empty(c: &ContestFields) -> bool {
         && c.qid.is_empty()
         && c.sent.is_empty()
         && c.rcvd.is_empty()
+        // A block carrying nothing but its directed columns is still a real block: without
+        // this the sweep reads those rows and then throws the whole thing away.
+        && c.adif.is_empty()
 }
 
 /// The credit list as the one string the ADIF writer emits. See [`split_credit`] for why the
@@ -2100,6 +2181,305 @@ mod tests {
                 count("contest_exchange")
             ),
             (0, 0, 0)
+        );
+    }
+
+    /// A contest row built by the MERGE, which is the only producer of
+    /// [`ContestFields::adif`] — the directed standard columns (`ARRL_SECT`, `CLASS`,
+    /// `MY_ARRL_SECT`, and a QSO party's `STATE`).
+    ///
+    /// ⭐ **Built with `merge_into_general`, never `parse_adif`.** Every other fixture in
+    /// this module comes from the parser, and the parser by design never populates
+    /// `contest.adif` (see the field's own doc comment) — so no record in any existing
+    /// corpus can carry one, and the large byte-identical round trip, the census and the
+    /// column-identity test are all structurally incapable of seeing it dropped.
+    fn merged_fd_row() -> QsoRecord {
+        use crate::contest::{merge_into_general, ContestSession};
+        use crate::fieldday::{FdEvent, FieldDayLog};
+
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        assert!(log.log_mode_at("K1ABC", "2A", "EMA", "CW", 0, 1_782_583_500));
+        let mut lb = Logbook::new();
+        assert_eq!(merge_into_general(&log, "a1b2c3d4", &mut lb).added(), 1);
+        (*lb.records()[0]).clone()
+    }
+
+    /// ⭐ The directed standard columns of a contest row survive the store.
+    ///
+    /// Without them a Field Day or QSO-party contact loses its section, class and state
+    /// from every ADIF export made after a restart — and for a QSO party the loss is
+    /// total, because `record_for` leaves `state: None` and the contacted station's state
+    /// exists ONLY as the directed column.
+    #[test]
+    fn a_merged_contest_row_keeps_its_directed_columns_through_the_store() {
+        let rec = merged_fd_row();
+
+        // ── The fixture floor. ──────────────────────────────────────────────────────
+        // Asserted on the record BEFORE it is stored, so a later refactor that stops the
+        // merge populating `adif` fails HERE rather than turning the round trip below
+        // green for the wrong reason.
+        let built: Vec<(&str, &str)> = rec
+            .contest
+            .as_deref()
+            .expect("a merged row has contest provenance")
+            .adif
+            .iter()
+            .map(|(t, v)| (t.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            built,
+            vec![
+                ("MY_ARRL_SECT", "WI"),
+                ("CLASS", "2A"),
+                ("ARRL_SECT", "EMA")
+            ],
+            "the fixture must actually carry directed columns, or it proves nothing"
+        );
+
+        // ── The round trip. ─────────────────────────────────────────────────────────
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert(&rec, Resolved::default()).unwrap();
+        let back = db.load_all().unwrap();
+        assert_eq!(back.len(), 1, "the contact itself must survive");
+        let adif = adif_record(&back[0]);
+        assert!(
+            adif.contains("<ARRL_SECT:3>EMA"),
+            "the section they sent is gone: {adif}"
+        );
+        assert!(
+            adif.contains("<CLASS:2>2A"),
+            "the class they sent is gone: {adif}"
+        );
+
+        // ── The module header's claim, stated directly on the FIELD. ────────────────
+        // Not "the export looks right" but "the value came back": the whole vector, in
+        // order, values included. An export comparison alone cannot see every loss —
+        // `contest_fields` SKIPS an empty value, so a directed column that arrived as
+        // `("CLASS", "")` would vanish from both exports and compare equal. This is the
+        // stronger statement, and the one "those rows back as a `QsoRecord`" means.
+        assert_eq!(
+            back[0].contest.as_deref().map(|c| c.adif.as_slice()),
+            rec.contest.as_deref().map(|c| c.adif.as_slice()),
+            "contest.adif must come back exactly as it went in, order included"
+        );
+        // And nothing else on the record moved to make room for it.
+        assert_eq!(back[0], rec, "the whole record round-trips unchanged");
+
+        // ── The census floor. ───────────────────────────────────────────────────────
+        // The assertions above read the EXPORT, which a future writer change could
+        // satisfy from somewhere else entirely. This one reads the STORE, so the table
+        // itself has to be carrying the rows.
+        let stored: i64 = db
+            .conn
+            .query_row(
+                "SELECT count(*) FROM qso_contest_adif
+                 WHERE tag IN ('ARRL_SECT','CLASS','MY_ARRL_SECT')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 3, "the directed columns must be IN the store");
+
+        // The fourth child table cascades like the other three.
+        // `deleting_a_qso_cascades_to_its_children` cannot cover this one: its fixture
+        // comes from `parse_adif`, so it can never hold a directed column.
+        db.conn.execute("DELETE FROM qso", []).unwrap();
+        let orphans: i64 = db
+            .conn
+            .query_row("SELECT count(*) FROM qso_contest_adif", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(orphans, 0, "the directed columns go with their contact");
+
+        // ── The store changes nothing. ──────────────────────────────────────────────
+        // The strongest form of the claim: a stored-and-reloaded record exports the same
+        // bytes as the record that was stored, field order included.
+        assert_eq!(
+            adif_record(&rec),
+            adif,
+            "a round trip must return the record it was given"
+        );
+    }
+
+    /// ⭐ Why the round trip is asserted on the FIELD and not only on the exported bytes.
+    ///
+    /// `contest_fields` omits a tag whose value is empty, so a directed column that arrived
+    /// as `("CLASS", "")` is invisible in `adif_record`: a record carrying it and a record
+    /// carrying nothing export the same bytes. An export comparison is therefore blind to
+    /// losing it, and only a comparison of `contest.adif` itself can say the store kept it.
+    /// This is the case that makes the field-level assertion in the test above load-bearing
+    /// rather than a restatement of the export one.
+    #[test]
+    fn an_empty_directed_value_is_invisible_in_the_export_and_still_round_trips() {
+        let mut rec = merged_fd_row();
+        rec.contest.as_deref_mut().expect("provenance").adif =
+            vec![("CLASS".to_string(), String::new())];
+
+        // The blindness, demonstrated rather than asserted: identical bytes either way.
+        let mut bare = rec.clone();
+        bare.contest.as_deref_mut().expect("provenance").adif = Vec::new();
+        assert_eq!(
+            adif_record(&rec),
+            adif_record(&bare),
+            "the writer omits an empty value, so the export cannot witness this column"
+        );
+
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert(&rec, Resolved::default()).unwrap();
+        let back = db.load_all().unwrap();
+        assert_eq!(
+            back[0].contest.as_deref().map(|c| c.adif.as_slice()),
+            Some(&[("CLASS".to_string(), String::new())][..]),
+            "the store must carry the value the export cannot show"
+        );
+        assert_eq!(back[0], rec, "and the record is unchanged");
+    }
+
+    /// ⚠️ A directed column whose tag is ALREADY in `extra` must not be able to destroy the
+    /// contact.
+    ///
+    /// This is why the directed columns get their own table. In `qso_extra` the name would
+    /// hit `PRIMARY KEY (qso_id, name)`, the INSERT would fail, and because the whole batch
+    /// is one transaction the QSO would be LOST — where `log.adi` merely writes the tag
+    /// twice. Here the two live in different tables, so the collision is not a collision at
+    /// all: both values survive, and the export is byte-for-byte what the unstored record
+    /// exports.
+    #[test]
+    fn a_directed_column_colliding_with_the_passthrough_cannot_lose_the_contact() {
+        let mut rec = merged_fd_row();
+        // A stale `ARRL_SECT` from some earlier import, sitting in the passthrough while the
+        // exchange carries its own.
+        rec.extra = vec![("ARRL_SECT".to_string(), "WMA".to_string())];
+
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert(&rec, Resolved::default()).unwrap();
+        let back = db.load_all().unwrap();
+        assert_eq!(back.len(), 1, "the contact must survive the collision");
+
+        assert_eq!(
+            back[0].extra,
+            vec![("ARRL_SECT".to_string(), "WMA".to_string())],
+            "the passthrough value is kept"
+        );
+        assert_eq!(
+            back[0]
+                .contest
+                .as_deref()
+                .expect("provenance")
+                .adif
+                .iter()
+                .find(|(t, _)| t == "ARRL_SECT")
+                .map(|(_, v)| v.as_str()),
+            Some("EMA"),
+            "and so is the exchange's own"
+        );
+        // Neither value is dropped, and the store did not change what the record exports:
+        // the writer emitting the tag twice is its own pre-existing behaviour, identical
+        // with and without the store, and not something the store may silently 'fix' by
+        // throwing one of the operator's two values away.
+        assert_eq!(adif_record(&rec), adif_record(&back[0]));
+    }
+
+    /// ⚠️ The ADIF writer's duplicate-`STATE` guard still fires after a store round trip.
+    ///
+    /// The guard reads `contest.adif` to decide whether the resolver's `r.state` has already
+    /// been written by the exchange (§2.1.1: the exchange wins, and it writes once). Had the
+    /// directed columns come back through `extra` instead, the guard would see an empty
+    /// `contest.adif`, write `r.state` as well, and hand TQSL two `<STATE>` fields.
+    #[test]
+    fn the_duplicate_state_guard_still_fires_on_a_stored_record() {
+        let mut rec = merged_fd_row();
+        // A QSO party's shape: the exchange carries the state, and the DXCC/callbook
+        // resolver has since filled in a DIFFERENT guess for the same station.
+        //
+        // ⭐ The two values must disagree, or this test cannot fail. With both "MA", a build
+        // that lost `contest.adif` would emit the resolver's "MA" from `r.state`, still write
+        // exactly one `<STATE>`, and pass — the assertion would be inert. Disagreeing values
+        // are what make the count AND the winner observable.
+        rec.contest
+            .as_deref_mut()
+            .expect("provenance")
+            .adif
+            .push(("STATE".to_string(), "MA".to_string()));
+        rec.state = Some("RI".to_string());
+
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert(&rec, Resolved::default()).unwrap();
+        let back = db.load_all().unwrap();
+        let adif = adif_record(&back[0]);
+
+        assert_eq!(
+            adif.matches("<STATE:").count(),
+            1,
+            "exactly one STATE, or TQSL gets the undefined territory: {adif}"
+        );
+        assert!(
+            adif.contains("<STATE:2>MA"),
+            "the EXCHANGE wins — what they told me on the air, not the resolver's guess: {adif}"
+        );
+        assert!(
+            !adif.contains("<STATE:2>RI"),
+            "the resolver's guess must not reach the export: {adif}"
+        );
+    }
+
+    /// ⚠️ The writer's upsert path REPLACES the directed columns rather than appending them.
+    ///
+    /// An edit to a contest row goes through [`LogDb::apply`], which rewrites each child
+    /// table after deleting it. Without that delete the second write re-inserts the same
+    /// `ord` values, hits `PRIMARY KEY (qso_id, ord)`, and takes the whole transaction — and
+    /// so the operator's edit — down with it.
+    #[test]
+    fn an_upsert_replaces_the_directed_columns_rather_than_colliding_with_them() {
+        let rec = Arc::new(merged_fd_row());
+        let mut db = LogDb::open_in_memory().unwrap();
+        let write = [RowWrite::new(Arc::clone(&rec))];
+        let batch = || Batch {
+            clear: false,
+            remove: &[],
+            upsert: &write,
+            marks: None,
+        };
+        db.apply(batch()).expect("first write");
+        db.apply(batch()).expect("the same row written again");
+
+        let rows: i64 = db
+            .conn
+            .query_row("SELECT count(*) FROM qso_contest_adif", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 3, "replaced, not accumulated");
+        assert_eq!(
+            adif_record(&db.load_all().unwrap()[0]),
+            adif_record(&rec),
+            "and the row still exports what it exported"
+        );
+    }
+
+    /// A contest block carrying NOTHING but its directed columns is still a contest block.
+    ///
+    /// [`contest_is_empty`] decides whether a loaded block is real or an artefact of every
+    /// column being NULL. It has to count `adif`, or the sweep's own rows are read and then
+    /// immediately thrown away.
+    #[test]
+    fn a_contest_block_of_only_directed_columns_survives_the_emptiness_test() {
+        let mut rec = merged_fd_row();
+        {
+            let c = rec.contest.as_deref_mut().expect("provenance");
+            *c = ContestFields {
+                adif: std::mem::take(&mut c.adif),
+                ..ContestFields::default()
+            };
+        }
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert(&rec, Resolved::default()).unwrap();
+        let back = db.load_all().unwrap();
+        assert_eq!(
+            back[0].contest.as_deref().map(|c| c.adif.len()),
+            Some(3),
+            "the block must not be discarded as empty"
         );
     }
 }

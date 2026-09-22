@@ -21818,9 +21818,52 @@ contact yourself."
         self.station.activation_qso_count()
     }
 
-    /// See [`StationCore::update_qso`].
+    /// See [`StationCore::update_qso`] — plus the propagation of a correction back into
+    /// the CONTEST log, which is this function's own job.
+    ///
+    /// ⭐ **The join has to live here and nowhere else.** The general log is on
+    /// [`StationCore`] and the contest log is inside [`Mode::FieldDay`]; nothing below
+    /// this function can see both, which is why fixing a busted callsign used to update
+    /// the log the operator can read and stop there. The Cabrillo and the contest ADIF
+    /// are written from `FieldDayLog`'s OWN rows, so the file that gets scored kept the
+    /// busted call — silently, with nothing on screen to say the two disagreed.
+    ///
+    /// The STORED record, not the incoming payload: `update_record` merges the fields the
+    /// edit form does not carry, the contest block among them, and it is the block's
+    /// `qid` that routes the correction.
+    ///
+    /// ⛔ **Three things stop this reaching a row it does not name**, and an edit that
+    /// trips any of them is an ordinary general-log edit with no contest effect:
+    /// a record with no contest block has an empty `qid`, which parses as nothing;
+    /// [`seq_from_qid`](tempo_core::contest::seq_from_qid) compares the WHOLE session id,
+    /// because seqs are per position and restart at 1 — so `1` names a row in every log
+    /// the operator has ever run, and last weekend's correction must not rewrite this
+    /// weekend's first contact; and `correct_row` refuses a seq no row here carries.
     pub fn update_qso(&mut self, index: usize, rec: QsoRecord) -> bool {
-        self.station.update_qso(index, rec)
+        if !self.station.update_qso(index, rec) {
+            return false;
+        }
+        let Some((qid, call, band)) = self.station.logbook.records().get(index).map(|r| {
+            (
+                r.contest
+                    .as_deref()
+                    .map_or(String::new(), |c| c.qid.clone()),
+                r.call.clone(),
+                r.band.clone(),
+            )
+        }) else {
+            return true;
+        };
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            if let Some(seq) = tempo_core::contest::seq_from_qid(&qid, &station.log.session.id) {
+                // Unconditional for a row this session owns: the band is a dupe-key
+                // component too, so an edit that left the call alone still has to be
+                // propagated, and a rebuild over a log that did not move is a no-op by
+                // construction (`FieldDayLog::rebuild_dupe_index`).
+                station.log.correct_row(seq, &call, &band);
+            }
+        }
+        true
     }
 
     /// See [`StationCore::mark_qsl_sent`]. `None` = the operator withdrawing the mark.
@@ -34133,6 +34176,116 @@ mod tests {
         let again = e.fd_merge_to_general().unwrap();
         assert_eq!((again.added(), again.already), (0, 2));
         assert_eq!(e.station.logbook.len(), 2, "the logbook did not grow");
+    }
+
+    /// ⭐ **A CORRECTION REACHES THE CABRILLO, NOT JUST THE LOG ON SCREEN.**
+    ///
+    /// Fixing a busted callsign went through [`Logbook::update_record`] and stopped
+    /// there. The Cabrillo and the contest ADIF are written from `FieldDayLog`'s OWN
+    /// rows, so the file the operator submits kept the busted call while the log they
+    /// can read showed the corrected one — silently, and in the file that gets scored.
+    ///
+    /// This is the seam test: the join lives here, because the general log is on
+    /// `StationCore` and the contest log is inside [`Mode::FieldDay`], and nothing below
+    /// this function can see both.
+    #[test]
+    fn correcting_a_contest_contact_reaches_the_cabrillo_and_the_contest_adif() {
+        let mut e = fd_session("W9XYZ");
+        assert_eq!(e.fd_merge_to_general().unwrap().added(), 2);
+
+        // Precondition, so a later change that stops the merge writing a qid fails HERE
+        // rather than turning the assertions below green for the wrong reason.
+        let at = e
+            .station
+            .logbook
+            .records()
+            .iter()
+            .position(|r| r.call == "K1ABC")
+            .expect("the merged contact is in the general log");
+        assert!(
+            e.station.logbook.records()[at]
+                .contest
+                .as_deref()
+                .is_some_and(|c| c.qid.ends_with(":1")),
+            "the merged row must carry the merge identity, or nothing can route a correction"
+        );
+
+        // The operator fixes a busted call in the Logbook's own edit form.
+        let mut fixed = QsoRecord::clone(&e.station.logbook.records()[at]);
+        fixed.call = "K1ABD".into();
+        assert!(e.update_qso(at, fixed), "the edit applies");
+
+        // The general log shows it — this half always worked.
+        assert_eq!(e.station.logbook.records()[at].call, "K1ABD");
+
+        // …and so does the file that gets scored.
+        let cbr = e.export_log("cabrillo").expect("a Field Day log exports");
+        assert!(
+            cbr.contains("K1ABD"),
+            "the Cabrillo kept the busted call:\n{cbr}"
+        );
+        assert!(
+            !cbr.contains("K1ABC"),
+            "the busted call is still in the submitted file:\n{cbr}"
+        );
+        // The contest ADIF is the same rows, so it cannot disagree with the Cabrillo.
+        let adi = e.export_log("adif").expect("a Field Day log exports");
+        assert!(adi.contains("K1ABD") && !adi.contains("K1ABC"), "{adi}");
+
+        // ⛔ AND THE CONTACT THAT WAS NOT EDITED IS UNTOUCHED. Without this the three
+        // assertions above would also pass in a build that simply rewrote every row.
+        assert!(
+            cbr.contains("W1AW"),
+            "the other contact was dropped:\n{cbr}"
+        );
+    }
+
+    /// ⛔ An edit to an ORDINARY contact must not reach the contest log at all, and an
+    /// edit to a contest row from a DIFFERENT session must not either.
+    ///
+    /// `seq_from_qid` compares the whole session id for exactly this reason: seqs are per
+    /// position and restart at 1, so `1` alone names a row in every log ever run. Without
+    /// the check, correcting a call in last weekend's contest would silently rewrite this
+    /// weekend's row 1 — a contact that was made, replaced by one that was not.
+    #[test]
+    fn an_edit_outside_this_contest_session_changes_no_contest_row() {
+        let mut e = fd_session("W9XYZ");
+        assert_eq!(e.fd_merge_to_general().unwrap().added(), 2);
+        let before = e.export_log("cabrillo").expect("exports");
+
+        // An ordinary, non-contest contact logged alongside the contest.
+        let mut plain = qrec("N0CAL", "20m");
+        plain.mode = "CW".into();
+        e.log_qso(plain);
+        let plain_at = e
+            .station
+            .logbook
+            .records()
+            .iter()
+            .position(|r| r.call == "N0CAL")
+            .expect("logged");
+        let mut edited = QsoRecord::clone(&e.station.logbook.records()[plain_at]);
+        edited.call = "N0CAM".into();
+        assert!(e.update_qso(plain_at, edited));
+
+        // A contest row whose qid names ANOTHER session, on the same seq as a real row here.
+        let at = e
+            .station
+            .logbook
+            .records()
+            .iter()
+            .position(|r| r.call == "K1ABC")
+            .expect("merged");
+        let mut foreign = QsoRecord::clone(&e.station.logbook.records()[at]);
+        foreign.call = "K9ZZZ".into();
+        foreign.contest.as_deref_mut().expect("provenance").qid = "CQ-WW-CW:IL:a1b2c3d4:1".into();
+        assert!(e.update_qso(at, foreign));
+
+        assert_eq!(
+            e.export_log("cabrillo").expect("exports"),
+            before,
+            "neither edit may touch this session's contest log"
+        );
     }
 
     /// ⭐ §3.1 — during a session, B4 means DUPE and it is bounded by the session.

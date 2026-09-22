@@ -493,6 +493,116 @@ impl FieldDayLog {
             .contains(&self.dupe_rule().key_of(call, band, mode, rx, tx))
     }
 
+    /// ⭐ **THE PER-RULESET SPLIT, and the one place it is decided.** Take a candidate
+    /// row's key into the dupe index and say how the row must be written: `Some(false)`
+    /// a fresh contact, `Some(true)` a duplicate that is logged and marked, `None` the
+    /// ruleset refuses it and nothing is written.
+    ///
+    /// A duplicate is either a row that scores zero or a contact that was never made,
+    /// and which one is the SPONSOR's answer — it rides on the ruleset's own
+    /// [`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes), where both
+    /// sponsors' sentences are quoted. A contest that cross-checks wants the row
+    /// (removing it hands the other operator a NIL); Field Day, which checks no logs at
+    /// all, keeps refusing it.
+    ///
+    /// Both write paths — [`log_exchange_at`](Self::log_exchange_at) and the journal's
+    /// `restore_row` — come through here, because two copies of this decision is how
+    /// the live log and the restored one come to disagree about the same contact.
+    fn admit(&mut self, key: Vec<String>) -> Option<bool> {
+        let dupe = self.worked.contains(&key);
+        if dupe && !self.dupe_rule().log_dupes {
+            return None;
+        }
+        self.worked.insert(key);
+        Some(dupe)
+    }
+
+    /// ⭐ **Rebuild the dupe index and re-derive every row's mark, in row order** — the
+    /// BATCH form of the rule [`admit`](Self::admit) applies one row at a time.
+    ///
+    /// ⚠️ **A correction cannot patch the index, it has to rebuild it**, for two
+    /// reasons that only became true together. The index is a set of keys with no way
+    /// back to the rows holding them, and under a reporting ruleset SEVERAL rows can
+    /// legitimately share one key — that is what a logged duplicate is — so removing
+    /// the corrected row's old key would un-dupe rows that are still duplicates.
+    /// And the mark is ORDER-derived, so correcting one row can make a LATER row stop
+    /// being a duplicate, or start being one; neither is reachable by looking at the
+    /// edited row alone.
+    ///
+    /// ⚠️ It must agree with [`admit`](Self::admit) exactly, being the same rule said
+    /// twice — so a rebuild of a log built by logging changes nothing, and there is a
+    /// test that says so. `log_dupes` does not appear here on purpose: refusing happens
+    /// when a row is offered, and every row already in the log was already admitted.
+    fn rebuild_dupe_index(&mut self) {
+        let rule = self.dupe_rule();
+        let mut worked: HashSet<Vec<String>> = HashSet::new();
+        for q in &mut self.qsos {
+            // `insert` is false when the key was already present — an earlier row has
+            // it, which is precisely what makes this row a duplicate.
+            q.dupe = !worked.insert(rule.key(q));
+        }
+        self.worked = worked;
+    }
+
+    /// ⭐ **Correct a contact already in the log** — a busted callsign or a wrong band,
+    /// the two corrections [`Logbook::update_record`](crate::logbook::Logbook::update_record)
+    /// names in its own doc. Returns false, having changed nothing, when `seq` names no
+    /// row here.
+    ///
+    /// ⚠️ **Why this exists at all:** the ADIF and the Cabrillo are written from THESE
+    /// rows. A correction that reached the general log and stopped there left the
+    /// submitted Cabrillo carrying the busted call while the log the operator can read
+    /// showed the corrected one — a divergence in the file that gets scored, with
+    /// nothing on screen to show for it.
+    ///
+    /// **`seq` is the identity, because a contest row has no qid.** The general log
+    /// names one of these rows by `APP_NEXUS_QID`, which is MINTED from the seq at
+    /// merge time; [`contest::merge::seq_from_qid`](crate::contest::seq_from_qid)
+    /// turns it back, and refuses a qid belonging to another session. A zero seq is
+    /// UNSTAMPED rather than "the first row" — the merge refuses those rows, so the
+    /// general log holds nothing that could address one, and it is refused here too.
+    ///
+    /// **Out of scope, deliberately, rather than half-done:** the exchange (`rx`/`tx`)
+    /// and the mode. The exchange is a typed field vector rather than the two strings
+    /// below, so accepting one means resolving it through the spec, and editing the
+    /// SENT side is also what would leave
+    /// [`constant_sent_warning`](Self::constant_sent_warning) describing rows that no
+    /// longer exist. The mode arrives from the general log as an ADIF name and would
+    /// need the ADIF→(class, submode) mapping that the journal restore already owns —
+    /// a second place for it is how two readings of one contact appear.
+    pub fn correct_row(&mut self, seq: u64, call: &str, band: &str) -> bool {
+        // A row is addressed by a STAMPED seq. 0 means the row never got one.
+        if seq == 0 {
+            return false;
+        }
+        let Some(row) = self.qsos.iter_mut().find(|q| q.seq == seq) else {
+            return false;
+        };
+        let call = call.trim();
+        let changed_call = !row.call.eq_ignore_ascii_case(call);
+        row.call = call.to_string();
+        row.band = band.trim().to_string();
+        if changed_call {
+            // ⚠️ **SCORING-GRADE, and the one place the "resolved once at log time"
+            // rule on those three fields does NOT apply.** That rule is about
+            // re-resolving a SHIPPED row against a country file that has since moved,
+            // which would rescore contacts already submitted. This is a different
+            // event: the callsign itself was wrong, so the entity, continent and prefix
+            // derived from it describe a station that was never worked. Left alone they
+            // would claim the busted call's country multiplier and its WPX prefix.
+            // `None` is a real answer here — a call the country file cannot place
+            // resolves to nothing, and must not keep the old station's.
+            let placed = crate::contest::resolve_call(call);
+            row.entity = placed.map(|p| p.entity.to_string());
+            row.continent = placed.map(|p| p.continent.to_string());
+            row.prefix = crate::contest::wpx_prefix(call);
+        }
+        // The call and the band are both dupe-key components, so the correction can
+        // move the mark on rows it did not touch. Rebuild rather than patch.
+        self.rebuild_dupe_index();
+        true
+    }
+
     /// Log a contact.
     ///
     /// ⭐ **The bool is "did this contact ENTER THE LOG", which is no longer the same
@@ -597,17 +707,11 @@ impl FieldDayLog {
         let mode = mode.to_ascii_uppercase();
         let band = self.band.clone();
         let key = self.dupe_rule().key_of(call, &band, &mode, &rx, &tx);
-        // ⭐ **THE PER-RULESET SPLIT.** A duplicate is either a row that scores zero or a
-        // contact that was never made, and which one is the SPONSOR's answer — it rides on
-        // the ruleset's own [`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes),
-        // where both sponsors' sentences are quoted. A contest that cross-checks wants the
-        // row (removing it hands the other operator a NIL); Field Day, which checks no
-        // logs at all, keeps refusing it.
-        let dupe = self.worked.contains(&key);
-        if dupe && !self.dupe_rule().log_dupes {
+        // The per-ruleset split lives in [`admit`](Self::admit) — one decision, shared
+        // with the journal restore, so the live log and the restored one cannot disagree.
+        let Some(dupe) = self.admit(key) else {
             return false;
-        }
-        self.worked.insert(key);
+        };
         // ⭐ FIRING SITE 1 of 3 (§6.3): the cheap one, at the moment the operator can
         // still fix it. O(1) — a rule that says "every row carries the same value" is
         // fully checked by comparing this row against the first. It WARNS: the contact
@@ -1134,11 +1238,9 @@ impl FieldDayLog {
         // FIRST occurrence, its survivor duplicates nothing that is still in this log and
         // is restored as the real contact.
         let key = self.dupe_rule().key_of(call, &band, mode, &rx, &tx);
-        let dupe = self.worked.contains(&key);
-        if dupe && !self.dupe_rule().log_dupes {
+        let Some(dupe) = self.admit(key) else {
             return;
-        }
-        self.worked.insert(key);
+        };
         // The journaled sync seq round-trips; a legacy row without the tag
         // backfills the next free seq in row order (1..n on a whole legacy
         // journal), so pre-sync journals join the sequence deterministically.

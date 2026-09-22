@@ -138,6 +138,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code that restores it after a restart, so leaving the frequency out of the file was also
   leaving it out of the recovery, and a restart mid-event quietly blanked the dial on every
   contact already in the log.
+- **Correcting a busted callsign now reaches the Cabrillo you submit, not just the log you can
+  read.** Fixing a wrong callsign or a wrong band on a contest contact updated your log but stopped
+  there. The Cabrillo is written from the contest log, so the file you sent the sponsor still
+  carried the busted call while the log on screen showed the corrected one — and nothing told you
+  the two disagreed. A correction now reaches both. The contact's country, continent and prefix are
+  worked out again from the corrected callsign, so it no longer counts for the wrong country or the
+  wrong prefix multiplier, and if the callsign or band you corrected changes which contacts are
+  duplicates, every affected contact is re-marked and your QSO count and score follow. Correcting
+  the exchange itself is not included yet.
 - **A contest you merged before this release is not repaired by it, and re-merging will not fix
   it.** Contacts are matched into the lifetime log by a stable id, so a second merge reports
   everything as already there and changes nothing — by design, because that is what stops a

@@ -28,6 +28,45 @@ use super::spec::FieldKind;
 use crate::fieldday::{FieldDayLog, LoggedQso};
 use crate::logbook::{ContestFields, Logbook, QslRcvd, QslSent, QsoRecord, UploadState};
 
+/// ⭐ **The merge identity for one contest row** — `"<session>:<posid>:<seq>"`.
+///
+/// ⚠️ **There is no `qid` on a contest row.** [`LoggedQso`] does not carry one; the
+/// contest-side identity is [`LoggedQso::seq`](crate::fieldday::LoggedQso::seq) and the
+/// qid is MINTED here, from it. That direction is what makes a correction routable:
+/// the general log names a row by qid, and [`seq_from_qid`] turns that back into the
+/// seq that [`FieldDayLog::correct_row`](crate::fieldday::FieldDayLog::correct_row)
+/// addresses.
+///
+/// Minting and parsing are one pair of functions for the usual reason: two sites that
+/// each build this string by hand are two sites that come to disagree about it.
+pub fn qid_for(session_id: &str, posid: &str, seq: u64) -> String {
+    format!("{session_id}:{posid}:{seq}")
+}
+
+/// The `seq` a qid names, when that qid belongs to `session_id` — `None` otherwise, and
+/// for anything that is not one of these strings.
+///
+/// ⚠️ **Parsed from the RIGHT, and that is not a style choice.** A session id contains a
+/// colon of its own — both constructors build it as `"<contest id>:<location>"`, so a
+/// real qid looks like `"CQ-WW-CW:IL:7:42"`. Splitting three ways from the left reads
+/// the posid as `"IL"` and the seq as `"7:42"`, which parses as nothing and silently
+/// makes every correction a no-op. The seq is the last field and the posid the one
+/// before it; everything to their left is the session, compared whole.
+///
+/// The session check is what stops a correction landing on the same seq in a DIFFERENT
+/// contest: seqs are per position and restart at 1, so `42` alone names a row in every
+/// log the operator has ever run.
+pub fn seq_from_qid(qid: &str, session_id: &str) -> Option<u64> {
+    let (head, seq) = qid.rsplit_once(':')?;
+    let (session, _posid) = head.rsplit_once(':')?;
+    if session != session_id {
+        return None;
+    }
+    // A zero seq is UNSTAMPED, never a row: the merge refuses those rows, so no qid
+    // naming one was ever written. Refusing it here keeps that true on the way back.
+    seq.trim().parse::<u64>().ok().filter(|&n| n > 0)
+}
+
 /// What one merge did (§3.2).
 #[derive(Debug, Clone, Default)]
 pub struct MergeReport {
@@ -82,7 +121,7 @@ pub fn merge_into_general(log: &FieldDayLog, posid: &str, into: &mut Logbook) ->
             report.refused += 1;
             continue;
         }
-        let qid = format!("{}:{}:{}", log.session.id, posid, q.seq);
+        let qid = qid_for(&log.session.id, posid, q.seq);
         if seen.contains(&qid) {
             report.already += 1;
             continue;
