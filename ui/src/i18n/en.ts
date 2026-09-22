@@ -3975,6 +3975,30 @@ export const EN = {
   'sat.detail.close.title':
     'Close — a tracked pass keeps tracking; the badge on this bar brings you back',
 
+  // SKED WITH A STATION — the two-observer band. The wording carries the
+  // honesty this feature lives or dies on: an empty answer is usually the
+  // CORRECT answer, so it says what was searched and how far apart the pair
+  // is, and a window past the element-age tier is labelled rather than hidden.
+  'sat.sked.head': 'Sked with a station',
+  'sat.sked.peer.placeholder': 'Their grid or callsign',
+  'sat.sked.peer.label': "The other station's grid square or callsign",
+  'sat.sked.find': 'Find windows',
+  'sat.sked.finding': 'Finding…',
+  'sat.sked.noFavorites':
+    'Star a bird or two first — a sked is searched over your ★ favourites, not the whole catalogue.',
+  'sat.sked.scanned':
+    '{{grid}}, {{km}} km away · {{birds}} ★ birds over {{days}} days · a window needs {{el}}° at BOTH ends',
+  'sat.sked.none':
+    'No window with {{grid}} in the next {{days}} days. For a low-orbit bird both stations have to be inside the same footprint at the same moment — past about 3300 km apart that never happens, whatever the schedule says.',
+  'sat.sked.el.title':
+    "The window's shared ceiling: the highest the bird gets for whichever of you has it LOWER. A mutual window is only as good as its worse end.",
+  'sat.sked.ends.title':
+    'How high the bird gets for you, and for them, inside this window — routinely tens of degrees apart, so one antenna can be pointing overhead while the other is on the treeline',
+  'sat.sked.soft.tag': 're-check',
+  'sat.sked.soft.title':
+    'The orbital elements will be about {{days}} days old by then. The window is real geometry, but confirm it nearer the time — elements are refreshed twice a day and a satellite can be manoeuvred.',
+  'sat.sked.showAll': 'Show all {{count}} windows',
+
   // The gate ladder and the Next/Best strip.
   'sat.noGrid':
     'Set your grid square (Settings ▸ Station) first — passes are computed over YOUR location, and without a locator there is nothing honest to show.',

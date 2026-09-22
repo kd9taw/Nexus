@@ -48,6 +48,7 @@ pub mod pskr_mqtt;
 pub mod repeaters;
 pub mod sat;
 pub mod satneeds;
+pub mod satsked;
 pub mod solar_cycle;
 pub mod solar_wind;
 pub mod space_wx;
@@ -114,6 +115,7 @@ pub use pskr_mqtt::{
 };
 pub use sat::{passes as sat_passes, subpoint as sat_subpoint, tle_age_days, Pass, Tle};
 pub use satneeds::{pass_earn, SatNeeds, SatPassEarn};
+pub use satsked::{mutual_schedule, mutual_windows, MutualWindow, SkedWindow};
 pub use solar_wind::SolarWind;
 pub use space_wx::{ScalarTrend, SpaceWxHistory, SpaceWxSample, TrendDir, WxTrend};
 pub use spot::Spot;

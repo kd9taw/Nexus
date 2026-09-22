@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Satellites section can now work out when you and another station can both see the same
+  bird.** Nexus could always tell you when a satellite rises over your own QTH, which is half of
+  what a satellite QSO needs: the other operator has to be able to see it at the same moment, and
+  working that out meant two pass lists, two windows on the screen and a lot of arithmetic. Open
+  "Sked with a station" under the schedule, type their grid square or their callsign, and you get
+  the windows over the next fortnight when one of your ★ birds is up for both of you at once —
+  the day, the times, how long the window lasts, which bird, and where to point. Give it a
+  callsign and it finds their square from the last time you worked them. Nothing else is asked
+  for: your own square and your favourites are already known.
+  Two things it is careful about, because both are easy to get wrong by hand. A window needs the
+  satellite at least 5° above the horizon at BOTH ends at the same instant — two passes merely
+  overlapping on the clock is not a contact, and 5° is about where the trees and the rooftops
+  stop. And each window shows how high the bird gets for you and for them separately, which on a
+  real pass are nothing like each other: one of you can have it overhead while the other is
+  scraping the treeline. Windows far enough out that the orbital elements will be over a fortnight
+  old by then are marked "re-check" rather than quietly presented as certain. If there is no
+  window at all, it says so and tells you how far apart you are — for a low-orbiting bird, two
+  stations much more than about 3300 km apart simply cannot see it together, and that is an
+  answer rather than a failure.
+
 - **PSK now has editable F-key macros, the way RTTY does.** The PSK dock's four macro keys were
   fixed in place: the messages could not be changed, there was no way to add one of your own, and
   the keys drawn on them — F1, F2, F3, F4 — did nothing when you actually pressed them, so the one

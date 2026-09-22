@@ -18346,6 +18346,132 @@ h2.sats-best-tag {
   overflow-y: auto;
   min-height: 0;
 }
+/* ============ SKED WITH A STATION — the two-observer band ==================
+   FIT-CONTENT, NEVER A GROWER, and that is the whole layout contract here.
+   `.sats-plan` is a bounded column whose one grower is `.sats-sched`; anything
+   this band takes comes out of the schedule's row count, so closed it is a
+   single control strip (one line) and open it caps its own list with a scroller
+   rather than pushing the column. The row cap is a ROW COUNT (SKED_ROW_CAP), a
+   pixel height is never the bound on what is listed. */
+.sats-sked {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-height: 0;
+}
+.sats-sked-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.sats-sked-disclose {
+  font-size: var(--fs-label);
+  color: var(--text);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-weight: 600;
+}
+.sats-sked-peer {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  width: 14ch;
+}
+.sats-sked-go {
+  font-size: var(--fs-micro);
+}
+.sats-sked-body {
+  /* Its own scroller, so a 14-day answer cannot lengthen the column. The cap
+     is on ROWS; this only bounds what an already-capped list may cost when the
+     window is short. */
+  flex: 0 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  max-height: 14em;
+}
+.sats-sked-note,
+.sats-sked-empty,
+.sats-sked-error {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  margin: 2px 0;
+}
+.sats-sked-error {
+  /* The ERROR colour, not the warning one: every refusal this renders stopped
+     the operator getting an answer (`--alert-critical` is defined in both
+     themes; `--state-*` has no "bad"). */
+  color: var(--alert-critical);
+}
+.sats-sked-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sats-sked-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+  padding: 1px 0;
+  /* A 14-day list is long and every column is a number: the row must stay one
+     line and let the bird name give up width first. */
+  white-space: nowrap;
+}
+.sats-sked-row.soft {
+  color: var(--text-dim);
+}
+.sats-sked-day {
+  width: 10ch;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+.sats-sked-when {
+  flex: 0 0 auto;
+}
+.sats-sked-dur {
+  width: 4ch;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  text-align: right;
+}
+.sats-sked-bird {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sats-sked-el {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+.sats-sked-ends,
+.sats-sked-az {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+.sats-sked-soft {
+  flex: 0 0 auto;
+  font-size: var(--fs-micro);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--text-dim);
+}
+.sats-sked-more button {
+  font-size: var(--fs-micro);
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
 /* The discovery disclosure: a live count in the schedule's own title line —
    top of column 1, the section's primary reading position. */
 .sats-more-chip {
