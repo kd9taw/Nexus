@@ -87,9 +87,17 @@ describe('the QSO detail view', () => {
   // record carries `whenUnix` and so always has at least a time to show. The component
   // says so where the branch would have been, rather than carrying a branch no test can
   // reach.
+  // ⛔ THE AFFORDANCE IS A MEASURED DECISION, not a preference. A tenth button in the row's
+  // action cluster was built first, and the layout harness refused it: ten controls need
+  // ~318 px of button plus nine gaps against a 336 px track floor, `fits: false` at every
+  // viewport including the 1024 support floor. Double-click costs no width and keeps the
+  // callsign selectable. Pinned here because an invisible affordance that silently stops
+  // working is indistinguishable from one that was never built — which is the exact
+  // complaint #313 was filed about.
   it('renders nothing at all when no contact is selected', () => {
     const { container } = render(<QsoDetail qso={null} onClose={() => {}} />)
     expect(container.textContent).toBe('')
     expect(document.body.textContent).toBe('')
   })
 })
+

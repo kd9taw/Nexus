@@ -197,9 +197,6 @@ const HRDLOG_LABEL = 'HL'
 // Technical product token, not prose — same ruling as the labels above.
 const WRL_LABEL = 'WRL'
 const QSL_MENU_LABEL = 'QSL▸'
-/** The detail-view button. A magnifier reads as "look at this" in every locale and is not
- *  prose — the same invariant-token rule the labels above follow. */
-const VIEW_GLYPH = '🔍'
 
 function fmtUtc(whenUnix: number): string {
   const d = new Date(whenUnix * 1000)
@@ -1844,6 +1841,17 @@ export function Logbook({
                 return (
                   <div
                     className={`log-row logbook-row${editIndex === i ? ' editing' : ''}`}
+                    // ⛔ DOUBLE-CLICK, NOT A TENTH BUTTON. A view button in the action cluster
+                    // was built first and MEASURED: ten controls need ~318 px of button plus
+                    // nine gaps against a 336 px track floor, and the harness reported
+                    // `fits: false` at EVERY viewport, including the 1024 support floor.
+                    // Widening the track takes that width from the columns at the narrowest
+                    // size the app claims to support. Double-click costs no width, keeps the
+                    // callsign selectable so it can still be copied, and is the idiom this app
+                    // already uses in the decoded text (#262). The row title carries it,
+                    // because the affordance is otherwise invisible.
+                    onDoubleClick={() => setViewing(q)}
+                    title={t('logbook.row.view.title', { call: q.call })}
                     role="row"
                     // The backend index `i` is unique per record → collision-proof even for two
                     // identical QSOs (double-clicked Log in the same second). Rows are stateless
@@ -2000,20 +2008,7 @@ export function Logbook({
                     '—'
                   )}
                 </span>
-                <span className="log-cell log-rowactions">
-                  {/* ⭐ OUTSIDE the `control &&` guard below, deliberately: every other row
-                      action SENDS something (a spot, a QRZ push, a ClubLog upload) and needs
-                      station control. Reading your own log does not, and a browser watching
-                      without control is exactly the case that wants to look a contact up. */}
-                  <button
-                    type="button"
-                    className="log-rowbtn"
-                    onClick={() => setViewing(q)}
-                    title={t('logbook.row.view.title', { call: q.call })}
-                  >
-                    {VIEW_GLYPH}
-                  </button>
-                  {control && <>
+                <span className="log-cell log-rowactions">{control && <>
                   <button
                     type="button"
                     className="log-rowbtn"
