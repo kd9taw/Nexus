@@ -1859,6 +1859,14 @@ export interface DecodeRow {
 
 /** A logged contact in the general ADIF logbook (separate from Field Day). */
 export interface LoggedQso {
+  /**
+   * The row's stable identity (`APP_NEXUS_ID`), as OPAQUE text: carry it back to address
+   * this row, never parse or construct one.
+   *
+   * Absent on a draft that is not in the log yet, and on every row served by a station
+   * older than 1.14, which minted no ids — so a reader must still cope without one.
+   */
+  id?: string | null
   call: string
   grid: string | null
   /** DXCC entity name (country), resolved from the callsign — the key DXer field. */
@@ -1867,6 +1875,12 @@ export interface LoggedQso {
   state?: string | null
   band: string
   freqMhz: number
+  /**
+   * ADIF FREQ_RX — the RECEIVE frequency of a split contact (MHz), present only when it
+   * differs from `freqMhz`. Display only: the edit form has no control for it, and the
+   * station drops an incoming value rather than letting a column become a write path.
+   */
+  freqRxMhz?: number | null
   mode: string
   /** Signal report as a string: CW "599" / phone "59" / digital "-12" dB. */
   rstSent: string | null

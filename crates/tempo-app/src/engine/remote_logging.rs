@@ -83,13 +83,17 @@ impl HeldQso {
 /// a sidecar of the same camelCase name beside a `flatten` writes the key twice and makes
 /// the whole journal unreadable. A journal written by an older build spells it identically,
 /// so it now lands in the flattened record instead and nothing on disk changes.
+///
+/// `freqRxMhz` has now gone exactly the same way, for the same reason and with the same
+/// result on disk: it is on the DTO so the Logbook can SHOW a split contact's receive leg,
+/// and a sidecar of that name beside the `flatten` would emit the key twice — which costs
+/// every held contact in the journal, not just its own field. It is still restored by hand
+/// below, because the DTO deliberately carries it one way only.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PendingRecord {
     #[serde(flatten)]
     record: crate::dto::LoggedQso,
-    #[serde(default)]
-    freq_rx_mhz: Option<f64>,
     /// Absent from a journal written before this build — and then [`GridSource::LookedUp`],
     /// which is the safe answer for a grid whose provenance nobody recorded.
     #[serde(default)]
@@ -99,7 +103,6 @@ struct PendingRecord {
 fn pending_record(held: &HeldQso) -> PendingRecord {
     PendingRecord {
         record: held.record.clone().into(),
-        freq_rx_mhz: held.record.freq_rx_mhz,
         grid_source: held.grid_source,
     }
 }
@@ -107,8 +110,13 @@ fn pending_record(held: &HeldQso) -> PendingRecord {
 impl PendingRecord {
     fn into_held(self) -> HeldQso {
         let grid_source = self.grid_source;
+        // Read off the DTO before the conversion, which drops it: `LoggedQso` carries the
+        // split receive leg OUTBOUND only, so that a display column cannot become a write
+        // path through the edit form. A held contact is this type's own round trip, not an
+        // operator edit, so it restores what it wrote.
+        let freq_rx_mhz = self.record.freq_rx_mhz;
         let mut record: QsoRecord = self.record.into();
-        record.freq_rx_mhz = self.freq_rx_mhz;
+        record.freq_rx_mhz = freq_rx_mhz;
         HeldQso::new(record, grid_source)
     }
 }
@@ -952,6 +960,23 @@ mod tests {
             upgraded.pending_log().unwrap().time_off_unix,
             ended,
             "a journal written before the sidecar was folded in keeps its end time"
+        );
+
+        // `freqRxMhz` went the same way one build later, and the on-disk spelling is again
+        // unchanged: the sidecar sat at the top level of the object and the flattened field
+        // lands in the same place. A journal holding a SPLIT contact when the operator
+        // upgrades keeps its receive leg, which is a frequency nothing else can re-derive.
+        let mut split = serde_json::to_value(&dto).unwrap();
+        split
+            .as_object_mut()
+            .unwrap()
+            .insert("freqRxMhz".into(), serde_json::json!(14.0755));
+        let mut with_split = Engine::new("K2DEF", "FN31", 0);
+        with_split.load_pending_qso_json(&serde_json::to_string(&split).unwrap());
+        assert_eq!(
+            with_split.pending_log().unwrap().freq_rx_mhz,
+            Some(14.0755),
+            "a journal written before the sidecar was folded in keeps its split receive leg"
         );
 
         fixture.engine.load_pending_qso_json(&legacy);
