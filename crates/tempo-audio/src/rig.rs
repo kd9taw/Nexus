@@ -1332,6 +1332,43 @@ impl Rig {
     pub fn set_vfo(&mut self, vfo: &str) -> std::io::Result<()> {
         self.cat(&vfo_line(vfo))
     }
+    /// Read WHICH VFO the rig is on via rigctld `v` (get_vfo) — `Some(true)` = B.
+    ///
+    /// ⚠️ THIS EXISTS BECAUSE A/B SELECTION WAS WRITE-ONLY. Nexus told the rig which VFO to use
+    /// and never asked, so an A/B press on the radio's own front panel left the indicator
+    /// reporting the last command — which by then named the wrong VFO.
+    ///
+    /// `None` for everything that is not plainly A or B, and that is the whole safety of it:
+    /// no CAT, a rejection, a link hiccup, `MEM`, `currVFO`, or a Main/Sub name this step does
+    /// not model. A `None` must leave the indicator exactly as it was — "absent" is not "A".
+    ///
+    /// The caller must only ever ask a rig whose capability dump said `Can get VFO: Y`
+    /// ([`crate::baud_ladder::RigCaps::vfo_read_native`]); an emulated answer is Hamlib's cache
+    /// of our own last `set_vfo` and can only ever agree with us.
+    pub fn read_vfo(&mut self) -> Option<bool> {
+        self.control.as_ref()?;
+        let reply = self.command("v\n").ok()?;
+        // `rig_strvfo` prints "VFOA"/"VFOB"; the bare letters are the spelling
+        // `civ::commands::select_vfo` already accepts, so both are read here.
+        match reply.lines().map(str::trim).find(|l| !l.is_empty())? {
+            "VFOA" | "A" => Some(false),
+            "VFOB" | "B" => Some(true),
+            // "Main"/"Sub"/"MEM"/"currVFO" and anything else: NOT translated to A or B. A
+            // satellite rig's Main/Sub is a different question and belongs to the dual-receiver
+            // work, not to this indicator.
+            _ => None,
+        }
+    }
+    /// Ask the rig ONCE whether it can report its own VFO selection — the `v` twin of
+    /// [`Self::read_split_capability`], off the same `\dump_caps` reply.
+    ///
+    /// `None` = we could not ask, which the caller must treat as "cannot", because silence is
+    /// not permission here either.
+    pub fn read_vfo_capability(&mut self) -> Option<bool> {
+        self.control.as_ref()?;
+        let reply = self.command_multiline("\\dump_caps\n").ok()?;
+        Some(crate::baud_ladder::parse_caps(&reply).vfo_read_native)
+    }
     /// Set RIT (receive incremental tuning) offset in Hz; enabling RIT first (0 = off).
     pub fn set_rit(&mut self, hz: i32) -> std::io::Result<()> {
         self.cat(&func_line("RIT", u8::from(hz != 0)))?;
@@ -1957,6 +1994,48 @@ mod tests {
         let mut rig = Rig::rigctld(&addr);
         assert_eq!(rig.read_freq().unwrap(), 14_074_000);
         assert_eq!(log.lock().unwrap().as_slice(), &["f".to_string()]);
+    }
+
+    /// ⭐ THE READ THAT MAKES A/B SELECTION HONEST. `v` (get_vfo) is the one question Nexus
+    /// never asked, which is why an A/B press on the rig's front panel was invisible to it.
+    ///
+    /// The reply shapes are verbatim from Hamlib 4.5.5 `rigctld -m 1` on this box: `v` answers
+    /// a single bare VFO-name line.
+    #[test]
+    fn read_vfo_asks_the_rig_which_vfo_it_is_on() {
+        let (addr, log) = mock_rigctld(|_| "VFOB\n".to_string());
+        let mut rig = Rig::rigctld(&addr);
+        assert_eq!(rig.read_vfo(), Some(true), "VFOB is B");
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            &["v".to_string()],
+            "one `v`, and nothing that could move the radio"
+        );
+
+        let (addr, _) = mock_rigctld(|_| "VFOA\n".to_string());
+        assert_eq!(Rig::rigctld(&addr).read_vfo(), Some(false), "VFOA is A");
+    }
+
+    /// ABSENT IS NOT "A". Every answer that is not plainly one of the two VFOs this indicator
+    /// models must come back `None`, so the caller keeps the commanded value instead of
+    /// inventing a selection.
+    ///
+    /// ⚠️ `Main`/`Sub` IS A REAL REPLY, not a hypothetical: Hamlib 4.5.5's own dummy backend,
+    /// asked here on this box, answers `Sub` to `v` after being sent `V VFOB`. Translating it
+    /// to B would be modelling a second receiver, which this change deliberately does not do —
+    /// so such a rig degrades to exactly the old behaviour rather than to a wrong one.
+    #[test]
+    fn a_vfo_reply_that_is_not_plainly_a_or_b_changes_nothing() {
+        for reply in ["Main\n", "Sub\n", "MEM\n", "currVFO\n", "RPRT -11\n", "\n"] {
+            let (addr, _) = mock_rigctld(move |_| reply.to_string());
+            assert_eq!(
+                Rig::rigctld(&addr).read_vfo(),
+                None,
+                "{reply:?} must leave the indicator alone, not resolve to a VFO"
+            );
+        }
+        // …and a rig with no CAT control channel is never asked at all.
+        assert_eq!(Rig::vox().read_vfo(), None);
     }
 
     #[test]
