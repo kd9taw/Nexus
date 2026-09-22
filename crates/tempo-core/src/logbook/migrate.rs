@@ -96,6 +96,19 @@ pub enum Error {
         /// What went wrong.
         source: std::io::Error,
     },
+    /// ⛔ The log has content, and NOT ONE record could be read out of it.
+    ///
+    /// A corrupt, truncated-to-nothing or wrong-format `log.adi` is the case that must never be
+    /// mistaken for an empty one: "empty" marks the store converted, and a store marked
+    /// converted is never looked at again — so the operator's whole log would be silently
+    /// written off as "nothing to migrate". The parser resyncs at the next `<` and is happy to
+    /// read a partly damaged file, so reaching zero records out of a non-empty body means the
+    /// file is not a logbook this build can read. The conversion refuses, marks nothing, and
+    /// leaves the operator's file exactly where it is.
+    Unreadable {
+        /// How much there was to read, so the refusal can say it plainly.
+        bytes: usize,
+    },
     /// The store refused, or SQLite did.
     Db(sqlite::Error),
 }
@@ -108,6 +121,11 @@ impl std::fmt::Display for Error {
                 "could not copy the logbook to {} before converting it: {source}",
                 path.display()
             ),
+            Error::Unreadable { bytes } => write!(
+                f,
+                "the logbook file holds {bytes} bytes but no readable contacts — it has not \
+                 been converted, and it has not been changed"
+            ),
             Error::Db(e) => write!(f, "{e}"),
         }
     }
@@ -117,6 +135,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Copy { source, .. } => Some(source),
+            Error::Unreadable { .. } => None,
             Error::Db(e) => Some(e),
         }
     }
@@ -208,8 +227,12 @@ where
     let log = Logbook::load(log_path);
     let total = log.len();
     if total == 0 {
-        db.set_meta(DONE, 1)?;
-        return Ok(Outcome::Empty);
+        // ⛔ NOT `Empty`. The body was not blank, so there was something here to read and
+        // nothing came out of it. Marking this store done would write the operator's whole log
+        // off as "nothing to migrate", permanently and without a word.
+        return Err(Error::Unreadable {
+            bytes: source.len(),
+        });
     }
 
     let len = i64::try_from(source.len()).unwrap_or(i64::MAX);
@@ -306,6 +329,9 @@ mod tests {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
+
+    /// Carries the scratch directory to the child process of the kill test.
+    const KILL_DIR: &str = "NEXUS_MIGRATE_KILL_DIR";
 
     fn unresolved(_: &QsoRecord) -> Resolved<'static> {
         Resolved::default()
@@ -613,6 +639,211 @@ mod tests {
             !std::fs::read_to_string(&arrived).unwrap().contains(KEY),
             "a copy that arrived poisoned must be swept — nothing else ever revisits it"
         );
+    }
+
+    /// ⛔ **The interrupted path, interrupted for real.** The conversion runs in a CHILD
+    /// PROCESS which is `kill`ed part way through; this process then resumes it. Nothing is
+    /// simulated — the child dies with the store open, mid-conversion, exactly as it would in a
+    /// power cut or a force-quit.
+    ///
+    /// **Fixture: 6,000 contacts against `CHUNK_ROWS` = 256, so 24 chunks.** Well above the
+    /// batch boundary, which matters twice over: a handful of contacts could not tell a
+    /// conversion that migrated everything from one that migrated only the first chunk, and a
+    /// conversion that finished before the kill landed would leave nothing to resume. The test
+    /// ASSERTS that it caught a genuine partial state rather than passing quietly if it did not.
+    #[test]
+    fn a_conversion_killed_mid_flight_resumes_without_duplicating_or_dropping() {
+        const TOTAL: usize = 6_000;
+        let d = Dir::new("kill");
+        std::fs::write(d.log(), legacy_log(TOTAL)).unwrap();
+        let source = Logbook::load(&d.log());
+        assert_eq!(source.len(), TOTAL, "fixture: the log holds what we think");
+        // Checked at COMPILE time, so shrinking the fixture below the batch boundary fails
+        // the build rather than quietly turning this into a first-page test.
+        const _: () = assert!(TOTAL > CHUNK_ROWS * 4);
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "logbook::migrate::tests::convert_for_the_kill_test",
+            ])
+            .env(KILL_DIR, &d.0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the child conversion starts");
+
+        // Wait until the child has COMMITTED at least one chunk, then kill it there. Read
+        // through a second, read-only connection: WAL lets a reader see committed
+        // transactions while the writer is still working.
+        let partial = wait_for_a_committed_prefix(&d.db(), TOTAL);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        let partial = partial.expect("the child must be caught mid-conversion, not after it");
+        assert!(
+            partial > 0 && partial < TOTAL as u64,
+            "the kill landed on a genuine partial state: {partial} of {TOTAL}"
+        );
+        assert_eq!(
+            LogDb::open(&d.db()).unwrap().meta(DONE).unwrap(),
+            None,
+            "a killed conversion is not marked done"
+        );
+
+        // …and the resume finishes it.
+        let out = migrate_log(&d.log(), &d.db(), unresolved).expect("the resume completes");
+        let Outcome::Converted {
+            resumed_at, total, ..
+        } = out
+        else {
+            panic!("expected a resumed conversion, got {out:?}");
+        };
+        assert_eq!(total, TOTAL);
+        assert!(resumed_at > 0, "it resumed rather than starting over");
+
+        let db = LogDb::open(&d.db()).unwrap();
+        assert_eq!(
+            db.row_count().unwrap(),
+            TOTAL as u64,
+            "no record dropped and none written twice"
+        );
+        let stored = db.load_all().unwrap();
+        let ids: std::collections::HashSet<_> = stored.iter().filter_map(|r| r.id).collect();
+        assert_eq!(ids.len(), TOTAL, "every stored id is distinct");
+        // Sampled deep equality, on the RECORDS — including rows either side of the kill.
+        for i in [
+            0,
+            1,
+            CHUNK_ROWS - 1,
+            CHUNK_ROWS,
+            partial as usize - 1,
+            partial as usize,
+            TOTAL - 1,
+        ] {
+            assert_eq!(
+                &stored[i],
+                &*source.records()[i],
+                "stored record {i} differs from the one in the log"
+            );
+        }
+    }
+
+    /// The child half of the kill test. Ignored, so it never runs on its own; the parent
+    /// invokes it by name with the directory in the environment.
+    #[test]
+    #[ignore = "invoked as a child process by the kill test"]
+    fn convert_for_the_kill_test() {
+        let Ok(dir) = std::env::var(KILL_DIR) else {
+            return;
+        };
+        let d = PathBuf::from(dir);
+        let _ = migrate_log(&d.join("log.adi"), &d.join("log.sqlite3"), unresolved);
+    }
+
+    /// How many records the store holds once it holds SOME but not all, read without disturbing
+    /// the writer. `None` if that state never appeared before the deadline.
+    fn wait_for_a_committed_prefix(db_path: &Path, total: usize) -> Option<u64> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while std::time::Instant::now() < deadline {
+            if let Ok(conn) = rusqlite::Connection::open_with_flags(
+                db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            ) {
+                if let Ok(n) =
+                    conn.query_row("SELECT COUNT(*) FROM qso", [], |r| r.get::<_, i64>(0))
+                {
+                    if n > 0 && (n as usize) < total {
+                        return Some(n as u64);
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        None
+    }
+
+    /// A log this build cannot read a single contact out of must NOT be mistaken for an empty
+    /// one. "Empty" marks the store converted, and a converted store is never looked at again —
+    /// so a corrupt `log.adi` would write the operator's whole history off without a word.
+    #[test]
+    fn a_log_with_content_but_no_readable_contacts_is_refused_not_called_empty() {
+        let d = Dir::new("garbage");
+        // Content after `<EOH>`, none of it a record this build can read.
+        let junk = format!(
+            "{}\u{0}\u{1}not an adif file at all\n",
+            super::super::adif_header()
+        );
+        std::fs::write(d.log(), &junk).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+
+        let err = migrate_log(&d.log(), &d.db(), unresolved).expect_err("refused");
+        assert!(
+            matches!(err, Error::Unreadable { .. }),
+            "refused as unreadable, not something else: {err}"
+        );
+        assert!(
+            err.to_string().contains("has not been changed"),
+            "the refusal says plainly what it did and did not do: {err}"
+        );
+        assert_eq!(
+            std::fs::read(d.log()).unwrap(),
+            before,
+            "the operator's file is untouched"
+        );
+        assert_eq!(
+            LogDb::open(&d.db()).unwrap().meta(DONE).unwrap(),
+            None,
+            "and NOTHING is marked done, so a later run still looks at it"
+        );
+        assert_eq!(
+            LogDb::open(&d.db()).unwrap().row_count().unwrap(),
+            0,
+            "no half-populated store is left behind"
+        );
+    }
+
+    /// A log truncated mid-record converts the contacts that survive it, leaves the operator's
+    /// file alone, and marks only what it actually did. The parser resyncs at the next `<`, so a
+    /// torn tail costs its own record and nothing else.
+    #[test]
+    fn a_truncated_log_converts_what_survives_and_leaves_the_file_alone() {
+        let d = Dir::new("truncated");
+        let whole = legacy_log(600);
+        // Cut in the middle of the last record, as a half-written file ends.
+        let cut = whole.len() - 40;
+        std::fs::write(d.log(), &whole[..cut]).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+        let readable = Logbook::load(&d.log()).len();
+        assert!(
+            (598..600).contains(&readable),
+            "control: the truncation really did cost a record, and only about one: {readable}"
+        );
+
+        let out = migrate_log(&d.log(), &d.db(), unresolved).expect("converts what it can");
+        assert_eq!(
+            out,
+            Outcome::Converted {
+                written: readable,
+                resumed_at: 0,
+                total: readable
+            }
+        );
+        assert_eq!(
+            std::fs::read(d.log()).unwrap(),
+            before,
+            "the operator's file is untouched by the conversion"
+        );
+        let db = LogDb::open(&d.db()).unwrap();
+        assert_eq!(db.row_count().unwrap(), readable as u64);
+        // On the RECORDS: a torn tail must not have produced a mangled row anywhere.
+        let stored = db.load_all().unwrap();
+        let source = Logbook::load(&d.log());
+        for (a, b) in stored.iter().zip(source.records()) {
+            assert_eq!(a, &**b);
+        }
     }
 
     /// The copy must not be written world-readable: an operator's log holds their whole
