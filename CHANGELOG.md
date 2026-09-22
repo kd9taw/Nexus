@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be one fixed sentence, which read the same whether the rig's Hamlib backend has no keying command
   at all or the reply simply never arrived — two different faults needing two different answers.
   (#332)
+- **LoTW confirmation downloads no longer give up on a report that is still arriving.** Download
+  Confirmations gave the whole download sixty seconds and then failed, however well it was going.
+  LoTW answers straight away and then sends the report while it builds it, so that limit was a
+  budget on how fast LoTW works, not on whether the connection is alive — and a first sync asks
+  for your entire confirmation history, which for an established log does not finish in a minute.
+  Because the sync marker only moves on a download that completed, every retry was the same
+  request, so the confirmations never arrived at all. Nexus now keeps reading for as long as the
+  report keeps coming, and stops only if it goes quiet for two minutes or the whole download
+  passes ten. The message when it does stop says which of those happened and how much had
+  arrived, instead of offering two possible causes and picking neither.
 - **FT4 contacts now export as ADIF the way WSJT-X writes them, so LoTW and the rest accept
   them.** FT4 is not an ADIF mode in its own right — it is a submode of MFSK, as Q65, FST4 and
   FST4W are — and Nexus was writing a bare `MODE=FT4`. That spelling is not in the mode list

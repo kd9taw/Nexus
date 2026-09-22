@@ -2273,7 +2273,17 @@ fn poll_monitors(
                                     e.observe_radio_smeter(conn.id, db);
                                 }
                             }
-                            None if conn.smeter_supported.is_none() => {
+                            // ⚠️ DEBOUNCED, and it has to be. `Some(false)` here is FOREVER —
+                            // nothing in this pool re-probes, so the only escape is the CAT link
+                            // being torn down and reopened. Deciding it on ONE read decided it on
+                            // the FIRST poll of a freshly-opened link, which is exactly when a
+                            // transient miss is most likely; the `freq_misses` arm below debounces
+                            // the same link for the same reason, and the active radio's own
+                            // S-meter arm gives it three misses plus a re-probe ladder. `ticks`
+                            // is incremented above and the S-meter is read every third one, so
+                            // the probes are ticks 3, 6 and 9 — and any success would have left
+                            // `Some(true)`, so reaching here at 9 means all three missed.
+                            None if conn.smeter_supported.is_none() && conn.ticks >= 9 => {
                                 conn.smeter_supported = Some(false);
                             }
                             None => {}
@@ -16492,6 +16502,83 @@ mod tests {
         assert_eq!(
             p[1].transport.rigctld_port, ports[1],
             "radio 1's conn was not rebuilt or repointed by the handoff"
+        );
+    }
+
+    /// One transient miss must not cost a monitored radio its S-meter for the whole session.
+    ///
+    /// `MonitorConn::smeter_supported` is write-once: nothing in the pool ever re-probes a
+    /// `Some(false)`, so whatever the FIRST S-meter read says stands until CAT is torn down.
+    /// That read lands on the first poll of a link that has only just opened — the moment a
+    /// slow answer is most likely — and the arm right beneath it debounces `freq_misses` for
+    /// exactly that reason. A rig that answers `l STRENGTH` perfectly well from its second
+    /// probe onward was being recorded as having no S-meter at all.
+    #[test]
+    fn a_transient_miss_does_not_cost_a_monitored_radio_its_s_meter() {
+        use crate::rig::remote_tests::retuning_peer;
+        // `l STRENGTH` fails the first two probes with Hamlib's ETIMEOUT (the LINK did not
+        // answer — not a refusal), then reads normally.
+        let probes = std::sync::atomic::AtomicU32::new(0);
+        let peer = retuning_peer(14_074_000, "USB", move |line, _| {
+            if line.starts_with("l STRENGTH") {
+                let n = probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Some(if n < 2 {
+                    "RPRT -5\n".into()
+                } else {
+                    "-30\n".into()
+                });
+            }
+            None
+        });
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let id = engine.lock().unwrap().add_radio();
+        let pool: MonitorPool = Arc::new(MonitorConnections::new(vec![MonitorConn {
+            id,
+            transport: cat_transport(4532, None),
+            rig: Rig::with_control(Some(peer.address.clone()), PttMode::Vox),
+            rigctld_proc: None,
+            last_poll: 0.0,
+            ticks: 0,
+            smeter_supported: None,
+            freq_misses: 0,
+            open_failures: 0,
+            retry_after_ms: 0.0,
+        }]));
+        let pending = std::sync::atomic::AtomicBool::new(false);
+        // Nine polls: the S-meter is read every third tick, so probes land at 3, 6 and 9.
+        // `last_poll` is reset each time because the picker only serves an OVERDUE conn.
+        for _ in 0..9 {
+            pool.lock().unwrap()[0].last_poll = 0.0;
+            poll_monitors(&pool, u32::MAX, &engine, &pending);
+        }
+
+        // The positive control: the peer really was asked three times, so a green result
+        // cannot come from the S-meter never being polled at all.
+        assert_eq!(
+            peer.lines
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.starts_with("l STRENGTH"))
+                .count(),
+            3,
+            "the S-meter must have been probed on ticks 3, 6 and 9"
+        );
+        assert_eq!(
+            pool.lock().unwrap()[0].smeter_supported,
+            Some(true),
+            "two transient misses must not latch 'this rig has no S-meter'"
+        );
+        let snap = engine.lock().unwrap().snapshot();
+        let row = snap
+            .radios
+            .iter()
+            .find(|r| r.id == id)
+            .expect("the monitored radio is in the snapshot");
+        assert_eq!(
+            row.smeter_db,
+            Some(-30),
+            "and the reading must reach the radio's live cache"
         );
     }
 

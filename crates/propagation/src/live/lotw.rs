@@ -15,16 +15,35 @@
 //!   only a fixed, category-based message derived from boolean predicates.
 
 use super::neterr;
-use std::time::Duration;
+use std::io::Read;
+use std::time::{Duration, Instant};
 
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
 
-/// The whole-request deadline. reqwest 0.12's blocking `ClientBuilder::timeout` is "a
-/// timeout for connect, **read** and write operations"
-/// (`reqwest-0.12.28/src/blocking/client.rs`), so this bounds the body download too —
-/// which is why [`body_text`] has to classify a timeout of its own. Named rather than
-/// inlined so the operator-facing message below cannot drift from the real number.
-const TIMEOUT_SECS: u64 = 60; // LoTW is a slow queue; a full pull is large.
+/// How long the fetch may be SILENT before it is called dead.
+///
+/// ⚠️ #266. This is the client's `timeout`, and it is deliberately **not** a whole-body
+/// deadline any more. reqwest's blocking client re-applies this value to *every* `read` on
+/// the response body (`reqwest-0.12.28/src/blocking/response.rs`, `impl Read for Response`),
+/// so reading the body ourselves turns it into exactly an inactivity bound: a report that
+/// keeps arriving keeps its budget, and one that stops arriving ends. It still bounds
+/// `send()` — connect, TLS and the response headers as one — which is the phase where "LoTW
+/// is unreachable" actually shows up.
+const IDLE_TIMEOUT_SECS: u64 = 120;
+
+/// The hard ceiling on one report fetch, enforced by [`body_text`]'s own loop.
+///
+/// The idle bound above cannot supply this: a body that keeps trickling resets it forever,
+/// and this request carries the operator's LoTW password in its query string, so it must
+/// always end. Ten minutes is well above what a first full pull of a large log costs even on
+/// a slow LoTW, and well below a wait anyone would sit through twice.
+const TOTAL_TIMEOUT_SECS: u64 = 600;
+
+/// The two bounds mean different things and must never be swapped: silence has to be called
+/// dead well before the whole transfer is, or the ceiling would fire first and every stall
+/// would be reported as a report too large to finish. A property of the constants, so it is
+/// checked where they are written rather than in a test that could be deleted with them.
+const _: () = assert!(IDLE_TIMEOUT_SECS * 2 <= TOTAL_TIMEOUT_SECS);
 
 /// Fetch a LoTW report given a fully-built report URL (which carries the
 /// credentials). Returns the raw response body (ADIF on success); the caller
@@ -33,8 +52,18 @@ const TIMEOUT_SECS: u64 = 60; // LoTW is a slow queue; a full pull is large.
 /// On any failure returns a **redacted** message that never contains the URL,
 /// the password, or the raw transport error.
 pub fn fetch_report(url: &str) -> Result<String, String> {
+    fetch_report_with(
+        url,
+        Duration::from_secs(IDLE_TIMEOUT_SECS),
+        Duration::from_secs(TOTAL_TIMEOUT_SECS),
+    )
+}
+
+/// [`fetch_report`] with its two bounds supplied. Production only ever calls it through
+/// `fetch_report`; the split exists so the constants above live in exactly one place.
+fn fetch_report_with(url: &str, idle: Duration, total: Duration) -> Result<String, String> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(TIMEOUT_SECS))
+        .timeout(idle)
         .user_agent(UA)
         .https_only(true) // reject any non-https URL outright
         .redirect(reqwest::redirect::Policy::none()) // never follow a redirect off https
@@ -48,62 +77,132 @@ pub fn fetch_report(url: &str) -> Result<String, String> {
         // is reported, not chased. Only the numeric status is surfaced — no URL.
         return Err(format!("LoTW: server returned HTTP {}", status.as_u16()));
     }
-    body_text(resp)
+    body_text(resp, idle, total)
 }
 
-/// Read the report body off a response LoTW has already answered 2xx to.
+/// Read the report body off a response LoTW has already answered 2xx to, a chunk at a time,
+/// under two bounds that mean different things.
 ///
-/// ⚠️ #266. This used to flatten every failure here into "could not read the response
-/// body", which named the *step* and threw away the *category* — the one thing the
-/// operator could have acted on. Reaching this point already proves the request got
-/// through and LoTW answered 2xx, so the categories mean something different than they do
-/// around [`fetch_report`]'s `send()`: a timeout here is not an unreachable server, and
-/// telling the operator to "check your network" would send them after something that
-/// demonstrably works. What it IS, this code cannot tell — see
-/// [`download_timeout_message`], which says so rather than guessing.
+/// ⚠️ **#266 — THE DEFECT THIS REPLACES.** This used to be `Response::text()`, which puts the
+/// WHOLE body read under one deadline. That is the wrong question to ask LoTW. It answers 2xx
+/// as soon as it accepts the request and then streams the ADIF (chunked, and uncompressed — it
+/// sends no `Content-Encoding` even when gzip is offered), so the deadline was a budget on the
+/// server's own work rather than on the connection being alive. A first sync has no cursor
+/// (`lotw_last_qsl` is empty), which makes it a full pull of the operator's entire confirmation
+/// history; when that could not finish inside the budget the download failed, and because the
+/// cursor only advances on a complete body, every retry was the identical request. That is the
+/// reported symptom exactly: confirmations that never download, permanently.
 ///
-/// Same redaction discipline as [`redact`] and for the same reason — `reqwest::Error`'s
-/// `Display`/`source` can echo the password-bearing URL, so this classifies by boolean
-/// predicate and never stringifies the error.
+/// The reporter's "short date ranges failed too" was not a counter-example to the deadline —
+/// Nexus has no LoTW date-range control at all (the Logbook button and the Settings button both
+/// call `download_lotw_report` with no arguments), so every attempt was the same full pull.
 ///
-/// The only production caller is [`fetch_report`], whose client carries [`TIMEOUT_SECS`];
-/// that is where the number in the message comes from.
-fn body_text(resp: reqwest::blocking::Response) -> Result<String, String> {
-    resp.text().map_err(|e| {
-        if e.is_timeout() {
-            download_timeout_message()
-        } else {
-            format!(
-                "{} while downloading the report",
-                neterr::redact("LoTW", &e)
-            )
+/// So the bounds now ask the right questions. `idle` — the client timeout, which reqwest
+/// re-applies to each `read` — bounds SILENCE; `total` bounds the whole transfer, because the
+/// idle bound alone would let a trickling body hold a password-bearing request open forever. A
+/// large report that keeps arriving now completes. The ceiling is checked before each read, so
+/// the true stop is at most one `idle` past it — a bound, not a promise of precision.
+///
+/// Same redaction discipline as [`redact`] and for the same reason: a `reqwest::Error`'s
+/// `Display`/`source` can echo the password-bearing URL, so every message on this path is built
+/// from boolean predicates and a byte count, never from the error's own text.
+fn body_text(
+    mut resp: reqwest::blocking::Response,
+    idle: Duration,
+    total: Duration,
+) -> Result<String, String> {
+    let deadline = Instant::now() + total;
+    let mut body: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        if Instant::now() >= deadline {
+            return Err(overall_timeout_message(body.len(), total));
         }
-    })
+        match resp.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => body.extend_from_slice(&chunk[..n]),
+            Err(e) => return Err(read_error_message(&e, body.len(), idle)),
+        }
+    }
+    // Byte-for-byte what `Response::text()` would have returned: this crate's reqwest does not
+    // enable the `charset` feature, and without it `text()` is `String::from_utf8_lossy` over
+    // the same bytes regardless of Content-Type (`async_impl/response.rs`).
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
-/// What the operator is told when the report did not finish downloading in time.
+/// Classify a failed body read **without stringifying it**.
 ///
-/// ⚠️ It names **two** possibilities and asserts neither, and that is deliberate. The first
-/// wording said the cause was "LoTW queueing the report at its end. Try again shortly." — but
-/// [`TIMEOUT_SECS`] is a whole-request deadline, so a report that is arriving steadily and is
-/// simply too big to finish inside it busts exactly the same deadline and arrives as exactly
-/// the same error, and for that operator trying again shortly is the one thing that never
-/// helps. Nothing at this point can tell the two apart: `blocking::Response::text` wraps the
-/// entire body read in ONE `wait::timeout`, so all that comes back is "the budget ran out"
-/// (`reqwest-0.12.28/src/blocking/response.rs:296`).
+/// Both arms of `impl Read for blocking::Response` hand back an `io::Error` carrying a
+/// `reqwest::Error` — the timeout arm through `Error::into_io`, the stream arm through the same
+/// conversion inside `body_mut` — so the category is reachable by predicate, which is the only
+/// way it may be read here.
+fn read_error_message(e: &std::io::Error, got: usize, idle: Duration) -> String {
+    match e.get_ref().and_then(|r| r.downcast_ref::<reqwest::Error>()) {
+        Some(re) if re.is_timeout() => stalled_message(got, idle),
+        Some(re) => format!(
+            "{} while downloading the report",
+            neterr::redact("LoTW", re)
+        ),
+        // No reqwest error inside — the socket itself failed. Reported as a category like
+        // everything else on this path; nothing here is ever printed.
+        None => format!(
+            "LoTW: the download stopped after {} — the connection dropped. Try again.",
+            human_bytes(got)
+        ),
+    }
+}
+
+/// What the operator is told when the transfer went quiet.
 ///
-/// Nor is reading the body by hand a way to find out, though it looks like one: `impl Read for
-/// Response` re-applies `self.timeout` to EVERY `read` call (same file, :439), so counting
-/// bytes as they arrive would replace the whole-request deadline with a per-chunk one and
-/// leave a credential-bearing fetch with no overall bound at all. Diagnosing this properly
-/// costs the deadline; saying honestly what is known costs nothing.
-fn download_timeout_message() -> String {
+/// ⚠️ It states **which** of the two cases happened instead of offering both, and that is the
+/// point of reading the body here. The previous wording had to name "still assembling" and "too
+/// large" and assert neither, because one whole-body deadline cannot tell them apart. A byte
+/// count can: nothing arrived means LoTW has not started sending; something arrived and then
+/// stopped is a stalled transfer, and telling that operator to wait for a queue would send them
+/// after the wrong thing.
+fn stalled_message(got: usize, idle: Duration) -> String {
+    let secs = idle.as_secs();
+    if got == 0 {
+        format!(
+            "LoTW: it accepted the request and then sent nothing for {secs}s — it is still \
+             assembling the report at its end. Try again in a few minutes."
+        )
+    } else {
+        format!(
+            "LoTW: the report stopped arriving after {} and the connection stayed quiet for \
+             {secs}s. Nothing was merged, so nothing is lost — try the download again.",
+            human_bytes(got)
+        )
+    }
+}
+
+/// What the operator is told when the report was still arriving when the ceiling ran out.
+fn overall_timeout_message(got: usize, total: Duration) -> String {
     format!(
-        "LoTW: timed out after {TIMEOUT_SECS}s while downloading the report — LoTW accepted \
-         the request and answered, so the connection is fine. Either it is still assembling \
-         the report at its end, or the report is too large to finish arriving inside the \
-         deadline. Try again; if it keeps timing out, ask for a shorter date range."
+        "LoTW: the report was still arriving after {} ({} so far) and Nexus stopped waiting. \
+         That is an unusually large pull — try again when LoTW is less busy.",
+        human_duration(total),
+        human_bytes(got)
     )
+}
+
+/// A byte count as an operator reads it. Message text only.
+fn human_bytes(n: usize) -> String {
+    match n {
+        n if n >= 1024 * 1024 => format!("{:.1} MB", n as f64 / (1024.0 * 1024.0)),
+        n if n >= 1024 => format!("{} kB", n / 1024),
+        n => format!("{n} bytes"),
+    }
+}
+
+/// A duration as an operator reads it — "10 minutes", not "600s". Message text only.
+fn human_duration(d: Duration) -> String {
+    let s = d.as_secs();
+    if s >= 120 {
+        format!("{} minutes", s / 60)
+    } else {
+        format!("{s}s")
+    }
 }
 
 /// Map a transport error to a safe, category-only message. Uses ONLY boolean
@@ -138,12 +237,16 @@ mod tests {
         assert!(err.starts_with("LoTW: "), "unexpected message: {err}");
     }
 
-    /// A loopback server that answers 200 with a `Content-Length` it never satisfies, then
-    /// holds the socket open — the exact shape of LoTW answering and then queueing the
-    /// report server-side. Plain HTTP: what is under test is the error class reqwest
-    /// reports for a stalled body, and reaching it over TLS would need a certificate this
-    /// suite has no way to make. No internet is involved.
-    fn stalled_body_server() -> u16 {
+    /// A loopback server shaped like LoTW: 200 + `Transfer-Encoding: chunked` (measured
+    /// against `lotw.arrl.org` on 2026-09-21 — it is chunked, and it sends no
+    /// `Content-Encoding` even when gzip is offered), then `chunks` chunks of `chunk_len`
+    /// bytes `gap` apart. `finish` closes the body properly; otherwise it goes quiet and
+    /// holds the socket open, which is the shape of a report that stops arriving.
+    ///
+    /// Plain HTTP: what is under test is how the body-read loop treats bytes and silence, and
+    /// reaching it over TLS would need a certificate this suite has no way to make. No
+    /// internet is involved.
+    fn body_server(chunks: usize, chunk_len: usize, gap: Duration, finish: bool) -> u16 {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = l.local_addr().expect("addr").port();
         std::thread::spawn(move || {
@@ -151,82 +254,153 @@ mod tests {
                 let _ = s.set_read_timeout(Some(Duration::from_millis(500)));
                 let mut buf = [0u8; 1024];
                 let _ = s.read(&mut buf);
-                // Headers only. The body the length promises never comes.
-                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n");
+                if s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                    .is_err()
+                {
+                    return;
+                }
                 let _ = s.flush();
-                std::thread::sleep(Duration::from_millis(1500));
+                let payload = vec![b'A'; chunk_len];
+                for _ in 0..chunks {
+                    std::thread::sleep(gap);
+                    if s.write_all(format!("{chunk_len:x}\r\n").as_bytes())
+                        .is_err()
+                        || s.write_all(&payload).is_err()
+                        || s.write_all(b"\r\n").is_err()
+                    {
+                        return;
+                    }
+                    let _ = s.flush();
+                }
+                if finish {
+                    let _ = s.write_all(b"0\r\n\r\n");
+                    let _ = s.flush();
+                } else {
+                    // Quiet, but still connected: the case an inactivity bound exists for.
+                    std::thread::sleep(Duration::from_millis(1500));
+                }
             }
         });
         port
     }
 
-    /// #266 follow-up. The message must not name a cause it cannot tell apart.
-    ///
-    /// A report LoTW has not begun sending and a report that is arriving too slowly bust the
-    /// SAME whole-request deadline and arrive as the same `reqwest` error class, so the arm
-    /// cannot know which it has. The first wording asserted the first one — "which is LoTW
-    /// queueing the report at its end. Try again shortly." — and for the second, retrying is
-    /// exactly what does not help.
-    ///
-    /// Coupled to the wording on purpose: the wording IS the defect here, so this is what
-    /// stops it regressing quietly.
-    #[test]
-    fn the_download_timeout_does_not_diagnose_a_cause_it_cannot_see() {
-        let m = download_timeout_message();
-        // Controls: it must still say what happened and how long it waited, or "stop naming a
-        // cause" would be satisfied by saying nothing.
-        assert!(
-            m.contains("timed out"),
-            "it must still name the failure: {m}"
-        );
-        assert!(
-            m.contains(&TIMEOUT_SECS.to_string()),
-            "it must still name the deadline: {m}"
-        );
-        // Both possibilities named, neither asserted.
-        assert!(
-            m.contains("still assembling"),
-            "the queued-report case must still be offered: {m}"
-        );
-        assert!(
-            m.contains("too large"),
-            "the slow-download case is the one the old wording denied: {m}"
-        );
-        // …and an action for the case where trying again never helps.
-        assert!(
-            m.contains("date range"),
-            "an operator whose pull is simply too big is told nothing to do: {m}"
-        );
-    }
-
-    #[test]
-    fn a_stall_while_downloading_the_report_is_classified_as_a_timeout() {
-        // #266: the reporter's "LoTW: could not read the response body" proves LoTW
-        // answered 2xx and then the BODY read failed — and the old wording threw the
-        // category away, so a 60 s stall and a dropped stream read identically.
-        let port = stalled_body_server();
+    /// The response whose body the tests drive, from a client carrying `idle` as its timeout —
+    /// the same wiring [`fetch_report_with`] does, minus `https_only`, which no loopback
+    /// server can satisfy and which is not what is under test here.
+    fn stalled_response(port: u16, idle: Duration) -> reqwest::blocking::Response {
         let resp = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_millis(400))
+            .timeout(idle)
             .build()
             .expect("client")
             .get(format!(
                 "http://127.0.0.1:{port}/lotwuser/lotwreport.adi?login=ke3z&password=Sup3rSecret"
             ))
             .send()
-            // The positive control for the whole test: if this failed, the stall would be
-            // in the HEADERS and the body-read path under test would never be reached.
-            .expect("headers must arrive — only the body stalls");
-        assert!(resp.status().is_success(), "the stall must follow a 2xx");
+            // The positive control for every test below: if this failed, the stall would be in
+            // the HEADERS and the body-read path under test would never be reached.
+            .expect("headers must arrive — only the body is under test");
+        assert!(resp.status().is_success(), "the body must follow a 2xx");
+        resp
+    }
 
-        let err = body_text(resp).unwrap_err();
-        assert!(
-            err.contains("timed out"),
-            "a stalled download must be reported as a timeout, not as an unreadable body: {err}"
-        );
-        // Same redaction invariant as `send()`: the URL carries the password.
+    /// Nothing on this path may echo the password-bearing URL.
+    fn assert_redacted(err: &str) {
         assert!(!err.contains("Sup3rSecret"), "password leaked: {err}");
         assert!(!err.contains("password"), "param name leaked: {err}");
         assert!(!err.contains("127.0.0.1"), "host leaked: {err}");
         assert!(err.starts_with("LoTW: "), "unexpected message: {err}");
+    }
+
+    /// **#266 — THE DEFECT.** A report that keeps arriving must not be cut off.
+    ///
+    /// `Response::text()` put the whole body under ONE deadline, so a download that was
+    /// progressing perfectly well failed the moment the transfer outlasted it — and since the
+    /// sync cursor only advances on a complete body, every retry was the same doomed request.
+    ///
+    /// Here the body takes ~1.5 s to arrive in ten chunks 150 ms apart, with the inactivity
+    /// bound at 400 ms: never reached, because bytes keep coming. Under the old semantics a
+    /// 400 ms budget killed this outright, which is what makes it the repro rather than a
+    /// restatement — flip `body_text`'s loop back to `resp.text()` and this reds on the
+    /// timeout, while the two stall tests below stay green.
+    #[test]
+    fn a_report_that_keeps_arriving_is_not_cut_off_by_the_deadline() {
+        let idle = Duration::from_millis(400);
+        let port = body_server(10, 4096, Duration::from_millis(150), true);
+        let body = body_text(
+            stalled_response(port, idle),
+            idle,
+            Duration::from_secs(10), // the ceiling, far above this transfer
+        )
+        .expect("a body that keeps arriving must complete");
+        assert_eq!(
+            body.len(),
+            10 * 4096,
+            "every chunk must be kept, in order and whole"
+        );
+        assert!(body.bytes().all(|b| b == b'A'), "the body was corrupted");
+    }
+
+    #[test]
+    fn a_report_that_never_starts_arriving_is_reported_as_lotw_still_assembling() {
+        // The 2xx-then-silence case: this is what the reporter's "could not read the response
+        // body" actually was, and the one case where waiting really is the answer.
+        let idle = Duration::from_millis(400);
+        let port = body_server(0, 0, Duration::ZERO, false);
+        let err = body_text(stalled_response(port, idle), idle, Duration::from_secs(10))
+            .expect_err("silence must not look like an empty report");
+        assert!(
+            err.contains("sent nothing"),
+            "it must say nothing arrived: {err}"
+        );
+        assert!(
+            err.contains("still assembling"),
+            "the queued-report case is the one this is: {err}"
+        );
+        assert_redacted(&err);
+    }
+
+    /// The discriminator the old single-deadline wording could not make.
+    ///
+    /// A transfer that started and then stopped is not LoTW queueing a report, and telling
+    /// that operator to wait for a queue sends them after the wrong thing. The byte count is
+    /// what tells the two apart, so this asserts on the difference, not just on the words.
+    #[test]
+    fn a_report_that_stops_part_way_is_not_reported_as_a_queue() {
+        let idle = Duration::from_millis(400);
+        let port = body_server(2, 1024, Duration::from_millis(10), false);
+        let err = body_text(stalled_response(port, idle), idle, Duration::from_secs(10))
+            .expect_err("a body that stops half way is not a complete report");
+        assert!(
+            err.contains("stopped arriving after 2 kB"),
+            "it must say how much arrived: {err}"
+        );
+        assert!(
+            !err.contains("still assembling"),
+            "bytes arrived, so this is not LoTW queueing: {err}"
+        );
+        assert_redacted(&err);
+    }
+
+    #[test]
+    fn a_body_that_never_ends_is_stopped_by_the_overall_ceiling() {
+        // The idle bound alone cannot end this — the trickle keeps resetting it — and the URL
+        // carries the operator's password, so the fetch must always terminate.
+        let idle = Duration::from_millis(400);
+        let port = body_server(10_000, 64, Duration::from_millis(20), false);
+        let err = body_text(
+            stalled_response(port, idle),
+            idle,
+            Duration::from_millis(500),
+        )
+        .expect_err("an endless body must hit the ceiling");
+        assert!(
+            err.contains("still arriving"),
+            "it must say the transfer was alive, not stalled: {err}"
+        );
+        assert!(
+            err.contains("stopped waiting"),
+            "it must say Nexus gave up, not that LoTW failed: {err}"
+        );
+        assert_redacted(&err);
     }
 }
