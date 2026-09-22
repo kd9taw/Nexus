@@ -6779,6 +6779,13 @@ export const EN = {
   'settings.workspace.theme.label': 'Theme',
   'settings.workspace.theme.hint':
     'Light reads best outdoors in daylight; the top bar’s Field chip boosts contrast and size in whichever theme you use.',
+  'settings.workspace.contrast.label': 'High contrast',
+  'settings.workspace.contrast.on': 'On',
+  'settings.workspace.contrast.off': 'Off',
+  'settings.workspace.contrast.hint':
+    'Stronger text-against-background in whichever theme you are using, at the size you already have. Turn this on if the screen is hard to read \u2014 it does not change the UI scale.',
+  'settings.workspace.contrast.hint.field':
+    'Field mode is on, so high contrast is applied already. This setting is your own standing choice, and it is what the screen keeps when you turn Field mode off.',
   'settings.workspace.field.label': 'Field mode',
   'settings.workspace.field.on': 'On',
   'settings.workspace.field.off': 'Off',

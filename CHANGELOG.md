@@ -194,6 +194,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all, and searching Settings for "contrast" returned nothing. There is now a **Field mode** row in
   Appearance ▸ Workspace, and the same words find it. It is the same switch as the chip, not a
   second one: flipping either moves both.
+- **High contrast is now its own switch, separate from Field mode (#215).** Field mode raises
+  contrast *and* makes everything bigger, and it was the only way to get the stronger contrast —
+  so an operator who just wanted a more readable screen at the size they had already chosen could
+  not have one. **Settings ▸ Appearance ▸ Workspace ▸ High contrast** is that setting: the same
+  stronger text-against-background Field mode applies, in either theme, and it changes nothing
+  else — your UI scale stays exactly where you put it. Field mode is unchanged and still turns
+  contrast on as part of the outdoor treatment; the two do not fight. Your High contrast choice is
+  remembered separately, so turning Field mode off puts the screen back to the contrast *you*
+  chose rather than clearing it, and while Field mode is on the High contrast row says so.
 
 ### Corrections to 1.14.0
 

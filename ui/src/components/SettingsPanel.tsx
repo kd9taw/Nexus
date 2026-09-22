@@ -250,6 +250,11 @@ interface Props {
    *  pointed at it. Same optional shape as the theme above. */
   fieldMode?: boolean
   onFieldModeChange?: (on: boolean) => void
+  /** #215: high contrast on its own — the same tokens field mode lights, without the larger
+   *  auto-fit that comes with it. The size half of the report already had a finer control
+   *  (UI scale, just below); this is the half that had none. Same optional shape. */
+  highContrast?: boolean
+  onHighContrastChange?: (on: boolean) => void
 }
 
 /** Display order for the Features section's category groups. */
@@ -937,6 +942,8 @@ export function SettingsPanel({
   onThemeChange,
   fieldMode = false,
   onFieldModeChange,
+  highContrast = false,
+  onHighContrastChange,
 }: Props) {
   const configuration=useNavigation<SettingsConfiguration>('settings')
   const remote=configuration.remote
@@ -3387,12 +3394,61 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.workspace.theme.hint')}</span>
                 </div>
               )}
+              {/* #215: HIGH CONTRAST ON ITS OWN, directly under Theme because it modifies the
+                  palette the row above picks. The reporter asked for larger type and stronger
+                  contrast; the size half already had a finer control than a switch could be
+                  (UI scale, two rows down — an eleven-step ladder plus a cap), so no "large
+                  text" boolean is offered here and this row is contrast only. What it did NOT
+                  have was any way to reach these tokens without field mode, which in auto
+                  scale mode moves the zoom too.
+
+                  ⭐ IT DOES NOT FIGHT FIELD MODE. `data-contrast` is derived from both
+                  (useFieldMode.ts) — either lights it, neither clears the other's stored
+                  value, so leaving the field restores exactly the contrast the operator had
+                  chosen. While field mode is on it is ALSO asking for these tokens, and this
+                  row keeps showing the operator's own standing choice rather than the
+                  effective state: the note below says so, so a row reading "Off" on a
+                  high-contrast screen is explained instead of looking broken. Deliberately
+                  not disabled — the standing preference is still theirs to set, and it is
+                  what the screen falls back to the moment field mode goes off. */}
+              {onHighContrastChange && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.contrast.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.workspace.contrast.label')}
+                  >
+                    <button
+                      type="button"
+                      className={`theme-chip${!highContrast ? ' active' : ''}`}
+                      aria-pressed={!highContrast}
+                      onClick={() => onHighContrastChange(false)}
+                    >
+                      {t('settings.workspace.contrast.off')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-chip${highContrast ? ' active' : ''}`}
+                      aria-pressed={highContrast}
+                      onClick={() => onHighContrastChange(true)}
+                    >
+                      {t('settings.workspace.contrast.on')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">
+                    {fieldMode
+                      ? t('settings.workspace.contrast.hint.field')
+                      : t('settings.workspace.contrast.hint')}
+                  </span>
+                </div>
+              )}
               {/* #215: Field mode, BETWEEN theme and scale, because it is both — maximum
                   contrast and larger type in one switch. It has been in the app since
                   2026-08-09 and reachable only as a chip named "Field" in the top bar, so an
                   operator who came to Settings for a high-contrast or large-text setting found
                   the scale half and not the contrast half. The chip stays: this is the same
-                  boolean (`useFieldMode`), not a second one. */}
+                  boolean (`useContrastPrefs().fieldMode`), not a second one. */}
               {onFieldModeChange && (
                 <div className="settings-field">
                   <span className="settings-label">{t('settings.workspace.field.label')}</span>

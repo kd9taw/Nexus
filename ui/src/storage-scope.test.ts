@@ -110,6 +110,9 @@ const SHARED = [
   // Field mode: being outdoors is a fact about the STATION, not a window — a pop-out beside
   // the main window in the same sunlight must follow it (DetachedPanel mirrors the hook).
   'nexus-field-mode',
+  // High contrast (#215), the other input to `data-contrast`: a fact about the operator's
+  // eyes and this screen, so every window of the station agrees, exactly like field mode.
+  'nexus-high-contrast',
   // The optional local-time clock beside UTC (#253). Per MACHINE, like density and field mode:
   // local time is a fact about this computer's time zone, and every window of it agrees.
   'nexus-local-clock',

@@ -13,11 +13,16 @@
           var den = localStorage.getItem('nexus-density')
           if (den === 'guided' || den === 'standard' || den === 'dense') d.setAttribute('data-density', den)
           if (localStorage.getItem('nexus-motion') === 'reduce') d.setAttribute('data-motion', 'reduce')
-          // Field mode (outdoor/POTA): high-contrast tokens key off this attribute, and the
-          // zoom seed below mirrors its larger fit — BOTH halves must seed or field mode
-          // flashes the indoor look on every launch.
+          // The contrast axis, and the asymmetry IS the feature (#215 — useFieldMode.ts is
+          // the runtime copy of this derivation). EITHER field mode or the standing
+          // high-contrast preference lights the tokens, so both must seed or the launch
+          // flashes the indoor look; only FIELD MODE reaches the zoom seed below, because
+          // only it carries the larger fit. High contrast on its own must leave the scale
+          // exactly where the operator set it.
           var fieldOn = localStorage.getItem('nexus-field-mode') === '1'
-          if (fieldOn) d.setAttribute('data-contrast', 'high')
+          if (fieldOn || localStorage.getItem('nexus-high-contrast') === '1') {
+            d.setAttribute('data-contrast', 'high')
+          }
           // First-paint zoom seed — keep in sync with useScale.ts (SCALE_STEPS, the
           // per-surface natural fit model, keys nexus-ui-scale-mode /
           // nexus-ui-scale-cap): a pinned Manual scale applies directly (capped in a

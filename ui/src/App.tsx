@@ -62,7 +62,7 @@ import { Announcer } from './components/Announcer'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { loadWatchlist, type WatchFilter } from './watchlist'
 import { useTheme } from './useTheme'
-import { useFieldMode } from './useFieldMode'
+import { useContrastPrefs } from './useFieldMode'
 import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
 import { useViewport } from './useViewport'
@@ -270,9 +270,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   const spotsRead = useRemoteCollection('spots')
   const [remoteSelection, setRemoteSelection] = useState<string | null>(null)
   const [theme, setTheme] = useTheme()
-  // Field mode (outdoor/POTA): high contrast via data-contrast on <html>, larger auto-fit via
-  // the useScale argument. Global — a fact about the station, like the theme.
-  const [fieldMode, setFieldMode] = useFieldMode()
+  // The contrast axis: field mode (outdoor/POTA) and the standing high-contrast preference
+  // (#215). Both set data-contrast on <html>; only field mode is handed to useScale, because
+  // only it carries the larger auto-fit. Global — facts about the station, like the theme.
+  const { fieldMode, setFieldMode, highContrast, setHighContrast } = useContrastPrefs()
   const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale(fieldMode)
   // First launch on a high-density display: raise the auto-fit ceiling so the UI can grow to
   // the panel. Once only, raise only, and nothing at all on an ordinary 96-dpi monitor or on
@@ -2924,6 +2925,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             onThemeChange={setTheme}
             fieldMode={fieldMode}
             onFieldModeChange={setFieldMode}
+            highContrast={highContrast}
+            onHighContrastChange={setHighContrast}
           />
         </main>
       )
