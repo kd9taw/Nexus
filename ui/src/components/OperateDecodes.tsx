@@ -449,13 +449,20 @@ export function OperateDecodes({
             (partnerCall == null || d.from !== partnerCall)
           ),
       )
-      // "Hide confirmed on this band" — own rows and the working partner always stay.
+      // "Hide confirmed on this band" — own rows and the working partner always stay,
+      // and so does anything addressed to me: the same rule as −B4 above, because the two
+      // are one class (declutter what I no longer need to work) and must not disagree.
+      // `confirmedBand` is per-ENTITY, so this chip hides EVERY station from a confirmed
+      // entity — including the partner's RR73 the moment the QSO ends and the live-partner
+      // exemption stops covering it. That is −B4's #268 defect reached through the other
+      // chip; approved with it rather than left stranded.
       .filter(
         (d) =>
           !(
             hideConfirmed &&
             d.confirmedBand &&
             !d.mine &&
+            !d.directedToMe &&
             (partnerCall == null || d.from !== partnerCall)
           ),
       )

@@ -129,6 +129,35 @@ describe('−B4 and a decode addressed to me (#268)', () => {
     expect(shows(rx, /PD2BS/)).toBe(true)
   })
 
+  it('hide-confirmed does not hide it either — the two declutter filters must agree', () => {
+    // The same principle on the sibling filter (operator-approved with the −B4 fix): a
+    // decode addressed to YOU is never hidden by a declutter filter, and two filters in
+    // that class must not disagree. `confirmedBand` is per-ENTITY, so with hide-confirmed
+    // on, every station from a confirmed entity goes — including the partner's RR73 once
+    // the QSO ends and the live-partner exemption stops covering it. Exactly −B4's bug,
+    // reached through the other chip.
+    localStorage.setItem('nexus.decodes.hideConfirmed', '1')
+    const confirmedOther = decode({
+      from: 'G3XYZ',
+      message: 'CQ G3XYZ IO91',
+      confirmedBand: true,
+    })
+    const confirmedRr73 = decode({
+      from: 'PD2BS',
+      message: 'KD9TAW PD2BS RR73',
+      directedToMe: true,
+      confirmedBand: true,
+      isCq: false,
+    })
+    const { rx } = mountBoth([confirmedOther, confirmedRr73])
+    expect(shows(rx, /G3XYZ/), 'control: hide-confirmed really is hiding a confirmed CQ').toBe(
+      false,
+    )
+    expect(shows(rx, /PD2BS/), 'the RR73 that ended our QSO vanished under hide-confirmed').toBe(
+      true,
+    )
+  })
+
   it('−B4 still hides a worked station that is only calling CQ', () => {
     // The filter has to keep working, or the fix above is just "−B4 off".
     localStorage.setItem('nexus.decodes.hideB4', '1')

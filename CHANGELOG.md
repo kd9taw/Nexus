@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"Hide confirmed" no longer hides a station calling you either.** Same fix as the −B4 one
+  above, on the other decluttering chip: it hides every station from an entity you have already
+  confirmed on the band, which took your partner's RR73 away the moment the contact was logged.
 - **Garbled text on the band can no longer be read as a message to you — or answered.** A
   decoded line only counts as a real exchange now if BOTH callsigns in it are callsigns. It used
   to be enough for the last word to look like a report, a grid or a 73, so a line such as
