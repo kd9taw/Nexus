@@ -780,11 +780,13 @@ pub struct Logbook {
     minter: Minter,
 }
 
+mod edit;
 mod id;
 mod op;
 mod records;
 pub mod sqlite;
 pub mod writer;
+pub use edit::{OtaEdit, QsoEdit};
 pub use id::{Minter, RecordId};
 pub use op::{Effects, LogOp, UploadService};
 pub use records::OpClass;
