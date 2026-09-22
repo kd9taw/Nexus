@@ -75,6 +75,7 @@
 // ── THE REAL LABELS (Logbook.tsx). Keep in step with the constants there. ───────────────
 const QRZ_LABEL = 'QRZ', QRZ_CORRECT_LABEL = 'QRZ✎', CLUBLOG_LABEL = 'CL';
 const HRDLOG_LABEL = 'HL', WRL_LABEL = 'WRL', QSL_MENU_LABEL = 'QSL▸';
+const SAT_MENU_LABEL = 'SAT▸';
 // The buttons in render order. `control` true, which is the widest case and the one the
 // operator runs: the six push buttons, then the QSL menu, then edit and delete.
 const BTNS = ['📢', QRZ_LABEL, QRZ_CORRECT_LABEL, CLUBLOG_LABEL, HRDLOG_LABEL, WRL_LABEL];
@@ -84,6 +85,13 @@ const TAIL = ['✎', '✕'];
 const OPTS = {
   en: [QSL_MENU_LABEL, 'Bureau', 'Direct', 'Electronic', 'QSL NOT sent', 'Card received', 'Card NOT received'],
   de: [QSL_MENU_LABEL, 'Büro', 'Direkt', 'Elektronisch', 'QSL NICHT gesendet', 'Karte erhalten', 'Karte NICHT erhalten'],
+};
+// The SATELLITE tag menu beside it. Its options are LoTW's own satellite names, which are
+// invariant tokens, plus the one prose entry that removes the tag — the widest option, and
+// the only one a catalog can grow.
+const SAT_OPTS = {
+  en: [SAT_MENU_LABEL, 'AO-10', 'AO-91', 'AO-123', 'ARISS', 'SO-50', 'TEV2-1', 'Not via satellite'],
+  de: [SAT_MENU_LABEL, 'AO-10', 'AO-91', 'AO-123', 'ARISS', 'SO-50', 'TEV2-1', 'Nicht über Satellit'],
 };
 
 // The eleven compact columns that precede the actions cell, with representative content —
@@ -122,6 +130,12 @@ function buildRow(row, lang) {
     const op = document.createElement('option'); op.textContent = o; sel.appendChild(op);
   }
   act.appendChild(sel);
+  const satSel = document.createElement('select');
+  satSel.className = 'log-rowbtn'; satSel.style.fontSize = '0.85em';
+  for (const o of SAT_OPTS[lang]) {
+    const op = document.createElement('option'); op.textContent = o; satSel.appendChild(op);
+  }
+  act.appendChild(satSel);
   for (const label of TAIL) {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'log-rowbtn' + (label === '✕' ? ' danger' : '');
@@ -189,23 +203,30 @@ function measure(opts) {
   });
 
   // What the select WANTS if nothing pins it (widest option), vs what it got.
-  const sel = free.querySelector('select.log-rowbtn');
-  const selClone = sel.cloneNode(true);
-  selClone.style.width = 'max-content'; selClone.style.minWidth = '0'; selClone.style.maxWidth = 'none';
-  selClone.style.position = 'absolute'; selClone.style.left = '-99999px';
-  free.parentElement.appendChild(selClone);
-  const qslIntrinsic = +(r(selClone).width / zoom).toFixed(1);
-  // …and what it needs to show only its CLOSED label, which is the invariant `QSL▸`. This
-  // is the number a pinned width has to cover; `qslIntrinsic` is what it would take if the
-  // catalog were allowed to size the control.
-  while (selClone.options.length > 1) selClone.remove(1);
-  free.parentElement.appendChild(selClone);
-  const qslLabelW = +(r(selClone).width / zoom).toFixed(1);
-  selClone.remove();
-  // A <select>'s scrollWidth is not its ink the way a button's is (the engine clips the
-  // closed box itself), so take the select's requirement from the label measurement above.
-  const selIdx = kids.indexOf(sel);
-  inkW[selIdx] = Math.max(inkW[selIdx], qslLabelW);
+  // BOTH selects: the QSL menu and the satellite tag menu. Measured in a loop rather than
+  // singly, so a third menu is covered by adding it to the row and nothing else.
+  const sels = [...free.querySelectorAll('select.log-rowbtn')];
+  const selIntrinsic = [], selLabelW = [];
+  for (const s of sels) {
+    const selClone = s.cloneNode(true);
+    selClone.style.width = 'max-content'; selClone.style.minWidth = '0'; selClone.style.maxWidth = 'none';
+    selClone.style.position = 'absolute'; selClone.style.left = '-99999px';
+    free.parentElement.appendChild(selClone);
+    selIntrinsic.push(+(r(selClone).width / zoom).toFixed(1));
+    // …and what it needs to show only its CLOSED label, which is the invariant `QSL▸` /
+    // `SAT▸`. This is the number a pinned width has to cover; the intrinsic is what it would
+    // take if the catalog were allowed to size the control.
+    while (selClone.options.length > 1) selClone.remove(1);
+    free.parentElement.appendChild(selClone);
+    selLabelW.push(+(r(selClone).width / zoom).toFixed(1));
+    selClone.remove();
+    // A <select>'s scrollWidth is not its ink the way a button's is (the engine clips the
+    // closed box itself), so take each select's requirement from its label measurement.
+    const selIdx = kids.indexOf(s);
+    inkW[selIdx] = Math.max(inkW[selIdx], selLabelW[selLabelW.length - 1]);
+  }
+  const [qslIntrinsic, satIntrinsic] = selIntrinsic;
+  const [qslLabelW, satLabelW] = selLabelW;
   const requiredInkW = +(inkW.reduce((a, b) => a + b, 0) + gap * (kids.length - 1)).toFixed(1);
 
   const rowEl = document.getElementById('row');
@@ -257,7 +278,8 @@ function measure(opts) {
     clippedLeft, clippedRight,
     overflowingLabels: overflowing,
     overlaps,
-    qslW: widths[selIdx], qslIntrinsic, qslLabelW,
+    qslW: widths[kids.indexOf(sels[0])], qslIntrinsic, qslLabelW,
+    satW: widths[kids.indexOf(sels[1])], satIntrinsic, satLabelW,
     widths, inkW,
     // The cluster wrapped onto a grid row of its own — it is not beside the QSL/Notes cells,
     // it is UNDERNEATH them. Compare tops: an x-only comparison calls that an overlap and is

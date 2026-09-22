@@ -1300,6 +1300,26 @@ impl StationCore {
         ok
     }
 
+    /// Set — or REMOVE — the satellite tag on entry `index` (`PROP_MODE=SAT` + `SAT_NAME`).
+    /// `Some(name)` tags the contact, `None` removes the tag; the name has already been
+    /// gated against LoTW's accepted list by the command layer that owns the table.
+    ///
+    /// Persists by rewriting the ADIF — a removal MUST be written: the wrongly tagged record
+    /// is what LoTW and the Satellite-VUCC fold are reading, and until the file says
+    /// otherwise the contact keeps claiming a bird it was never worked through. Refreshes
+    /// the worked index for the same reason `mark_qsl_card` does: `PROP_MODE=SAT` diverts a
+    /// grid out of the per-band terrestrial sets into the band-independent satellite one, so
+    /// the awards model has to be told. Returns false if `index` is out of range.
+    pub fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
+        self.recover_external_appends();
+        let ok = self.logbook.set_sat_tag(index, sat_name);
+        if ok {
+            self.save_log("set_sat_tag");
+            self.refresh_worked_index();
+        }
+        ok
+    }
+
     /// Delete a logbook entry (a mis-logged contact). Persists by rewriting the
     /// ADIF. Returns false if `index` is out of range. Shifts later indices — the
     /// caller must reload the log afterward.

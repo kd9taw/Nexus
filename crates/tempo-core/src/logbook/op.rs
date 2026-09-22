@@ -95,6 +95,19 @@ pub enum LogOp {
     /// The operator says a paper card arrived (or did not) — a confirmation an awards fold
     /// reads, which is why it is not a [`Stamp`](LogOp::Stamp).
     MarkQslCard { id: RecordId, received: bool },
+    /// The operator says this contact was — or was NOT — worked through a satellite
+    /// (`PROP_MODE=SAT` + `SAT_NAME`). `Some(name)` tags it, `None` removes the tag.
+    ///
+    /// Its own op rather than a field of [`Edit`](LogOp::Edit) because REMOVAL has to be
+    /// unmistakable. The edit form reads a blank field as "leave alone" so that a busted-call
+    /// fix cannot strip a tag the contact earned; put the two fields on that form and a blank
+    /// box means both "leave it" and "clear it" at once. Here the three states are distinct by
+    /// construction: no op at all is leave-alone, `Some` sets, `None` clears. Same shape as
+    /// [`MarkQslSent`](LogOp::MarkQslSent), whose `via: None` is the one value that withdraws.
+    SetSatTag {
+        id: RecordId,
+        sat_name: Option<String>,
+    },
     /// What happened the last time we pushed this contact to one connector.
     Stamp {
         id: RecordId,
@@ -116,6 +129,13 @@ impl LogOp {
             LogOp::Edit { .. } => OpClass::Key,
             LogOp::MarkQslSent { .. } | LogOp::Stamp { .. } => OpClass::Stamp,
             LogOp::MarkQslCard { .. } => OpClass::Upgrade,
+            // `Key`, not the narrower `Upgrade` its neighbour gets: a tag can be REMOVED, and
+            // `Upgrade` promises a monotone change a plan built on an earlier snapshot can be
+            // re-applied over. Naming a change wider than it is costs a rebuild; naming it
+            // narrower serves a stale answer — and the awards fold reads `PROP_MODE` for the
+            // Satellite-VUCC split, so a stale answer here is a wrong award. Exactly what the
+            // same change through `Edit` would cost, on an act an operator performs by hand.
+            LogOp::SetSatTag { .. } => OpClass::Key,
             LogOp::Delete(_) | LogOp::Clear => OpClass::Structural,
         }
     }
@@ -141,6 +161,10 @@ impl Logbook {
             },
             LogOp::MarkQslCard { id, received } => match self.position_of(id) {
                 Some(i) if self.mark_qsl_card(i, received) => Effects::changed(class, id),
+                _ => Effects::none(class),
+            },
+            LogOp::SetSatTag { id, sat_name } => match self.position_of(id) {
+                Some(i) if self.set_sat_tag(i, sat_name.as_deref()) => Effects::changed(class, id),
                 _ => Effects::none(class),
             },
             LogOp::Stamp {
@@ -305,6 +329,16 @@ mod tests {
                 via: Some(QslVia::Bureau),
                 date_unix: 1_700_000_500,
             },
+            // Both directions: a tag set AND a tag removed must miss a row that is gone.
+            // The clear is the one that would hurt — it would strip a stranger's tag.
+            LogOp::SetSatTag {
+                id: gone,
+                sat_name: Some("AO-91".into()),
+            },
+            LogOp::SetSatTag {
+                id: gone,
+                sat_name: None,
+            },
             LogOp::Delete(gone),
         ] {
             let effects = lb.apply(op);
@@ -360,6 +394,22 @@ mod tests {
                     received: true,
                 },
                 OpClass::Upgrade,
+            ),
+            (
+                "sat tag",
+                |ids| LogOp::SetSatTag {
+                    id: ids[1],
+                    sat_name: Some("AO-91".into()),
+                },
+                OpClass::Key,
+            ),
+            (
+                "sat untag",
+                |ids| LogOp::SetSatTag {
+                    id: ids[1],
+                    sat_name: None,
+                },
+                OpClass::Key,
             ),
             ("delete", |ids| LogOp::Delete(ids[1]), OpClass::Structural),
             ("clear", |_| LogOp::Clear, OpClass::Structural),

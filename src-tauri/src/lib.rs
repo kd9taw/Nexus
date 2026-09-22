@@ -14695,6 +14695,83 @@ fn mark_qsl_card(
     log_row(&eng, index)
 }
 
+/// What a `satName` argument MEANS on [`set_sat_tag`] — the one decision this layer owns,
+/// and the same sandwich [`qsl_via_arg`] sits in (UI `string|null` → here → `Engine`).
+///
+/// EXACTLY ONE VALUE REMOVES THE TAG: `null`, which the UI sends from its own explicit
+/// "Not via satellite" menu entry. The EMPTY string is an error, and that arm is the safety
+/// of the whole thing rather than a nicety — empty is the select's PLACEHOLDER, the state the
+/// control sits in when the operator has chosen nothing, and honouring it as a removal would
+/// strip a tag nobody asked to strip.
+///
+/// Every other value must be a satellite LoTW ACCEPTS. A QSO record is permanent, and TQSL
+/// matches `SAT_NAME` against its own designator list and rejects anything else — through the
+/// `-a compliant` funnel one rejected record wedges its whole signed batch. So an unrecognised
+/// name fails closed here, exactly as the automatic stamp refuses to guess one.
+fn sat_name_arg(sat_name: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = sat_name else {
+        return Ok(None); // the removal, and the only one
+    };
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err(
+            "No satellite given — pick one from the list, or use Not via satellite to remove \
+             the tag."
+                .into(),
+        );
+    }
+    if !Engine::is_lotw_sat_name(name) {
+        return Err(format!(
+            "'{name}' is not a satellite LoTW accepts — pick one from the list."
+        ));
+    }
+    Ok(Some(name.to_string()))
+}
+
+/// Set — or REMOVE — the satellite tag on the logged contact `target` (ADIF `PROP_MODE=SAT`
+/// + `SAT_NAME`). Returns the row as stored (see [`edit_qso`]).
+///
+/// ⭐ **Why this is not two boxes on the edit form.** `docs/guide/satellites.md` used to send
+/// an operator who mis-tagged a contact out of the app: close Nexus, open `log.adi` in a text
+/// editor, fix it there. The form carries neither field on purpose — it reads a blank field as
+/// LEAVE ALONE, which is what stops a busted-call fix silently stripping a satellite tag off a
+/// contact that earned it. Add the boxes and a blank one means "leave it" and "clear it" at
+/// once, and the guard dies. So removal is its own act, reached only by choosing it, exactly
+/// like [`mark_qsl_sent`]'s `via: null` withdrawal.
+///
+/// `satName: null` REMOVES the tag — both fields, together, because TQSL validates them as a
+/// pair and a lone member wedges the whole signed batch. Anything else must be a name LoTW
+/// ACCEPTS, and an empty string is an error rather than a removal for the same reason it is on
+/// [`qsl_via_arg`]: empty is what a select sits at when the operator has chosen nothing, and a
+/// non-choice must not erase a tag nobody asked to erase.
+#[tauri::command(async)]
+fn set_sat_tag(
+    state: State<'_, SharedEngine>,
+    target: LoggedQso,
+    sat_name: Option<String>,
+) -> Result<LoggedQso, String> {
+    // Gated BEFORE the lock: nothing that can be refused should hold the engine mutex, which
+    // the radio loop needs every 20 ms.
+    let name = sat_name_arg(sat_name.as_deref())?;
+    let mut eng = engine_lock(&state);
+    let index = locate_seen(&mut eng, &target)?;
+    if !eng.set_sat_tag(index, name.as_deref()) {
+        return Err(LOG_ROW_GONE.into());
+    }
+    log_row(&eng, index)
+}
+
+/// The satellite names LoTW accepts, for the Logbook row's tag picker — the backend owns the
+/// table (`Engine::LOTW_SAT_NAMES`), so the UI offers exactly what the writer will accept and
+/// the two cannot drift. Same arrangement as [`dxcc_entity_names`].
+#[tauri::command]
+fn lotw_sat_names() -> Vec<String> {
+    Engine::lotw_accepted_sat_names()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 /// Delete the logged contact `target`. Returns the refreshed snapshot.
 #[tauri::command(async)]
 fn delete_qso(state: State<'_, SharedEngine>, target: LoggedQso) -> Result<AppSnapshot, String> {
@@ -25297,6 +25374,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             edit_qso,
             mark_qsl_sent,
             mark_qsl_card,
+            set_sat_tag,
+            lotw_sat_names,
             delete_qso,
             purge_log,
             get_awards,
@@ -26777,6 +26856,66 @@ mod tests {
         assert!(super::qsl_via_arg(Some("BUREAU")).is_err());
     }
 
+    /// The satellite tag's half of the same sandwich. `docs/guide/satellites.md` used to send
+    /// an operator who mis-tagged a contact out of the app to hand-edit `log.adi`; this is the
+    /// decision that makes the in-app repair safe — what a `satName` argument MEANS.
+    ///
+    /// The two rules mirror the QSL-sent withdrawal above, and for the same reasons. `null` is
+    /// the operator explicitly saying "not via satellite" and is the ONLY removal. Anything
+    /// else must name a satellite LoTW accepts — because a QSO record is permanent and TQSL
+    /// rejects a name it does not list, taking the whole signed batch with it.
+    #[test]
+    fn a_satellite_tag_can_be_removed_and_a_typo_still_cannot_be_stored() {
+        assert_eq!(
+            super::sat_name_arg(None),
+            Ok(None),
+            "no satellite named = the operator removing the tag"
+        );
+        // ⚠️ EMPTY IS NOT A REMOVAL — it is a NON-CHOICE. The UI's removal is an explicit menu
+        // entry that sends `null`; the empty string is the select's placeholder, the state the
+        // control sits in when nothing has been chosen (and the component's own `else if (v)`
+        // guard means it should never reach here). Honouring it would strip a tag nobody asked
+        // to strip — the same loss as reading a typo as a removal, and likelier.
+        assert!(
+            super::sat_name_arg(Some("")).is_err(),
+            "a placeholder is not a decision"
+        );
+        assert!(super::sat_name_arg(Some("   ")).is_err());
+        // The refusal is something an operator reads in a toast, and it is written across two
+        // source lines with a continuation escape — which silently eats the newline AND the
+        // next line's indent, or does not, depending on getting it right.
+        let msg = super::sat_name_arg(Some("")).unwrap_err();
+        assert!(msg.contains("Not via satellite"), "{msg}");
+        assert!(
+            !msg.contains("  "),
+            "the continuation escape left a gap: {msg}"
+        );
+
+        assert_eq!(
+            super::sat_name_arg(Some("SO-50")),
+            Ok(Some("SO-50".to_string()))
+        );
+        assert_eq!(
+            super::sat_name_arg(Some(" ao-91 ")),
+            Ok(Some("ao-91".to_string())),
+            "case and surrounding space are typing, not a different bird"
+        );
+        // ⚠️ A REAL DESIGNATOR LoTW HAS NEVER LISTED is still refused — the gate is the
+        // table, not the hyphenated shape. Accepting this would put a permanent name on a
+        // record that TQSL then rejects, and the operator would find out at signing time.
+        assert!(
+            super::sat_name_arg(Some("GO-32")).is_err(),
+            "a shape-valid name LoTW does not list must not reach a record"
+        );
+        // The typo the guide names: TQSL wants AO-7 and rejects AO7.
+        assert!(super::sat_name_arg(Some("AO7")).is_err());
+        let msg = super::sat_name_arg(Some("AO7")).unwrap_err();
+        assert!(
+            msg.contains("AO7"),
+            "the refusal names what was refused: {msg}"
+        );
+    }
+
     /// The RTTY view-entry auto-arm reaches the frontend only if the command is DEFINED and
     /// REGISTERED — `ui/src/api.ts` already calls `invoke('rtty_auto_arm')`, and a name that
     /// is not in `generate_handler!` fails at runtime with nothing at compile time to catch
@@ -26811,6 +26950,60 @@ mod tests {
                 "{name} is not registered — invoking it from the UI would fail at runtime"
             );
         }
+    }
+
+    /// The satellite-tag repair reaches the operator only if BOTH commands are defined and
+    /// registered: `ui/src/api.ts` invokes `set_sat_tag` and `lotw_sat_names`, and a name
+    /// missing from `generate_handler!` fails at runtime with nothing at compile time to catch
+    /// it. The picker fails quietly — its `.catch(() => {})` means an unregistered
+    /// `lotw_sat_names` shows no menu at all rather than an error — so the guide would promise
+    /// a repair that simply is not on screen.
+    ///
+    /// Source-scanned, like the auto-arm test above, because registration is the property
+    /// under test and no type sees it.
+    #[test]
+    fn the_satellite_tag_commands_the_ui_calls_are_defined_and_registered() {
+        let src = include_str!("lib.rs");
+        // ⚠️ COLUMN-ZERO MATCH, not `contains`: `include_str!` pulls in THIS TEST too, so a
+        // `contains` would be satisfied by the literal inside the assertion itself.
+        for name in ["set_sat_tag", "lotw_sat_names"] {
+            assert!(
+                src.lines().any(|l| l.starts_with(&format!("fn {name}("))),
+                "{name} is invoked by the UI but defined nowhere"
+            );
+        }
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for name in ["set_sat_tag", "lotw_sat_names"] {
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{name},")),
+                "{name} is not registered — invoking it from the UI would fail at runtime"
+            );
+        }
+        // The removal must survive the whole path: the command hands the engine an
+        // `Option`, and a `.unwrap_or_default()` anywhere in it would turn "remove the tag"
+        // into an empty name the core then refuses — a silent no-op on the one act this
+        // feature exists for.
+        let body = src
+            .split_once("\nfn set_sat_tag(")
+            .expect("the command")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(
+            body.contains("set_sat_tag(index, name.as_deref())"),
+            "the command must pass the Option through — None is the removal"
+        );
+        assert!(
+            !body.contains("unwrap_or_default"),
+            "a defaulted name would turn the removal into a refused empty name"
+        );
     }
 
     /// Each keyboard cockpit's macro editor saves through its OWN command — defined, registered,

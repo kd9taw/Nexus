@@ -37,6 +37,8 @@ import {
   markLotwUploaded,
   markQslSent,
   markQslCard,
+  setSatTag,
+  lotwSatNames,
   purgeLog,
   qrzLookup,
   saveTextToDownloads,
@@ -205,6 +207,8 @@ const HRDLOG_LABEL = 'HL'
 // Technical product token, not prose — same ruling as the labels above.
 const WRL_LABEL = 'WRL'
 const QSL_MENU_LABEL = 'QSL▸'
+/** The satellite tag menu. `SAT` is the ADIF `PROP_MODE` value itself, not a word. */
+const SAT_MENU_LABEL = 'SAT▸'
 
 function fmtUtc(whenUnix: number): string {
   const d = new Date(whenUnix * 1000)
@@ -359,6 +363,17 @@ export function Logbook({
       )
       .catch(() => {}) // no bridge / older core — just don't offer the split
   }, [log.length, control])
+  // The satellites LoTW accepts, for the row's tag picker. A fixed backend table, so it is
+  // fetched once rather than per log change — and it is a PICKER because TQSL matches
+  // SAT_NAME against its own list and rejects anything else, which through the compliant
+  // upload funnel takes the whole signed batch with it. A typed name is a permanent guess.
+  const [satNames, setSatNames] = useState<string[]>([])
+  useEffect(() => {
+    if (!control) return
+    void lotwSatNames()
+      .then(setSatNames)
+      .catch(() => {}) // no bridge / older core — just don't offer the picker
+  }, [control])
   // Activations present in the log: (your park) × (UTC day) × (the callsign you signed). Same
   // shape as the operator list above, and loaded the same way — a new activation can only first
   // appear when the log grows.
@@ -833,6 +848,26 @@ export function Logbook({
         received
           ? t('logbook.qsl.cardMarked', { call: q.call })
           : t('logbook.qsl.cardCleared', { call: q.call }),
+        'success',
+      )
+      load()
+    }
+  }
+
+  // Set or REMOVE the satellite tag on a row (#313 follow-up). `name === null` is the removal,
+  // and it is the whole reason this is a menu entry rather than two boxes on the edit form:
+  // that form reads a blank field as LEAVE ALONE so a busted-call fix cannot strip a tag the
+  // contact earned, so "clear it" has to be something the operator SAYS. Same shape as the
+  // QSL-sent withdrawal above — an operator-declared fact, unmade only by the operator.
+  const onSetSatTag = async (q: LoggedQso, name: string | null) => {
+    const row = await withErrorToast(() => setSatTag(q, name), t('logbook.sat.failed'))
+    if (row) {
+      // Two literal keys, not one interpolated one — the i18n orphan guard cannot see a
+      // ternary inside the call (same reason as onMarkQslCard above).
+      pushToast(
+        name
+          ? t('logbook.sat.tagged', { call: q.call, sat: name })
+          : t('logbook.sat.cleared', { call: q.call }),
         'success',
       )
       load()
@@ -2224,6 +2259,48 @@ export function Logbook({
                       <option value="R">{t('logbook.row.qslRcvd.card')}</option>
                       {q.qslRcvd?.card && (
                         <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
+                      )}
+                    </select>
+                  )}
+                  {/* SATELLITE TAG (PROP_MODE=SAT + SAT_NAME). The guide used to send an
+                      operator who mis-tagged a contact out of the app — close Nexus, open
+                      log.adi in a text editor — because the edit form carries neither field.
+                      It still does not, deliberately: a blank field there means LEAVE ALONE,
+                      which is what stops a busted-call fix stripping a tag the contact earned.
+                      So the repair lives here, where choosing "Clear" is unmistakably a
+                      decision and not a blank box submitted with everything else.
+
+                      ⚠️ Desktop only. There is no Remote capability for this change, so on an
+                      observing browser the control is simply absent rather than offered and
+                      refused — `control` is false there. Both halves of the pair move together
+                      in the backend: TQSL rejects a lone member and takes the batch with it. */}
+                  {control && satNames.length > 0 && (
+                    <select
+                      className="log-rowbtn"
+                      style={{ fontSize: '0.85em' }}
+                      value=""
+                      onChange={(e) => {
+                        const v = e.target.value
+                        // '' is the PLACEHOLDER — the state the select sits in when nothing
+                        // has been chosen. A non-choice must never clear a tag, so only the
+                        // explicit 'clear' entry passes null.
+                        if (v === 'clear') void onSetSatTag(q, null)
+                        else if (v) void onSetSatTag(q, v)
+                      }}
+                      title={t('logbook.row.sat.title', { call: q.call })}
+                      aria-label={t('logbook.row.sat.aria', { call: q.call })}
+                    >
+                      <option value="">{SAT_MENU_LABEL}</option>
+                      {satNames.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                      {/* Shown when EITHER field is set: a record carrying a lone PROP_MODE=SAT
+                          or a lone SAT_NAME is the half-pair TQSL rejects, and clearing it is
+                          exactly the repair that record needs. */}
+                      {(q.propMode || q.satName) && (
+                        <option value="clear">{t('logbook.row.sat.clear')}</option>
                       )}
                     </select>
                   )}{(control || canEdit) && <>

@@ -37,6 +37,8 @@ vi.mock('../api', () => {
     deleteQso: noop(), importAdif: noop(), editQso: vi.fn(async () => ({})),
     logOperators: vi.fn(async () => [] as string[]), exportLogForOperator: noop(),
     logActivations: vi.fn(async () => []), exportLogForActivation: noop(),
+    // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
     logQso: vi.fn(async () => ({})), purgeLog: noop(), qrzLookup: noop(),
     markQslSent: noop(), markQslCard: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),

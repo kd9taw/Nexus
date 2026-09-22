@@ -10692,6 +10692,35 @@ impl Engine {
         find(name).or_else(|| Self::sat_designator(label).as_deref().and_then(find))
     }
 
+    /// The satellite names LoTW accepts, sorted — what the operator's "tag this contact"
+    /// picker offers, read straight off [`Self::LOTW_SAT_NAMES`] so the list they can choose
+    /// from and the list [`Self::log_qso`] stamps from cannot drift apart.
+    ///
+    /// A PICKER AND NOT A TEXT BOX, deliberately. TQSL matches `SAT_NAME` against its own
+    /// designator list and rejects anything else ("AO7 instead of AO-7 → rejected"), and
+    /// through the `-a compliant` funnel one rejected record takes its whole signed batch
+    /// with it. A typed name is a permanent record of a guess; a picked one cannot be a typo.
+    /// The cost is the table's own: a bird missing from it still cannot be named from inside
+    /// Nexus — the same fail-closed trade the stamp already makes.
+    pub fn lotw_accepted_sat_names() -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = Self::LOTW_SAT_NAMES.iter().map(|(_, n)| *n).collect();
+        names.sort_unstable();
+        // The table is keyed by OUR catalog name, so two catalog spellings of one bird would
+        // otherwise offer the operator the same LoTW name twice.
+        names.dedup();
+        names
+    }
+
+    /// Whether `name` is one LoTW accepts — the gate on what may reach a record's `SAT_NAME`
+    /// through an operator edit. The picker above offers only these; this refuses everything
+    /// else, so a caller that gets the list wrong cannot write a name TQSL will reject.
+    pub fn is_lotw_sat_name(name: &str) -> bool {
+        let name = name.trim();
+        Self::LOTW_SAT_NAMES
+            .iter()
+            .any(|(_, lotw)| lotw.eq_ignore_ascii_case(name))
+    }
+
     /// The station callsign to stamp on a contact: the operator's current `mycall`, ADIF-cased
     /// like the `OPERATOR` stamp beside it, or `None` when it is blank — a record carrying no
     /// station call is honest, one claiming an empty station is not.
@@ -22016,6 +22045,11 @@ contact yourself."
     /// See [`StationCore::mark_qsl_card`].
     pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
         self.station.mark_qsl_card(index, received)
+    }
+
+    /// See [`StationCore::set_sat_tag`] — `None` = the operator removing the tag.
+    pub fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
+        self.station.set_sat_tag(index, sat_name)
     }
 
     /// See [`StationCore::delete_qso`].
@@ -43869,6 +43903,68 @@ mod tests {
             "TEVEL is lowercase-only? no — 5 letters, refused"
         );
         assert_eq!(d(""), None);
+    }
+
+    /// The operator's tag picker and the gate on what may be stored are ONE table, so the
+    /// list they choose from cannot drift from the list the writer accepts. Both directions
+    /// are asserted: every offered name passes the gate, and the gate refuses what the picker
+    /// does not offer.
+    #[test]
+    fn the_satellite_picker_offers_exactly_what_the_writer_will_accept() {
+        let offered = Engine::lotw_accepted_sat_names();
+        assert!(
+            !offered.is_empty(),
+            "an empty picker offers no repair at all"
+        );
+        for name in &offered {
+            assert!(
+                Engine::is_lotw_sat_name(name),
+                "{name} is offered but would be refused"
+            );
+        }
+        assert!(offered.windows(2).all(|w| w[0] < w[1]), "sorted and unique");
+        // The ISS is the table's whole reason for existing: LoTW's spelling is a measured
+        // fact, not something derivable from the catalog name.
+        assert!(Engine::is_lotw_sat_name("ARISS"));
+        assert!(offered.contains(&"ARISS"));
+
+        // ⚠️ REFUSED, and each for its own reason — the gate is not just a shape check.
+        // A real designator LoTW has never listed (the table's doc names this one):
+        assert!(!Engine::is_lotw_sat_name("GO-32"));
+        // The typo the guide names — TQSL wants AO-7 and rejects AO7, and through the
+        // compliant funnel one rejected record takes its whole signed batch with it:
+        assert!(!Engine::is_lotw_sat_name("AO7"));
+        // And the two non-choices a control can emit by accident:
+        assert!(!Engine::is_lotw_sat_name(""));
+        assert!(!Engine::is_lotw_sat_name("   "));
+        // Case and surrounding space are the operator's typing, not a different bird.
+        assert!(Engine::is_lotw_sat_name(" so-50 "));
+    }
+
+    /// The repair the guide used to send an operator to a text editor for, end to end through
+    /// the engine: correct a wrong designator, then take the tag off entirely.
+    #[test]
+    fn an_operator_can_repair_a_mis_tagged_satellite_contact_through_the_engine() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let mut wrong = qrec("N0CALL", "70cm");
+        wrong.prop_mode = Some("SAT".into());
+        wrong.sat_name = Some("RS-44".into());
+        e.log_qso(wrong);
+        assert_eq!(e.get_log()[0].sat_name.as_deref(), Some("RS-44"));
+
+        // CORRECT it. The stored name and the new one disagree, so a no-op fails here.
+        assert!(e.set_sat_tag(0, Some("AO-91")));
+        assert_eq!(e.get_log()[0].sat_name.as_deref(), Some("AO-91"));
+        assert_eq!(e.get_log()[0].prop_mode.as_deref(), Some("SAT"));
+
+        // REMOVE it — the contact was never on a bird. Both fields go together: a lone
+        // PROP_MODE=SAT is the half-pair TQSL hard-errors on.
+        assert!(e.set_sat_tag(0, None));
+        assert_eq!(e.get_log()[0].sat_name, None);
+        assert_eq!(e.get_log()[0].prop_mode, None);
+
+        // A row that is not there changes nothing and says so.
+        assert!(!e.set_sat_tag(9, Some("AO-91")));
     }
 
     #[test]

@@ -88,6 +88,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record of the contact held only half of it — you could read their side of an exchange but not
   your own, and there was no way to check what actually went out. Sent text now appears in the
   same window as it keys, marked as yours so the two are never confused.
+- **A satellite tag can be corrected or taken off a contact without leaving Nexus.** A contact
+  carrying the wrong satellite — or carrying one when it was never on a bird at all, which is
+  what the 0.24–0.27 tagging bug left behind — could only be repaired by closing Nexus and
+  hand-editing `log.adi` in a text editor. The Logbook row now has a **SAT▸** menu beside the
+  QSL one: pick a satellite to set or correct the name, or pick **Not via satellite** to remove
+  the tag. `PROP_MODE` and `SAT_NAME` are written as a pair and removed as a pair, because TQSL
+  rejects a record carrying one without the other and one rejected record can take a whole
+  signed batch with it. The menu lists only the satellites LoTW accepts rather than letting you
+  type a name, for the same reason the automatic tagging refuses to guess one: TQSL matches the
+  name against its own designators, and a logged contact is a permanent record of a typo.
+  Nexus still rewrites nothing on its own — only you know which pass you were actually on.
+  The row's ✎ edit form deliberately still carries neither field: it treats a blank box as
+  "leave this alone", which is what stops a busted-callsign fix quietly stripping a satellite
+  tag off a contact that earned it, so removing a tag is its own decision and not a side effect
+  of saving the form.
 
 ### Fixed
 
