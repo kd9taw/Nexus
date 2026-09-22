@@ -757,7 +757,7 @@ impl Rig {
         let mut tail_deadline: Option<std::time::Instant> = None;
         let mut out = Vec::with_capacity(64);
         let mut buf = [0u8; 256];
-        loop {
+        let partial = loop {
             match stream.read(&mut buf) {
                 Ok(0) => {
                     return Err(std::io::Error::new(
@@ -798,7 +798,7 @@ impl Rig {
             // this function did before it counted lines at all, so a short multi-line reply can
             // never become an error it was not already.
             if tail_deadline.is_some_and(|t| std::time::Instant::now() >= t) {
-                return Ok(String::from_utf8_lossy(&out).to_string());
+                break String::from_utf8_lossy(&out).to_string();
             }
             if std::time::Instant::now() >= deadline {
                 return Err(std::io::Error::new(
@@ -809,7 +809,18 @@ impl Rig {
                     ),
                 ));
             }
-        }
+        };
+        // ⚠️ THE REPLY IS SALVAGEABLE; THE CONNECTION IS NOT. The line we stopped waiting for is
+        // still in flight, and the pre-command drain above is NON-BLOCKING — it discards only
+        // what has already arrived, so it catches the straggler by luck, not by guarantee. Left
+        // alone it becomes the NEXT command's answer, which is the desync this function's own
+        // header calls a TX-safety invariant ("a keyed rig read as PTT ok"): a `m` width of `0`,
+        // rigctld's answer for the rig's default filter, is byte-identical to `t`'s answer for
+        // NOT KEYED. So take the `Ok` path's reply and the `Err` path's cleanup — one reconnect,
+        // on a reply that was already anomalous. See
+        // `a_straggler_past_the_tail_window_never_answers_the_next_command`.
+        self.stream = None;
+        Ok(partial)
     }
 
     /// Send a command whose reply is MANY lines with no length or terminator we can predict
@@ -839,6 +850,7 @@ impl Rig {
         let deadline = std::time::Instant::now() + Duration::from_millis(2_000);
         let mut out = Vec::with_capacity(2048);
         let mut buf = [0u8; 1024];
+        let mut still_talking = false;
         loop {
             match stream.read(&mut buf) {
                 Ok(0) => break, // peer closed — parse what we have
@@ -859,11 +871,20 @@ impl Rig {
                 Err(e) => return Err(e),
             }
             if std::time::Instant::now() >= deadline {
+                still_talking = true;
                 break;
             }
         }
         if out.is_empty() {
             return Err(std::io::Error::other("no reply to a multi-line command"));
+        }
+        // ⚠️ The SAME hazard as the multi-line tail window in `command_inner`, and the same
+        // answer. The quiet-window break above means the daemon has finished; THIS break means
+        // it is still mid-dump when our patience ran out, so the rest of the dump lands in the
+        // socket and becomes the next command's answer — the desync `command`'s header calls a
+        // TX-safety invariant. Keep what we parsed, drop the connection.
+        if still_talking {
+            self.stream = None;
         }
         Ok(String::from_utf8_lossy(&out).to_string())
     }
@@ -1926,37 +1947,50 @@ mod tests {
         }
     }
 
-    /// [`mock_rigctld`], but delivering each reply ONE LINE AT A TIME with a gap — the
-    /// networked chain (rigctld → SmartSDR CAT → radio) that `command_inner`'s pre-command
-    /// drain comment describes, made deterministic.
+    /// [`mock_rigctld`], but delivering each reply ONE LINE AT A TIME with `gap_ms` between
+    /// them — the networked chain (rigctld → SmartSDR CAT → radio) that `command_inner`'s
+    /// pre-command drain comment describes, made deterministic. A gap past
+    /// `MULTILINE_TAIL_MS` is the case where the straggler misses its window entirely.
+    /// Serves reconnections too, because dropping the stream is what an incomplete reply
+    /// must do.
     fn mock_rigctld_split(
-        reply: impl Fn(&str) -> String + Send + 'static,
+        gap_ms: u64,
+        reply: impl Fn(&str) -> String + Send + Sync + 'static,
     ) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let log = Arc::new(Mutex::new(Vec::<String>::new()));
         let log_w = log.clone();
+        let reply = Arc::new(reply);
         std::thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 256];
-                loop {
-                    let n = match stream.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => n,
-                    };
-                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                    for line in text.lines() {
-                        log_w.lock().unwrap().push(line.to_string());
-                        for (i, part) in reply(line).split_inclusive('\n').enumerate() {
-                            if i > 0 {
-                                std::thread::sleep(Duration::from_millis(5));
-                            }
-                            if stream.write_all(part.as_bytes()).is_err() {
-                                return;
+            // ⚠️ ONE THREAD PER CONNECTION, and it is not tidiness. A test here drops the stream
+            // mid-reply on purpose, so the old connection is still mid-`gap_ms` sleep when the
+            // client reconnects. Serving connections in sequence would make accepting that
+            // reconnect wait out the sleep, and under a loaded test binary that wait is what
+            // would turn this case into the very kind of flake it exists to kill.
+            while let Ok((mut stream, _)) = listener.accept() {
+                let (log_w, reply) = (log_w.clone(), reply.clone());
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 256];
+                    loop {
+                        let n = match stream.read(&mut buf) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => n,
+                        };
+                        let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                        for line in text.lines() {
+                            log_w.lock().unwrap().push(line.to_string());
+                            for (i, part) in reply(line).split_inclusive('\n').enumerate() {
+                                if i > 0 {
+                                    std::thread::sleep(Duration::from_millis(gap_ms));
+                                }
+                                if stream.write_all(part.as_bytes()).is_err() {
+                                    return;
+                                }
                             }
                         }
                     }
-                }
+                });
             }
         });
         (addr, log)
@@ -1981,7 +2015,7 @@ mod tests {
     /// GET its second line, and the next command must get ITS OWN answer.
     #[test]
     fn a_split_mode_reply_does_not_leak_its_passband_into_the_next_command() {
-        let (addr, log) = mock_rigctld_split(|line| match line {
+        let (addr, log) = mock_rigctld_split(5, |line| match line {
             "m" => "USB\n2400\n".to_string(),
             "l RFPOWER" => "0.500\n".to_string(),
             _ => "RPRT 0\n".to_string(),
@@ -1998,6 +2032,104 @@ mod tests {
             "the next command must read its OWN answer, not the stray passband"
         );
         assert_eq!(*log.lock().unwrap(), ["m", "l RFPOWER"]);
+    }
+
+    /// **AND WHEN THE STRAGGLER MISSES ITS WINDOW, THE SOCKET IS DIRTY** (CI flake, diagnosed
+    /// 2026-09-22 — the one the fix above did not close).
+    ///
+    /// The tail window bounds how long a multi-line verb waits for its last line, and then
+    /// returns the lines that DID arrive. That fallback was correct about the reply and wrong
+    /// about the CONNECTION: it returned `Ok`, so it skipped the drop that
+    /// [`Rig::command`]'s header makes a TX-safety invariant ("if a slow reply were left in
+    /// the socket buffer, the next command would read it as its own answer … a keyed rig read
+    /// as PTT ok"), and the straggler arrived into a socket nobody was going to clean. The
+    /// pre-command drain is non-blocking, so it catches the straggler only if it has already
+    /// landed — a race, not a guard.
+    ///
+    /// The width here is `0`, which is not a contrivance: it is rigctld's own answer for the
+    /// rig's default filter, and [`parse_mode_passband`] documents treating it as no-value.
+    /// That makes the leaked line `0`, and `0` is exactly what `t` (get_ptt) answers for NOT
+    /// KEYED — so the stale line does not merely fail to parse, it parses as the wrong
+    /// transmit state on a rig that is keying. That is the named invariant, not an analogy.
+    ///
+    /// In the wild this reached an operator as `Reason::ReadingUnavailable` on an FM receiver
+    /// adjustment: the leaked width landed on the next verb and `read_ptt`/`read_split`
+    /// answered `None`, which the Remote radio owner refuses with.
+    #[test]
+    fn a_straggler_past_the_tail_window_never_answers_the_next_command() {
+        let (addr, log) = mock_rigctld_split(250, |line| match line {
+            // Two lines, the second far past MULTILINE_TAIL_MS.
+            "m" => "USB\n0\n".to_string(),
+            // The rig IS keying. Reading `0` here instead would be the desync.
+            "t" => "1\n".to_string(),
+            _ => "RPRT 0\n".to_string(),
+        });
+        let mut rig = Rig::with_control(Some(addr), PttMode::Cat);
+        assert_eq!(
+            rig.read_mode_passband(),
+            (Some("USB".to_string()), None),
+            "the fallback still returns the lines that DID arrive"
+        );
+        assert_eq!(
+            rig.read_ptt(),
+            Some(true),
+            "the next command must read its OWN answer, never the stale width"
+        );
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["m", "t"],
+            "and it must ask the rig once, not paper over the leak with a retry"
+        );
+    }
+
+    /// The same rule for the OTHER multi-line reader. `command_multiline` ends a `\dump_state`
+    /// when the daemon goes quiet for a read window — that break means "finished" and leaves
+    /// nothing behind. Its 2 s deadline is a different break with the opposite meaning: the
+    /// daemon is STILL SENDING, and the remainder of a ~40-line dump would otherwise answer
+    /// whatever we ask next. A dump line is a bare integer, so it parses as a frequency, a PTT
+    /// state or a level just as readily as the real answer would.
+    #[test]
+    fn a_dump_that_outlasts_its_deadline_does_not_answer_the_next_command() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            // One thread per connection, for the reason `mock_rigctld_split` spells out: the
+            // abandoned dump is still running when the client reconnects, and that reconnect
+            // must not have to wait for it.
+            while let Ok((mut stream, _)) = listener.accept() {
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 256];
+                    loop {
+                        let n = match stream.read(&mut buf) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => n,
+                        };
+                        for line in String::from_utf8_lossy(&buf[..n]).to_string().lines() {
+                            if line.starts_with("\\dump_state") {
+                                // Never goes quiet and never ends, so the 2 s deadline is what
+                                // stops the read — with the rest of the dump still coming.
+                                for _ in 0..200 {
+                                    if stream.write_all(b"1\n").is_err() {
+                                        return;
+                                    }
+                                    std::thread::sleep(Duration::from_millis(50));
+                                }
+                            } else if stream.write_all(b"14074000\n").is_err() {
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        let mut rig = Rig::with_control(Some(addr), PttMode::Cat);
+        // The dump is unparseable, which is fine and not what this asserts.
+        let _ = rig.read_rx_ranges();
+        assert_eq!(
+            rig.read_freq().ok(),
+            Some(14_074_000),
+            "the next command must read its OWN answer, not the tail of an abandoned dump"
+        );
     }
 
     /// The other direction, and it is what keeps the fix from costing a deadline on every
