@@ -157,6 +157,19 @@ pub struct RigCaps {
     /// Requires all three of: `Can get Split VFO: Y`, `Can get Split Freq: Y`, and FREQ in
     /// `Targetable features`. Anything less is `Emulated` (asking moves the radio) or `Absent`.
     pub split_detect: SplitDetect,
+    /// Whether `Can get VFO:` is `Y` — the rig answers "which VFO am I on" from the RADIO.
+    ///
+    /// ⚠️ `Y` AND NOTHING ELSE, and `E` is the reason this is a bool rather than the tri-state
+    /// its neighbour needs. Hamlib emulates `get_vfo` by returning its own `currVFO` cache,
+    /// which on this path holds whatever Nexus last SET — so an emulated read hands the
+    /// commanded value back dressed as the radio's answer, and an indicator fed from it would
+    /// look confirmed while being exactly as blind as the write-only one it replaced. `N`, `E`
+    /// and a dump with no such line are all the same answer: do not ask this rig.
+    ///
+    /// The two fixtures are a natural pair, and an inverted one — the FT-847 reports split
+    /// natively but cannot report its VFO at all, the TS-570D the other way round. So this is
+    /// genuinely a second capability and never a restatement of [`Self::split_detect`].
+    pub vfo_read_native: bool,
 }
 
 impl RigCaps {
@@ -213,6 +226,13 @@ pub fn parse_caps(dump_caps: &str) -> RigCaps {
         }
         if let Some(rest) = line.trim().strip_prefix("Can get Split VFO:") {
             get_vfo = rest.trim().chars().next();
+        }
+        // A DIFFERENT LINE FROM THE ONE ABOVE — `Can get VFO:` is "which VFO is selected",
+        // `Can get Split VFO:` is "is the rig split, and on which". Neither string is a prefix
+        // of the other, so the two never collide; they are adjacent here because the names are
+        // one word apart and reading them as one fact is the easy mistake.
+        if let Some(rest) = line.trim().strip_prefix("Can get VFO:") {
+            caps.vfo_read_native = rest.trim().starts_with('Y');
         }
         if let Some(rest) = line.trim().strip_prefix("Can get Split Freq:") {
             get_freq = rest.trim().chars().next();
@@ -2577,5 +2597,44 @@ mod tests {
         let untargetable =
             "Targetable features: MODE\nCan get Split VFO:\tY\nCan get Split Freq:\tY\n";
         assert_eq!(parse_caps(untargetable).split_detect, SplitDetect::Emulated);
+    }
+
+    /// WHICH VFO THE RIG IS ON is a SEPARATE capability from whether its SPLIT can be read, and
+    /// the two fixtures prove it by disagreeing in opposite directions — so a flag that merely
+    /// echoed `split_detect` would fail this.
+    ///
+    /// `E` is refused with `N`: Hamlib emulates `get_vfo` out of its own `currVFO` cache, which
+    /// holds the last VFO Nexus SET. Believing it would feed the commanded value back into the
+    /// indicator as though the radio had said it.
+    #[test]
+    fn the_vfo_read_is_offered_only_when_the_rig_itself_answers_it() {
+        let ts570 = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ts570d.log"));
+        assert!(
+            ts570.vfo_read_native,
+            "TS-570D prints `Can get VFO: Y` — its A/B selection can be read from the radio"
+        );
+        assert_eq!(
+            ts570.split_detect,
+            SplitDetect::Emulated,
+            "…while its SPLIT read is emulated: the two capabilities are not the same question"
+        );
+
+        let ft847 = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ft847.log"));
+        assert!(
+            !ft847.vfo_read_native,
+            "FT-847 prints `Can get VFO: N` — never ask it, and keep the commanded value"
+        );
+        assert_eq!(
+            ft847.split_detect,
+            SplitDetect::Native,
+            "…while its SPLIT read IS native — the pair is inverted, which is the point"
+        );
+
+        // Emulated is refused exactly as hard as absent: it answers from Hamlib's cache of our
+        // own last `set_vfo`, so it can only ever confirm what we already believed.
+        assert!(!parse_caps("Can get VFO:\tE\n").vfo_read_native);
+        // A dump we could not read, and one from a Hamlib with no such line, claim nothing.
+        assert!(!parse_caps("").vfo_read_native);
+        assert!(!parse_caps("Can get Split VFO:\tY\n").vfo_read_native);
     }
 }

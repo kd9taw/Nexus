@@ -3216,6 +3216,14 @@ struct RadioLoop {
     /// (`\dump_caps` is a long reply and the answer cannot change while the rig is the same
     /// rig). `None` = not yet asked.
     split_detect: Option<crate::baud_ladder::SplitDetect>,
+    /// Whether THIS rig answers "which VFO am I on" from the radio itself — probed once per
+    /// connection off the same `\dump_caps`, and for the same reason. `None` = not yet asked;
+    /// `Some(false)` = never ask, keep the commanded value.
+    ///
+    /// ⚠️ MUST RESET WITH THE RADIO, and it does (see the handoff reset): an FT-847's "cannot
+    /// answer" inherited by a TS-570D would leave the new rig's A/B press invisible for the
+    /// rest of the session.
+    vfo_read_native: Option<bool>,
     /// Last time we ran the FULL rig read-back (dial + RF power + S-meter + mode + funcs), ms.
     last_rig_poll: f64,
     /// Last time we read the TRANSMIT meters (ms). 0.0 when the bars are blanked (not keyed), so
@@ -3585,6 +3593,7 @@ impl RadioLoop {
             audio_rig_split: false,
             rig_split_restore: None,
             split_detect: None,
+            vfo_read_native: None,
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
             tx_rf: TxRfWatch::default(),
@@ -5038,6 +5047,7 @@ impl RadioLoop {
         self.func_misses = [0; N_FUNCS];
         self.func_state = [None; N_FUNCS];
         self.tuner_probed = false;
+        self.vfo_read_native = None; // the new rig answers `v` or not on its own account
         self.level_supported = [None; N_LEVELS];
         self.level_misses = [0; N_LEVELS];
         // The audio device must be (re)opened for the new radio even if its device name matches
@@ -6411,6 +6421,7 @@ impl RadioLoop {
                     self.func_misses = [0; N_FUNCS];
                     self.func_state = [None; N_FUNCS];
                     self.tuner_probed = false;
+                    self.vfo_read_native = None;
                     self.level_supported = [None; N_LEVELS];
                     self.level_misses = [0; N_LEVELS];
                     // The level give-ups are a rate limit, not a verdict: a write refused while
@@ -6531,6 +6542,7 @@ impl RadioLoop {
                             self.func_misses = [0; N_FUNCS];
                             self.func_state = [None; N_FUNCS];
                             self.tuner_probed = false;
+                            self.vfo_read_native = None;
                             self.level_supported = [None; N_LEVELS];
                             self.level_misses = [0; N_LEVELS];
                             self.agc_giveup = None; // the refusal may have been the dead link
@@ -7124,7 +7136,58 @@ impl RadioLoop {
                             if let Some(vfo_b) =
                                 Some(engine_lock(engine)).and_then(|mut e| e.take_vfo_apply())
                             {
-                                let _ = rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" });
+                                if rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" }).is_ok() {
+                                    // Optimistic, and load-bearing for the READ-BACK below —
+                                    // the same discipline as `observe_rig_passband` and the
+                                    // DSP funcs ("optimistic; a GET confirms").
+                                    //
+                                    // ⚠️ WITHOUT THIS THE INDICATOR FLICKS BACK. Draining the
+                                    // request clears the flag that was making the operator's
+                                    // press outrank the last reading — and that reading is up
+                                    // to three seconds old and still names the VFO the rig was
+                                    // on BEFORE the press. So the moment the write succeeds the
+                                    // press would lose to it, until the next read caught up.
+                                    // Restating the reading as what we just wrote closes the
+                                    // gap; the next `v` confirms it from the radio.
+                                    engine_lock(engine).observe_rig_vfo(vfo_b);
+                                }
+                            }
+                        }
+                        // WHICH VFO THE RIG IS ACTUALLY ON. A/B selection used to be write-only
+                        // — Nexus commanded a VFO and never asked — so pressing A/B on the
+                        // radio's own front panel left the indicator reporting the last
+                        // command, which by then named the wrong VFO. Same defect class as RIT
+                        // and XIT, and unlike those two this one is answerable.
+                        //
+                        // ⚠️ ONLY ASK A RIG THAT ANSWERS FROM THE RADIO. `Can get VFO: E` is
+                        // Hamlib handing back its own cache of the last VFO *we* set, so an
+                        // emulated answer can only ever agree with us — it would dress the
+                        // commanded value up as a reading. `N`, `E` and silence are one answer:
+                        // do not ask, and keep exactly the old behaviour.
+                        //
+                        // ⚠️ ITS OWN SUB-TICK (`% 4 == 3`), and that is deliberate. The split
+                        // read and the mode read are on tick 0, the DSP funcs on tick 2. A
+                        // `\dump_caps` is a long reply, and probing it alongside another read
+                        // is exactly what spent the heavy poll's budget out from under the
+                        // split read once before and regressed the teardown restore. So: the
+                        // probe OR the read, never both in one tick, and both behind the budget.
+                        if self.rig_poll_ticks % 4 == 3 && have_budget() {
+                            match self.vfo_read_native {
+                                None => {
+                                    // Could not ask → "cannot". Silence is not permission.
+                                    self.vfo_read_native =
+                                        Some(rig.read_vfo_capability().unwrap_or(false));
+                                }
+                                Some(true) => {
+                                    // `None` = a reply that is not plainly VFO A or B (a
+                                    // Main/Sub rig, `MEM`, a rejection, a link hiccup). It
+                                    // leaves the indicator alone rather than inventing a
+                                    // selection — absent is not "A".
+                                    if let Some(vfo_b) = rig.read_vfo() {
+                                        engine_lock(engine).observe_rig_vfo(vfo_b);
+                                    }
+                                }
+                                Some(false) => {}
                             }
                         }
                         // DSP funcs (NB/NR/notch=ANF/COMP/VOX): one GET per still-supported func on
@@ -15914,6 +15977,266 @@ mod tests {
         assert!(
             sent.iter().any(|l| l == "S 0 VFOA"),
             "nothing to restore → today's behaviour, unchanged: {sent:?}"
+        );
+    }
+
+    /// A rigctld that answers `v` (get_vfo) with `vfo`, serves a `\dump_caps` whose
+    /// `Can get VFO:` line is `get_vfo_cap`, and logs every command line it was sent.
+    fn mock_vfo_rigctld(vfo: &'static str, get_vfo_cap: char) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log2 = Arc::clone(&log);
+        // Verbatim shape of Hamlib 4.5.5 `rigctl --dump-caps`, trimmed to the lines the parser
+        // reads. The FT-847 really does print `N` here and the TS-570D `Y` — checked against
+        // the binary on this box, and the two fixtures agree.
+        let caps = format!(
+            "Caps dump for model: 1\nCan set VFO:\tY\nCan get VFO:\t{get_vfo_cap}\n\
+             Targetable features: FREQ\nCan get Split VFO:\tY\nCan get Split Freq:\tY\n"
+        );
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                });
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let l = line.trim().to_string();
+                    log2.lock().unwrap().push(l.clone());
+                    let reply = match l.as_str() {
+                        "f" => "14074000\n".to_string(),
+                        "v" => format!("{vfo}\n"),
+                        "\\dump_caps" => caps.clone(),
+                        _ => "RPRT 0\n".to_string(),
+                    };
+                    if stream.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// Put the loop on the tick where the VFO read-back runs, with the two blocking
+    /// once-per-connection probes already done (against a stub `\dump_state` blocks to the CAT
+    /// deadline and eats the heavy poll's whole read budget, which would leave the scene
+    /// asserting nothing — the same trap the split teardown scene documents).
+    fn vfo_read_tick(engine: &Arc<Mutex<Engine>>, state: &mut RadioLoop) {
+        state.last_mode = engine.lock().unwrap().rig_mode_effective();
+        state.last_dial = engine.lock().unwrap().settings().dial_hz();
+        state.last_rig_poll = 0.0;
+        state.rig_poll_ticks = 2; // → 3 on this tick: the VFO-read sub-cadence
+        state.rx_ranges_probed = true;
+        state.tuner_probed = true;
+    }
+
+    /// ⭐ FAILING-FIRST, THE WHOLE PATH: A/B SELECTION WAS WRITE-ONLY.
+    ///
+    /// Nexus told the rig which VFO to use and never asked. Press A/B on the radio's own front
+    /// panel and the indicator went on reporting the last command — which by then named the
+    /// wrong VFO. This steps the real radio loop against a rigctld that says it is on B while
+    /// Nexus commanded A, and asserts the snapshot the cockpit draws.
+    #[test]
+    fn the_radio_loop_reads_back_the_vfo_the_operator_chose_at_the_front_panel() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.request_vfo(false); // Nexus commanded VFO A…
+            e.take_vfo_apply(); // …and the loop wrote it.
+            assert_eq!(e.snapshot().radio.active_vfo, "A", "precondition");
+        }
+        let mut backend = MockBackend::new();
+        // The rig is on B — the operator pressed A/B — and it can say so natively.
+        let (addr, log) = mock_vfo_rigctld("VFOB", 'Y');
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        vfo_read_tick(&engine, &mut state);
+        state.vfo_read_native = Some(true); // the `\dump_caps` probe already answered
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100_000.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "v"),
+            "the loop must ASK: wire {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.active_vfo,
+            "B",
+            "the indicator must report the VFO the RADIO is on, not the one we last commanded"
+        );
+    }
+
+    /// THE CAPABILITY GATE, AND IT IS THE NEGATIVE CONTROL FOR THE SCENE ABOVE. Same rig, same
+    /// tick, same `VFOB` on the wire — but its capability dump says it cannot answer `v`
+    /// natively. It must never be asked, and the indicator must stay exactly where the old
+    /// write-only behaviour left it. Absent is not a reading, and it is not "wrong" either.
+    #[test]
+    fn a_rig_that_cannot_report_its_vfo_is_never_asked_and_keeps_the_commanded_one() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.request_vfo(false);
+            e.take_vfo_apply();
+        }
+        let mut backend = MockBackend::new();
+        // `N` is the FT-847's real answer, and this rig would happily say "VFOB" if asked.
+        let (addr, log) = mock_vfo_rigctld("VFOB", 'N');
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        vfo_read_tick(&engine, &mut state);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // Tick one: the capability probe runs, and NOTHING else — the long reply is exactly
+        // what must not share a tick with a read.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100_000.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert_eq!(
+            state.vfo_read_native,
+            Some(false),
+            "the dump says `Can get VFO: N` — this rig is out: wire {:?}",
+            log.lock().unwrap()
+        );
+        assert!(
+            log.lock().unwrap().iter().any(|l| l == "\\dump_caps"),
+            "…and it was actually probed, so this is not a vacuous pass: wire {:?}",
+            log.lock().unwrap()
+        );
+
+        // Tick two, back on the read sub-cadence: still never asked.
+        log.lock().unwrap().clear();
+        vfo_read_tick(&engine, &mut state);
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                200_000.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert!(
+            !log.lock().unwrap().iter().any(|l| l == "v"),
+            "a rig that cannot answer natively must never be asked: wire {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.active_vfo,
+            "A",
+            "with no reading the indicator is the commanded value, exactly as it always was"
+        );
+    }
+
+    /// ⭐ THE READ-BACK MUST NOT FIGHT THE OPERATOR — the race that makes a poll worse than no
+    /// poll at all.
+    ///
+    /// A reading is up to three seconds old. While the operator's press is undrained it
+    /// outranks that reading; the instant the loop drains and writes it, it stops outranking
+    /// anything — and the stale reading, still naming the VFO the rig was on BEFORE the press,
+    /// would win and flick the indicator back under the operator's finger. The write restating
+    /// what it just wrote is what closes that gap, and this is the scene that fails without it.
+    ///
+    /// Deliberately stepped on a tick that does NOT read (`% 4 != 3`), so nothing but the
+    /// write's own restatement can hold the indicator on B.
+    #[test]
+    fn writing_the_operators_vfo_does_not_hand_the_indicator_back_to_a_stale_reading() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        // The rig reports A throughout — it has not caught up with the press yet.
+        let (addr, log) = mock_vfo_rigctld("VFOA", 'Y');
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        vfo_read_tick(&engine, &mut state);
+        state.vfo_read_native = Some(true);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+
+        // Tick one reads the rig: it is on A, and we know it.
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100_000.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.active_vfo,
+            "A",
+            "precondition: a fresh reading of A: wire {:?}",
+            log.lock().unwrap()
+        );
+
+        // The operator presses B in the cockpit. Not yet on the wire.
+        engine.lock().unwrap().request_vfo(true);
+        assert_eq!(engine.lock().unwrap().snapshot().radio.active_vfo, "B");
+
+        // Tick two writes it. `rig_poll_ticks` is 3 → 4, so this tick takes no reading at all.
+        state.last_rig_poll = 0.0;
+        log.lock().unwrap().clear();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                200_000.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            sent.iter().any(|l| l == "V VFOB"),
+            "precondition: the press actually went out this tick: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|l| l == "v"),
+            "precondition: and this tick took no reading, so only the write can hold it: {sent:?}"
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.active_vfo,
+            "B",
+            "the indicator flicked back to the pre-press reading the moment the write landed"
         );
     }
 

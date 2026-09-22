@@ -176,7 +176,10 @@ impl Engine {
         {
             return Err(Reason::StationBusy);
         }
-        if expected_vfo_b != self.active_vfo_b {
+        // Against the EFFECTIVE selection, which is what the browser's page was shown. Comparing
+        // the commanded field instead would admit a change judged against a VFO the operator has
+        // since moved off at the front panel, and refuse one judged against the VFO on screen.
+        if expected_vfo_b != self.active_vfo_b_effective() {
             return Err(Reason::ContextChanged);
         }
         if expected_vfo_b == vfo_b {

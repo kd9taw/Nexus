@@ -983,6 +983,19 @@ const ZERO_RF_POWER: f32 = 0.005;
 /// an operator who cancels split at the front panel on a rig we then stop hearing from gets a
 /// refusal, not a transmission on the receive frequency.
 const OBSERVED_SPLIT_TTL_SECS: u64 = 6;
+
+/// How long the rig's own report of WHICH VFO it is on may stand before the indicator goes back
+/// to reporting the last commanded selection.
+///
+/// The poll reads it every 4th heavy poll (`4 × RIG_POLL_MS` = 3 s), so this is two intervals
+/// plus slack for a tick whose read budget ran out and for the one-second clock granularity.
+///
+/// ⚠️ EXPIRY FALLS BACK; IT DOES NOT LOCK, and the difference from [`OBSERVED_SPLIT_TTL_SECS`]
+/// is the point. A stale SPLIT reading must refuse, because it decides where the transmitter
+/// goes and the dial is not the conservative answer. A stale VFO reading decides nothing but a
+/// label, so the honest thing is to stop claiming the radio's selection and show the operator
+/// what Nexus asked for — which is exactly the behaviour of a rig that cannot be asked at all.
+const OBSERVED_VFO_TTL_SECS: u64 = 8;
 const NOTCH_MIN_HZ: f32 = 300.0;
 const NOTCH_MAX_HZ: f32 = 3400.0;
 
@@ -2481,11 +2494,22 @@ pub struct Engine {
     /// "split on at X" may only GRANT when the operator opted in and the reading is fresh.
     observed_split: Option<(bool, Option<u64>, u64)>,
     /// RIT / XIT clarifier offsets in Hz (0 = off) and the active VFO — the CAT-panel controls.
-    /// Write-only + optimistic (no read-back): the loop applies a change once and the snapshot
-    /// mirrors the last commanded value, like the RF-power / filter-width path.
+    /// RIT and XIT are write-only + optimistic (no read-back): the loop applies a change once
+    /// and the snapshot mirrors the last commanded value, like the RF-power / filter-width path.
+    /// The VFO no longer is — see [`Engine::observed_vfo`].
     rit_hz: i32,
     xit_hz: i32,
-    active_vfo_b: bool, // false = VFO A, true = VFO B
+    /// The VFO Nexus last COMMANDED (false = A, true = B). Kept separate from what the rig
+    /// says, exactly as `observe_rig_power` is kept separate from a pending power set: a
+    /// reading must never fight a command the loop has not written yet.
+    active_vfo_b: bool,
+    /// What the RIG last said about which VFO is selected, and when (unix secs).
+    ///
+    /// Written only from a capability-verified NATIVE `get_vfo` read — never from an emulated
+    /// one, because Hamlib emulates it by handing back its own cache of the last VFO *we* set,
+    /// which is the commanded value wearing a read's clothes. `None` = never asked or never
+    /// answered, which must degrade to exactly the old write-only behaviour.
+    observed_vfo: Option<(bool, u64)>,
     rit_dirty: bool,
     xit_dirty: bool,
     vfo_dirty: bool,
@@ -4559,6 +4583,7 @@ impl Engine {
             rit_hz: 0,
             xit_hz: 0,
             active_vfo_b: false,
+            observed_vfo: None,
             rit_dirty: false,
             xit_dirty: false,
             vfo_dirty: false,
@@ -7312,6 +7337,42 @@ impl Engine {
             self.vfo_dirty = false;
             self.active_vfo_b
         })
+    }
+    /// The radio loop's report of which VFO the RIG says it is on (`true` = B).
+    ///
+    /// Called two ways, and both are the same fact arriving from different directions:
+    ///   • a capability-verified native `get_vfo` read — the operator's own A/B press on the
+    ///     front panel, which nothing else in Nexus can see;
+    ///   • the loop's own successful `set_vfo` write, optimistically — the same discipline as
+    ///     `observe_rig_passband` and the DSP funcs ("optimistic; the next read confirms").
+    ///
+    /// That second call is what keeps a poll from fighting the operator: the read happens
+    /// EARLIER in a tick than the VFO write does, so without it a reading taken moments before
+    /// the press landed would sit there claiming the old VFO until the next read three seconds
+    /// later.
+    pub fn observe_rig_vfo(&mut self, vfo_b: bool) {
+        self.observed_vfo = Some((vfo_b, now_unix_secs()));
+    }
+
+    /// WHICH VFO TO REPORT — the rig's answer when we have a fresh one, the commanded value
+    /// otherwise.
+    ///
+    /// Order matters, and it is the whole of the race:
+    ///   1. A command the loop has not written yet WINS. The operator's press is newer than any
+    ///      reading, which by definition describes the radio before it.
+    ///   2. A fresh reading from the rig. This is the fix: an A/B press on the front panel.
+    ///   3. Otherwise the commanded value — a rig that cannot be asked, or one that has gone
+    ///      quiet, behaves exactly as it did before there was a read-back at all.
+    pub(crate) fn active_vfo_b_effective(&self) -> bool {
+        if self.vfo_dirty {
+            return self.active_vfo_b;
+        }
+        match self.observed_vfo {
+            Some((vfo_b, at)) if now_unix_secs().saturating_sub(at) <= OBSERVED_VFO_TTL_SECS => {
+                vfo_b
+            }
+            _ => self.active_vfo_b,
+        }
     }
 
     /// Consume the one-shot split request: `Some(Some(tx))` = set split TX dial,
@@ -18708,7 +18769,14 @@ contact yourself."
         s.radio.filter_width_hz = self.rig_passband;
         s.radio.rit_hz = self.rit_hz;
         s.radio.xit_hz = self.xit_hz;
-        s.radio.active_vfo = if self.active_vfo_b { "B" } else { "A" }.to_string();
+        // The RADIO's selection when it answered one, the commanded value otherwise — never the
+        // raw `active_vfo_b`, which is only ever what Nexus asked for.
+        s.radio.active_vfo = if self.active_vfo_b_effective() {
+            "B"
+        } else {
+            "A"
+        }
+        .to_string();
         s.radio.hold_tx_freq = self.hold_tx_freq;
         // The clock chip's whole story, not just the number: what we steer by,
         // how old that measurement is, how many servers stood behind it, and any
@@ -25750,6 +25818,89 @@ mod tests {
         assert!(
             !e.tx_allowed(),
             "a stale split reading must lock; 14.030 being legal is not the question"
+        );
+    }
+
+    /// ⭐ FAILING-FIRST: THE A/B INDICATOR REPORTED THE LAST COMMAND, NOT THE RADIO.
+    ///
+    /// A/B selection was write-only — `request_vfo` set `active_vfo_b`, the loop wrote it once,
+    /// and the snapshot mirrored the commanded value for ever. Press A/B on the radio's own
+    /// front panel and Nexus went on displaying the VFO it had asked for, which by then was the
+    /// wrong one. Same defect class as RIT and XIT.
+    #[test]
+    fn the_rigs_own_vfo_selection_wins_over_the_one_nexus_commanded() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.request_vfo(false); // Nexus commanded VFO A…
+        e.take_vfo_apply(); // …and the radio loop wrote it.
+        assert_eq!(e.snapshot().radio.active_vfo, "A", "precondition");
+
+        // The operator presses A/B on the rig's front panel; the poll reads the rig back.
+        e.observe_rig_vfo(true);
+        assert_eq!(
+            e.snapshot().radio.active_vfo,
+            "B",
+            "the indicator must report the VFO the RADIO is on, not the one we last commanded"
+        );
+    }
+
+    /// THE OPERATOR'S OWN COMMAND WINS WHILE IT IS IN FLIGHT. A press is not on the wire until
+    /// the loop drains it, so a reading taken in between describes the radio BEFORE the press.
+    /// Letting it through would walk the indicator back to A under the operator's finger.
+    #[test]
+    fn a_reading_cannot_walk_back_a_selection_the_operator_just_made() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.observe_rig_vfo(false); // the rig is on A, and we know it
+        assert_eq!(e.snapshot().radio.active_vfo, "A", "precondition");
+
+        e.request_vfo(true); // the operator presses B — not yet written
+        assert_eq!(
+            e.snapshot().radio.active_vfo,
+            "B",
+            "a pending command outranks a reading taken before it"
+        );
+
+        // Once the loop has written it, the reading it then takes is the authority again.
+        assert_eq!(e.take_vfo_apply(), Some(true));
+        e.observe_rig_vfo(true);
+        assert_eq!(e.snapshot().radio.active_vfo, "B");
+    }
+
+    /// ABSENT IS NOT "A". A rig that cannot answer a get-VFO query is never asked, so nothing is
+    /// ever observed — and the indicator must degrade to EXACTLY the old behaviour (the
+    /// commanded value), not to a blank or a hardcoded A.
+    #[test]
+    fn a_rig_that_is_never_asked_keeps_the_commanded_selection() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.request_vfo(true);
+        e.take_vfo_apply();
+        // No `observe_rig_vfo` — the capability probe said this rig cannot answer.
+        assert_eq!(
+            e.snapshot().radio.active_vfo,
+            "B",
+            "with no reading the indicator is the commanded value, as it always was"
+        );
+    }
+
+    /// STALENESS FALLS BACK, IT DOES NOT LOCK — and that asymmetry with split is deliberate.
+    /// An expired split reading must REFUSE (it decides where the transmitter goes); an expired
+    /// VFO reading only means we have stopped hearing the radio, and the honest thing for an
+    /// indicator is to go back to reporting what we asked for.
+    #[test]
+    fn a_stale_vfo_reading_falls_back_to_the_commanded_selection() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.request_vfo(false);
+        e.take_vfo_apply();
+        e.observe_rig_vfo(true);
+        assert_eq!(e.snapshot().radio.active_vfo, "B", "precondition: fresh");
+
+        // Age it past the TTL by hand — the reading is the same, only older.
+        if let Some((_, at)) = e.observed_vfo.as_mut() {
+            *at -= OBSERVED_VFO_TTL_SECS + 5;
+        }
+        assert_eq!(
+            e.snapshot().radio.active_vfo,
+            "A",
+            "a reading we can no longer vouch for must not keep claiming the radio's selection"
         );
     }
 

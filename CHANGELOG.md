@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The A/B indicator now follows the radio, not just what Nexus last asked for.** Nexus told the
+  rig which VFO to use and never asked it back, so pressing **A/B** on the radio's own front panel
+  left the indicator showing the other one — and it stayed wrong until you changed VFO from Nexus.
+  It is now read back from the radio every few seconds on rigs that can answer the question, which
+  Nexus checks for once when it connects. A rig that cannot answer behaves exactly as before,
+  showing the VFO Nexus selected, and your own A/B press in Nexus still takes effect immediately
+  rather than waiting for the radio to confirm it.
 - **FT4 contacts now export as ADIF the way WSJT-X writes them, so LoTW and the rest accept
   them.** FT4 is not an ADIF mode in its own right — it is a submode of MFSK, as Q65, FST4 and
   FST4W are — and Nexus was writing a bare `MODE=FT4`. That spelling is not in the mode list
