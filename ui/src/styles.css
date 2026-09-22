@@ -8134,11 +8134,41 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .recall-log-rst {
   color: var(--text-dim);
 }
+/* #162: the clip container for a prior contact's comment, and its toggle — the same pair as
+   the Logbook's `.log-note` / `.log-note-text`. Flex because a <button> is an atomic inline
+   box that `text-overflow` on the cell cannot clip with an ellipsis. */
 .recall-log-cmt {
+  display: flex;
+  min-width: 0;
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.recall-log-cmt-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* #162: opened, the comment wraps to its full length inside its row. Only the row grows —
+   the list's column template is untouched, and the list is already a bounded scroller. The
+   row stays `align-items: baseline`, so date / band / report keep the comment's FIRST line. */
+.recall-log-cmt.expanded {
+  white-space: normal;
+}
+.recall-log-cmt.expanded .recall-log-cmt-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* ===========================================================================
