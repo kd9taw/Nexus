@@ -2665,6 +2665,7 @@ export const DE: PartialCatalog = {
   "program.chirp.link": "CHIRP laden ↗",
   "program.chirp.dontShow": "Nicht mehr anzeigen — Datei einfach speichern",
   "program.chirp.save": "CSV speichern",
+  "recall.log.comment.readAria": "Kommentar — in der Zeile öffnen",
   "recall.qrz.title": "{{call}} bei QRZ öffnen (Browser)",
   "recall.qrz.error": "{{call}} konnte bei QRZ nicht geöffnet werden",
   "recall.where.empty": "Tab drücken oder Abfrage für Name / QTH",

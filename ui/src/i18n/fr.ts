@@ -3477,6 +3477,7 @@ export const FR: PartialCatalog = {
   "recall.need.title": "À contacter — un « new one » pour votre journal",
   "recall.note.title": "Votre note la plus récente sur cette station",
   "recall.qrz.error": "Impossible d'ouvrir {{call}} sur QRZ",
+  "recall.log.comment.readAria": "Commentaire — l’ouvrir dans la ligne",
   "recall.qrz.title": "Ouvrir {{call}} sur QRZ (navigateur)",
   "recall.where.empty": "Tab ou Rechercher pour le nom / QTH",
   "reveal.enable": "Activer",

@@ -4558,6 +4558,7 @@ export const EN = {
   // ⚠️ The callsign, the grid squares, the band and mode of each prior contact, the RST pair,
   // the operator's own comments and the distance/bearing line are all data and stay in the
   // component — as do the month abbreviations, which are date formatting.
+  'recall.log.comment.readAria': 'Comment — open it in the row',
   'recall.qrz.title': 'Open {{call}} on QRZ (browser)',
   'recall.qrz.error': 'Could not open {{call}} on QRZ',
   // Names the button the operator can see: the log strip's callbook button reads "Lookup".

@@ -71,6 +71,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A previous contact's comment can be read in the callsign card without hovering it.** The
+  "Previous contacts" list in the lookup card clipped each comment to one line and put the rest
+  in a tooltip, which is the same dead end the Logbook's Comment column had before it opened in
+  place. Click a comment and it opens to its full length right there in the card; click again and
+  it folds back. Clicking anywhere else on the line still takes you to that contact in the
+  Logbook, and so does Enter — reading a comment no longer throws you out of the card in the
+  middle of working someone. (#162)
 - **The setup wizard can now reach every rig in the catalog, not just the common ones.** The
   wizard's radio list showed about fifty curated rigs and had no way to see past them, so if
   yours was not among them there was nothing you could do in the wizard about it — Settings has
