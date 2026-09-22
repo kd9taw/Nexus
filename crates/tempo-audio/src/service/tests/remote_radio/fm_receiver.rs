@@ -161,7 +161,44 @@ fn remote_fm_receiver_commands_preserve_tuning_and_do_not_replay_after_later_pol
                 let saved = std::fs::read(&s.path).unwrap();
                 let fm = s.state.last_fm.clone();
                 let canonical = s.state.last_mode.clone();
+                // ⚠️ RE-STAMP THE IDLE EVIDENCE IMMEDIATELY BEFORE THE STEP, and this is the
+                // whole fix for a case that reddened public main four times in two days.
+                //
+                // `Request::validate` ends in `remote_radio_link`, which refuses a PTT reading
+                // 1000 ms or older with `ReadingUnavailable` — the TX-adjacent idle-evidence
+                // freshness check that `d4465b89` recorded as a known residual and deliberately
+                // left alone. A live station satisfies it continuously, because its monitor poll
+                // re-reads the radio; NOTHING in this harness does. So the reading stamped back
+                // in `station()` had to survive the queue, a settings write and a file read —
+                // and on a CI runner a multi-second whole-process stall anywhere in that gap
+                // aged it past the limit. The product then refused correctly, before any write,
+                // which is why the receipt was `Rejected` (never `Unknown`) and why the peer saw
+                // no commands at all.
+                //
+                // Re-reading here leaves microseconds where there were milliseconds of
+                // stall-sensitive gap. It removes no check and weakens no guard: a stall landing
+                // inside THAT window still refuses, and still should. The freshness rule itself
+                // stays asserted where it is the subject, in the remote_settings receiver cases.
+                {
+                    let read = s.state.remote_read(&s.engine).unwrap();
+                    let mut e = engine_lock(&s.engine);
+                    e.remote_observe_cat(Some(&read), Some(true));
+                    e.remote_observe_mode(Some(&read), Some(mode));
+                    e.remote_observe_ptt(Some(&read), Some(false));
+                }
                 s.step();
+                // ⚠️ THE PEER'S COMMAND LOG IS PART OF THE MESSAGE, and it is the whole reason
+                // this reads the way it does. This case reddened public main four times in two
+                // days with `Rejected { reason: ReadingUnavailable }` and nothing else — and
+                // that reason is reachable from FOUR different reads inside the owner
+                // (`read_freq`, `read_mode`, `read_ptt`, `read_split`), so the outcome alone
+                // cannot say which one answered "no reading", nor whether the owner got that
+                // far. The log does. EMPTY is the loudest answer of all — the owner never
+                // reached CAT, so the refusal came out of `Request::validate`, which is where
+                // the freshness check above lives. Otherwise the last verb in it is the one
+                // that failed, and a verb appearing twice is a dropped connection being
+                // re-established. A `Rejected` (rather than `Unknown`) additionally proves no
+                // write was attempted, so the failure is always upstream of the first write.
                 assert_eq!(
                     matches!(
                         receipt.outcome(),
@@ -170,8 +207,9 @@ fn remote_fm_receiver_commands_preserve_tuning_and_do_not_replay_after_later_pol
                         }
                     ),
                     confirmed,
-                    "{mode} {adjustment:?}: {:?}",
-                    receipt.outcome()
+                    "{mode} {adjustment:?}: {:?} after {:?}",
+                    receipt.outcome(),
+                    peer.lines.lock().unwrap()
                 );
                 if !confirmed {
                     assert!(matches!(receipt.outcome(), Outcome::Unknown { .. }));
