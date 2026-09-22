@@ -464,6 +464,47 @@ export interface SatPass {
   aosClamped?: boolean
 }
 
+/** One window in which THIS station and another can both see the same bird at
+ * or above the floor — the sked answer. Times are unix SECONDS. */
+export interface SatSkedWindow {
+  satName: string
+  norad?: number | null
+  startUnix: number
+  endUnix: number
+  /** The instant the window is at its best (where `mutualElDeg` is attained). */
+  peakUnix: number
+  /** THE quality number: the highest elevation the WORSE-OFF end reaches at any
+   * single instant. Never above either station's own maximum — a window is only
+   * as good as the end that has it lower. */
+  mutualElDeg: number
+  /** How high the bird gets for THIS station inside the window. */
+  maxElHereDeg: number
+  /** …and for the other station. The two are routinely tens of degrees apart:
+   * one end can have an overhead pass while the other scrapes the treeline. */
+  maxElThereDeg: number
+  /** Where to point at `peakUnix`, from HERE (° from N, clockwise). */
+  peakAzHereDeg: number
+  /** How old the elements will be (days) when this window happens. */
+  elementAgeDays: number
+  /** False once the elements would be over 14 days old by then: still shown,
+   * to be re-checked nearer the time rather than relied on. */
+  firm: boolean
+}
+
+/** The sked answer. An EMPTY `windows` is a real answer for most pairs, which
+ * is why the separation and the birds scanned ride along — they are what tells
+ * the operator "impossible" apart from "nothing was looked at". */
+export interface SatSked {
+  /** The square the answer is about (a callsign may have resolved it). */
+  theirGrid: string
+  separationKm: number
+  /** The elevation floor applied at BOTH ends. */
+  minElDeg: number
+  days: number
+  birds: string[]
+  windows: SatSkedWindow[]
+}
+
 /** One pass's earn summary (spec §3 needs-aware ranking). Counts are complete;
  * the sample lists are capped at 8 (sorted). */
 export interface SatPassEarn {

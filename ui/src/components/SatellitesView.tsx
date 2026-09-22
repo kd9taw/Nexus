@@ -39,6 +39,7 @@ import type {
   SatExcluded,
   SatPass,
   SatPassEarn,
+  SatSked,
   SatTrackStatus,
   SatVfoMap,
   SatView,
@@ -48,6 +49,7 @@ import type {
 import {
   getSatellites,
   getSatPassNeeds,
+  getSatSked,
   getSatDetail,
   getSettings,
   setSettings,
@@ -199,6 +201,207 @@ function countdown(p: SatPass, nowSecs: number): string {
   return min < 90
     ? t('sat.countdown.mins', { mins: Math.max(1, min) })
     : t('sat.countdown.hours', { hours: (min / 60).toFixed(1) })
+}
+
+/** Rows shown before "show all N". A 14-day two-observer scan over ten ★ birds
+ * can return hundreds of windows; the list is TIME-sorted, so a cap on it hides
+ * only what is furthest away, and the remainder is always stated. */
+const SKED_ROW_CAP = 10
+
+/** Days of horizon asked for. The full [`MAX_HORIZON_DAYS`] the backend allows,
+ * and deliberately NOT a control: the operator's own square and the ★ set are
+ * already known, so "their grid" is the only thing this feature has to ask for.
+ * The far end of the range is made honest by the `firm` flag on each row rather
+ * than by shortening it — a sked is arranged days ahead, and truncating the
+ * horizon to keep every row confident would remove the answer instead of
+ * qualifying it. */
+const SKED_DAYS = 14
+
+/** `2026-09-29` from unix seconds, in the same LOCAL zone `hhmm` prints in.
+ * ISO order rather than a locale month name: this is a tick label on a list of
+ * times, and an operator agreeing a sked by email writes the date this way. */
+const ymd = (unix: number) => {
+  const d = new Date(unix * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/** SKED WITH A STATION — the section's two-observer band.
+ *
+ * Every other surface here answers "when is this bird up for ME". This one
+ * answers the question two operators actually have to settle before a satellite
+ * QSO can happen: when is it up for BOTH of us at once, high enough at each end
+ * to work? The geometry, the 5° floor at each end and the element-age rules all
+ * live in the `propagation::satsked` module — this is the surface, and it is
+ * deliberately one text box: the operator's own square comes from settings and
+ * the birds are the ★ set the rest of the section already runs on, so the only
+ * thing it has to ask for is who the other station is.
+ *
+ * ON DEMAND, never polled. A 14-day scan over two observers is cheap enough to
+ * run on a click and far too speculative to run on a timer — nobody is owed a
+ * background recompute of a sked they have not asked about.
+ *
+ * COLLAPSED BY DEFAULT, because its height comes out of the schedule's row
+ * count in this bounded column (see `.sats-plan`). Closed it is one control
+ * strip; open it is a disclosure the operator chose. */
+function SkedBand({ favKey, nowSecs }: { favKey: string; nowSecs: number }) {
+  const [open, setOpen] = useState(false)
+  const [peer, setPeer] = useState('')
+  const [busy, setBusy] = useState(false)
+  // The backend's refusals are sentences about the box the operator just typed
+  // in ("No grid on file for W1AW"), so they are SHOWN, not swallowed.
+  const [error, setError] = useState<string | null>(null)
+  const [sked, setSked] = useState<SatSked | null>(null)
+  const [showAll, setShowAll] = useState(false)
+
+  const names = useMemo(() => (favKey === '' ? [] : favKey.split(',')), [favKey])
+  const ask = () => {
+    if (peer.trim() === '' || busy) return
+    setBusy(true)
+    setError(null)
+    getSatSked(names, peer, SKED_DAYS)
+      .then((s) => {
+        setSked(s)
+        setShowAll(false)
+      })
+      .catch((e: unknown) => {
+        setSked(null)
+        setError(String(e))
+      })
+      .finally(() => setBusy(false))
+  }
+
+  // Windows already over are dropped here rather than backend-side: the scan
+  // starts at `now`, so this only ever removes the one window that ended while
+  // the answer was on screen.
+  const rows = (sked?.windows ?? []).filter((w) => w.endUnix > nowSecs)
+  const shown = showAll ? rows : rows.slice(0, SKED_ROW_CAP)
+
+  return (
+    <section className="sats-sked" data-testid="sats-sked">
+      <div className="sats-sked-strip">
+        <button
+          type="button"
+          className="sats-sked-disclose"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? '▾' : '▸'} {t('sat.sked.head')}
+        </button>
+        {open && (
+          <>
+            <input
+              className="sats-sked-peer"
+              value={peer}
+              placeholder={t('sat.sked.peer.placeholder')}
+              aria-label={t('sat.sked.peer.label')}
+              onChange={(e) => setPeer(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') ask()
+              }}
+            />
+            <button
+              type="button"
+              className="sats-sked-go"
+              disabled={busy || peer.trim() === ''}
+              onClick={ask}
+            >
+              {busy ? t('sat.sked.finding') : t('sat.sked.find')}
+            </button>
+          </>
+        )}
+      </div>
+
+      {open && (
+        <div className="sats-sked-body">
+          {names.length === 0 && (
+            <p className="sats-sked-note">{t('sat.sked.noFavorites')}</p>
+          )}
+          {error && (
+            <p className="sats-sked-error" data-testid="sat-sked-error">
+              {error}
+            </p>
+          )}
+          {sked && (
+            <>
+              {/* THE HONESTY LINE, and it is the whole reason an empty list is
+                  readable. For most pairs on most birds there are no windows,
+                  and the operator's next question is always "did it not look,
+                  or is it really impossible?" — the separation answers it (a
+                  400 km LEO's 5° circle is ~1,660 km across the ground, so
+                  past ~3,300 km no schedule can help) and the bird count says
+                  what was searched. */}
+              <p className="sats-sked-note" data-testid="sat-sked-note">
+                {t('sat.sked.scanned', {
+                  grid: sked.theirGrid,
+                  km: Math.round(sked.separationKm),
+                  birds: sked.birds.length,
+                  days: sked.days,
+                  el: sked.minElDeg,
+                })}
+              </p>
+              {rows.length === 0 ? (
+                <p className="sats-sked-empty" data-testid="sat-sked-empty">
+                  {t('sat.sked.none', { grid: sked.theirGrid, days: sked.days })}
+                </p>
+              ) : (
+                <ul className="sats-sked-rows">
+                  {shown.map((w, i) => {
+                    const day = ymd(w.startUnix)
+                    const newDay = i === 0 || ymd(shown[i - 1].startUnix) !== day
+                    const mins = Math.max(1, Math.round((w.endUnix - w.startUnix) / 60))
+                    return (
+                      <li
+                        key={`${w.satName}-${w.startUnix}`}
+                        className={`sats-sked-row${w.firm ? '' : ' soft'}`}
+                      >
+                        <span className="sats-sked-day">{newDay ? day : ''}</span>
+                        <span className="sats-sked-when">
+                          {hhmm(w.startUnix)}–{hhmm(w.endUnix)}
+                        </span>
+                        <span className="sats-sked-dur">{mins}m</span>
+                        <b className="sats-sked-bird">{w.satName}</b>
+                        {/* The pair's SHARED ceiling — the honest one-number
+                            quality of a mutual window, because it is only as
+                            good as the end that has the bird lower. */}
+                        <span className="sats-sked-el" title={t('sat.sked.el.title')}>
+                          {Math.round(w.mutualElDeg)}°
+                        </span>
+                        {/* …and what each antenna actually has to do, which on
+                            a real pass is nothing like the ceiling: one end can
+                            be overhead while the other scrapes the treeline. */}
+                        <span className="sats-sked-ends" title={t('sat.sked.ends.title')}>
+                          {Math.round(w.maxElHereDeg)}° / {Math.round(w.maxElThereDeg)}°
+                        </span>
+                        <span className="sats-sked-az">{wind8(w.peakAzHereDeg)}</span>
+                        {!w.firm && (
+                          <span
+                            className="sats-sked-soft"
+                            title={t('sat.sked.soft.title', {
+                              days: Math.round(w.elementAgeDays),
+                            })}
+                          >
+                            {t('sat.sked.soft.tag')}
+                          </span>
+                        )}
+                      </li>
+                    )
+                  })}
+                  {!showAll && rows.length > SKED_ROW_CAP && (
+                    <li className="sats-sked-more">
+                      <button type="button" onClick={() => setShowAll(true)}>
+                        {t('sat.sked.showAll', { count: rows.length })}
+                      </button>
+                    </li>
+                  )}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  )
 }
 
 /** Geometry-first pass quality: max elevation dominates (a 70° pass is a
@@ -3942,6 +4145,22 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
       )}
 
       <aside className="sats-side">
+        {/* SKED WITH A STATION — the two-observer band.
+            COLUMN 2, NOT COLUMN 1, and the reason is a budget rather than a
+            taste. It reads like a planning block and the thought that reaches
+            it starts in the schedule ("that pass is mine — is it theirs?"), so
+            column 1 is where it wants to live. But `.sats-plan` is budgeted as
+            exactly three blocks whose leftover IS the schedule's row count, and
+            that count is a MEASURED claim (5 rows at the 1024×768 floor, 16 at
+            1920×1080 — styles.css carries the table). A fourth block there,
+            however small, invalidates every one of those numbers, and this box
+            cannot re-measure them. Column 2 already holds a variable set of
+            blocks and an input strip ("Log this QSO"), and carries no such
+            claim, so the band costs nothing that is written down.
+            FIRST in the column, above the pass graphics: collapsed it is one
+            line, and a disclosure the operator has to scroll a favourites list
+            to find is a disclosure nobody opens. */}
+        <SkedBand favKey={favKey} nowSecs={nowSecs} />
         {selected && detail && (
           <section className="sats-detail">
             {/* THE TWO MAPS, SIDE BY SIDE. Operator, 2026-08-03: "It also would

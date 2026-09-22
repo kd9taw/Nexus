@@ -5688,6 +5688,33 @@ struct SatView {
     excluded: Vec<SatExcludedDto>,
 }
 
+/// What [`get_sat_sked`] answers with: the mutual-visibility windows, plus the
+/// facts that let an EMPTY list read as an answer rather than a failure.
+///
+/// For most pairs on most birds there are no windows at all, and the operator's
+/// next question is always "did it not look, or is it really impossible?" —
+/// `separation_km` and `birds` answer it without a second round trip. (A 400 km
+/// LEO's 5° circle has a ~1,660 km ground radius, so a pair more than ~3,300 km
+/// apart can never share one, whatever the schedule says.)
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SatSkedDto {
+    /// The square actually used for the other station — echoed back because a
+    /// callsign may have resolved it from the log, and the operator is
+    /// entitled to see which square the answer is about.
+    their_grid: String,
+    /// Great-circle distance between the two stations (km).
+    separation_km: f64,
+    /// The elevation floor applied at BOTH ends.
+    min_el_deg: f64,
+    /// Days of horizon actually predicted over, after clamping.
+    days: u32,
+    /// The ★ birds scanned, by the name the operator starred them with.
+    birds: Vec<String>,
+    /// Every window found, in time order across all birds.
+    windows: Vec<propagation::satsked::SkedWindow>,
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SatPassDto {
@@ -7432,6 +7459,120 @@ fn satellite_needs_passes(
     }
     passes.sort_by_key(|p| p.aos_unix);
     passes
+}
+
+/// SKED WITH ANOTHER STATION — the two-observer answer the satellite stack has
+/// never given: when is one of the operator's birds above the horizon for BOTH
+/// of us at once, high enough at each end to actually work? The geometry, the
+/// elevation floor and the staleness rules all live in
+/// [`propagation::satsked`]; this command is the plumbing — resolve who "they"
+/// are, pick the birds, and hand the pure function two lat/lons.
+///
+/// `peer` is a Maidenhead square (4/6/8, the same alphabet a QSO record
+/// carries) **or** a callsign, in which case the most recent logged contact
+/// with that call supplies the grid. Nothing else is asked for: the operator's
+/// own square comes from settings and the birds are the ★ favourites, resolved
+/// rename-survivingly through the same [`resolve_birds`] the schedule uses, so
+/// the feature works the moment the section does.
+///
+/// Errors carry the reason a human would want ("no grid on file for W1AW"),
+/// because every one of them is a thing the operator can fix in the box they
+/// just typed into. An EMPTY window list is not an error — for most pairs on
+/// most birds it is the correct answer, which is why the DTO reports the
+/// separation and the birds scanned.
+#[tauri::command]
+async fn get_sat_sked(
+    state: State<'_, SharedEngine>,
+    names: Vec<String>,
+    peer: String,
+    days: u32,
+) -> Result<SatSkedDto, String> {
+    let peer = peer.trim().to_uppercase();
+    if peer.is_empty() {
+        return Err("Enter the other station's grid square or callsign".into());
+    }
+    let (mygrid, their_grid) = {
+        let mut eng = engine_lock(&state);
+        let mygrid = eng.settings().mygrid.clone();
+        let their_grid = if propagation::geo::is_logged_grid(&peer) {
+            peer.clone()
+        } else {
+            // A callsign: the log is the one place this app already knows where
+            // another station is. Newest QSO carrying a grid wins — an operator
+            // moves, and the last square they gave is the current one.
+            eng.sync_shared_log_if_changed();
+            let mut best: Option<(u64, String)> = None;
+            for q in eng.get_log() {
+                if q.call.eq_ignore_ascii_case(&peer) {
+                    if let Some(g) = q
+                        .grid
+                        .as_deref()
+                        .filter(|g| propagation::geo::is_logged_grid(g))
+                    {
+                        if best.as_ref().is_none_or(|(w, _)| q.when_unix >= *w) {
+                            best = Some((q.when_unix, g.trim().to_uppercase()));
+                        }
+                    }
+                }
+            }
+            match best {
+                Some((_, g)) => g,
+                None => {
+                    return Err(format!(
+                        "No grid on file for {peer} — enter their square instead"
+                    ))
+                }
+            }
+        };
+        (mygrid, their_grid)
+    };
+
+    let Some(here) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
+        return Err("Set your own grid square in Settings ▸ Station first".into());
+    };
+    let Some(there) = propagation::geo::maidenhead_to_latlon(&their_grid) else {
+        return Err(format!("{their_grid} is not a Maidenhead grid square"));
+    };
+
+    let tles = tle_snapshot();
+    if tles.is_empty() {
+        return Err("No satellite elements yet — fetch TLEs first".into());
+    }
+    let aliases = tle_aliases();
+    let now = now_unix();
+    let days = days.clamp(1, propagation::satsked::MAX_HORIZON_DAYS);
+
+    let (birds, windows) = tauri::async_runtime::spawn_blocking(move || {
+        // The ★ set, alias-resolved exactly as on get_sat_schedule so a sked
+        // row and a schedule row name the same bird. Staleness is NOT filtered
+        // here: mutual_schedule owns the acting ceiling, and it applies it to
+        // the age at the PREDICTED time rather than at now — a stricter rule
+        // than dropping the bird up front, and the one that makes a 14-day
+        // horizon honest.
+        let mine = resolve_birds(&tles, &aliases, &names);
+        let birds: Vec<String> = mine.iter().map(|(label, _)| label.clone()).collect();
+        let refs: Vec<&propagation::sat::Tle> = mine.iter().map(|(_, t)| *t).collect();
+        let windows = propagation::satsked::mutual_schedule(
+            &refs,
+            here,
+            there,
+            now,
+            days,
+            propagation::satsked::MUTUAL_MIN_EL_DEG,
+        );
+        (birds, windows)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(SatSkedDto {
+        their_grid,
+        separation_km: propagation::geo::haversine_km(here, there),
+        min_el_deg: propagation::satsked::MUTUAL_MIN_EL_DEG,
+        days,
+        birds,
+        windows,
+    })
 }
 
 /// The ISS's current-or-next pass over the operator's QTH, or `None`. Keyed on
@@ -24948,6 +25089,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             discover_flex,
             get_sat_schedule,
             get_sat_pass_needs,
+            get_sat_sked,
             get_iss_pass,
             get_sat_detail,
             set_sat_transponder,

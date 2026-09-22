@@ -116,6 +116,36 @@ pub fn grid_distance_km(a: &str, b: &str) -> Option<f64> {
     ))
 }
 
+/// Whether a string is a Maidenhead square a QSO record could carry — exactly
+/// 4, 6 or 8 characters of the locator alphabet. The Rust twin of
+/// `ui/src/grid.ts`'s `isValidLoggedGrid`, and deliberately that rule rather
+/// than the operator's-own-square rule: 8-character squares are what the
+/// VHF/microwave and satellite operators who exchange grids at all actually
+/// pass, and the places this gates are places the operator was GIVEN a square.
+///
+/// ⭐ THE LENGTH CHECK IS LOAD-BEARING and is the whole reason this exists
+/// beside [`maidenhead_to_latlon`], which is a permissive locator *parser*:
+/// it accepts any string of length ≥ 4 whose first four characters fit and
+/// simply ignores the rest, so `is_some()` is not a grid test. A two-letter
+/// prefix with a TWO-digit number — the shape a special-event callsign takes,
+/// `OL20ABC` — clears every character class and is seven characters long, so
+/// only the length rejects it. Asking "grid or callsign?" with the parser
+/// would have sent that operator's sked request off to look up a grid square
+/// in Czechia.
+pub fn is_logged_grid(s: &str) -> bool {
+    let b = s.trim().as_bytes();
+    if !matches!(b.len(), 4 | 6 | 8) {
+        return false;
+    }
+    let in_range = |i: usize, lo: u8, hi: u8| (lo..=hi).contains(&b[i].to_ascii_uppercase());
+    in_range(0, b'A', b'R')
+        && in_range(1, b'A', b'R')
+        && b[2].is_ascii_digit()
+        && b[3].is_ascii_digit()
+        && (b.len() < 6 || (in_range(4, b'A', b'X') && in_range(5, b'A', b'X')))
+        && (b.len() < 8 || (b[6].is_ascii_digit() && b[7].is_ascii_digit()))
+}
+
 /// Compass octant (N, NE, …) for a bearing in degrees — for plain-language
 /// "point NW" guidance.
 pub fn compass_octant(bearing: f64) -> &'static str {
@@ -359,5 +389,32 @@ mod tests {
         assert!((a0.0 - a.0).abs() < 1e-6 && (a0.1 - a.1).abs() < 1e-6);
         // This NA↔EU path bows north — geomagnetic lat of the midpoint is high.
         assert!(geomagnetic_lat_deg(mid.0, mid.1) > 50.0);
+    }
+    #[test]
+    fn is_logged_grid_takes_4_6_and_8_and_refuses_a_callsign() {
+        for g in ["EN52", "FN42", "fn31pr", "FN31PR99", " IO91  "] {
+            assert!(is_logged_grid(g), "{g} is a valid logged square");
+        }
+        // THE case the length check exists for: every character class fits, and
+        // it is a callsign. The permissive parser says yes to it — the control
+        // below is what makes this test about `is_logged_grid` and not about
+        // the alphabet.
+        assert!(
+            maidenhead_to_latlon("OL20ABC").is_some(),
+            "control: the parser is permissive, or this test proves nothing"
+        );
+        assert!(!is_logged_grid("OL20ABC"));
+
+        for bad in [
+            "W1AW",     // ordinary callsign: 'W' is past the field range
+            "KB1ABC",   // char 3 is a letter
+            "FN42X",    // 5 characters — a truncated square, not a square
+            "FN42ABC",  // 7
+            "FN42ABCD", // 8, but the extended pair must be digits
+            "FN4",      // too short
+            "",
+        ] {
+            assert!(!is_logged_grid(bad), "{bad:?} is not a logged square");
+        }
     }
 }

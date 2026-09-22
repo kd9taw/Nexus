@@ -266,6 +266,21 @@ export async function getSatPassNeeds(names: string[], hours: number): Promise<i
   return invoke<import('./types').SatPass[]>('get_sat_pass_needs', { names, hours })
 }
 
+/** MUTUAL-VISIBILITY WINDOWS with another station — when a ★ bird is above the
+ * floor for BOTH of you at once, over the next `days`. `peer` is their grid
+ * square (4/6/8 char) or a callsign, which the backend resolves from the most
+ * recent logged QSO carrying a grid. Rejects (with a sentence the operator can
+ * act on) when neither grid resolves or no elements are loaded; an empty
+ * `windows` is a RESULT, not a failure — see SatSked. On demand only: this is a
+ * two-observer scan over the whole horizon, never a poll. */
+export async function getSatSked(
+  names: string[],
+  peer: string,
+  days: number,
+): Promise<import('./types').SatSked> {
+  return invoke<import('./types').SatSked>('get_sat_sked', { names, peer, days })
+}
+
 /** The ISS's current-or-next pass over the QTH (keyed on NORAD 25544), or null
  * when the grid is unset, no ISS elements are loaded, or no pass falls in the
  * next ~3 h. Drives the SSTV auto-arm opt-in. */
