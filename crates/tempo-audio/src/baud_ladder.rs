@@ -140,7 +140,7 @@ pub enum SplitDetect {
     Absent,
 }
 
-/// The two facts the ladder takes from Hamlib's `--dump-caps`, and nothing else.
+/// The facts the ladder takes from Hamlib's `--dump-caps`, and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RigCaps {
     /// `Serial speed: 4800..57600 baud` — `serial_rate_min`/`_max`, the rates the BACKEND
@@ -157,6 +157,24 @@ pub struct RigCaps {
     /// Requires all three of: `Can get Split VFO: Y`, `Can get Split Freq: Y`, and FREQ in
     /// `Targetable features`. Anything less is `Emulated` (asking moves the radio) or `Absent`.
     pub split_detect: SplitDetect,
+    /// `Get level: … RFPOWER(0.050000..1.000000/0.010000) …` — the LOWEST RF power this backend
+    /// says the rig can be set to, as a fraction. `None` when the rig publishes no RFPOWER level
+    /// at all (28 of the models in our catalog), which is not a floor of zero: it means the
+    /// question cannot be asked of this radio.
+    ///
+    /// ⚠️ It exists to qualify a READING. A rig whose own backend says it cannot go below 0.05
+    /// and which then reports 0.0 has not been turned down — something in the read is wrong, and
+    /// a "NO RF POWER" banner over a radio that is transmitting normally is exactly the false
+    /// alarm [`crate::rig`]'s callers must not raise. See `Engine::tx_power_is_zero`.
+    ///
+    /// ⚠️ MATCHED ON `RFPOWER(`, WITH THE PAREN, AND THAT IS LOAD-BEARING. The same line carries
+    /// `RFPOWER_METER(0.000000..)` and `RFPOWER_METER_WATTS(0.000000..)` — both begin with
+    /// `RFPOWER` and both declare a floor of ZERO. A prefix match picks one of those up and the
+    /// qualification silently does nothing, which the FT-710 fixture is here to catch.
+    /// Carried in THOUSANDTHS of full scale (`0.050000` → `50`), not as a float: `RigCaps` is
+    /// `Eq`, a float is not, and the declared side of this comparison is an exact decimal that
+    /// should never have been made approximate.
+    pub rfpower_floor_milli: Option<u16>,
     /// Whether `Can get VFO:` is `Y` — the rig answers "which VFO am I on" from the RADIO.
     ///
     /// ⚠️ `Y` AND NOTHING ELSE, and `E` is the reason this is a bool rather than the tri-state
@@ -236,6 +254,25 @@ pub fn parse_caps(dump_caps: &str) -> RigCaps {
         }
         if let Some(rest) = line.trim().strip_prefix("Can get Split Freq:") {
             get_freq = rest.trim().chars().next();
+        }
+        // The rig's own lowest settable RF power. Taken from `Get level:` — the levels that can
+        // be READ are the ones whose readings this qualifies; `Set level:` is a different list.
+        //
+        // ⚠️ `RFPOWER(` INCLUDES THE PAREN ON PURPOSE. The same line carries
+        // `RFPOWER_METER(0.000000..)` and `RFPOWER_METER_WATTS(0.000000..)`, both of which begin
+        // with `RFPOWER` and declare a floor of ZERO. Matching the prefix reads one of those and
+        // the qualification agrees with every bad reading it exists to catch.
+        if let Some(rest) = line.trim().strip_prefix("Get level:") {
+            if let Some(after) = rest.split("RFPOWER(").nth(1) {
+                if let Some(lo) = after.split("..").next() {
+                    if let Ok(v) = lo.trim().parse::<f32>() {
+                        // Thousandths, rounded, and clamped to the 0..=1 fraction the level is.
+                        if (0.0..=1.0).contains(&v) {
+                            caps.rfpower_floor_milli = Some((v * 1000.0).round() as u16);
+                        }
+                    }
+                }
+            }
         }
         if let Some(rest) = line.trim().strip_prefix("Serial speed:") {
             let mut halves = rest.trim().split("..");
@@ -2563,6 +2600,49 @@ mod tests {
         );
         let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true, false);
         assert!(m.contains("not valid CI-V"), "{m}");
+    }
+
+    /// THE RF-POWER FLOOR, read off three REAL capability dumps, because the three cases the
+    /// caller must tell apart all occur naturally among them.
+    ///
+    /// ⭐ The FT-710 is the whole reason this is parsed with the paren. Its `Get level:` line
+    /// carries `RFPOWER(0.050000..)` **and** `RFPOWER_METER(0.000000..)` **and**
+    /// `RFPOWER_METER_WATTS(0.000000..)`. Two of the three declare a floor of ZERO, so a parser
+    /// that matched the prefix `RFPOWER` would read 0.0, agree with every bad reading it was
+    /// written to catch, and do nothing at all — silently.
+    #[test]
+    fn the_rf_power_floor_comes_from_the_rig_and_the_meter_is_not_mistaken_for_it() {
+        let ft710 = include_str!("../tests/fixtures/rigctld/caps_ft710.log");
+        let ts570d = include_str!("../tests/fixtures/rigctld/caps_ts570d.log");
+        let ft847 = include_str!("../tests/fixtures/rigctld/caps_ft847.log");
+
+        // The rig in the field report. 0.05 — TEN TIMES the threshold the zero-power banner
+        // fires at, so that banner is unreachable on this radio unless the reading is wrong.
+        assert_eq!(
+            parse_caps(ft710).rfpower_floor_milli,
+            Some(50),
+            "the FT-710 declares a 0.05 floor; reading 0.0 here means RFPOWER_METER was matched",
+        );
+        // A second, unrelated backend with the same floor — so the value is not an artefact of
+        // one capture.
+        assert_eq!(parse_caps(ts570d).rfpower_floor_milli, Some(50));
+        // POSITIVE CONTROL that the parse is really reading these files: the FT-847 publishes no
+        // RFPOWER level at all, and NONE is not a floor of zero. A rig that cannot be asked must
+        // never have its readings qualified against a number nobody declared.
+        assert_eq!(
+            parse_caps(ft847).rfpower_floor_milli,
+            None,
+            "the FT-847 declares no RFPOWER; absent must not become a floor",
+        );
+        assert!(
+            !ft847.contains("RFPOWER"),
+            "positive control: this fixture must really lack RFPOWER, or the None above is vacuous",
+        );
+        // And the thing that makes the FT-710 case a trap is really in the file.
+        assert!(
+            ft710.contains("RFPOWER_METER(0.000000"),
+            "positive control: the zero-floor meter must really be on that line",
+        );
     }
 
     /// THE THREE-STATE VERDICT, against the two real capability dumps in the fixtures — which

@@ -2634,6 +2634,11 @@ pub struct Engine {
     /// the commanded `rf_power` so a 750 ms poll can never clobber a just-issued
     /// set that the radio loop hasn't applied yet.
     rig_rf_power: Option<f32>,
+    /// The rig's OWN lowest settable RF power, in thousandths, as its capability dump declares
+    /// it. Fetched lazily and only when a reading already looks like zero — a healthy radio
+    /// never costs anything for it. `None` = never asked, or a rig that publishes no RFPOWER,
+    /// and in both cases the reading is taken at face value exactly as before.
+    rig_rf_power_floor_milli: Option<u16>,
     /// Latch for the zero-power log line, so it is written once per transition and not once
     /// per radio-loop tick.
     zero_power_noted: bool,
@@ -4624,6 +4629,7 @@ impl Engine {
             manual_ptt: false,
             rf_power: None,
             rig_rf_power: None,
+            rig_rf_power_floor_milli: None,
             zero_power_noted: false,
             mic_gain: None,
             rig_mic_gain: None,
@@ -8533,6 +8539,36 @@ impl Engine {
             && self
                 .rig_rf_power
                 .is_some_and(|observed| observed <= ZERO_RF_POWER)
+            // …unless the rig's own backend says it cannot BE this low. A radio declaring a
+            // floor of 0.05 that then reports 0.0 has not been turned down — the reading
+            // disagrees with the contract the same backend published, and the honest answer to
+            // a number that cannot be true is to say nothing. An FT-710 operator working
+            // stations was being told his transmitter was dead.
+            //
+            // ⚠️ This never silences the rigs the warning is FOR: 14 models in the catalog
+            // declare a floor of 0.0, so zero is a level they can really be left at, and for
+            // them this test is false and the banner stands. `None` — never asked, or a rig
+            // publishing no RFPOWER — leaves it standing too, because silence is not evidence
+            // that a reading was wrong.
+            && !self.rig_rf_power_is_below_its_own_floor()
+    }
+
+    /// Whether the last power reading sits UNDER the lowest level the rig itself declares it can
+    /// be set to — i.e. the reading is not a level the radio could have been left at.
+    fn rig_rf_power_is_below_its_own_floor(&self) -> bool {
+        let (Some(observed), Some(floor)) = (self.rig_rf_power, self.rig_rf_power_floor_milli)
+        else {
+            return false;
+        };
+        observed < f32::from(floor) / 1000.0
+    }
+
+    /// Adopt the rig's declared RF-power floor (thousandths of full scale). Observed-only, and
+    /// asked for lazily by the radio loop the first time a reading looks like zero.
+    pub fn observe_rig_power_floor(&mut self, floor_milli: Option<u16>) {
+        if let Some(f) = floor_milli {
+            self.rig_rf_power_floor_milli = Some(f);
+        }
     }
 
     /// Set desired mic gain (0.0–1.0). The radio loop applies it via the rig.
@@ -29719,6 +29755,55 @@ mod tests {
     /// when Nexus moved his mode, because a Yaesu keeps a separate level per mode — and that is
     /// a feature, not a constant. Left for its own decision; this test exists so the constant is
     /// not quietly "fixed" in the meantime.
+    /// THE FT-710 FIELD REPORT: "NO RF POWER" in several modes while the radio transmits fine.
+    ///
+    /// That radio's own backend declares `RFPOWER(0.050000..1.000000)` — it cannot be SET below
+    /// 0.05, which is ten times the threshold this banner fires at. So a 0.0 reading from it is
+    /// not a turned-down transmitter, it is a reading that contradicts the contract the same
+    /// backend published, and the banner must stay silent rather than tell an operator working
+    /// stations that nothing is going out.
+    #[test]
+    fn a_reading_under_the_rigs_own_declared_floor_is_not_read_as_zero_power() {
+        // No floor known — unchanged behaviour, which is what every rig gets until one is asked
+        // for. This is the control that stops the fix from silencing everything.
+        let mut unasked = Engine::new("W9XYZ", "EN37", 0);
+        unasked.set_tx_enabled(true);
+        unasked.observe_rig_power(0.0);
+        assert!(
+            unasked.snapshot().radio.tx_power_zero,
+            "with no declared floor the warning must still fire — silence is not evidence",
+        );
+
+        // The FT-710's own number. Same reading, now qualified, and the banner goes quiet.
+        let mut ft710 = Engine::new("W9XYZ", "EN37", 0);
+        ft710.set_tx_enabled(true);
+        ft710.observe_rig_power_floor(Some(50));
+        ft710.observe_rig_power(0.0);
+        assert!(
+            !ft710.snapshot().radio.tx_power_zero,
+            "a rig that cannot be set below 0.05 reporting 0.0 is a bad READING, not no power",
+        );
+
+        // ⚠️ AND IT MUST NOT SILENCE THE RIGS THIS WARNING IS FOR. 14 models declare a floor of
+        // 0.0, so zero IS a level they can be left at, and for them nothing changes.
+        let mut can_be_zero = Engine::new("W9XYZ", "EN37", 0);
+        can_be_zero.set_tx_enabled(true);
+        can_be_zero.observe_rig_power_floor(Some(0));
+        can_be_zero.observe_rig_power(0.0);
+        assert!(
+            can_be_zero.snapshot().radio.tx_power_zero,
+            "a rig whose own floor IS zero must still warn — this is the case the banner exists for",
+        );
+
+        // A reading AT the declared floor is a real QRP level somebody chose, not a fault, and
+        // it is above the threshold anyway — so it warns about nothing either way.
+        let mut at_floor = Engine::new("W9XYZ", "EN37", 0);
+        at_floor.set_tx_enabled(true);
+        at_floor.observe_rig_power_floor(Some(50));
+        at_floor.observe_rig_power(0.05);
+        assert!(!at_floor.snapshot().radio.tx_power_zero);
+    }
+
     #[test]
     fn the_zero_power_threshold_is_below_almost_every_rigs_own_floor_and_must_stay_there() {
         // The floors measured above, lowest first. Nothing in the catalog sits between the

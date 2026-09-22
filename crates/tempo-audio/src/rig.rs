@@ -1454,6 +1454,21 @@ impl Rig {
     ///
     /// `None` = we could not ask, which the caller must treat as "cannot", because silence is
     /// not permission here either.
+    /// The rig's OWN lowest settable RF power, in thousandths of full scale, off the same
+    /// `\dump_caps` reply as [`Self::read_split_capability`].
+    ///
+    /// ⚠️ ASK THIS ONLY WHEN A READING ALREADY LOOKS LIKE ZERO, and cache the answer. The dump is
+    /// a long multi-line reply, and issuing it inside the heavy poll is what once starved the
+    /// readers after it — the regression recorded in [`crate::amppoll`]. A healthy radio never
+    /// reaches the caller that asks, so a working station pays nothing for this.
+    ///
+    /// `None` = could not ask, or a rig that publishes no RFPOWER at all. Neither is a floor of
+    /// zero, and the caller must leave such a reading exactly as it found it.
+    pub fn read_rfpower_floor_milli(&mut self) -> Option<u16> {
+        self.control.as_ref()?;
+        let reply = self.command_multiline("\\dump_caps\n").ok()?;
+        crate::baud_ladder::parse_caps(&reply).rfpower_floor_milli
+    }
     pub fn read_vfo_capability(&mut self) -> Option<bool> {
         self.control.as_ref()?;
         let reply = self.command_multiline("\\dump_caps\n").ok()?;
