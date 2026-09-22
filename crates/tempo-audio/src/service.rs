@@ -9531,6 +9531,13 @@ impl RadioLoop {
                         exchange_recvd: "",
                         adif_propmode: q.prop_mode.as_deref().unwrap_or(""),
                     },
+                    // WITHHELD here, unlike the DXKeeper/HRD Logbook syncs: this is a
+                    // BROADCAST to every configured target (`parse_wsjtx_targets` returns a
+                    // list, and a non-loopback one is explicitly supported), consumed by
+                    // alerting tools as much as by loggers — not a master log the operator
+                    // nominated. The structured QSOLogged message built directly above already
+                    // sends `comment` and never `notes`; the safe serializer makes the ADIF
+                    // message agree with its own sibling instead of contradicting it.
                     &tempo_core::logbook::adif_record(q),
                 );
             }

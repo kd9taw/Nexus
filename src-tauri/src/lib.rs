@@ -23999,11 +23999,20 @@ pub fn run() {
                 // nothing meaningful to retry. A failed connect almost always just means
                 // DXLab is not running. Fire it and move on.
                 if let Some((host, base, uploads)) = dxk.clone() {
+                    // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
+                    // call site that does. DXKeeper is the operator's OWN logging software on
+                    // their OWN machine (the comment above says it: a failed connect just means
+                    // DXLab is not running), reached point-to-point as the master log they
+                    // nominated. That is their data moving between their own programs, not a
+                    // publication, and stripping it would leave their master log missing what
+                    // they typed in Nexus. The line this fix draws is a nominated local logger
+                    // vs a service or a broadcast — flip this one word if the operator wants it
+                    // drawn elsewhere.
                     dxkeeper_push_async(
                         host,
                         base,
                         uploads,
-                        tempo_core::logbook::adif_record(&rec),
+                        tempo_core::logbook::adif_record_own_log(&rec),
                     );
                 }
                 let failed = auto_push_one(

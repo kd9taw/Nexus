@@ -1070,7 +1070,7 @@ impl StationCore {
     /// record it, so the next recovery re-reads. A stamp we cannot justify is exactly
     /// how a stale copy silently deletes a second instance's QSOs on the next full
     /// rewrite — the fault `recover_external_appends` exists to prevent. `written` is
-    /// re-derived through the same [`adif_record`] the append writes; if the two ever
+    /// re-derived through the same [`adif_record_own_log`] the append writes; if the two ever
     /// drift the length check simply misses and we fall back to re-reading.
     ///
     /// # MEMORY FIRST — the caller's half of the contract
@@ -1086,7 +1086,7 @@ impl StationCore {
     /// re-read it. Memory is the source of truth for `save`, so memory is written
     /// first, always. Checked here in debug builds, where the invariant is relied on.
     ///
-    /// [`adif_record`]: tempo_core::logbook::adif_record
+    /// [`adif_record_own_log`]: tempo_core::logbook::adif_record_own_log
     pub(crate) fn append_to_log(&mut self, recs: &[QsoRecord]) {
         let _ = self.append_to_log_checked(recs, false);
     }
@@ -1122,7 +1122,9 @@ impl StationCore {
                 Logbook::append(&path, r).map(|_| None)
             } {
                 Ok(handle) => {
-                    written += tempo_core::logbook::adif_record(r).len() as u64;
+                    // MUST match `Logbook::append`'s own bytes (see the contract above),
+                    // so it re-derives through the same own-log serializer.
+                    written += tempo_core::logbook::adif_record_own_log(r).len() as u64;
                     receipts.extend(handle);
                 }
                 Err(e) => {
@@ -1983,7 +1985,7 @@ mod grid_tests {
     /// against a 26,007-record / 3.67 MB log, forever, not once.
     #[test]
     fn our_own_import_append_leaves_the_recovery_gate_shut() {
-        use tempo_core::logbook::{adif_header, adif_record};
+        use tempo_core::logbook::{adif_header, adif_record_own_log};
         let path =
             std::env::temp_dir().join(format!("nexus_append_stamp_{}.adi", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -1992,7 +1994,7 @@ mod grid_tests {
             format!(
                 "{}{}",
                 adif_header(),
-                adif_record(&rec("W1AW", "20m", "FN31"))
+                adif_record_own_log(&rec("W1AW", "20m", "FN31"))
             ),
         )
         .unwrap();
@@ -2037,7 +2039,7 @@ mod grid_tests {
     /// DROPPED instead, so the next look re-reads.
     #[test]
     fn an_append_onto_a_file_that_moved_under_us_drops_the_fingerprint() {
-        use tempo_core::logbook::{adif_header, adif_record};
+        use tempo_core::logbook::{adif_header, adif_record_own_log};
         let path =
             std::env::temp_dir().join(format!("nexus_append_stale_{}.adi", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -2046,7 +2048,7 @@ mod grid_tests {
             format!(
                 "{}{}",
                 adif_header(),
-                adif_record(&rec("W1AW", "20m", "FN31"))
+                adif_record_own_log(&rec("W1AW", "20m", "FN31"))
             ),
         )
         .unwrap();
@@ -2086,13 +2088,13 @@ mod grid_tests {
 
     #[test]
     fn freshness_watcher_folds_in_another_instances_appends_and_no_ops_when_unchanged() {
-        use tempo_core::logbook::{adif_header, adif_record};
+        use tempo_core::logbook::{adif_header, adif_record_own_log};
         let path =
             std::env::temp_dir().join(format!("nexus_sync_watcher_{}.adi", std::process::id()));
         let write = |recs: &[QsoRecord]| {
             let mut s = adif_header();
             for r in recs {
-                s.push_str(&adif_record(r));
+                s.push_str(&adif_record_own_log(r));
             }
             std::fs::write(&path, s).unwrap();
         };

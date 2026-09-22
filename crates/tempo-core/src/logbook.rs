@@ -1841,7 +1841,8 @@ impl Logbook {
         if new {
             file.write_all(adif_header().as_bytes())?;
         }
-        file.write_all(adif_record(rec).as_bytes())?;
+        // The operator's OWN log: everything they typed, private note included.
+        file.write_all(adif_record_own_log(rec).as_bytes())?;
         let mut parent = None;
         #[cfg(unix)]
         if receipt && new {
@@ -2090,7 +2091,9 @@ impl Logbook {
     pub fn adif_in_range(&self, from_unix: Option<u64>, to_unix: Option<u64>) -> String {
         let mut s = adif_header();
         for r in self.records_in_range(from_unix, to_unix) {
-            s.push_str(&adif_record(r));
+            // The operator exporting their own logbook — a backup that dropped their private
+            // notes would lose them for good on the next re-import.
+            s.push_str(&adif_record_own_log(r));
         }
         s
     }
@@ -2147,7 +2150,7 @@ impl Logbook {
                 .map(|o| o.trim().to_ascii_uppercase() == want)
                 .unwrap_or(false);
             if is_theirs {
-                s.push_str(&adif_record(r));
+                s.push_str(&adif_record_own_log(r));
             }
         }
         s
@@ -2267,7 +2270,7 @@ impl Logbook {
             }
             let mut one = QsoRecord::clone(r);
             one.ota.my_ref = Some(want.clone());
-            s.push_str(&adif_record(&one));
+            s.push_str(&adif_record_own_log(&one));
         }
         s
     }
@@ -2337,9 +2340,55 @@ fn upload_field(name: &str, st: &Option<UploadStatus>) -> String {
     }
 }
 
-/// Serialize a single QSO as one ADIF record (ending in `<eor>`) — used by the
-/// full-log export and the QRZ Logbook push (one-record INSERT).
+/// Who a serialized record is being written FOR — the one thing that decides whether the
+/// operator's private note rides along.
+///
+/// ⭐ **The product already makes a two-field promise and only the wire broke it.** The log row
+/// labels `COMMENT` "Comment (shared on the QSL)" and `NOTES` "Private note"
+/// (`logbook.row.notes.title` / `.private`, in all five shipped languages, with a "has a
+/// private note" ARIA flag beside it). The labels were right; the emission was not — every
+/// logbook service got the private note verbatim.
+///
+/// ⛔ **THE DEFAULT IS WITHHELD, AND THAT IS THE WHOLE MECHANISM.** [`adif_record`] — the name
+/// anyone reaches for, and the one every future connector will reach for — is the OUTBOUND
+/// one. Keeping the note takes saying so, with [`adif_record_own_log`]. The alternative shape
+/// (a plain `adif_record` beside an opt-in `adif_record_for_upload`) is exactly what lets the
+/// next person adding a connector pick the wrong one, and picking wrong there is a breach of
+/// a promise the UI made in five languages.
+///
+/// The inverted risk is real but it is the survivable one: miss an OWN-LOG site and the
+/// operator loses a note from their own ADIF mirror — visible to them, and not a publication.
+/// Miss an OUTBOUND site and the note is on someone else's server forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Audience {
+    /// The operator's own data — `log.adi`, the files they export and re-import, and the
+    /// integrity re-derivations that must match those bytes. Everything they typed.
+    OwnLog,
+    /// Anything Nexus sends off the machine BY ITSELF: every logbook service (QRZ, ClubLog,
+    /// eQSL, HRDLog.net, Cloudlog/Wavelog, LoTW) and the broadcast sinks. Private fields are
+    /// withheld.
+    Outbound,
+}
+
+/// The operator's OWN copy of a record — every field they typed, private note included.
+///
+/// For `log.adi`, the file exports, and anything that must reproduce those bytes. Everything
+/// else wants [`adif_record`], which withholds the private fields.
+pub fn adif_record_own_log(r: &QsoRecord) -> String {
+    adif_record_for(r, Audience::OwnLog)
+}
+
+/// One QSO as an ADIF record, **safe to send** — the private note is withheld.
+///
+/// This is the default on purpose; see [`Audience`]. To write the operator's own log, say so
+/// with [`adif_record_own_log`].
 pub fn adif_record(r: &QsoRecord) -> String {
+    adif_record_for(r, Audience::Outbound)
+}
+
+/// The shared body of the two public serializers. PRIVATE on purpose: a third public name
+/// taking the audience as an argument is a third thing for the next person to pick wrong.
+fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     let (y, mo, d, h, mi, s) = datetime_utc(r.when_unix);
     let mut out = String::new();
     out.push_str(&field("CALL", &r.call));
@@ -2447,7 +2496,12 @@ pub fn adif_record(r: &QsoRecord) -> String {
     if let Some(c) = &r.comment {
         out.push_str(&field("COMMENT", c));
     }
-    if let Some(n) = &r.notes {
+    // ⛔ THE PRIVATE FIELD — the only one this function withholds, and the reason [`Audience`]
+    // exists. `COMMENT` directly above is labelled "shared on the QSL" and goes everywhere;
+    // `NOTES` is labelled "Private note" and must not leave the machine. It cannot arrive by
+    // another door: the parser CONSUMES the tags it models (`f.remove("NOTES")`), so an
+    // imported NOTES lands here and never in `extra`.
+    if let Some(n) = r.notes.as_ref().filter(|_| audience == Audience::OwnLog) {
         out.push_str(&field("NOTES", n));
     }
     if let Some(p) = r.tx_power {
@@ -8004,7 +8058,9 @@ mod tests {
         r.comment = Some("nice signal".into());
         r.notes = Some("IC-7300, 100W, G5RV — talked antennas".into());
         r.tx_power = Some(100.0);
-        let back = parse_adif(&(adif_header() + &adif_record(&r)));
+        // The operator's own round trip — NOTES is asserted below, and only the own-log
+        // serializer carries it (see `Audience`).
+        let back = parse_adif(&(adif_header() + &adif_record_own_log(&r)));
         assert_eq!(back.len(), 1);
         let b = &back[0];
         assert_eq!(b.rst_sent.as_deref(), Some("59"));
@@ -9641,6 +9697,279 @@ mod watermark_tests {
                     "{name}: {mark}_rev must move for a write we cannot see the shape of"
                 );
             }
+        }
+    }
+}
+
+/// ⭐ **The private note must not leave the machine.** The product makes a two-field promise
+/// the wire has to keep: `COMMENT` is labelled "Comment (shared on the QSL)" and `NOTES` is
+/// labelled "Private note" (`logbook.row.notes.title` / `.private`, in all five shipped
+/// languages, with a "has a private note" ARIA flag beside it in the log row). These tests
+/// hold both halves of that promise down — the note is withheld from everything Nexus sends
+/// by itself, AND it survives in the operator's own log, which is the half that is easy to
+/// break silently.
+///
+/// Every absence assertion here carries its **positive control in the same invocation**: the
+/// shared `COMMENT` marker must be PRESENT in the very bytes the private marker is absent
+/// from. Without it a builder that returned an empty string would pass the privacy half
+/// perfectly.
+#[cfg(test)]
+mod private_note_tests {
+    use super::*;
+
+    /// The operator's own words, distinctive and alphanumeric so they survive
+    /// percent-encoding verbatim and can be searched for in a form body as-is.
+    const PRIVATE: &str = "ZZPRIVATEZZ";
+    const SHARED: &str = "ZZSHAREDZZ";
+
+    /// Every operator-authored free-text field populated — the classification test below
+    /// asserts each one BY VALUE, so a field left `None` here would make its assertion
+    /// vacuous rather than failing loudly.
+    fn noted() -> QsoRecord {
+        let mut r = mk("W1AW");
+        r.comment = Some(format!("{SHARED} nice signal"));
+        r.notes = Some(format!("{PRIVATE} he is going through a divorce"));
+        r.name = Some("Hiram".into());
+        r.qth = Some("Newington".into());
+        r
+    }
+
+    fn mk(call: &str) -> QsoRecord {
+        QsoRecord {
+            id: None,
+            call: call.into(),
+            grid: Some("EN37".into()),
+            country: None,
+            state: None,
+            band: "20m".into(),
+            freq_mhz: 14.0905,
+            freq_rx_mhz: None,
+            mode: "FT8".into(),
+            rst_sent: Some("-10".into()),
+            rst_rcvd: Some("-12".into()),
+            name: None,
+            qth: None,
+            comment: None,
+            notes: None,
+            tx_power: None,
+            when_unix: 1_700_000_000,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            my_grid: None,
+            my_rig: None,
+            station_callsign: None,
+            extra: Vec::new(),
+            contest: None,
+        }
+    }
+
+    /// Assert on the BYTES a service actually receives: the operator's private words appear
+    /// nowhere in them, and — the control, on the same bytes — their shared words do. Checking
+    /// the words rather than the `<NOTES:` tag is deliberate: it cannot be defeated by a
+    /// different spelling, a different encoding, or the note riding some other field.
+    fn assert_withheld(service: &str, body: &str) {
+        assert!(
+            body.contains(SHARED),
+            "{service}: POSITIVE CONTROL FAILED — the shared COMMENT is missing from the \
+             payload too, so this test cannot tell a privacy fix from an empty body: {body}"
+        );
+        assert!(
+            !body.contains(PRIVATE),
+            "{service}: the operator's PRIVATE note is in the outbound payload: {body}"
+        );
+    }
+
+    /// The four logbook services whose request body is built in this crate, each through the
+    /// real builder the push path calls.
+    #[test]
+    fn no_logbook_service_receives_the_private_note() {
+        let adif = adif_record(&noted());
+
+        assert_withheld(
+            "QRZ Logbook",
+            &crate::qrz::build_insert_body("KEY", &adif, false),
+        );
+
+        assert_withheld(
+            "eQSL",
+            &crate::eqsl::build_upload_body("KD9TAW", "pw", &adif, Some("Home")),
+        );
+
+        assert_withheld(
+            "HRDLog.net",
+            &crate::hrdlog::build_upload_body(&crate::hrdlog::HrdLogQuery {
+                callsign: "KD9TAW".into(),
+                code: "code".into(),
+                app: "Nexus".into(),
+                adif: adif.clone(),
+            }),
+        );
+
+        assert_withheld(
+            "ClubLog",
+            &crate::clublog::build_realtime_body(&crate::clublog::ClubLogQuery {
+                email: "op@example.com".into(),
+                password: "pw".into(),
+                callsign: "KD9TAW".into(),
+                api_key: "key".into(),
+                adif: adif.clone(),
+            }),
+        );
+
+        // Cloudlog/Wavelog and LoTW have no pure body builder in this crate — Cloudlog's JSON
+        // is assembled inside the live POST and LoTW's batch is built in `tempo-app` — but both
+        // carry exactly this string, so the record itself is the thing to assert on.
+        assert_withheld("the outbound ADIF record", &adif);
+        assert_withheld(
+            "the LoTW-signed record",
+            &adif_record_with_station(&noted(), "KD9TAW", "EN37"),
+        );
+    }
+
+    /// The other half, and the one that is easy to break silently: the operator's OWN log keeps
+    /// what they typed. A round trip proves it — write the record as the log writes it, read it
+    /// back, and the note is still there.
+    #[test]
+    fn the_operators_own_log_keeps_the_private_note() {
+        let r = noted();
+        let own = adif_record_own_log(&r);
+        assert!(
+            own.contains(PRIVATE),
+            "the operator's own log must keep their private note: {own}"
+        );
+        assert!(own.contains(SHARED), "…and the shared comment: {own}");
+
+        let back = &parse_adif(&(adif_header() + &own))[0];
+        assert_eq!(
+            back.notes, r.notes,
+            "the private note survives the operator's own round trip"
+        );
+        assert_eq!(back.comment, r.comment, "and so does the comment");
+    }
+
+    /// The file exports are the operator saving their own logbook — a backup that silently
+    /// dropped every private note would lose the data on the next re-import.
+    #[test]
+    fn the_file_exports_keep_the_private_note() {
+        let mut lb = Logbook::new();
+        let mut r = noted();
+        r.operator = Some("KD9TAW".into());
+        r.ota.my_program = Some("POTA".into());
+        r.ota.my_ref = Some("US-1234".into());
+        lb.add(r);
+
+        let day = 1_700_000_000 - (1_700_000_000 % 86_400);
+        for (what, text) in [
+            ("the whole-log export", lb.adif()),
+            ("the per-operator export", lb.adif_for_operator("KD9TAW")),
+            // The callsign is NOT optional here in practice: `adif_for_activation` matches on
+            // `worked_under`, so a record logged under a call and a `None` filter select
+            // nothing. Passing it is what makes this row assert anything at all — the
+            // positive control caught the empty export when it did not.
+            (
+                "the per-activation export",
+                lb.adif_for_activation("US-1234", day, Some("KD9TAW")),
+            ),
+        ] {
+            assert!(
+                text.contains(SHARED),
+                "{what}: POSITIVE CONTROL FAILED — the export is empty or has no comment: {text}"
+            );
+            assert!(
+                text.contains(PRIVATE),
+                "{what} must keep the operator's private note: {text}"
+            );
+        }
+    }
+
+    /// ⭐ **Nothing unclassified is ever exposed.** Destructuring `QsoRecord` field by field
+    /// means a field added later does not COMPILE here until someone decides which side of the
+    /// promise it falls on. That is the guard: not that today's six connectors are patched, but
+    /// that tomorrow's field and tomorrow's connector cannot quietly opt out.
+    ///
+    /// The operator-authored free-text fields — the only ones that can carry prose about
+    /// another human — are classified individually and asserted by value. The rest are
+    /// structural, derived or numeric (a callsign, a band, a timestamp, an upload stamp): they
+    /// hold no prose to leak, and they are named here so that adding one is a decision.
+    #[test]
+    fn every_modelled_field_is_classified_before_it_can_go_outbound() {
+        let r = noted();
+        let QsoRecord {
+            // ---- WITHHELD: the operator's alone, never sent ------------------------------
+            notes,
+            // ---- SHARED free text: the operator writes it KNOWING it is shared -----------
+            comment,
+            name,
+            qth,
+            // ---- Structural / derived / numeric: no operator prose ----------------------
+            id: _,
+            call: _,
+            grid: _,
+            country: _,
+            state: _,
+            band: _,
+            freq_mhz: _,
+            freq_rx_mhz: _,
+            mode: _,
+            rst_sent: _,
+            rst_rcvd: _,
+            tx_power: _,
+            when_unix: _,
+            time_known: _,
+            time_off_unix: _,
+            confirmed: _,
+            award_confirmed: _,
+            qsl_rcvd: _,
+            qsl_sent: _,
+            credit_granted: _,
+            credit_submitted: _,
+            upload: _,
+            ota: _,
+            dxcc: _,
+            prop_mode: _,
+            sat_name: _,
+            operator: _,
+            station_callsign: _,
+            my_grid: _,
+            my_rig: _,
+            // Unmodelled ADIF tags, re-emitted verbatim. It can never hold NOTES: the parser
+            // CONSUMES every tag it models (`f.remove("NOTES")`) and only the remainder lands
+            // here, so the withheld field has no way in through this door.
+            extra: _,
+            contest: _,
+        } = r.clone();
+
+        let outbound = adif_record(&r);
+
+        // A `Vec` rather than an array because the withheld set is a LIST that a later
+        // classification joins — today it holds exactly one field.
+        let withheld: Vec<(&str, Option<String>)> = vec![("NOTES", notes)];
+        for (what, value) in withheld {
+            let v = value.expect("the fixture must populate every classified field");
+            assert!(
+                !outbound.contains(&v),
+                "{what} is classified WITHHELD but reached the outbound record: {outbound}"
+            );
+        }
+        for (what, value) in [("COMMENT", comment), ("NAME", name), ("QTH", qth)] {
+            let v = value.expect("the fixture must populate every classified field");
+            assert!(
+                outbound.contains(&v),
+                "{what} is classified SHARED but is missing from the outbound record — either \
+                 the emitter dropped it or this test has stopped being able to tell: {outbound}"
+            );
         }
     }
 }
