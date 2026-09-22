@@ -1,0 +1,438 @@
+Caps dump for model: 1049
+Model name:	FT-710
+Mfg name:	Yaesu
+Hamlib version:	Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit
+Backend version:	20241118.7
+Backend copyright:	LGPL
+Backend status:	Stable
+Rig type:	Other Receiver Transmitter Transceiver 
+PTT type:	None
+DCD type:	None
+Port type:	RS-232
+Serial speed: 4800..115200 baud, 8N1, ctrl=NONE
+Write delay: 0ms, timeout 1000ms, 3 retry
+Post write delay: 20ms
+Has targetable VFO: Y
+Targetable features: FREQ
+Has async data support: N
+Announce: 0x0
+Max RIT: -9.999kHz/+9.999kHz
+Max XIT: -9.999kHz/+9.999kHz
+Max IF-SHIFT: -1.200kHz/+1.200kHz
+Preamp: 10dB 20dB
+Attenuator: 6dB 12dB 18dB
+AGC levels: 0=OFF 2=FAST 5=MEDIUM 3=SLOW 6=AUTO
+CTCSS: 67.0 69.3 71.9 74.4 77.0 79.7 82.5 85.4 88.5 91.5 94.8 97.4 100.0 103.5 107.2 110.9 114.8 118.8 123.0 127.3 131.8 136.5 141.3 146.2 151.4 156.7 159.8 162.2 165.5 167.9 171.3 173.8 177.3 179.9 183.5 186.2 189.9 192.8 196.6 199.5 203.5 206.5 210.7 218.1 225.7 229.1 233.6 241.8 250.3 254.1 Hz, 50 tones
+DCS: None
+Get functions: NB COMP VOX TONE TSQL FBKIN ANF NR APF MON MN LOCK RIT TUNER XIT 
+Set functions: NB COMP VOX TONE TSQL FBKIN ANF NR APF MON MN LOCK RIT TUNER XIT 
+Extra functions:
+Get level: PREAMP(0..20/10) ATT(0..18/0) VOXDELAY(3..300/1) AF(0.000000..1.000000/0.003922) RF(0.000000..1.000000/0.003922) SQL(0.000000..1.000000/0.010000) IF(-1200..1200/20) NR(0.000000..1.000000/0.066667) CWPITCH(300..1050/10) RFPOWER(0.050000..1.000000/0.010000) MICGAIN(0.000000..1.000000/0.010000) KEYSPD(4..60/1) NOTCHF(1..3200/10) COMP(0.000000..1.000000/0.010000) AGC(0..0/0) BKINDL(30..3000/1) METER(0..0/0) VOXGAIN(0.000000..1.000000/0.010000) ANTIVOX(0.000000..1.000000/0.010000) RAWSTR(0..255/0) SWR(0.000000..5.000000/0.003922) ALC(0.000000..1.000000/0.010000) STRENGTH(0..60/0) RFPOWER_METER(0.000000..1.000000/0.003922) COMP_METER(0.000000..1.000000/0.003922) VD_METER(0.000000..1.000000/0.003922) ID_METER(0.000000..1.000000/0.003922) MONITOR_GAIN(0.000000..1.000000/0.010000) NB(0.000000..10.000000/1.000000) RFPOWER_METER_WATTS(0.000000..100.000000/0.003922) BAND_SELECT(0..16/1) 
+Set level: PREAMP(0..20/10) ATT(0..18/0) VOXDELAY(3..300/1) AF(0.000000..1.000000/0.003922) RF(0.000000..1.000000/0.003922) SQL(0.000000..1.000000/0.010000) IF(-1200..1200/20) NR(0.000000..1.000000/0.066667) CWPITCH(300..1050/10) RFPOWER(0.050000..1.000000/0.010000) MICGAIN(0.000000..1.000000/0.010000) KEYSPD(4..60/1) NOTCHF(1..3200/10) COMP(0.000000..1.000000/0.010000) AGC(0..0/0) BKINDL(30..3000/1) METER(0..0/0) VOXGAIN(0.000000..1.000000/0.010000) ANTIVOX(0.000000..1.000000/0.010000) MONITOR_GAIN(0.000000..1.000000/0.010000) NB(0.000000..10.000000/1.000000) BAND_SELECT(0..16/1) 
+Extra levels:
+	KEYER
+		Type: CHECKBUTTON
+		Default: 
+		Label: Keyer
+		Tooltip: Keyer on/off
+	APF_FREQ
+		Type: NUMERIC
+		Default: 
+		Label: APF frequency
+		Tooltip: Audio peak filter frequency
+		Range: -250.000000..250.000000/10.000000
+	APF_WIDTH
+		Type: COMBO
+		Default: 
+		Label: APF width
+		Tooltip: Audio peak filter width
+		Values: 0="Narrow" 1="Medium" 2="Wide"
+	CONTOUR
+		Type: CHECKBUTTON
+		Default: 
+		Label: Contour
+		Tooltip: Contour on/off
+	CONTOUR_FREQ
+		Type: NUMERIC
+		Default: 
+		Label: Contour frequency
+		Tooltip: Contour frequency
+		Range: 10.000000..3200.000000/1.000000
+	CONTOUR_LEVEL
+		Type: NUMERIC
+		Default: 
+		Label: Contour level
+		Tooltip: Contour level (dB)
+		Range: -40.000000..20.000000/1.000000
+	CONTOUR_WIDTH
+		Type: NUMERIC
+		Default: 
+		Label: Contour width
+		Tooltip: Contour width
+		Range: 1.000000..11.000000/1.000000
+Get parameters: BANDSELECT(BAND160M,BAND80M,BAND60M,BAND40M,BAND30M,BAND20M,BAND17M,BAND15M,BAND12M,BAND10M,BAND6M,BAND4M) 
+Set parameters: BANDSELECT(BAND160M,BAND80M,BAND60M,BAND40M,BAND30M,BAND20M,BAND17M,BAND15M,BAND12M,BAND10M,BAND6M,BAND4M) 
+Extra parameters:
+Mode list: AM CW USB LSB RTTY FM CWR RTTYR PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+VFO list: VFOA VFOB MEM 
+VFO Ops: CPY XCHG FROM_VFO TO_VFO UP DOWN BAND_UP BAND_DOWN TUNE TOGGLE 
+Scan Ops: VFO 
+Number of banks:	0
+Memory name desc size:	0
+Memories:
+	1..99:   	MEM
+	  Mem caps: FREQ MODE RPTRSHIFT RIT XIT TONE CTCSS 
+	1..5:   	VOICE
+	  Mem caps: 
+	1..5:   	MORSE
+	  Mem caps: 
+TX ranges #1 for ITU1:
+	1810000 Hz - 2000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	3500000 Hz - 3800000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	7000000 Hz - 7200000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	10100000 Hz - 10150000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	14000000 Hz - 14350000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	18068000 Hz - 18168000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	21000000 Hz - 21450000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	24890000 Hz - 24990000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	28000000 Hz - 29700000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	1810000 Hz - 2000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	3500000 Hz - 3800000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	7000000 Hz - 7200000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	10100000 Hz - 10150000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	14000000 Hz - 14350000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	18068000 Hz - 18168000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	21000000 Hz - 21450000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	24890000 Hz - 24990000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	28000000 Hz - 29700000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	50000000 Hz - 54000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	50000000 Hz - 54000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+RX ranges #1 for USA:
+	30000 Hz - 60000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM CWR RTTYR PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+TX ranges #2 for EUR:
+	1800000 Hz - 2000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	3500000 Hz - 4000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	7000000 Hz - 7300000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	10100000 Hz - 10150000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	14000000 Hz - 14350000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	18068000 Hz - 18168000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	21000000 Hz - 21450000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	24890000 Hz - 24990000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	28000000 Hz - 29700000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	1800000 Hz - 2000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	3500000 Hz - 4000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	7000000 Hz - 7300000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	10100000 Hz - 10150000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	14000000 Hz - 14350000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	18068000 Hz - 18168000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	21000000 Hz - 21450000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	24890000 Hz - 24990000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	28000000 Hz - 29700000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	50000000 Hz - 54000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	50000000 Hz - 54000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+	70000000 Hz - 70500000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+		Low power: 5 W, High power: 200 W
+	70000000 Hz - 70500000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM AMN
+		Antenna list: ANT_CURR 
+		Low power: 2 W, High power: 75 W
+RX ranges #2 for EUR:
+	30000 Hz - 60000000 Hz
+		VFO list: VFOA VFOB MEM 
+		Mode list: AM CW USB LSB RTTY FM CWR RTTYR PKTLSB PKTUSB FM-D FMN AMN PKTFMN
+		Antenna list: ANT_CURR 
+TX ranges #3 for TBD:
+RX ranges #3 for TBD:
+TX ranges #4 for TBD:
+RX ranges #4 for TBD:
+TX ranges #5 for TBD:
+RX ranges #5 for TBD:
+TX ranges #1 status for ITU1:	OK (0)
+RX ranges #1 status for USA:	OK (0)
+TX ranges #2 status for EUR:	OK (0)
+RX ranges #2 status for EUR:	OK (0)
+TX ranges #3 status for TBD:	OK (0)
+RX ranges #3 status for TBD:	OK (0)
+TX ranges #4 status for TBD:	OK (0)
+RX ranges #4 status for TBD:	OK (0)
+TX ranges #5 status for TBD:	OK (0)
+RX ranges #5 status for TBD:	OK (0)
+Tuning steps:
+	10.0 Hz:   	 CW USB LSB RTTY CWR RTTYR PKTLSB PKTUSB
+	100.0 Hz:   	 CW USB LSB RTTY CWR RTTYR PKTLSB PKTUSB
+	100.0 Hz:   	AM AMN
+	1.0000 kHz:   	AM AMN
+	100.0 Hz:   	 FM FM-D FMN PKTFMN
+	1.0000 kHz:   	 FM FM-D FMN PKTFMN
+Tuning steps status:	OK (0)
+Filters:
+	600.0 Hz:   	 CW RTTY CWR RTTYR PKTLSB PKTUSB
+	300.0 Hz:   	 CW RTTY CWR RTTYR PKTLSB PKTUSB
+	2.4000 kHz:   	 CW RTTY CWR RTTYR PKTLSB PKTUSB
+	1.2000 kHz:   	 CW RTTY CWR RTTYR PKTLSB PKTUSB
+	2.4000 kHz:   	 USB LSB
+	1.8000 kHz:   	 USB LSB
+	3.0000 kHz:   	 USB LSB
+	9.0000 kHz:   	AM
+	6.0000 kHz:   	 AMN
+	16.0000 kHz:   	 FM FM-D
+	9.0000 kHz:   	 FMN PKTFMN
+	ANY:   	 CW USB LSB RTTY CWR RTTYR PKTLSB PKTUSB
+Bandwidths:
+	AM	Normal: 9.0000 kHz,	Narrow: 0.0 Hz,	Wide: 0.0 Hz
+	CW	Normal: 600.0 Hz,	Narrow: 300.0 Hz,	Wide: 2.4000 kHz
+	USB	Normal: 2.4000 kHz,	Narrow: 1.8000 kHz,	Wide: 3.0000 kHz
+	LSB	Normal: 2.4000 kHz,	Narrow: 1.8000 kHz,	Wide: 3.0000 kHz
+	RTTY	Normal: 600.0 Hz,	Narrow: 300.0 Hz,	Wide: 2.4000 kHz
+	FM	Normal: 16.0000 kHz,	Narrow: 0.0 Hz,	Wide: 0.0 Hz
+	CWR	Normal: 600.0 Hz,	Narrow: 300.0 Hz,	Wide: 2.4000 kHz
+	RTTYR	Normal: 600.0 Hz,	Narrow: 300.0 Hz,	Wide: 2.4000 kHz
+	PKTLSB	Normal: 600.0 Hz,	Narrow: 300.0 Hz,	Wide: 2.4000 kHz
+	PKTUSB	Normal: 600.0 Hz,	Narrow: 300.0 Hz,	Wide: 2.4000 kHz
+	FM-D	Normal: 16.0000 kHz,	Narrow: 0.0 Hz,	Wide: 0.0 Hz
+	FMN	Normal: 9.0000 kHz,	Narrow: 0.0 Hz,	Wide: 0.0 Hz
+	AMN	Normal: 6.0000 kHz,	Narrow: 0.0 Hz,	Wide: 0.0 Hz
+Spectrum scopes: None
+Spectrum modes: 
+Spectrum spans: 
+Spectrum averaging modes: 
+Spectrum attenuator: None
+Has priv data:	Y
+Has Init:	Y
+Has Cleanup:	Y
+Has Open:	Y
+Has Close:	Y
+Can set Conf:	Y
+Can get Conf:	N
+Can set Frequency:	Y
+Can get Frequency:	Y
+Can set Mode:	Y
+Can get Mode:	Y
+Can set VFO:	Y
+Can get VFO:	Y
+Can set PTT:	Y
+Can get PTT:	Y
+Can get DCD:	N
+Can set Repeater Duplex:	Y
+Can get Repeater Duplex:	Y
+Can set Repeater Offset:	Y
+Can get Repeater Offset:	Y
+Can set Split Freq:	E
+Can get Split Freq:	E
+Can set Split Mode:	E
+Can get Split Mode:	E
+Can set Split VFO:	Y
+Can get Split VFO:	Y
+Can set Tuning Step:	Y
+Can get Tuning Step:	Y
+Can set RIT:	Y
+Can get RIT:	Y
+Can set XIT:	Y
+Can get XIT:	Y
+Can set CTCSS:	Y
+Can get CTCSS:	Y
+Can set DCS:	N
+Can get DCS:	N
+Can set CTCSS Squelch:	Y
+Can get CTCSS Squelch:	Y
+Can set DCS Squelch:	N
+Can get DCS Squelch:	N
+Can set Power Stat:	Y
+Can get Power Stat:	Y
+Can Reset:	N
+Can get Ant:	N
+Can set Ant:	N
+Can set Transceive:	Y
+Can get Transceive:	Y
+Can set Func:	Y
+Can get Func:	Y
+Can set Level:	Y
+Can get Level:	Y
+Can set Param:	N
+Can get Param:	N
+Can send DTMF:	N
+Can recv DTMF:	N
+Can send Morse:	Y
+Can stop Morse:	N
+Can wait Morse:	Y
+Can send Voice:	Y
+Can decode Events:	N
+Can set Bank:	N
+Can set Mem:	Y
+Can get Mem:	Y
+Can set Channel:	Y
+Can get Channel:	Y
+Can ctl Mem/VFO:	Y
+Can Scan:	Y
+Can get Info:	Y
+Can get power2mW:	Y
+Can get mW2power:	Y
+
+Overall backend warnings: 0   
