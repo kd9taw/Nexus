@@ -1008,6 +1008,27 @@ const FUNC_RETRY_BACKOFF_MAX: u32 = 2560;
 /// drop+reconnect the CAT socket — the ~5 s "Nexus hangs up every few seconds" churn. Capability-
 /// caching them (3 consecutive misses → stop issuing that read) ends it, the same way
 /// `smeter_supported` and `func_supported` already gate their own reads.
+/// A power reading at or below this is "looks like zero" — the only condition under which the
+/// radio loop will spend a capability dump to find out whether the rig can even BE this low.
+///
+/// ⚠️ Deliberately a hair above `tempo_app`'s own `ZERO_RF_POWER` (0.005) rather than equal to
+/// it. This one decides whether to ASK a question; that one decides whether to WARN. Tying them
+/// together would mean a reading that sits a whisker above the warning threshold — exactly the
+/// suspicious case — never gets qualified at all.
+const ZERO_LOOKING_RF_POWER: f32 = 0.01;
+
+/// ⚠️ THE ONE RELATIONSHIP THAT CAN SILENTLY DISABLE THE WHOLE QUALIFICATION, pinned where the
+/// constant lives and checked by the COMPILER rather than by a test that could be filtered out.
+///
+/// [`ZERO_LOOKING_RF_POWER`] decides whether the radio loop pays for a capability dump;
+/// `tempo_app`'s private `ZERO_RF_POWER` (0.005) decides whether the banner fires. Drop the ASK
+/// threshold to or below the WARN threshold and a reading between them — precisely the
+/// suspicious case this exists for — warns without ever being qualified, and the FT-710 fix stops
+/// working with every test still green.
+///
+/// A runtime `assert!` here would be a tautology: both sides are constants, which is what clippy
+/// says when you write one. This is the form that fails the BUILD instead.
+const _: () = assert!(ZERO_LOOKING_RF_POWER > 0.005);
 const LVL_RFPOWER: usize = 0;
 const LVL_MICGAIN: usize = 1;
 const LVL_NR: usize = 2;
@@ -3241,6 +3262,11 @@ struct RadioLoop {
     /// (`\dump_caps` is a long reply and the answer cannot change while the rig is the same
     /// rig). `None` = not yet asked.
     split_detect: Option<crate::baud_ladder::SplitDetect>,
+    /// The rig's declared RF-power floor, in thousandths — asked for at most ONCE per
+    /// connection, and only after a reading already looks like zero. `Some(None)` records that
+    /// we asked and the rig had no answer, so a rig that publishes no RFPOWER is not re-asked
+    /// every poll for the rest of the session.
+    rfpower_floor: Option<Option<u16>>,
     /// Whether THIS rig answers "which VFO am I on" from the radio itself — probed once per
     /// connection off the same `\dump_caps`, and for the same reason. `None` = not yet asked;
     /// `Some(false)` = never ask, keep the commanded value.
@@ -3642,6 +3668,7 @@ impl RadioLoop {
             audio_rig_split: false,
             rig_split_restore: None,
             split_detect: None,
+            rfpower_floor: None,
             vfo_read_native: None,
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
@@ -6754,8 +6781,21 @@ impl RadioLoop {
                         if self.level_supported[LVL_RFPOWER] != Some(false) && have_budget() {
                             let ok = match rig.read_level("RFPOWER") {
                                 Ok(frac) => {
+                                    // A reading this low is either a transmitter that will put
+                                    // nothing on the air — the case the warning exists for — or a
+                                    // read that disagrees with the rig's own published contract.
+                                    // Only here, and only once per connection, is it worth the
+                                    // long capability dump to tell those two apart. A healthy
+                                    // radio never takes this branch.
+                                    if frac <= ZERO_LOOKING_RF_POWER && self.rfpower_floor.is_none()
+                                    {
+                                        self.rfpower_floor = Some(rig.read_rfpower_floor_milli());
+                                    }
                                     {
                                         let mut eng = engine_lock(engine);
+                                        if let Some(floor) = self.rfpower_floor {
+                                            eng.observe_rig_power_floor(floor);
+                                        }
                                         eng.observe_rig_power(frac);
                                     }
                                     true
