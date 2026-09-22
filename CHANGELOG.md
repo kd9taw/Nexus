@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of reach on the one screen a new operator actually meets. The same box is now on both of the
   wizard's radio pickers, unticked by default so the short list stays the default, and the full
   Hamlib catalog loads the first time you tick it.
+- **The FT-890 now gets its one true CAT rate instead of being left on the default.** That radio
+  talks at 4,800 baud and nothing else, so picking it and being left on the 38,400 default meant
+  it simply never answered — the same failure the fixed-rate table was built to end, on a rig the
+  table had no row for. It has one now. The reason it was missed is the part worth saying: the
+  rate table is checked against a generated dump of what each backend actually declares, the
+  FT-890 was absent from that dump, and every check ran over the dump — so the one radio that
+  needed catching was the one radio nothing could see. The dump is rebuilt, and it is now checked
+  against the radio list itself, so a rig added later cannot go unnoticed the same way.
 - **Nexus Remote: re-sending a logging request no longer reports the station as busy when the
   contact had already been logged.** If a browser's reply went missing and it asked again, the
   station answered the repeat with "the station was busy" instead of the receipt for the entry
