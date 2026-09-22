@@ -188,6 +188,48 @@ describe('index.html preseed: field mode', () => {
     }
   })
 
+  it('high contrast alone seeds the attribute and NOT the bump', () => {
+    // #215's whole point, at first paint: the standing preference reaches the tokens and
+    // leaves the zoom alone. This is the test that tells the split apart from a second name
+    // for field mode — an OR that also fed the zoom seed passes the attribute half of the
+    // case above and fails the `fitScale` assertion here.
+    for (const [w, h] of [[1024, 768], [1366, 768], [1920, 1080]] as const) {
+      localStorage.clear()
+      localStorage.setItem('nexus-high-contrast', '1')
+      document.documentElement.removeAttribute('style')
+      document.documentElement.removeAttribute('data-contrast')
+      window.history.replaceState(null, '', '/')
+      setWin(w, h)
+      runPreseed()
+      expect(document.documentElement.getAttribute('data-contrast'), `${w}x${h}`).toBe('high')
+      expect(
+        document.documentElement.style.getPropertyValue('--ui-zoom'),
+        `${w}x${h}: high contrast moved the zoom — that is field mode's half, not this one`,
+      ).toBe(String(fitScale(w, h) / 100))
+      // The positive control for that negative result: at this window the two fits really
+      // do differ, so "unchanged" is a fact about the seed and not about the arithmetic.
+      expect(fieldFitScale(w, h), `${w}x${h}: the two fits agree — this case proves nothing`)
+        .not.toBe(fitScale(w, h))
+    }
+  })
+
+  it('field mode still bumps the zoom when BOTH are set', () => {
+    // The mirror: an implementation that keyed the zoom on the new preference instead of on
+    // field mode would pass every other case in this file.
+    localStorage.clear()
+    localStorage.setItem('nexus-field-mode', '1')
+    localStorage.setItem('nexus-high-contrast', '1')
+    document.documentElement.removeAttribute('style')
+    document.documentElement.removeAttribute('data-contrast')
+    window.history.replaceState(null, '', '/')
+    setWin(1366, 768)
+    runPreseed()
+    expect(document.documentElement.getAttribute('data-contrast')).toBe('high')
+    expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe(
+      String(fieldFitScale(1366, 768) / 100),
+    )
+  })
+
   it('field OFF seeds neither the attribute nor the bump', () => {
     localStorage.clear()
     document.documentElement.removeAttribute('style')

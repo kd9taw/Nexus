@@ -91,7 +91,7 @@ import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { readEnabledModes } from './useFeatures'
 import { useTheme } from './useTheme'
-import { useFieldMode } from './useFieldMode'
+import { useContrastPrefs } from './useFieldMode'
 import { useScale } from './useScale'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
@@ -204,9 +204,11 @@ function DetachedShell({ className, children }: { className?: string; children?:
 
 function DetachedPanelBody({ panel }: { panel: string }) {
   const [theme] = useTheme()
-  // Pop-outs follow field mode: a separate document re-applies the attribute itself, the
-  // same way it mirrors the theme — outdoors is a fact about the station, not a window.
-  const [fieldMode] = useFieldMode()
+  // Pop-outs follow the contrast axis: a separate document re-applies the attribute itself,
+  // the same way it mirrors the theme — outdoors, and an operator's eyes, are facts about the
+  // station, not about a window. Only `fieldMode` reaches useScale; high contrast on its own
+  // must leave this window's zoom exactly where the operator left it.
+  const { fieldMode } = useContrastPrefs()
   // A torn-off window is its OWN document — it must publish the same layout/responsive
   // state the main app does, or the CSS falls back to the broken narrow/stacked layout
   // (vertical rails go horizontal, the map collapses to zero height). Mirror App.tsx.
