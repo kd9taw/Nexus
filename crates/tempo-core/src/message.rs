@@ -659,7 +659,9 @@ impl Msg {
         // Same two-callsign gate as the three-token arm above, and upstream's Field Day
         // packer (packjt77.f90:983-986) has no first-slot exemption at all — a Field Day
         // exchange is always call-to-call — so neither does this.
-        if (t.len() == 4 || t.len() == 5) && is_call_field(t[0], false) && is_call_field(t[1], false)
+        if (t.len() == 4 || t.len() == 5)
+            && is_call_field(t[0], false)
+            && is_call_field(t[1], false)
         {
             let class_idx = if t.len() == 5 && t[2] == "R" {
                 Some(3)
@@ -1188,7 +1190,10 @@ mod fidelity_tests {
 
         // CONTROL — real traffic is untouched, one per arm the gate now guards.
         assert!(matches!(Msg::parse("KR4FQG W1ABC -07"), Msg::Report { .. }));
-        assert!(matches!(Msg::parse("KR4FQG W1ABC R-07"), Msg::RReport { .. }));
+        assert!(matches!(
+            Msg::parse("KR4FQG W1ABC R-07"),
+            Msg::RReport { .. }
+        ));
         assert!(matches!(Msg::parse("KR4FQG W1ABC FN31"), Msg::Grid { .. }));
         assert!(matches!(Msg::parse("KR4FQG W1ABC RR73"), Msg::Rr73 { .. }));
         assert!(matches!(Msg::parse("KR4FQG W1ABC RRR"), Msg::Rrr { .. }));
@@ -1198,8 +1203,25 @@ mod fidelity_tests {
 
         // CONTROL — compound and i3=4 hashed calls are callsigns. `looks_like_call`, not
         // `is_callsign`: a hashed/compound QSO frame must stay standard.
-        assert!(matches!(Msg::parse("<W9XYZ> PJ4/K1ABC R-10"), Msg::RReport { .. }));
-        assert!(matches!(Msg::parse("PJ4/K1ABC <W9XYZ> -10"), Msg::Report { .. }));
+        assert!(matches!(
+            Msg::parse("<W9XYZ> PJ4/K1ABC R-10"),
+            Msg::RReport { .. }
+        ));
+        assert!(matches!(
+            Msg::parse("PJ4/K1ABC <W9XYZ> -10"),
+            Msg::Report { .. }
+        ));
+
+        // CONTROL — the UNRESOLVED hash is a callsign field too, and this one is load-
+        // bearing on the air: a station answering several callers at once sends its call
+        // hashed, and the receiver that has not learned it yet decodes `<...>`. Upstream
+        // admits it by the same token shape (`index(w(1),'>').ge.5`), and `is_valid_hashed`
+        // spells `...` out. If it ever stopped, a live QSO would stall with the frames
+        // silently reclassified as free text.
+        assert!(matches!(Msg::parse("<...> KD9TAW -12"), Msg::Report { .. }));
+        assert!(matches!(Msg::parse("KD9TAW <...> RR73"), Msg::Rr73 { .. }));
+        // …but arbitrary brackets are not a hash, and must not become one.
+        assert!(matches!(Msg::parse("KD9TAW <HI> -12"), Msg::Other(_)));
 
         // CONTROL — the upstream exemption, kept: DE/CQ/QRZ may lead. A Tempo bare
         // broadcast ("DE <CALL> 73") still names its sender, which the decode row and the
@@ -1211,8 +1233,14 @@ mod fidelity_tests {
 
         // Field Day: the same gate, on the arm that has the same hole (upstream 983-986
         // exempts nothing here, and a Field Day exchange is always call-to-call).
-        assert!(matches!(Msg::parse("W9XYZ K2DEF 3A WI"), Msg::FieldDay { .. }));
-        assert!(matches!(Msg::parse("W9XYZ K2DEF R 3A WI"), Msg::FieldDay { .. }));
+        assert!(matches!(
+            Msg::parse("W9XYZ K2DEF 3A WI"),
+            Msg::FieldDay { .. }
+        ));
+        assert!(matches!(
+            Msg::parse("W9XYZ K2DEF R 3A WI"),
+            Msg::FieldDay { .. }
+        ));
         assert!(matches!(Msg::parse("KR4FQG TNX 3A WI"), Msg::Other(_)));
         assert!(matches!(Msg::parse("HPE OM R 3A WI"), Msg::Other(_)));
     }
