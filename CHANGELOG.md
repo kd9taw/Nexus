@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The log shows a contact's date and its time as two columns instead of one.** One "Time (UTC)"
+  column printed the whole instant — `2026-09-14 00:58Z` — in a single cell, so the dates could
+  not be read down the column and the time of day sat wherever the date's width left it. They are
+  now Date and Time, side by side; sorting by either still orders the log by when the contact
+  happened, because that is the one thing a contact records. Nothing else on the row moved: the
+  pair shares the width the single column had. One thing you will see change: a contact imported
+  from a log that carried a date and no time of day now shows a dash in the Time column rather
+  than a midnight it never had. That is what "More columns" already showed you in the record
+  itself, and it is why those contacts go unmatched at LoTW and eQSL, which match on time. (#239)
 - **A contact's full record is now one double-click away.** The logbook was a list of contacts
   with no way to open one, so everything the table has no column for was being logged and then
   hidden: the other station's name and QTH, their grid, the rig and antenna they gave you, your
@@ -25,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A previous contact's comment can be read in the callsign card without hovering it.** The
+  "Previous contacts" list in the lookup card clipped each comment to one line and put the rest
+  in a tooltip, which is the same dead end the Logbook's Comment column had before it opened in
+  place. Click a comment and it opens to its full length right there in the card; click again and
+  it folds back. Clicking anywhere else on the line still takes you to that contact in the
+  Logbook, and so does Enter — reading a comment no longer throws you out of the card in the
+  middle of working someone. (#162)
 - **The setup wizard can now reach every rig in the catalog, not just the common ones.** The
   wizard's radio list showed about fifty curated rigs and had no way to see past them, so if
   yours was not among them there was nothing you could do in the wizard about it — Settings has

@@ -14,6 +14,7 @@ import { t } from '../i18n'
 import { useUnits } from '../units'
 import { useRovingList } from '../useRovingList'
 import { PaneCloseButton } from './panes/PaneCloseButton'
+import { useCallback, useState } from 'react'
 import type { ReactNode } from 'react'
 
 interface Props {
@@ -171,6 +172,20 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
   // are not a selection, and the pane's tests pin the listitem count.
   const openLog = onOpenLog
   const roving = useRovingList(prior.length, () => openLog?.(cu))
+  // #162: which prior-contact comments are open, keyed like the row itself. Same state shape
+  // and same idiom as the Logbook's Comment column (1.13.0) — a `LoggedQso` has no stable id,
+  // so the key is the instant plus the position, and a re-sorted list cannot carry an open
+  // state onto a different contact. ⚠️ Above the short-call early return, like the hooks
+  // beside it.
+  const [openCmts, setOpenCmts] = useState<Set<string>>(() => new Set())
+  const toggleCmt = useCallback((key: string) => {
+    setOpenCmts((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
   if (c.length < 3) return null
   const nm = name?.trim()
   // "KEKAHA, HI (BL01dx)" — the state rides with the town, the way an operator says it.
@@ -416,8 +431,37 @@ export function RecallPanel({ call, band, name, qth, state, grid, lat, lon, coun
                   <span className="recall-log-date mono">{fmtDate(q.whenUnix)}</span>
                   <span className="recall-log-bm">{[q.band, q.mode].filter(Boolean).join(' ')}</span>
                   <span className="recall-log-rst mono">{rstPair(q)}</span>
-                  <span className="recall-log-cmt" title={cmt}>
-                    {cmt}
+                  {/* #162, the last half: this line was a clipped comment with the rest only
+                      in the tooltip — the very thing the Logbook's Comment column stopped
+                      doing in 1.13.0. Same fix, same shape: the comment is its own toggle, the
+                      CELL is the clip container so `expanded` goes there, and the text is the
+                      button's accessible name.
+                      Both handlers stop the event, which the Logbook's does not have to. The
+                      row underneath is a control of its own (#192 — open the Logbook filtered
+                      to this call), and `useRovingList`'s handler on the LIST preventDefault()s
+                      Enter/Space before a nested button is ever activated. Unhandled, reading a
+                      comment throws the operator out of the card mid-contact, and on the
+                      keyboard it never opens at all. */}
+                  <span
+                    className={`recall-log-cmt${openCmts.has(`${q.whenUnix}-${i}`) ? ' expanded' : ''}`}
+                    title={cmt}
+                  >
+                    {cmt && (
+                      <button
+                        type="button"
+                        className="recall-log-cmt-text"
+                        aria-expanded={openCmts.has(`${q.whenUnix}-${i}`)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleCmt(`${q.whenUnix}-${i}`)
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
+                        }}
+                      >
+                        {cmt}
+                      </button>
+                    )}
                   </span>
                 </div>
               )
