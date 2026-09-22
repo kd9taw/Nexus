@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Garbled text on the band can no longer be read as a message to you — or answered.** A
+  decoded line only counts as a real exchange now if BOTH callsigns in it are callsigns. It used
+  to be enough for the last word to look like a report, a grid or a 73, so a line such as
+  `YOURCALL AGN 73` was treated as a signoff sent to you by a station named "AGN". Two things
+  followed. JS8 traffic rides the same waveform as FT8 and a JS8 message starts with the
+  callsign it is aimed at, so those lines landed in the FT8 **Rx Frequency** pane even when they
+  were nowhere near your receive frequency (#303). Worse, while you were calling CQ the
+  sequencer could take one of them as an answer, stop calling, and put an over on the air
+  addressed to a station that does not exist. This is the rule WSJT-X applies to the same two
+  fields before it will send a standard message. One deliberate cost: a free-text goodbye
+  between two things that are not callsigns — `HPE CUAGN 73` — no longer counts toward the
+  CQ+73 chip. A 73 between two real callsigns, which is what that chip is for, is unchanged.
 - **The waterfall now says "TRANSMITTING — display held" during a tune, too.** On RTTY, PSK, JS8
   and SSTV the receive picture freezes while the radio is keyed, and since 1.13.0 a label has
   said so — but only for a message you sent. Pressing Tune froze it exactly the same way with
