@@ -1,5 +1,6 @@
 {
   "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
+  "catalog": 117,
   "rigs": [
     {
       "model": 1001,
@@ -22,6 +23,12 @@
     {
       "model": 1014,
       "name": "Yaesu FT-920",
+      "min": 4800,
+      "max": 4800
+    },
+    {
+      "model": 1015,
+      "name": "Yaesu FT-890",
       "min": 4800,
       "max": 4800
     },
@@ -665,5 +672,12 @@
   "missing": [],
   "needsDaemon": [
     2
+  ],
+  "noSerial": [
+    1,
+    4,
+    5,
+    2036,
+    23005
   ]
 }
