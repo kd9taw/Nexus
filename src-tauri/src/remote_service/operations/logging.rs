@@ -4,9 +4,12 @@
 //!
 //! Log changes (edit, delete, QSL marks) follow the same rules. A row is found again by the key
 //! of the exact row the browser's log page showed, never by a position, so a row that changed at
-//! the station since that page is refused rather than overwritten. The engine's rewrite does not
-//! sync and reports a failed save only to stderr, so "applied" is claimed only after the log file
-//! itself has been re-read, shown to hold the change, and synced.
+//! the station since that page is refused rather than overwritten. "Applied" is claimed only
+//! once the change is proved durable: with the logbook store, by the store's own commit of it
+//! (the writer's ticket, waited for with the engine released); on the 1.13 path, where the
+//! engine's rewrite does not sync and reports a failed save only to stderr, by re-reading the log
+//! file itself, showing it holds the change, and syncing it. Either way the evidence the browser
+//! is told is `fileSynced` — the token every supported page already reads.
 use super::station::Action;
 use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
@@ -527,10 +530,14 @@ pub(super) enum ChangeWork {
     /// `adif_record_own_log` — the operator's own bytes, private note included. Build it
     /// with the outbound serializer and every edit to a record carrying a private note
     /// would look for text the file does not hold.
+    ///
+    /// `durable` is present when the logbook STORE owns the log: the change's own commit is
+    /// then the proof, and `log.adi` — only its mirror, which is allowed to lag — is not read.
     Rewrite {
         path: Option<PathBuf>,
         expected: String,
         count: usize,
+        durable: Option<tempo_app::logstore::Durability>,
     },
     /// In-memory station context (a hunt), applied under the Engine lock. Nothing to sync.
     State,
@@ -621,6 +628,24 @@ pub(super) fn prepare_change(
     }
     let t = change.target().ok_or(ChangeReason::ContextChanged)?;
     let index = locate(engine, t).ok_or(ChangeReason::ContextChanged)?;
+    let store = engine.log_store_open();
+    let (proof, durable) = engine.with_log_tickets(|engine| rewrite(engine, change, index));
+    let (expected, count) = proof?;
+    Ok(ChangeWork::Rewrite {
+        path: engine.log_path().map(Path::to_path_buf),
+        expected,
+        count,
+        durable: store.then_some(durable),
+    })
+}
+
+/// The row change itself, under the Engine lock: what the file must then hold (`expected`,
+/// `count` copies of it) for the 1.13 path's proof.
+fn rewrite(
+    engine: &mut Engine,
+    change: &Change,
+    index: usize,
+) -> Result<(String, usize), ChangeReason> {
     let stored = engine.log_records()[index].as_ref().clone();
     let copies = |records: &[std::sync::Arc<QsoRecord>], of: &QsoRecord, text: &str| {
         records
@@ -668,11 +693,7 @@ pub(super) fn prepare_change(
         let count = copies(engine.log_records(), &written, &text);
         (text, count)
     };
-    Ok(ChangeWork::Rewrite {
-        path: engine.log_path().map(Path::to_path_buf),
-        expected,
-        count,
-    })
+    Ok((expected, count))
 }
 
 fn edited(record: &super::ManualRecord, stored: &QsoRecord) -> QsoRecord {
@@ -710,10 +731,27 @@ impl ChangeWork {
         cluster: impl FnOnce(f64, &str, &str) -> Result<(), String>,
     ) -> ChangeOutcome {
         let (path, expected, count) = match self {
+            // The store owns the log: its commit of this change is the proof, waited for here,
+            // with the Engine released (this runs on the blocking pool — see transport.rs).
+            Self::Rewrite {
+                durable: Some(durable),
+                ..
+            } => {
+                return match durable.wait(tempo_app::logstore::DURABLE_WAIT) {
+                    Ok(()) => ChangeOutcome::Applied {
+                        evidence: ChangeEvidence::FileSynced,
+                        spot: None,
+                    },
+                    Err(_) => ChangeOutcome::Unknown {
+                        reason: ChangeReason::PersistenceUnconfirmed,
+                    },
+                };
+            }
             Self::Rewrite {
                 path,
                 expected,
                 count,
+                durable: None,
             } => (path, expected, count),
             Self::State => {
                 return ChangeOutcome::Applied {

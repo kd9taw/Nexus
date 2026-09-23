@@ -307,6 +307,29 @@ impl Fixture {
             dir,
         }
     }
+    /// The same station with its log owned by the STORE — the ordinary launch since the
+    /// logbook moved into its database — rather than by `contacts.adi` directly.
+    fn with_store() -> Self {
+        let f = Self::new();
+        {
+            let mut e = f.engine.lock().unwrap();
+            let opened = tempo_app::logstore::open(
+                &f.dir.join("contacts.adi"),
+                Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+                None,
+            )
+            .expect("the store opens");
+            e.attach_log_store(opened);
+        }
+        f
+    }
+    /// Every row the store holds, read through a connection of the test's own — what is on
+    /// disk, not what the engine remembers.
+    fn stored(&self) -> Vec<tempo_core::logbook::QsoRecord> {
+        tempo_core::logbook::sqlite::LogDb::open(&self.dir.join("contacts.sqlite3"))
+            .and_then(|db| db.load_all())
+            .expect("the store reads")
+    }
     fn run(&self, request: &Request, now: Instant) -> Result<Value, &'static str> {
         self.authority
             .handle(self.connection, SESSION, DEVICE, request, &self.engine, now)
