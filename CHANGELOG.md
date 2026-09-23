@@ -147,6 +147,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Needed board follows, and a park you picked yourself on the POTA/SOTA board is left as you
   picked it. The call itself goes out exactly as before. (#351)
 
+- **"Needed only" and "Hide worked" no longer keep the station you just worked.** A contact
+  starts out unconfirmed, so the moment you log one the station can pick up a LoTW chip — a
+  confirmation still to come — and that chip counted as a need, so both Call Roster filters, and
+  the Needed chip on the Classic station list, went on showing the station you had just worked.
+  A confirmation and nothing else no longer keeps a station on those lists once you have worked
+  it on the band you are on: another contact with them cannot confirm anything the first one
+  will not. The LoTW chip still shows with the filters off, and a station you worked on another
+  band, or one that still has something real to offer — a new state, a park you have not worked
+  in this activation — stays on the list as before. The needs also refresh the moment Nexus logs
+  a contact on its own after RR73 or 73; until now that waited for the next 30-second update.
+  (#350)
+
 - **The SSTV screen now says where the switch is that keeps your radio in the data mode.** On an
   IC-7300 or IC-7100 the rig drops back to plain USB between pictures, taking its data-mode
   filter settings with it, and two operators independently ended up setting USB-D by hand every

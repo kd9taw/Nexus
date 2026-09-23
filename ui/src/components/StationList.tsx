@@ -7,7 +7,7 @@
 import { useMemo, useState } from 'react'
 import type { Conversation as Conv, NeedAlert, NeedTag, Station, Tier } from '../types'
 import { StationCard } from './StationCard'
-import { tagsForSurface } from '../features/needs'
+import { confirmOnlyOnWorkedBand, tagsForSurface } from '../features/needs'
 import { matchAnyTerm } from '../searchQuery'
 import { t, type MessageKey } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
@@ -168,10 +168,13 @@ export function StationList({
     // "Needed" means needed HERE — a station whose only need is on another band or in
     // another mode class isn't workable off this filter, so gate it the same way the
     // pills are gated (otherwise the filter and the pills disagree on the same row).
+    // And a LoTW confirmation alone on a station already worked on this band is the one
+    // the first contact is waiting on — the Call Roster's Needed only drops it too (#350).
     else if (filter === 'needed')
-      list = list.filter(
-        (s) => needAll(s.call, needByCall.get(s.call.toUpperCase()) ?? null).length > 0,
-      )
+      list = list.filter((s) => {
+        const tags = needAll(s.call, needByCall.get(s.call.toUpperCase()) ?? null)
+        return tags.length > 0 && !confirmOnlyOnWorkedBand(tags, s.workedBand)
+      })
     // sort: presence (active first), then strongest SNR
     const order: Record<string, number> = { active: 0, idle: 1, stale: 2 }
     return [...list].sort(
