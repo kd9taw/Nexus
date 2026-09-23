@@ -46,6 +46,16 @@ pub enum Expect {
     /// A read → a frame with this command byte (and this first data byte, for
     /// sub-commanded reads like `15 02`).
     Reply { cmd: u8, sub: Option<u8> },
+    /// A read sent in Icom's BAND-DIRECTED form (`29 <band> <cmd> <sub>…`, see
+    /// `commands::band_directed`) → the reply naming the same band and command.
+    ///
+    /// Icom's text says only that an ACK/NAK drops the `29 <band>` prefix (IC-7610 CI-V
+    /// Reference Guide A7380-7EX-4, p. 15). A data reply is taken WITH the prefix, as that
+    /// sentence implies, and also without it — so a wording ambiguity can never become a meter
+    /// that never moves on a real radio. The bare shape is safe to take: the bus carries one
+    /// request at a time, so a bare `<cmd> <sub>` reply arriving while this is pending is this
+    /// request's answer. A prefixed reply naming the OTHER band is never taken.
+    ReplyOnBand { band: u8, cmd: u8, sub: Option<u8> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,6 +243,15 @@ fn resolves(expect: Expect, f: &Frame) -> Option<Result<Frame, CivError>> {
         Expect::Reply { cmd, sub } => {
             let sub_ok = sub.is_none_or(|s| f.data.first() == Some(&s));
             (f.cmd == cmd && sub_ok).then(|| Ok(f.clone()))
+        }
+        Expect::ReplyOnBand { band, cmd, sub } => {
+            let d = &f.data;
+            let prefixed = f.cmd == super::commands::BAND_DIRECTED
+                && d.first() == Some(&band)
+                && d.get(1) == Some(&cmd)
+                && sub.is_none_or(|s| d.get(2) == Some(&s));
+            let bare = f.cmd == cmd && sub.is_none_or(|s| d.first() == Some(&s));
+            (prefixed || bare).then(|| Ok(f.clone()))
         }
     }
 }
@@ -459,9 +478,355 @@ pub(crate) mod tests_support {
         /// transposed nibble would encode and decode symmetrically and the test would pass.
         /// A second, independent implementation is what makes the read-back evidence.
         pub levels: std::collections::BTreeMap<u8, u16>,
+        /// ⭐ THE SUB BAND'S OWN RECEIVE REGISTERS. `levels`, `funcs`, `att_raw` and
+        /// `smeter_raw` above are the MAIN band's; these are the Sub's. Two files, not one,
+        /// because a single register file cannot tell "the command acted on Main" from
+        /// "it acted on Sub" — a read would come back with the same number either way.
+        ///
+        /// A plain (unaddressed) `0x14`/`0x15 02`/`0x11`/`0x16` command acts on the band
+        /// that is SELECTED when it arrives (`sel_sub`); a band-directed one (`29 <band>
+        /// …`) on the band it names. ⚠️ That the IC-9700 applies these to its selected band
+        /// is this fixture's MODEL, taken from Icom's own wording ("Some functions can only
+        /// be applied to the selected band", IC-9700 Basic Manual, "Selecting the Main and
+        /// Sub bands") — not a bench measurement. NEEDS-BENCH, like everything here.
+        pub sub_levels: std::collections::BTreeMap<u8, u16>,
+        pub sub_funcs: std::collections::BTreeMap<u8, u8>,
+        pub sub_att_raw: u8,
+        /// Raw 0..255 S-meter per band (`15 02`). Main defaults to 120 (S9, what every
+        /// existing test expects); Sub to a DIFFERENT value, so a reading taken from the
+        /// wrong receiver is visible by its number rather than by luck.
+        pub smeter_raw: u16,
+        pub sub_smeter_raw: u16,
+        /// Does this radio answer Icom's BAND-DIRECTED command `29` ("regardless of
+        /// active/inactive the Main or Sub band, you can directly specify the Main or Sub
+        /// band", IC-7610 CI-V Reference Guide A7380-7EX-4, p. 9)? True only at the IC-7610's
+        /// address: the IC-9700's reference (A7508-3EX-4) has no command `29` at all, so
+        /// at `0xA2` the fixture refuses it the way that table says the rig would.
+        pub cmd29: bool,
+        /// Which band each command ACTED on, in arrival order: `(on_sub, cmd, data)`. A
+        /// `29`-wrapped command is recorded UNWRAPPED, under the band it named; every other
+        /// command under the selection at the moment it arrived. This is the witness for
+        /// "the command acted on Main" — `log` below says what was SENT, this says where
+        /// it LANDED.
+        pub acted: Vec<(bool, u8, Vec<u8>)>,
+        /// Every controller frame exactly as it arrived on the wire, `FE FE … FD`. The
+        /// byte-for-byte witness the single-receiver identity test compares against.
+        pub wire: Vec<Vec<u8>>,
         /// Every command frame received, as (cmd, data) — lets a test assert a
         /// verb was NOT sent (e.g. "no `0F` under the satellite-mode contract").
         pub log: Vec<(u8, Vec<u8>)>,
+    }
+
+    /// The (command, sub-command) pairs Icom's IC-7610 CI-V Reference Guide (A7380-7EX-4,
+    /// Sep. 2025, pp. 3–4 and 8) marks "Command 29 supported", for the band-directed
+    /// handler below. `None` = a command with no sub-command, whose whole data is the value
+    /// (the attenuator, `11`).
+    ///
+    /// ⚠️ Deliberately a SECOND transcription, typed separately from the broker's table in
+    /// `commands`: a fixture that asked the code under test which commands it may wrap
+    /// would agree with any mistake that code made.
+    const IC7610_CMD29: &[(u8, Option<u8>)] = &[
+        (0x11, None),
+        (0x12, Some(0x00)),
+        (0x12, Some(0x01)),
+        (0x14, Some(0x01)),
+        (0x14, Some(0x02)),
+        (0x14, Some(0x03)),
+        (0x14, Some(0x05)),
+        (0x14, Some(0x06)),
+        (0x14, Some(0x07)),
+        (0x14, Some(0x08)),
+        (0x14, Some(0x0D)),
+        (0x14, Some(0x12)),
+        (0x14, Some(0x13)),
+        (0x15, Some(0x01)),
+        (0x15, Some(0x02)),
+        (0x15, Some(0x05)),
+        (0x15, Some(0x07)),
+        (0x16, Some(0x02)),
+        (0x16, Some(0x12)),
+        (0x16, Some(0x22)),
+        (0x16, Some(0x32)),
+        (0x16, Some(0x40)),
+        (0x16, Some(0x41)),
+        (0x16, Some(0x42)),
+        (0x16, Some(0x43)),
+        (0x16, Some(0x48)),
+        (0x16, Some(0x4E)),
+        (0x16, Some(0x4F)),
+        (0x16, Some(0x53)),
+        (0x16, Some(0x56)),
+        (0x16, Some(0x57)),
+        (0x16, Some(0x65)),
+        (0x1A, Some(0x03)),
+        (0x1A, Some(0x04)),
+        (0x1A, Some(0x09)),
+        (0x1A, Some(0x0A)),
+        (0x1B, Some(0x00)),
+        (0x1B, Some(0x01)),
+    ];
+
+    /// What the fake radio does with ONE command — `cmd` + `data` acting on the Main band
+    /// (`on_sub` false) or the Sub band. A plain frame acts on whichever band is selected when
+    /// it arrives; a band-directed one ([`band_directed`]) on the band it names. Returns the
+    /// reply to send: `None` = ack, `Some((0xFA, _))` = NAK, [`SILENT`] = say nothing.
+    fn act(r: &mut Regs, addr: u8, cmd: u8, data: &[u8], on_sub: bool) -> Option<(u8, Vec<u8>)> {
+        r.acted.push((on_sub, cmd, data.to_vec()));
+        match (cmd, data.first().copied()) {
+            (0x03, _) => {
+                let hz = if r.sel_sub { r.sub_hz } else { r.main_hz };
+                Some((0x03, freq_to_bcd(hz).to_vec()))
+            }
+            (0x05, _) => {
+                let hz = bcd_to_freq(data);
+                if r.sel_sub {
+                    r.sub_hz = hz;
+                } else {
+                    r.main_hz = hz;
+                }
+                None // ack
+            }
+            (0x04, _) => {
+                let m = if r.sel_sub { r.sub_mode } else { r.main_mode };
+                Some((0x04, vec![m, 0x01]))
+            }
+            (0x06, _) => {
+                let m = data[0];
+                if r.sel_sub {
+                    r.sub_mode = m;
+                } else {
+                    r.main_mode = m;
+                }
+                None
+            }
+            // [MAIN/SUB] band selection; the A/B forms just ack.
+            (0x07, Some(0xD0)) => {
+                if r.nak_main_select > 0 {
+                    r.nak_main_select -= 1;
+                    Some((0xFA, Vec::new()))
+                } else {
+                    r.sel_sub = false;
+                    None
+                }
+            }
+            (0x07, Some(0xD1)) => {
+                r.sel_sub = true;
+                None
+            }
+            (0x07, Some(0x00 | 0x01)) => None,
+            // Same-band split / duplex — the 9700 accepts these.
+            (0x0F, Some(v @ (0x00 | 0x01))) => {
+                r.split = v != 0;
+                None
+            }
+            (0x0F, _) => None, // duplex shift
+            // The unselected VFO of the CURRENT band — write-only here.
+            (0x25, Some(0x01)) if data.len() >= 6 => {
+                r.unselected_hz = bcd_to_freq(&data[1..]);
+                None
+            }
+            // …and its MODE (`26 01 <mode> <data>`), a register of
+            // its own. Separate from `main_mode`/`sub_mode` here for
+            // the same reason it is separate on the radio: that is
+            // exactly what made an unwritten TX VFO keep the last
+            // pass's sideband.
+            (0x26, Some(0x01)) if data.len() >= 2 => {
+                r.unselected_mode = data[1];
+                None
+            }
+            // Satellite mode: read (1-byte data) / set (2-byte data).
+            (0x16, Some(0x5A)) if !r.no_satmode => match data.get(1) {
+                Some(&v) => {
+                    if r.nak_satmode_set > 0 {
+                        r.nak_satmode_set -= 1;
+                        Some((0xFA, Vec::new()))
+                    } else {
+                        r.satmode = v != 0;
+                        None
+                    }
+                }
+                None => {
+                    if r.drop_satmode_reads > 0 {
+                        r.drop_satmode_reads -= 1;
+                        Some((SILENT, Vec::new()))
+                    } else {
+                        Some((0x16, vec![0x5A, u8::from(r.satmode)]))
+                    }
+                }
+            },
+            // DATA mode set (`1A 06 <on> <filter>`) / read (`1A 06`). A real
+            // IC-7300/9700 answers both; without them this fake NAKed every
+            // DATA-submode set, so `M PKTUSB`/`M PKTFM` could not be tested at
+            // all against it — the daemon's `set_mode` requires the DATA ack.
+            (0x1A, Some(0x06)) => match data.get(1) {
+                Some(&on) => {
+                    r.data_mode = on != 0;
+                    None // ack
+                }
+                None => Some((0x1A, vec![0x06, u8::from(r.data_mode), 0x01])),
+            },
+            // S-meter, from the band the command acts on (Main S9 by default — see
+            // [`Regs::smeter_raw`]).
+            (0x15, Some(0x02)) => {
+                let [hi, lo] = bcd2(if on_sub {
+                    r.sub_smeter_raw
+                } else {
+                    r.smeter_raw
+                });
+                Some((0x15, vec![0x02, hi, lo]))
+            }
+            // THE `0x14` LEVEL FAMILY — see [`Regs::levels`]. A bare
+            // sub-command reads; a sub-command plus two BCD bytes writes.
+            (0x14, Some(sub)) => {
+                let file = if on_sub {
+                    &mut r.sub_levels
+                } else {
+                    &mut r.levels
+                };
+                match (data.get(1), data.get(2)) {
+                    (Some(&hi), Some(&lo)) => {
+                        // Two decimal digits per byte, big-endian: `01 27` = 127.
+                        let dig = |b: u8| {
+                            let (h, l) = (b >> 4, b & 0x0F);
+                            u16::from(if h > 9 { 0 } else { h }) * 10
+                                + u16::from(if l > 9 { 0 } else { l })
+                        };
+                        file.insert(sub, dig(hi) * 100 + dig(lo));
+                        None // ack
+                    }
+                    _ => {
+                        let [hi, lo] = bcd2(file.get(&sub).copied().unwrap_or(0));
+                        Some((0x14, vec![sub, hi, lo]))
+                    }
+                }
+            }
+            // ATTENUATOR (`0x11`): a bare frame reads, one payload byte writes.
+            // The byte is stored and echoed UNTOUCHED — see [`Regs::att_raw`].
+            (0x11, None) => Some((0x11, vec![if on_sub { r.sub_att_raw } else { r.att_raw }])),
+            (0x11, Some(v)) => {
+                if on_sub {
+                    r.sub_att_raw = v;
+                } else {
+                    r.att_raw = v;
+                }
+                None // ack
+            }
+            // CW text (`17 …`, `17 FF` = stop), RIT / ΔTX (`21 00` offset, `21 01`/`21 02`
+            // on-off), the repeater and TSQL tone frequencies (`1B 00`/`1B 01`) and the
+            // duplex offset (`0D`): write-only here, and accepted, because a real IC-9700 takes
+            // them (CI-V Reference Guide A7508-3EX-4, command table). Where each one LANDED is
+            // what the tests read, and [`Regs::acted`] records that for every command.
+            (0x17, _) | (0x21, _) | (0x1B, Some(0x00 | 0x01)) | (0x0D, _) => None,
+            // THE REST OF THE `0x16` FAMILY — see [`Regs::funcs`]. Read is the
+            // bare sub-command, write carries the byte after it, exactly as
+            // satellite mode does above (and this arm sits AFTER it, so `5A`
+            // keeps its own field and its fault injection).
+            //
+            // ⚠️ Keeping read and write apart is load-bearing, not tidiness: a
+            // read swallowed as a write would set the register to the
+            // sub-command's own value and answer nothing — switching the preamp
+            // or the monitor to something nobody asked for, in the fixture that
+            // is supposed to be the witness.
+            // ⛔ `5A` NEVER reaches here. A rig configured `no_satmode` must
+            // answer satellite mode with a NAK — an honest "this rig has no such
+            // mode", which is the capability probe the 7300-family relies on.
+            // Without this exclusion the arm above falls through on exactly that
+            // configuration and the generic map ACKS it, turning a single-band
+            // rig into one that claims satellite mode.
+            (0x16, Some(sub)) if sub != 0x5A => {
+                let file = if on_sub {
+                    &mut r.sub_funcs
+                } else {
+                    &mut r.funcs
+                };
+                match data.get(1) {
+                    Some(&v) => {
+                        file.insert(sub, v);
+                        None // ack
+                    }
+                    None => Some((0x16, vec![sub, file.get(&sub).copied().unwrap_or(0)])),
+                }
+            }
+            // Scope CENTER/FIXED (`27 14`) — remembered so the span below can be
+            // refused. The mode is the LAST payload byte on both frame shapes
+            // (`27 14 <fixed>` single-scope, `27 14 <main_sub> <fixed>` dual).
+            // ⚠️ READ vs WRITE, and the distinction is load-bearing. A CI-V READ is
+            // the bare sub-command (`27 14`, len 1); a WRITE carries the mode after it
+            // (`27 14 <fixed>`, or `27 14 <main_sub> <fixed>` on a dual-scope rig). The
+            // arm below used to take `data.last()` unconditionally, so a READ would have
+            // been swallowed as a write of `0x14` — setting the mode to Center and
+            // answering nothing. A test built on that would have "passed" while the
+            // fixture quietly rewrote the state under it.
+            // A READ carries no mode byte; a WRITE does. Length alone cannot tell
+            // them apart, because a dual-scope rig puts a Main/Sub selector between the
+            // sub-command and the payload: a single-rig WRITE and a dual-rig READ are
+            // both two bytes. So ask the SAME question the real code asks — is this
+            // address dual — instead of guessing from the length.
+            (0x27, Some(0x14))
+                if data.len() == 1 + usize::from(crate::civ::scope::scope_is_dual(addr)) =>
+            {
+                Some((0x27, {
+                    let mut d = vec![0x14];
+                    if crate::civ::scope::scope_is_dual(addr) {
+                        d.push(0x00);
+                    }
+                    d.push(u8::from(r.scope_fixed));
+                    d
+                }))
+            }
+            (0x27, Some(0x14)) => {
+                r.scope_fixed = data.last().is_some_and(|&b| b == 0x01);
+                None
+            }
+            // Scope SPAN (`27 15`) — NAKed while the scope is in Fixed mode, which
+            // is the #275 refusal this fixture exists to produce.
+            (0x27, Some(0x15)) if r.scope_fixed => Some((0xFA, Vec::new())),
+            (0x27, _) => None,             // scope enable/disable, span in centre
+            _ => Some((0xFA, Vec::new())), // NAK anything unknown
+        }
+    }
+
+    /// Icom's BAND-DIRECTED form, `29 <band> <command…>` (`band` 00 = MAIN, 01 = SUB), as the
+    /// IC-7610 CI-V Reference Guide A7380-7EX-4 describes it: p. 9, "Regardless of
+    /// active/inactive the Main or Sub band, you can directly specify the Main or Sub band";
+    /// p. 15, "When you receive the OK code (FB), or the NG code (FA), the Command 29 and
+    /// Main/Sub specify (00 or 01) is omitted" — so an ack is a bare `FB`, and a DATA reply
+    /// carries the prefix back.
+    ///
+    /// A radio without the command (`cmd29` false — the IC-9700 fixture) NAKs it, and so does
+    /// the IC-7610 for any command its table does not mark. The selection is never touched.
+    fn band_directed(r: &mut Regs, addr: u8, data: &[u8]) -> Option<(u8, Vec<u8>)> {
+        let nak = Some((0xFA, Vec::new()));
+        let (Some(&band), Some(&cmd)) = (data.first(), data.get(1)) else {
+            return nak;
+        };
+        let inner = &data[2..];
+        let marked = IC7610_CMD29
+            .iter()
+            .any(|&(c, s)| c == cmd && (s.is_none() || s == inner.first().copied()));
+        if !r.cmd29 || band > 0x01 || !marked {
+            return nak;
+        }
+        match act(r, addr, cmd, inner, band == 0x01) {
+            // Acks and refusals come back bare (p. 15); a lost reply stays lost.
+            reply @ (None | Some((0xFA | SILENT, _))) => reply,
+            Some((rcmd, rdata)) => {
+                let mut d = vec![band, rcmd];
+                d.extend_from_slice(&rdata);
+                Some((0x29, d))
+            }
+        }
+    }
+
+    /// Two decimal digits per byte, big-endian: `raw` 0..=9999 → the 2-byte BCD Icom's
+    /// level and meter replies carry. By hand, like the decoder in the `0x14` arm.
+    fn bcd2(raw: u16) -> [u8; 2] {
+        let d = |v: u16| {
+            let v = (v % 100) as u8;
+            ((v / 10) << 4) | (v % 10)
+        };
+        let v = raw.min(9999);
+        [d(v / 100), d(v % 100)]
     }
 
     /// Pseudo-reply cmd meaning "say NOTHING" (a lost reply on the wire).
@@ -512,6 +877,14 @@ pub(crate) mod tests_support {
                         att_raw: 0,
                         funcs: std::collections::BTreeMap::new(),
                         levels: std::collections::BTreeMap::new(),
+                        sub_levels: std::collections::BTreeMap::new(),
+                        sub_funcs: std::collections::BTreeMap::new(),
+                        sub_att_raw: 0,
+                        smeter_raw: 120, // S9 — what every existing reading expects
+                        sub_smeter_raw: 60,
+                        cmd29: addr == 0x98, // the IC-7610 has `29`; the IC-9700 does not
+                        acted: Vec::new(),
+                        wire: Vec::new(),
                         log: Vec::new(),
                     })),
                     mute: false,
@@ -567,192 +940,13 @@ pub(crate) mod tests_support {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     r.log.push((f.cmd, f.data.clone()));
+                    r.wire.push(bytes.clone());
                     // Decide the reply under the register lock, emit after.
-                    match (f.cmd, f.data.first().copied()) {
-                        (0x03, _) => {
-                            let hz = if r.sel_sub { r.sub_hz } else { r.main_hz };
-                            Some((0x03, freq_to_bcd(hz).to_vec()))
-                        }
-                        (0x05, _) => {
-                            let hz = bcd_to_freq(&f.data);
-                            if r.sel_sub {
-                                r.sub_hz = hz;
-                            } else {
-                                r.main_hz = hz;
-                            }
-                            None // ack
-                        }
-                        (0x04, _) => {
-                            let m = if r.sel_sub { r.sub_mode } else { r.main_mode };
-                            Some((0x04, vec![m, 0x01]))
-                        }
-                        (0x06, _) => {
-                            let m = f.data[0];
-                            if r.sel_sub {
-                                r.sub_mode = m;
-                            } else {
-                                r.main_mode = m;
-                            }
-                            None
-                        }
-                        // [MAIN/SUB] band selection; the A/B forms just ack.
-                        (0x07, Some(0xD0)) => {
-                            if r.nak_main_select > 0 {
-                                r.nak_main_select -= 1;
-                                Some((0xFA, Vec::new()))
-                            } else {
-                                r.sel_sub = false;
-                                None
-                            }
-                        }
-                        (0x07, Some(0xD1)) => {
-                            r.sel_sub = true;
-                            None
-                        }
-                        (0x07, Some(0x00 | 0x01)) => None,
-                        // Same-band split / duplex — the 9700 accepts these.
-                        (0x0F, Some(v @ (0x00 | 0x01))) => {
-                            r.split = v != 0;
-                            None
-                        }
-                        (0x0F, _) => None, // duplex shift
-                        // The unselected VFO of the CURRENT band — write-only here.
-                        (0x25, Some(0x01)) if f.data.len() >= 6 => {
-                            r.unselected_hz = bcd_to_freq(&f.data[1..]);
-                            None
-                        }
-                        // …and its MODE (`26 01 <mode> <data>`), a register of
-                        // its own. Separate from `main_mode`/`sub_mode` here for
-                        // the same reason it is separate on the radio: that is
-                        // exactly what made an unwritten TX VFO keep the last
-                        // pass's sideband.
-                        (0x26, Some(0x01)) if f.data.len() >= 2 => {
-                            r.unselected_mode = f.data[1];
-                            None
-                        }
-                        // Satellite mode: read (1-byte data) / set (2-byte data).
-                        (0x16, Some(0x5A)) if !r.no_satmode => match f.data.get(1) {
-                            Some(&v) => {
-                                if r.nak_satmode_set > 0 {
-                                    r.nak_satmode_set -= 1;
-                                    Some((0xFA, Vec::new()))
-                                } else {
-                                    r.satmode = v != 0;
-                                    None
-                                }
-                            }
-                            None => {
-                                if r.drop_satmode_reads > 0 {
-                                    r.drop_satmode_reads -= 1;
-                                    Some((SILENT, Vec::new()))
-                                } else {
-                                    Some((0x16, vec![0x5A, u8::from(r.satmode)]))
-                                }
-                            }
-                        },
-                        // DATA mode set (`1A 06 <on> <filter>`) / read (`1A 06`). A real
-                        // IC-7300/9700 answers both; without them this fake NAKed every
-                        // DATA-submode set, so `M PKTUSB`/`M PKTFM` could not be tested at
-                        // all against it — the daemon's `set_mode` requires the DATA ack.
-                        (0x1A, Some(0x06)) => match f.data.get(1) {
-                            Some(&on) => {
-                                r.data_mode = on != 0;
-                                None // ack
-                            }
-                            None => Some((0x1A, vec![0x06, u8::from(r.data_mode), 0x01])),
-                        },
-                        (0x15, Some(0x02)) => Some((0x15, vec![0x02, 0x01, 0x20])), // raw 120 = S9
-                        // THE `0x14` LEVEL FAMILY — see [`Regs::levels`]. A bare
-                        // sub-command reads; a sub-command plus two BCD bytes writes.
-                        (0x14, Some(sub)) => match (f.data.get(1), f.data.get(2)) {
-                            (Some(&hi), Some(&lo)) => {
-                                // Two decimal digits per byte, big-endian: `01 27` = 127.
-                                let dig = |b: u8| {
-                                    let (h, l) = (b >> 4, b & 0x0F);
-                                    u16::from(if h > 9 { 0 } else { h }) * 10
-                                        + u16::from(if l > 9 { 0 } else { l })
-                                };
-                                r.levels.insert(sub, dig(hi) * 100 + dig(lo));
-                                None // ack
-                            }
-                            _ => {
-                                let v = r.levels.get(&sub).copied().unwrap_or(0).min(9999);
-                                let bcd = |d: u16| {
-                                    let d = (d % 100) as u8;
-                                    ((d / 10) << 4) | (d % 10)
-                                };
-                                Some((0x14, vec![sub, bcd(v / 100), bcd(v % 100)]))
-                            }
-                        },
-                        // ATTENUATOR (`0x11`): a bare frame reads, one payload byte writes.
-                        // The byte is stored and echoed UNTOUCHED — see [`Regs::att_raw`].
-                        (0x11, None) => Some((0x11, vec![r.att_raw])),
-                        (0x11, Some(v)) => {
-                            r.att_raw = v;
-                            None // ack
-                        }
-                        // THE REST OF THE `0x16` FAMILY — see [`Regs::funcs`]. Read is the
-                        // bare sub-command, write carries the byte after it, exactly as
-                        // satellite mode does above (and this arm sits AFTER it, so `5A`
-                        // keeps its own field and its fault injection).
-                        //
-                        // ⚠️ Keeping read and write apart is load-bearing, not tidiness: a
-                        // read swallowed as a write would set the register to the
-                        // sub-command's own value and answer nothing — switching the preamp
-                        // or the monitor to something nobody asked for, in the fixture that
-                        // is supposed to be the witness.
-                        // ⛔ `5A` NEVER reaches here. A rig configured `no_satmode` must
-                        // answer satellite mode with a NAK — an honest "this rig has no such
-                        // mode", which is the capability probe the 7300-family relies on.
-                        // Without this exclusion the arm above falls through on exactly that
-                        // configuration and the generic map ACKS it, turning a single-band
-                        // rig into one that claims satellite mode.
-                        (0x16, Some(sub)) if sub != 0x5A => match f.data.get(1) {
-                            Some(&v) => {
-                                r.funcs.insert(sub, v);
-                                None // ack
-                            }
-                            None => {
-                                Some((0x16, vec![sub, r.funcs.get(&sub).copied().unwrap_or(0)]))
-                            }
-                        },
-                        // Scope CENTER/FIXED (`27 14`) — remembered so the span below can be
-                        // refused. The mode is the LAST payload byte on both frame shapes
-                        // (`27 14 <fixed>` single-scope, `27 14 <main_sub> <fixed>` dual).
-                        // ⚠️ READ vs WRITE, and the distinction is load-bearing. A CI-V READ is
-                        // the bare sub-command (`27 14`, len 1); a WRITE carries the mode after it
-                        // (`27 14 <fixed>`, or `27 14 <main_sub> <fixed>` on a dual-scope rig). The
-                        // arm below used to take `data.last()` unconditionally, so a READ would have
-                        // been swallowed as a write of `0x14` — setting the mode to Center and
-                        // answering nothing. A test built on that would have "passed" while the
-                        // fixture quietly rewrote the state under it.
-                        // A READ carries no mode byte; a WRITE does. Length alone cannot tell
-                        // them apart, because a dual-scope rig puts a Main/Sub selector between the
-                        // sub-command and the payload: a single-rig WRITE and a dual-rig READ are
-                        // both two bytes. So ask the SAME question the real code asks — is this
-                        // address dual — instead of guessing from the length.
-                        (0x27, Some(0x14))
-                            if f.data.len()
-                                == 1 + usize::from(crate::civ::scope::scope_is_dual(addr)) =>
-                        {
-                            Some((0x27, {
-                                let mut d = vec![0x14];
-                                if crate::civ::scope::scope_is_dual(addr) {
-                                    d.push(0x00);
-                                }
-                                d.push(u8::from(r.scope_fixed));
-                                d
-                            }))
-                        }
-                        (0x27, Some(0x14)) => {
-                            r.scope_fixed = f.data.last().is_some_and(|&b| b == 0x01);
-                            None
-                        }
-                        // Scope SPAN (`27 15`) — NAKed while the scope is in Fixed mode, which
-                        // is the #275 refusal this fixture exists to produce.
-                        (0x27, Some(0x15)) if r.scope_fixed => Some((0xFA, Vec::new())),
-                        (0x27, _) => None, // scope enable/disable, span in centre
-                        _ => Some((0xFA, Vec::new())), // NAK anything unknown
+                    if f.cmd == 0x29 {
+                        band_directed(&mut r, addr, &f.data)
+                    } else {
+                        let on_sub = r.sel_sub;
+                        act(&mut r, addr, f.cmd, &f.data, on_sub)
                     }
                 };
                 match action {
@@ -896,6 +1090,39 @@ mod tests {
             assert!(Instant::now() < deadline, "transceive folded into state");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// A band-directed read resolves on its OWN band's reply — prefixed (`29 <band> <cmd>
+    /// <sub> <data>`) or bare — and never on the other band's.
+    #[test]
+    fn a_band_directed_read_takes_its_own_bands_reply_in_either_shape() {
+        let want = Expect::ReplyOnBand {
+            band: 0x00,
+            cmd: 0x14,
+            sub: Some(0x01),
+        };
+        let from = |cmd: u8, data: &[u8]| Frame {
+            to: 0xE0,
+            from: 0x98,
+            cmd,
+            data: data.to_vec(),
+        };
+        let prefixed = from(0x29, &[0x00, 0x14, 0x01, 0x01, 0x27]);
+        assert_eq!(resolves(want, &prefixed), Some(Ok(prefixed.clone())));
+        let bare = from(0x14, &[0x01, 0x01, 0x27]);
+        assert_eq!(resolves(want, &bare), Some(Ok(bare.clone())));
+        // The Sub's answer is not Main's, and another level is not this one.
+        assert_eq!(
+            resolves(want, &from(0x29, &[0x01, 0x14, 0x01, 0x00, 0x50])),
+            None
+        );
+        assert_eq!(
+            resolves(want, &from(0x29, &[0x00, 0x14, 0x02, 0x00, 0x50])),
+            None
+        );
+        assert_eq!(resolves(want, &from(0x14, &[0x02, 0x00, 0x50])), None);
+        // A refusal is a refusal, whatever was asked.
+        assert_eq!(resolves(want, &from(0xFA, &[])), Some(Err(CivError::Nak)));
     }
 
     #[test]

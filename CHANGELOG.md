@@ -115,6 +115,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you stop it. (#304)
 ### Changed
 
+- **IC-7610 on native CI-V: the S-meter, the receive controls (AF, RF gain, squelch, NB, NR,
+  notch, AGC, attenuator, preamp) and the CTCSS tone now always act on the Main receiver**, even
+  with the Sub band selected on the radio (the frequency and mode still follow the selected band).
 - **Nexus now refuses to put your data and log folder on a network drive, and tells you why.**
   Settings ▸ Config ▸ Data & log folder used to accept a NAS or a mapped network drive, and the
   manual suggested exactly that for a multi-PC shack. That was survivable while the logbook was a
