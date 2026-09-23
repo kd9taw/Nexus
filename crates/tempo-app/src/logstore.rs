@@ -954,6 +954,52 @@ mod tests {
         same_log(&stored(&d), e.log_records(), "after the stall");
     }
 
+    /// The datagram WSJT-X sends when it logs a contact (UDP type 12, LoggedAdif), as it
+    /// sends it: its own header, lower-case tags, no COUNTRY.
+    const WSJTX_LOGGED_ADIF: &str = "\n<adif_ver:5>3.1.0\n<programid:6>WSJT-X\n<EOH>\n\
+        <call:5>W1ABC <gridsquare:4>FN42 <mode:3>FT8 <rst_sent:3>-10 <rst_rcvd:3>-12 \
+        <qso_date:8>20260923 <time_on:6>120015 <qso_date_off:8>20260923 <time_off:6>120115 \
+        <band:3>20m <freq:9>14.075512 <station_callsign:5>K2DEF <my_gridsquare:4>FN31 <EOR>";
+
+    /// ★ PROPERTY 5, the radio loop's own write. In companion mode the radio loop imports
+    /// WSJT-X's LoggedAdif datagram inside a tick, under the engine lock. With the store's
+    /// write lock held elsewhere the import still returns at once — the contact is in the log
+    /// and the tick moves on — and the contact reaches the disk when the write clears. The loop
+    /// never waits for it (it collects no ticket; the test collects one only to know when).
+    ///
+    /// The positive control is the timed-out wait: the writer really was stalled, so the
+    /// prompt return is not a write that simply finished first.
+    #[test]
+    fn the_radio_loops_companion_import_touches_no_disk_under_the_lock() {
+        let d = Dir::new("companion");
+        std::fs::write(d.log(), legacy_log(20)).unwrap();
+        let mut e = engine_on_store(&d);
+
+        let hold = WriteHold::take(&d.db()).expect("hold the write lock");
+        let started = Instant::now();
+        let ((added, ..), durable) = e.with_log_tickets(|e| e.import_adif(WSJTX_LOGGED_ADIF));
+        let under_lock = started.elapsed();
+        assert_eq!(added, 1, "the contact WSJT-X logged is in the log");
+        assert!(
+            under_lock < Duration::from_millis(500),
+            "the import under the engine lock took {under_lock:?} with the writer stalled"
+        );
+        assert!(
+            durable.wait(Duration::from_millis(300)).is_err(),
+            "control: the contact cannot be on disk while the write lock is held elsewhere"
+        );
+
+        drop(hold);
+        durable
+            .wait(DURABLE_WAIT)
+            .expect("durable once the lock is released");
+        same_log(&stored(&d), e.log_records(), "after the stall");
+        assert!(
+            stored(&d).iter().any(|r| r.call == "W1ABC"),
+            "the store has the contact"
+        );
+    }
+
     // ── two windows, one store ──────────────────────────────────────────────
 
     /// Poll `f` until it says yes or ten seconds pass. The other window's commit is seen by
