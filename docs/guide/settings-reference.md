@@ -2044,13 +2044,13 @@ live in one folder. By default that is `%APPDATA%\tempo` on Windows and
   variable (which wins for this launch).
 - **New folder** — the folder you want to use next. **Browse…** opens your
   computer's own folder chooser and fills the box in, so you never have to type a
-  path; you can still type or paste one instead, which is how you reach a network
-  share like `\\nas\ham\nexus` that a chooser will not always show. Browse only
-  fills the box — nothing changes until you press one of the two buttons below.
+  path; you can still type or paste one instead, for a folder a chooser will not
+  always show. Browse only fills the box — nothing changes until you press one of
+  the two buttons below.
 - **Use this folder** — point Nexus at a folder that *already* holds a log. This
-  is the second computer in a shack picking up the log the first one keeps on a
-  NAS. Nexus refuses a folder with no `log.adi` when your current folder has one,
-  rather than opening an empty logbook.
+  is the second computer in a shack picking up the log the first one keeps in a
+  shared folder. Nexus refuses a folder with no `log.adi` when your current folder
+  has one, rather than opening an empty logbook.
 - **Copy my log and data there** — copy the logbook, the data tables and the
   Winlink mailbox across, check every copied file against the original, and use
   the new folder from then on. **Nothing is moved or deleted**: your old folder is
@@ -2060,10 +2060,19 @@ live in one folder. By default that is `%APPDATA%\tempo` on Windows and
 A change takes effect the next time Nexus starts, and never half-way through a
 session — the logbook is opened once at launch.
 
+⚠️ **Keep the folder on a drive inside the computer.** Nexus keeps your logbook in
+a database, and a database on a network drive can be damaged by the way file
+locking works across a network — the worst case is a logbook that will not open at
+all. Choosing a network drive here is refused, and one that is already in use
+(through `NEXUS_DATA_DIR`, or a `data-dir.json` copied in from another machine) is
+reported in **Folder in use** rather than moved for you: your log is in there, and
+Nexus will not quietly open a different folder instead.
+
 ⚠️ **One Nexus at a time.** Putting the folder on Dropbox, OneDrive or Google
 Drive lets another computer reach your log, but two copies of Nexus writing the
-same `log.adi` produce a *conflicted copy*, not a merged log. Run one, or keep
-one machine's Nexus closed.
+same logbook produce a *conflicted copy*, not a merged log. Nexus warns when the
+folder looks synced — it is a guess from the folder's name, so it can miss a
+renamed one. Run one, or keep one machine's Nexus closed.
 
 ### Backup & reset
 

@@ -239,8 +239,11 @@ platforms. `~/.config` is hidden in Finder: press **⌘⇧.** in an Open dialog,
 
 Running a second instance against a second radio puts its settings in a
 profile-suffixed folder beside the first (`tempo-<profile>`), and both instances
-share the one `log.adi`. `NEXUS_DATA_DIR` moves that shared logbook somewhere else —
-a NAS or a synced folder — for a multi-PC shack.
+share the one `log.adi`. `NEXUS_DATA_DIR` moves that shared logbook somewhere
+else for a multi-PC shack. **Keep it on a drive inside the computer.** Nexus keeps
+the logbook in a database, and a database on a network drive can be damaged by the
+way file locking works across a network, so choosing one in Settings is refused; a
+network drive already in use is reported in Settings rather than moved for you.
 
 Two things worth understanding:
 
