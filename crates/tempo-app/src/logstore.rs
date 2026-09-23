@@ -1394,4 +1394,50 @@ mod tests {
         same_log(e.log_records(), source.records(), "every contact, once");
         untouched(&d, &before, "resume");
     }
+
+    // ── the FT duplicate guard (hard gate) ──────────────────────────────────
+
+    /// ⛔ THE GUARD ANSWERS FROM MEMORY AND NEVER FROM THE STORE. With the store's writer held
+    /// back (its write lock taken elsewhere), a contact is logged: memory has it, the store does
+    /// not — shown by reading the store through a connection of the test's own (the control).
+    /// Logged again, it is refused as a duplicate at once. A guard that consulted the store
+    /// would have found nothing there and logged it twice; one that waited for the store would
+    /// not have answered while the lock was held.
+    #[test]
+    fn the_duplicate_guard_answers_from_memory_while_the_store_lags() {
+        let d = Dir::new("dedup-guard");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let mut e = engine_on_store(&d);
+        let hold = WriteHold::take(&d.db()).expect("hold the write lock");
+        let rec = qso("W1DUP", 1_788_000_000);
+        assert!(!matches!(
+            e.log_qso_for_sync(rec.clone()),
+            crate::engine::LogWriteOutcome::Duplicate
+        ));
+        assert!(
+            stored(&d).iter().all(|r| r.call != "W1DUP"),
+            "control: the store does NOT hold the contact yet"
+        );
+        let started = Instant::now();
+        let again = e.log_qso_for_sync(rec);
+        assert!(
+            matches!(again, crate::engine::LogWriteOutcome::Duplicate),
+            "refused from memory, though the store has never seen the first"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "and at once"
+        );
+        assert_eq!(
+            e.log_records().iter().filter(|r| r.call == "W1DUP").count(),
+            1
+        );
+        drop(hold);
+        flush(&e);
+        assert_eq!(
+            stored(&d).iter().filter(|r| r.call == "W1DUP").count(),
+            1,
+            "once the store catches up it holds the contact once"
+        );
+    }
 }

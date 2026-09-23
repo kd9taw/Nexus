@@ -174,6 +174,10 @@ pub struct StationCore {
     pub(crate) store: Option<LogStore>,
     /// Why the store is not in use this session, when it was asked for and could not be opened.
     pub(crate) store_problem: Option<String>,
+    /// `log_qso`'s duplicate guard, answered from the rows sharing a contact's base call —
+    /// see [`tempo_core::logbook::dedup`]. Read against the in-memory log only: it has no
+    /// store in scope and cannot wait on one.
+    pub(crate) dedup: tempo_core::logbook::dedup::DedupIndex,
     /// Memory still holds a row another process deleted from the store: an in-place re-read
     /// (made while a caller held positions into the log) could not remove it. The next
     /// freshness poll does, whether or not anything else has changed.
@@ -307,6 +311,7 @@ impl StationCore {
             store: None,
             store_problem: None,
             store_lingering: false,
+            dedup: Default::default(),
             b4_cache: Default::default(),
             log_path: None,
             last_log_mtime: None,

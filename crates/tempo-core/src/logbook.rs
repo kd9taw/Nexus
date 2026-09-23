@@ -790,6 +790,7 @@ pub struct Logbook {
     minter: Minter,
 }
 
+pub mod dedup;
 mod edit;
 mod id;
 pub mod migrate;

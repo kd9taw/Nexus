@@ -11080,13 +11080,15 @@ impl Engine {
         // it can never block a legitimate later re-work (that's minutes/hours later, or
         // a different band), coarse enough to catch a burst of identical seeds. Covers
         // every path into the log (auto, cockpit button, manual Logbook, companion).
-        const DEDUP_WINDOW_SECS: u64 = 300;
-        let is_dup = self.station.logbook.records().iter().any(|r| {
-            tempo_core::message::same_call(&r.call, &rec.call)
-                && r.band.eq_ignore_ascii_case(&rec.band)
-                && r.mode.eq_ignore_ascii_case(&rec.mode)
-                && rec.when_unix.abs_diff(r.when_unix) <= DEDUP_WINDOW_SECS
-        });
+        //
+        // ⛔ FT HARD GATE — operator yes 2026-09-19, for exactly this and nothing more: the
+        // guard is the SAME predicate (`tempo_core::logbook::dedup::is_recent_duplicate`, moved
+        // there verbatim from here: base call, band and mode case-insensitively, 300 s), asked
+        // of only the rows that share the contact's base call instead of every row in the log.
+        // Same accept/reject — held to the old scan, kept as `dedup::scan_for_duplicate`, by a
+        // parity property test — at the same point, before any enrichment. The index is built
+        // from the in-memory log and never touches the store.
+        let is_dup = self.station.dedup.is_duplicate(&self.station.logbook, &rec);
         if is_dup {
             return LogWriteOutcome::Duplicate;
         }
@@ -50359,6 +50361,235 @@ mod private_note_boundary_tests {
         assert_carried(
             "the DXKeeper ExternalLog message",
             &tempo_net::dxkeeper::build_externallog(&own, false),
+        );
+    }
+}
+
+/// ⛔ The FT hard gate on `log_qso`'s duplicate guard (operator yes 2026-09-19): the guard became
+/// an index lookup, with the behaviour IDENTICAL. These pin the ENGINE's behaviour around it —
+/// what a duplicate does and does not touch, and that every accept/reject matches the old scan —
+/// while `tempo_core::logbook::dedup`'s property test holds the index to the scan over every
+/// kind of change to the log.
+#[cfg(test)]
+mod dedup_gate_tests {
+    use super::*;
+
+    /// THE OLD GUARD, VERBATIM — the expression `log_qso_inner` ran before the index, kept here
+    /// as the oracle so the comparison is against the code that shipped, not a restatement.
+    fn old_scan(e: &Engine, rec: &QsoRecord) -> bool {
+        const DEDUP_WINDOW_SECS: u64 = 300;
+        e.station.logbook.records().iter().any(|r| {
+            tempo_core::message::same_call(&r.call, &rec.call)
+                && r.band.eq_ignore_ascii_case(&rec.band)
+                && r.mode.eq_ignore_ascii_case(&rec.mode)
+                && rec.when_unix.abs_diff(r.when_unix) <= DEDUP_WINDOW_SECS
+        })
+    }
+
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn pick<T: Copy>(&mut self, xs: &[T]) -> T {
+            xs[self.below(xs.len())]
+        }
+    }
+
+    const T0: u64 = 1_788_000_000;
+
+    fn contact(g: &mut Gen) -> QsoRecord {
+        let call = g.pick(&[
+            "W1AW",
+            "w1aw",
+            "W1AW/P",
+            "KH6/W1AW",
+            "<W1AW>",
+            "K1ABC",
+            "k1abc/mm",
+            "VP2E/AA9A",
+            "AA9A",
+            "DL1ZZZ",
+        ]);
+        let band = g.pick(&["20m", "20M", "40m", "2m"]);
+        let mode = g.pick(&["FT8", "ft8", "FT4", "CW"]);
+        let dt = g.pick(&[0i64, 120, 299, 300, 301, -300, -301, 900, -2000]);
+        let mut r = QsoRecord {
+            id: None,
+            call: call.into(),
+            grid: None,
+            country: None,
+            state: None,
+            band: band.into(),
+            freq_mhz: 14.074,
+            freq_rx_mhz: None,
+            mode: mode.into(),
+            rst_sent: Some("-10".into()),
+            rst_rcvd: Some("-12".into()),
+            name: None,
+            qth: None,
+            comment: None,
+            notes: None,
+            tx_power: None,
+            when_unix: (T0 as i64 + dt) as u64,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: vec![],
+            credit_submitted: vec![],
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            my_grid: None,
+            my_rig: None,
+            station_callsign: None,
+            extra: Vec::new(),
+            contest: None,
+        };
+        r.when_unix += g.below(3) as u64; // a little jitter off the edges too
+        r
+    }
+
+    /// ★ Every accept/reject `log_qso` makes is the one the OLD SCAN would have made, across a
+    /// long interleaving of logged contacts with every other change the engine makes to the log
+    /// (edits that move a row's keys, deletes, imports, stamps, card marks, the purge) — and a
+    /// duplicate touches exactly what it always touched: nothing in the log, no upload queued,
+    /// the pending hunt kept for the real contact; the logged-tick moves and the stalled-contact
+    /// stash clears, as they did before the check, because they come first in `log_qso`.
+    #[test]
+    fn log_qso_rejects_exactly_what_the_old_scan_rejected() {
+        for seed in [7u64, 11, 0xC0FF_EE00, 0x5EED] {
+            let mut g = Gen(seed);
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            let mut dups = 0;
+            let mut accepted = 0;
+            for step in 0..400 {
+                let n = e.station.logbook.len();
+                match g.below(10) {
+                    0 if n > 0 => {
+                        let i = g.below(n);
+                        let mut r = QsoRecord::clone(&e.station.logbook.records()[i]);
+                        r.call = g.pick(&["W1AW", "K1ABC", "N0NEW"]).into();
+                        r.band = g.pick(&["20m", "40m"]).into();
+                        e.update_qso(i, r);
+                    }
+                    1 if n > 0 => {
+                        e.delete_qso(g.below(n));
+                    }
+                    2 => {
+                        let c = contact(&mut g);
+                        let mut t = tempo_core::logbook::adif_header();
+                        t.push_str(&tempo_core::logbook::adif_record_own_log(&c));
+                        e.import_adif(&t);
+                    }
+                    3 if n > 0 => {
+                        e.mark_qsl_card(g.below(n), true);
+                    }
+                    4 if n > 0 => {
+                        let r = QsoRecord::clone(&e.station.logbook.records()[g.below(n)]);
+                        e.stamp_qrz_upload(
+                            &r,
+                            tempo_core::logbook::UploadOutcome::Accepted,
+                            1,
+                            None,
+                        );
+                    }
+                    5 if g.below(40) == 0 => {
+                        e.clear_logbook();
+                    }
+                    _ => {
+                        let rec = contact(&mut g);
+                        let expected = old_scan(&e, &rec);
+                        let hunt = e.station.pending_hunt.clone();
+                        let (len, uploads, tick) = (
+                            e.station.logbook.len(),
+                            e.station.pending_uploads.len(),
+                            e.logged_tick,
+                        );
+                        e.stalled_qso = Some(StalledQso {
+                            dxcall: "N0STALL".into(),
+                            dxgrid: None,
+                            rx_report: Some(-5),
+                            tx_report: None,
+                            start_unix: None,
+                        });
+                        let got =
+                            matches!(e.log_qso_for_sync(rec.clone()), LogWriteOutcome::Duplicate);
+                        assert_eq!(
+                            got, expected,
+                            "seed {seed:#x} step {step}: {} {} {} @{} — the index disagrees with \
+                             the old scan",
+                            rec.call, rec.band, rec.mode, rec.when_unix
+                        );
+                        assert_eq!(e.logged_tick, tick.wrapping_add(1), "the tick moves first");
+                        assert!(e.stalled_qso.is_none(), "the stash clears first, as before");
+                        if got {
+                            dups += 1;
+                            assert_eq!(e.station.logbook.len(), len, "a duplicate adds nothing");
+                            assert_eq!(e.station.pending_uploads.len(), uploads, "nor queues");
+                            assert_eq!(e.station.pending_hunt, hunt, "nor spends the hunt");
+                        } else {
+                            accepted += 1;
+                            assert_eq!(e.station.logbook.len(), len + 1);
+                        }
+                    }
+                }
+            }
+            assert!(
+                dups > 20 && accepted > 20,
+                "seed {seed:#x}: both answers exercised ({dups} dups, {accepted} accepted)"
+            );
+        }
+    }
+
+    /// The order the gate protects: the duplicate check comes BEFORE the hunt is spent, so a
+    /// duplicate of the hunted station leaves the hunt for the real contact.
+    #[test]
+    fn a_duplicate_does_not_spend_the_pending_hunt() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut g = Gen(3);
+        let mut first = contact(&mut g);
+        first.call = "K1ABC".into();
+        e.log_qso(first.clone());
+        e.set_hunt_target("K1ABC", "POTA", "US-0001").expect("hunt");
+        let hunt = e.station.pending_hunt.clone();
+        assert!(matches!(
+            e.log_qso_for_sync(first.clone()),
+            LogWriteOutcome::Duplicate
+        ));
+        assert_eq!(e.station.pending_hunt, hunt, "the hunt is still pending");
+        let mut real = first;
+        real.when_unix += 3_600;
+        assert!(!matches!(
+            e.log_qso_for_sync(real),
+            LogWriteOutcome::Duplicate
+        ));
+        assert!(
+            e.station.pending_hunt.is_none(),
+            "and the real contact spends it"
+        );
+        assert_eq!(
+            e.station
+                .logbook
+                .records()
+                .last()
+                .unwrap()
+                .ota
+                .their_ref
+                .as_deref(),
+            Some("US-0001")
         );
     }
 }
