@@ -193,6 +193,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   XIT figure are gone, and an XIT change aimed at one is refused, including from a browser. RIT
   is unchanged, and so is XIT on every other radio.
 
+- **The transmit lock now judges the sideband you picked in Phone.** Picking USB, LSB or AM in
+  the Phone cockpit, or recalling a saved memory in its own sideband, changed what the radio
+  sent, but the licence check went on judging the sideband the band normally uses. So a General
+  could pick USB at 7.299 and transmit across the top of 40 m, or LSB at 14.226 and go below the
+  bottom of the 20 m General phone segment, and nothing locked. Both now read 🔒 TX locked, like
+  any other frequency outside your privileges, and a Remote split or XIT that would land there is
+  refused the same way. Nothing that was locked before is unlocked, and with the mode on AUTO
+  nothing changes.
+
 - **The Linux AppImage no longer prints `Failed to load module "canberra-gtk-module"` when it
   starts.** The 1.14.0 AppImage stopped looking in your system's own GTK folders, so the add-ons
   your desktop asks every GTK program to load — the event-sound module, and on some desktops the

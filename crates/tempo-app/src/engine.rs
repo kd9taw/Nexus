@@ -18278,17 +18278,17 @@ contact yourself."
     /// `Open` always permits. Judges the EMITTED RF, not the bare dial: for digital the signal
     /// sits at the dial + the TX audio offset (≈+1.5 kHz on USB), so a dial just below a
     /// higher-class-only edge can still emit inside it; on an FM channel the transmitter is
-    /// moved bodily by the repeater shift, which on 70 cm is 5 MHz. Every TX path ANDs this in;
-    /// the snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
+    /// moved bodily by the repeater shift, which on 70 cm is 5 MHz; in Phone the passband is
+    /// judged in the mode the rig is actually commanded, the cockpit's pick included
+    /// ([`Self::emission_in_use_allowed`]). Every TX path ANDs this in; the snapshot exposes it
+    /// so the cockpit can show a lockout indicator. See `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
         // The rig says split and we cannot say where it transmits — refuse rather than judge
         // the dial, which under split is an unrelated number.
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
             return false;
         }
-        let judge = |mhz: f64| {
-            self.emission_allowed(self.settings.operating_mode, mhz, &self.settings.sideband)
-        };
+        let judge = |mhz: f64| self.emission_in_use_allowed(mhz);
         // `tx_emission_mhz` already carries XIT.
         let emission = self.tx_emission_mhz();
         // ⚠️ SPLIT **AND** XIT IS THE ONE COMBINATION NO DOCUMENT HERE SETTLES. Whether a radio
@@ -18426,10 +18426,53 @@ contact yourself."
         }
     }
 
+    /// THE key-time judgement of one transmit carrier `mhz`: what [`Self::tx_allowed`] asks of
+    /// every frequency it judges, and what the Remote's split/XIT admission asks of the one it
+    /// is about to write, so the two cannot disagree.
+    ///
+    /// Two models, and BOTH must pass:
+    /// * [`Self::emission_allowed`], the section's own model, with Phone on the band's
+    ///   convention (LSB below 10 MHz, USB above). Unchanged, so every refusal the gate made
+    ///   before still stands.
+    /// * in Phone, the passband of the mode the transmitting VFO is actually COMMANDED
+    ///   ([`Self::tx_mode_effective`]): the same word the radio loop writes, so the gate and the
+    ///   radio cannot drift apart.
+    ///
+    /// ⭐ THE SECOND TERM IS THE FIX. From the day it arrived (0.4.0) the cockpit's mode pick
+    /// (`sideband_override`, which a saved-memory recall also sets) reached the radio through
+    /// `rig_mode_effective` and never reached this gate, which went on judging the convention's
+    /// sideband. A General who picked USB at 7.299 transmitted across the 7.300 band edge, and
+    /// LSB at 14.226 went under the 14.225 General phone floor, with the gate saying allowed.
+    ///
+    /// ⚠️ Keeping the convention term means a pick on the band's OTHER side is judged on both
+    /// sides of the carrier: USB at the very bottom of a General's 40 m segment stays refused,
+    /// exactly as before, although its own passband is legal. That is the cost of this fix only
+    /// ever refusing more than before; dropping the convention term for a pick is a separate
+    /// decision, not a defect.
+    fn emission_in_use_allowed(&self, mhz: f64) -> bool {
+        let om = self.settings.operating_mode;
+        self.emission_allowed(om, mhz, &self.settings.sideband)
+            && (om != crate::settings::OperatingMode::Phone
+                || self.phone_emission_allowed(mhz, &self.tx_mode_effective()))
+    }
+
+    /// The mode word the TRANSMITTING VFO is commanded into — each VFO read from the one place
+    /// the radio loop reads it. Under a satellite pass that owns the split, that is the uplink
+    /// VFO's own word ([`Self::sat_tx_mode_for_split`]): an inverting transponder transmits LSB
+    /// while the dial listens USB, so judging the dial's word there would put the passband on the
+    /// wrong side of the uplink carrier. Everywhere else it is the dial's word,
+    /// [`Self::rig_mode_effective`].
+    fn tx_mode_effective(&self) -> String {
+        self.tx_split_confirmed_hz
+            .and_then(|hz| self.sat_tx_mode_for_split(hz))
+            .unwrap_or_else(|| self.rig_mode_effective())
+    }
+
     /// May the operator's class key `om`'s EMISSION with the dial at `dial` (`sideband`
     /// only matters for Digital, whose audio offset is sideband-signed)? THE one
-    /// emission-passband model: [`Engine::tx_allowed`] judges the live dial through it,
-    /// and the per-(band, mode) dial memory re-runs it at restore time — the license
+    /// emission-passband model: [`Engine::tx_allowed`] judges the live dial through it (and, in
+    /// Phone, the mode actually commanded on top — [`Self::emission_in_use_allowed`]), and the
+    /// per-(band, mode) dial memory re-runs it at restore time — the license
     /// class can change mid-session, so a remembered dial is re-checked, never trusted.
     fn emission_allowed(
         &self,
@@ -18448,18 +18491,12 @@ contact yourself."
                 allow(if lsb { dial - off } else { dial + off })
             }
             OperatingMode::Phone => {
-                // SSB occupies ~2.8 kHz above the carrier (USB) / below it (LSB). The WHOLE
-                // passband must be in a privileged phone segment, so a dial within a passband
-                // of a band edge can't bleed out of band. Phone sideband is band-aware (LSB <10 MHz).
-                // The width is `privileges::SSB_BW_MHZ` — the SAME constant the phone home parks
-                // by, so a picker can never choose a dial this gate then refuses.
-                use crate::privileges::SSB_BW_MHZ as SSB_BW;
-                let (lo, hi) = if dial < 10.0 {
-                    (dial - SSB_BW, dial)
-                } else {
-                    (dial, dial + SSB_BW)
-                };
-                allow(lo) && allow(hi)
+                // The band CONVENTION's sideband (LSB below 10 MHz, USB from 30 m up) through the
+                // one phone passband model. Right as it stands for a band pick and a dial-memory
+                // recall — both follow a band change, which drops the cockpit's pick — and the
+                // key-time gate judges the mode the rig is actually in on top of it
+                // (`emission_in_use_allowed`).
+                self.phone_emission_allowed(dial, if dial < 10.0 { "LSB" } else { "USB" })
             }
             // CW: the carrier sits at the dial.
             OperatingMode::Cw => allow(dial),
@@ -18470,6 +18507,37 @@ contact yourself."
             // above the always-USB dial.
             OperatingMode::Keyboard => self.psk_emission_ok(dial),
         }
+    }
+
+    /// May the operator's class key a PHONE emission whose carrier is at `carrier`, in the rig
+    /// mode `word` (`USB`, `LSB`, `AM`, `FM`, or a DATA form of one)? THE one phone passband
+    /// model: the band convention ([`Self::emission_allowed`]) and the mode actually commanded
+    /// ([`Self::emission_in_use_allowed`]) are both judged through it.
+    ///
+    /// The width is `privileges::SSB_BW_MHZ` — the SAME constant the phone home parks by, so a
+    /// picker can never choose a dial this gate then refuses — and it is the voice audio one
+    /// sideband carries. The WHOLE emission must sit in a privileged phone segment, so a dial
+    /// within a passband of an edge cannot bleed out of it:
+    /// * USB / LSB, and the PKTUSB / PKTLSB an SSTV image rides: one passband above / below.
+    /// * AM: the carrier plus BOTH sidebands of the same audio, one passband either side.
+    /// * FM: ⚠️ NO WIDTH MODEL. An FM signal's width is set by its deviation, which Nexus does
+    ///   not know (`repeater_tune` records the same decision), so only the carrier is judged.
+    ///   Every caller also judges the convention's passband, so an FM pick is judged exactly as
+    ///   it was before this model knew the pick at all — never less.
+    /// * any other word: both sides. A mode this model does not know must never unlock anything.
+    fn phone_emission_allowed(&self, carrier: f64, word: &str) -> bool {
+        use crate::privileges::SSB_BW_MHZ as SSB_BW;
+        let class = self.settings.license_class;
+        let allow =
+            |f: f64| crate::privileges::tx_allowed(class, f, crate::settings::OperatingMode::Phone);
+        let (above, below) = match word.trim().to_ascii_uppercase().as_str() {
+            "USB" | "PKTUSB" => (true, false),
+            "LSB" | "PKTLSB" => (false, true),
+            "FM" | "PKTFM" => (false, false),
+            // AM, and any word this model does not know.
+            _ => (true, true),
+        };
+        allow(carrier) && (!above || allow(carrier + SSB_BW)) && (!below || allow(carrier - SSB_BW))
     }
 
     /// UDP HighlightCallsign (JTAlert): paint/clear a callsign in the decode
@@ -45536,6 +45604,37 @@ mod tests {
         );
     }
 
+    /// The licence gate judges a pass in the UPLINK VFO's own sideband — the word the radio loop
+    /// writes to the transmit VFO — not the dial's. An inverting bird transmits LSB while the
+    /// dial listens USB, so near a segment floor the two put the passband on opposite sides of
+    /// the uplink carrier. The transponder is synthetic, parked just above 2 m's CW-only bottom:
+    /// every real VHF/UHF uplink sits deep inside an all-mode segment, where the two agree.
+    #[test]
+    fn a_satellite_pass_is_judged_in_the_uplink_vfos_own_sideband() {
+        let (mut e, tp) = sat_mode_engine(true, 144_101_000);
+        e.set_license_class("technician");
+        e.set_sat_transponder(Some(("TEST|linear".into(), 0, tp)));
+        let c = e
+            .sat_doppler_tick(-0.5, 10_000, false)
+            .expect("first tick sends a correction");
+        let up = c.uplink_hz.expect("the mapping drives the uplink");
+        e.rig_split_applied(up);
+        assert_eq!(e.rig_mode_effective(), "USB", "precondition: USB down");
+        assert_eq!(
+            e.sat_tx_mode_for_split(up).as_deref(),
+            Some("LSB"),
+            "precondition: LSB up"
+        );
+        assert!(
+            (144_100_000..144_102_800).contains(&up),
+            "precondition: the uplink carrier is within one passband above 144.100: {up}"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "LSB on {up} Hz reaches below 144.100, where 2 m is CW-only"
+        );
+    }
+
     #[test]
     fn an_fm_bird_commands_fm_on_the_transmit_leg() {
         // ⭐ THE REPLACED BELIEF. This test used to be called
@@ -50119,6 +50218,411 @@ mod am_override_tests {
         assert!(
             !e.am_in_force(),
             "a band change drops the pick — this is the reason the FM-style gate is unnecessary here"
+        );
+    }
+}
+
+/// The licence gate judges the Phone mode the rig is actually COMMANDED — the cockpit's
+/// USB/LSB/FM/AM pick included — and never less than the band convention it judged before.
+///
+/// Wrong from the day the pick arrived (0.4.0) through 1.14.0: the pick reached the radio through
+/// `rig_mode_effective` and never reached `tx_allowed`, which went on judging the band's
+/// convention (LSB below 10 MHz). A pick is reachable from the Phone cockpit's mode buttons and
+/// from recalling a saved SSB memory, which re-asserts the memory's own sideband after the tune.
+#[cfg(test)]
+mod phone_pick_licence_tests {
+    use super::*;
+    use crate::privileges::SSB_BW_MHZ;
+
+    /// A Phone station as `class` on `band` at `dial`, with the cockpit's mode pick `pick`
+    /// (`None` = AUTO) — built through the operator's own verbs in the cockpit's order: the tune
+    /// first, THEN the pick, because a band change drops the pick.
+    fn phone_at(class: &str, band: &str, dial: f64, pick: Option<&str>) -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class(class);
+        e.set_operating_mode("phone", false);
+        e.set_frequency(dial, band, if dial < 10.0 { "LSB" } else { "USB" });
+        e.request_sideband_override(pick);
+        assert!(
+            (e.settings.dial_mhz - dial).abs() < 1e-9,
+            "precondition: the tune landed on {dial}"
+        );
+        assert_eq!(
+            e.sideband_override().as_deref(),
+            pick,
+            "precondition: the pick is in force — otherwise the verdict is about AUTO"
+        );
+        e
+    }
+
+    /// Every case whose verdict is not `want`, named, so a red run lists all of them rather than
+    /// the first.
+    fn wrong_verdicts(class: &str, cases: &[(&str, f64, Option<&str>)], want: bool) -> Vec<String> {
+        cases
+            .iter()
+            .filter_map(|&(band, dial, pick)| {
+                let got = phone_at(class, band, dial, pick).tx_allowed();
+                (got != want).then(|| format!("{class} {band} {dial:.4} {pick:?}: allowed={got}"))
+            })
+            .collect()
+    }
+
+    /// Today's model, written out independently: the band CONVENTION's passband (LSB below
+    /// 10 MHz, USB from 30 m up), both edges inside a phone segment.
+    fn convention_allows(class: crate::settings::LicenseClass, dial: f64) -> bool {
+        let (lo, hi) = if dial < 10.0 {
+            (dial - SSB_BW_MHZ, dial)
+        } else {
+            (dial, dial + SSB_BW_MHZ)
+        };
+        let phone = crate::settings::OperatingMode::Phone;
+        crate::privileges::tx_allowed(class, lo, phone)
+            && crate::privileges::tx_allowed(class, hi, phone)
+    }
+
+    /// The US phone-segment boundaries from 160 m to 70 cm, as (band, edge MHz). Channelized 60 m
+    /// and the bands above 70 cm are not swept.
+    const PHONE_EDGES: &[(&str, f64)] = &[
+        ("160m", 1.800),
+        ("160m", 2.000),
+        ("80m", 3.600),
+        ("80m", 3.800),
+        ("80m", 4.000),
+        ("40m", 7.125),
+        ("40m", 7.175),
+        ("40m", 7.300),
+        ("20m", 14.150),
+        ("20m", 14.225),
+        ("20m", 14.350),
+        ("17m", 18.110),
+        ("17m", 18.168),
+        ("15m", 21.200),
+        ("15m", 21.275),
+        ("15m", 21.450),
+        ("12m", 24.930),
+        ("12m", 24.990),
+        ("10m", 28.300),
+        ("10m", 28.500),
+        ("10m", 29.700),
+        ("6m", 50.100),
+        ("6m", 54.000),
+        ("2m", 144.100),
+        ("2m", 148.000),
+        ("1.25m", 222.000),
+        ("1.25m", 225.000),
+        ("70cm", 420.000),
+        ("70cm", 450.000),
+    ];
+
+    /// One case of a sweep: the gate's verdict, the convention's, which case, and whether the rig
+    /// was commanded FM there.
+    struct Verdict {
+        got: bool,
+        want: bool,
+        case: String,
+        fm: bool,
+    }
+
+    /// Every edge in [`PHONE_EDGES`] ±6 kHz in 0.5 kHz steps for every US class, with `pick` in
+    /// force (re-asserted after each tune) and the station-wide `phone_mode` as given.
+    fn sweep(phone_mode: &str, pick: Option<&str>) -> Vec<Verdict> {
+        use crate::settings::LicenseClass;
+        let mut out = Vec::new();
+        for class in [
+            LicenseClass::Technician,
+            LicenseClass::General,
+            LicenseClass::Extra,
+        ] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.settings.license_class = class;
+            e.set_operating_mode("phone", false);
+            e.settings.phone_mode = phone_mode.into();
+            e.settings.rptr_shift = "simplex".into(); // the emission stays on the dial
+            for &(band, edge) in PHONE_EDGES {
+                for k in -12..=12 {
+                    let dial = edge + f64::from(k) * 0.0005;
+                    e.set_frequency(dial, band, if dial < 10.0 { "LSB" } else { "USB" });
+                    e.request_sideband_override(pick);
+                    assert_eq!(e.sideband_override().as_deref(), pick, "precondition");
+                    out.push(Verdict {
+                        got: e.tx_allowed(),
+                        want: convention_allows(class, dial),
+                        case: format!(
+                            "{class:?} {band} {dial:.4} {pick:?} phone_mode={phone_mode}"
+                        ),
+                        fm: e.rig_mode_effective() == "FM",
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// The cases whose verdict differs from the convention's, and how many the convention
+    /// allowed, refused, and saw commanded FM — so a sweep that proved nothing cannot pass as
+    /// one that did.
+    fn against_the_convention(v: &[Verdict]) -> (Vec<String>, usize, usize, usize) {
+        let wrong = v
+            .iter()
+            .filter(|v| v.got != v.want)
+            .map(|v| {
+                format!(
+                    "{}: allowed={}, the convention says {}",
+                    v.case, v.got, v.want
+                )
+            })
+            .collect();
+        let allowed = v.iter().filter(|v| v.want).count();
+        let fm = v.iter().filter(|v| v.fm).count();
+        (wrong, allowed, v.len() - allowed, fm)
+    }
+
+    /// ⭐ THE REPORTED CASE, AT THE TOP OF 40 M. A General's 40 m phone runs to the 7.300 band
+    /// edge. USB at 7.299 puts its voice passband ABOVE the dial — across the edge, out of the
+    /// amateur band — and that is what the rig is commanded. The gate judged the convention
+    /// (LSB), whose passband hangs safely below the dial, and said allowed.
+    #[test]
+    fn a_usb_pick_at_the_top_of_40m_is_refused_for_a_general() {
+        let e = phone_at("general", "40m", 7.299, Some("USB"));
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "precondition: the radio is commanded USB"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "USB at 7.299 transmits 7.2990–7.3018 MHz, across the 7.300 band edge"
+        );
+    }
+
+    /// The mirror case, inside the band: a General's 20 m phone starts at 14.225. LSB at 14.226
+    /// hangs its passband down to 14.2232 — under the floor, where only an Extra may talk —
+    /// while the convention (USB) judged 14.2260–14.2288.
+    #[test]
+    fn an_lsb_pick_at_the_bottom_of_the_20m_general_segment_is_refused() {
+        let e = phone_at("general", "20m", 14.226, Some("LSB"));
+        assert_eq!(
+            e.rig_mode_effective(),
+            "LSB",
+            "precondition: the radio is commanded LSB"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "LSB at 14.226 transmits 14.2232–14.2260 MHz, under the 14.225 General phone floor"
+        );
+    }
+
+    /// What the operator SEES is the same refusal: the cockpit's 🔒 TX LOCKED reads
+    /// `radio.tx_allowed` off the snapshot, live PTT does not key, and a send that reports a
+    /// reason gives the usual outside-privileges one.
+    #[test]
+    fn the_refusal_reaches_the_lock_indicator_the_ptt_and_the_reason() {
+        let mut e = phone_at("general", "40m", 7.299, Some("USB"));
+        assert!(
+            e.tx_enabled(),
+            "precondition: entering Phone arms TX, so any refusal below is the licence's"
+        );
+        assert!(
+            !e.snapshot().radio.tx_allowed,
+            "the snapshot the cockpit's lock indicator reads must show the lock"
+        );
+        e.set_ptt(true);
+        assert!(!e.manual_ptt(), "live PTT must not key");
+        let why = e
+            .sstv_tx_gate()
+            .expect_err("an image send on the same dial must be refused");
+        assert!(
+            why.contains("outside your license privileges"),
+            "the usual reason, got: {why}"
+        );
+    }
+
+    /// An Extra, with the OTHER sideband picked at its own edges: the passband crosses the edge.
+    #[test]
+    fn an_extra_picking_the_other_sideband_at_an_edge_is_refused() {
+        let wrong = wrong_verdicts(
+            "extra",
+            &[
+                ("40m", 7.2990, Some("USB")), // 7.2990–7.3018: across the 7.300 band edge
+                ("20m", 14.1510, Some("LSB")), // 14.1482–14.1510: under the 14.150 Extra floor
+            ],
+            false,
+        );
+        assert!(wrong.is_empty(), "must be refused: {wrong:#?}");
+    }
+
+    /// The guard the other way round: an Extra keeps both 40 m and both 20 m phone edges when the
+    /// pick is the band's own sideband, or AUTO. This fix must not cost a legal dial.
+    #[test]
+    fn an_extra_keeps_its_own_edges_with_the_bands_own_sideband() {
+        let wrong = wrong_verdicts(
+            "extra",
+            &[
+                ("40m", 7.1280, Some("LSB")), // 7.1252–7.1280: just clear of the 7.125 floor
+                ("40m", 7.1280, None),
+                ("40m", 7.2990, Some("LSB")), // 7.2962–7.2990: under the band edge
+                ("40m", 7.2990, None),
+                ("20m", 14.1500, Some("USB")), // 14.1500–14.1528: ON the 14.150 floor
+                ("20m", 14.1500, None),
+                ("20m", 14.3470, Some("USB")), // 14.3470–14.3498: under the band edge
+                ("20m", 14.3470, None),
+            ],
+            true,
+        );
+        assert!(wrong.is_empty(), "must stay keyable: {wrong:#?}");
+    }
+
+    /// A General on the band's own side mid-segment, and a pick of either side well inside the
+    /// segment, all stay keyable — the pick itself is not what gets refused.
+    #[test]
+    fn a_pick_well_inside_the_segment_stays_keyable() {
+        let wrong = wrong_verdicts(
+            "general",
+            &[
+                ("40m", 7.2000, Some("LSB")),
+                ("40m", 7.2000, None),
+                ("40m", 7.2500, Some("USB")), // 7.2500–7.2528: the other side, nowhere near an edge
+                ("20m", 14.3000, Some("USB")),
+                ("20m", 14.3000, None),
+                ("20m", 14.3000, Some("LSB")), // 14.2972–14.3000
+            ],
+            true,
+        );
+        assert!(wrong.is_empty(), "must stay keyable: {wrong:#?}");
+    }
+
+    /// With NO pick the gate is exactly what it was, at every swept phone edge, for every US
+    /// class — on SSB, and on the station-wide FM policy that commands FM at 29 MHz and up.
+    #[test]
+    fn with_no_pick_every_phone_verdict_is_what_it_was() {
+        for phone_mode in ["ssb", "fm"] {
+            let (wrong, allowed, refused, fm) = against_the_convention(&sweep(phone_mode, None));
+            assert!(wrong.is_empty(), "a verdict moved with no pick: {wrong:#?}");
+            assert!(
+                allowed > 100 && refused > 100,
+                "the sweep must straddle the edges: {allowed} allowed, {refused} refused"
+            );
+            if phone_mode == "fm" {
+                assert!(fm > 100, "the FM policy must actually command FM: {fm}");
+            }
+        }
+    }
+
+    /// `Open` (no US class) is never refused by a pick: the lockout is operator-declared.
+    #[test]
+    fn open_is_never_refused_whatever_the_pick() {
+        let cases: Vec<(&str, f64, Option<&str>)> = [
+            ("40m", 7.299),
+            ("40m", 7.176),
+            ("20m", 14.226),
+            ("20m", 14.349),
+            ("10m", 29.699),
+            ("2m", 144.100),
+        ]
+        .into_iter()
+        .flat_map(|(band, dial)| {
+            [None, Some("USB"), Some("LSB"), Some("FM"), Some("AM")]
+                .into_iter()
+                .map(move |pick| (band, dial, pick))
+        })
+        .collect();
+        let wrong = wrong_verdicts("open", &cases, true);
+        assert!(wrong.is_empty(), "Open must never be refused: {wrong:#?}");
+    }
+
+    /// AM is the carrier plus BOTH sidebands of the same voice audio — two SSB passbands at
+    /// once — so either sideband crossing an edge refuses it.
+    #[test]
+    fn an_am_pick_is_judged_on_both_sidebands() {
+        let wrong = wrong_verdicts(
+            "general",
+            &[
+                ("40m", 7.2990, Some("AM")), // upper sideband to 7.3018: across the band edge
+                ("20m", 14.2260, Some("AM")), // lower sideband to 14.2232: under the General floor
+                ("40m", 7.1760, Some("AM")), // lower sideband to 7.1732: under the 7.175 floor
+            ],
+            false,
+        );
+        assert!(wrong.is_empty(), "must be refused: {wrong:#?}");
+    }
+
+    /// …and AM clear of the edges stays keyable: the 80 m and 20 m AM calling frequencies.
+    #[test]
+    fn an_am_pick_clear_of_the_edges_stays_keyable() {
+        let wrong = wrong_verdicts(
+            "general",
+            &[("80m", 3.8850, Some("AM")), ("20m", 14.2860, Some("AM"))],
+            true,
+        );
+        assert!(wrong.is_empty(), "must stay keyable: {wrong:#?}");
+    }
+
+    /// ⚠️ FM HAS NO WIDTH MODEL, so an FM pick is judged exactly as the band convention judged
+    /// it before — never less, and nothing new refused on a width the gate cannot know. An FM
+    /// signal's width is set by its deviation, which Nexus does not know (`repeater_tune`
+    /// records the same decision). Pinned across every edge in [`PHONE_EDGES`], both ways.
+    #[test]
+    fn an_fm_pick_is_judged_as_the_band_convention_judged_it() {
+        let (wrong, allowed, refused, fm) = against_the_convention(&sweep("ssb", Some("FM")));
+        assert!(wrong.is_empty(), "an FM pick moved a verdict: {wrong:#?}");
+        assert!(
+            allowed > 100 && refused > 100 && fm > 100,
+            "the sweep must straddle the edges with FM commanded: {allowed}/{refused}/{fm}"
+        );
+    }
+
+    /// ⛔ NEVER LESS. Whatever is picked, nothing the band convention refused is unlocked: the
+    /// gate may only ever refuse MORE than it did before it knew the pick. Swept across every
+    /// phone edge in [`PHONE_EDGES`], for every US class and every pick.
+    #[test]
+    fn no_pick_unlocks_a_dial_the_convention_refused() {
+        for pick in ["USB", "LSB", "AM", "FM"] {
+            let verdicts = sweep("ssb", Some(pick));
+            let unlocked: Vec<&str> = verdicts
+                .iter()
+                .filter(|v| v.got && !v.want)
+                .map(|v| v.case.as_str())
+                .collect();
+            assert!(unlocked.is_empty(), "{pick} unlocked: {unlocked:#?}");
+            let refused = verdicts.iter().filter(|v| !v.want).count();
+            assert!(
+                refused > 100,
+                "{pick}: the sweep must reach dials the convention refuses: {refused}"
+            );
+        }
+    }
+
+    /// The split + XIT branch judges TWO carriers — whether a rig adds XIT on top of split is
+    /// per-rig — and both must be judged in the mode actually picked. Here the carrier only that
+    /// branch looks at (the split TX without the clarifier) is the one the USB pick carries
+    /// across the band edge; the emission itself is legal.
+    #[test]
+    fn the_split_and_xit_branch_judges_both_carriers_in_the_picked_mode() {
+        let scene = |split_hz: u64| {
+            let mut e = phone_at("general", "40m", 7.250, Some("USB"));
+            e.rig_split_applied(split_hz);
+            e.request_xit(-4_000);
+            e
+        };
+        // Control: both carriers clear of the edge in USB (7.2920 and 7.2960).
+        let ok = scene(7_296_000);
+        assert!(
+            (ok.tx_emission_mhz() - 7.292).abs() < 1e-9,
+            "precondition: the emission is split + XIT"
+        );
+        assert!(
+            ok.tx_allowed(),
+            "control: both USB carriers are inside the segment"
+        );
+
+        let e = scene(7_299_000);
+        assert!(
+            (e.tx_emission_mhz() - 7.295).abs() < 1e-9,
+            "precondition: the emission (7.2950 USB) is itself legal"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "the split TX without XIT is 7.2990 USB, across the 7.300 band edge"
         );
     }
 }
