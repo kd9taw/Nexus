@@ -632,6 +632,22 @@ impl LogDb {
         Ok(())
     }
 
+    /// `PRAGMA data_version` on this connection: it moves exactly when a DIFFERENT connection —
+    /// another process's writer, sharing this data folder — commits. This connection's own
+    /// commits never move it, which is what lets the writer thread tell "someone else wrote the
+    /// log" apart from its own work without any bookkeeping of its own.
+    pub fn data_version(&self) -> Result<i64> {
+        data_version(&self.conn)
+    }
+
+    /// The file this database was opened from, or `None` for an in-memory one.
+    pub fn path(&self) -> Option<std::path::PathBuf> {
+        self.conn
+            .path()
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+    }
+
     /// How many records the store holds.
     ///
     /// Written for [`super::migrate`], where it IS the resume watermark: a migration inserts
@@ -900,6 +916,35 @@ impl LogDb {
             }
         }
         Ok(out)
+    }
+}
+
+/// The database's write lock, held the way ANOTHER process holds it while it writes — until
+/// this value is dropped. Every writer that wants the lock meanwhile waits (`busy_timeout`),
+/// which is exactly the state "a write that is taking its time" puts the log in.
+///
+/// For the tests that must show nothing waits on that state under the engine lock, and for a
+/// diagnosis that needs to reproduce it; nothing in the app takes it.
+pub struct WriteHold {
+    conn: Connection,
+}
+
+impl WriteHold {
+    /// Take the lock on the database at `path` (which must exist).
+    pub fn take(path: &Path) -> Result<WriteHold> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(WriteHold { conn })
+    }
+}
+
+impl Drop for WriteHold {
+    fn drop(&mut self) {
+        let _ = self.conn.execute_batch("ROLLBACK");
     }
 }
 
@@ -2009,6 +2054,104 @@ mod tests {
             expected.matches(&dropped).count(),
             actual.matches(&dropped).count() + 1,
             "exactly one {dropped} must have gone missing"
+        );
+    }
+
+    /// The WHOLE PIPELINE the store now owns, on disk: an operator's `log.adi` → the real
+    /// conversion (`migrate_log`, with its file-backed store) → the load the app starts from →
+    /// the file the mirror writes. Every record comes out as the ADIF writer would have written
+    /// it from a plain load of the original file — `extra` included — in the same order and
+    /// under the same id. `meddle` runs against the store between the conversion and the load.
+    fn pipeline(n: usize, meddle: impl FnOnce(&Connection)) -> (Vec<String>, Vec<String>) {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-pipeline-{}-{:?}-{n}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("log.adi");
+        std::fs::write(&log, synthetic_log(n)).unwrap();
+        let expected: Vec<String> = Logbook::load(&log)
+            .records()
+            .iter()
+            .map(|r| super::super::adif_record_own_log(r))
+            .collect();
+        let db = super::super::migrate::database_path(&log);
+        super::super::migrate::migrate_log(&log, &db, |_| Resolved::default()).expect("converts");
+        meddle(&Connection::open(&db).unwrap());
+        let held = Logbook::from_store(LogDb::open(&db).unwrap().load_all().unwrap());
+        let mirror = super::super::mirror::mirror_adif(held.records());
+        let actual: Vec<String> = held
+            .records()
+            .iter()
+            .map(|r| super::super::adif_record_own_log(r))
+            .collect();
+        // The file the mirror writes is exactly those records after its header — so a
+        // per-record comparison below is a comparison of the FILE, not of a re-parse of it
+        // (which would measure the ADIF reader, a different thing: see the note at the call).
+        let body = &mirror[mirror.find("<EOH>").expect("a header") + 5..];
+        assert_eq!(
+            body,
+            format!("\n{}", actual.concat()),
+            "the mirror is its records"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        (expected, actual)
+    }
+
+    /// ★ PROPERTY 1, through the new owner: the file the operator had and the file the mirror
+    /// writes hold the same records, byte for byte per record, passthrough included, over a
+    /// fixture that exercises every representation (the census, asserted on the stored rows).
+    ///
+    /// ⚠️ It compares the mirror's own bytes, NOT a re-parse of them, and that is deliberate: a
+    /// re-parse would also measure the ADIF READER, which is not lossless. A POTA two-fer is
+    /// written as `MY_SIG_INFO` = the first park plus `MY_POTA_REF` = both, and the reader
+    /// prefers `MY_SIG_INFO` when both are present, so a re-read keeps one park. That is a
+    /// reader defect found by this test's first draft and reported, not fixed here; the store
+    /// itself never re-reads the mirror, so it keeps both parks across a restart.
+    #[test]
+    fn the_log_survives_conversion_load_and_mirror_byte_for_byte() {
+        let n = 20_000;
+        let (expected, actual) = pipeline(n, |conn| census(conn, n));
+        assert_eq!(actual.len(), n, "every record came back out");
+        if let Some(at) = expected.iter().zip(&actual).position(|(e, a)| e != a) {
+            panic!(
+                "record {at} differs after conversion, load and mirror\nexpected: {:?}\nactual:   {:?}",
+                expected[at], actual[at]
+            );
+        }
+    }
+
+    /// Its positive control: one passthrough row dropped from the store between the conversion
+    /// and the load must break the same comparison, by exactly that one tag.
+    #[test]
+    fn positive_control_the_pipeline_catches_one_dropped_passthrough_row() {
+        let mut dropped = String::new();
+        let (expected, actual) = pipeline(300, |conn| {
+            let (qso_id, name, value): (String, String, String) = conn
+                .query_row(
+                    "SELECT qso_id, name, value FROM qso_extra ORDER BY qso_id, name LIMIT 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .expect("a passthrough row to drop");
+            assert_eq!(
+                conn.execute(
+                    "DELETE FROM qso_extra WHERE qso_id = ?1 AND name = ?2",
+                    params![&qso_id, &name],
+                )
+                .unwrap(),
+                1
+            );
+            dropped = format!("<{}:{}>{}", name, value.len(), value);
+        });
+        assert_ne!(expected, actual, "a dropped passthrough row MUST be caught");
+        let count = |v: &[String]| v.iter().map(|r| r.matches(&dropped).count()).sum::<usize>();
+        assert_eq!(
+            count(&expected),
+            count(&actual) + 1,
+            "exactly {dropped}, once"
         );
     }
 

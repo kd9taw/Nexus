@@ -22017,6 +22017,85 @@ contact yourself."
         self.station.logbook.set_posid(log_posid(&self.settings));
     }
 
+    /// Make the store the owner of the log — the ordinary launch. See
+    /// [`StationCore::attach_store`] and [`crate::logstore`].
+    pub fn attach_log_store(&mut self, opened: crate::logstore::Opened) {
+        self.station.attach_store(opened);
+        // A fresh log, whose ids start without the position id — as after `set_log_path`.
+        self.sync_log_posid();
+    }
+
+    /// Record why the store could not be opened this session: the log runs on `log.adi` as
+    /// 1.13 ran it, and this is what says so.
+    pub fn note_log_store_problem(&mut self, why: String) {
+        self.station.store_problem = Some(why);
+    }
+
+    /// Why the store is not in use this session, if it was refused.
+    pub fn log_store_problem(&self) -> Option<&str> {
+        self.station.store_problem.as_deref()
+    }
+
+    /// Whether the store owns the log this session.
+    pub fn log_store_open(&self) -> bool {
+        self.station.store.is_some()
+    }
+
+    /// Whether ANOTHER process has committed to the store since this engine's log last matched
+    /// it — a change the next freshness poll, or the next change to existing rows, folds in.
+    pub fn log_store_foreign_pending(&self) -> bool {
+        self.station
+            .store
+            .as_ref()
+            .is_some_and(|s| s.foreign_changed())
+    }
+
+    /// The store's writer, for a caller that waits or copies with every lock released.
+    pub fn log_store_writer(
+        &self,
+    ) -> Option<std::sync::Arc<tempo_core::logbook::writer::LogWriter>> {
+        self.station.store.as_ref().map(|s| s.writer())
+    }
+
+    /// The store's mirror of `log.adi`, as it stands.
+    pub fn log_mirror_status(&self) -> Option<tempo_core::logbook::mirror::Status> {
+        self.station.store.as_ref().map(|s| s.mirror_status())
+    }
+
+    /// Write everything submitted to the store, and the mirror, waiting up to `deadline` —
+    /// the exit path. `Ok` at once when there is no store (the 1.13 path wrote inline).
+    ///
+    /// ⚠️ It WAITS, so a caller holding the engine lock holds it for the wait. The exit path
+    /// may: the radio loop has stopped by then. Anything else takes [`Self::log_store_writer`]
+    /// and waits with the lock released.
+    pub fn flush_log_store(&self, deadline: std::time::Duration) -> Result<(), String> {
+        match self.station.store.as_ref() {
+            Some(store) => store.flush(deadline),
+            None => Ok(()),
+        }
+    }
+
+    /// Run `f`, and hand back what it did together with the durability of every change it made
+    /// to the log — what an operator command waits on AFTER it has released the engine lock
+    /// ([`crate::logstore::Durability::wait`]). Empty on the 1.13 path, which wrote inline.
+    pub fn with_log_tickets<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> (T, crate::logstore::Durability) {
+        if let Some(store) = self.station.store.as_mut() {
+            store.begin_collecting();
+        }
+        let out = f(self);
+        let durability = match self.station.store.as_mut() {
+            Some(store) => {
+                let tickets = store.take_collected();
+                crate::logstore::Durability::new(Some(store.writer()), tickets)
+            }
+            None => crate::logstore::Durability::default(),
+        };
+        (out, durability)
+    }
+
     /// The general logbook file, when one is configured. Read-only: Remote re-reads it after a
     /// rewrite to prove the change reached the disk before it reports one.
     pub fn log_path(&self) -> Option<&std::path::Path> {

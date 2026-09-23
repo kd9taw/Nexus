@@ -21,7 +21,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use tempo_core::logbook::writer::Change;
 use tempo_core::logbook::{Logbook, OpClass, QsoRecord, WorkedSince};
+
+use crate::logstore::{LogStore, Opened};
 
 use crate::engine::{
     now_unix_secs, LotwResolver, PendingUpload, HUNT_TTL_SECS, MAX_UPLOAD_RETRIES, SSTV_GALLERY_CAP,
@@ -164,6 +167,17 @@ pub struct StationCore {
     pub(crate) upload_tick: u32,
     /// Persistent QSO logbook (worked-before / ADIF), loaded from `log_path`.
     pub(crate) logbook: Logbook,
+    /// The store that owns the log on disk, once [`Self::attach_store`] has run — see
+    /// [`crate::logstore`]. `None` is the 1.13 path, where the log IS `log.adi`, appended to and
+    /// rewritten whole: what a session falls back to when the store cannot be opened, and what
+    /// the tests that pin `log.adi`'s own behaviour still drive through [`Self::set_log_path`].
+    pub(crate) store: Option<LogStore>,
+    /// Why the store is not in use this session, when it was asked for and could not be opened.
+    pub(crate) store_problem: Option<String>,
+    /// Memory still holds a row another process deleted from the store: an in-place re-read
+    /// (made while a caller held positions into the log) could not remove it. The next
+    /// freshness poll does, whether or not anything else has changed.
+    pub(crate) store_lingering: bool,
     /// The B4 sweeps, kept against the log's revision (see [`Self::worked_sets`]). A `Mutex`
     /// because the snapshot builds them through `&self`; it is only ever taken under the engine
     /// lock, so it never waits.
@@ -290,6 +304,9 @@ impl StationCore {
             upload_ok: false,
             upload_tick: 0,
             logbook: Logbook::new(),
+            store: None,
+            store_problem: None,
+            store_lingering: false,
             b4_cache: Default::default(),
             log_path: None,
             last_log_mtime: None,
@@ -330,12 +347,113 @@ impl StationCore {
     /// Point the logbook at an ADIF file and load any existing contacts from it.
     /// Called once by the shell at startup so `worked_before` highlighting and
     /// the log view reflect prior sessions, and auto-log appends to this file.
+    ///
+    /// This is the 1.13 path: `log.adi` IS the log. The shell takes it only when the store
+    /// cannot be opened ([`Self::attach_store`] is the ordinary launch), and it is unchanged.
     pub fn set_log_path(&mut self, path: PathBuf) {
+        self.store = None;
         self.logbook = Logbook::load(&path);
         self.log_path = Some(path);
         self.backfill_country();
         self.backfill_state();
         self.refresh_worked_index();
+    }
+
+    /// Make the store the owner of the log — the ordinary launch since the logbook moved into
+    /// its database (see [`crate::logstore`]). The rows come from the store; `log.adi` is not
+    /// read, and is from here on a mirror of them.
+    ///
+    /// ★ LAUNCH WRITES NOTHING. The country and state backfills — which on the 1.13 path can
+    /// each rewrite the whole of `log.adi` on every launch — fill the log IN MEMORY here, where
+    /// every view, award and export reads it, and write nothing. A filled row reaches the store
+    /// the next time it changes for a reason of its own, and the mirror always carries what
+    /// memory holds. The one write an open can make is taking in a `log.adi` the store cannot
+    /// account for ([`Self::take_in_log_file`]) — contacts that are in no store at all.
+    pub fn attach_store(&mut self, opened: Opened) {
+        let Opened {
+            store,
+            records,
+            foreign,
+            ..
+        } = opened;
+        self.logbook = Logbook::from_store(records);
+        self.log_path = Some(store.log_path().to_path_buf());
+        self.last_log_mtime = None;
+        self.store = Some(store);
+        self.store_problem = None;
+        self.store_lingering = false;
+        self.fill_country();
+        self.fill_state();
+        if let Some(f) = foreign {
+            self.take_in_log_file(&f.text, f.stamp);
+        }
+        self.refresh_worked_index();
+    }
+
+    /// Take the contacts of a `log.adi` the store does not account for into the log — a file a
+    /// 1.13 instance wrote to, the operator's own log from before the store, a restore — so the
+    /// mirror may replace it without taking anything with it.
+    ///
+    /// An IMPORT, with an import's rules: a contact the log lacks is added, one it holds is
+    /// brought up to date monotonically (a confirmation, a stamp), and nothing is removed or
+    /// un-confirmed. So a 1.13 instance's new contacts arrive; its edits arrive as the import
+    /// rules have always treated a restated contact, and a contact it deleted stays — the
+    /// visible trades a shared `log.adi` has always made, and never a contact lost.
+    pub(crate) fn take_in_log_file(
+        &mut self,
+        text: &str,
+        stamp: Option<tempo_core::logbook::mirror::FileStamp>,
+    ) {
+        let base = self.change_base();
+        let resolve = self.dxcc_resolve.as_ref();
+        let (added, _, merged) = self.logbook.import_adif_with(text, |r| {
+            if r.country.is_none() {
+                r.country = resolve.and_then(|resolve| resolve(&r.call));
+            }
+        });
+        self.persist_change(base, "take in log.adi");
+        if !added.is_empty() || merged > 0 {
+            tempo_core::applog::info(
+                "logbook",
+                &format!(
+                    "log.adi held contacts the logbook database did not: {} added, {} brought up \
+                     to date",
+                    added.len(),
+                    merged
+                ),
+            );
+        }
+        if let (Some(store), Some(stamp)) = (&self.store, stamp) {
+            store.accept_log_file(stamp);
+        }
+    }
+
+    /// The rows as they stand, for measuring a change against — taken only when a store will
+    /// be told about the change. See [`Self::persist_change`].
+    fn change_base(&self) -> Option<Vec<Arc<QsoRecord>>> {
+        self.store.as_ref().map(|_| self.logbook.records().to_vec())
+    }
+
+    /// Carry a change made in memory to disk. With the store, the rows whose contents differ
+    /// from `base` go to the writer thread — a channel send, no I/O — and the log to the mirror
+    /// lane. On the 1.13 path, the whole of `log.adi` is rewritten, as it always was.
+    fn persist_change(&mut self, base: Option<Vec<Arc<QsoRecord>>>, context: &str) {
+        match (base, &self.store) {
+            (Some(before), Some(store)) => {
+                let change = Change::between(&before, &self.logbook, store.resolved());
+                if let Some(store) = self.store.as_mut() {
+                    store.submit(change, &self.logbook);
+                }
+            }
+            _ => self.save_log(context),
+        }
+    }
+
+    /// Carry the last `count` rows — just appended in memory — to disk. The one-contact case:
+    /// no walk over the rest of the log.
+    fn persist_appended(&mut self, count: usize) -> Option<tempo_core::logbook::writer::Ticket> {
+        let change = Change::appended(&self.logbook, count, self.store.as_ref()?.resolved());
+        self.store.as_mut()?.submit(change, &self.logbook)
     }
 
     /// Point the Field Day contest log at its durable ADIF journal. Called once
@@ -396,13 +514,26 @@ impl StationCore {
     /// report as needed forever. Filling the record is what makes both sides read the same
     /// source. See [`Self::backfill_country`] — same shape, same reasons, same ordering.
     fn backfill_state(&mut self) {
-        let Some(resolve) = self.state_resolve.take() else {
+        if self.state_resolve.is_none() {
             return;
-        };
+        }
         // Same ordering as backfill_country and for the same reason: pull in records a second
         // instance appended BEFORE the full-log rewrite below, or this silently drops them
         // (the M18 data-loss class). Doing it first also backfills the recovered records.
         self.recover_external_appends();
+        let base = self.change_base();
+        if self.fill_state() {
+            self.persist_change(base, "backfill_state");
+        }
+    }
+
+    /// Fill a US state into every record that lacks one and that the resolver can place — IN
+    /// MEMORY, writing nothing. Returns whether anything was filled. [`Self::backfill_state`]
+    /// persists it; the store's launch deliberately does not (see [`Self::attach_store`]).
+    fn fill_state(&mut self) -> bool {
+        let Some(resolve) = self.state_resolve.take() else {
+            return false;
+        };
         // Resolved first, written only if something resolved — see `backfill_country`.
         let fills: Vec<(usize, String)> = self
             .logbook
@@ -413,14 +544,15 @@ impl StationCore {
             .filter_map(|(i, r)| resolve(&r.call, r.grid.as_deref()).map(|st| (i, st)))
             .collect();
         self.state_resolve = Some(resolve);
-        if !fills.is_empty() {
-            // An upgrade: a filled state is content a needs fold reads, and no row moves.
-            let records = self.logbook.records_mut(OpClass::Upgrade);
-            for (i, st) in fills {
-                Arc::make_mut(&mut records[i]).state = Some(st);
-            }
-            self.save_log("backfill_state");
+        if fills.is_empty() {
+            return false;
         }
+        // An upgrade: a filled state is content a needs fold reads, and no row moves.
+        let records = self.logbook.records_mut(OpClass::Upgrade);
+        for (i, st) in fills {
+            Arc::make_mut(&mut records[i]).state = Some(st);
+        }
+        true
     }
 
     /// Inject the grid → rarity-tier (0–3) resolver (the command layer passes a
@@ -465,13 +597,27 @@ impl StationCore {
     /// No-op without a resolver; persists the log if anything changed. Run after
     /// load / import / resolver-set so the logbook + awards are country-complete.
     fn backfill_country(&mut self) {
-        let Some(resolve) = self.dxcc_resolve.take() else {
+        if self.dxcc_resolve.is_none() {
             return;
-        };
+        }
         // Pull in any records a second instance appended BEFORE the full-log
         // rewrite below, so backfill can't silently drop them (the M18 data-loss
         // class). Doing it before the loop also backfills the recovered records.
         self.recover_external_appends();
+        let base = self.change_base();
+        if self.fill_country() {
+            self.persist_change(base, "backfill_country");
+        }
+    }
+
+    /// Fill a DXCC country into every record that lacks one and that the resolver can place —
+    /// IN MEMORY, writing nothing. Returns whether anything was filled.
+    /// [`Self::backfill_country`] persists it; the store's launch deliberately does not (see
+    /// [`Self::attach_store`]), and an import folds it into the import's own change.
+    fn fill_country(&mut self) -> bool {
+        let Some(resolve) = self.dxcc_resolve.take() else {
+            return false;
+        };
         // Resolved first, written only if something resolved. A mutable borrow of the records
         // marks the log REWRITTEN (`Logbook::revision`), which sends every log view a full
         // reload, and this runs after every import — in companion mode, once per contact
@@ -486,14 +632,15 @@ impl StationCore {
             .filter_map(|(i, r)| resolve(&r.call).map(|c| (i, c)))
             .collect();
         self.dxcc_resolve = Some(resolve);
-        if !fills.is_empty() {
-            // Likewise: the entity index reads `country`, and no row moves.
-            let records = self.logbook.records_mut(OpClass::Upgrade);
-            for (i, c) in fills {
-                Arc::make_mut(&mut records[i]).country = Some(c);
-            }
-            self.save_log("backfill_country");
+        if fills.is_empty() {
+            return false;
         }
+        // Likewise: the entity index reads `country`, and no row moves.
+        let records = self.logbook.records_mut(OpClass::Upgrade);
+        for (i, c) in fills {
+            Arc::make_mut(&mut records[i]).country = Some(c);
+        }
+        true
     }
 
     /// One-click HUNT: remember the activator + park so the NEXT QSO logged
@@ -1037,6 +1184,12 @@ impl StationCore {
     ///   per-record id and a tombstone — the same ingredient the edit trade above lacks, and
     ///   not something that can be added to an ADIF other loggers also read.
     fn recover_external_appends(&mut self) -> bool {
+        if self.store.is_some() {
+            // IN PLACE: every caller of this is about to change a row it may be holding BY
+            // POSITION, and the 1.13 recovery it stands in for only ever appended, so positions
+            // held across it stayed true. A re-read here must not move a row either.
+            return self.refresh_from_store(true);
+        }
         let Some(path) = self.log_path.clone() else {
             return false;
         };
@@ -1073,6 +1226,47 @@ impl StationCore {
         }
         self.last_log_mtime = stamp;
         true
+    }
+
+    /// The store's answer to [`Self::recover_external_appends`]: if ANOTHER process — a second
+    /// radio window on this data folder — has committed to the store since memory last matched
+    /// it, re-read the store and lay this process's own changes still in flight over it (see
+    /// [`crate::logstore::LogStore::reload`]). Whether anything was re-read.
+    ///
+    /// The question is an atomic read, so it costs nothing when nothing changed. The re-read
+    /// happens only after another process wrote, at exactly the points the 1.13 path re-read
+    /// `log.adi` — before a change to existing rows, and on the freshness poll — and it closes
+    /// the gaps that path had to leave open: rows are matched by id, so an edit made in the
+    /// other window arrives as an edit (not a duplicate), and a contact deleted there is gone
+    /// here too (not resurrected by this window's next rewrite, because there is none).
+    ///
+    /// `in_place` keeps every row where it is — see [`crate::logstore::LogStore::reload`]: a
+    /// row the other process deleted then lingers until a re-read that may move rows (the
+    /// freshness poll) removes it.
+    fn refresh_from_store(&mut self, in_place: bool) -> bool {
+        let Some(store) = self.store.as_mut() else {
+            return false;
+        };
+        if !store.foreign_changed() && (in_place || !self.store_lingering) {
+            return false;
+        }
+        match store.reload(self.logbook.records(), in_place) {
+            Ok((rows, lingering)) => {
+                self.store_lingering = lingering;
+                self.logbook.replace_rows(rows);
+                true
+            }
+            Err(e) => {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!(
+                        "another Nexus window changed the logbook, and this one could not read \
+                         the change: {e}"
+                    ),
+                );
+                false
+            }
+        }
     }
 
     /// THE way to APPEND to the logbook file: write the records on the end, then
@@ -1127,6 +1321,22 @@ impl StationCore {
         recs: &[QsoRecord],
         receipt: bool,
     ) -> Option<Vec<tempo_core::logbook::LogAppendReceipt>> {
+        if self.store.is_some() {
+            // The rows are already the log's last (memory first — see above); the writer is
+            // told, the mirror follows, and nothing here touches the disk. A receipt is the
+            // change's ticket, redeemed after every lock is released.
+            let ticket = self.persist_appended(recs.len())?;
+            let writer = self.store.as_ref()?.writer();
+            return Some(if receipt {
+                vec![tempo_core::logbook::LogAppendReceipt::durable(
+                    writer,
+                    ticket,
+                    crate::logstore::DURABLE_WAIT,
+                )]
+            } else {
+                Vec::new()
+            });
+        }
         let path = self.log_path.clone()?;
         debug_assert!(
             {
@@ -1200,6 +1410,16 @@ impl StationCore {
     /// as "needed" that the other radio just worked, with no save or restart required. Returns
     /// true when it actually re-read (so the caller can refresh anything derived downstream).
     pub fn sync_shared_log_if_changed(&mut self) -> bool {
+        if self.store.is_some() {
+            // Another window's commits, and — if the mirror has stopped because `log.adi` holds
+            // something it cannot account for — that file, taken in so the mirror can resume.
+            let reloaded = self.refresh_from_store(false);
+            let took_in = self.take_in_refused_log_file();
+            if reloaded || took_in {
+                self.refresh_worked_index();
+            }
+            return reloaded || took_in;
+        }
         let Some(path) = self.log_path.clone() else {
             return false;
         };
@@ -1212,6 +1432,36 @@ impl StationCore {
             return false;
         }
         self.refresh_worked_index();
+        true
+    }
+
+    /// If the mirror refused to replace `log.adi` because something other than Nexus wrote it
+    /// mid-session — a 1.13 instance on the same folder — take that file in, so its contacts are
+    /// in the log and the mirror can go back to keeping the file current. Whether it did.
+    ///
+    /// Reads `log.adi` under the engine lock, as the 1.13 path's recovery did; it happens only
+    /// after a foreign write, and only on the freshness poll.
+    fn take_in_refused_log_file(&mut self) -> bool {
+        let Some(store) = self.store.as_ref() else {
+            return false;
+        };
+        let status = store.mirror_status();
+        if !status.foreign_write {
+            return false;
+        }
+        let Some(path) = self.log_path.clone() else {
+            return false;
+        };
+        let stamp = tempo_core::logbook::mirror::file_stamp(&path);
+        // Only the file the mirror refused: one that has changed again since is refused again,
+        // and taken in on the next poll — never replaced on the strength of an older read.
+        if stamp.is_none() || stamp != status.foreign_stamp {
+            return false;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            return false;
+        };
+        self.take_in_log_file(&String::from_utf8_lossy(&bytes), stamp);
         true
     }
 
@@ -1230,6 +1480,7 @@ impl StationCore {
         // full-log rewrite below can't drop them (and so the pre-edit record is
         // still present to dedup against — no stale copy is re-added).
         self.recover_external_appends();
+        let base = self.change_base();
         // A CALLSIGN correction is the one edit the services have to hear about again.
         // `Logbook::update_record` clears the upload stamps for exactly that reason — "the
         // services hold the OLD call, so clearing the upload stamps re-queues the corrected
@@ -1246,7 +1497,7 @@ impl StationCore {
             .is_some_and(|old| !rec.call.trim().eq_ignore_ascii_case(old.call.trim()));
         let ok = self.logbook.update_record(index, rec);
         if ok {
-            self.save_log("update_qso");
+            self.persist_change(base, "update_qso");
             self.refresh_worked_index();
             if call_changed {
                 // The STORED record, not the incoming payload: `update_record` merges the
@@ -1280,9 +1531,10 @@ impl StationCore {
         via: Option<tempo_core::logbook::QslVia>,
     ) -> bool {
         self.recover_external_appends();
+        let base = self.change_base();
         let ok = self.logbook.mark_qsl_sent(index, via, now_unix_secs());
         if ok {
-            self.save_log("mark_qsl_sent");
+            self.persist_change(base, "mark_qsl_sent");
         }
         ok
     }
@@ -1292,9 +1544,10 @@ impl StationCore {
     /// confirmation — the needs/awards model reads it.
     pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
         self.recover_external_appends();
+        let base = self.change_base();
         let ok = self.logbook.mark_qsl_card(index, received);
         if ok {
-            self.save_log("mark_qsl_card");
+            self.persist_change(base, "mark_qsl_card");
             self.refresh_worked_index();
         }
         ok
@@ -1312,9 +1565,10 @@ impl StationCore {
     /// the awards model has to be told. Returns false if `index` is out of range.
     pub fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
         self.recover_external_appends();
+        let base = self.change_base();
         let ok = self.logbook.set_sat_tag(index, sat_name);
         if ok {
-            self.save_log("set_sat_tag");
+            self.persist_change(base, "set_sat_tag");
             self.refresh_worked_index();
         }
         ok
@@ -1328,9 +1582,10 @@ impl StationCore {
         // drops only THIS record (the deleted key is absent from our copy at save
         // time, so recovery can't re-add it) and keeps the other writer's QSOs.
         self.recover_external_appends();
+        let base = self.change_base();
         let ok = self.logbook.delete(index);
         if ok {
-            self.save_log("delete_qso");
+            self.persist_change(base, "delete_qso");
             self.refresh_worked_index();
         }
         ok
@@ -1341,9 +1596,10 @@ impl StationCore {
     /// recomputes the worked-entity/grid sets (so the roster B4 highlighting and
     /// the needs/awards model reset too). Returns the number of contacts removed.
     pub fn clear_logbook(&mut self) -> usize {
+        let base = self.change_base();
         let n = self.logbook.clear();
         if n > 0 {
-            self.save_log("clear_logbook");
+            self.persist_change(base, "clear_logbook");
             self.refresh_worked_index();
         }
         n
@@ -1385,18 +1641,28 @@ impl StationCore {
     /// `save` of log.adi, fsync included, per contact.
     pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
         self.recover_external_appends();
+        let base = self.change_base();
         let resolve = self.dxcc_resolve.as_ref();
         let (added, skipped, merged) = self.logbook.import_adif_with(text, |r| {
             if r.country.is_none() {
                 r.country = resolve.and_then(|resolve| resolve(&r.call));
             }
         });
-        if merged > 0 {
-            self.save_log("import_adif"); // rewrites the whole log, `added` included
+        if base.is_some() {
+            // With the store the import, the rows it upgraded and the backfill that follows are
+            // ONE change of rows — no whole-log rewrite, whatever the import touched. In
+            // companion mode this runs once per contact WSJT-X logs, from the radio loop: it
+            // must not touch the disk, and it does not.
+            self.fill_country();
+            self.persist_change(base, "import_adif");
         } else {
-            self.append_to_log(&added);
+            if merged > 0 {
+                self.save_log("import_adif"); // rewrites the whole log, `added` included
+            } else {
+                self.append_to_log(&added);
+            }
+            self.backfill_country();
         }
-        self.backfill_country();
         self.refresh_worked_index();
         (added.len(), skipped, merged, self.logbook.len())
     }
@@ -1407,9 +1673,10 @@ impl StationCore {
     /// return the reconcile summary (newly confirmed/credited + unmatched orphans).
     pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
         self.recover_external_appends();
+        let base = self.change_base();
         let summary = self.logbook.merge_report(text);
         self.last_lotw_reconcile = Some(summary.clone());
-        self.save_log("merge_lotw_report");
+        self.persist_change(base, "merge_lotw_report");
         summary
     }
 
@@ -1418,9 +1685,10 @@ impl StationCore {
     /// reviewed-adds half is a separate feature). Returns (stamped, already, unmatched).
     pub fn import_pota_log(&mut self, text: &str) -> (usize, usize, usize) {
         self.recover_external_appends();
+        let base = self.change_base();
         let out = self.logbook.stamp_ota_refs(text);
         if out.0 > 0 {
-            self.save_log("import_pota_log");
+            self.persist_change(base, "import_pota_log");
         }
         out
     }
@@ -1432,9 +1700,10 @@ impl StationCore {
     /// Persists the log on any change. Returns the count newly promoted.
     pub fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
         self.recover_external_appends();
+        let base = self.change_base();
         let promoted = self.logbook.merge_own_echo(text, when_unix);
         if promoted > 0 {
-            self.save_log("merge_lotw_own_echo");
+            self.persist_change(base, "merge_lotw_own_echo");
         }
         promoted
     }
@@ -1462,9 +1731,10 @@ impl StationCore {
             detail,
         };
         self.recover_external_appends();
+        let base = self.change_base();
         let changed = self.logbook.stamp_qrz_upload(pushed, status);
         if changed {
-            self.save_log("stamp_qrz_upload");
+            self.persist_change(base, "stamp_qrz_upload");
         }
         changed
     }
@@ -1484,9 +1754,10 @@ impl StationCore {
             detail,
         };
         self.recover_external_appends();
+        let base = self.change_base();
         let changed = self.logbook.stamp_clublog_upload(pushed, status);
         if changed {
-            self.save_log("stamp_clublog_upload");
+            self.persist_change(base, "stamp_clublog_upload");
         }
         changed
     }
@@ -1506,9 +1777,10 @@ impl StationCore {
             detail,
         };
         self.recover_external_appends();
+        let base = self.change_base();
         let changed = self.logbook.stamp_eqsl_upload(pushed, status);
         if changed {
-            self.save_log("stamp_eqsl_upload");
+            self.persist_change(base, "stamp_eqsl_upload");
         }
         changed
     }
@@ -1533,9 +1805,10 @@ impl StationCore {
     /// eQSL confirmation lands `confirmed` but NOT `award_confirmed` by construction.
     pub fn merge_eqsl_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
         self.recover_external_appends();
+        let base = self.change_base();
         let summary = self.logbook.merge_report(text);
         self.last_eqsl_reconcile = Some(summary.clone());
-        self.save_log("merge_eqsl_report");
+        self.persist_change(base, "merge_eqsl_report");
         summary
     }
 
@@ -1556,10 +1829,17 @@ impl StationCore {
         // spelling difference (e.g. a phone QSO re-uploaded as USB vs our SSB) can't
         // double-log the same contact. A full save then captures both the appended
         // rows and the reconciled confirmations.
+        let base = self.change_base();
         let (added, summary) = self.logbook.merge_downloaded(text);
         self.last_qrz_reconcile = Some(summary.clone());
-        self.save_log("merge_qrz_report");
-        self.backfill_country();
+        if base.is_some() {
+            // One change of rows: the merge's adds and upgrades, and the backfill after them.
+            self.fill_country();
+            self.persist_change(base, "merge_qrz_report");
+        } else {
+            self.save_log("merge_qrz_report");
+            self.backfill_country();
+        }
         self.refresh_worked_index();
         (added.len(), summary)
     }
@@ -1634,6 +1914,7 @@ impl StationCore {
         // recovered records land at the end, so `indices` still address the same
         // rows.
         self.recover_external_appends();
+        let base = self.change_base();
         // One classified write for the whole batch — a stamp nothing derived reads, and
         // taking it per row would move the revision once per stamped record.
         let records = self.logbook.records_mut(OpClass::Stamp);
@@ -1646,7 +1927,7 @@ impl StationCore {
                 });
             }
         }
-        self.save_log("lotw upload stamp");
+        self.persist_change(base, "lotw upload stamp");
     }
 
     /// Append a completed SSTV image to the session gallery (newest last),

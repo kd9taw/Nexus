@@ -224,6 +224,252 @@ impl Change {
         self.priority = Priority::Bulk;
         self
     }
+
+    /// The durable form of a change nothing reported by id: every row whose CONTENT differs
+    /// between `before` — the log's rows as they stood just before the change, taken under the
+    /// same lock — and the log as it stands now.
+    ///
+    /// This is the bridge for the multi-row operations (a confirmation merge, an import that
+    /// upgrades rows it already holds, a reconcile, a backfill), whose memory-side code reports
+    /// tallies rather than ids. Reading the answer off the rows, instead of re-deriving it,
+    /// keeps the rule of [`Change::of`]: memory and disk cannot disagree, because the disk is
+    /// told what memory now holds.
+    ///
+    /// **One walk, not a hash join.** Every operation this serves keeps the rows it does not
+    /// remove in their order, so the two lists are walked side by side: a row that is the same
+    /// POINTER is unchanged (a write copies a shared record first, so an untouched one is never
+    /// a new allocation), and one that is a new pointer is compared by value, so a write that
+    /// changed nothing costs nothing. A row of `before` whose id is not where the walk expects
+    /// it is counted removed, and everything past the end of `before` is counted added.
+    ///
+    /// **And it is right even when that assumption is not.** A row inserted in the middle
+    /// makes the walk count the rows after it as removed and then re-added — more statements
+    /// than needed, but the removals run first ([`plan`]) and every upsert carries the full row,
+    /// so the store ends up holding the same rows in the same order as memory. That order is
+    /// what the next launch loads, so it is the property that matters.
+    ///
+    /// A log emptied by the change is ONE statement, never a delete per row.
+    pub fn between(
+        before: &[Arc<QsoRecord>],
+        log: &Logbook,
+        resolve: impl Fn(&QsoRecord) -> (Option<String>, Option<u8>),
+    ) -> Change {
+        let after = log.records();
+        let mut change = Change {
+            rev: log.revision(),
+            marks: Watermarks::of(log),
+            ..Change::default()
+        };
+        if after.is_empty() {
+            change.clear = !before.is_empty();
+            return change;
+        }
+        let mut rows: Vec<Arc<QsoRecord>> = Vec::new();
+        let (mut i, mut j) = (0, 0);
+        while i < before.len() && j < after.len() {
+            let (b, a) = (&before[i], &after[j]);
+            if b.id == a.id {
+                if !Arc::ptr_eq(b, a) && **b != **a {
+                    rows.push(Arc::clone(a));
+                }
+                i += 1;
+                j += 1;
+            } else {
+                change.remove.extend(b.id);
+                i += 1;
+            }
+        }
+        change
+            .remove
+            .extend(before[i..].iter().filter_map(|b| b.id));
+        rows.extend(after[j..].iter().cloned());
+        change.upsert = rows
+            .into_iter()
+            .map(|rec| {
+                let (entity, cq_zone) = resolve(&rec);
+                RowWrite {
+                    rec,
+                    entity,
+                    cq_zone,
+                }
+            })
+            .collect();
+        change
+    }
+
+    /// The durable form of the last `count` rows of `log`, appended by the change just made.
+    /// What the FT auto-log costs: one row, no walk over the rest of the log.
+    pub fn appended(
+        log: &Logbook,
+        count: usize,
+        resolve: impl Fn(&QsoRecord) -> (Option<String>, Option<u8>),
+    ) -> Change {
+        let rows = log.records();
+        let from = rows.len().saturating_sub(count);
+        Change {
+            rev: log.revision(),
+            marks: Watermarks::of(log),
+            upsert: rows[from..]
+                .iter()
+                .map(|rec| {
+                    let (entity, cq_zone) = resolve(rec);
+                    RowWrite {
+                        rec: Arc::clone(rec),
+                        entity,
+                        cq_zone,
+                    }
+                })
+                .collect(),
+            ..Change::default()
+        }
+    }
+
+    /// Whether this change writes anything at all. An empty change still moves the
+    /// watermarks, so it is only skipped by a caller that knows nothing changed.
+    pub fn is_empty(&self) -> bool {
+        !self.clear && self.remove.is_empty() && self.upsert.is_empty()
+    }
+}
+
+/// Which rows a change submitted by THIS process touched — what a reload of the store must not
+/// lose while the change is still on its way to disk. See [`merge_reloaded`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Touched {
+    /// Every row (a purge).
+    All,
+    /// These rows: written or removed.
+    Rows(Vec<RecordId>),
+}
+
+impl Touched {
+    /// The rows `change` touches.
+    pub fn of(change: &Change) -> Touched {
+        if change.clear {
+            return Touched::All;
+        }
+        let mut ids = change.remove.clone();
+        ids.extend(change.upsert.iter().filter_map(|w| w.rec.id));
+        Touched::Rows(ids)
+    }
+}
+
+/// The log after ANOTHER process changed the store: `stored` — every row as the store holds it
+/// now, in its order — with this process's own changes that the store may not hold yet laid
+/// over it. `held` is this process's log as it stands (memory is written first, so it already
+/// has every one of its own changes), and `pending` names the rows those changes touched.
+///
+/// - A row this process has a change in flight for is taken from `held`, or left out if `held`
+///   no longer has it (a delete on its way to disk). The store's copy may predate the change.
+/// - A row this process added that the store does not hold yet is kept, after the stored rows.
+/// - Every other row is the store's: the other process's edits, stamps and deletes win, and
+///   its new contacts appear.
+///
+/// A pending purge keeps `held` whole: nothing the store holds survives it.
+///
+/// The window this leaves is the one every shared-file scheme has: another process changing a
+/// row in the moment between this process's own change to that row and its commit loses to
+/// this one. It does not lose a contact.
+pub fn merge_reloaded(
+    stored: Vec<QsoRecord>,
+    held: &[Arc<QsoRecord>],
+    pending: &[Touched],
+) -> Vec<Arc<QsoRecord>> {
+    if pending.contains(&Touched::All) {
+        return held.to_vec();
+    }
+    let ours: HashSet<RecordId> = pending
+        .iter()
+        .filter_map(|t| match t {
+            Touched::Rows(ids) => Some(ids),
+            Touched::All => None,
+        })
+        .flatten()
+        .copied()
+        .collect();
+    let mine: HashMap<RecordId, &Arc<QsoRecord>> = held
+        .iter()
+        .filter_map(|r| r.id.filter(|id| ours.contains(id)).map(|id| (id, r)))
+        .collect();
+    let mut out: Vec<Arc<QsoRecord>> = Vec::with_capacity(stored.len() + mine.len());
+    let mut placed: HashSet<RecordId> = HashSet::with_capacity(mine.len());
+    for r in stored {
+        match r.id {
+            Some(id) if ours.contains(&id) => {
+                if let Some(m) = mine.get(&id) {
+                    out.push(Arc::clone(m));
+                }
+                placed.insert(id);
+            }
+            _ => out.push(Arc::new(r)),
+        }
+    }
+    for r in held {
+        if let Some(id) = r.id {
+            if ours.contains(&id) && placed.insert(id) {
+                out.push(Arc::clone(r));
+            }
+        }
+    }
+    out
+}
+
+/// [`merge_reloaded`] WITHOUT MOVING A ROW — for the re-read a change makes just before it
+/// changes existing rows, when the caller is holding positions into the log.
+///
+/// Every row `held` has keeps its position: it takes the store's copy when the store has one
+/// and this process has no change of its own in flight for it, and stays as it is otherwise.
+/// The store's rows `held` lacks are appended, in the store's order. A row the store no longer
+/// holds and this process has nothing in flight for — another process deleted it — is KEPT,
+/// because removing it would shift the rows after it under the caller; the second value says
+/// so, and the caller finishes the job with a full [`merge_reloaded`] when positions are not
+/// being held (the freshness poll).
+pub fn merge_reloaded_in_place(
+    stored: Vec<QsoRecord>,
+    held: &[Arc<QsoRecord>],
+    pending: &[Touched],
+) -> (Vec<Arc<QsoRecord>>, bool) {
+    if pending.contains(&Touched::All) {
+        return (held.to_vec(), false);
+    }
+    let ours: HashSet<RecordId> = pending
+        .iter()
+        .filter_map(|t| match t {
+            Touched::Rows(ids) => Some(ids),
+            Touched::All => None,
+        })
+        .flatten()
+        .copied()
+        .collect();
+    let held_ids: HashSet<RecordId> = held.iter().filter_map(|r| r.id).collect();
+    let mut theirs: HashMap<RecordId, QsoRecord> = HashMap::with_capacity(stored.len());
+    let mut added: Vec<QsoRecord> = Vec::new();
+    for r in stored {
+        match r.id {
+            Some(id) if held_ids.contains(&id) => {
+                theirs.insert(id, r);
+            }
+            Some(id) if ours.contains(&id) => {} // our delete, on its way to disk
+            _ => added.push(r),
+        }
+    }
+    let mut lingering = false;
+    let mut out: Vec<Arc<QsoRecord>> = Vec::with_capacity(held.len() + added.len());
+    for h in held {
+        match h.id {
+            Some(id) if ours.contains(&id) => out.push(Arc::clone(h)),
+            Some(id) => match theirs.remove(&id) {
+                Some(r) if r == **h => out.push(Arc::clone(h)),
+                Some(r) => out.push(Arc::new(r)),
+                None => {
+                    lingering = true;
+                    out.push(Arc::clone(h));
+                }
+            },
+            None => out.push(Arc::clone(h)),
+        }
+    }
+    out.extend(added.into_iter().map(Arc::new));
+    (out, lingering)
 }
 
 /// A claim on one change's durability. Hold it, drop every lock, then
@@ -238,6 +484,12 @@ impl Ticket {
     /// The revision this ticket is for.
     pub fn revision(&self) -> u64 {
         self.rev
+    }
+
+    /// Whether the writer has finished with this change — committed or given up on it. Never
+    /// waits.
+    pub fn is_resolved(&self) -> bool {
+        lock(&self.slot.done).is_some()
     }
 }
 
@@ -338,11 +590,26 @@ struct Shared {
     status: Mutex<Status>,
     /// Woken whenever `status` changes — what `flush` waits on.
     settled: Condvar,
+    /// How many times the writer has seen ANOTHER connection commit — another Nexus process
+    /// sharing this data folder. See [`LogWriter::foreign_commits`].
+    foreign: std::sync::atomic::AtomicU64,
 }
+
+/// A copy of the database (see [`LogWriter::copy_database`]): where, and who is waiting.
+type CopyRequest = (
+    std::path::PathBuf,
+    std::sync::mpsc::SyncSender<std::result::Result<u64, String>>,
+);
 
 enum Msg {
     Write(Box<Change>, Arc<Slot>),
+    Copy(CopyRequest),
 }
+
+/// How often an idle writer looks for another process's commits. A `PRAGMA data_version` is a
+/// read of the WAL index in shared memory — no disk — so this costs nothing measurable, and it
+/// bounds how stale another window's contacts can be in this one's worked-before and needs.
+const FOREIGN_POLL: Duration = Duration::from_millis(500);
 
 /// The handle. One per open database; it is not [`Clone`], because dropping it stops the
 /// thread and two owners could not agree on when that should happen. Share it as an `Arc`.
@@ -480,6 +747,43 @@ impl LogWriter {
     /// What the writer is doing, for the status lane.
     pub fn status(&self) -> Status {
         lock(&self.shared.status).clone()
+    }
+
+    /// How many times the writer has seen ANOTHER connection commit to this database since it
+    /// started — another Nexus process sharing the data folder (two radio windows share one
+    /// log). Only ever grows. A caller that remembers the value it last synced at knows, with
+    /// no I/O of its own, whether the store holds changes its memory does not.
+    ///
+    /// It is `PRAGMA data_version` on the writer's own connection, which moves exactly when a
+    /// DIFFERENT connection commits: this writer's own commits never count, so no bookkeeping
+    /// of "which of these were mine" is needed to read it.
+    pub fn foreign_commits(&self) -> u64 {
+        self.shared
+            .foreign
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Copy the database to `dst` ([`sqlite::copy_database`]) FROM THE WRITER THREAD, after
+    /// every change submitted before this call is written, and with none written while it
+    /// runs. The data-folder move uses this while the store is open: a copy taken beside a
+    /// working writer would see this process's own commits land under it and keep starting
+    /// over. Blocks up to `deadline`; never call it holding a lock.
+    pub fn copy_database(
+        &self,
+        dst: &std::path::Path,
+        deadline: Duration,
+    ) -> std::result::Result<u64, String> {
+        let (reply, answer) = std::sync::mpsc::sync_channel(1);
+        let sent = self
+            .tx
+            .as_ref()
+            .is_some_and(|tx| tx.send(Msg::Copy((dst.to_path_buf(), reply))).is_ok());
+        if !sent {
+            return Err("the logbook writer is not running".into());
+        }
+        answer
+            .recv_timeout(deadline)
+            .map_err(|_| "the logbook database copy did not finish in time".to_string())?
     }
 }
 
@@ -633,8 +937,26 @@ fn transient(e: &sqlite::Error) -> bool {
     )
 }
 
+/// Look for another connection's commits and count them. See [`LogWriter::foreign_commits`].
+fn watch_foreign(db: &LogDb, seen: &mut Option<i64>, shared: &Shared) {
+    let Ok(now) = db.data_version() else {
+        return;
+    };
+    if seen.is_some_and(|was| was != now) {
+        shared
+            .foreign
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+    *seen = Some(now);
+}
+
 fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
     let mut queue: VecDeque<Job> = VecDeque::new();
+    // Copies wait for the queue ahead of them to empty: a copy must hold every change
+    // submitted before it was asked for.
+    let mut copies: VecDeque<CopyRequest> = VecDeque::new();
+    let mut seen_version: Option<i64> = None;
+    watch_foreign(&db, &mut seen_version, shared);
     // Revisions submitted and not yet resolved — the low end of this set is the durability
     // watermark.
     let mut unresolved: BTreeSet<u64> = BTreeSet::new();
@@ -651,6 +973,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                     unresolved.insert(c.rev);
                     queue.push_back(Job::new(*c, slot));
                 }
+                Ok(Msg::Copy(request)) => copies.push_back(request),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     closed = true;
@@ -659,15 +982,26 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
             }
         }
         if queue.is_empty() {
+            watch_foreign(&db, &mut seen_version, shared);
+            if let Some((dst, reply)) = copies.pop_front() {
+                let outcome = match db.path() {
+                    Some(src) => sqlite::copy_database(&src, &dst).map_err(|e| e.to_string()),
+                    None => Err("an in-memory logbook has no file to copy".into()),
+                };
+                let _ = reply.send(outcome);
+                continue;
+            }
             if closed {
                 return;
             }
-            match rx.recv() {
+            match rx.recv_timeout(FOREIGN_POLL) {
                 Ok(Msg::Write(c, slot)) => {
                     unresolved.insert(c.rev);
                     queue.push_back(Job::new(*c, slot));
                 }
-                Err(_) => return,
+                Ok(Msg::Copy(request)) => copies.push_back(request),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             }
             continue;
         }
@@ -1468,5 +1802,437 @@ mod tests {
             loaded.load_all().expect("load"),
             written.load_all().expect("load")
         );
+    }
+
+    // ── the store equals memory ─────────────────────────────────────────────
+
+    /// A deterministic generator, so a failing step is reproducible from its seed alone.
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn pick<T: Copy>(&mut self, xs: &[T]) -> T {
+            xs[self.below(xs.len())]
+        }
+    }
+
+    /// One ADIF record from a deliberately SMALL space — few calls, bands, days and times — so
+    /// imports, merges and reconciles keep landing on rows the log already holds.
+    fn adif_row(g: &mut Gen) -> String {
+        let call = g.pick(&["W1AW", "K1ABC/P", "DL1ZZZ", "VP2E/AA9A", "JA1XYZ"]);
+        let band = g.pick(&["20m", "40m", "2m"]);
+        let mode = g.pick(&["FT8", "CW", "SSB"]);
+        let day = g.pick(&["20260901", "20260902"]);
+        let time = g.pick(&["120000", "120100", "130000"]);
+        let mut row = format!(
+            "<CALL:{}>{call}<BAND:{}>{band}<MODE:{}>{mode}<QSO_DATE:8>{day}<TIME_ON:6>{time}",
+            call.len(),
+            band.len(),
+            mode.len()
+        );
+        match g.below(6) {
+            0 => row.push_str("<QSL_RCVD:1>Y"),
+            1 => row.push_str("<LOTW_QSL_RCVD:1>Y<CREDIT_GRANTED:4>DXCC"),
+            2 => row.push_str("<EQSL_QSL_RCVD:1>Y"),
+            3 => row.push_str("<POTA_REF:7>US-0001"),
+            4 => row.push_str("<APP_OTHER:3>abc"),
+            _ => {}
+        }
+        row.push_str("<EOR>\n");
+        row
+    }
+
+    fn adif_text(g: &mut Gen, max: usize) -> String {
+        let mut t = crate::logbook::adif_header();
+        for _ in 0..1 + g.below(max) {
+            t.push_str(&adif_row(g));
+        }
+        t
+    }
+
+    /// Apply `c` to `db` as the writer would — removals, then rows, then the watermarks — in
+    /// one batch (chunking is the writer's business and is proved in its own tests).
+    fn store(db: &mut LogDb, c: &Change) {
+        db.apply(Batch {
+            clear: c.clear,
+            remove: &c.remove,
+            upsert: &c.upsert,
+            marks: Some(c.marks),
+        })
+        .expect("the store accepts the change");
+    }
+
+    /// Memory and the store hold the same log: the same ids in the same order, and each row
+    /// the same contact as the ADIF writer would put it on disk — which is the equivalence the
+    /// store promises (its own round trip is proved byte-identical through ADIF).
+    fn assert_same(db: &LogDb, log: &Logbook, step: &str) {
+        let stored = db.load_all().expect("load");
+        let held = log.records();
+        assert_eq!(
+            stored.iter().map(|r| r.id).collect::<Vec<_>>(),
+            held.iter().map(|r| r.id).collect::<Vec<_>>(),
+            "{step}: the same rows, in the same order"
+        );
+        for (a, b) in stored.iter().zip(held) {
+            assert_eq!(
+                crate::logbook::adif_record_own_log(a),
+                crate::logbook::adif_record_own_log(b),
+                "{step}: row {:?} differs between the store and memory",
+                b.id
+            );
+        }
+    }
+
+    /// ★ THE STORE EQUALS MEMORY, after every kind of change the app makes to the log, in any
+    /// order. Each step takes the rows as they stood (a pointer copy, as the app does under its
+    /// lock), runs one real `Logbook` operation, hands the store [`Change::between`], and then
+    /// compares the whole store with the whole log. The operations are the multi-row ones whose
+    /// memory code reports tallies, not ids — merges, imports that upgrade, reconciles — plus
+    /// every single-row edit, stamp and delete, and the purge.
+    #[test]
+    fn the_store_equals_memory_after_any_sequence_of_changes() {
+        for seed in [1u64, 2, 3, 0xDEAD_BEEF, 0x5EED_0FC9] {
+            let mut g = Gen(seed);
+            let mut log = Logbook::new();
+            let mut db = LogDb::open_in_memory().expect("store");
+            for step in 0..260 {
+                let before: Vec<Arc<QsoRecord>> = log.records().to_vec();
+                let n = log.len();
+                let what = match g.below(17) {
+                    0 | 1 => {
+                        let rec = parse_adif(&adif_row(&mut g)).remove(0);
+                        log.add(rec);
+                        "add"
+                    }
+                    2 | 3 => {
+                        let text = adif_text(&mut g, 4);
+                        log.import_adif_with(&text, |r| {
+                            if r.country.is_none() {
+                                r.country = Some("Somewhere".into());
+                            }
+                        });
+                        "import"
+                    }
+                    4 if n > 0 => {
+                        let i = g.below(n);
+                        let mut rec = parse_adif(&adif_row(&mut g)).remove(0);
+                        rec.id = None;
+                        log.update_record(i, rec);
+                        "edit"
+                    }
+                    5 if n > 0 => {
+                        log.delete(g.below(n));
+                        "delete"
+                    }
+                    6 if n > 0 => {
+                        let via = [None, Some(QslVia::Bureau), Some(QslVia::Direct)];
+                        let v = g.pick(&via);
+                        log.mark_qsl_sent(g.below(n), v, 1_700_000_000 + step);
+                        "qsl sent"
+                    }
+                    7 if n > 0 => {
+                        let on = g.below(2) == 0;
+                        log.mark_qsl_card(g.below(n), on);
+                        "qsl card"
+                    }
+                    8 if n > 0 => {
+                        let name = g.pick(&[Some("AO-91"), None]);
+                        log.set_sat_tag(g.below(n), name);
+                        "sat tag"
+                    }
+                    9 if n > 0 => {
+                        let id = log.records()[g.below(n)].id.expect("id");
+                        log.apply(LogOp::Stamp {
+                            id,
+                            service: UploadService::Lotw,
+                            status: crate::logbook::UploadStatus {
+                                outcome: crate::logbook::UploadOutcome::Accepted,
+                                when_unix: 1_700_000_000 + step as i64,
+                                detail: None,
+                            },
+                        });
+                        "stamp"
+                    }
+                    10 if n > 0 => {
+                        let pushed = QsoRecord::clone(&log.records()[g.below(n)]);
+                        log.stamp_qrz_upload(
+                            &pushed,
+                            crate::logbook::UploadStatus {
+                                outcome: crate::logbook::UploadOutcome::Duplicate,
+                                when_unix: 1_700_000_000,
+                                detail: None,
+                            },
+                        );
+                        "qrz stamp"
+                    }
+                    11 => {
+                        let text = adif_text(&mut g, 5);
+                        log.merge_report(&text);
+                        "merge report"
+                    }
+                    12 => {
+                        let text = adif_text(&mut g, 5);
+                        log.merge_downloaded(&text);
+                        "merge downloaded"
+                    }
+                    13 => {
+                        let text = adif_text(&mut g, 5);
+                        log.reconcile_disk(&text);
+                        "reconcile"
+                    }
+                    14 => {
+                        let text = adif_text(&mut g, 3);
+                        log.stamp_ota_refs(&text);
+                        log.merge_own_echo(&text, 1_700_000_000);
+                        "ota + own echo"
+                    }
+                    15 if n > 0 => {
+                        let i = g.below(n);
+                        let rows = log.records_mut(crate::logbook::OpClass::Upgrade);
+                        Arc::make_mut(&mut rows[i]).state = Some("WI".into());
+                        "backfill"
+                    }
+                    16 if g.below(20) == 0 => {
+                        log.clear();
+                        "clear"
+                    }
+                    _ => continue,
+                };
+                let change = Change::between(&before, &log, |_| (None, None));
+                store(&mut db, &change);
+                assert_same(&db, &log, &format!("seed {seed:#x} step {step} ({what})"));
+            }
+        }
+    }
+
+    /// The walk's two positive controls. A change that only moved a row's FIELDS is found even
+    /// though its id is where it was (the pointer changed and the value differs), and a copy of
+    /// a row that changed nothing is NOT written (the pointer changed, the value did not).
+    #[test]
+    fn between_writes_changed_rows_and_only_changed_rows() {
+        let mut log = Logbook::new();
+        for n in 0..5 {
+            log.add((*rec("W1AW", n)).clone());
+        }
+        let before = log.records().to_vec();
+        log.mark_qsl_card(2, true);
+        let c = Change::between(&before, &log, |_| (None, None));
+        assert_eq!(c.upsert.len(), 1, "the one changed row");
+        assert_eq!(c.upsert[0].rec.id, log.records()[2].id);
+        assert!(c.remove.is_empty() && !c.clear);
+
+        // A write that copies a shared record and changes nothing costs nothing.
+        let before = log.records().to_vec();
+        let rows = log.records_mut(crate::logbook::OpClass::Stamp);
+        let same = QsoRecord::clone(&rows[3]);
+        rows[3] = Arc::new(same);
+        assert!(
+            !Arc::ptr_eq(&before[3], &log.records()[3]),
+            "premise: a new pointer"
+        );
+        let c = Change::between(&before, &log, |_| (None, None));
+        assert!(c.is_empty(), "an identical copy is not a change: {c:?}");
+
+        // A purge is ONE statement.
+        let before = log.records().to_vec();
+        log.clear();
+        let c = Change::between(&before, &log, |_| (None, None));
+        assert!(c.clear && c.remove.is_empty() && c.upsert.is_empty());
+    }
+
+    /// A row inserted in the MIDDLE — which no operation does today — still leaves the store
+    /// holding memory's rows in memory's order: the walk re-writes what follows the insertion
+    /// rather than getting the order wrong.
+    #[test]
+    fn a_row_inserted_in_the_middle_still_lands_in_memorys_order() {
+        let mut log = Logbook::new();
+        for n in 0..4 {
+            log.add((*rec("W1AW", n)).clone());
+        }
+        let mut db = LogDb::open_in_memory().unwrap();
+        let seed = Change::between(&[], &log, |_| (None, None));
+        store(&mut db, &seed);
+        let before = log.records().to_vec();
+        let rows = log.records_mut(crate::logbook::OpClass::Structural);
+        let mut x = (*rec("K5XYZ", 99)).clone();
+        x.id = Some(RecordId::Provisional {
+            hash: 99,
+            ordinal: 0,
+        });
+        // Not through `Vec::insert` on the guard: the guard derefs to a slice here, so build the
+        // new order and write it back.
+        let mut order: Vec<Arc<QsoRecord>> = rows.to_vec();
+        order.insert(2, Arc::new(x));
+        let mut fresh = Logbook::new();
+        for r in order {
+            fresh.add(QsoRecord::clone(&r));
+        }
+        let c = Change::between(&before, &fresh, |_| (None, None));
+        store(&mut db, &c);
+        assert_same(&db, &fresh, "middle insertion");
+    }
+
+    // ── other processes ─────────────────────────────────────────────────────
+
+    /// Two writers on ONE database file — two Nexus windows sharing a data folder. Each counts
+    /// the OTHER's commits and never its own. The control is the first assertion: a writer's
+    /// own commit must not count, or every window would reload after every contact it logged.
+    #[test]
+    fn a_writer_counts_another_process_commits_and_never_its_own() {
+        let scratch = Scratch::new();
+        let a = LogWriter::start(LogDb::open(&scratch.db()).expect("a"));
+        let b = LogWriter::start(LogDb::open(&scratch.db()).expect("b"));
+        let wait_until = |f: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !f() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            f()
+        };
+
+        let t = a.submit(change(1, vec![rec("W1AW", 1)]));
+        a.wait_durable(&t, Duration::from_secs(60)).expect("stored");
+        assert!(
+            wait_until(&|| b.foreign_commits() >= 1),
+            "B sees A's commit"
+        );
+        // Give A every chance to (wrongly) count its own commit.
+        std::thread::sleep(FOREIGN_POLL * 3);
+        assert_eq!(a.foreign_commits(), 0, "A does not count its own commit");
+
+        let before = a.foreign_commits();
+        let t = b.submit(change(2, vec![rec("K5XYZ", 2)]));
+        b.wait_durable(&t, Duration::from_secs(60)).expect("stored");
+        assert!(
+            wait_until(&|| a.foreign_commits() > before),
+            "and A sees B's"
+        );
+    }
+
+    /// The live copy runs on the writer thread, after every change submitted before it: the
+    /// copy holds all of them.
+    #[test]
+    fn a_copy_through_the_writer_holds_every_change_submitted_before_it() {
+        let scratch = Scratch::new();
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        for n in 0..300 {
+            w.submit(change(100 + n, vec![rec("W1AW", n)]));
+        }
+        let dst = scratch.0.join("moved").join("log.db");
+        let bytes = w
+            .copy_database(&dst, Duration::from_secs(60))
+            .expect("copied");
+        assert!(bytes > 0);
+        assert_eq!(
+            rows(&stored(&dst)),
+            300,
+            "every change submitted before the copy"
+        );
+    }
+
+    // ── reloading after another process wrote ──────────────────────────────
+
+    fn with_comment(r: &Arc<QsoRecord>, c: &str) -> Arc<QsoRecord> {
+        let mut r = QsoRecord::clone(r);
+        r.comment = Some(c.into());
+        Arc::new(r)
+    }
+
+    /// ★ Another process's changes arrive — its new contact, its edit, its stamp and its delete
+    /// — and none of THIS process's own changes still on their way to disk is lost: an edit, a
+    /// delete and a new contact the store does not hold yet.
+    #[test]
+    fn a_reload_takes_the_other_process_changes_and_keeps_our_own_in_flight() {
+        let base: Vec<Arc<QsoRecord>> = (0..6).map(|n| rec("W1AW", n)).collect();
+        let id = |n: usize| base[n].id.expect("id");
+
+        // What WE hold: row 1 edited, row 2 deleted, a new row 9 — none of it stored yet.
+        let mut held = base.clone();
+        held[1] = with_comment(&base[1], "our edit");
+        held.remove(2);
+        held.push(rec("K5NEW", 9));
+
+        // What the STORE holds after the other process: row 3 edited, row 4 deleted, a new
+        // row 7 — and the store still has OUR rows 1 and 2 as they were.
+        let mut stored: Vec<QsoRecord> = base.iter().map(|r| QsoRecord::clone(r)).collect();
+        stored[3].comment = Some("their edit".into());
+        stored.remove(4);
+        stored.push(QsoRecord::clone(&rec("DL1NEW", 7)));
+
+        let pending = [
+            Touched::Rows(vec![id(1)]),
+            Touched::Rows(vec![id(2)]),
+            Touched::Rows(vec![rec("K5NEW", 9).id.unwrap()]),
+        ];
+        let merged = merge_reloaded(stored, &held, &pending);
+        let comments: Vec<String> = merged
+            .iter()
+            .map(|r| r.comment.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            comments,
+            ["0", "our edit", "their edit", "5", "7", "9"],
+            "ours kept, theirs taken, the store's order, our unstored add last"
+        );
+    }
+
+    /// The control: with NOTHING in flight, a reload is exactly the store — so the test above
+    /// is about the pending set, not a merge that always prefers memory.
+    #[test]
+    fn a_reload_with_nothing_in_flight_is_exactly_the_store() {
+        let held: Vec<Arc<QsoRecord>> = (0..4).map(|n| rec("W1AW", n)).collect();
+        let mut stored: Vec<QsoRecord> = held.iter().map(|r| QsoRecord::clone(r)).collect();
+        stored[1].comment = Some("theirs".into());
+        stored.remove(3);
+        let merged = merge_reloaded(stored.clone(), &held, &[]);
+        let back: Vec<QsoRecord> = merged.iter().map(|r| QsoRecord::clone(r)).collect();
+        assert_eq!(back, stored);
+    }
+
+    /// A purge on its way to disk keeps memory empty: nothing the store still holds survives it.
+    #[test]
+    fn a_pending_purge_keeps_memory_as_it_is() {
+        let stored: Vec<QsoRecord> = (0..4).map(|n| QsoRecord::clone(&rec("W1AW", n))).collect();
+        let merged = merge_reloaded(stored, &[], &[Touched::All]);
+        assert!(merged.is_empty());
+    }
+
+    /// The in-place re-read keeps every position: the other process's edit arrives in place,
+    /// its new contact is appended, ours in flight are kept — and the row it DELETED stays
+    /// where it was, reported, because removing it would move the rows after it under a caller
+    /// that is holding their positions.
+    #[test]
+    fn an_in_place_reload_moves_no_row_and_reports_what_it_could_not_remove() {
+        let base: Vec<Arc<QsoRecord>> = (0..5).map(|n| rec("W1AW", n)).collect();
+        let mut held = base.clone();
+        held[1] = with_comment(&base[1], "our edit");
+        let mut stored: Vec<QsoRecord> = base.iter().map(|r| QsoRecord::clone(r)).collect();
+        stored[3].comment = Some("their edit".into());
+        stored[1].comment = Some("their older edit".into());
+        stored.remove(2); // their delete
+        stored.push(QsoRecord::clone(&rec("DL1NEW", 7)));
+
+        let pending = [Touched::Rows(vec![base[1].id.unwrap()])];
+        let (merged, lingering) = merge_reloaded_in_place(stored, &held, &pending);
+        let comments: Vec<String> = merged
+            .iter()
+            .map(|r| r.comment.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            comments,
+            ["0", "our edit", "2", "their edit", "4", "7"],
+            "positions kept: ours in flight wins, theirs arrives in place, the deleted row stays"
+        );
+        assert!(lingering, "and the delete it could not apply is reported");
+        for (i, r) in held.iter().enumerate() {
+            assert_eq!(merged[i].id, r.id, "row {i} did not move");
+        }
     }
 }
