@@ -49,6 +49,7 @@
     "beacon": false,
     "catDetail": "",
     "catOk": null,
+    "catShareError": null,
     "clockAgeSecs": null,
     "clockGrossMs": null,
     "clockOffsetMs": null,
