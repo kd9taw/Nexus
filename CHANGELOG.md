@@ -137,6 +137,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   want, or give "Sharing port" a number nothing else uses. It clears itself the moment the port
   comes free. Sharing behaves exactly as it did; only what you are told about it has changed.
   (#165)
+- **A repeater search that could not reach one state now says so, instead of quietly handing you
+  a short list.** Nexus pulls RepeaterBook a whole state at a time, and a search near a state line
+  asks for more than one. If one of those requests failed — the directory was briefly unreachable,
+  or the search came round again too soon after the last one — that state's machines were simply
+  absent from the results, and nothing on the panel suggested anything had gone wrong. A search
+  that reached only half of what it asked for looked exactly like a search that found everything
+  there was, so the honest reading of a short list, "there are no repeaters near you", was
+  sometimes wrong. The panel now names the state it could not read and tells you to fetch again.
+  Nothing about the fetching itself changed: same requests, same timing, same cached copies — only
+  what the results are allowed to leave unsaid.
 
 - **A satellite contact made during Field Day now scores for the club, on the bird's band.** The
   log strip in the Satellites section was the one strip that never switched to the Field Day

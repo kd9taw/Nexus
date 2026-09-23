@@ -2597,6 +2597,7 @@ export const DE: PartialCatalog = {
   "program.age.mins": "vor {{mins}} min",
   "program.age.hours": "vor {{hours}} h",
   "program.age.days": "vor {{days}} d",
+  "program.missingStates": "RepeaterBook hat für <b>{{states}}</b> nicht geantwortet, daher fehlen die dortigen Relais in dieser Liste. Das ist ein fehlgeschlagener Abruf, kein leeres Gebiet — in ein paar Minuten erneut abrufen.",
   "program.coverageGap": "{{source}} führt hier keine <b>{{band}}</b>-Relais, was für ein Gebiet mit überhaupt einem Relais ungewöhnlich ist — die Abdeckung im ländlichen Raum ist lückenhaft, in dieser Liste fehlen also wahrscheinlich Relais. Ein RepeaterBook-API-Token unter <b>Einstellungen ▸ Integrationen</b> schließt die Lücke.",
   "program.filters.aria": "Ergebnisfilter",
   "program.filters.allBands": "Alle",

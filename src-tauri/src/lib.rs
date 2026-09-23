@@ -21695,6 +21695,11 @@ struct RepeaterSearchResult {
     /// and a channel list missing a whole band reads as complete when it isn't.
     /// Only set on the hearham path, where adding a RepeaterBook token is the fix.
     coverage_gap: Option<&'static str>,
+    /// States this search PLANNED to read but heard nothing from (2-letter codes), so
+    /// a short list can say which directory is absent instead of reading as "there are
+    /// no repeaters near you" (#241). Empty on a complete search and on the hearham
+    /// path, which is one global feed rather than per-state exports.
+    missing_states: Vec<String>,
     rows: Vec<RepeaterSearchRow>,
 }
 
@@ -21732,10 +21737,10 @@ async fn repeater_search(
         let now = now_unix();
 
         if !states.is_empty() {
-            let mut records = Vec::new();
-            let mut oldest = i64::MAX;
-            let mut stale = false;
-            let mut any = false;
+            // One entry per PLANNED state, whether or not it answered — a state that
+            // yields nothing has to survive as far as the result, or the search reports
+            // itself complete while a whole state's repeaters are absent (#241).
+            let mut fetches: Vec<rpt::StateFetch> = Vec::new();
             let mut last_err = String::new();
             for st in &states {
                 let cache_name = format!("rb_{st}.json");
@@ -21773,20 +21778,26 @@ async fn repeater_search(
                         .as_ref()
                         .map(|c| (c.body.clone(), c.fetched_utc, true))
                 };
-                if let Some((b, at, was_stale)) = body {
-                    records.extend(rpt::parse_repeaterbook_json(&b));
-                    oldest = oldest.min(at);
-                    stale |= was_stale;
-                    any = true;
-                }
+                let (body, fetched_utc, was_stale) = match body {
+                    Some((b, at, s)) => (Some(b), at, s),
+                    None => (None, 0, false),
+                };
+                fetches.push(rpt::StateFetch {
+                    state_id: st.clone(),
+                    body,
+                    fetched_utc,
+                    stale: was_stale,
+                });
             }
-            if any {
+            let cov = rpt::fold_state_fetches(&fetches);
+            if cov.any_served() {
                 return Ok(RepeaterSearchResult {
                     source: "repeaterbook".into(),
-                    fetched_utc: if oldest == i64::MAX { now } else { oldest },
-                    stale,
+                    fetched_utc: cov.oldest_utc,
+                    stale: cov.stale,
                     coverage_gap: None,
-                    rows: search_rows(rpt::filter_sort(&records, origin, radius)),
+                    missing_states: cov.missing,
+                    rows: search_rows(rpt::filter_sort(&cov.records, origin, radius)),
                 });
             }
             // Every state failed with no cache (e.g. the proxy is dormant pre-approval) — fall
@@ -21824,6 +21835,8 @@ async fn repeater_search(
             fetched_utc: at,
             stale,
             coverage_gap: rpt::missing_major_band(&in_radius),
+            // hearham is ONE global feed, not per-state exports — no state can go missing.
+            missing_states: Vec::new(),
             rows: search_rows(in_radius),
         })
     })
