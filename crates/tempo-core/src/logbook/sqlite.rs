@@ -742,9 +742,12 @@ impl LogDb {
 
     /// Store many records in ONE transaction.
     ///
-    /// One transaction per batch, never one spanning a whole import: the contest writer's
-    /// `busy_timeout` has to be measured in milliseconds, so a caller with a very large import
-    /// chunks it and calls this repeatedly.
+    /// One transaction per call, so a caller with a very large import chunks it and calls this
+    /// repeatedly — and how big a chunk may be depends on who could be waiting for the write
+    /// lock meanwhile. Beside a live session a contest QSO could, and its `busy_timeout` is
+    /// measured in milliseconds: that is the writer thread's rule, and its chunks stay small.
+    /// The one-time conversion runs before any session, with nothing waiting, and commits tens
+    /// of thousands of contacts at a time (`migrate::CHUNK_ROWS` says why).
     pub fn insert_all<'a, I>(&mut self, rows: I) -> Result<()>
     where
         I: IntoIterator<Item = (&'a QsoRecord, Resolved<'a>)>,
