@@ -531,8 +531,8 @@ mod tests {
 
     /// ★ The switchover. An operator's existing `log.adi` is converted, the log the app holds
     /// is the store's — the same contacts, with the same ids, a load of the file would give —
-    /// and from the first change on `log.adi` is the store's MIRROR: every contact, the change
-    /// included, marked as generated.
+    /// and from the conversion on `log.adi` is the store's MIRROR: every contact, and then every
+    /// change, marked as generated. The file the operator had is kept beside it, byte for byte.
     #[test]
     fn the_store_owns_the_log_and_log_adi_becomes_its_mirror() {
         let d = Dir::new("owner");
@@ -544,10 +544,20 @@ mod tests {
         assert!(e.log_store_open());
         same_log(e.log_records(), expected.records(), "held after the open");
         same_log(&stored(&d), expected.records(), "stored after the open");
+        // The conversion hands the log to the mirror lane, which writes after its debounce, so
+        // `log.adi` is the operator's original only until that write lands. Reading it straight
+        // after the open raced the lane — green on a quick machine, red on a loaded CI runner.
+        // Settle the lane, then hold the file to what the conversion makes it.
+        flush(&e);
         assert_eq!(
-            std::fs::read(d.log()).unwrap(),
-            original,
-            "log.adi is untouched until something changes"
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "log.adi is the store's mirror from the conversion on"
+        );
+        same_log(
+            tempo_core::logbook::Logbook::load(&d.log()).records(),
+            expected.records(),
+            "the mirror carries exactly the converted contacts",
         );
         assert_eq!(
             std::fs::read(d.0.join("log.adi.pre-sqlite")).unwrap(),
@@ -1560,13 +1570,22 @@ mod tests {
             calls.contains(&"K0ABC"),
             "and so are the store's: {calls:?}"
         );
-        untouched(
-            &d,
-            &before,
-            "pre-existing store (until the mirror's first write)",
-        );
+        // `log.adi` stays as it was only until the mirror lane's first write, which the take-in
+        // queues — asserting it unchanged before that write raced the lane. Settle it: the file
+        // is then the store's mirror, and it carries this folder's contact and the store's.
         flush(&e);
         assert!(stored(&d).iter().any(|r| r.call == "G4OUR"));
+        assert_eq!(
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "pre-existing store: log.adi is the store's mirror once the take-in lands"
+        );
+        let mirrored = tempo_core::logbook::Logbook::load(&d.log());
+        let mirrored: Vec<&str> = mirrored.records().iter().map(|r| r.call.as_str()).collect();
+        assert!(
+            mirrored.contains(&"G4OUR") && mirrored.contains(&"K0ABC"),
+            "pre-existing store: the mirror carries both logs: {mirrored:?}"
+        );
     }
 
     /// A conversion a crash cut short resumes at the next open and completes — nothing
@@ -1600,10 +1619,25 @@ mod tests {
                 total: 700
             }
         );
+        // The conversion itself — resumed or not — never writes the operator's file.
+        untouched(&d, &before, "resume");
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.attach_log_store(opened);
         same_log(e.log_records(), source.records(), "every contact, once");
-        untouched(&d, &before, "resume");
+        // Attached, the log goes to the mirror lane, which writes after its debounce: asserting
+        // `log.adi` unchanged HERE raced the lane. Settle it, then hold the file to what the
+        // completed conversion makes it, with the operator's own copy kept beside it.
+        flush(&e);
+        assert_eq!(
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "resume: log.adi is the store's mirror once the conversion completes"
+        );
+        assert_eq!(
+            std::fs::read(d.0.join("log.adi.pre-sqlite")).unwrap(),
+            before,
+            "resume: the operator's file is kept beside it, byte for byte"
+        );
     }
 
     // ── the FT duplicate guard (hard gate) ──────────────────────────────────
