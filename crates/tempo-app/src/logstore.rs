@@ -1558,7 +1558,6 @@ mod tests {
             "<CALL:5>G4OUR<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260101<TIME_ON:6>101010<EOR>\n",
         );
         std::fs::write(d.log(), &ours).unwrap();
-        let before = std::fs::read(d.log()).unwrap();
 
         let e = engine_on_store(&d);
         let calls: Vec<&str> = e.log_records().iter().map(|r| r.call.as_str()).collect();
