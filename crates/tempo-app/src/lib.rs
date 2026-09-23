@@ -261,6 +261,8 @@ impl AppState {
                 hrd_link_up: None,
                 hrd_queued: 0,
                 amp: None,
+                // The engine builds these from its receiver model on every snapshot.
+                receivers: None,
                 transmitting: false,
                 // Nobody holds the transmitter at construction — the engine recomputes this
                 // from `tx_owner()` every snapshot.

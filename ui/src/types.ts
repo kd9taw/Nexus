@@ -1191,6 +1191,77 @@ export interface AmpStatus {
   kpaFault?: number | null
 }
 
+/** Which receiver — the radio's Main, or its Sub. */
+export type ReceiverId = 'main' | 'sub'
+/** Whose receive stage it is (`dualrx::StageOwner`). `unknown` is NEVER a "no". */
+export type StageOwner = 'own' | 'sharedWithMain' | 'unknown'
+/** The three-state capability answer — the same words and the same rule as `rigControls.ts`'s
+ *  `CapState`: collapsing `unknown` into `absent` is forbidden. */
+export type SubCapability = 'present' | 'absent' | 'unknown'
+
+/** ONE RECEIVER'S VALUES, each named exactly as the flat `RadioStatus` field it mirrors.
+ *  `null` / absent = NOT KNOWN — never "off", never zero. On the Sub that is nearly everything:
+ *  nothing reads the Sub back over CAT in this build. */
+export interface ReceiverStatus {
+  id: ReceiverId
+  /** D7 — which receive stages THIS receiver may be credited with. Attribution, never
+   *  existence: `own` on a DSP does not say the radio has one. */
+  stages: { frontEnd: StageOwner; dsp: StageOwner; audio: StageOwner }
+  dialMhz?: number | null
+  band?: string | null
+  sideband?: string | null
+  sidebandOverride?: string | null
+  rigMode?: string | null
+  /** This receiver's own A/B selection, 'A' | 'B'. */
+  activeVfo?: string | null
+  ritHz?: number | null
+  refusedDialMhz?: number | null
+  /** Receive coverage, MHz. null = unknown, which fails OPEN. */
+  rxRangesMhz?: [number, number][] | null
+  smeterDb?: number | null
+  agc?: string | null
+  refusedAgc?: string | null
+  filterWidthHz?: number | null
+  nb?: boolean | null
+  nr?: boolean | null
+  nrLevel?: number | null
+  notch?: boolean | null
+  manualNotch?: boolean | null
+  notchFreqHz?: number | null
+  rfGain?: number | null
+  squelch?: number | null
+  attDb?: number | null
+  preampDb?: number | null
+  attStepsDb?: number[] | null
+  preampStepsDb?: number[] | null
+  afGain?: number | null
+  scopeModeCode?: number | null
+  scopeFixStartMhz?: number | null
+  scopeSpanRefused?: string | null
+  scopeError?: string | null
+}
+
+/** THE RADIO'S RECEIVERS — Main always, the Sub only where this build offers one. ADDITIVE:
+ *  every flat `RadioStatus` field stays, and `main` is those values read again.
+ *
+ *  ⚠️ ABSENT on a station older than this field — which a relay deploy makes routine, since it
+ *  puts the hosted page ahead of every station. Absent means "this station does not say",
+ *  NEVER "one receiver". */
+export interface ReceiversStatus {
+  main: ReceiverStatus
+  /** Present only where this build offers a Sub for the active radio (a confirmed independent
+   *  second receiver). */
+  sub?: ReceiverStatus | null
+  /** Does the radio HAVE a second receiver — the reason whenever `sub` is missing. `unknown`
+   *  shows no Sub UI and says nothing about the radio lacking one. */
+  subCapability: SubCapability
+  /** D6 — may the two receivers sit where they sit. Only `refused` may stop anything. */
+  pairing?: { state: 'allowed' | 'refused' | 'unknown'; reason?: string | null } | null
+  /** Can Nexus command the Sub's controls on the CAT path serving this radio. null = not
+   *  known, which offers nothing. */
+  subCommandable?: boolean | null
+}
+
 export interface RadioStatus {
   dialMhz: number
   band: string
@@ -1211,6 +1282,8 @@ export interface RadioStatus {
    * `{linked:false}` = configured and not answering (stay on screen, every reading '—');
    * `{linked:true}` = live. Display-only — nothing here may gate or stop a transmission. */
   amp?: AmpStatus | null
+  /** Main and (where offered) Sub — see `ReceiversStatus`. Absent on an older station. */
+  receivers?: ReceiversStatus | null
   transmitting: boolean
   slot: number
   nextSlotMs: number

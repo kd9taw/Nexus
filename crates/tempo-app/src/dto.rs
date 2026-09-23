@@ -695,6 +695,299 @@ pub struct RadioSummary {
     pub bands: Vec<String>,
 }
 
+/// ⭐ THE RADIO'S RECEIVERS — Main always, the Sub only where this build OFFERS one.
+///
+/// The engine's one model of them (`Engine::receivers`) on the wire, built from it on every
+/// snapshot — never a second copy kept here or anywhere else.
+///
+/// ⛔ ADDITIVE. Every flat single-receiver field of [`RadioStatus`] keeps its storage, its name
+/// and its meaning, and `main` is those same values read again (a test holds them equal, key
+/// by key). The flat fields go only once every consumer has moved; the Remote page is the last,
+/// and its deploy is the operator's.
+///
+/// ⚠️ A PAGE OLDER THAN THE STATION IGNORES THIS, and a page NEWER than the station must treat
+/// its absence as "this station predates receivers", never as "one receiver": a relay deploy
+/// puts the hosted page ahead of every station in the field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiversDto {
+    /// The receiver CAT describes by default. Always present.
+    pub main: ReceiverDto,
+    /// Present only where this build offers a second receiver for the active radio — a
+    /// confirmed independent one (rulings D2, D10). A Sub the radio has and nothing here can
+    /// read is still present, every unread value `None` (the configured-but-silent state
+    /// [`AmpStatusDto`]'s `linked: false` has).
+    #[serde(default)]
+    pub sub: Option<ReceiverDto>,
+    /// Does the radio HAVE a second receiver, three-state (D3) — the reason whenever `sub` is
+    /// `None`. `unknown` is no vendor statement read, NEVER a no, and no Sub is offered on it.
+    /// `absent` is a vendor-sourced single receiver. `present` with no `sub` is a second
+    /// receiver this build does not offer (a shared front end, category 2).
+    pub sub_capability: CapStateDto,
+    /// D6 — may the two receivers sit where they sit now. `None` with no Sub. `unknown` is NOT
+    /// a refusal: only `refused` may stop anything.
+    #[serde(default)]
+    pub pairing: Option<PairingDto>,
+    /// Can Nexus COMMAND the Sub's controls on the CAT path serving this radio — i.e. can a
+    /// command there name the Sub at all. `None` = not known (no Sub, or the radio loop has
+    /// not said yet), which offers nothing: a control that cannot reach its receiver is worse
+    /// than one that is not drawn.
+    #[serde(default)]
+    pub sub_commandable: Option<bool>,
+}
+
+/// ONE RECEIVER'S VALUES. Every field is named exactly as the flat [`RadioStatus`] field it
+/// mirrors, so a consumer moving from `radio.dialMhz` to `radio.receivers.main.dialMhz` finds
+/// the same key and the same encoding.
+///
+/// `None` means NOT KNOWN — never "off", never zero. On the Sub that is almost everything in
+/// this build: nothing reads the Sub back over CAT yet, so it carries only what the engine
+/// knows about it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiverDto {
+    /// Which receiver this is.
+    pub id: ReceiverIdDto,
+    /// D7 — which of the radio's receive stages THIS receiver may be credited with.
+    /// ⛔ Attribution, never existence: `own` on a DSP does not say the radio has a DSP.
+    pub stages: RxStagesDto,
+    #[serde(default)]
+    pub dial_mhz: Option<f64>,
+    /// The band label; `""` off the bands, the flat field's own convention.
+    #[serde(default)]
+    pub band: Option<String>,
+    #[serde(default)]
+    pub sideband: Option<String>,
+    #[serde(default)]
+    pub sideband_override: Option<String>,
+    #[serde(default)]
+    pub rig_mode: Option<String>,
+    /// This receiver's A/B selection, `"A"` | `"B"` (D5: each receiver has its own pair).
+    #[serde(default)]
+    pub active_vfo: Option<String>,
+    #[serde(default)]
+    pub rit_hz: Option<i32>,
+    #[serde(default)]
+    pub refused_dial_mhz: Option<f64>,
+    /// Receive coverage, MHz, inclusive. `None` = unknown and fails OPEN — where the flat
+    /// field has to spell the same thing as an empty list.
+    #[serde(default)]
+    pub rx_ranges_mhz: Option<Vec<(f64, f64)>>,
+    #[serde(default)]
+    pub smeter_db: Option<i32>,
+    #[serde(default)]
+    pub agc: Option<String>,
+    #[serde(default)]
+    pub refused_agc: Option<String>,
+    #[serde(default)]
+    pub filter_width_hz: Option<u32>,
+    #[serde(default)]
+    pub nb: Option<bool>,
+    #[serde(default)]
+    pub nr: Option<bool>,
+    #[serde(default)]
+    pub nr_level: Option<f32>,
+    #[serde(default)]
+    pub notch: Option<bool>,
+    #[serde(default)]
+    pub manual_notch: Option<bool>,
+    #[serde(default)]
+    pub notch_freq_hz: Option<f32>,
+    #[serde(default)]
+    pub rf_gain: Option<f32>,
+    #[serde(default)]
+    pub squelch: Option<f32>,
+    #[serde(default)]
+    pub att_db: Option<u8>,
+    #[serde(default)]
+    pub preamp_db: Option<u8>,
+    #[serde(default)]
+    pub att_steps_db: Option<Vec<u8>>,
+    #[serde(default)]
+    pub preamp_steps_db: Option<Vec<u8>>,
+    #[serde(default)]
+    pub af_gain: Option<f32>,
+    #[serde(default)]
+    pub scope_mode_code: Option<u32>,
+    #[serde(default)]
+    pub scope_fix_start_mhz: Option<f64>,
+    #[serde(default)]
+    pub scope_span_refused: Option<String>,
+    #[serde(default)]
+    pub scope_error: Option<String>,
+}
+
+/// Which receiver — `"main"` | `"sub"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReceiverIdDto {
+    Main,
+    Sub,
+}
+
+/// Whose stage it is — `"own"` | `"sharedWithMain"` | `"unknown"` (`dualrx::StageOwner`).
+/// `unknown` is never a "no".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StageOwnerDto {
+    Own,
+    SharedWithMain,
+    Unknown,
+}
+
+/// The three receive stages a vendor speaks to, one owner each (`dualrx::RxStage`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RxStagesDto {
+    /// Attenuator, preamp, RF gain, AGC.
+    pub front_end: StageOwnerDto,
+    /// Filter width, NB, NR, the automatic and manual notches.
+    pub dsp: StageOwnerDto,
+    /// AF gain and squelch.
+    pub audio: StageOwnerDto,
+}
+
+/// `"present"` | `"absent"` | `"unknown"` — the same three words, and the same rule, as
+/// `rigControls.ts`'s `CapState`: collapsing UNKNOWN into ABSENT is forbidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CapStateDto {
+    Present,
+    Absent,
+    Unknown,
+}
+
+/// D6's answer for the two receivers where they sit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingDto {
+    pub state: PairingStateDto,
+    /// The vendor-sourced sentence, only when `state` is `refused`.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `"allowed"` | `"refused"` | `"unknown"`. Only `refused` may stop anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PairingStateDto {
+    Allowed,
+    Refused,
+    Unknown,
+}
+
+impl From<crate::dualrx::ReceiverId> for ReceiverIdDto {
+    fn from(id: crate::dualrx::ReceiverId) -> Self {
+        match id {
+            crate::dualrx::ReceiverId::Main => ReceiverIdDto::Main,
+            crate::dualrx::ReceiverId::Sub => ReceiverIdDto::Sub,
+        }
+    }
+}
+
+impl From<crate::dualrx::StageOwner> for StageOwnerDto {
+    fn from(o: crate::dualrx::StageOwner) -> Self {
+        match o {
+            crate::dualrx::StageOwner::Own => StageOwnerDto::Own,
+            crate::dualrx::StageOwner::SharedWithMain => StageOwnerDto::SharedWithMain,
+            crate::dualrx::StageOwner::Unknown => StageOwnerDto::Unknown,
+        }
+    }
+}
+
+impl From<crate::dualrx::CapState> for CapStateDto {
+    fn from(c: crate::dualrx::CapState) -> Self {
+        match c {
+            crate::dualrx::CapState::Present => CapStateDto::Present,
+            crate::dualrx::CapState::Absent => CapStateDto::Absent,
+            crate::dualrx::CapState::Unknown => CapStateDto::Unknown,
+        }
+    }
+}
+
+impl From<crate::dualrx::Pairing> for PairingDto {
+    fn from(p: crate::dualrx::Pairing) -> Self {
+        match p {
+            crate::dualrx::Pairing::Allowed => PairingDto {
+                state: PairingStateDto::Allowed,
+                reason: None,
+            },
+            crate::dualrx::Pairing::Refused(why) => PairingDto {
+                state: PairingStateDto::Refused,
+                reason: Some(why.to_string()),
+            },
+            crate::dualrx::Pairing::Unknown => PairingDto {
+                state: PairingStateDto::Unknown,
+                reason: None,
+            },
+        }
+    }
+}
+
+impl From<&crate::engine::receivers::Receiver> for ReceiverDto {
+    fn from(r: &crate::engine::receivers::Receiver) -> Self {
+        ReceiverDto {
+            id: r.id.into(),
+            stages: RxStagesDto {
+                front_end: r.stages.front_end.into(),
+                dsp: r.stages.dsp.into(),
+                audio: r.stages.audio.into(),
+            },
+            dial_mhz: r.dial_mhz,
+            band: r.band.clone(),
+            sideband: r.sideband.clone(),
+            sideband_override: r.sideband_override.clone(),
+            rig_mode: r.rig_mode.clone(),
+            // The flat field's own encoding, so the two read alike.
+            active_vfo: r
+                .active_vfo_b
+                .map(|b| if b { "B" } else { "A" }.to_string()),
+            rit_hz: r.rit_hz,
+            refused_dial_mhz: r.refused_dial_mhz,
+            rx_ranges_mhz: r.rx_ranges_hz.as_ref().map(|ranges| {
+                ranges
+                    .iter()
+                    .map(|(lo, hi)| (*lo as f64 / 1_000_000.0, *hi as f64 / 1_000_000.0))
+                    .collect()
+            }),
+            smeter_db: r.smeter_db,
+            agc: r.agc.clone(),
+            refused_agc: r.refused_agc.clone(),
+            filter_width_hz: r.filter_width_hz,
+            nb: r.nb,
+            nr: r.nr,
+            nr_level: r.nr_level,
+            notch: r.notch,
+            manual_notch: r.manual_notch,
+            notch_freq_hz: r.notch_freq_hz,
+            rf_gain: r.rf_gain,
+            squelch: r.squelch,
+            att_db: r.att_db,
+            preamp_db: r.preamp_db,
+            att_steps_db: r.att_steps_db.clone(),
+            preamp_steps_db: r.preamp_steps_db.clone(),
+            af_gain: r.af_gain,
+            scope_mode_code: r.scope_mode_code,
+            scope_fix_start_mhz: r.scope_fix_start_mhz,
+            scope_span_refused: r.scope_span_refused.clone(),
+            scope_error: r.scope_error.clone(),
+        }
+    }
+}
+
+impl From<&crate::engine::receivers::Receivers> for ReceiversDto {
+    fn from(rs: &crate::engine::receivers::Receivers) -> Self {
+        ReceiversDto {
+            main: ReceiverDto::from(&rs.main),
+            sub: rs.sub.as_ref().map(ReceiverDto::from),
+            sub_capability: rs.sub_capability.into(),
+            pairing: rs.pairing.map(PairingDto::from),
+            // The engine's model does not carry it; the radio loop reports it.
+            sub_commandable: None,
+        }
+    }
+}
+
 /// Current radio / slot-timing status.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -738,6 +1031,11 @@ pub struct RadioStatus {
     /// so no field here may ever reach a cockpit's stop-line census.
     #[serde(default)]
     pub amp: Option<AmpStatusDto>,
+    /// ⭐ THE RECEIVERS — Main always, the Sub where this build offers one, the three-state
+    /// capability beside it. ADDITIVE: see [`ReceiversDto`]. `None` only on an `AppState`
+    /// snapshot that never went through the engine, and on a station older than this field.
+    #[serde(default)]
+    pub receivers: Option<ReceiversDto>,
     pub transmitting: bool,
     pub slot: u64,
     pub next_slot_ms: u64,
@@ -3606,5 +3904,293 @@ mod winlink_dto_tests {
             WINLINK_OUTCOMES,
             ["complete", "stopped", "peerClosed", "io"]
         );
+    }
+}
+
+#[cfg(test)]
+mod receivers_dto_tests {
+    use super::*;
+    use crate::dualrx::{CapState, Pairing, ReceiverId, StageOwner};
+    use crate::engine::receivers::{Receiver, Receivers, RxStages};
+
+    /// A receiver in which no two fields of the same type hold the same value, so a crossed
+    /// wire — RF gain read into squelch, the refused dial into the dial — cannot pass. The four
+    /// booleans cannot all differ in one receiver, so `flip` gives the second permutation, and
+    /// between the two every pair of them differs at least once.
+    fn receiver(flip: bool) -> Receiver {
+        let (nb, nr, notch, mn) = if flip {
+            (Some(false), Some(true), Some(true), None)
+        } else {
+            (Some(true), Some(false), None, Some(true))
+        };
+        Receiver {
+            id: ReceiverId::Sub,
+            stages: RxStages {
+                front_end: StageOwner::Own,
+                dsp: StageOwner::SharedWithMain,
+                audio: StageOwner::Unknown,
+            },
+            dial_mhz: Some(145.965),
+            band: Some("2m".into()),
+            sideband: Some("LSB".into()),
+            sideband_override: Some("FM".into()),
+            rig_mode: Some("USB-D".into()),
+            active_vfo_b: Some(true),
+            rit_hz: Some(-120),
+            refused_dial_mhz: Some(146.5),
+            rx_ranges_hz: Some(vec![(144_000_000, 148_000_000)]),
+            smeter_db: Some(-11),
+            agc: Some("slow".into()),
+            refused_agc: Some("fast".into()),
+            filter_width_hz: Some(2_300),
+            nb,
+            nr,
+            nr_level: Some(0.125),
+            notch,
+            manual_notch: mn,
+            notch_freq_hz: Some(1_234.0),
+            rf_gain: Some(0.375),
+            squelch: Some(0.625),
+            att_db: Some(12),
+            preamp_db: Some(2),
+            att_steps_db: Some(vec![6, 12, 18]),
+            preamp_steps_db: Some(vec![1, 2]),
+            af_gain: Some(0.875),
+            scope_mode_code: Some(3),
+            scope_fix_start_mhz: Some(144.0),
+            scope_span_refused: Some("span".into()),
+            scope_error: Some("scope".into()),
+        }
+    }
+
+    /// Every DTO field from ITS OWN engine field, under the name the flat `RadioStatus` field
+    /// carries — compared as the JSON the UI parses, so a wrong serialized name fails as surely
+    /// as a wrong value.
+    #[test]
+    fn a_receiver_crosses_the_wire_field_by_field() {
+        for flip in [false, true] {
+            let r = receiver(flip);
+            let got = serde_json::to_value(ReceiverDto::from(&r)).unwrap();
+            let want = serde_json::json!({
+                "id": "sub",
+                "stages": { "frontEnd": "own", "dsp": "sharedWithMain", "audio": "unknown" },
+                "dialMhz": 145.965,
+                "band": "2m",
+                "sideband": "LSB",
+                "sidebandOverride": "FM",
+                "rigMode": "USB-D",
+                "activeVfo": "B",
+                "ritHz": -120,
+                "refusedDialMhz": 146.5,
+                "rxRangesMhz": [[144.0, 148.0]],
+                "smeterDb": -11,
+                "agc": "slow",
+                "refusedAgc": "fast",
+                "filterWidthHz": 2300,
+                "nb": r.nb,
+                "nr": r.nr,
+                "nrLevel": 0.125,
+                "notch": r.notch,
+                "manualNotch": r.manual_notch,
+                "notchFreqHz": 1234.0,
+                "rfGain": 0.375,
+                "squelch": 0.625,
+                "attDb": 12,
+                "preampDb": 2,
+                "attStepsDb": [6, 12, 18],
+                "preampStepsDb": [1, 2],
+                "afGain": 0.875,
+                "scopeModeCode": 3,
+                "scopeFixStartMhz": 144.0,
+                "scopeSpanRefused": "span",
+                "scopeError": "scope",
+            });
+            assert_eq!(got, want, "flip={flip}");
+        }
+    }
+
+    /// UNKNOWN is null, never a zero or an "A": a receiver nothing was read from crosses the
+    /// wire with every value null and its identity intact.
+    #[test]
+    fn an_unread_receiver_is_null_throughout_and_never_zero() {
+        let mut r = receiver(false);
+        r.dial_mhz = None;
+        r.band = None;
+        r.sideband = None;
+        r.sideband_override = None;
+        r.rig_mode = None;
+        r.active_vfo_b = None;
+        r.rit_hz = None;
+        r.refused_dial_mhz = None;
+        r.rx_ranges_hz = None;
+        r.smeter_db = None;
+        r.agc = None;
+        r.refused_agc = None;
+        r.filter_width_hz = None;
+        r.nb = None;
+        r.nr = None;
+        r.nr_level = None;
+        r.notch = None;
+        r.manual_notch = None;
+        r.notch_freq_hz = None;
+        r.rf_gain = None;
+        r.squelch = None;
+        r.att_db = None;
+        r.preamp_db = None;
+        r.att_steps_db = None;
+        r.preamp_steps_db = None;
+        r.af_gain = None;
+        r.scope_mode_code = None;
+        r.scope_fix_start_mhz = None;
+        r.scope_span_refused = None;
+        r.scope_error = None;
+        let got = serde_json::to_value(ReceiverDto::from(&r)).unwrap();
+        let obj = got.as_object().unwrap();
+        for (k, v) in obj {
+            if k == "id" || k == "stages" {
+                continue;
+            }
+            assert!(
+                v.is_null(),
+                "{k} must be null on an unread receiver, got {v}"
+            );
+        }
+        assert_eq!(obj["id"], "sub");
+        // The discriminator: the loop above would pass on an empty object.
+        assert_eq!(obj.len(), 32, "every mirrored field is on the wire: {got}");
+    }
+
+    /// The set: Sub present or absent, the three capability words, and D6's three answers.
+    #[test]
+    fn the_receiver_set_says_why_a_sub_is_missing_and_how_a_pair_stands() {
+        let main = || {
+            let mut m = receiver(false);
+            m.id = ReceiverId::Main;
+            m
+        };
+        for (cap, word) in [
+            (CapState::Present, "present"),
+            (CapState::Absent, "absent"),
+            (CapState::Unknown, "unknown"),
+        ] {
+            let rs = Receivers {
+                main: main(),
+                sub: None,
+                sub_capability: cap,
+                pairing: None,
+            };
+            let got = serde_json::to_value(ReceiversDto::from(&rs)).unwrap();
+            assert_eq!(got["subCapability"], word);
+            assert!(got["sub"].is_null());
+            assert!(got["pairing"].is_null());
+            assert!(
+                got["subCommandable"].is_null(),
+                "nothing has reported a route"
+            );
+            assert_eq!(got["main"]["id"], "main");
+        }
+        for (pairing, state, reason) in [
+            (Pairing::Allowed, "allowed", serde_json::Value::Null),
+            (Pairing::Unknown, "unknown", serde_json::Value::Null),
+            (
+                Pairing::Refused("no"),
+                "refused",
+                serde_json::Value::String("no".into()),
+            ),
+        ] {
+            let rs = Receivers {
+                main: main(),
+                sub: Some(receiver(true)),
+                sub_capability: CapState::Present,
+                pairing: Some(pairing),
+            };
+            let got = serde_json::to_value(ReceiversDto::from(&rs)).unwrap();
+            assert_eq!(got["pairing"]["state"], state);
+            assert_eq!(got["pairing"]["reason"], reason);
+            assert_eq!(got["sub"]["id"], "sub");
+        }
+    }
+
+    /// The keys a `types.ts` interface declares at its top level (`  name:` / `  name?:`).
+    fn ts_keys(interface: &str) -> Vec<String> {
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = format!("export interface {interface} {{");
+        let start = ts
+            .find(&head)
+            .unwrap_or_else(|| panic!("types.ts declares {interface}"))
+            + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        body.lines()
+            // Two-space indent exactly: a member of a nested object type is deeper.
+            .filter(|l| l.starts_with("  ") && !l.starts_with("   "))
+            .filter_map(|l| {
+                let key: String = l
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                let rest = &l.trim_start()[key.len()..];
+                (!key.is_empty() && (rest.starts_with(':') || rest.starts_with("?:")))
+                    .then_some(key)
+            })
+            .collect()
+    }
+
+    /// ⭐ THE TYPESCRIPT MIRROR CARRIES EXACTLY THE KEYS THE WIRE DOES, in both directions. A
+    /// guard on one side of a language boundary is not a guard on the boundary: the Remote page
+    /// is built against `types.ts`, and a key renamed here and not there reads as "unknown"
+    /// there for ever, with nothing failing.
+    #[test]
+    fn the_typescript_mirror_declares_exactly_the_serialized_keys() {
+        let mut main = receiver(false);
+        main.id = ReceiverId::Main;
+        let rs = Receivers {
+            main,
+            sub: Some(receiver(true)),
+            sub_capability: CapState::Present,
+            pairing: Some(Pairing::Allowed),
+        };
+        let mut dto = ReceiversDto::from(&rs);
+        dto.sub_commandable = Some(true);
+        let wire = serde_json::to_value(&dto).unwrap();
+        for (interface, obj) in [("ReceiversStatus", &wire), ("ReceiverStatus", &wire["sub"])] {
+            let mut want: Vec<String> = obj.as_object().unwrap().keys().cloned().collect();
+            let mut got = ts_keys(interface);
+            want.sort();
+            got.sort();
+            // Parser sanity: a scan that found nothing would pass the comparison vacuously.
+            assert!(got.len() >= 5, "{interface}: parsed only {got:?}");
+            assert_eq!(
+                got, want,
+                "ui/src/types.ts {interface} vs the serialized DTO"
+            );
+        }
+    }
+
+    /// Additive and tolerant: a snapshot from a station older than this field still parses,
+    /// and reads as "no receivers reported" — never as a default Main that nobody sent.
+    #[test]
+    fn a_snapshot_without_receivers_still_parses() {
+        let rs = Receivers {
+            main: {
+                let mut m = receiver(false);
+                m.id = ReceiverId::Main;
+                m
+            },
+            sub: None,
+            sub_capability: CapState::Unknown,
+            pairing: None,
+        };
+        let mut v = serde_json::to_value(ReceiversDto::from(&rs)).unwrap();
+        let back: ReceiversDto = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(back, ReceiversDto::from(&rs), "round trip");
+        // Older shape: the optional members absent altogether.
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("sub");
+        obj.remove("pairing");
+        obj.remove("subCommandable");
+        let back: ReceiversDto = serde_json::from_value(v).unwrap();
+        assert!(back.sub.is_none() && back.pairing.is_none() && back.sub_commandable.is_none());
     }
 }

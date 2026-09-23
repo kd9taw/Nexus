@@ -19347,6 +19347,9 @@ contact yourself."
         }
         .to_string();
         s.radio.hold_tx_freq = self.hold_tx_freq;
+        // ⭐ THE RECEIVERS, beside the flat fields above — built from the engine's one receiver
+        // model, never a second copy (dual-receiver programme, the DTO stage; ADDITIVE).
+        s.radio.receivers = Some(crate::dto::ReceiversDto::from(&self.receivers()));
         // The clock chip's whole story, not just the number: what we steer by,
         // how old that measurement is, how many servers stood behind it, and any
         // offset guard 3 refused. `now` once, so age and freshness agree.
