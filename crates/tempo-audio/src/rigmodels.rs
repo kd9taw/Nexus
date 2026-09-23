@@ -1004,6 +1004,11 @@ mod tests {
         assert_eq!(rig_model_name(1), Some("Hamlib Dummy"));
         // An out-of-catalog model number has no name.
         assert_eq!(rig_model_name(999_999), None);
+        // MODEL 0 IS "NO RIG", AND THE CATALOG MUST NOT NAME IT. `Settings::heal_rig_model_names`
+        // repairs a stored `rig_model_name` that disagrees with this lookup, and it is this `None`
+        // that keeps the repair away from a station with no rig configured — the shipped spelling
+        // there is "None / VOX" (`Settings::default`), which no catalog entry may claim.
+        assert_eq!(rig_model_name(0), None);
     }
 
     #[test]

@@ -168,14 +168,24 @@ pub fn candidates_from(
                 seeded: false,
             }],
             // Bridge chip WITH a configured model → use it (the rig is known, only the port isn't).
+            //
+            // The name is the MODEL's, never the PORT's. This candidate is `seeded: false` —
+            // trusted — so both Auto-test and the setup wizard persist the winning hit's
+            // `model_name` into the radio profile's `rig_model_name`, and that field is what
+            // stamps ADIF `MY_RIG` on every logged contact. Naming it from the USB descriptor
+            // put "CP2105 Dual USB to UART Bridge Controller" in the RIG column of every QSO an
+            // FTDX10 owner logged (field report 2026-09-22); the model number was right all
+            // along, which is why Settings still showed the correct radio.
+            //
+            // A model Hamlib supports but this catalog does not name leaves it BLANK, exactly as
+            // the model picker does for a number typed straight in: blank is honest, a mislabel
+            // is not.
             None if fallback_model > 0 => vec![Candidate {
                 port_name: p.port_name.clone(),
                 model: fallback_model,
-                model_name: if p.product.is_empty() {
-                    p.port_name.clone()
-                } else {
-                    p.product.clone()
-                },
+                model_name: crate::rigmodels::rig_model_name(fallback_model)
+                    .unwrap_or_default()
+                    .to_string(),
                 baud: None,
                 seeded: false,
             }],
@@ -421,6 +431,70 @@ mod tests {
             cands[0].model, 3073,
             "no model in the product → operator's configured model"
         );
+    }
+
+    /// THE FIELD REPORT (2026-09-22, FTDX10 on macOS): the logbook's RIG column read
+    /// "CP2105 Dual USB to UART Bridge Controller" — the USB bridge chip's product string —
+    /// on EVERY logged contact, while Settings showed the right radio.
+    ///
+    /// Both halves are this branch. The model NUMBER was always correct (the Rig Model
+    /// dropdown is keyed on it), but the bridge-chip branch labelled the candidate with the
+    /// PORT's USB descriptor instead of the model's catalog name, and flags it `seeded: false`
+    /// — "trusted". Auto-test (`SettingsPanel.handleAutoTestPorts`) and the setup wizard
+    /// (`SetupWizard.runProbe`) both persist a trusted hit's `model_name` into the radio
+    /// profile's `rig_model_name`, which is what stamps ADIF `MY_RIG` on every QSO.
+    ///
+    /// `model_name` here is a MODEL name, not a port description: the only legitimate value
+    /// is the catalog name of the model actually being probed.
+    #[test]
+    fn a_bridge_chip_candidate_is_named_for_the_rig_not_the_usb_chip() {
+        let cands = candidates_from(
+            &[usb(
+                "/dev/cu.SLAB_USBtoUART",
+                "CP2105 Dual USB to UART Bridge Controller",
+                "Silicon Labs",
+            )],
+            1042, // the operator's configured Yaesu FTDX10
+            &[],
+        );
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].model, 1042);
+        assert_eq!(
+            cands[0].model_name, "Yaesu FTDX10",
+            "a bridge-chip candidate must be named for the MODEL being probed; a USB product \
+             string here is persisted as the radio's name and stamped into MY_RIG on every contact"
+        );
+    }
+
+    /// The invariant behind the report, over every branch of the builder: a `Candidate`'s
+    /// `model_name` reaches `rig_model_name` verbatim through `ProbeHit`, so it must never
+    /// carry anything but a Hamlib catalog name — no USB descriptors, no port names.
+    #[test]
+    fn no_candidate_is_named_anything_but_its_catalog_name() {
+        let ports = [
+            // Native-USB rig — names itself.
+            usb("COM5", "IC-705", "Icom Inc."),
+            // Bridge chip — names the CHIP, so the fallback model supplies the name.
+            usb(
+                "COM3",
+                "CP2105 Dual USB to UART Bridge Controller",
+                "Silicon Labs",
+            ),
+            // Bridge chip whose descriptor is empty (Linux often reports nothing).
+            usb("/dev/ttyUSB0", "", ""),
+        ];
+        for fallback in [0u32, 1042, 3073] {
+            for c in candidates_from(&ports, fallback, &[]) {
+                assert_eq!(
+                    Some(c.model_name.as_str()),
+                    crate::rigmodels::rig_model_name(c.model),
+                    "candidate on {} is named {:?}, which is not model {}'s catalog name",
+                    c.port_name,
+                    c.model_name,
+                    c.model
+                );
+            }
+        }
     }
 
     /// An IC-7610's two ports both resolve to model 3078 — without the CI-V-side sort, an

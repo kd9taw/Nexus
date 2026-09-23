@@ -4871,6 +4871,57 @@ impl Settings {
         }
     }
 
+    /// Correct any stored `rig_model_name` that the rig catalog can PROVE is not its model
+    /// number's name — on the flat mirror and on every radio profile. Returns one line per
+    /// repair, for the startup log; empty means nothing was wrong.
+    ///
+    /// **Why this exists.** `rig_model_name` is a free `String` that no writer validated, and one
+    /// of them wrote the wrong kind of value into it: Auto-test's bridge-chip branch named its
+    /// probe candidate from the PORT's USB product string instead of from the model it was
+    /// probing, and marked that candidate trusted, so Settings' Auto-test and the setup wizard
+    /// both persisted the bridge chip's name as the radio's model name. This field stamps ADIF
+    /// `MY_RIG` (see `Engine::log_qso`), so "CP2105 Dual USB to UART Bridge Controller" became the
+    /// RIG column of every contact an FTDX10 owner logged (field report 2026-09-22). The model
+    /// NUMBER stayed correct — which is why Settings kept showing the right radio, and why the
+    /// operator has no reason to go and re-pick it. Fixing the writer stops new damage; without
+    /// this, an already-poisoned config keeps mis-stamping every future QSO forever.
+    ///
+    /// `catalog_name` is the rig-model lookup (`tempo_audio::rigmodels::rig_model_name`), injected
+    /// because `tempo-app` is deliberately decoupled from `tempo-audio` and cannot call it.
+    ///
+    /// **Narrow on purpose**, because "different from the catalog" is the only evidence of a
+    /// mistake this can actually have:
+    ///  * a model the catalog does not name — a number Hamlib supports but we do not list — is
+    ///    left exactly as found, the same way the model picker leaves it blank rather than
+    ///    mislabel it. "None / VOX" (model 0) is unnamed too, so it is never touched.
+    ///  * [`RadioProfile::name`] is NOT touched: that is the operator's own label for the rig
+    ///    ("Shack FTDX10"), free text with no right answer to check against.
+    ///
+    /// Idempotent — safe to run on every load.
+    pub fn heal_rig_model_names(
+        &mut self,
+        catalog_name: impl Fn(u32) -> Option<&'static str>,
+    ) -> Vec<String> {
+        let mut repaired = Vec::new();
+        for p in self.radios.iter_mut() {
+            if let Some(real) = catalog_name(p.rig_model) {
+                if p.rig_model_name != real {
+                    repaired.push(format!(
+                        "radio {}: {:?} -> {:?}",
+                        p.id, p.rig_model_name, real
+                    ));
+                    p.rig_model_name = real.to_string();
+                }
+            }
+        }
+        if let Some(real) = catalog_name(self.rig_model) {
+            if self.rig_model_name != real {
+                self.rig_model_name = real.to_string();
+            }
+        }
+        repaired
+    }
+
     /// Load settings from `path`. A missing file (first run) returns defaults. A
     /// present-but-CORRUPT file is NOT silently defaulted — that would be
     /// indistinguishable from a first run, wiping the operator's identity/rig config
@@ -9835,6 +9886,76 @@ mod tests {
         assert_eq!(back.radios[0].rig_model_name, "Icom IC-9700"); // synced flat field
         assert_eq!(back.rig_model, 3081, "flat mirror intact after reload");
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The 2026-09-22 repair, and — more to the point — the three things it must NOT touch.
+    /// "Different from the catalog" is the only evidence of a mistake this has, so anything the
+    /// catalog cannot rule on has to be left exactly as the operator left it.
+    #[test]
+    fn the_rig_name_heal_corrects_only_what_the_catalog_can_prove_wrong() {
+        // The shipped catalog, cut down to the models this test uses.
+        let catalog = |m: u32| match m {
+            1042 => Some("Yaesu FTDX10"),
+            3073 => Some("Icom IC-7300"),
+            _ => None, // 0 ("None / VOX") and any number Hamlib knows but we don't name
+        };
+        let radio = |id: u32, model: u32, model_name: &str, name: &str| RadioProfile {
+            id,
+            name: name.to_string(),
+            rig_model: model,
+            rig_model_name: model_name.to_string(),
+            ..RadioProfile::default()
+        };
+        let mut s = Settings::default();
+        s.radios = vec![
+            // The reporter: an FTDX10 wearing its USB bridge chip's product string.
+            radio(
+                0,
+                1042,
+                "CP2105 Dual USB to UART Bridge Controller",
+                "CP2105 Dual USB to UART Bridge Controller",
+            ),
+            // Already right — must not be reported as a repair.
+            radio(1, 3073, "Icom IC-7300", "Shack Icom"),
+            // A model number Hamlib supports that this catalog does not name.
+            radio(2, 9999, "My homebrew rig", "Homebrew"),
+            // No rig: model 0 is unnamed, so the shipped "None / VOX" must survive.
+            radio(3, 0, "None / VOX", "Spare"),
+        ];
+        s.rig_model = 1042;
+        s.rig_model_name = "CP2105 Dual USB to UART Bridge Controller".into();
+        s.active_radio = 0;
+
+        let repaired = s.heal_rig_model_names(catalog);
+
+        assert_eq!(
+            repaired.len(),
+            1,
+            "only the provably-wrong name is a repair: {repaired:?}"
+        );
+        assert!(repaired[0].contains("radio 0"), "{repaired:?}");
+        assert_eq!(s.radios[0].rig_model_name, "Yaesu FTDX10");
+        assert_eq!(
+            s.rig_model_name, "Yaesu FTDX10",
+            "the flat mirror is what stamps MY_RIG — healing only the profile would fix nothing"
+        );
+        assert_eq!(s.radios[1].rig_model_name, "Icom IC-7300");
+        assert_eq!(
+            s.radios[2].rig_model_name, "My homebrew rig",
+            "a model the catalog cannot name is left alone rather than blanked"
+        );
+        assert_eq!(
+            s.radios[3].rig_model_name, "None / VOX",
+            "model 0 is unnamed in the catalog, so 'no rig' must survive the heal"
+        );
+        assert_eq!(
+            s.radios[0].name, "CP2105 Dual USB to UART Bridge Controller",
+            "the operator's own label for the rig is free text with no right answer — renaming \
+             the radio is their call, not this repair's"
+        );
+
+        // Idempotent: a second pass has nothing left to say.
+        assert!(s.heal_rig_model_names(catalog).is_empty());
     }
 
     #[test]
