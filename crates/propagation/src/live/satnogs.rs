@@ -119,6 +119,28 @@ impl Transmitter {
         self.downlink_class().is_fm()
     }
 
+    /// ⭐ True when the uplink takes **CW over an FM-class downlink** — the one shape whose
+    /// TX mode cannot come from the downlink. KOSEN-1's onboard SDR (NORAD 49402) takes CW on
+    /// 21.125–21.150 MHz and relays AFSK on 435.525 MHz, so deriving the uplink from the
+    /// downlink put the TX VFO in FM on a CW-only 15 m segment. It is the only such record in
+    /// the live catalogue (2026-09-23: ten records list a CW uplink, the other nine over a CW
+    /// downlink, which is linear-class).
+    ///
+    /// Both halves are needed. A CW uplink over a LINEAR downlink (AO-7's "Lin CW", QO-100's
+    /// "CW Only" segments) is CW through a passband, worked like any linear bird. An FM-class
+    /// downlink with any other uplink is an FM bird. An absent or empty `uplink_mode` is
+    /// `false`, so a record that says nothing changes nothing.
+    ///
+    /// This names the MODE only, never a SIDE: some inverting records list USB up, so the
+    /// engine derives any sideband itself rather than reading one here.
+    pub fn uplink_is_cw_only(&self) -> bool {
+        self.is_fm()
+            && self
+                .uplink_mode
+                .as_deref()
+                .is_some_and(tempo_core::doppler::mode_is_cw)
+    }
+
     /// Centre of the downlink passband (or the single downlink frequency).
     pub fn downlink_centre_hz(&self) -> Option<u64> {
         centre(self.downlink_low_hz, self.downlink_high_hz)
@@ -417,6 +439,53 @@ mod tests {
 
         // An uncharacterised transmitter (mode null) is not claimed as FM.
         assert!(!x[2].is_fm());
+    }
+
+    #[test]
+    fn only_a_cw_uplink_over_an_fm_downlink_is_cw_only() {
+        // KOSEN-1's onboard-SDR transponder, verbatim as db.satnogs.org served it on
+        // 2026-09-23. `mode` is the DOWNLINK's (SatNOGS sends no `downlink_mode`), and it is
+        // AFSK — FM-class — under a CW `uplink_mode`.
+        let kosen1 = &parse_transmitters(
+            r#"[{"uuid":"YcezEz4dXU5uTwzYEFFrtk","description":"Mode HF/U - Onboard SDR","alive":true,"type":"Transponder","uplink_low":21125000,"uplink_high":21150000,"uplink_drift":null,"uplink_drifted":21125000,"downlink_low":435525000,"downlink_high":435525000,"downlink_drift":null,"downlink_drifted":435525000,"mode":"AFSK","mode_id":49,"uplink_mode":"CW","invert":false,"baud":1200.0,"sat_id":"NJBJ-3838-9654-0508-8247","norad_cat_id":49402,"norad_follow_id":null,"status":"active","updated":"2021-09-30T18:19:40.605018Z","citation":"http://space.kochi-ct.jp/kosen-1/ and https://iaru.amsat-uk.org/finished_detail.php?serialnum=687","service":"Amateur","iaru_coordination":"IARU Coordinated","iaru_coordination_url":"https://iaru.amsat-uk.org/finished_detail.php?serialnum=687","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null}]"#,
+        )[0];
+        assert!(kosen1.is_fm(), "scene: AFSK down is FM-class");
+        assert!(
+            kosen1.uplink_is_cw_only(),
+            "KOSEN-1 takes CW up over its AFSK downlink"
+        );
+
+        // Everything else keeps today's answer. The same catalogue, the same day — the fields
+        // the parser reads, values verbatim.
+        let others = parse_transmitters(
+            r#"[
+              {"norad_cat_id":44909,"description":"Mode V/U - Transponder","alive":true,"type":"Transponder","invert":true,"uplink_low":145935000,"uplink_high":145995000,"uplink_mode":"LSB","downlink_low":435610000,"downlink_high":435670000,"mode":"USB"},
+              {"norad_cat_id":27607,"description":"Mode V/U FM Voice CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145850000,"uplink_high":null,"uplink_mode":"FM","downlink_low":436795000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"Mode V APRS","alive":true,"type":"Transceiver","invert":false,"uplink_low":145825000,"uplink_high":null,"uplink_mode":"AFSK","downlink_low":145825000,"downlink_high":null,"mode":"AFSK"},
+              {"norad_cat_id":7530,"description":"Mode V/A (A) Lin CW","alive":true,"type":"Transponder","invert":false,"uplink_low":145850000,"uplink_high":145950000,"uplink_mode":"CW","downlink_low":29400000,"downlink_high":29500000,"mode":"CW"},
+              {"norad_cat_id":43700,"description":"CW Only Transpoder","alive":true,"type":"Transponder","invert":false,"uplink_low":2400005000,"uplink_high":2400040000,"uplink_mode":"CW","downlink_low":10489505000,"downlink_high":10489540000,"mode":"CW"},
+              {"norad_cat_id":99054,"description":"Mode U/V Transponder","alive":true,"type":"Transponder","invert":true,"uplink_low":435012500,"uplink_high":435037500,"uplink_mode":"USB","downlink_low":145962500,"downlink_high":145987500,"mode":"USB"}
+            ]"#,
+        );
+        assert_eq!(others.len(), 6, "scene: six records parsed");
+        for t in &others {
+            assert!(
+                !t.uplink_is_cw_only(),
+                "{} {:?}: not a CW uplink over an FM downlink",
+                t.norad,
+                t.description
+            );
+        }
+        // The two CW-uplink controls are CW-over-LINEAR: it is the FM half that rules them out.
+        assert!(others[3].uplink_mode.as_deref() == Some("CW") && !others[3].is_fm());
+        assert!(others[4].uplink_mode.as_deref() == Some("CW") && !others[4].is_fm());
+
+        // No uplink mode, or an empty one, says nothing.
+        let mut quiet = kosen1.clone();
+        quiet.uplink_mode = None;
+        assert!(!quiet.uplink_is_cw_only(), "absent uplink_mode");
+        quiet.uplink_mode = Some(String::new());
+        assert!(!quiet.uplink_is_cw_only(), "empty uplink_mode");
     }
 
     #[test]

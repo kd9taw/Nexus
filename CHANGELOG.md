@@ -178,6 +178,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (split) VFO takes had the same fault and never appeared at all; it now shows once you pick RS-44
   or another inverting transponder.
 
+- **Working KOSEN-1 no longer puts its uplink in FM.** Its transponder takes CW on 21.125–21.150
+  MHz and sends it down as AFSK on 435.525 MHz, and Nexus set the transmit (split) VFO from the
+  downlink — so the uplink went to FM, on a part of 15 m where FM is not allowed, from every
+  section. The transmit VFO now takes CW when you work it from Phone or from CW on the radio's own
+  keyer (reverse CW if you have that set), and the data mode a keyed tone needs if you use the
+  soundcard CW keyer, the same as on every other band. Digital is unchanged for now: what an FT
+  mode should do on a CW-only uplink is its own decision. The note under the transponder list says
+  which mode the transmit VFO takes, and the mode shown beside the uplink in the Doppler readout no
+  longer claims the uplink always runs a different mode from the downlink. KOSEN-1 is the only
+  satellite listed this way today.
+
 - **The filter no longer stays at 6 kHz when you switch from phone or CW into a digital mode.**
   A Flex over SmartSDR CAT answers "done" to the 3 kHz data filter Nexus asks for and then keeps
   its own 6 kHz SSB filter. Nexus already read the filter back and put the right one in — but

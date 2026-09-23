@@ -4290,6 +4290,13 @@ struct SatTune {
     /// too, and that mistake fails in the direction that refuses a legal contact. The
     /// satellite catalogue answers it exactly — see [`Engine::set_sat_single_channel_fm`].
     single_channel_fm: bool,
+    /// ⭐ **The uplink takes CW over an FM-class downlink** — KOSEN-1's shape, and the one
+    /// transponder whose TX mode cannot be derived from its downlink's. Read by
+    /// [`Engine::sat_tx_mode`].
+    ///
+    /// Set by the pick and cleared by every pick, on the terms of `single_channel_fm` above —
+    /// see [`Engine::set_sat_uplink_cw`].
+    uplink_cw: bool,
 }
 
 /// How far off a CHANNELISED bird's own frequency a rig-reported dial may be
@@ -13568,6 +13575,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     // default: it treats an unclassified bird as a linear transponder,
                     // which under-reports the limit instead of refusing a legal QSO.
                     single_channel_fm: false,
+                    // Cleared on the same terms: `false` is today's TX mode, derived from
+                    // the downlink, so a pick that never states it changes nothing.
+                    uplink_cw: false,
                 });
                 // Remembered past this hold's release — see `sat_last_worked`.
                 self.sat_last_worked = self.sat_tune.clone();
@@ -13673,6 +13683,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let label = st.label.clone();
         if let Some(last) = self.sat_last_worked.as_mut().filter(|l| l.label == label) {
             last.single_channel_fm = on;
+        }
+    }
+
+    /// ⭐ **Tell the engine the held transponder's uplink takes CW over an FM-class downlink**
+    /// (KOSEN-1). The downlink cannot supply this fact — [`Self::sat_tx_mode`] derives the TX
+    /// mode from it, and on this shape it is FM — so the command layer states it from the
+    /// catalogue record, exactly as it states [`Self::set_sat_single_channel_fm`].
+    ///
+    /// Call it AFTER [`Self::set_sat_transponder`], which clears it, so the outgoing bird's
+    /// answer can never outlive it.
+    ///
+    /// Unlike the FM-satellite fact it stops at the live hold and does not reach
+    /// `sat_last_worked`: that record is read for LOGGING, and a TX mode is only asked while a
+    /// hold is live.
+    pub fn set_sat_uplink_cw(&mut self, on: bool) {
+        if let Some(st) = self.sat_tune.as_mut() {
+            st.uplink_cw = on;
         }
     }
 
@@ -14289,6 +14316,36 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return None;
         }
         let st = self.sat_tune.as_ref()?;
+        // ⭐ A CW UPLINK OVER AN FM DOWNLINK (KOSEN-1; operator ruling 2026-09-23). Everything
+        // below derives the uplink from the DOWNLINK's mode, which on this shape is FM, so the
+        // TX VFO went to FM on a CW-only 15 m segment in every section: an emission Nexus's own
+        // licence table permits nowhere below 21.200 MHz, while in the CW section the licence
+        // gate was approving a CW one. The catalogue's `uplink_mode` is what knows, and it
+        // decides the MODE here — never the side (`set_sat_uplink_cw`):
+        //
+        // - Phone → `CW`. Phone keys no CW, but the TX VFO must hold the one emission this
+        //   uplink takes, not FM: an unwritten TX VFO keeps whatever the last pass left in it
+        //   (the doc comment above).
+        // - CW → the CW section's own form, through the ONE per-section policy
+        //   (`rig_mode_on_sideband`), on the side the UPLINK's band gives — the same 10 MHz
+        //   line the terrestrial convention draws: the radio's keyer gets `CW` (or `CWR`), the
+        //   soundcard keyer the DATA submode its keyed tone needs (`PKTUSB` on 21 MHz).
+        // - Digital is EXCLUDED and keeps today's answer: what an FT section puts on a CW-only
+        //   uplink is a separate FT decision. RTTY and Keyboard were not part of the ruling
+        //   either, so they keep today's answer too rather than a guessed one.
+        if st.uplink_cw {
+            use crate::settings::OperatingMode;
+            match self.settings.operating_mode {
+                OperatingMode::Phone => return Some("CW".to_string()),
+                OperatingMode::Cw => {
+                    return Some(
+                        self.settings
+                            .rig_mode_on_sideband(st.transponder.uplink_centre_hz < 10_000_000),
+                    );
+                }
+                OperatingMode::Digital | OperatingMode::Rtty | OperatingMode::Keyboard => {}
+            }
+        }
         // The DOWNLINK mode is whatever the loop is commanding for the dial —
         // read from the one write-side canon rather than a second guess at it,
         // so the two legs can never be derived from different beliefs.
@@ -45484,6 +45541,143 @@ mod tests {
         // Releasing still says nothing — the hand-back rule is unchanged.
         e.set_sat_transponder(None);
         assert_eq!(e.sat_tx_mode(), None, "released ⇒ silent, never a restore");
+    }
+
+    /// KOSEN-1's onboard SDR (NORAD 49402) as the pick hands it to the engine: CW up across
+    /// 21.125–21.150 MHz, AFSK down on 435.525 MHz. One downlink frequency, so no passband
+    /// to tune inside; not inverting.
+    const KOSEN1: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 21_137_500,
+        downlink_centre_hz: 435_525_000,
+        invert: false,
+        half_width_hz: 0,
+    };
+
+    /// Pick KOSEN-1 the way the command layer does: the hold, the two facts its catalogue
+    /// record supplies (typed a Transponder, so not a single-channel FM bird; a CW uplink
+    /// over an FM downlink), then the tune on its FM class.
+    fn pick_kosen1(e: &mut Engine) {
+        e.set_sat_transponder(Some(("KOSEN-1|Mode HF/U - Onboard SDR".into(), 0, KOSEN1)));
+        e.set_sat_single_channel_fm(false);
+        e.set_sat_uplink_cw(true);
+        e.sat_tune_nominal(FM_BIRD, 1_000_000);
+    }
+
+    /// A one-radio station in `section`, uplink mapping (A/B) confirmed, that has just
+    /// picked KOSEN-1.
+    fn kosen1_station(
+        section: &str,
+        keyer: crate::settings::CwKeyerBackend,
+        cw_reverse: bool,
+    ) -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.cw_keyer = keyer;
+        e.settings.cw_reverse = cw_reverse;
+        e.set_operating_mode(section, false);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
+        pick_kosen1(&mut e);
+        e
+    }
+
+    #[test]
+    fn a_cw_uplink_over_an_fm_downlink_is_commanded_cw_not_fm() {
+        // THE DEFECT. The TX VFO's mode was derived from the DOWNLINK's, and KOSEN-1's
+        // downlink is AFSK — FM-class — so its CW uplink on 21.1375 MHz was commanded FM in
+        // every section: an emission the licence table allows nowhere below 21.200 MHz,
+        // while in the CW section the licence gate approved a CW one.
+        //
+        // The ruling (2026-09-23): Phone → CW; CW → the section's own CW form, which for
+        // the soundcard keyer is the DATA submode its keyed tone needs (never a promise of
+        // CW mode); Digital EXCLUDED — it stays FM pending its own FT decision. RTTY and
+        // Keyboard were outside the ruling and keep today's answer.
+        use crate::settings::CwKeyerBackend as K;
+        for (section, keyer, cw_reverse, want) in [
+            ("phone", K::Cat, false, "CW"),
+            ("cw", K::Cat, false, "CW"),
+            ("cw", K::WinKeyer, false, "CW"),
+            ("cw", K::Serial, false, "CW"),
+            ("cw", K::Cat, true, "CWR"),
+            ("cw", K::Soundcard, false, "PKTUSB"),
+            ("digital", K::Cat, false, "FM"),
+            ("rtty", K::Cat, false, "FM"),
+            ("keyboard", K::Cat, false, "FM"),
+        ] {
+            let e = kosen1_station(section, keyer, cw_reverse);
+            assert_eq!(
+                e.rig_mode_effective(),
+                "FM",
+                "{section}/{keyer:?}: the downlink is still received in FM"
+            );
+            assert_eq!(
+                e.sat_tx_mode().as_deref(),
+                Some(want),
+                "{section}/{keyer:?} (cw_reverse {cw_reverse}): the TX VFO's mode"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cw_uplink_still_needs_every_consent_the_tx_mode_does() {
+        // The CW answer sits AFTER the release and consent checks, so everything that
+        // silences the TX mode for any bird silences it here too.
+        use crate::settings::{CwKeyerBackend, SatVfoMap};
+        let mut e = kosen1_station("phone", CwKeyerBackend::Cat, false);
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "precondition");
+
+        e.settings.sat_vfo_map = SatVfoMap::DownlinkOnly;
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "a downlink-only mapping never commands a transmit mode"
+        );
+        e.settings.sat_vfo_map = SatVfoMap::ADownBUp;
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "control: restored");
+
+        let confirmed = e.settings.sat_uplink_radios.clone();
+        e.settings.sat_uplink_radios = Some(Vec::new());
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "an unconfirmed mapping commands nothing onto a transmit VFO"
+        );
+        e.settings.sat_uplink_radios = confirmed;
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "control: restored");
+
+        e.request_sideband_override(Some("FM"));
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "the operator's own mode pick mid-pass stands the CW answer down too"
+        );
+    }
+
+    #[test]
+    fn a_cw_uplink_never_outlives_its_bird() {
+        // KOSEN-1, then RS-44, then SO-50. Only the first pick states the CW fact: the
+        // next two are deliberately NOT told it is false, so a flag the pick failed to
+        // clear would show here as CW on a linear or an FM uplink.
+        let mut e = kosen1_station("phone", crate::settings::CwKeyerBackend::Cat, false);
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "KOSEN-1: CW up");
+
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 2_000_000);
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("LSB"),
+            "RS-44: the inverting swap of its USB downlink, not CW"
+        );
+
+        e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, fm_bird())));
+        e.sat_tune_nominal(FM_BIRD, 3_000_000);
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("FM"),
+            "SO-50: FM up, not CW"
+        );
+
+        // …and a fresh KOSEN-1 pick states it again.
+        pick_kosen1(&mut e);
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "KOSEN-1 again");
     }
 
     // ===================== tune-on-pick (the S.A.T.-box behaviour) =====================

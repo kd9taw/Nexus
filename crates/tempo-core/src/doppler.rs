@@ -276,6 +276,22 @@ pub fn mode_is_fm(mode: &str) -> bool {
         .any(|tok| FM_MODE_TOKENS.iter().any(|m| tok.eq_ignore_ascii_case(m)))
 }
 
+/// Does this satellite mode string name **CW** — a keyed carrier, the rig's own CW mode?
+///
+/// Asked of the UPLINK leg, to find the one transponder shape the downlink class cannot
+/// describe: a CW uplink over an FM-class downlink. KOSEN-1's onboard SDR takes CW on
+/// 21.125–21.150 MHz and relays AFSK on 435.525 MHz, so the mode the TX VFO needs is not the
+/// downlink's (FM) or its mirror. A declared CW DOWNLINK is untouched by this: it stays in the
+/// linear class and is worked in USB, for the reasons [`downlink_class`] gives.
+///
+/// Per TOKEN, like [`mode_is_fm`], so a compound name reads the same way. `CW` is the only CW
+/// name in the SatNOGS mode vocabulary (60 names on 2026-09-23); a substring test would also
+/// claim a name like `MCW`, a keyed tone on an FM carrier, which is a different emission.
+pub fn mode_is_cw(mode: &str) -> bool {
+    mode.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| tok.eq_ignore_ascii_case("CW"))
+}
+
 /// What the RADIO must be put in to work a transponder, from the downlink mode
 /// the satellite database declares — a CLOSED set of three, never a SatNOGS
 /// mode name passed through.
@@ -752,6 +768,26 @@ mod tests {
         assert_eq!(uplink_mode_for("CW", true), "CW");
         assert_eq!(uplink_mode_for("FM", true), "FM");
         assert_eq!(uplink_mode_for(" usb ", true), "LSB", "case/space tolerant");
+    }
+
+    #[test]
+    fn cw_is_read_per_token_like_the_fm_map() {
+        // The uplink_mode SatNOGS lists for KOSEN-1, AO-7 "Lin CW" and QO-100's
+        // "CW Only" segment — the one CW name in its vocabulary.
+        assert!(mode_is_cw("CW"));
+        assert!(mode_is_cw(" cw "), "case/space tolerant");
+        for m in [
+            "",
+            "USB",
+            "LSB",
+            "FM",
+            "AFSK",
+            "BPSK",
+            "FSK AX.25 G3RUH",
+            "MCW",
+        ] {
+            assert!(!mode_is_cw(m), "{m:?} is not CW");
+        }
     }
 
     #[test]

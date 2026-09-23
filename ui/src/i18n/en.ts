@@ -3838,7 +3838,7 @@ export const EN = {
   'sat.leg.downlink': '↓ Downlink',
   'sat.leg.uplink': '↑ Uplink',
   'sat.doppler.txMode.title':
-    "The TX (split) VFO's sideband — this bird's uplink runs {{mode}} while the downlink does not, and the radio's TX leg is set to match. Commanded by the engine with the Doppler tuning; shown here so a swapped sideband is never a surprise.",
+    "The mode the TX (split) VFO is set to for this pass: {{mode}}. That VFO keeps a mode of its own, apart from the receive dial, so it is set with the Doppler tuning instead of keeping whatever the last pass left there. It can differ from the downlink's — on an inverting transponder the sideband swaps.",
   // The inverting mark and its lesson — one chip and one tooltip, rendered by the Doppler
   // head, the readiness rail and every transponder card.
   'sat.inverting.label': 'INVERTING',
@@ -4095,16 +4095,21 @@ export const EN = {
   'sat.transponder.showDead': 'show {{count}} inactive',
   'sat.transponder.showDead.title':
     'Transmitters SatNOGS reports dead/re-entered — shown for the record, never workable',
-  // The TX-sideband note. `{{tx}}`, `{{up}}` and `{{down}}` are the record's own mode names.
+  // The TX-mode note. `{{up}}` and `{{down}}` are the record's own mode names; `{{tx}}` is the
+  // mode the engine commands.
   'sat.transponder.txMode.commanded':
-    'TX sideband: the uplink (split) VFO is set to <b>{{tx}}</b> — the downlink stays {{down}} while Doppler runs this pass.',
+    'TX mode: the uplink (split) VFO is set to <b>{{tx}}</b> — the downlink stays {{down}} while Doppler runs this pass.',
   'sat.transponder.txMode.notCommanded':
-    'This bird lists {{up}} up / {{down}} down (SatNOGS) — the TX sideband is not being commanded for this pass ({{why}}).',
+    'This bird lists {{up}} up / {{down}} down (SatNOGS) — the TX mode is not being commanded for this pass ({{why}}).',
   'sat.transponder.txMode.why.dopplerOff': 'Doppler correction is off',
   'sat.transponder.txMode.why.notDriving': 'Doppler is not driving the uplink on this radio',
   'sat.transponder.txMode.why.shared': 'the legs share a sideband, or the mode is yours',
   'sat.transponder.txMode.forecast':
     'TX sideband: this bird runs {{up}} up / {{down}} down (SatNOGS). Once your uplink mapping is confirmed for the radio in use, the TX (split) VFO is set to match while a tracked pass runs.',
+  // A CW uplink over an FM downlink (KOSEN-1). It must not promise CW to a soundcard CW keyer:
+  // that station's TX VFO gets the data mode its keyed tone needs.
+  'sat.transponder.txMode.forecastCw':
+    "TX mode: this bird runs {{up}} up / {{down}} down (SatNOGS). Once your uplink mapping is confirmed for the radio in use, a tracked pass sets the TX (split) VFO to CW when you work it from Phone or with the radio's own CW keyer; a soundcard CW keyer gets the data mode its keyed tone needs.",
   'sat.transponder.state.dopplerOff':
     'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.',
   'sat.transponder.state.uplinkOnly.driving':

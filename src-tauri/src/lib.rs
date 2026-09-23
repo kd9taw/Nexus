@@ -8725,6 +8725,19 @@ fn pick_sat_transponder(
         // by name, rather than shifting everything after it.
         .filter(|t| t.norad == norad)
         .collect();
+    hold_sat_row(state, &name, &rows, index)
+}
+
+/// The pick's engine half: hold row `index` of `rows` — the list `get_sat_detail` showed for
+/// bird `name` — tell the engine what the catalogue says about it, and tune. It reads no
+/// global, so a test drives the real pick with catalogue records instead of a hand-copied
+/// list of engine calls.
+fn hold_sat_row(
+    state: &SharedEngine,
+    name: &str,
+    rows: &[&propagation::live::satnogs::Transmitter],
+    index: usize,
+) -> Result<(), String> {
     let tp = (*rows
         .get(index)
         .ok_or_else(|| format!("{name}: no transponder #{index}"))?)
@@ -8812,6 +8825,10 @@ fn pick_sat_transponder(
     // than to the zero. A CW/telemetry beacon is excluded for free — `downlink_class`
     // puts it in the SSB class, not FM.
     eng.set_sat_single_channel_fm(!tp.is_linear() && class.is_fm());
+    // …and, on the same terms, whether its uplink takes CW over that FM downlink (KOSEN-1).
+    // The downlink cannot say so, and the TX VFO's mode is otherwise derived from it
+    // (`Engine::sat_tx_mode`), which put FM on a CW-only uplink.
+    eng.set_sat_uplink_cw(tp.uplink_is_cw_only());
     // TUNE ON PICK — the click IS the consent for the dial, exactly as it is for
     // a spot, a repeater favourite or a band-map click. The hold is set FIRST so
     // the tune reads the transponder it is tuning to; a refused tune (Doppler
@@ -31293,6 +31310,52 @@ mod tests {
         engine_lock(&shared).set_frequency(14.105, "20m", "USB");
         let rig = super::EngineRig::new(shared);
         assert_eq!(rig.freq_hz(), 14_105_000);
+    }
+
+    /// ⭐ THE PICK TELLS THE ENGINE WHAT THE UPLINK TAKES, and the next pick forgets it.
+    /// KOSEN-1 (CW up over an AFSK downlink), then RS-44 (an inverting linear), then SO-50 (an
+    /// FM repeater), each through the pick's own engine half with the catalogue's records,
+    /// worked from Phone. The engine tests pin what the fact DOES; this pins that the pick
+    /// states it from the record. Without that line KOSEN-1's uplink is still commanded FM,
+    /// however right the engine is.
+    #[test]
+    fn the_pick_states_a_cw_uplink_and_the_next_pick_drops_it() {
+        // KOSEN-1 verbatim as db.satnogs.org served it on 2026-09-23; RS-44 and SO-50 from the
+        // same catalogue, trimmed to the fields the parser reads.
+        let rows = propagation::live::satnogs::parse_transmitters(
+            r#"[
+              {"uuid":"YcezEz4dXU5uTwzYEFFrtk","description":"Mode HF/U - Onboard SDR","alive":true,"type":"Transponder","uplink_low":21125000,"uplink_high":21150000,"uplink_drift":null,"uplink_drifted":21125000,"downlink_low":435525000,"downlink_high":435525000,"downlink_drift":null,"downlink_drifted":435525000,"mode":"AFSK","mode_id":49,"uplink_mode":"CW","invert":false,"baud":1200.0,"sat_id":"NJBJ-3838-9654-0508-8247","norad_cat_id":49402,"norad_follow_id":null,"status":"active","updated":"2021-09-30T18:19:40.605018Z","citation":"http://space.kochi-ct.jp/kosen-1/ and https://iaru.amsat-uk.org/finished_detail.php?serialnum=687","service":"Amateur","iaru_coordination":"IARU Coordinated","iaru_coordination_url":"https://iaru.amsat-uk.org/finished_detail.php?serialnum=687","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null},
+              {"norad_cat_id":44909,"description":"Mode V/U - Transponder","alive":true,"type":"Transponder","invert":true,"uplink_low":145935000,"uplink_high":145995000,"uplink_mode":"LSB","downlink_low":435610000,"downlink_high":435670000,"mode":"USB"},
+              {"norad_cat_id":27607,"description":"Mode V/U FM Voice CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145850000,"uplink_high":null,"uplink_mode":"FM","downlink_low":436795000,"downlink_high":null,"mode":"FM"}
+            ]"#,
+        );
+        let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&shared);
+            // Materialise radio 0 the way a launch does, so the uplink consent has a radio
+            // to be recorded for.
+            let s = e.settings().clone();
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::ADownBUp));
+        }
+        for (name, norad, want) in [
+            ("KOSEN-1", 49402, "CW"),
+            ("RS-44", 44909, "LSB"),
+            ("SO-50", 27607, "FM"),
+        ] {
+            let bird: Vec<&propagation::live::satnogs::Transmitter> =
+                rows.iter().filter(|t| t.norad == norad).collect();
+            assert_eq!(bird.len(), 1, "scene: {name} parsed");
+            super::hold_sat_row(&shared, name, &bird, 0).expect("the pick lands");
+            assert_eq!(
+                engine_lock(&shared).sat_tx_mode().as_deref(),
+                Some(want),
+                "{name}: the TX VFO's mode"
+            );
+        }
     }
 
     /// The engine mid-pass with a transponder HELD — the exact state the removed
