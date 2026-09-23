@@ -16,6 +16,7 @@
 mod field_day_display;
 mod mode_entry;
 pub mod radio_selection;
+pub mod receivers;
 pub mod remote_logging;
 pub mod remote_radio;
 pub mod remote_selection;

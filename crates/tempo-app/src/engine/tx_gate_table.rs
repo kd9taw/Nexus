@@ -19,6 +19,10 @@
 //! one was checked against the privilege tables by hand. The rows cover single-receiver radios,
 //! dual-receiver radios in ordinary operation, and satellite cross-band pairs, because those
 //! are the three places a second receiver could plausibly leak into the answer.
+//!
+//! The same rows are then judged the D1 way ([`Engine::tx_source_verdict`], against the receiver
+//! that transmits), and [`D1_DIFFERS`] pins every row where that answer parts from the gate's —
+//! the difference the maintainer rules on before the gate is ever switched.
 
 use super::*;
 use crate::dualrx::ReceiverId;
@@ -27,7 +31,7 @@ use tempo_core::doppler::{DownlinkClass, Transponder};
 
 /// RS-44 as the satellite tests elsewhere in the engine carry it: an INVERTING linear
 /// transponder, 2 m up and 70 cm down. On an IC-9700 that pair is Main = downlink, Sub = uplink.
-const RS44: Transponder = Transponder {
+pub(super) const RS44: Transponder = Transponder {
     uplink_centre_hz: 145_965_000,
     downlink_centre_hz: 435_640_000,
     invert: true,
@@ -37,7 +41,7 @@ const RS44: Transponder = Transponder {
 /// A CONSTRUCTED inverting pair whose uplink sits 1 kHz above the 2 m CW-only edge (144.100).
 /// No real bird uplinks there; it exists to put a sideband-sensitive emission next to a
 /// segment edge, which is the only place the uplink's sideband can change a licence answer.
-const EDGE_BIRD: Transponder = Transponder {
+pub(super) const EDGE_BIRD: Transponder = Transponder {
     uplink_centre_hz: 144_101_000,
     downlink_centre_hz: 435_640_000,
     invert: true,
@@ -46,7 +50,7 @@ const EDGE_BIRD: Transponder = Transponder {
 
 /// A V/V transponder (2 m in, 2 m out): the pass a Main/Sub Icom works on its A/B split,
 /// because Main and Sub cannot share a band.
-const VV_BIRD: Transponder = Transponder {
+pub(super) const VV_BIRD: Transponder = Transponder {
     uplink_centre_hz: 145_990_000,
     downlink_centre_hz: 145_950_000,
     invert: false,
@@ -54,7 +58,14 @@ const VV_BIRD: Transponder = Transponder {
 };
 
 /// A station on `model` with `class` privileges, in `section`, tuned to `mhz` on `band`.
-fn station(model: u32, class: &str, section: &str, mhz: f64, band: &str, sideband: &str) -> Engine {
+pub(super) fn station(
+    model: u32,
+    class: &str,
+    section: &str,
+    mhz: f64,
+    band: &str,
+    sideband: &str,
+) -> Engine {
     let mut e = Engine::new("KD9TAW", "EN52", 0);
     e.settings.ensure_radio_profiles();
     e.settings.rig_model = model;
@@ -69,7 +80,7 @@ fn station(model: u32, class: &str, section: &str, mhz: f64, band: &str, sideban
 /// Main = downlink / Sub = uplink confirmed for every radio, the native CI-V daemon serving,
 /// the transponder picked, the nominal legs queued. The section is set FIRST because a section
 /// change releases a satellite's hold on the rig mode.
-fn sat_pass(model: u32, class: &str, section: &str, tp: Transponder) -> Engine {
+pub(super) fn sat_pass(model: u32, class: &str, section: &str, tp: Transponder) -> Engine {
     let mut e = Engine::new("KD9TAW", "EN52", 0);
     e.settings.ensure_radio_profiles();
     e.settings.rig_model = model;
@@ -99,7 +110,7 @@ fn queued_uplink_hz(e: &Engine) -> u64 {
 /// the engine calls it makes: ask which VFO the split rides, then either report the rig's
 /// acknowledgement — naming the receiver it wrote, as the loop does — or report the refusal.
 /// Returns the VFO the split rode, if it was sent.
-fn loop_applies_sat_split(e: &mut Engine, cat: SatCatBackend) -> Option<&'static str> {
+pub(super) fn loop_applies_sat_split(e: &mut Engine, cat: SatCatBackend) -> Option<&'static str> {
     let up = queued_uplink_hz(e);
     e.rig_dial_applied(e.settings.dial_hz());
     match e.sat_split_tx_vfo(up, cat) {
@@ -301,6 +312,27 @@ fn rows() -> Vec<Row> {
                     loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
                     Some("Sub")
                 );
+                e
+            },
+            tx_allowed: true,
+            emission_mhz: 144.101,
+            phone_seg: Some((420.0, 450.0)),
+        },
+        // Added with the D1 comparison below, and measured the same way: the gate code these
+        // rows exercise is unchanged from the base. The one state in which the uplink's
+        // sideband is unknown — the operator took the mode back mid-pass, so Nexus stops
+        // commanding one (`sat_mode_released`). Every shipped caller of the override sets it for
+        // PHONE (the mode picker, a memory recall into Phone, Remote's phone mode), so in the
+        // Digital section it is reachable only through the bare `set_sideband_override` command.
+        Row {
+            name: "IC-9700 edge bird digital, uplink mode released mid-pass",
+            build: || {
+                let mut e = sat_pass(3081, "general", "digital", EDGE_BIRD);
+                assert_eq!(
+                    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+                    Some("Sub")
+                );
+                e.request_sideband_override(Some("USB"));
                 e
             },
             tx_allowed: true,
@@ -532,4 +564,102 @@ fn the_transmit_source_is_main_until_an_acknowledged_split_rides_the_sub() {
         Some("Sub")
     );
     assert_eq!(e.tx_source(), ReceiverId::Sub, "IC-905 uplink");
+}
+
+// ── D1: the same table, judged against the transmit source ─────────────────────────────
+
+/// What D1 answers for one row of the table.
+struct D1Answer {
+    row: &'static str,
+    tx_allowed: bool,
+    emission_mhz: f64,
+    phone_seg: Option<(f64, f64)>,
+}
+
+/// ⭐ THE DIFF TABLE — every row where D1's verdict ([`Engine::tx_source_verdict`]) decides
+/// differently from the gate today, with what D1 would answer. D1 and today agree on every row
+/// not listed, by assertion.
+///
+/// Read it as: switching the gate to D1 moves the band strip's phone shade on every cross-band
+/// pass (Main's 70 cm segment becomes the uplink's 2 m one), never moves the judged frequency,
+/// and changes a licence answer in exactly one state — the uplink's sideband unknown and a
+/// sideband-sensitive emission within an offset of a segment edge.
+const D1_DIFFERS: &[D1Answer] = &[
+    D1Answer {
+        row: "IC-9700 RS-44 phone, native CI-V: uplink rides Sub, General",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 RS-44 digital, native CI-V: uplink rides Sub, General",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 constructed edge bird (up 144.101, inverting) digital, General",
+        tx_allowed: true,
+        emission_mhz: 144.101,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-9700 edge bird digital, uplink mode released mid-pass",
+        tx_allowed: false,
+        emission_mhz: 144.101,
+        phone_seg: Some((144.1, 148.0)),
+    },
+    D1Answer {
+        row: "IC-905 (second receiver unread) RS-44, native CI-V: uplink rides Sub",
+        tx_allowed: true,
+        emission_mhz: 145.965,
+        phone_seg: Some((144.1, 148.0)),
+    },
+];
+
+/// D1 JUDGES THE TRANSMIT SOURCE, and parts from today's gate only where the Sub transmits.
+///
+/// A Main-sourced verdict IS the gate's (it judges the same receiver), so every difference must
+/// come from a Sub-sourced row; and a Sub-sourced row may still agree (the Open class has no
+/// segments to differ over), which is why the Sub-sourced count is asserted separately.
+#[test]
+fn d1_judges_the_transmit_source_and_parts_from_today_only_where_the_sub_transmits() {
+    let rows = rows();
+    for d in D1_DIFFERS {
+        assert!(
+            rows.iter().any(|r| r.name == d.row),
+            "the diff table names a row the table does not have: {}",
+            d.row
+        );
+    }
+    let mut sub_sourced = Vec::new();
+    for row in &rows {
+        let e = (row.build)();
+        let v = e.tx_source_verdict();
+        assert_eq!(v.source, e.tx_source(), "{}", row.name);
+        if v.source == ReceiverId::Sub {
+            sub_sourced.push(row.name);
+        }
+        let today = decisions(&e);
+        let d1 = (v.tx_allowed, v.emission_mhz, v.phone_seg);
+        match D1_DIFFERS.iter().find(|d| d.row == row.name) {
+            Some(d) => {
+                assert_eq!(v.source, ReceiverId::Sub, "{}", row.name);
+                assert!(
+                    d1.0 == d.tx_allowed
+                        && close(d1.1, d.emission_mhz)
+                        && same_seg(d1.2, d.phone_seg),
+                    "{}: D1 now answers {d1:?}",
+                    row.name
+                );
+                assert_ne!(d1, today, "{}: listed as differing, but agrees", row.name);
+            }
+            None => assert_eq!(d1, today, "{}: D1 must agree with the gate here", row.name),
+        }
+    }
+    assert_eq!(
+        sub_sourced.len(),
+        6,
+        "the Sub transmits on six rows, listed or not: {sub_sourced:?}"
+    );
 }
