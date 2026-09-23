@@ -130,20 +130,49 @@ pub fn open(
     open_with(log_path, resolve, network, MirrorOptions::default())
 }
 
+/// [`open`], telling `progress` how far a first launch's conversion of `log.adi` has got — what
+/// the start-up screen shows while it works (see [`migrate::migrate_log_reporting`]).
+pub fn open_reporting(
+    log_path: &Path,
+    resolve: StoreResolve,
+    network: Option<String>,
+    progress: &mut dyn FnMut(migrate::Progress),
+) -> Result<Opened, OpenError> {
+    open_reporting_with(
+        log_path,
+        resolve,
+        network,
+        MirrorOptions::default(),
+        progress,
+    )
+}
+
 /// [`open`], with the mirror's timings named — what a test uses so it does not wait a real
 /// second for a real write. `mirror.accepted` is decided here and overwritten.
 pub fn open_with(
     log_path: &Path,
     resolve: StoreResolve,
     network: Option<String>,
+    mirror_options: MirrorOptions,
+) -> Result<Opened, OpenError> {
+    open_reporting_with(log_path, resolve, network, mirror_options, &mut |_| {})
+}
+
+/// [`open_with`] and [`open_reporting`] in one: the mirror's timings, and the conversion's
+/// progress.
+fn open_reporting_with(
+    log_path: &Path,
+    resolve: StoreResolve,
+    network: Option<String>,
     mut mirror_options: MirrorOptions,
+    progress: &mut dyn FnMut(migrate::Progress),
 ) -> Result<Opened, OpenError> {
     if let Some(why) = network {
         return Err(OpenError::NetworkFolder(why));
     }
     let db_path = migrate::database_path(log_path);
-    let outcome =
-        migrate::migrate_log(log_path, &db_path, |r| resolve(r)).map_err(OpenError::Conversion)?;
+    let outcome = migrate::migrate_log_reporting(log_path, &db_path, |r| resolve(r), progress)
+        .map_err(OpenError::Conversion)?;
     let db = LogDb::open(&db_path).map_err(OpenError::Store)?;
     let records = db.load_all().map_err(OpenError::Store)?;
 

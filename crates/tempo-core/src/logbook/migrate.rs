@@ -242,6 +242,48 @@ pub fn is_converted(db_path: &Path) -> Result<bool> {
     Ok(LogDb::open(db_path)?.meta(DONE)? == Some(1))
 }
 
+/// How far a conversion has got, for a screen that shows it: `done` of `total` records are in the
+/// store. `total` is 0 until the log has been read and counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// Records in the store so far, counting any an interrupted attempt had already written.
+    pub done: usize,
+    /// Records in the log; 0 while that is not known yet.
+    pub total: usize,
+}
+
+/// [`migrate_log`], telling `progress` how far it has got.
+///
+/// ⚠️ A HOOK POINT, NOT YET WIRED. This reports nothing, so a start-up screen that shows it stays
+/// indeterminate. The conversion's own loop is where `done` and `total` are known, and that is
+/// where the calls belong.
+pub fn migrate_log_reporting<R>(
+    log_path: &Path,
+    db_path: &Path,
+    resolve: R,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<Outcome>
+where
+    R: Fn(&QsoRecord) -> Resolved<'static>,
+{
+    let _ = progress;
+    migrate_log(log_path, db_path, resolve)
+}
+
+/// Whether a conversion into `db_path` is running right now: some process holds its lock.
+///
+/// Asked without waiting, and without creating the lock file. A launch asks it before it does
+/// anything of its own, so a second double-click while the first launch converts stands down
+/// instead of queueing invisibly behind the conversion and then opening a second copy of Nexus.
+/// A lock file nobody holds is a conversion that was interrupted, not one that is running; and a
+/// lock that cannot be asked about reads as "no", as [`ConversionLock`] itself treats one.
+pub fn conversion_in_progress(db_path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(ConversionLock::path_for(db_path)) else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
 /// The advisory lock that keeps two processes from converting one log into one store at once.
 /// Best-effort by construction: a lock that cannot be taken (a filesystem without locks, a
 /// read-only folder) is no lock, and the conversion's own checks — a resume reads the store's
@@ -951,6 +993,54 @@ mod tests {
         assert!(
             !ConversionLock::path_for(&d.db()).exists(),
             "the lock file is gone once the conversion is done"
+        );
+    }
+
+    /// ⛔ **A launch can see another window's conversion without joining its queue.** The answer
+    /// comes from the lock a conversion really holds — not from the lock FILE, which an
+    /// interrupted conversion leaves behind — and asking must neither wait nor create the file.
+    #[test]
+    fn a_conversion_in_progress_is_seen_from_its_lock_and_only_while_it_is_held() {
+        let d = Dir::new("inprogress");
+        let file = ConversionLock::path_for(&d.db());
+        assert!(
+            !conversion_in_progress(&d.db()),
+            "no lock file: nothing is converting"
+        );
+        assert!(!file.exists(), "and asking did not create one");
+
+        let lock = ConversionLock::take(&d.db());
+        assert!(
+            lock.file.is_some(),
+            "premise: this filesystem takes the lock"
+        );
+        // Asked from another thread with a deadline, so a check that WAITS on the lock fails
+        // here instead of hanging the suite.
+        let db = d.db();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(conversion_in_progress(&db));
+        });
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(true),
+            "held: a conversion is running, and asking did not wait for it"
+        );
+
+        drop(lock); // what a crash or a kill leaves: the file, and nobody holding it
+        assert!(
+            file.exists(),
+            "premise: an interrupted conversion leaves its file"
+        );
+        assert!(
+            !conversion_in_progress(&d.db()),
+            "a lock file nobody holds is an interrupted conversion, not a running one"
+        );
+
+        ConversionLock::take(&d.db()).finished();
+        assert!(
+            !conversion_in_progress(&d.db()),
+            "finished: nothing is converting"
         );
     }
 

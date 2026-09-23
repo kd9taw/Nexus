@@ -1,0 +1,20 @@
+<!doctype html>
+<!-- Where the hidden main window waits while the launch opens the logbook (tauri.conf.json
+     starts it here). It runs no script, so nothing reaches the app's engine from this window
+     until the log is attached; then the launch sends the window to the app itself (src-tauri
+     `finish_launch`). The window is not shown before that. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nexus</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0e151f;
+      }
+    </style>
+  </head>
+  <body></body>
+</html>
