@@ -995,6 +995,17 @@ pub struct RadioStatus {
     /// why the waterfall is blank instead of failing silently.
     #[serde(default)]
     pub audio_error: Option<String>,
+    /// Why this station is NOT sharing its radio, when the CAT broker asked for its port and
+    /// could not have it — `None` = it is serving, or sharing is switched off (#165).
+    ///
+    /// ⭐ IT EXISTS BECAUSE THE APP CLAIMED THE OPPOSITE. The share block prints
+    /// `127.0.0.1:<port>` for any operator whose "Share this radio with other programs" switch
+    /// is on, and printed it just the same when the bind had been refused — an address to paste
+    /// into WSJT-X that nothing was listening on. The refusal had a good sentence written for it
+    /// from the first day; it went to the connection log, which, in the reporter's words about
+    /// exactly this, "is not where anyone looks".
+    #[serde(default)]
+    pub cat_share_error: Option<String>,
     /// A problem with the RF SCOPE source, separate from `audio_error` on purpose: they have
     /// different cures and can be true at once. `None` = nothing to say.
     ///

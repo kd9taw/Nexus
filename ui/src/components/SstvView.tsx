@@ -206,6 +206,11 @@ interface Props {
   /** Panel visibility/resize record — host-owned (App), so it survives this view's remounts.
    *  Optional: without it the panels all show and there's no ⊞ menu. */
   panels?: PanelLayoutApi<SstvPanelId>
+  /** Is THIS radio set to hold the data submode for as long as the SSTV receiver runs
+   *  (`Settings::sstv_hold_data_submode`, per radio, default off)? Absent/false ⇒ the rig drops
+   *  back to plain USB/FM between pictures, and the view says where the switch is — see the
+   *  signpost below. */
+  holdDataSubmode?: boolean
   /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the audio and
    * callsign faults below say what to fix without offering to take you there. */
   onOpenSettings?: (target: string) => void
@@ -581,7 +586,7 @@ function ReceivedThumb({entry,active}: {entry:SstvGalleryEntry;active:boolean}) 
  * receiver keeps listening while the operator is on another section.
  * txState=false: nothing here transmits.
  */
-export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txFskId, txPowerPct, panels, onOpenSettings }: Props) {
+export function SstvView({ snap, theme = 'default', onSnap, active = true, onSetFrequency, onSetTxEnabled, wheelSensitivity, txModeDefault, txFskId, txPowerPct, panels, onOpenSettings, holdDataSubmode }: Props) {
   const canControl=useStationControl(), receiverControl=useStationCapability('decoder'), dataAvailable=useStationData(), source=useContext(RemoteCollectionsContext), remote=!!source
   // Deleting a received picture is permanent and it is the operator's only copy, so a browser may
   // do it only while the station advertises its gallery verb.
@@ -1583,6 +1588,39 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       : inFlight && sstv?.mode
         ? `${SSTV} · ${sstv.mode}`
         : SSTV
+  // ⭐ #191 — THE POINTER TO A SWITCH THAT ALREADY SHIPPED, PUT WHERE THE REPORT WAS WRITTEN.
+  //
+  // F4CYH watched an IC-7300 and an IC-7100 drop out of USB-D between pictures and asked for
+  // the mode to be held, the way FT and RTTY hold it. 1.13.0 shipped exactly that switch, per
+  // radio — and it lives in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced, a COLLAPSED group the same
+  // operator had already failed to find a different switch inside ("i did not notice the arrow
+  // for 'advanced' to expand the view"). A capability nobody can find is a capability that does
+  // not exist, and a second operator hit the identical wall on Discord the same week.
+  //
+  // It is a LINK, never a second copy of the setting: the switch is per radio and its hint
+  // carries a warning about going back to voice with the receiver running, neither of which
+  // survives being duplicated into a cockpit. `SettingsGroup` opens the disclosure it is
+  // targeted at (the mechanism Issue #62 produced), so the switch is on screen on arrival
+  // rather than one more click away.
+  //
+  // Shown only while the receiver is ARMED and the hold is OFF — the exact state in which the
+  // radio does the thing being complained about. With the receiver stopped the switch does
+  // nothing at all, so offering it there would promise the reporter's OTHER ask (hold it while
+  // the tab is merely open), which is still open and is not this.
+  const dataModeSignpost =
+    onOpenSettings && armed && holdDataSubmode === false ? (
+      <span className="sstv-datamode-hint">
+        {t('sstv.dataMode.drops')}{' '}
+        <button
+          type="button"
+          className="settings-linkbtn"
+          onClick={() => onOpenSettings('rig-advanced')}
+        >
+          {t('sstv.dataMode.action')}
+        </button>
+      </span>
+    ) : null
+
   // The header shift readout, when the arriving picture says the dial is off frequency.
   const hedrShiftHz = Math.round(sstv?.hedrShiftHz ?? 0)
   const tuneOff = `${hedrShiftHz > 0 ? '+' : ''}${hedrShiftHz}`
@@ -1797,6 +1835,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   {t('sstv.caption.tuneOff', { hz: tuneOff })}
                 </span>
               )}
+              {dataModeSignpost}
             </div>
           </div>
         ) : (
@@ -1860,6 +1899,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   </button>
                 </>
               )}
+              {dataModeSignpost}
             </div>
           </div>
         )}

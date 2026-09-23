@@ -23,7 +23,7 @@ pub mod seq;
 
 pub use baudot::{code_bits, encodable, BaudotDecoder, BaudotEncoder};
 pub use demod::{DecodedChar, RttyConfig, RttyDemod, RttyDemodulator};
-pub use seq::{Action, RttySeq, SeqState};
+pub use seq::{Action, RttySeq, SeqConfig, SeqState};
 
 /// The mark/space audio tone pair (Hz) for a netted `center_hz`, `shift_hz`, and
 /// sense — the SINGLE source of truth shared by the RX demod thread's tones and

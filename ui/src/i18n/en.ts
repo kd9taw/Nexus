@@ -6158,6 +6158,13 @@ export const EN = {
   'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
   'settings.rtty.reverse.hint':
     'The convention is LSB with mark on the lower audio tone. Turn this on when deliberately running the opposite sideband (e.g. AFSK in USB/DATA-U) so the on-air sense stays correct — applies to TX and the RX decoder.',
+  'settings.rtty.autoCall.title': 'Auto call',
+  'settings.rtty.autoListen.label': 'Listen before repeating',
+  'settings.rtty.autoListen.hint':
+    'How long Auto call waits before it calls CQ again, in seconds — and the same wait before it asks a station for a repeat. The clock starts when your over has finished going out, not when it was queued. <b>30 seconds</b> is what Auto call has always done; change it only if you want a faster or slower cycle. Anything under 5 seconds would key over the answer you just asked for, so 5 is the floor.',
+  'settings.rtty.autoRepeats.label': 'Repeats before giving up',
+  'settings.rtty.autoRepeats.hint':
+    'How many times Auto call asks again inside a contact before it lets that station go. <b>This does not limit CQ.</b> An unanswered CQ repeats until you stop it — that is what the Stop button and the TX switch are for.',
 
   // ── Settings ▸ PSK ──────────────────────────────────────────────────────────────────
   'settings.psk.legend': 'PSK',
@@ -8267,6 +8274,8 @@ export const EN = {
     'Hearing audio, no SSTV header yet — a picture decodes automatically when one starts.{{where}}',
   'sstv.rx.unreachable':
     'Cannot read the receiver state — the app is not answering. The decoder may still be running.',
+  'sstv.dataMode.drops': 'Between pictures this radio goes back to plain USB, and its data-mode filters go with it.',
+  'sstv.dataMode.action': 'Hold the data mode',
   'sstv.rx.openAudio': 'Open audio settings',
 
   // ── SSTV ▸ the header and the RX stage ──────────────────────────────────────────────

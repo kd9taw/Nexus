@@ -155,6 +155,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'rigblaster', 'mic jack', 'pktusb', 'data-u', 'usb-d',
       // #130: the words the reporter used were the RIG's, not ours — "FM-D", "reverts to FM".
       'fm-d', 'fmd', 'data-fm', 'pktfm', 'fm data', 'data submode', 'sstv fm', 'hold mode',
+      // #191 is that same switch's HF half, and these are the only three of that thread's
+      // vocabulary that returned NOTHING (the rest already landed here — measured, not
+      // guessed). 'lsb-d' was the asymmetry: 'usb-d' above was a keyword and the sideband the
+      // reporter named for 80 m was not. The other two are the SYMPTOM, which is what an
+      // operator types when they have never seen the switch: "the icom are back in USB mode".
+      'lsb-d', 'back to usb', 'stays in usb',
       // The #145 declarations. The words here are the SYMPTOM, not the setting name — an
       // operator whose rig keys the moment Nexus opens does not search for "handshake".
       'serial handshake', 'flow control', 'xonxoff', 'rts state', 'dtr state', 'keying line',
@@ -309,7 +315,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'RTTY',
     tab: 'digital',
     keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
-      'mark', 'space', 'auto arm', 'start receiving', 'not decoding', 'macro'],
+      'mark', 'space', 'auto arm', 'start receiving', 'not decoding', 'macro',
+      // #304 asked for a "timer" and neither the control nor this section is called one.
+      // The rest are what the cadence is called out loud — the reporter wrote "cq, 15s rx,
+      // cq", not "listen window".
+      'timer', 'auto call', 'auto cq', 'cq repeat', 'repeat cq', 'listen', 'unattended',
+      'calling interval', 'give up', 'sequencer'],
   },
   {
     id: 'psk',

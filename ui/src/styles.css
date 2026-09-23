@@ -11989,6 +11989,34 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text);
   user-select: all; /* one click selects the whole address for anyone not using Copy */
 }
+/* #165: why this radio is NOT being shared, in the slot the address occupies when it is. The
+   error colour, not the caution one: `.settings-error` versus `.settings-warn` draws this line
+   in the same panel, and a refused bind is "this stopped you" — sharing is off until the port
+   is free. `--state-weak` is defined in both themes.
+
+   It sits in `.rig-share-row`, a flex row holding the switch, so it needs `min-width: 0` to
+   WRAP rather than push the row past the panel: this is a sentence in a slot sized for
+   `127.0.0.1:4532`, and at the 1024 floor it is three lines. `align-self: center` keeps it
+   level with the switch it is talking about at every width. */
+/* #191: the pointer to the per-radio "Hold the data mode" switch, riding in either SSTV
+   caption. `--text-faint` is the caption's own colour (`.settings-hint` uses it too): this is
+   an aside, not a fault — nothing is broken, the radio is doing what it was configured to do.
+   `display: block` puts it on its own line so it never competes with the decode status the
+   caption exists for, and the caption's own wrapping does the rest. */
+.sstv-datamode-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.rig-share-fault {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: center;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--state-weak);
+}
 .bandmap-track {
   position: relative;
   flex: 1;

@@ -22046,6 +22046,41 @@ fn broker_bind_backoff(attempts: u32) -> std::time::Duration {
     std::time::Duration::from_secs(2u64.saturating_pow(attempts.clamp(1, 6)).min(60))
 }
 
+/// ⭐ **The one sentence a refused sharing bind says, wherever it is said (#165).**
+///
+/// The reporter runs their own rigctld on 4532 before starting anything else, so Nexus's broker
+/// asks for a port that is already gone. The sentence itself was never the problem — what was
+/// missing is that it only ever reached the connection log, and in the reporter's own words
+/// about this bug, that "is not where anyone looks". It is built here, once, so the line in the
+/// log and the line in the share block cannot come to say different things.
+///
+/// **It names the two controls by the exact words printed beside them** — "Share this radio with
+/// other programs" (`settings.transmit.share.label`) and "Sharing port"
+/// (`settings.rigControl.sharingPort.label`) — because a route that names a control the operator
+/// cannot then find on screen is the failure mode this whole change is about. ⚠️ If either label
+/// is reworded, this sentence is part of the rename;
+/// `the_refused_sharing_message_names_controls_that_exist` in the UI suite reads the catalog and
+/// fails otherwise.
+///
+/// ⚠️ **`AddrInUse` is the only kind that earns the advice**, and splitting on it is the whole
+/// of "say what is holding it" that can be said honestly from here. On that kind another program
+/// IS holding the port — a fact, not a guess — and turning sharing off is a real fix. On any
+/// other kind (a privileged port, a firewall, an interface that is gone) nothing is holding
+/// anything, and telling the operator to switch off a working feature would send them after the
+/// wrong thing. Identifying WHICH program holds it needs a process scan Nexus deliberately does
+/// not do, so the usual suspects are named as suspects.
+fn broker_bind_message(port: u16, err: &std::io::Error) -> String {
+    if err.kind() == std::io::ErrorKind::AddrInUse {
+        format!(
+            "Not sharing this radio: another program is already listening on 127.0.0.1:{port}              — usually your own rigctld, a second copy of Nexus, or another radio's daemon.              Nexus does not need this port to drive the radio, so if that other program is the              one you want, switch off \"Share this radio with other programs\" in Settings ▸              Radio. To go on sharing through Nexus instead, set \"Sharing port\" to a number              nothing else uses. Retrying quietly."
+        )
+    } else {
+        format!(
+            "Not sharing this radio: 127.0.0.1:{port} was refused — {err}. Set \"Sharing port\"              in Settings ▸ Radio to a port this computer will allow, or switch off \"Share this              radio with other programs\". Retrying quietly."
+        )
+    }
+}
+
 /// May the manager attempt to bind `port` right now? A record for a DIFFERENT port never
 /// holds one back — moving the broker to a free port is the operator's fix for this, and it
 /// must take effect on the next tick.
@@ -24599,6 +24634,13 @@ pub fn run() {
                     if let Some((_, shutdown)) = running.take() {
                         shutdown.store(true, Ordering::Relaxed);
                     }
+                    // Sharing switched off is not a fault, and a complaint about the old port
+                    // must not outlive the decision to stop asking for it. Cleared here rather
+                    // than only on a later success, because when `want` is None there is no
+                    // later success to clear it.
+                    if want.is_none() {
+                        engine_lock(&mgr_engine).set_cat_share_error(None);
+                    }
                     // Start on the wanted port, unless a recent failure on THIS port says to
                     // wait. A different port is always tried at once — changing it is the
                     // operator's fix for a conflict and must take effect on the next tick.
@@ -24608,6 +24650,7 @@ pub fn run() {
                     {
                         match std::net::TcpListener::bind(("127.0.0.1", port)) {
                             Ok(l) => {
+                                engine_lock(&mgr_engine).set_cat_share_error(None);
                                 let shutdown = std::sync::Arc::new(AtomicBool::new(false));
                                 let backend: std::sync::Arc<
                                     dyn tempo_audio::rigctld_server::RigBackend,
@@ -24625,17 +24668,16 @@ pub fn run() {
                                 );
                             }
                             Err(e) => {
+                                // The sentence goes to the operator FIRST and to the log
+                                // second. It is set on every failure, not only the first: the
+                                // log line is rate-limited because a repeated line is noise,
+                                // but the snapshot holds a current state, and a UI that only
+                                // learned about the first failure would go blank on the second.
+                                let msg = broker_bind_message(port, &e);
+                                engine_lock(&mgr_engine).set_cat_share_error(Some(msg.clone()));
                                 if broker_record_failure(&mut failure, port, now) {
                                     // ONE line, naming the port and the cause an operator can
                                     // act on. The retry carries on quietly behind the backoff.
-                                    let msg = format!(
-                                        "couldn't bind 127.0.0.1:{port}: {e} — another program \
-                                         is already listening there (your own rigctld, a second \
-                                         copy of Nexus, or this radio's own daemon on 4534). \
-                                         Sharing is OFF until it frees up; change the Sharing \
-                                         port in Settings ▸ Radio, or stop the other program. \
-                                         Retrying quietly."
-                                    );
                                     tempo_core::applog::error("cat", &msg);
                                     conn_log("CAT broker", "error", msg);
                                 }
@@ -27315,6 +27357,55 @@ mod tests {
         assert!(
             !digital.set_mode("USB", 2700),
             "plain USB is a different emission from PKTUSB — refuse it"
+        );
+    }
+
+    /// ⭐ **#165 — a refused sharing port has to explain itself in the words of the switch that
+    /// frees it.**
+    ///
+    /// The reporter starts rigctld on 4532 themselves, before anything else. Nexus's broker
+    /// then asks for a port that is gone, and what the operator got was a failure to control
+    /// the radio with no visible cause — "A failed bind only shows up as a line in the
+    /// connection log, which is not where anyone looks."
+    ///
+    /// Asserted on the CONTROLS, not on the prose: naming a path is what already failed here
+    /// (and in #191), so what is pinned is that the sentence contains the exact text printed
+    /// beside the switch and beside the port box.
+    #[test]
+    fn a_taken_sharing_port_names_the_switch_that_resolves_it() {
+        use std::io::{Error, ErrorKind};
+        let msg = super::broker_bind_message(4532, &Error::from(ErrorKind::AddrInUse));
+        assert!(msg.contains("4532"), "never says which port: {msg}");
+        assert!(
+            msg.contains("Share this radio with other programs"),
+            "does not name the switch that frees the port: {msg}"
+        );
+        assert!(
+            msg.contains("Sharing port"),
+            "does not name the other way out: {msg}"
+        );
+        assert!(
+            msg.contains("Settings"),
+            "names two controls and not where they are: {msg}"
+        );
+    }
+
+    /// POSITIVE CONTROL, and the reason the branch exists. A bind can fail for reasons that
+    /// are NOT another program holding the port, and on those "switch off sharing" sends the
+    /// operator after the wrong thing entirely — so the advice is bound to `AddrInUse`, the one
+    /// kind on which "another program is already listening" is a fact rather than a guess.
+    #[test]
+    fn a_bind_refused_for_another_reason_does_not_blame_another_program() {
+        use std::io::{Error, ErrorKind};
+        let msg = super::broker_bind_message(4532, &Error::from(ErrorKind::PermissionDenied));
+        assert!(
+            !msg.contains("already listening"),
+            "claims a program holds the port when the error says otherwise: {msg}"
+        );
+        assert!(msg.contains("4532"), "still says which port: {msg}");
+        assert!(
+            msg.contains("Sharing port"),
+            "still offers the fix that works for this one: {msg}"
         );
     }
 

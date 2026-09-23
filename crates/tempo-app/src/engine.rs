@@ -2899,6 +2899,9 @@ pub struct Engine {
     /// Set by the radio loop when the sound card failed to open, so the UI can
     /// explain a blank waterfall instead of failing silently.
     audio_error: Option<String>,
+    /// Why the CAT broker is not serving, when its bind was refused (#165). See
+    /// [`crate::dto::RadioStatus::cat_share_error`].
+    cat_share_error: Option<String>,
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
@@ -4726,6 +4729,7 @@ impl Engine {
             amp_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
+            cat_share_error: None,
             scope_error: None,
             scope_span_refused: None,
             scope_mode_code: None,
@@ -17177,6 +17181,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 ];
                 tempo_core::rtty::RttySeq::new(&mycall, tempo_core::contest::casual(), &exch)
             };
+            // #304: the Auto-call cadence the operator set, clamped (`rtty_seq_config`), on
+            // BOTH arms — the machine is rebuilt here and by `rtty_reconcile_auto_exchange`
+            // after every save, so a listen window typed mid-session takes effect on the next
+            // over rather than at the next launch. Applied after construction because that is
+            // where the sequencer's own default lives: a station that never opens Settings is
+            // handed back exactly the constants it was built with.
+            let mut seq = seq;
+            seq.cfg = self.settings.rtty_seq_config();
             self.rtty_seq = Some(seq);
         } else {
             if let Some(seq) = self.rtty_seq.as_mut() {
@@ -18082,6 +18094,17 @@ contact yourself."
 
     pub fn set_audio_error(&mut self, err: Option<String>) {
         self.audio_error = err;
+    }
+
+    /// Record why this station is not sharing its radio, or clear it (#165).
+    ///
+    /// ⚠️ **Written on EVERY broker decision, in both directions, and that is the whole
+    /// contract.** A bind that is refused sets it; a bind that succeeds, and switching sharing
+    /// off, clear it. A setter that were only ever called on failure would leave an operator who
+    /// fixed the collision staring at the complaint about it — which is the same defect as the
+    /// stale address this replaced, pointing the other way.
+    pub fn set_cat_share_error(&mut self, err: Option<String>) {
+        self.cat_share_error = err;
     }
 
     /// Set the operator's TX-slot parity live. `true` = transmit on even/"1st"
@@ -19000,6 +19023,7 @@ contact yourself."
         }
         .to_string();
         s.radio.audio_error = self.audio_error.clone();
+        s.radio.cat_share_error = self.cat_share_error.clone();
         // A map lookup and a clone: no I/O and no second lock. `Engine::snapshot` runs under
         // the engine mutex on the UI's 300 ms poll, and work done inside it has twice stalled
         // the radio loop.
@@ -24128,6 +24152,126 @@ mod tests {
         let mut s = e.settings().clone();
         s.fd_active = on;
         e.apply_settings(s);
+    }
+
+    /// ⭐ **#165 — a refused sharing bind reaches the SNAPSHOT, which is where a screen can
+    /// read it.** The sentence existed from the start; it went to the connection log alone, and
+    /// the reporter's own words about this bug are that the connection log "is not where anyone
+    /// looks". Nothing rendered it, so the share block went on printing an address nothing was
+    /// listening on.
+    ///
+    /// Both directions, because the clear is half the contract: an operator who moves their own
+    /// rigctld off 4532 must not be left reading the complaint about it.
+    /// ⚠️ **THE WIRE KEY, READ THROUGH THE JSON.** `reference-settings-plumbing`'s oldest trap:
+    /// a hand-written TS key that does not match what serde emits fails SILENTLY — no error, no
+    /// warning, the field simply never arrives and the control does nothing. `ui/src/types.ts`
+    /// hand-writes `catShareError`, so that is what is asserted, on the serialized document
+    /// rather than on the field.
+    #[test]
+    fn the_sharing_fault_reaches_the_ui_on_the_key_the_ui_reads() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_cat_share_error(Some("port taken".to_string()));
+        let json = serde_json::to_string(&e.snapshot().radio).unwrap();
+        assert!(
+            json.contains("\"catShareError\":\"port taken\""),
+            "missing wire key catShareError in {json}"
+        );
+    }
+
+    #[test]
+    fn a_refused_sharing_bind_reaches_the_snapshot_and_clears_again() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.snapshot().radio.cat_share_error.is_none(),
+            "a station with no collision must say nothing about one"
+        );
+
+        e.set_cat_share_error(Some("Not sharing this radio: …".to_string()));
+        assert_eq!(
+            e.snapshot().radio.cat_share_error.as_deref(),
+            Some("Not sharing this radio: …"),
+            "the refusal never reached the screen"
+        );
+
+        e.set_cat_share_error(None);
+        assert!(
+            e.snapshot().radio.cat_share_error.is_none(),
+            "a bind that succeeded left the old complaint on screen"
+        );
+    }
+
+    /// Arm Auto on a casual (non-contest) engine whose Auto-call timing has been set to
+    /// `listen` seconds and `repeats` cycles, and hand back the sequencer's own config.
+    /// Reads the machine, not the settings — the question every test below asks is whether
+    /// the number the operator typed got as far as the thing that uses it.
+    fn armed_seq_config(listen: u32, repeats: u32) -> tempo_core::rtty::SeqConfig {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        let mut s = e.settings().clone();
+        s.rtty_auto_listen_secs = listen;
+        s.rtty_auto_repeats = repeats;
+        e.apply_settings(s);
+        e.set_rtty_auto(true).expect("Auto arms outside a contest");
+        e.rtty_seq.as_ref().expect("armed").cfg
+    }
+
+    /// ⭐ **#304 — the Auto-call listen window and repeat budget are the OPERATOR'S, by value.**
+    ///
+    /// "would it be possible please to add a timer possibility for rtty qso's (example cq,
+    /// 15s rx, cq etc)". Auto call already did the cq-listen-cq cadence; the window was
+    /// `SeqConfig::default()`, a constant with no way in, so 15 was not expressible.
+    ///
+    /// ⚠️ **The values here are DELIBERATELY not the defaults.** Asserting 30 s / 3 proves
+    /// nothing — an unwired `set_rtty_auto` returns exactly that — so the assertion is on a
+    /// pair that cannot arise by accident, and the default is checked separately below as its
+    /// own claim.
+    #[test]
+    fn the_auto_call_timing_an_operator_sets_reaches_the_sequencer() {
+        let cfg = armed_seq_config(15, 5);
+        assert_eq!(
+            cfg.timeout_ms, 15_000,
+            "the operator asked for a 15 s listen window and the sequencer never heard it"
+        );
+        assert_eq!(
+            cfg.max_repeats, 5,
+            "the repeat budget did not reach the sequencer either"
+        );
+    }
+
+    /// The other half, and the one the project's premise rests on: **an operator who never
+    /// opens Settings gets the sequencer they had.** 30 s / 3 are the shipped constants, so
+    /// this is the claim that the new field is an adjustment and not a prerequisite.
+    #[test]
+    fn an_unconfigured_station_still_gets_the_shipped_auto_call_cadence() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("rtty", false);
+        e.set_rtty_auto(true).expect("Auto arms outside a contest");
+        let cfg = e.rtty_seq.as_ref().expect("armed").cfg;
+        assert_eq!(cfg, tempo_core::rtty::SeqConfig::default());
+        assert_eq!(cfg.timeout_ms, 30_000, "the shipped listen window");
+        assert_eq!(cfg.max_repeats, 3, "the shipped repeat budget");
+    }
+
+    /// **A settings file is not a trusted number.** It is hand-editable JSON and a Remote
+    /// write-back target, and `timeout_ms` is the silence between one over ending and the
+    /// next one keying — so a `0` is a station that re-keys the moment its own transmission
+    /// finishes playing out. The clamp lives at the consuming end for that reason, and this
+    /// checks BOTH directions: a value under the floor and a value over the ceiling.
+    #[test]
+    fn an_out_of_range_auto_call_timing_is_clamped_before_it_can_key() {
+        let low = armed_seq_config(0, 0);
+        assert_eq!(
+            low.timeout_ms, 5_000,
+            "a zero listen window must not reach TX"
+        );
+        assert_eq!(
+            low.max_repeats, 1,
+            "zero repeats aborts before the first AGN"
+        );
+
+        let high = armed_seq_config(9_999, 9_999);
+        assert_eq!(high.timeout_ms, 120_000, "the listen window has a ceiling");
+        assert_eq!(high.max_repeats, 10, "so does the repeat budget");
     }
 
     /// The CQ the sequencer actually keys, as text off the TX queue.

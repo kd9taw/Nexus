@@ -2209,6 +2209,33 @@ pub struct Settings {
     /// (`rttyRXAutoArm` compiles clean on both sides and never matches).
     #[serde(default = "default_true")]
     pub rtty_rx_auto_arm: bool,
+    /// RTTY **Auto call**: how long the sequencer listens before it repeats itself, in
+    /// seconds (#304). This is the whole of the "CQ, listen, CQ" cadence the reporter
+    /// asked for — the window between two CQs when nobody comes back, and equally the
+    /// wait before `AGN` inside a contact.
+    ///
+    /// ⭐ **The default IS the shipped behaviour, and that is the point.** Auto call
+    /// worked before this field existed and must keep working untouched by an operator
+    /// who never opens Settings: 30 s is exactly the constant
+    /// [`tempo_core::rtty::SeqConfig::default`] has always carried, so a file that
+    /// predates the key and an operator who never touches the control get the same
+    /// sequencer they had. The setting is an ADJUSTMENT, never a prerequisite.
+    ///
+    /// Read through [`Settings::rtty_seq_config`], which CLAMPS it — the sequencer is a
+    /// transmit path, and a hand-edited `0` here would put a station back on the air the
+    /// instant its own over finished playing out.
+    #[serde(default = "default_rtty_auto_listen_secs")]
+    pub rtty_auto_listen_secs: u32,
+    /// RTTY **Auto call**: how many unanswered cycles a contact gets before the
+    /// sequencer gives up on it (#304), [`tempo_core::rtty::SeqConfig::max_repeats`].
+    ///
+    /// ⚠️ It bounds a CONTACT, not the CQ loop: an unanswered CQ repeats forever and is
+    /// stopped by the operator (`cq_repeats_forever_without_abort` in `rtty/seq.rs`), so
+    /// raising this never lengthens an unattended CQ run. Cycles `1..n` send `AGN` or
+    /// repeat the call; cycle `n` aborts. Default 3, the shipped constant. Clamped by
+    /// [`Settings::rtty_seq_config`].
+    #[serde(default = "default_rtty_auto_repeats")]
+    pub rtty_auto_repeats: u32,
 
     // --- alerts / comforts ---
     /// Alert (sound + visual) when your callsign is decoded (someone calling you).
@@ -2738,6 +2765,25 @@ fn default_rtty_baud() -> f64 {
 
 fn default_rtty_shift_hz() -> u32 {
     170
+}
+
+/// The bounds [`Settings::rtty_seq_config`] clamps to, and the range the Settings controls
+/// offer. Named here so the control and the chokepoint cannot disagree about what is legal.
+pub const RTTY_AUTO_LISTEN_SECS_MIN: u32 = 5;
+pub const RTTY_AUTO_LISTEN_SECS_MAX: u32 = 120;
+pub const RTTY_AUTO_REPEATS_MIN: u32 = 1;
+pub const RTTY_AUTO_REPEATS_MAX: u32 = 10;
+
+/// ⚠️ **Both of these are the sequencer's own shipped constants, deliberately.** They are
+/// read off [`tempo_core::rtty::SeqConfig::default`] rather than written out again, so the
+/// "unconfigured Nexus behaves exactly as it did" promise cannot drift from the machine it is
+/// a promise about — a second copy of `30_000` here would let one move without the other.
+fn default_rtty_auto_listen_secs() -> u32 {
+    (tempo_core::rtty::SeqConfig::default().timeout_ms / 1_000) as u32
+}
+
+fn default_rtty_auto_repeats() -> u32 {
+    tempo_core::rtty::SeqConfig::default().max_repeats
 }
 
 /// "auto" = the SSTV screen's band-aware pick, which is what it does today.
@@ -4203,6 +4249,8 @@ impl Default for Settings {
             sstv_tx_fsk_id: false,
             psk_rx_auto_arm: true,
             rtty_rx_auto_arm: true,
+            rtty_auto_listen_secs: default_rtty_auto_listen_secs(),
+            rtty_auto_repeats: default_rtty_auto_repeats(),
             alert_my_call: true,
             alert_confirm_tier: true, // the tier ships lit; the setting is the opt-out
             log_reports_to_comments: false, // WSJT-X parity: dBtoComments defaults false
@@ -5376,6 +5424,39 @@ impl Settings {
     pub fn rf_power_ceiling_am(&self) -> f32 {
         let am = self.max_power_am.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0);
         am.min(self.rf_power_ceiling())
+    }
+
+    /// ⭐ **The RTTY auto-sequencer's timing, as the sequencer takes it — the ONE place the
+    /// operator's two numbers become [`tempo_core::rtty::SeqConfig`]** (#304).
+    ///
+    /// It exists to be a chokepoint rather than a getter. `SeqConfig` drives a TRANSMIT path:
+    /// `timeout_ms` is measured from `on_tx_complete`, so it is the silence between one over
+    /// ending and the next one keying, and a `0` there is a station that re-keys the instant
+    /// its own transmission stops playing out. Settings arrive from a JSON file an operator can
+    /// edit by hand and from a Remote write-back, neither of which the UI's number boxes bound,
+    /// so the bound belongs here — where the value is CONSUMED — and not only on the control.
+    ///
+    /// * **listen 5 s … 120 s.** An RTTY over is ~10 s of keying and the operator on the far end
+    ///   has to hear the end of it, start typing and get their own over out; under 5 s the
+    ///   machine is talking over the reply it asked for. Above two minutes "auto" has stopped
+    ///   being automatic, and the operator is better served by the Stop button.
+    /// * **repeats 1 … 10.** `0` is degenerate rather than lenient: `tick` increments first and
+    ///   tests `repeats >= max_repeats`, so zero aborts the contact on its first timeout, before
+    ///   a single `AGN` — a sequencer that gives up faster than the band allows anyone to answer.
+    ///
+    /// ⚠️ Neither bound restrains an unanswered CQ run, because nothing here can: `SeqState::CallingCq`
+    /// never aborts by design (the operator owns stopping a run). What bounds that is the TX
+    /// watchdog, which a bare CQ repeat deliberately does not reset — see `Engine::rtty_drive`.
+    pub fn rtty_seq_config(&self) -> tempo_core::rtty::SeqConfig {
+        tempo_core::rtty::SeqConfig {
+            timeout_ms: u64::from(
+                self.rtty_auto_listen_secs
+                    .clamp(RTTY_AUTO_LISTEN_SECS_MIN, RTTY_AUTO_LISTEN_SECS_MAX),
+            ) * 1_000,
+            max_repeats: self
+                .rtty_auto_repeats
+                .clamp(RTTY_AUTO_REPEATS_MIN, RTTY_AUTO_REPEATS_MAX),
+        }
     }
 
     pub fn rig_mode(&self) -> String {
@@ -8105,6 +8186,66 @@ mod tests {
         assert!(old.rtty_rx_auto_arm, "an upgrader's file predates the key");
         let off: Settings = serde_json::from_str(r#"{"rttyRxAutoArm":false}"#).unwrap();
         assert!(!off.rtty_rx_auto_arm, "and an explicit opt-out survives");
+    }
+
+    /// ⭐ **#304 — the Auto-call timing fields, on the wire keys the UI hand-writes, and the
+    /// upgrade path that must not move anybody's cadence.**
+    ///
+    /// The operator-visible promise is that a station which never opens Settings keeps the
+    /// sequencer it had, so the load-bearing assertion is the third one: a settings file
+    /// written before these keys existed comes back 30 s / 3. A bare `#[serde(default)]`
+    /// would have read that same file as 0 s / 0 repeats — a sequencer that re-keys the
+    /// instant its own over stops and gives up on a contact before its first `AGN`.
+    #[test]
+    fn rtty_auto_call_timing_defaults_wire_keys_and_upgrade() {
+        let s = Settings::default();
+        assert_eq!(s.rtty_auto_listen_secs, 30, "the shipped listen window");
+        assert_eq!(s.rtty_auto_repeats, 3, "the shipped repeat budget");
+
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"rttyAutoListenSecs\":30"),
+            "missing wire key rttyAutoListenSecs in {json}"
+        );
+        assert!(
+            json.contains("\"rttyAutoRepeats\":3"),
+            "missing wire key rttyAutoRepeats in {json}"
+        );
+
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            old.rtty_seq_config(),
+            tempo_core::rtty::SeqConfig::default(),
+            "an upgrader's file predates both keys and its Auto call must not change"
+        );
+
+        // An explicit choice survives the round trip — a default that ignored the file
+        // would pass the assertions above on its own.
+        let set: Settings =
+            serde_json::from_str(r#"{"rttyAutoListenSecs":15,"rttyAutoRepeats":5}"#).unwrap();
+        assert_eq!(set.rtty_seq_config().timeout_ms, 15_000);
+        assert_eq!(set.rtty_seq_config().max_repeats, 5);
+    }
+
+    /// The clamp, asserted where the value is CONSUMED rather than where it is typed: this
+    /// JSON never went through the number boxes, and it is the shape a hand-edited file or a
+    /// Remote write-back has. Both bounds, both fields — a one-sided clamp is half a guard.
+    #[test]
+    fn a_hand_edited_auto_call_timing_cannot_reach_the_sequencer_out_of_range() {
+        let zero: Settings =
+            serde_json::from_str(r#"{"rttyAutoListenSecs":0,"rttyAutoRepeats":0}"#).unwrap();
+        let cfg = zero.rtty_seq_config();
+        assert_eq!(
+            cfg.timeout_ms, 5_000,
+            "a 0 s window would re-key immediately"
+        );
+        assert_eq!(cfg.max_repeats, 1, "0 aborts before the first AGN");
+
+        let huge: Settings =
+            serde_json::from_str(r#"{"rttyAutoListenSecs":86400,"rttyAutoRepeats":1000}"#).unwrap();
+        let cfg = huge.rtty_seq_config();
+        assert_eq!(cfg.timeout_ms, 120_000);
+        assert_eq!(cfg.max_repeats, 10);
     }
 
     /// The RTTY cockpit's F1–F8 sets, on the exact wire keys `ui/src/types.ts` hand-writes
