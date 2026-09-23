@@ -26,7 +26,7 @@ Deliberate differences: Nexus always decodes every RX slot (no Monitor-on/off to
 
 ### Will JTAlert and GridTracker still work?
 
-Yes. Nexus outputs the standard WSJT-X UDP datagram set on `127.0.0.1:2237` (Decode type 2, Status type 1, QsoLogged type 5, Heartbeat). It also accepts inbound HaltTx, Clear, Replay, Location, HighlightCallsign, FreeText, and Reply. (`Location` type 11 updates the operator's Maidenhead grid from a GPS feeder.) Type numbers are pinned to the canonical 0–15 range. During Field Day, the Status message sets `special_op = 3` so JTAlert and GridTracker auto-activate their FD behaviour. You may need to point JTAlert at port `2237` if you changed the WSJT-X default in your setup — check Settings → Logging & Connectors ▸ Integrations & Feeds.
+Yes, once you turn it on: the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is **off by default**. Its address already defaults to `127.0.0.1:2237`, WSJT-X's own, so nothing else needs setting. Nexus then outputs the standard WSJT-X UDP datagram set (Decode type 2, Status type 1, QsoLogged type 5, LoggedADIF type 12, Heartbeat). It also accepts inbound HaltTx, Clear, Replay, Location, HighlightCallsign, FreeText, and Reply. (`Location` type 11 updates the operator's Maidenhead grid from a GPS feeder.) Type numbers are pinned to the canonical 0–15 range. During Field Day, the Status message sets `special_op = 3` so JTAlert and GridTracker auto-activate their FD behaviour. You may need to point JTAlert at port `2237` if you changed the WSJT-X default in your setup — check Settings → Logging & Connectors ▸ Integrations & Feeds.
 
 ---
 

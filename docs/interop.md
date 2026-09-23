@@ -24,7 +24,7 @@ WSJT-X broadcasts a stream of UDP datagrams that the whole ham ecosystem listens
 **identical** datagrams (magic `0xADBCCBDA`, schema 3), announcing itself with the
 sender id **`Tempo`**.
 
-**Enable it:** Settings → turn on the WSJT-X UDP output (`wsjtx_udp`). The target
+**Enable it:** Settings → Logging & Connectors ▸ Integrations & Feeds → turn on **WSJT-X UDP API** (`wsjtx_udp`, **off by default**). The target
 address defaults to **`127.0.0.1:2237`** (`wsjtx_udp_addr`) — WSJT-X's own default —
 so most consumers need no reconfiguration. A **multicast group address** also works
 if you want several apps to hear Nexus at once.
@@ -38,6 +38,7 @@ if you want several apps to hear Nexus at once.
 | Decode | per decoded signal | the decode that feeds spotting, alerts, and the map |
 | Clear | when you Erase a window | mirroring your Band Activity / Rx Frequency clears |
 | QSOLogged | on each logged contact | filing the QSO in the logger |
+| LoggedADIF | right after QSOLogged, on each logged contact | the same contact as a raw ADIF record — GridTracker2 files worked status from it, and some loggers read only this one |
 | Close | on shutdown | so consumers drop the connection cleanly |
 
 **What Nexus accepts back** (so a controlling app can drive it): Reply (double-click a
