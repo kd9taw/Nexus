@@ -4457,6 +4457,10 @@ export const EN = {
   'program.coverageGap':
     '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <b>Settings ▸ Integrations</b> fills the gap.',
 
+  // `{{states}}` is a list of 2-letter state codes — tokens, never translated.
+  'program.missingStates':
+    'RepeaterBook did not answer for <b>{{states}}</b>, so repeaters there are missing from this list. That is a fetch that failed, not an empty area — fetch again in a few minutes.',
+
   // Narrowing the results. The band chips and the FM chip are mode/band names, not prose.
   'program.filters.aria': 'Result filters',
   'program.filters.allBands': 'All',

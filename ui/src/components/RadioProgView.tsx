@@ -842,6 +842,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               />
             </div>
           )}
+          {/* A state the search planned but never heard from. Said out loud, because a
+              short list is otherwise indistinguishable from a quiet area (#241). */}
+          {result && result.missingStates.length > 0 && (
+            <div className="rp-note" role="status">
+              <T
+                k="program.missingStates"
+                tags={{ b: <strong /> }}
+                vals={{ states: result.missingStates.join(', ') }}
+              />
+            </div>
+          )}
 
           <div className="rp-filters" role="group" aria-label={t('program.filters.aria')}>
             <button disabled={remote}

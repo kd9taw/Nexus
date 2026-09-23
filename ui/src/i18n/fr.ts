@@ -3160,6 +3160,7 @@ export const FR: PartialCatalog = {
   "program.clear.confirm.ok": "Vider la liste",
   "program.clear.confirm.title": "Vider toute la liste de canaux ?",
   "program.count": "{{shown}} sur {{total}} affichés · les plus proches d'abord",
+  "program.missingStates": "RepeaterBook n'a pas répondu pour <b>{{states}}</b>, les relais de cette zone manquent donc dans cette liste. C'est une requête qui a échoué, pas une zone vide — réessayez dans quelques minutes.",
   "program.coverageGap": "{{source}} ne liste aucun relais <b>{{band}}</b> ici, ce qui est inhabituel pour une zone qui en a — sa couverture rurale est irrégulière, donc cette liste est sans doute incomplète. Ajouter un token API RepeaterBook dans <b>Réglages ▸ Intégrations</b> comble le manque.",
   "program.deliver.byHand.label": "Ajouter à la main…",
   "program.deliver.byHand.title": "Saisir un relais ou un canal simplex que l'annuaire n'a pas (ou a faux)",

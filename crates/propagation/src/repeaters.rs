@@ -234,61 +234,79 @@ pub fn parse_hearham_json(json: &str) -> Vec<RepeaterRecord> {
 
 // ── query planning ──────────────────────────────────────────────────────────
 
+/// US state 2-letter code ↔ RepeaterBook `state_id` (US FIPS, zero-padded).
+///
+/// ONE table, read in both directions, so they cannot drift: [`state_id_for`] goes
+/// forwards to plan the fetch, [`state_code_for_id`] comes back so a coverage report
+/// can name the state an operator recognizes instead of a FIPS number.
+const STATE_IDS: &[(&str, &str)] = &[
+    ("AL", "01"),
+    ("AK", "02"),
+    ("AZ", "04"),
+    ("AR", "05"),
+    ("CA", "06"),
+    ("CO", "08"),
+    ("CT", "09"),
+    ("DE", "10"),
+    ("FL", "12"),
+    ("GA", "13"),
+    ("HI", "15"),
+    ("ID", "16"),
+    ("IL", "17"),
+    ("IN", "18"),
+    ("IA", "19"),
+    ("KS", "20"),
+    ("KY", "21"),
+    ("LA", "22"),
+    ("ME", "23"),
+    ("MD", "24"),
+    ("MA", "25"),
+    ("MI", "26"),
+    ("MN", "27"),
+    ("MS", "28"),
+    ("MO", "29"),
+    ("MT", "30"),
+    ("NE", "31"),
+    ("NV", "32"),
+    ("NH", "33"),
+    ("NJ", "34"),
+    ("NM", "35"),
+    ("NY", "36"),
+    ("NC", "37"),
+    ("ND", "38"),
+    ("OH", "39"),
+    ("OK", "40"),
+    ("OR", "41"),
+    ("PA", "42"),
+    ("RI", "44"),
+    ("SC", "45"),
+    ("SD", "46"),
+    ("TN", "47"),
+    ("TX", "48"),
+    ("UT", "49"),
+    ("VT", "50"),
+    ("VA", "51"),
+    ("WA", "53"),
+    ("WV", "54"),
+    ("WI", "55"),
+    ("WY", "56"),
+];
+
 /// US state 2-letter code → RepeaterBook `state_id` (US FIPS, zero-padded).
 pub fn state_id_for(code: &str) -> Option<&'static str> {
-    Some(match code {
-        "AL" => "01",
-        "AK" => "02",
-        "AZ" => "04",
-        "AR" => "05",
-        "CA" => "06",
-        "CO" => "08",
-        "CT" => "09",
-        "DE" => "10",
-        "FL" => "12",
-        "GA" => "13",
-        "HI" => "15",
-        "ID" => "16",
-        "IL" => "17",
-        "IN" => "18",
-        "IA" => "19",
-        "KS" => "20",
-        "KY" => "21",
-        "LA" => "22",
-        "ME" => "23",
-        "MD" => "24",
-        "MA" => "25",
-        "MI" => "26",
-        "MN" => "27",
-        "MS" => "28",
-        "MO" => "29",
-        "MT" => "30",
-        "NE" => "31",
-        "NV" => "32",
-        "NH" => "33",
-        "NJ" => "34",
-        "NM" => "35",
-        "NY" => "36",
-        "NC" => "37",
-        "ND" => "38",
-        "OH" => "39",
-        "OK" => "40",
-        "OR" => "41",
-        "PA" => "42",
-        "RI" => "44",
-        "SC" => "45",
-        "SD" => "46",
-        "TN" => "47",
-        "TX" => "48",
-        "UT" => "49",
-        "VT" => "50",
-        "VA" => "51",
-        "WA" => "53",
-        "WV" => "54",
-        "WI" => "55",
-        "WY" => "56",
-        _ => return None,
-    })
+    STATE_IDS
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map(|(_, id)| *id)
+}
+
+/// RepeaterBook `state_id` → US state 2-letter code — the inverse of [`state_id_for`],
+/// for naming a state that a search planned but could not fetch.
+pub fn state_code_for_id(state_id: &str) -> Option<&'static str> {
+    STATE_IDS
+        .iter()
+        .find(|(_, id)| *id == state_id)
+        .map(|(c, _)| *c)
 }
 
 /// Which RepeaterBook state exports cover a radius query. The origin's state
@@ -314,6 +332,81 @@ pub fn plan_states(origin: (f64, f64), radius_km: f64) -> Vec<String> {
         push(p.0, p.1);
     }
     out
+}
+
+/// What ONE planned state contributed to a multi-state search.
+///
+/// A [`plan_states`] entry becomes one of these. `body` is `None` when the state
+/// yielded nothing at all — the fetch failed with no cache to fall back on, or the
+/// per-state throttle blocked it — which is the case that used to vanish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateFetch {
+    /// RepeaterBook `state_id` (US FIPS), exactly as [`plan_states`] produced it.
+    pub state_id: String,
+    /// The export payload, from a fresh fetch or from cache. `None` = nothing.
+    pub body: Option<String>,
+    /// When `body` was obtained (unix secs). Meaningless when `body` is `None`.
+    pub fetched_utc: i64,
+    /// `body` came from cache because the fetch failed or was rate-limited.
+    pub stale: bool,
+}
+
+/// What a multi-state search actually covered — the records it found AND the states
+/// it never heard from.
+///
+/// **The whole point of `missing`.** A search that plans two states and hears from one
+/// used to be reported exactly like a search that heard from both: the caller kept a
+/// single `any` flag, so "there are no repeaters near you" and "we could not fetch your
+/// state" produced the same screen (issue #241). The states are carried as 2-letter
+/// codes because that is what an operator recognizes — a FIPS number names nothing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StateCoverage {
+    /// Every record parsed out of the states that did answer.
+    pub records: Vec<RepeaterRecord>,
+    /// Oldest payload timestamp behind `records` — the "as of" stamp.
+    pub oldest_utc: i64,
+    /// At least one served body was stale cache.
+    pub stale: bool,
+    /// Planned states that returned NOTHING, as 2-letter codes, in plan order.
+    /// An unrecognized `state_id` is passed through verbatim rather than dropped —
+    /// losing it here would be the same silence this type exists to end.
+    pub missing: Vec<String>,
+}
+
+impl StateCoverage {
+    /// True when at least one planned state answered. A search where NO state answered
+    /// has no RepeaterBook result at all and falls through to the other directory.
+    pub fn any_served(&self) -> bool {
+        self.oldest_utc != i64::MAX
+    }
+}
+
+/// Fold each planned state's fetch into the records plus the coverage report.
+pub fn fold_state_fetches(fetches: &[StateFetch]) -> StateCoverage {
+    let mut records = Vec::new();
+    let mut oldest = i64::MAX;
+    let mut stale = false;
+    let mut missing = Vec::new();
+    for f in fetches {
+        match &f.body {
+            Some(body) => {
+                records.extend(parse_repeaterbook_json(body));
+                oldest = oldest.min(f.fetched_utc);
+                stale |= f.stale;
+            }
+            None => missing.push(
+                state_code_for_id(&f.state_id)
+                    .unwrap_or(&f.state_id)
+                    .to_string(),
+            ),
+        }
+    }
+    StateCoverage {
+        records,
+        oldest_utc: oldest,
+        stale,
+        missing,
+    }
 }
 
 /// A major band the source lists NO repeater on, in an area where it lists
@@ -474,6 +567,91 @@ mod tests {
 
     // EN52 center — the WI/IL border area (exercises multi-state planning).
     const EN52: (f64, f64) = (42.5, -89.0);
+
+    /// A one-row RepeaterBook export, in the `{results:[…]}` wrapper shape.
+    fn rb_row(callsign: &str, mhz: f64, lat: f64, lon: f64) -> String {
+        format!(
+            r#"{{"results":[{{"Callsign":"{callsign}","Frequency":"{mhz}","Lat":"{lat}","Long":"{lon}","State ID":"42","Rptr ID":"1","FM Analog":"Yes"}}]}}"#
+        )
+    }
+
+    /// Issue #241 (swinn): a search that hears from ONE of two planned states must be
+    /// DISTINGUISHABLE from one that hears from both.
+    ///
+    /// The discriminator is the coverage report BY VALUE. A row count is NOT one: a
+    /// genuinely thin area and a state that failed to fetch both produce a short list,
+    /// which is exactly why the old `any` flag could not tell the operator apart from
+    /// "there are no repeaters near you".
+    #[test]
+    fn a_state_that_answered_nothing_is_named_in_the_coverage() {
+        let pa = StateFetch {
+            state_id: "42".into(),
+            body: Some(rb_row("W3ZGD", 146.865, 39.9, -76.6)),
+            fetched_utc: 1000,
+            stale: false,
+        };
+        let md_served = StateFetch {
+            state_id: "24".into(),
+            body: Some(rb_row("K3AE", 146.895, 39.7, -76.7)),
+            fetched_utc: 900,
+            stale: false,
+        };
+        let md_silent = StateFetch {
+            state_id: "24".into(),
+            body: None,
+            fetched_utc: 0,
+            stale: false,
+        };
+
+        // CONTROL — both states answered. Nothing is missing, and the stamp is the
+        // OLDER of the two payloads.
+        let both = fold_state_fetches(&[pa.clone(), md_served]);
+        assert_eq!(both.records.len(), 2);
+        assert_eq!(both.missing, Vec::<String>::new());
+        assert!(both.any_served());
+        assert_eq!(both.oldest_utc, 900);
+
+        // THE DEFECT — Maryland answered nothing. Same call shape, and the observable
+        // MUST differ: the absent state is named, not merely absent.
+        let partial = fold_state_fetches(&[pa, md_silent]);
+        assert_eq!(partial.records.len(), 1);
+        assert_eq!(
+            partial.missing,
+            vec!["MD".to_string()],
+            "a state that returned nothing must be named"
+        );
+        assert!(partial.any_served());
+        assert_eq!(partial.oldest_utc, 1000);
+    }
+
+    /// No state answered at all: there is no RepeaterBook result to report, and every
+    /// planned state is named. An unrecognized id is passed through rather than dropped.
+    #[test]
+    fn no_state_answering_reports_every_planned_state() {
+        let silent = |id: &str| StateFetch {
+            state_id: id.into(),
+            body: None,
+            fetched_utc: 0,
+            stale: false,
+        };
+        let cov = fold_state_fetches(&[silent("42"), silent("24"), silent("99")]);
+        assert!(!cov.any_served(), "nothing answered");
+        assert!(cov.records.is_empty());
+        assert_eq!(cov.missing, vec!["PA", "MD", "99"]);
+    }
+
+    /// The two directions read ONE table, so a code that plans a fetch must name
+    /// itself again when that fetch is the one that failed.
+    #[test]
+    fn state_code_and_id_round_trip() {
+        for (code, id) in STATE_IDS {
+            assert_eq!(state_id_for(code), Some(*id));
+            assert_eq!(state_code_for_id(id), Some(*code));
+        }
+        assert_eq!(STATE_IDS.len(), 50);
+        assert_eq!(state_id_for("ZZ"), None);
+        assert_eq!(state_code_for_id("99"), None);
+    }
 
     #[test]
     fn hearham_fixture_parses() {

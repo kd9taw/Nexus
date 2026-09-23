@@ -4216,6 +4216,14 @@ export interface RepeaterSearchResult {
    * set on the hearham path.
    */
   coverageGap: string | null
+  /**
+   * States this search planned to read but heard nothing from (2-letter codes).
+   * A directory that failed to fetch leaves a SHORT list that otherwise looks
+   * complete, so the panel has to name the absent state rather than let it read
+   * as "there are no repeaters near you". Empty on the hearham path — that is one
+   * global feed, not per-state exports.
+   */
+  missingStates: string[]
   rows: RepeaterSearchRow[]
 }
 
