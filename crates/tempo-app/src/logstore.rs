@@ -1726,6 +1726,48 @@ mod tests {
         );
     }
 
+    /// The start-up screen hears a first launch's conversion through the store's open: not
+    /// counted yet, then counted up to every contact. A launch whose store is already converted
+    /// hears nothing — the screen has nothing to show it.
+    #[test]
+    fn a_launch_passes_the_conversions_progress_through() {
+        let d = Dir::new("progress");
+        std::fs::write(d.log(), legacy_log(40)).unwrap();
+        let mut seen = Vec::new();
+        let opened =
+            open_reporting_with(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
+                .expect("the store opens");
+        assert_eq!(
+            opened.outcome,
+            migrate::Outcome::Converted {
+                written: 40,
+                resumed_at: 0,
+                total: 40
+            }
+        );
+        assert_eq!(
+            seen.first(),
+            Some(&migrate::Progress { done: 0, total: 0 }),
+            "{seen:?}"
+        );
+        assert_eq!(
+            seen.last(),
+            Some(&migrate::Progress {
+                done: 40,
+                total: 40
+            }),
+            "{seen:?}"
+        );
+        drop(opened);
+
+        seen.clear();
+        let again =
+            open_reporting_with(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
+                .expect("the store opens again");
+        assert_eq!(again.outcome, migrate::Outcome::AlreadyDone);
+        assert!(seen.is_empty(), "{seen:?}");
+    }
+
     // ── the FT duplicate guard (hard gate) ──────────────────────────────────
 
     /// ⛔ THE GUARD ANSWERS FROM MEMORY AND NEVER FROM THE STORE. With the store's writer held
