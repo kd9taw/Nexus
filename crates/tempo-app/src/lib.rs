@@ -17,6 +17,7 @@ pub mod bandplan;
 pub mod clocksync;
 pub mod connect_web;
 pub mod dto;
+pub mod dualrx;
 pub mod engine;
 pub mod fd_scoreboard;
 pub mod fdbridge;

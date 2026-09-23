@@ -56,7 +56,10 @@ pub mod control_line;
 /// Whether a radio has a SECOND RECEIVER, and how its two receivers may be paired — a
 /// vendor-sourced table, because Hamlib's VFO list says what can be ADDRESSED and not what
 /// can RECEIVE. Three-state; UNKNOWN is never "no". Pure; tested.
-pub mod dualrx;
+///
+/// The table lives in `tempo-app`, where the engine can consult it (the engine cannot depend
+/// on this crate); re-exported here so `crate::dualrx` reads as it always did.
+pub use tempo_app::dualrx;
 /// FlexRadio native DAX RX audio orchestrator (Phase 2) — same VITA-49 path as flexspectrum.
 #[cfg(feature = "device")]
 pub mod flexdax;
