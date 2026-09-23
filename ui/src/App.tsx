@@ -3470,6 +3470,10 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
                 txPowerPct={settings?.sstvTxPowerPct}
                 panels={sstvPanels}
                 onOpenSettings={openSettingsAt}
+                // #191: the flat mirror, so this is the ACTIVE radio's answer. The switch is
+                // per radio (it is a property of how one rig is cabled), and the view is about
+                // the radio being operated.
+                holdDataSubmode={settings?.sstvHoldDataSubmode ?? false}
               />
             </div>
           )}

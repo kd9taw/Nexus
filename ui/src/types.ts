@@ -1386,6 +1386,11 @@ export interface RadioStatus {
   splitTxMhz?: number | null
   /** Set when the sound card failed to open (explains a blank waterfall). */
   audioError?: string | null
+  /** Why this station is NOT sharing its radio: the CAT broker asked for its port and was
+   *  refused (#165). Absent/null = it is serving, or sharing is switched off. The share block
+   *  renders this INSTEAD of the address, because with the bind refused that address is one
+   *  nothing is listening on. */
+  catShareError?: string | null
   /**
    * What is wrong with the RF SCOPE source, separate from `audioError` — different problem, different
    * cure, and both can be true at once.
@@ -3782,6 +3787,15 @@ export interface Settings {
    *  decode mode with no auto-arm, which is very likely what "RTTY is not decoding" was.
    *  Absent = on (`rtty_rx_auto_arm`, settings.rs). */
   rttyRxAutoArm?: boolean
+  /** RTTY **Auto call**: the seconds it listens before repeating itself — the cq/listen/cq
+   *  cadence of #304, and equally the wait before AGN inside a contact. Absent = 30, the
+   *  sequencer's shipped constant, so an operator who never opens Settings is unaffected.
+   *  Clamped 5..120 where it is consumed (`Settings::rtty_seq_config`), not only here. */
+  rttyAutoListenSecs?: number
+  /** RTTY **Auto call**: unanswered cycles a CONTACT gets before the sequencer gives up.
+   *  Absent = 3. An unanswered CQ is not bounded by this and never was — it repeats until
+   *  the operator stops it. Clamped 1..10 where it is consumed. */
+  rttyAutoRepeats?: number
   /** Alert (beep + flash) when a decode is directed at my callsign. */
   alertMyCall: boolean
   /** Alert when any station is calling CQ. */

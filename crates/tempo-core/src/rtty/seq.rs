@@ -61,7 +61,7 @@ const WINDOW_CAP: usize = 400;
 /// Timing knobs. `timeout_ms` runs from the last emitted action (or the last
 /// [`RttySeq::on_tx_complete`], when the engine reports it — an RTTY
 /// over takes ~10 s of TX time, which the machine cannot see on its own).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeqConfig {
     pub timeout_ms: u64,
     /// Timeout cycles before the session aborts; cycles `1..max_repeats` send
@@ -1605,6 +1605,92 @@ mod tests {
         let s = sends(&seq.take_actions());
         assert_eq!(s, vec![my_exchange], "the same exchange goes out again");
         assert_eq!(seq.state(), SeqState::ExchangeSent);
+    }
+
+    /// ⭐ **`timeout_ms` IS the listen window — the claim the engine's wiring test rests on.**
+    ///
+    /// The engine test asserts a number reached `seq.cfg`; that is only worth something if the
+    /// number changes what the machine does, and until #304 every test in this file used the
+    /// one default, so nothing here would have noticed `tick` reading a constant instead.
+    ///
+    /// Both halves are read off the SAME clock, which is the positive control: 15 001 ms is a
+    /// fresh CQ on a 15 s window and silence on the 30 s default, so it is the window that
+    /// moved the observable and not the tick.
+    #[test]
+    fn the_listen_window_is_what_decides_when_the_cq_repeats() {
+        let mut short = casual_seq();
+        short.cfg.timeout_ms = 15_000;
+        short.start_cq(0);
+        short.take_actions(); // the operator's first CQ
+
+        short.tick(14_999);
+        assert!(
+            sends(&short.take_actions()).is_empty(),
+            "repeated inside its own listen window"
+        );
+        short.tick(15_001);
+        assert!(
+            sends(&short.take_actions())
+                .iter()
+                .any(|t| t.contains("CQ")),
+            "a 15 s window did not repeat at 15 s"
+        );
+
+        // POSITIVE CONTROL — the shipped window, same clock, nothing yet.
+        let mut shipped = casual_seq();
+        assert_eq!(shipped.cfg.timeout_ms, 30_000);
+        shipped.start_cq(0);
+        shipped.take_actions();
+        shipped.tick(15_001);
+        assert!(
+            sends(&shipped.take_actions()).is_empty(),
+            "the default window repeated at 15 s, so the test above proves nothing"
+        );
+        shipped.tick(30_001);
+        assert!(
+            sends(&shipped.take_actions())
+                .iter()
+                .any(|t| t.contains("CQ")),
+            "the default window did not repeat at 30 s either — the tick is broken"
+        );
+    }
+
+    /// The other knob, same argument. A budget of 2 aborts the contact one cycle EARLIER than
+    /// the shipped 3, and the control is the shipped machine still sending its second `AGN` on
+    /// the same tick.
+    #[test]
+    fn the_repeat_budget_is_what_decides_when_a_contact_is_given_up() {
+        let mut tight = fd_seq();
+        tight.cfg.max_repeats = 2;
+        tight.start_cq(0);
+        tight.feed_text("W1XYZ W1XYZ K\n", 1_000);
+        tight.take_actions();
+        tight.tick(40_000); // cycle 1: AGN
+        assert!(sends(&tight.take_actions())[0].contains("AGN"));
+        tight.tick(80_000); // cycle 2 == the budget: give up
+        assert!(
+            tight.take_actions().contains(&Action::Abort),
+            "a budget of 2 did not abort on its second cycle"
+        );
+
+        // POSITIVE CONTROL — the shipped budget is still mid-contact on that same tick.
+        let mut shipped = fd_seq();
+        assert_eq!(shipped.cfg.max_repeats, 3);
+        shipped.start_cq(0);
+        shipped.feed_text("W1XYZ W1XYZ K\n", 1_000);
+        shipped.take_actions();
+        shipped.tick(40_000);
+        shipped.take_actions();
+        shipped.tick(80_000);
+        let a = shipped.take_actions();
+        assert!(
+            !a.contains(&Action::Abort),
+            "the shipped budget aborted on the same tick, so the test above proves nothing"
+        );
+        assert!(
+            sends(&a)[0].contains("AGN"),
+            "it sends its second AGN instead"
+        );
     }
 
     #[test]

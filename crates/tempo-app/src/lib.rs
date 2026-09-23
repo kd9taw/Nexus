@@ -323,6 +323,7 @@ impl AppState {
                 cw_wpm: 25,
                 split_tx_mhz: None,
                 audio_error: None,
+                cat_share_error: None,
                 scope_error: None,
                 scope_span_refused: None,
                 scope_mode_code: None,

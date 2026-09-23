@@ -1016,6 +1016,22 @@ Comma-separated chip lists for the quick text you fire from each surface:
   AFSK in USB/DATA-U) so the on-air sense stays correct." Applies to TX and the
   RX decoder.
 
+**Auto call**
+
+The RTTY cockpit's **Auto call** button sends CQ, listens, and sends CQ again if
+nobody comes back, repeating until you stop it. These two set its rhythm, and
+both ship carrying what Auto call already did — change them only if you want a
+different cycle.
+
+- **Listen before repeating** — seconds of silence before it calls CQ again, and
+  the same wait before it asks a station for a repeat. The clock starts when your
+  over has finished going out, not when it was queued. 5 to 120 seconds; below 5
+  you would key over the answer you just asked for.
+- **Repeats before giving up** — how many times it asks again *inside a contact*
+  before letting that station go, 1 to 10. It does not limit CQ: an unanswered CQ
+  repeats until you stop it, which is what the Stop button and the TX switch are
+  for.
+
 ![The RTTY group: "Start receiving when RTTY opens" switched on, Keying backend set to "AFSK — soundcard tones through the rig in LSB (default)", Baud rate "45.45 — the HF standard" and Shift "170 — the HF standard".](../img/manual/settings-rtty.webp)
 
 *RTTY in Nexus 1.10.3, on the AFSK default. Baud and shift drive both the

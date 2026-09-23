@@ -891,6 +891,23 @@ const KEYING_EXAMPLES = {
 } as const
 
 /**
+ * The RTTY Auto-call timing bounds and the values the controls ship carrying (#304).
+ *
+ * ⚠️ **A SECOND COPY OF A NUMBER THE ENGINE ALSO HOLDS**, and the reason it is exported is that
+ * a copy nothing checks is a copy that drifts. `Settings::rtty_seq_config` clamps to exactly
+ * these bounds and `SeqConfig::default` is exactly these defaults;
+ * `SettingsPanel.rttyauto.test.tsx` reads the Rust source and fails if the two ever disagree.
+ * Widening only the input's `max` would otherwise produce a box that accepts a number the
+ * sequencer silently refuses — a control that looks like it worked and did nothing.
+ */
+export const RTTY_AUTO_LISTEN_SECS_MIN = 5
+export const RTTY_AUTO_LISTEN_SECS_MAX = 120
+export const RTTY_AUTO_LISTEN_SECS_DEFAULT = 30
+export const RTTY_AUTO_REPEATS_MIN = 1
+export const RTTY_AUTO_REPEATS_MAX = 10
+export const RTTY_AUTO_REPEATS_DEFAULT = 3
+
+/**
  * APRS's own wire formats, shown as examples or written into a frame.
  *
  * `ssid` and `watchCalls` are callsigns, `path` is a digipeater path the packet carries
@@ -6345,7 +6362,24 @@ export function SettingsPanel({
                 >
                   <span className="toggle-knob" />
                 </button>
-                {form.catBroker && (
+                {/* #165: WITH THE BIND REFUSED, THE ADDRESS IS NOT A FACT. The reporter runs
+                    their own rigctld on 4532, so Nexus's broker asks for a port that is gone
+                    — and this block printed `127.0.0.1:4532` regardless, an address to paste
+                    into WSJT-X that nothing was listening on, beside a Copy button offering to
+                    hand it over. The refusal had a sentence written for it from the first day;
+                    it went to the connection log, which is not where anyone looks.
+
+                    So the address and its Copy button are replaced, not annotated: an address
+                    that is wrong is worse than no address, and the sentence in its place names
+                    the switch directly above it as the way out. The engine writes this lane on
+                    every broker decision in both directions, so a collision the operator fixes
+                    clears it with no save and no restart. */}
+                {form.catBroker && radio?.catShareError && (
+                  <span className="rig-share-fault" role="alert">
+                    {radio.catShareError}
+                  </span>
+                )}
+                {form.catBroker && !radio?.catShareError && (
                   <>
                     <code className="rig-share-addr mono">
                       127.0.0.1:{form.catBrokerPort || 4532}
@@ -7811,6 +7845,50 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">{t('settings.rtty.reverse.hint')}</span>
               </div>
+            </div>
+            {/* AUTO CALL (#304). The reporter asked for "cq, 15s rx, cq" and the cadence
+                already existed — the RTTY cockpit's Auto call button — with its listen window
+                welded shut at the sequencer's 30 s default. These two are that constant, opened
+                up. They are an ADJUSTMENT, not a prerequisite: the boxes ship carrying the
+                behaviour Auto call already had, so an operator who never comes here loses
+                nothing, which is why neither is a placeholder over an empty field.
+
+                The ranges are the ones `Settings::rtty_seq_config` clamps to, and the clamp is
+                there as well as here because this form is not the only writer — a hand-edited
+                settings.json and a Remote write-back reach the sequencer without passing a
+                number box. Under 5 s the machine transmits over the reply it just asked for. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.rtty.autoCall.title')}</span>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.rtty.autoListen.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  min={RTTY_AUTO_LISTEN_SECS_MIN}
+                  max={RTTY_AUTO_LISTEN_SECS_MAX}
+                  step={1}
+                  value={String(form.rttyAutoListenSecs ?? RTTY_AUTO_LISTEN_SECS_DEFAULT)}
+                  onChange={(e) => updateNum('rttyAutoListenSecs', Number(e.target.value))}
+                />
+                <span className="settings-hint">
+                  <T k="settings.rtty.autoListen.hint" tags={{ b: <strong /> }} />
+                </span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.rtty.autoRepeats.label')}</span>
+                <input disabled={remote}
+                  className="settings-input"
+                  type="number"
+                  min={RTTY_AUTO_REPEATS_MIN}
+                  max={RTTY_AUTO_REPEATS_MAX}
+                  step={1}
+                  value={String(form.rttyAutoRepeats ?? RTTY_AUTO_REPEATS_DEFAULT)}
+                  onChange={(e) => updateNum('rttyAutoRepeats', Number(e.target.value))}
+                />
+                <span className="settings-hint">
+                  <T k="settings.rtty.autoRepeats.hint" tags={{ b: <strong /> }} />
+                </span>
+              </label>
             </div>
           </fieldset>
           )}

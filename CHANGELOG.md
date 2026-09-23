@@ -104,7 +104,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tag off a contact that earned it, so removing a tag is its own decision and not a side effect
   of saving the form.
 
+- **RTTY Auto call now has a timer you can set.** Auto call sends CQ, listens, and sends CQ
+  again if nobody comes back — and how long it listened was fixed at 30 seconds with no way to
+  change it, so an operator who wanted a quicker cycle could only click the button by hand.
+  Settings ▸ Digital ▸ RTTY now has **Listen before repeating**, in seconds, and **Repeats
+  before giving up**, which is how many times Auto call asks a station again inside a contact
+  before letting them go. Both ship set to what Auto call was already doing, so nothing changes
+  unless you change it, and the listen clock starts when your over has finished going out rather
+  than when it was queued. The repeat count does not limit CQ: an unanswered CQ still repeats
+  until you stop it. (#304)
+
 ### Fixed
+
+- **The SSTV screen now says where the switch is that keeps your radio in the data mode.** On an
+  IC-7300 or IC-7100 the rig drops back to plain USB between pictures, taking its data-mode
+  filter settings with it, and two operators independently ended up setting USB-D by hand every
+  single time. The switch that stops it — "Hold the data mode while SSTV is receiving", per
+  radio — has shipped since 1.13.0, inside a collapsed **Advanced** section that neither of them
+  found. With the receiver running and the hold switched off, the SSTV screen now says the radio
+  goes back to plain USB between pictures and offers a link straight to that switch, which opens
+  the section it is in rather than leaving you to spot the arrow. Searching Settings for "LSB-D",
+  "back to USB" or "stays in USB" now lands there too. Nothing about what the radio is commanded
+  to do has changed. (#191)
+
+- **When another program already has the sharing port, Nexus now says so where you would look.**
+  If you run your own rigctld on its default port 4532 before starting Nexus, Nexus cannot open
+  its own sharing port — and Settings ▸ Radio went on printing `127.0.0.1:4532` beside a Copy
+  button, an address to paste into WSJT-X that nothing was listening on. The refusal only ever
+  reached the connection log. That block now says what happened instead of showing the address:
+  which port is taken, that another program is already listening on it, and the two ways out by
+  name — switch off "Share this radio with other programs" if the other program is the one you
+  want, or give "Sharing port" a number nothing else uses. It clears itself the moment the port
+  comes free. Sharing behaves exactly as it did; only what you are told about it has changed.
+  (#165)
 
 - **A satellite contact made during Field Day now scores for the club, on the bird's band.** The
   log strip in the Satellites section was the one strip that never switched to the Field Day
