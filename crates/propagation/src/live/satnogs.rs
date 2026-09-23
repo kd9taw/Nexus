@@ -75,6 +75,13 @@ pub struct Transmitter {
     /// genuinely different operating behaviour, so the distinction is kept
     /// rather than inferred from which frequencies happen to be present.
     pub kind: Option<String>,
+    /// SatNOGS `baud`: the symbol rate of the DOWNLINK — it qualifies `mode`,
+    /// never `uplink_mode` (one live bird sends AFSK down at 1200 with a CW
+    /// uplink). `f64` because SatNOGS sends a float and a few rates are
+    /// genuinely fractional (an RTTY beacon's 45.45). `None` when it is not
+    /// known — null, absent, junk, and the 0.0 some records carry (mostly CW
+    /// beacons) — never a fabricated rate of 0.
+    pub baud: Option<f64>,
 }
 
 impl Transmitter {
@@ -202,6 +209,11 @@ pub fn parse_transmitters(json: &str) -> Vec<Transmitter> {
                 .and_then(Value::as_str)
                 .map(str::to_string),
             kind: item.get("type").and_then(Value::as_str).map(str::to_string),
+            // Only a positive, finite number is a rate; anything else is unknown.
+            baud: item
+                .get("baud")
+                .and_then(Value::as_f64)
+                .filter(|b| b.is_finite() && *b > 0.0),
         });
     }
     out
@@ -418,6 +430,74 @@ mod tests {
         let x = parse_transmitters(json);
         assert!(!x[0].invert, "absent invert → non-inverting");
         assert!(!x[1].invert, "non-boolean invert → non-inverting");
+    }
+
+    #[test]
+    fn baud_is_a_known_rate_or_nothing() {
+        // SatNOGS sends `baud` on every record, as a float literal or null: 2,721 and 2,298 of
+        // them in the live list on 2026-09-23, the ISS APRS digipeater's being the 1200.0 here.
+        // Only a positive number is a rate. Null, a missing key, junk, and the 0.0 that 31 records
+        // carry (18 of them CW beacons) all mean "not known" — "0 bd" is a claim nobody made.
+        // A fractional rate is real data (an RTTY beacon's 45.45), so it keeps its precision.
+        let x = parse_transmitters(
+            r#"[
+              {"norad_cat_id":25544,"description":"Mode V APRS","alive":true,"mode":"AFSK","baud":1200.0},
+              {"norad_cat_id":25544,"description":"FM voice","alive":true,"mode":"FM","baud":null},
+              {"norad_cat_id":25544,"description":"no key","alive":true,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"junk","alive":true,"mode":"FSK","baud":"9k6"},
+              {"norad_cat_id":25544,"description":"junk","alive":true,"mode":"FSK","baud":true},
+              {"norad_cat_id":25544,"description":"Mode V Imaging","alive":true,"mode":"SSTV","baud":0.0},
+              {"norad_cat_id":25544,"description":"negative","alive":true,"mode":"FSK","baud":-9600.0},
+              {"norad_cat_id":47721,"description":"FSK RTTY","alive":true,"mode":"FSK","baud":45.45},
+              {"norad_cat_id":25544,"description":"integer literal","alive":true,"mode":"GMSK","baud":9600}
+            ]"#,
+        );
+        let baud: Vec<Option<f64>> = x.iter().map(|t| t.baud).collect();
+        assert_eq!(
+            baud,
+            [
+                Some(1200.0),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(45.45),
+                Some(9600.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn baud_round_trips_through_the_snapshot_and_the_detail_dto() {
+        // `Transmitter` is written as-is into the on-disk SatNOGS snapshot and into the detail
+        // DTO the Satellites view reads, so the rate must come back out of serde intact, under
+        // the key the TypeScript mirror names.
+        let x = parse_transmitters(
+            r#"[{"norad_cat_id":25544,"description":"Mode V APRS","alive":true,"mode":"AFSK","baud":1200.0},
+                {"norad_cat_id":47721,"description":"FSK RTTY","alive":true,"mode":"FSK","baud":45.45},
+                {"norad_cat_id":25544,"description":"FM voice","alive":true,"mode":"FM","baud":null}]"#,
+        );
+        let wire = serde_json::to_value(&x).unwrap();
+        assert_eq!(wire[0]["baud"], serde_json::json!(1200.0));
+        assert_eq!(wire[1]["baud"], serde_json::json!(45.45));
+        assert_eq!(wire[2]["baud"], Value::Null);
+        let back: Vec<Transmitter> = serde_json::from_value(wire).unwrap();
+        let baud: Vec<Option<f64>> = back.iter().map(|t| t.baud).collect();
+        assert_eq!(baud, [Some(1200.0), Some(45.45), None]);
+
+        // A snapshot written before the field existed carries no `baud` key. It must still load,
+        // as unknown: a snapshot that fails to parse is read as "never fetched", and an offline
+        // station would lose its whole transponder list until the next successful fetch.
+        let legacy: Transmitter = serde_json::from_str(
+            r#"{"norad":25544,"description":"Mode V APRS","alive":true,"mode":"AFSK",
+                "uplinkLowHz":145825000,"downlinkLowHz":145825000,"invert":false,
+                "uplinkHighHz":null,"downlinkHighHz":null,"uplinkMode":null,
+                "downlinkMode":null,"kind":"Transceiver"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.baud, None);
     }
 
     #[test]

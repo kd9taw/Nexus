@@ -1763,6 +1763,7 @@ export const DE: PartialCatalog = {
   "sat.transponder.none.aria": "Keinen Transponder arbeiten — die Abstimmung mir überlassen",
   "sat.transponder.none.label": "Keiner — Abstimmung mir überlassen",
   "sat.transponder.card.aria": "{{description}} arbeiten",
+  "sat.transponder.baud": "{{baud}} bd",
   "sat.transponder.auto": "für Sie gewählt — hier ändern, falls es nicht der richtige ist",
   "sat.transponder.showAll": "alle {{count}} zeigen ▾",
   "sat.transponder.showAll.title": "Jeden arbeitbaren Sender zeigen, den SatNOGS für diesen Satelliten führt",

@@ -4045,6 +4045,7 @@ export const ES: PartialCatalog = {
   "sat.track.stop.noRotor.title": "Parar este seguimiento (no hay rotor de por medio; el dial se devuelve)",
   "sat.track.stop.rotor.title": "Parar el autoseguimiento (el rotor se detiene)",
   "sat.transponder.auto": "elegido automáticamente — cámbialo aquí si no es el que quieres",
+  "sat.transponder.baud": "{{baud}} bd",
   "sat.transponder.card.aria": "Trabajar {{description}}",
   "sat.transponder.dead": "reportado muerto (SatNOGS) — no trabajable",
   "sat.transponder.head": "Transpondedor",

@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
-import type { SatDetail } from '../types'
+import type { SatDetail, SatTransmitter } from '../types'
 
 const api = vi.hoisted(() => ({
   getSatellites: vi.fn(() => Promise.resolve(null)),
@@ -228,6 +228,113 @@ describe('what the row tells the operator', () => {
     expect(
       await screen.findByText(/tunes this transponder while auto-track is following the pass/),
     ).toBeTruthy()
+  })
+})
+
+/** A transmitter record as SatNOGS lists it, trimmed. `baud` is deliberately not defaulted: a
+ * record without it is how a station that predates the field sends one. */
+const tx = (over: Partial<SatTransmitter>): SatTransmitter => ({
+  description: '',
+  alive: true,
+  mode: null,
+  uplinkLowHz: null,
+  downlinkLowHz: 435_525_000,
+  invert: false,
+  uplinkHighHz: null,
+  downlinkHighHz: null,
+  uplinkMode: null,
+  downlinkMode: null,
+  kind: 'Transmitter',
+  ...over,
+})
+const bird = (name: string, norad: number, transmitters: SatTransmitter[]): SatDetail => ({
+  ...detail(),
+  name,
+  norad,
+  transmitters,
+})
+/** The text of every chip on the card whose description is `description`. */
+const chips = async (description: string) =>
+  Array.from(
+    (await screen.findByText(description)).closest('.sat-tp-card')?.querySelectorAll('.sat-tp-kind') ??
+      [],
+  ).map((c) => c.textContent)
+/** The text of the ↓ and ↑ legs on the card whose description is `description`. */
+const legs = async (description: string) =>
+  Array.from(
+    (await screen.findByText(description)).closest('.sat-tp-card')?.querySelectorAll('.sat-tp-leg') ??
+      [],
+  ).map((l) => l.textContent)
+
+describe('the downlink data rate SatNOGS lists (baud)', () => {
+  it('reads beside the mode, whole rates without a decimal and fractional ones kept', async () => {
+    // KOSEN-1's own downlinks, as the live catalog gave them on 2026-09-23. The 45.45 is NORAD
+    // 47721's RTTY beacon, here for its fractional rate: rounding it to 45 would misstate it.
+    api.getSatDetail.mockImplementation(() =>
+      Promise.resolve(
+        bird('KOSEN-1', 49402, [
+          tx({ description: 'Mode U - AFSK1k2', mode: 'AFSK', baud: 1200 }),
+          tx({ description: 'Mode U - GMSK9k6', mode: 'GMSK', baud: 9600 }),
+          tx({ description: 'Mode U - FSK RTTY', mode: 'FSK', baud: 45.45 }),
+        ]),
+      ),
+    )
+    render(<SatellitesView focusSat="KOSEN-1" />)
+    expect(await chips('Mode U - AFSK1k2')).toEqual(['beacon', 'AFSK · 1200 bd'])
+    expect(await chips('Mode U - GMSK9k6')).toEqual(['beacon', 'GMSK · 9600 bd'])
+    expect(await chips('Mode U - FSK RTTY')).toEqual(['beacon', 'FSK · 45.45 bd'])
+    // Once per card: the chip carries it, so the ↓ leg does not repeat it.
+    expect(await legs('Mode U - AFSK1k2')).toEqual(['↓ 435.525', '↑ —'])
+  })
+
+  it('is left off entirely when the catalog does not know it — never "0 bd"', async () => {
+    api.getSatDetail.mockImplementation(() =>
+      Promise.resolve(
+        bird('ISS', 25544, [
+          tx({ description: 'Mode U - SSTV', mode: 'SSTV', baud: null }),
+          // SatNOGS lists 0.0 on 31 entries, mostly CW beacons, this SSTV one among them. The
+          // backend reads it as unknown, and the card must too if one ever arrives.
+          tx({ description: 'Mode V Imaging', mode: 'SSTV', baud: 0 }),
+          // No key at all: a station that predates the field, read by a newer Remote page.
+          tx({
+            description: 'Mode V/U FM - Voice Repeater',
+            mode: 'FM',
+            kind: 'Transceiver',
+            uplinkLowHz: 145_990_000,
+            downlinkLowHz: 437_800_000,
+          }),
+        ]),
+      ),
+    )
+    render(<SatellitesView focusSat="ISS" />)
+    expect(await chips('Mode U - SSTV')).toEqual(['beacon', 'SSTV'])
+    expect(await chips('Mode V Imaging')).toEqual(['beacon', 'SSTV'])
+    expect(await chips('Mode V/U FM - Voice Repeater')).toEqual(['FM repeater', 'FM'])
+    expect(screen.getByTestId('sat-tp-list').textContent).not.toMatch(/\bbd\b/)
+  })
+
+  it('belongs to the downlink leg, never beside the uplink mode', async () => {
+    // KOSEN-1's onboard-SDR transponder sends AFSK down at 1200 and takes CW up. A card with a
+    // per-leg mode has no mode chip, so the rate rides the ↓ leg; beside "CW" it would describe
+    // a 1200-baud CW uplink that does not exist.
+    api.getSatDetail.mockImplementation(() =>
+      Promise.resolve(
+        bird('KOSEN-1', 49402, [
+          tx({
+            description: 'Mode HF/U - Onboard SDR',
+            kind: 'Transponder',
+            mode: 'AFSK',
+            uplinkMode: 'CW',
+            baud: 1200,
+            uplinkLowHz: 21_125_000,
+            uplinkHighHz: 21_150_000,
+          }),
+        ]),
+      ),
+    )
+    render(<SatellitesView focusSat="KOSEN-1" />)
+    expect(await legs('Mode HF/U - Onboard SDR')).toEqual(['↓ 435.525 1200 bd', '↑ 21.125–21.150 CW'])
+    expect(await chips('Mode HF/U - Onboard SDR')).toEqual(['linear'])
   })
 })
 

@@ -2660,6 +2660,7 @@ export const JA: PartialCatalog = {
   "sat.transponder.none.aria": "トランスポンダーを使わない — ダイヤルは自分で操作",
   "sat.transponder.none.label": "なし — ダイヤルは自分で操作",
   "sat.transponder.card.aria": "{{description}}で運用",
+  "sat.transponder.baud": "{{baud}} bd",
   "sat.transponder.auto": "自動選択 — 違う場合はここで変更してください",
   "sat.transponder.showAll": "{{count}}件すべて表示 ▾",
   "sat.transponder.showAll.title": "SatNOGSに登録されたこの衛星の運用可能な送信機をすべて表示",
