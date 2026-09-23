@@ -73,6 +73,14 @@ pub const SCHEMA_VERSION: i64 = 1;
 /// real wait in milliseconds; this is the ceiling, not the expectation.
 const BUSY_TIMEOUT_MS: u32 = 5_000;
 
+/// The page cache of the one-time conversion's connection, in KiB — 64 MiB, against SQLite's
+/// default of 2,000 KiB. Measured: the conversion's chunks are big, their rows land at random
+/// places in the primary keys, and in 2 MB the key pages were evicted and read back over and
+/// over. 64 MiB took 14–25% off the store's time at 150,000 and 300,000 contacts; 128 and 256
+/// MiB took at most 4% more. It writes no fewer bytes — that is the chunk size's job — and it is
+/// freed when the conversion's connection closes.
+const CONVERSION_CACHE_KIB: i64 = 65_536;
+
 /// `log_meta`, applied BEFORE [`DDL`] so the version can be read first.
 ///
 /// The five watermarks survive into SQLite rather than being replaced by a bare "the table
@@ -85,8 +93,8 @@ CREATE TABLE IF NOT EXISTS log_meta (
 );
 ";
 
-/// The schema. `IF NOT EXISTS` throughout so opening an existing database is the same call as
-/// creating one.
+/// The schema's tables. `IF NOT EXISTS` throughout so opening an existing database is the same
+/// call as creating one. Their secondary indexes are [`INDEXES`].
 const DDL: &str = r#"
 -- ─── The general log ────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS qso (
@@ -250,17 +258,35 @@ CREATE TABLE IF NOT EXISTS qso_contest_adif (
   value  TEXT NOT NULL,
   PRIMARY KEY (qso_id, ord)
 );
-
-CREATE INDEX IF NOT EXISTS qso_worked   ON qso(call_norm, band_norm, mode_norm);
-CREATE INDEX IF NOT EXISTS qso_dedup    ON qso(base_call, band_norm, mode_norm, when_unix);
-CREATE INDEX IF NOT EXISTS qso_recent   ON qso(when_unix DESC);
-CREATE INDEX IF NOT EXISTS qso_confirm  ON qso(call_norm, band_norm, mode_class, utc_day);
-CREATE INDEX IF NOT EXISTS qso_entity   ON qso(entity, band_norm, mode_norm);
-CREATE INDEX IF NOT EXISTS qso_callhist ON qso(call_norm, when_unix DESC);
-CREATE INDEX IF NOT EXISTS qso_dupekey  ON qso(contest_id, dupe_key);
-CREATE INDEX IF NOT EXISTS cx_dupe      ON contest_exchange(contest_id, slot, raw);
-CREATE INDEX IF NOT EXISTS up_service   ON qso_upload(service, when_unix DESC);
 "#;
+
+/// The secondary indexes, one statement each: the store's lookup paths, and none of them a rule.
+/// Every uniqueness rule is a table's own `PRIMARY KEY`, which [`DDL`] creates with its table, so
+/// a store without these holds exactly the same log — it is only slower to search.
+///
+/// ⭐ **Apart from [`DDL`] for the one-time conversion.** Kept up row by row while a lifetime log
+/// goes in, every chunk's commit rewrote every page of all nine that it touched; built once over
+/// the finished table, each is one sorted pass. Measured at 150,000 contacts, with nothing else
+/// changed: 8.65 GB written and 21.6 s in the store, against 3.8 GB and 13.1 s with the indexes
+/// built at the end (0.5 s of that is the nine builds). [`LogDb::open`] builds them as it always
+/// has. The conversion opens with [`LogDb::open_for_conversion`], which does not, and calls
+/// [`LogDb::build_indexes`] after its last contact and before it marks itself done.
+///
+/// `IF NOT EXISTS` on every one, so building them is safe to repeat: a conversion killed half-way
+/// through them builds only the rest when it resumes. ⚠️ Do not reformat them. SQLite records
+/// each statement's text from the index name onward in `sqlite_master`, so as written a store
+/// built by this list carries the same schema, byte for byte, as one built before the split.
+const INDEXES: [&str; 9] = [
+    "CREATE INDEX IF NOT EXISTS qso_worked   ON qso(call_norm, band_norm, mode_norm)",
+    "CREATE INDEX IF NOT EXISTS qso_dedup    ON qso(base_call, band_norm, mode_norm, when_unix)",
+    "CREATE INDEX IF NOT EXISTS qso_recent   ON qso(when_unix DESC)",
+    "CREATE INDEX IF NOT EXISTS qso_confirm  ON qso(call_norm, band_norm, mode_class, utc_day)",
+    "CREATE INDEX IF NOT EXISTS qso_entity   ON qso(entity, band_norm, mode_norm)",
+    "CREATE INDEX IF NOT EXISTS qso_callhist ON qso(call_norm, when_unix DESC)",
+    "CREATE INDEX IF NOT EXISTS qso_dupekey  ON qso(contest_id, dupe_key)",
+    "CREATE INDEX IF NOT EXISTS cx_dupe      ON contest_exchange(contest_id, slot, raw)",
+    "CREATE INDEX IF NOT EXISTS up_service   ON qso_upload(service, when_unix DESC)",
+];
 
 /// Every `qso` column the store writes, **in bind order**.
 ///
@@ -562,14 +588,61 @@ pub struct LogDb {
 }
 
 impl LogDb {
-    /// Open `path`, creating and initialising it if it is not there yet.
+    /// Open `path`, creating and initialising it if it is not there yet — every table and every
+    /// index, building any index the file does not have.
     pub fn open(path: &Path) -> Result<LogDb> {
-        LogDb::init(Connection::open(path)?)
+        let db = LogDb::init(Connection::open(path)?)?;
+        db.build_indexes(&mut |_, _| {})?;
+        Ok(db)
     }
 
     /// An in-memory database, for tests and for a caller that wants the schema without a file.
     pub fn open_in_memory() -> Result<LogDb> {
-        LogDb::init(Connection::open_in_memory()?)
+        let db = LogDb::init(Connection::open_in_memory()?)?;
+        db.build_indexes(&mut |_, _| {})?;
+        Ok(db)
+    }
+
+    /// Open `path` for the ONE-TIME conversion of an existing `log.adi` ([`super::migrate`]) —
+    /// never for ordinary use. It differs from [`LogDb::open`] in three ways, all confined to
+    /// this connection and gone when it closes:
+    ///
+    /// - **No indexes.** The tables only; [`INDEXES`] says why, and the conversion builds them
+    ///   with [`LogDb::build_indexes`] once every contact is in. It also means this open never
+    ///   WRITES to a store that already has its tables — which matters to the other caller, the
+    ///   check a second window makes while the first may still be converting: an ordinary open
+    ///   there would build the missing indexes, holding the write lock for as long as that
+    ///   takes, out from under the first window's next chunk.
+    /// - **`synchronous = NORMAL`**, where the store's own setting is SQLite's default, FULL. In
+    ///   WAL mode NORMAL still cannot corrupt the database, and a crashed process loses nothing
+    ///   it committed; what it gives up is that an OS crash or a power cut can lose the LAST few
+    ///   commits. For a conversion that costs nothing: its watermark is the store's own row
+    ///   count, so a lost chunk is simply converted again, from `log.adi`, which the conversion
+    ///   never changes. FULL waits for the disk at every commit; measured, that is worth only
+    ///   2–5% on a fast disk with the conversion's few big commits, and more where a flush is
+    ///   slow. ⛔ Never `OFF`: that one can corrupt the database.
+    /// - **A bigger page cache**, [`CONVERSION_CACHE_KIB`], so the key pages a big chunk keeps
+    ///   coming back to stay in memory instead of being evicted and read back.
+    pub fn open_for_conversion(path: &Path) -> Result<LogDb> {
+        let conn = Connection::open(path)?;
+        // Before `init`, so every write this connection makes — the version stamp and the tables
+        // of a new store included — is made under them. Both are this connection's alone.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "cache_size", -CONVERSION_CACHE_KIB)?;
+        LogDb::init(conn)
+    }
+
+    /// Build every index in [`INDEXES`] the store does not have yet, telling `progress` how many
+    /// of how many are built: `(0, n)` first, then after each one. Each index is its own
+    /// transaction, and an index that is already there is left as it is — so a build cut short
+    /// by a crash is finished by calling this again.
+    pub fn build_indexes(&self, progress: &mut dyn FnMut(usize, usize)) -> Result<()> {
+        progress(0, INDEXES.len());
+        for (built, sql) in INDEXES.iter().enumerate() {
+            self.conn.execute_batch(sql)?;
+            progress(built + 1, INDEXES.len());
+        }
+        Ok(())
     }
 
     /// The pragmas, the schema, and the version check — the three things every open does.
@@ -2484,6 +2557,14 @@ mod tests {
                 .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
                 .unwrap();
             assert_eq!(busy, i64::from(BUSY_TIMEOUT_MS));
+            let sync: i64 = db
+                .conn
+                .query_row("PRAGMA synchronous", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                sync, 2,
+                "FULL: a contact is on the disk when the commit that logged it returns"
+            );
             assert_eq!(db.meta("schema_version").unwrap(), Some(SCHEMA_VERSION));
         }
         // Reopening an existing file is the same call, and it keeps the stamp.
@@ -2503,6 +2584,53 @@ mod tests {
             other => panic!("expected a version refusal, got {:?}", other.map(|_| ())),
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// ⛔ **The conversion's durability trade is its own connection's, and nobody else's.** It
+    /// runs `synchronous = NORMAL` — safe in WAL mode, never `OFF` — while every ordinary
+    /// connection, the writer thread's among them, keeps the store's own FULL: alongside the
+    /// conversion, and after it.
+    #[test]
+    fn only_the_conversions_own_connection_relaxes_synchronous() {
+        let dir = std::env::temp_dir().join(format!("nexus-logdb-sync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.sqlite3");
+        let _ = std::fs::remove_file(&path);
+        let pragma = |db: &LogDb, name: &str| -> String {
+            db.conn
+                .query_row(&format!("PRAGMA {name}"), [], |r| {
+                    r.get::<_, rusqlite::types::Value>(0)
+                })
+                .map(|v| format!("{v:?}"))
+                .unwrap()
+        };
+
+        let conversion = LogDb::open_for_conversion(&path).unwrap();
+        assert_eq!(pragma(&conversion, "synchronous"), "Integer(1)", "NORMAL");
+        assert_eq!(
+            pragma(&conversion, "journal_mode"),
+            "Text(\"wal\")",
+            "NORMAL is safe only in WAL mode"
+        );
+        assert_eq!(
+            pragma(&conversion, "cache_size"),
+            format!("Integer({})", -CONVERSION_CACHE_KIB)
+        );
+        let ordinary = LogDb::open(&path).unwrap();
+        assert_eq!(
+            pragma(&ordinary, "synchronous"),
+            "Integer(2)",
+            "an ordinary connection alongside the conversion keeps FULL"
+        );
+        assert_eq!(pragma(&ordinary, "cache_size"), "Integer(-2000)");
+        drop(conversion);
+        drop(ordinary);
+        assert_eq!(
+            pragma(&LogDb::open(&path).unwrap(), "synchronous"),
+            "Integer(2)",
+            "and so does every ordinary connection after it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Deleting a QSO takes its children with it — the point of `foreign_keys = ON`.
