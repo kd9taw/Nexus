@@ -177,6 +177,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in an imported log, the APRS iGate's check of a packet's sender, and the line-tidying the
   diagnostic log does before it writes.
 
+- **A slow space-weather, POTA/SOTA or callbook server can no longer hold up the rest of Nexus.**
+  Eight requests made their wait on one of the few threads that answer the screen: the Kp
+  forecast, the NOAA scales and alerts, the aurora oval, the MUF map, the POTA and SOTA spot
+  lists, a callbook lookup and the QRZ Logbook connection test. Each held its thread for as long
+  as the server took, up to its time limit, and with several going at once on a slow connection
+  everything else could queue behind them. They now wait off to the side, the way logbook uploads
+  always have.
+
 - **A park reference next to a WWFF area or a SOTA summit no longer disappears when you import a
   log.** Several loggers write a combined activation as a WWFF or SOTA reference plus a `POTA_REF`.
   Importing that record into Nexus kept the WWFF or SOTA reference and silently dropped the POTA one,
