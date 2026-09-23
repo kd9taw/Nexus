@@ -4,9 +4,10 @@
 // tile claiming an ARRL semantic the number didn't have. These render the tiles
 // with N9UM-shaped data and pin the corrected claims.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { AwardsView } from './AwardsView'
 import type { AwardSummary } from '../types'
+import { EN } from '../i18n'
 
 const N9UM: Partial<AwardSummary> = {
   qsos: 31648,
@@ -79,6 +80,10 @@ afterEach(cleanup)
 
 async function renderAwards() {
   render(<AwardsView showGamification={false} />)
+  // Wait for the tiles, not for a word: the loading screen says "…against the DXCC entity
+  // list", so a DXCC match alone can arrive before the data does, and every assertion below
+  // then reads the loading screen.
+  await waitFor(() => expect(screen.queryByText(EN['awards.loading.title'])).toBeNull())
   await screen.findAllByText(/DXCC/i)
 }
 
