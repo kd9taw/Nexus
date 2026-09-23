@@ -24623,23 +24623,29 @@ pub fn run() {
             let mut failure: Option<BrokerBindFailure> = None;
             loop {
                 let want = {
-                    let e = engine_lock(&mgr_engine);
-                    e.settings()
+                    let mut e = engine_lock(&mgr_engine);
+                    let want = e
+                        .settings()
                         .cat_broker
-                        .then_some(e.settings().cat_broker_port)
+                        .then_some(e.settings().cat_broker_port);
+                    // ⚠️ **UN-GATED, AND IT HAS TO BE.** Sharing switched off is not a fault, so
+                    // a complaint about a port we have stopped asking for must not outlive the
+                    // decision to stop. Putting this clear inside the `want != have` branch
+                    // below looks equivalent and is not: a failed bind leaves `running` as
+                    // None, so when the operator then switches sharing off, `want` and `have`
+                    // are BOTH None, the branch never runs, and the operator who just took the
+                    // advice reads the complaint about it for the rest of the session. Here it
+                    // rides the poll's own lock, which is taken every tick regardless.
+                    if want.is_none() {
+                        e.set_cat_share_error(None);
+                    }
+                    want
                 };
                 let have = running.as_ref().map(|(p, _)| *p);
                 if want != have {
                     // Stop the current broker (disabled, or the port changed).
                     if let Some((_, shutdown)) = running.take() {
                         shutdown.store(true, Ordering::Relaxed);
-                    }
-                    // Sharing switched off is not a fault, and a complaint about the old port
-                    // must not outlive the decision to stop asking for it. Cleared here rather
-                    // than only on a later success, because when `want` is None there is no
-                    // later success to clear it.
-                    if want.is_none() {
-                        engine_lock(&mgr_engine).set_cat_share_error(None);
                     }
                     // Start on the wanted port, unless a recent failure on THIS port says to
                     // wait. A different port is always tried at once — changing it is the
