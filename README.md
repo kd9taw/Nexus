@@ -248,7 +248,7 @@ spot goes to and which one an APRS tune goes to.
 
 | Integration | What it does |
 |---|---|
-| **WSJT-X UDP protocol** | Full outbound Decode / Status / QsoLogged / Heartbeat + inbound HaltTx, Clear, Replay, Location, Highlight — JTAlert and GridTracker see a WSJT-X |
+| **WSJT-X UDP protocol** | Full outbound Decode / Status / QsoLogged / Heartbeat + inbound HaltTx, Clear, Replay, Location, Highlight — JTAlert and GridTracker see a WSJT-X. Off until you switch on **WSJT-X UDP API** in Settings ▸ Logging & Connectors ▸ Integrations & Feeds |
 | **CAT broker** | Nexus serves a rigctld-compatible TCP port so WSJT-X, N1MM+, and loggers share the radio through it |
 | **Companion mode** | Ride an upstream WSJT-X / JTDX / MSHV decode stream over UDP instead of owning the rig |
 | **N1MM+** | Native `<contactinfo>` UDP broadcast. **Broadcast every QSO** sends each logged contact, event or not, from every mode. Point OpenHamClock or GridTracker at the address and contacts plot as you log them. Off until you switch it on |

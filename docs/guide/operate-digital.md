@@ -173,7 +173,10 @@ end) is not implemented.
 ## Working with the rest of the shack
 
 Nexus speaks WSJT-X's UDP protocol byte-for-byte, so **GridTracker, JTAlert, and
-your logger see Nexus as WSJT-X**. Outbound Heartbeat / Status / Decode /
+your logger see Nexus as WSJT-X** once you turn on **WSJT-X UDP API** in
+[Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds).
+It is off by default; its address already matches WSJT-X's default, so nothing
+else needs setting. Outbound Heartbeat / Status / Decode /
 QsoLogged and inbound HaltTx / Clear / Replay / Location / HighlightCallsign all
 use the canonical type numbers, and PSK Reporter spotting batches on the stock
 schedule.

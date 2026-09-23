@@ -299,7 +299,7 @@ describe('the checker fires', () => {
 // German cannot see that `{{callsign}}` came back as `{{rufzeichen}}`, and the operator finds
 // out when their screen says `{{rufzeichen}}` in the middle of a sentence.
 //
-// Three rules, and the third is the one with teeth:
+// Four rules, and the third is the one with teeth:
 //   1. Same placeholders as English — a translation may reorder them, never rename or drop one.
 //   2. Same markup markers — `<b>` may move within the sentence, but a marker the call site
 //      never declared renders as literal angle brackets.
@@ -307,6 +307,10 @@ describe('the checker fires', () => {
 //      A translator (human or machine) "fixing" a frequency in an example sentence would put a
 //      comma into something an operator reads as a dial setting. Nothing else in this project
 //      guards that, because nothing else looks at a translated catalog.
+//   4. NO WRITTEN-OUT ESCAPE. A catalog value is the text on the screen, so `\u00a0` belongs in
+//      the SOURCE, where the compiler turns it into the character. Spanish and French shipped
+//      the six characters `\u00a0` in eleven strings each, the CW and Phone cockpits' Flex pan
+//      and rig scope buttons among them, because their import wrote the backslash out twice.
 describe('translated catalogs agree with English', () => {
   // Every catalog the build ships, by locale. English is the source and is checked by the
   // suite above; this loop covers the rest, and is EMPTY until a translation lands — hence
@@ -339,6 +343,8 @@ describe('translated catalogs agree with English', () => {
   }
   /** A digit, a comma, then digits — `14,074`. The shape a decimal comma takes in prose. */
   const DECIMAL_COMMA = /\d,\d/
+  /** Rule 4: `\uXXXX` as six characters of TEXT, which only a doubled backslash can produce. */
+  const WRITTEN_ESCAPE = /\\u[0-9a-fA-F]{4}/
 
   /** Every placeholder occurrence counted, not deduped — the flattened-plural detector needs
    *  multiplicity, where `holesOf` collapses to a Set. */
@@ -398,6 +404,9 @@ describe('translated catalogs agree with English', () => {
       for (const t of texts)
         if (DECIMAL_COMMA.test(String(t)) && !enHasComma)
           out.push(`${locale}/${key}: DECIMAL COMMA in "${t}" — introduced by the translation; a number an operator may read as a dial`)
+      for (const t of texts)
+        if (WRITTEN_ESCAPE.test(String(t)))
+          out.push(`${locale}/${key}: a written-out escape in "${t}" — the operator sees the backslash`)
     }
     return out
   }
@@ -422,6 +431,8 @@ describe('translated catalogs agree with English', () => {
       // The exact shape fr/es shipped from 1.9.0 to 1.9.2: an English plural collapsed into
       // one string carrying BOTH forms.
       'logbook.import.imported': '{{count}} QSO importiert{{count}} QSOs importiert',
+      // The shape es/fr shipped from 2026-08-24: the escape written out as six characters.
+      'cw.flexPan.label': 'Flex\\u00a0pan',
     }
     const found = catalogProblems('de', broken)
     expect(
@@ -436,17 +447,19 @@ describe('translated catalogs agree with English', () => {
     expect(found.some((p) => p.includes('markers'))).toBe(true)
     expect(found.some((p) => p.includes('DECIMAL COMMA'))).toBe(true)
     expect(found.some((p) => p.includes('no such key'))).toBe(true)
-    // …and a correct translation passes all four.
+    expect(found.some((p) => p.includes('written-out escape'))).toBe(true)
+    // …and a correct translation passes all five, a real non-breaking space included.
     expect(
       catalogProblems('de', {
         'settings.search.matched': 'gefunden “{{term}}”',
         'reveal.notNow': 'Nicht jetzt',
+        'cw.flexPan.label': 'Flex\u00a0pan',
       }),
     ).toEqual([])
   })
 
   for (const [locale, cat] of OTHER) {
-    it(`${locale} carries English's holes, markers and no decimal comma`, () => {
+    it(`${locale} carries English's holes and markers, and no decimal comma or written-out escape`, () => {
       expect(catalogProblems(locale, cat)).toEqual([])
     })
   }

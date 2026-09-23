@@ -2264,8 +2264,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // screens that leave the operating mode unchanged.
   // Where a Settings deep link asked the panel to land. Cleared on the way OUT of Settings so a
   // later plain visit (the rail gear) opens on Station as it always has, rather than returning to
-  // wherever the last pointer sent the operator.
-  const [settingsTarget, setSettingsTarget] = useState<string | undefined>(undefined)
+  // wherever the last pointer sent the operator. `seq` counts the requests, so asking again for
+  // the place Settings already holds still moves the panel: the operator may have changed tab
+  // since, and the Getting started guide opens over Settings itself.
+  const [settingsTarget, setSettingsTarget] = useState<{ where: string; seq: number } | undefined>(
+    undefined,
+  )
 
   const handleView = useCallback(
     (next: View) => {
@@ -2292,7 +2296,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
    */
   const openSettingsAt = useCallback(
     (where: string) => {
-      setSettingsTarget(where)
+      setSettingsTarget((prev) => ({ where, seq: (prev?.seq ?? 0) + 1 }))
       setView('settings')
     },
     [],
@@ -2936,7 +2940,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             fieldDay={snap.fieldDay}
             key={`sp-wiz${wizardGen}`}
             onSaved={handleSettingsSaved}
-            target={settingsTarget}
+            target={settingsTarget?.where}
+            targetSeq={settingsTarget?.seq}
             radio={snap.radio}
             activeRadioId={snap.activeRadioId}
             onProveTx={handleProveTx}
@@ -3570,7 +3575,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         />
       )}
 
-      {showGuide && <GettingStartedGuide onClose={() => setShowGuide(false)} />}
+      {showGuide && (
+        <GettingStartedGuide
+          onClose={() => setShowGuide(false)}
+          // Not on the Remote page: Settings there does not render Integrations & Feeds, the
+          // section the guide's WSJT-X note links to, so the link would open onto nothing.
+          onOpenSettings={remote ? undefined : openSettingsAt}
+        />
+      )}
 
       {snap.pendingLog && (
         // KEYED ON THE HOLD, on every transport (operator ruling 2026-09-19: completed contacts
