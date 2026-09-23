@@ -21,6 +21,8 @@ pub mod remote_radio;
 pub mod remote_selection;
 mod remote_settings;
 pub mod remote_transmit;
+#[cfg(test)]
+mod tx_gate_table;
 
 /// A manual Remote log append awaiting storage confirmation. The caller must
 /// release its engine lock before syncing; connector delivery uses its existing pipeline.
