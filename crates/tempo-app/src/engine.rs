@@ -45680,6 +45680,44 @@ mod tests {
         assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "KOSEN-1 again");
     }
 
+    #[test]
+    fn an_inverting_bird_mirrors_the_data_submode_on_the_transmit_leg() {
+        // FT through an inverting transponder (operator sign-off 2026-09-23): the DATA
+        // submode mirrors the way the voice sideband always has. Sent up in PKTUSB, an FT8
+        // over comes down tone-reversed and nothing decodes it. The RECEIVE leg is untouched.
+        for (class, down, up) in [
+            (SSB_BIRD, "PKTUSB", "PKTLSB"),
+            (LSB_BIRD, "PKTLSB", "PKTUSB"),
+        ] {
+            let (mut e, _, _) = sat_station();
+            e.set_operating_mode("digital", false);
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(class, 1_000_000);
+            assert_eq!(e.rig_mode_effective(), down, "{class:?}: the downlink");
+            assert_eq!(
+                e.sat_tx_mode().as_deref(),
+                Some(up),
+                "{class:?}: an inverting bird takes the opposite data sideband up"
+            );
+        }
+
+        // A NON-inverting bird is the same side both ways, exactly as before.
+        let (mut e, _, _) = sat_station();
+        e.set_operating_mode("digital", false);
+        let straight = tempo_core::doppler::Transponder {
+            invert: false,
+            ..RS44
+        };
+        e.set_sat_transponder(Some(("FO-29|linear".into(), 0, straight)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(e.rig_mode_effective(), "PKTUSB");
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("PKTUSB"),
+            "non-inverting: unchanged"
+        );
+    }
+
     // ===================== tune-on-pick (the S.A.T.-box behaviour) =====================
     //
     // Operator field report (IC-9700 as radio 1, FTDX10 as radio 0): "when I
@@ -47982,8 +48020,9 @@ mod tests {
         // (a) make the displayed dial mean something rig- and menu-dependent
         // while the Doppler engine steers it at up to ~100 Hz/s, and (b) lose
         // the inverting transponder's sideband swap entirely, because
-        // `uplink_mode_for` can only mirror USB↔LSB. A CW BEACON is not
-        // special-cased for the same two reasons.
+        // `uplink_mode_for` can only mirror a sideband-named mode (USB↔LSB and
+        // their DATA forms). A CW BEACON is not special-cased for the same two
+        // reasons.
         //
         // LSB: a record that names the LOWER sideband is the one case that must
         // not be commanded USB. It is an inverted-sideband error on the

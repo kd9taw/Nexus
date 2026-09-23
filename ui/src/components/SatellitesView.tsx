@@ -1628,10 +1628,10 @@ const fmtLeg = (lowHz: number | null, highHz: number | null) => {
 const downMode = (tx: SatTransmitter) => tx.downlinkMode ?? tx.mode
 
 /** The record lists the sideband swap the engine itself commands. `uplink_mode_for` (tempo-core
- * doppler.rs) swaps USB and LSB on an INVERTING transponder, so only an inverting bird whose
- * uplink is the opposite sideband of its downlink gets the uplink its record lists. The TX note's
- * swap forecast says exactly that, so it renders for no other pair: a non-inverting LSB/USB record
- * gets the downlink's sideband up, not the one it lists. */
+ * doppler.rs) mirrors the sideband on an INVERTING transponder — voice and data alike — so only an
+ * inverting bird whose uplink is the opposite sideband of its downlink gets the uplink its record
+ * lists. The TX note's swap forecast says exactly that, so it renders for no other pair: a
+ * non-inverting LSB/USB record gets the downlink's sideband up, not the one it lists. */
 const isSidebandSwap = (tx: SatTransmitter) => {
   const down = downMode(tx)?.trim().toUpperCase()
   const up = tx.uplinkMode?.trim().toUpperCase()

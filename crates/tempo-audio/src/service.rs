@@ -25862,6 +25862,35 @@ mod tests {
     }
 
     #[test]
+    fn an_inverting_birds_data_submode_reaches_the_tx_vfo_mirrored() {
+        // RS-44 (inverting, USB down) worked from the Digital section: the receive leg stays
+        // PKTUSB and the TX VFO takes PKTLSB. It used to be `X PKTUSB 3000`, which an
+        // inverting transponder turns tone-reversed on the way down.
+        let (addr, seen) = recording_rigctld_stub();
+        let rs44 = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: true,
+            half_width_hz: 30_000,
+        };
+        let engine = ab_sat_pick_engine("digital", rs44, SSB_BIRD, false);
+
+        step_with_watchdog(&engine, Rig::rigctld(&addr), None, Duration::from_secs(10));
+
+        assert_eq!(
+            split_verbs(&seen),
+            vec!["S 1 VFOB", "I 145965000", "X PKTLSB 3000"],
+            "the uplink rides VFO B in the mirrored data submode"
+        );
+        let lines = seen.lock().unwrap().clone();
+        assert!(
+            lines.iter().any(|l| l.trim() == "F 435640000")
+                && lines.iter().any(|l| l.trim().starts_with("M PKTUSB")),
+            "…while the downlink is still received in PKTUSB: {lines:?}"
+        );
+    }
+
+    #[test]
     fn terrestrial_up_split_apply_stays_live_and_rides_vfob() {
         // The same one-shot serves every pile-up "UP n" spot — pre-fix those
         // wedged identically (the scrutinee guard covered both arms), so the

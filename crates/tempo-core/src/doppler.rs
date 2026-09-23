@@ -353,9 +353,10 @@ impl DownlinkClass {
 ///   rig's CW-pitch/CW-R setting — per rig, per menu. Steering a dial we cannot
 ///   interpret, at up to ~100 Hz/s, would silently walk the operator off the
 ///   station they are working;
-/// - [`uplink_mode_for`] can only mirror USB↔LSB. Commanded `CW`, an INVERTING
-///   transponder's sideband swap is lost — the correct uplink frequency in the
-///   wrong sideband, which is silence at the far end;
+/// - [`uplink_mode_for`] can only mirror a sideband-named mode (USB↔LSB and
+///   their DATA forms). Commanded `CW`, an INVERTING transponder's sideband
+///   swap is lost — the correct uplink frequency in the wrong sideband, which
+///   is silence at the far end;
 /// - the rig's own CW filter memory narrows the passband, which is the opposite
 ///   of what hunting a whole transponder wants.
 ///
@@ -420,6 +421,20 @@ pub fn uplink_tone_hz(uplink_centre_hz: u64) -> Option<f32> {
 /// The sideband pair for a transponder, given the downlink mode the satellite
 /// database reports. An inverting transponder swaps the uplink sideband — the
 /// single most-missed detail in satellite operating.
+///
+/// ⭐ THE SIDEBAND-NAMED DATA SUBMODES MIRROR TOO (operator sign-off, 2026-09-23):
+/// `PKTUSB` ↔ `PKTLSB`, exactly as the voice pair does. A soundcard mode's tones sit
+/// in the passband the way a voice does, and an inverting transponder turns the
+/// passband upside down: FT8 sent up in PKTUSB comes down with its tone order
+/// reversed, and nothing decodes it. Sent up in PKTLSB it comes down the right way
+/// round, at the audio offset it went up at. Those two words are every sideband-named
+/// data form the engine commands (`Settings::rig_mode_on_sideband`, the SSTV arm,
+/// and `plain_ssb_if_configured`, which turns them back into plain USB/LSB for a
+/// mic-jack interface — already covered by the voice pair).
+///
+/// Everything else has no side to mirror and passes through: FM and `PKTFM`, `AM`,
+/// `RTTY` (the rig's FSK mode, not a sideband), and `CW`/`CWR` (normal and reverse
+/// RELATIVE to the rig, not an absolute side — see `Settings::rig_mode_on_sideband`).
 pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     let m = downlink_mode.trim().to_ascii_uppercase();
     if !invert {
@@ -428,7 +443,9 @@ pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     match m.as_str() {
         "USB" => "LSB".to_string(),
         "LSB" => "USB".to_string(),
-        // CW/FM/data modes have no sideband to mirror.
+        "PKTUSB" => "PKTLSB".to_string(),
+        "PKTLSB" => "PKTUSB".to_string(),
+        // CW, FM and the rest name no sideband to mirror (see above).
         _ => m,
     }
 }
@@ -768,6 +785,26 @@ mod tests {
         assert_eq!(uplink_mode_for("CW", true), "CW");
         assert_eq!(uplink_mode_for("FM", true), "FM");
         assert_eq!(uplink_mode_for(" usb ", true), "LSB", "case/space tolerant");
+    }
+
+    #[test]
+    fn data_submodes_mirror_on_an_inverting_bird_like_the_voice_pair() {
+        // FT8 up an inverting transponder in PKTUSB comes down tone-reversed and
+        // undecodable; in PKTLSB it comes down the right way round.
+        assert_eq!(uplink_mode_for("PKTUSB", true), "PKTLSB");
+        assert_eq!(uplink_mode_for("PKTLSB", true), "PKTUSB");
+        assert_eq!(
+            uplink_mode_for(" pktusb ", true),
+            "PKTLSB",
+            "case/space tolerant"
+        );
+        // A non-inverting bird is the same side both ways, data or voice.
+        assert_eq!(uplink_mode_for("PKTUSB", false), "PKTUSB");
+        assert_eq!(uplink_mode_for("PKTLSB", false), "PKTLSB");
+        // Only the sideband-named words mirror: these name no side.
+        for m in ["PKTFM", "FM", "AM", "RTTY", "CW", "CWR"] {
+            assert_eq!(uplink_mode_for(m, true), m, "{m} has no sideband to mirror");
+        }
     }
 
     #[test]

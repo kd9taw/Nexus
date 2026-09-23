@@ -189,6 +189,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer claims the uplink always runs a different mode from the downlink. KOSEN-1 is the only
   satellite listed this way today.
 
+- **FT8 and the other data modes now go up an inverting transponder on the right sideband.** On
+  a bird like RS-44 or AO-7's mode B, the transponder turns the passband over, so the uplink has
+  to go up on the opposite sideband. Nexus already did that for voice — USB down, LSB up — but
+  left a data mode's uplink on the downlink's side, and an FT8 over sent up that way comes back
+  down with its tones reversed, where nothing can decode it. The uplink now takes the mirrored
+  data mode (DATA-L up for DATA-U down, and the other way round). Only the transmit VFO's
+  sideband changes: FT timing, sequencing and audio are exactly as before, and a non-inverting
+  bird is untouched.
+
 - **The filter no longer stays at 6 kHz when you switch from phone or CW into a digital mode.**
   A Flex over SmartSDR CAT answers "done" to the 3 kHz data filter Nexus asks for and then keeps
   its own 6 kHz SSB filter. Nexus already read the filter back and put the right one in — but
