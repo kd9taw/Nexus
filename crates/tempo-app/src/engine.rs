@@ -11800,6 +11800,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let _ = self.call_station_ctx(dxcall, dxgrid, None, None, None);
     }
 
+    /// The station the directed QSO in progress is working, or `None` outside one. Lets a
+    /// caller of [`Self::call_station_ctx`] tell a QSO that really started from the benign
+    /// no-ops it also answers `Ok` to (our own call, a tier that cannot answer).
+    pub fn qso_dxcall(&self) -> Option<&str> {
+        match &self.mode {
+            Mode::Qso { station, .. } => station.dxcall.as_deref(),
+            _ => None,
+        }
+    }
+
     /// The faithful WSJT-X "double-click to work" entry point. `reply_msg` is the
     /// exact decoded line the operator double-clicked (with its `reply_snr`);
     /// WSJT-X parses *that* message to choose the next Tx, so clicking a station

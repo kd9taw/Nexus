@@ -135,6 +135,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A park activator you work from the Call Roster or Band Activity is now logged with their
+  park.** Nexus tags a contact with the activator's park — the reference your hunter credit
+  comes from — when you start it from the HUNT button, the map or the Needed board. A
+  double-click in the Call Roster, Band Activity or the station list, which is how most
+  FT8 contacts start, never did: those contacts went into the log with no park at all, no
+  hunter credit, and the station stayed on the Needed board as a new park after you had worked
+  it. Starting the contact from any of those now tags the park, whenever the POTA/SOTA spots
+  show the station at exactly one activation right now. When they show more than one — a
+  summit that is also a park, spotted to both programmes — nothing is tagged, the same rule the
+  Needed board follows, and a park you picked yourself on the POTA/SOTA board is left as you
+  picked it. The call itself goes out exactly as before. (#351)
+
 - **The SSTV screen now says where the switch is that keeps your radio in the data mode.** On an
   IC-7300 or IC-7100 the rig drops back to plain USB between pictures, taking its data-mode
   filter settings with it, and two operators independently ended up setting USB-D by hand every
