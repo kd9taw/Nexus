@@ -28,7 +28,7 @@ import { useEntityCentroids } from '../features/entityCentroids'
 import { useUnits } from '../units'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
-import { alertsForSurface, chaseRank, isActivityTag, strongestNeed } from '../features/needs'
+import { alertsForSurface, chaseRank, confirmOnlyOnWorkedBand, isActivityTag, strongestNeed } from '../features/needs'
 import { isIgnored } from '../txMessages'
 import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
@@ -239,6 +239,9 @@ export function OperateRoster({
         s,
         need,
         needAll,
+        // What Needed only and Hide worked count as a need: everything except a confirmation
+        // the first contact on this band is already waiting on (#350).
+        stillNeeded: need != null && !confirmOnlyOnWorkedBand(needAll, s.workedBand),
         needRank: chaseRank(alerts, need),
         distKm: me && ll ? haversineKm(me, ll) : Infinity,
         // Sorts on the SAME number the Brg cell prints, centroid fallback included.
@@ -267,14 +270,15 @@ export function OperateRoster({
           countries.hidden,
         ),
     )
-    if (neededOnly) f = f.filter((x) => x.need != null)
+    if (neededOnly) f = f.filter((x) => x.stillNeeded)
     // Hide worked keeps a worked station only while it still fills a need — and a park or
     // summit you have not worked in the activation running now IS one (`NewPark`), so an
     // activator survives here for the same reason it appears on the Needed board rather than
     // by a rule of this pane's own. `worked` is "this callsign is anywhere in the logbook" —
     // ever, not per band and emphatically not per park (dto.rs) — which is why it could never
-    // have answered this on its own.
-    if (hideWorked) f = f.filter((x) => !x.s.worked || x.need != null)
+    // have answered this on its own. A bare LoTW confirmation on a station already worked on
+    // this band is NOT one (#350): that was the station just worked, back on the list.
+    if (hideWorked) f = f.filter((x) => !x.s.worked || x.stillNeeded)
     // Hide blocked (opt-in; default they render dimmed). The station being WORKED or
     // selected always stays — hiding your live QSO partner mid-exchange is the same
     // self-own the country exclusion guards against.

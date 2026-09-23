@@ -1389,6 +1389,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Driven off the engine's loggedTick so EVERY log path fires it, including a
   // backend auto-log the frontend never initiated (#210) — the old approach
   // intercepted only the frontend's own log actions and so missed the auto-log.
+  //
+  // The needs refresh rides the same tick for the same reason (#350): only the Log button
+  // and the confirm popup asked for one, so a contact the sequencer logged after RR73 kept
+  // its pre-QSO need tags — and "Needed only" / "Hide worked" kept the station just worked —
+  // until the 30 s poll came round.
   const [dxClearTick, setDxClearTick] = useState(0)
   const prevLoggedTick = useRef<number | null>(null)
   useEffect(() => {
@@ -1401,8 +1406,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (tick !== prevLoggedTick.current) {
       prevLoggedTick.current = tick
       if (settings?.clearDxAfterLog) setDxClearTick((t) => t + 1)
+      refreshNeeds()
     }
-  }, [snap?.loggedTick, settings?.clearDxAfterLog])
+  }, [snap?.loggedTick, settings?.clearDxAfterLog, refreshNeeds])
 
   // The station refused the answer (its `expectedKey` is not the head's any more) or the call
   // failed: RE-READ rather than leave the operator looking at a hold that has moved on. Nothing

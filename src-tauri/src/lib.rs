@@ -14459,13 +14459,33 @@ async fn close_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), 
 #[tauri::command(async)]
 fn call_station(
     state: State<'_, SharedEngine>,
+    ota_cache: State<'_, SharedOtaSpots>,
     call: String,
     grid: Option<String>,
     message: Option<String>,
     snr: Option<i32>,
     freq: Option<f32>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
+    call_station_on(&state, &ota_cache, &call, grid, message, snr, freq)
+}
+
+/// [`call_station`]'s body, over plain handles so a test drives exactly what the command runs.
+fn call_station_on(
+    engine: &SharedEngine,
+    ota_cache: &SharedOtaSpots,
+    call: &str,
+    grid: Option<String>,
+    message: Option<String>,
+    snr: Option<i32>,
+    freq: Option<f32>,
+) -> Result<AppSnapshot, String> {
+    // #351 — the park this contact belongs to, when the hunter feed says it can only be one.
+    // This is the one path the Call Roster, Band Activity, the station list and their pop-outs
+    // share, and none of them set a hunt the way HUNT, the map and the Needed board's Work do,
+    // so a contact started here logged with no park. Read BEFORE the engine lock (an in-memory
+    // cache, never nested inside it) and applied only after the call has gone through.
+    let park = sole_live_activation(ota_cache, call, now_unix());
+    let mut eng = engine_lock(engine);
     // Working a station keys a standard structured message (your grid in Tx1) — refuse
     // without a valid callsign + grid so we never emit a grid-less directed call. The
     // mode plugin decides which tiers are gated (Capabilities::structured_identity).
@@ -14475,7 +14495,26 @@ fn call_station(
     // `freq` = the decoded station's audio offset (Hz); move our RX/TX onto it (WSJT-X
     // double-click). Ignore non-positive values (no usable frequency).
     let dx_freq = freq.filter(|f| *f > 0.0);
-    eng.call_station_ctx(&call, g, msg, snr, dx_freq)?;
+    eng.call_station_ctx(call, g, msg, snr, dx_freq)?;
+    // Tag only a QSO that really started — `call_station_ctx` answers `Ok` to a few calls it
+    // does not act on, and a pend armed for one would wait four hours to stamp the park on some
+    // later contact. Ambiguous or absent: the pending hunt is left exactly as it was, so a park
+    // the operator picked on the POTA/SOTA board survives. And the tag never costs the call: a
+    // reference `set_hunt_target` will not accept leaves this contact untagged, as an
+    // ambiguous one does.
+    if let Some((program, reference)) = park {
+        let started = eng
+            .qso_dxcall()
+            .is_some_and(|c| tempo_core::message::same_call(c, call));
+        if started {
+            if let Err(e) = eng.set_hunt_target(call, &program, &reference) {
+                tempo_core::applog::warn(
+                    "hunt",
+                    &format!("{call}: {program} {reference} not tagged: {e}"),
+                );
+            }
+        }
+    }
     Ok(eng.snapshot())
 }
 
@@ -15728,6 +15767,47 @@ fn live_activations<'a>(
     found
 }
 
+/// The hunter-feed rows that describe an activation happening NOW, across every programme in
+/// the cache. The cache STAMP proves the poller is alive (fetched within 10 min); the per-spot
+/// TIME proves the activation itself is current — see `OTA_ACTIVE_SECS`. Without the second
+/// filter a stale summit could both win the park and, worse, hide a live one behind an
+/// ambiguity that was never real.
+///
+/// ONE definition for the two readers that name a park: the Needed board's decoration pass
+/// (the row's PARK chip) and a call started from the roster ([`sole_live_activation`]), so
+/// the chip and the park the contact logs with can never come from different spots.
+fn live_ota_spots<'a>(
+    cache: &'a std::collections::HashMap<String, (i64, Vec<propagation::OtaSpot>)>,
+    now: i64,
+) -> impl Iterator<Item = &'a propagation::OtaSpot> + 'a {
+    cache
+        .values()
+        .filter(move |(stamp, _)| now.saturating_sub(*stamp) <= 600)
+        .flat_map(|(_, v)| v.iter())
+        .filter(move |sp| {
+            sp.spot_time_unix
+                .is_none_or(|t| now.saturating_sub(t) <= OTA_ACTIVE_SECS)
+        })
+}
+
+/// The ONE activation a contact with `call` can belong to right now, or `None`: none live, or
+/// more than one (the 2026-09-17 ruling, see [`live_activations`] — a wrong park is a hunt POTA
+/// never credits, a missing one the operator can add by hand).
+///
+/// An in-memory read of the cache the poller keeps. It never reaches the network, and a
+/// poisoned lock reads as "nothing live", the same as every other reader of this cache.
+fn sole_live_activation(
+    ota_cache: &SharedOtaSpots,
+    call: &str,
+    now: i64,
+) -> Option<(String, String)> {
+    let cache = ota_cache.lock().ok()?;
+    match live_activations(live_ota_spots(&cache, now), call).as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
 /// What a row says INSTEAD of a park when it cannot tell which one — the operator picks, from
 /// the POTA/SOTA board, where every live activation has its own HUNT button. Named references,
 /// because "ambiguous" alone gives the operator nothing to act on.
@@ -15943,19 +16023,9 @@ fn read_need_alerts(
     // (a park is a park — the award tier still drives the row).
     if let Ok(cache) = ota_cache.lock() {
         let now = now_unix();
-        // All fresh programs' activators (POTA + SOTA when both are polled). The cache STAMP
-        // proves the poller is alive; the per-spot TIME proves the activation itself is current
-        // — see `OTA_ACTIVE_SECS`. Without the second filter a stale summit could both win the
-        // park and, worse, hide a live one behind an ambiguity that was never real.
-        let spots: Vec<&propagation::OtaSpot> = cache
-            .values()
-            .filter(|(stamp, _)| now.saturating_sub(*stamp) <= 600)
-            .flat_map(|(_, v)| v.iter())
-            .filter(|sp| {
-                sp.spot_time_unix
-                    .is_none_or(|t| now.saturating_sub(t) <= OTA_ACTIVE_SECS)
-            })
-            .collect();
+        // All fresh programs' activators (POTA + SOTA when both are polled) — see
+        // `live_ota_spots`, which a call started from the roster reads too.
+        let spots: Vec<&propagation::OtaSpot> = live_ota_spots(&cache, now).collect();
         if !spots.is_empty() {
             for a in &mut alerts {
                 let live = live_activations(spots.iter().copied(), &a.call);
@@ -33155,6 +33225,205 @@ mod tests {
             Some(("POTA".into(), "US-0001".into())),
             "same park twice is one candidate"
         );
+    }
+
+    // ── #351: a QSO started from the Call Roster or Band Activity carries the park ──────────
+    //
+    // The pending hunt is the ONLY way a park reaches a logged contact (`Engine::log_qso` stamps
+    // `their_ref` from it), and only HUNT, the map and the Needed board's Work set one. A
+    // double-click on the Call Roster, Band Activity or the station list runs `call_station`,
+    // which never did — so the contact logged with no park, the hunter lost the credit, and the
+    // station's NEW PARK need never cleared.
+
+    /// The hunter cache as the background poller leaves it: each programme's rows, stamped now.
+    fn hunter_cache(feed: &[(&str, &[propagation::OtaSpot])]) -> crate::SharedOtaSpots {
+        let now = crate::now_unix();
+        let cache: crate::SharedOtaSpots =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        for (program, rows) in feed {
+            cache
+                .lock()
+                .unwrap()
+                .insert((*program).into(), (now, rows.to_vec()));
+        }
+        cache
+    }
+
+    fn fresh_engine() -> SharedEngine {
+        std::sync::Arc::new(std::sync::Mutex::new(tempo_app::engine::Engine::new(
+            "KD9TAW", "EN52", 0,
+        )))
+    }
+
+    /// Work `call` through the command's own body — a roster double-click carries no decoded
+    /// line — then log the contact the way the sequencer does, with no park of its own, and hand
+    /// back the park the log holds for it as (programme, reference).
+    fn work_then_log(
+        engine: SharedEngine,
+        feed: &[(&str, &[propagation::OtaSpot])],
+        call: &str,
+    ) -> Option<(String, String)> {
+        crate::call_station_on(&engine, &hunter_cache(feed), call, None, None, None, None)
+            .expect("the call itself goes through");
+        let mut eng = engine_lock(&engine);
+        eng.log_qso(park_rec(call, None, crate::now_unix()));
+        let log = eng.get_log();
+        let rec = log
+            .iter()
+            .find(|r| r.call == call)
+            .unwrap_or_else(|| panic!("no contact with {call} in the log"));
+        rec.ota
+            .their_ref
+            .clone()
+            .map(|r| (rec.ota.their_program.clone().unwrap_or_default(), r))
+    }
+
+    #[test]
+    fn a_call_from_the_roster_logs_the_park_of_the_one_live_activation() {
+        let pota = [live_spot("POTA", "K1ABC", "US-0001", 60)];
+        assert_eq!(
+            work_then_log(fresh_engine(), &[("POTA", &pota)], "K1ABC"),
+            Some(("POTA".into(), "US-0001".into())),
+            "a contact started from the roster with a live activator must carry the park"
+        );
+        // CONTROL: the park comes from the feed — the same call with the activator not on it
+        // logs none, or the fix is tagging something it never looked up.
+        assert_eq!(work_then_log(fresh_engine(), &[], "K1ABC"), None);
+    }
+
+    /// BY CONSTRUCTION, the way the roster and the Needed board are held together in the UI: for
+    /// every shape of feed, the park a roster call logs is the park the board's row names. Both
+    /// read `live_ota_spots` and `live_activations`, so the 2026-09-17 ruling — more than one live
+    /// reference tags NOTHING — reaches the roster without a second copy of it.
+    #[test]
+    fn a_roster_call_logs_exactly_the_park_the_needed_board_names() {
+        let park = [live_spot("POTA", "K1ABC", "US-0001", 60)];
+        let park_twice = [
+            live_spot("POTA", "K1ABC", "US-0001", 300),
+            live_spot("POTA", "K1ABC", "US-0001", 60),
+        ];
+        let summit_now = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 60)];
+        let summit_this_morning = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 7_200)];
+        let feeds = [
+            ("one live park", vec![("POTA", &park[..])]),
+            (
+                "the same park spotted twice",
+                vec![("POTA", &park_twice[..])],
+            ),
+            (
+                "a park and a live summit",
+                vec![("POTA", &park[..]), ("SOTA", &summit_now[..])],
+            ),
+            (
+                "a park and this morning's summit",
+                vec![("POTA", &park[..]), ("SOTA", &summit_this_morning[..])],
+            ),
+        ];
+        let mut tagged = 0;
+        for (shape, feed) in &feeds {
+            let board = board_park(&needed_board(&["K1ABC"], feed), "K1ABC", "CW");
+            let logged = work_then_log(fresh_engine(), feed, "K1ABC");
+            assert_eq!(
+                logged, board,
+                "{shape}: the roster call and the board disagree"
+            );
+            tagged += usize::from(logged.is_some());
+        }
+        // CONTROL: the loop is not comparing four Nones — three shapes tag, the ambiguous one does not.
+        assert_eq!(tagged, 3, "three of the four shapes name exactly one park");
+    }
+
+    /// More than one live reference tags nothing — and "nothing" includes not overwriting a park
+    /// the operator already picked. The board's row sends them to the POTA/SOTA board to choose
+    /// (`ambiguous_activation_note`); the double-click that then starts the QSO must not throw
+    /// that pick away, or swap in a guess.
+    #[test]
+    fn an_ambiguous_call_keeps_the_park_the_operator_picked_on_the_board() {
+        let pota = [live_spot("POTA", "K1ABC", "US-0001", 60)];
+        let sota = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 60)];
+        let engine = fresh_engine();
+        engine_lock(&engine)
+            .set_hunt_target("K1ABC", "SOTA", "W7A/MN-001")
+            .unwrap();
+        assert_eq!(
+            work_then_log(engine, &[("POTA", &pota), ("SOTA", &sota)], "K1ABC"),
+            Some(("SOTA".into(), "W7A/MN-001".into())),
+            "the operator's own pick must survive a call the feed cannot resolve"
+        );
+    }
+
+    /// The engine answers some calls with a benign no-op — our own line double-clicked, a
+    /// receive-only tier — and a pend armed for one of those waits four hours (`HUNT_TTL_SECS`)
+    /// and replaces whatever hunt was pending. Only a QSO that really started is tagged.
+    #[test]
+    fn a_call_that_starts_no_qso_arms_no_hunt() {
+        // Activating and self-spotted, the operator double-clicks their own CQ line — with a hunt
+        // for somebody else still pending.
+        let mine = [live_spot("POTA", "KD9TAW", "US-0009", 60)];
+        let engine = fresh_engine();
+        engine_lock(&engine)
+            .set_hunt_target("K1ABC", "POTA", "US-0001")
+            .unwrap();
+        crate::call_station_on(
+            &engine,
+            &hunter_cache(&[("POTA", &mine)]),
+            "KD9TAW",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("our own line is a benign no-op, not an error");
+        let eng = engine_lock(&engine);
+        assert!(eng.snapshot().qso.is_none(), "control: no QSO started");
+        assert_eq!(
+            eng.hunt_target(),
+            Some(("POTA".into(), "US-0001".into(), "K1ABC".into())),
+            "a call that started nothing replaced the pending hunt"
+        );
+    }
+
+    /// The tag rides on the call and can never cost it. A reference the feed spells in a way
+    /// `set_hunt_target` will not accept, or a hunter cache poisoned by a writer that panicked,
+    /// leaves the contact untagged — the direction the 2026-09-17 ruling calls safe — and the QSO
+    /// starts all the same.
+    #[test]
+    fn the_park_tag_never_fails_or_stops_the_call() {
+        let unreadable = [live_spot("POTA", "K1ABC", "US-12", 60)];
+        let good = [live_spot("POTA", "K1ABC", "US-0001", 60)];
+        let poisoned = hunter_cache(&[("POTA", &good)]);
+        let writer = poisoned.clone();
+        std::thread::spawn(move || {
+            let _held = writer.lock().unwrap();
+            panic!("poison the hunter cache for real");
+        })
+        .join()
+        .unwrap_err();
+        assert!(
+            poisoned.is_poisoned(),
+            "precondition: the cache is poisoned"
+        );
+        for (what, cache) in [
+            (
+                "an unreadable reference",
+                hunter_cache(&[("POTA", &unreadable)]),
+            ),
+            ("a poisoned hunter cache", poisoned),
+        ] {
+            let engine = fresh_engine();
+            let snap = crate::call_station_on(&engine, &cache, "K1ABC", None, None, None, None)
+                .unwrap_or_else(|e| panic!("{what} failed the call: {e}"));
+            assert_eq!(
+                snap.qso.and_then(|q| q.dxcall).as_deref(),
+                Some("K1ABC"),
+                "{what}: the QSO did not start"
+            );
+            assert_eq!(
+                engine_lock(&engine).hunt_target(),
+                None,
+                "{what}: tagged anyway"
+            );
+        }
     }
 
     #[test]
