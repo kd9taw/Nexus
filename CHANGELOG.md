@@ -141,6 +141,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Getting started now tells a WSJT-X operator which switch keeps JTAlert and GridTracker
+  working.** Its "Coming from WSJT-X?" note said both keep working, and they do, but only once
+  **WSJT-X UDP API** in Settings ▸ Logging & Connectors ▸ Integrations & Feeds is on, and it
+  ships off. A GridTracker2 user went looking for an ADIF file instead. The note now names the
+  switch, says it is off by default and that its address already matches WSJT-X's, and links
+  straight to that section. The manual's pages that made the same promise say so too. (#353)
+
 - **The Linux AppImage no longer prints `Failed to load module "canberra-gtk-module"` when it
   starts.** The 1.14.0 AppImage stopped looking in your system's own GTK folders, so the add-ons
   your desktop asks every GTK program to load — the event-sound module, and on some desktops the

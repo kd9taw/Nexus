@@ -580,7 +580,7 @@ export const JA: PartialCatalog = {
   "gettingStarted.log.closing.decodes": "1〜2ピリオドのうちにBand Activityがデコードで埋まります — ログをインポートしたので、国名、B4、<b>New / DXCC</b>バッジ付きです。",
   "gettingStarted.log.closing.doubleClick": "CQを出している局を<b>ダブルクリック</b>してください。シーケンサーが交信を最後まで進めてログします。同じログがフォーン／CWコックピットにも流れるので、見覚えのあるコールならそちらでも相手の名前と過去の交信が表示されます。",
   "gettingStarted.wsjtx.label": "WSJT-Xから乗り換え？最短ルート",
-  "gettingStarted.wsjtx.body": "体で覚えた操作はそのまま使えます — ダブルクリックの意味、<code>Esc</code>／<code>F4</code>／<code>F6</code>／<code>Alt+1–6</code>、Band Activityの下端固定、11.8 sの早期デコード、Fake-Itスプリット、Houndの自動移動。設定も同様です。ステップ2でWSJT-Xと同じリグ・オーディオデバイスを指定し、ステップ4に<code>wsjtx_log.adi</code>を渡してください。JTAlertとGridTrackerもそのまま動きます — NexusはWSJT-XのUDPプロトコルを完全に話すので、両者からはWSJT-Xに見えます。",
+  "gettingStarted.wsjtx.body": "体で覚えた操作はそのまま使えます — ダブルクリックの意味、<code>Esc</code>／<code>F4</code>／<code>F6</code>／<code>Alt+1–6</code>、Band Activityの下端固定、11.8 sの早期デコード、Fake-Itスプリット、Houndの自動移動。設定も同様です。ステップ2でWSJT-Xと同じリグ・オーディオデバイスを指定し、ステップ4に<code>wsjtx_log.adi</code>を渡してください。JTAlertとGridTrackerも、設定 ▸ ログと連携 ▸ <a>連携とフィード</a>で<b>WSJT-X UDP API</b>（デフォルトはオフ）をオンにすれば、そのまま動きます。アドレスは最初からWSJT-Xのデフォルトと同じなので、ほかに設定するものはなく、両者からはNexusがWSJT-Xに見えます。",
   "gettingStarted.wsjtx.mac": "Macでは、Fnを押しながらFキーを使うか、WSJT-Xと同じく、システム設定 ▸ キーボードで「F1、F2などのキーを標準のファンクションキーとして使用」をオンにしてください。",
   "assist.state.unassisted": "UNASSISTED",
   "assist.state.assisted": "ASSISTED",

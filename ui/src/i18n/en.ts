@@ -783,8 +783,13 @@ export const EN = {
     '<b>Double-click</b> a station calling CQ. The sequencer runs the whole exchange and logs it. The same log feeds the Phone and CW cockpits, so a familiar call shows their name and your history there too.',
 
   'gettingStarted.wsjtx.label': 'Coming from WSJT-X? The short path',
+  // ⚠️ JTAlert and GridTracker only hear Nexus once the WSJT-X UDP API switch is on, and it
+  // ships OFF — so the sentence names it (#353). `WSJT-X UDP API` is the switch's own label,
+  // which Settings shows as that literal in every language: copy it exactly. The path before
+  // `<a>` is the labels THIS language's Settings shows (the Settings view, the tab, the section
+  // legend), and the `<a>` span becomes a link that opens that section.
   'gettingStarted.wsjtx.body':
-    'Your muscle memory transfers — double-click semantics, <code>Esc</code> / <code>F4</code> / <code>F6</code> / <code>Alt+1–6</code>, Band Activity bottom-pinned, early decodes at 11.8\u00a0s, Fake-It split, Hound auto-move. So do your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working — Nexus speaks the full WSJT-X UDP protocol and they see it as a WSJT-X.',
+    'Your muscle memory transfers — double-click semantics, <code>Esc</code> / <code>F4</code> / <code>F6</code> / <code>Alt+1–6</code>, Band Activity bottom-pinned, early decodes at 11.8\u00a0s, Fake-It split, Hound auto-move. So do your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working once you turn on <b>WSJT-X UDP API</b> (off by default) in Settings ▸ Logging & Connectors ▸ <a>Integrations & Feeds</a>. Its address already matches WSJT-X’s default, so nothing else needs setting, and they see Nexus as a WSJT-X.',
   // A whole extra sentence, not a tail glued onto the one above — a translator may place it
   // wherever their language wants it.
   'gettingStarted.wsjtx.mac':

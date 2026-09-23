@@ -21,7 +21,7 @@ Shack-interop reference for every external protocol and online service Nexus spe
 
 ## WSJT-X UDP Protocol
 
-Nexus implements the full WSJT-X UDP datagram protocol on port `2237`. It is both a producer and a consumer on the same socket — connect any downstream tool that expects a live WSJT-X source.
+Nexus implements the full WSJT-X UDP datagram protocol on port `2237`. It is both a producer and a consumer on the same socket — connect any downstream tool that expects a live WSJT-X source. Turn it on first: the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is **off by default**, and nothing is sent until it is on. Its address already defaults to `127.0.0.1:2237`, WSJT-X's own, so nothing else needs setting.
 
 ### Outbound datagrams (Nexus → logger / overlay)
 
@@ -52,9 +52,9 @@ Nexus accepts and acts on:
 
 ### JTAlert and GridTracker
 
-JTAlert connects to port `2237` exactly as it would to WSJT-X. Highlight colors sent via `HighlightCallsign` appear on decode rows as inline background/foreground style overrides with no additional configuration. GridTracker receives Decode and Status datagrams and can drive Nexus via Reply.
+With the **WSJT-X UDP API** switch on, JTAlert connects to port `2237` exactly as it would to WSJT-X. Highlight colors sent via `HighlightCallsign` appear on decode rows as inline background/foreground style overrides with no additional configuration. GridTracker receives Decode and Status datagrams and can drive Nexus via Reply.
 
-To reach a logger on a different machine, change `wsjtx_udp` in Settings from `127.0.0.1:2237` to the logger's IP. Nexus sends to that address and binds its inbound receive on an OS-assigned ephemeral port (`0.0.0.0:0`), not on a fixed port 2237. Inbound control datagrams from JTAlert/GridTracker are received on that ephemeral port (the source port of Nexus's outgoing packets).
+To reach a logger on a different machine, change the **UDP Address** (`wsjtx_udp_addr`) in Settings from `127.0.0.1:2237` to the logger's IP. Nexus sends to that address and binds its inbound receive on an OS-assigned ephemeral port (`0.0.0.0:0`), not on a fixed port 2237. Inbound control datagrams from JTAlert/GridTracker are received on that ephemeral port (the source port of Nexus's outgoing packets).
 
 ---
 
