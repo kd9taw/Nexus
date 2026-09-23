@@ -291,6 +291,14 @@ describe('the mode, split and XIT cells each say how well they are known', () =>
     expect(cell('xit')!.textContent).toContain('500')
     expect(markIn('xit')!.textContent).toContain('cmd')
   })
+
+  it('a radio with no XIT has no XIT cell — the IC-9700 has no clarifier knob to account for', () => {
+    // The "+0 ⌁cmd" above exists because an offset may be dialled on the radio's own XIT
+    // knob. A radio with no XIT has no such knob, so the cell would describe nothing real.
+    mount({ xitUnsupported: true, xitHz: 0 })
+    expect(cell('xit'), 'an XIT cell on a radio that has none').toBeNull()
+    expect(cell('split'), 'control: the rest of the contract is still drawn').not.toBeNull()
+  })
 })
 
 describe('power, and who holds the transmitter', () => {

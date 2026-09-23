@@ -896,6 +896,13 @@ pub struct RadioStatus {
     /// XIT (transmit incremental tuning) offset in Hz — last commanded (0 = off). Optimistic.
     #[serde(default)]
     pub xit_hz: i32,
+    /// This radio has NO XIT at all (`settings::rig_has_xit`; the IC-9700), so every surface
+    /// that draws XIT leaves it out and the engine refuses one aimed at it.
+    ///
+    /// NEGATIVE ON PURPOSE, like `atu_start_tune_unsupported`: a snapshot from a station older
+    /// than the page leaves this out, and `false` (XIT offered) is how that station behaves.
+    #[serde(default)]
+    pub xit_unsupported: bool,
     /// Active VFO ("A" / "B") — last commanded. Optimistic (no read-back).
     #[serde(default)]
     pub active_vfo: String,

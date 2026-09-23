@@ -2520,13 +2520,17 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             </>
           )}
         </span>
-        <span className="ph-txc-cell" data-txc="xit" title={t('phone.txContract.xit.title')}>
-          <span className="ph-txc-lbl">{XIT}</span>
-          <span className="ph-txc-val mono">{xitHz >= 0 ? `+${xitHz}` : String(xitHz)}</span>
-          {/* `cmd` EVEN AT ZERO. Write-only means Nexus cannot see an offset dialled at the
-              radio, so "+0" states what Nexus commanded and not where the transmitter is. */}
-          <TruthMark kind="cmd" title={t('phone.txContract.xit.commanded.title')} />
-        </span>
+        {/* No cell on a radio with no XIT (the IC-9700): its "+0 ⌁cmd" would stand for an
+            offset dialled on an XIT knob the radio does not have. */}
+        {!snap.radio.xitUnsupported && (
+          <span className="ph-txc-cell" data-txc="xit" title={t('phone.txContract.xit.title')}>
+            <span className="ph-txc-lbl">{XIT}</span>
+            <span className="ph-txc-val mono">{xitHz >= 0 ? `+${xitHz}` : String(xitHz)}</span>
+            {/* `cmd` EVEN AT ZERO. Write-only means Nexus cannot see an offset dialled at the
+                radio, so "+0" states what Nexus commanded and not where the transmitter is. */}
+            <TruthMark kind="cmd" title={t('phone.txContract.xit.commanded.title')} />
+          </span>
+        )}
         <span className="ph-txc-cell" data-txc="power" title={t('phone.txContract.power.title')}>
           <span className="ph-txc-val mono">{powerPct == null ? '—' : `${powerPct}%`}</span>
           {/* NO MARK ON POWER, deliberately: `rfPower` is documented as the rig read-back

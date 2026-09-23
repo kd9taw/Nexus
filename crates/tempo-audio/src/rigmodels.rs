@@ -862,6 +862,32 @@ mod tests {
     }
 
     #[test]
+    fn the_no_xit_rigs_are_the_civ_models_without_delta_tx() {
+        // One fact, two copies: `tempo_app` offers or refuses XIT by Hamlib model number, the
+        // CI-V daemon refuses ΔTX by `IcomModel`, and neither can call the other. For every
+        // model the daemon serves, the two must give the same answer.
+        use tempo_app::settings::rig_has_xit;
+        let served: Vec<u32> = rig_models()
+            .iter()
+            .map(|(m, _)| *m)
+            .filter(|m| icom_scope_model(*m).is_some())
+            .collect();
+        assert!(!served.is_empty(), "control: the daemon serves somebody");
+        for m in served {
+            let model = icom_scope_model(m).unwrap();
+            assert_eq!(
+                rig_has_xit(m),
+                crate::civ::commands::has_delta_tx(model),
+                "model {m} ({model:?}): the engine and the CI-V daemon disagree about XIT"
+            );
+        }
+        // Named, so an edit to either table has to face the radios: the IC-9700 has no ΔTX
+        // (A7508-3EX-4), the IC-7610 has it (A7380-7EX-4).
+        assert!(!rig_has_xit(3081), "IC-9700");
+        assert!(rig_has_xit(3078), "IC-7610");
+    }
+
+    #[test]
     fn slow_serial_rig_flags_xiegu_and_vintage_kenwood_only() {
         // Xiegu family (slow CI-V backend) → the long deadline.
         for m in [3088u32, 3087, 3091, 3089, 3076] {

@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { TuningStrip } from './TuningStrip'
-import { setFrequency, setVfo, swapVfo } from '../api'
+import { setFrequency, setVfo, swapVfo, setXit } from '../api'
 import { pushToast } from '../toast'
 import type { AppSnapshot } from '../types'
 
@@ -202,5 +202,29 @@ describe('the A⇄B swap', () => {
     mount(snapWith({ catOk: true }))
     expect(swap().disabled).toBe(false)
     expect((screen.getByRole('button', { name: 'A' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
+// ── XIT ON A RADIO THAT HAS NONE (2026-09-23) ────────────────────────────────────────
+//
+// The IC-9700 has no XIT: Icom's CI-V reference for it lists RIT and no ΔTX. The engine says
+// so on the snapshot (`xitUnsupported`), and this strip, which Phone, CW, Operate and the
+// browser all draw, reads that one answer rather than a model name of its own.
+describe('XIT follows the radio', () => {
+  const xitButtons = () => ['XIT', 'XIT down', 'XIT up'].map((name) => screen.queryByRole('button', { name }))
+
+  it('a radio with no XIT gets no XIT buttons, and RIT beside them stays', () => {
+    mount(snapWith({ xitUnsupported: true }))
+    expect(xitButtons(), 'XIT was offered on a radio that has none').toEqual([null, null, null])
+    // The control: the clarifier half of the strip is still drawn, so this cannot pass on a
+    // strip that failed to render.
+    expect(screen.getByRole('button', { name: 'RIT up' })).not.toBeNull()
+  })
+
+  it('POSITIVE CONTROL — a radio that has it (or a station too old to say) keeps XIT', () => {
+    mount(snapWith({ xitHz: 0 }))
+    for (const b of xitButtons()) expect(b, 'XIT vanished from a radio that has it').not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'XIT up' }))
+    expect(setXit).toHaveBeenCalledWith(10)
   })
 })

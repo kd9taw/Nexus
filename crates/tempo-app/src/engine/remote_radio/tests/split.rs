@@ -177,3 +177,19 @@ fn values_the_page_did_not_display_or_cannot_reach_are_refused() {
     );
     assert_eq!(e.take_vfo_apply(), None);
 }
+
+/// A radio with no XIT refuses a browser's XIT as unsupported, and nothing is queued. The
+/// IC-9700 has none (Icom A7508-3EX-4 lists RIT and no ΔTX); the same request on an IC-7610 is
+/// admitted, which is what makes this a capability refusal rather than a station that refuses.
+#[test]
+fn a_radio_with_no_xit_refuses_a_browser_xit_and_queues_nothing() {
+    for (model, want, queued) in [
+        (3081, Err(Reason::UnsupportedAction), None), // IC-9700
+        (3078, Ok(()), Some(20)),                     // IC-7610
+    ] {
+        let mut s = Station::new(OperatingMode::Digital);
+        s.engine.settings.rig_model = model;
+        assert_eq!(attempt(&mut s, xit), want, "model {model}");
+        assert_eq!(s.engine.take_xit_apply(), queued, "model {model}");
+    }
+}

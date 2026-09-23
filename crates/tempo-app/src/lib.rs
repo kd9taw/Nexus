@@ -304,6 +304,7 @@ impl AppState {
                 filter_width_hz: None, // engine fills from the CAT `m` passband read-back
                 rit_hz: 0,
                 xit_hz: 0,
+                xit_unsupported: false, // engine fills from the active radio's model
                 active_vfo: String::new(), // engine fills ("A"/"B")
                 rx_level: 0.0,
                 tx_level: 0.9,

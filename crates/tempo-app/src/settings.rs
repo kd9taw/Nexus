@@ -324,6 +324,26 @@ pub fn swr_scale_verified(
     native_civ || flex_vita
 }
 
+/// Hamlib model numbers of the radios that have NO XIT (transmit incremental tuning) at all.
+/// Nexus offers no XIT on them and refuses one aimed at them.
+///
+/// ⛔ THE IC-9700 (3081). Icom's CI-V Reference Guide for it (A7508-3EX-4) lists RIT (`21 00`
+/// frequency, `21 01` on/off) and no ΔTX (`21 02`, which the IC-7610's does list), and Hamlib's
+/// IC-9700 backend agrees (`Can set XIT: N`). An XIT offered there went nowhere through Hamlib,
+/// and through Nexus's own CI-V daemon it went into `21 00`: the offset register ΔTX shares on
+/// the radios that have it, and on this one the RIT offset alone.
+///
+/// A DENY-list on purpose: a model that is not listed keeps XIT exactly as it always had it.
+/// Mirror of `tempo_audio::civ::commands::has_delta_tx` for the native CI-V models, pinned
+/// against it by that crate's `the_no_xit_rigs_are_the_civ_models_without_delta_tx` — the crate
+/// arrow points the other way, so this cannot call it.
+pub const NO_XIT_RIGS: [u32; 1] = [3081];
+
+/// Does this radio have XIT? `false` only for a model in [`NO_XIT_RIGS`].
+pub fn rig_has_xit(rig_model: u32) -> bool {
+    !NO_XIT_RIGS.contains(&rig_model)
+}
+
 /// Full-duplex satellite rigs with no Main/Sub CAT path in this build: the
 /// VFO pair is A/B and which one is the uplink is a station wiring choice no
 /// model string answers. FT-847, FT-736R, TS-2000, TS-790.

@@ -232,6 +232,20 @@ pub fn set_rit_on(radio: u8, on: bool) -> Frame {
 pub fn set_dtx_on(radio: u8, on: bool) -> Frame {
     Frame::command(radio, 0x21, &[0x02, u8::from(on)])
 }
+/// Does this radio have ΔTX (Icom's XIT) at all?
+///
+/// ⛔ THE IC-9700 DOES NOT. Its CI-V Reference Guide (A7508-3EX-4) lists two `21` commands,
+/// `21 00` (RIT frequency) and `21 01` (RIT on/off), and no `21 02`; the IC-7610's
+/// (A7380-7EX-4) has all three. Hamlib says the same (`rigctl -m 3081 -u`, 4.5.5 and 4.7.1:
+/// `Can set XIT: N`, and no XIT among its functions). So on a 9700 the offset register
+/// [`set_rit_offset`] writes is the RIT offset and nothing else, and an XIT sent there lands
+/// on the RECEIVER's clarifier.
+///
+/// The other four models keep ΔTX exactly as before. Hamlib gives each of them XIT; they have
+/// not been checked here against Icom's own reference for each radio.
+pub fn has_delta_tx(model: IcomModel) -> bool {
+    !matches!(model, IcomModel::Ic9700)
+}
 /// Icom's per-frame CW text limit (cmd `17`) — longer messages are chunked.
 pub const MORSE_CHUNK: usize = 30;
 /// Key CW from text (cmd `17`, ASCII payload ≤ [`MORSE_CHUNK`] chars).
