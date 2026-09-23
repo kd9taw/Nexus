@@ -1853,12 +1853,21 @@ fn validate_data_dir_target(
     Ok(resolved)
 }
 
-/// The data files a copy carries: the logbook, the refreshed tables beside it, and the Winlink
-/// mailbox tree. Relative to `from`, and only what exists.
+/// The data files a copy carries BYTE FOR BYTE: the logbook's own files, the refreshed tables
+/// beside it, and the Winlink mailbox tree. Relative to `from`, and only what exists.
+///
+/// The logbook's files are not listed here: they come from `Logbook::data_files`, the one list
+/// of what the logbook writes (the log, its anchor, the pre-conversion copy, the backup ring).
+/// A second, hand-kept list here knew only `log.adi`, so every other file the log depends on
+/// stayed behind on a move. The logbook DATABASE is deliberately not in this list — see
+/// [`data_dir_database`].
 fn data_dir_entries(from: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
+    let mut out: Vec<PathBuf> = tempo_core::logbook::Logbook::data_files(&from.join(LOG_FILE_NAME))
+        .files
+        .into_iter()
+        .filter_map(|p| p.strip_prefix(from).ok().map(Path::to_path_buf))
+        .collect();
     for name in [
-        "log.adi",
         "cty.dat",
         "cty.meta.json",
         "fcc-states.bin",
@@ -1888,6 +1897,16 @@ fn data_dir_entries(from: &Path) -> Vec<PathBuf> {
         walk(from, PathBuf::from("winlink"), &mut out);
     }
     out
+}
+
+/// The logbook database a copy carries, relative to `from` — copied THROUGH SQLite, never byte
+/// for byte (see `tempo_core::logbook::sqlite::copy_database`): a committed contact can still be
+/// in its `-wal` file, and a live database cannot be copied file by file. Its `-wal` and `-shm`
+/// are therefore in neither list; the copy is one self-contained file with the WAL folded in.
+fn data_dir_database(from: &Path) -> Option<PathBuf> {
+    tempo_core::logbook::Logbook::data_files(&from.join(LOG_FILE_NAME))
+        .database
+        .and_then(|p| p.strip_prefix(from).ok().map(Path::to_path_buf))
 }
 
 /// What a verified copy carried.
@@ -1923,6 +1942,20 @@ fn copy_data_dir_verified(from: &Path, to: &Path) -> Result<DataCopyReport, Stri
         }
         report.files += 1;
         report.bytes += a.len() as u64;
+    }
+    if let Some(rel) = data_dir_database(from) {
+        // Proved inside the copy itself (SQLite's integrity check, then every row compared with
+        // the original in one read transaction) — a byte compare is exactly what cannot work
+        // here, because the copy is not the same bytes: it is the same DATABASE.
+        let bytes = tempo_core::logbook::sqlite::copy_database(&from.join(&rel), &to.join(&rel))
+            .map_err(|e| {
+                format!(
+                    "Could not copy the logbook database {} — nothing was changed: {e}",
+                    rel.display()
+                )
+            })?;
+        report.files += 1;
+        report.bytes += bytes;
     }
     Ok(report)
 }
@@ -2172,6 +2205,143 @@ mod data_folder_tests {
             Some(target.canonicalize().unwrap_or(target.clone())),
             "the pointer names the new folder"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A LIVE logbook database, as the running app holds it: the connection stays open, so the
+    /// contacts it committed are in `log.sqlite3-wal` and NOT yet in the main file — SQLite only
+    /// folds them in at a checkpoint. Returns the connection (keep it alive for the whole move)
+    /// and the records it holds, in the order the store will hand them back.
+    fn live_database(
+        dir: &Path,
+        n: usize,
+    ) -> (
+        tempo_core::logbook::sqlite::LogDb,
+        Vec<tempo_core::logbook::QsoRecord>,
+    ) {
+        use tempo_core::logbook::sqlite::{LogDb, Resolved};
+        let mut adif = tempo_core::logbook::adif_header();
+        for i in 0..n {
+            let call = format!("K{i}WAL");
+            adif.push_str(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20260901<TIME_ON:6>{:02}{:02}00<BAND:3>20m<MODE:3>FT8\
+                 <COMMENT:6>row{i:03}<EOR>\n",
+                call.len(),
+                i / 60 % 24,
+                i % 60
+            ));
+        }
+        let seed = dir.join("seed.adi");
+        write(&seed, adif.as_bytes());
+        let recs: Vec<_> = tempo_core::logbook::Logbook::load(&seed)
+            .records()
+            .iter()
+            .map(|r| r.as_ref().clone())
+            .collect();
+        let _ = std::fs::remove_file(&seed);
+        let _ = std::fs::remove_file(seed.with_extension("adi.bak"));
+        let _ = std::fs::remove_file(seed.with_extension("adi.scrubbed"));
+        let mut live = LogDb::open(&dir.join("log.sqlite3")).expect("open the live store");
+        live.insert_all(recs.iter().map(|r| (r, Resolved::default())))
+            .expect("commit the contacts");
+        (live, recs)
+    }
+
+    /// ⛔ MOVING THE DATA FOLDER MUST CARRY EVERY COMMITTED CONTACT IN A LIVE DATABASE.
+    ///
+    /// The log is a WAL-mode SQLite database. A contact the store has COMMITTED sits in the
+    /// `-wal` file until a checkpoint folds it into the main file, so the main file alone is
+    /// not the log — and `fs::copy`, file by file, cannot take a consistent picture of a
+    /// database another connection is writing. This drives the shipped "copy my log and data
+    /// there" action against a store that is OPEN, with its contacts in the WAL, and reads the
+    /// copy back through a fresh connection on the new folder.
+    #[test]
+    fn a_live_database_moves_with_every_committed_contact() {
+        use tempo_core::logbook::sqlite::LogDb;
+        const N: usize = 40;
+        let root = scratch("livedb");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
+        station(&current);
+        let (live, recs) = live_database(&current, N);
+        let db_name = "log.sqlite3";
+
+        // THE PREMISE, measured: the contacts are in the WAL and not in the main file. A copy
+        // of the main file ALONE opens as a database holding none of them.
+        let wal = current.join(format!("{db_name}-wal"));
+        assert!(
+            std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0) > 0,
+            "premise: the committed contacts are still in the -wal file"
+        );
+        let main_only = root.join("main-only");
+        std::fs::create_dir_all(&main_only).expect("control dir");
+        std::fs::copy(current.join(db_name), main_only.join(db_name)).expect("control copy");
+        let seen_by_main_file = LogDb::open(&main_only.join(db_name))
+            .and_then(|db| db.row_count())
+            .expect("control read");
+        assert_eq!(
+            seen_by_main_file, 0,
+            "control: the main file on its own holds none of the {N} contacts"
+        );
+
+        apply_data_folder(&base, &current, &target, true, None, None).expect("copy");
+
+        let moved = LogDb::open(&target.join(db_name))
+            .and_then(|db| db.load_all())
+            .expect("the moved store opens");
+        assert_eq!(
+            moved.len(),
+            N,
+            "every committed contact moved with the folder (the store held {N})"
+        );
+        assert_eq!(
+            moved, recs,
+            "and they are the same contacts, in the same order"
+        );
+        assert_eq!(
+            live.row_count().expect("the original is still readable"),
+            N as u64,
+            "the original store is untouched"
+        );
+        drop(live);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The log's SAFETY COPIES move with it. The anchor (`log.adi.bak`, the bytes as first
+    /// loaded), the permanent pre-conversion copy (`log.adi.pre-sqlite`) and the dated backup
+    /// ring (`backups/`) are what an operator recovers from after a bad import, a purge or a
+    /// failed conversion — and the list this copy used to keep by hand knew only `log.adi`, so a
+    /// move left all three behind in the folder the app stops reading.
+    #[test]
+    fn the_logbooks_safety_copies_move_with_it() {
+        let root = scratch("safety");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
+        station(&current);
+        write(&current.join("log.adi.bak"), b"<CALL:5>W1AW <EOR>\n");
+        write(&current.join("log.adi.pre-sqlite"), b"<CALL:5>W1AW <EOR>\n");
+        write(
+            &current.join("backups/log-20260901-120000.adi"),
+            b"<CALL:5>W1AW <EOR>\n",
+        );
+        write(
+            &current.join("backups/log-20260902-120000-shrink.adi"),
+            b"<CALL:5>W1AW <EOR>\n<CALL:5>K1ABC <EOR>\n",
+        );
+
+        apply_data_folder(&base, &current, &target, true, None, None).expect("copy");
+
+        for rel in [
+            "log.adi",
+            "log.adi.bak",
+            "log.adi.pre-sqlite",
+            "backups/log-20260901-120000.adi",
+            "backups/log-20260902-120000-shrink.adi",
+        ] {
+            assert_eq!(
+                std::fs::read(target.join(rel)).ok(),
+                std::fs::read(current.join(rel)).ok(),
+                "{rel} moved with the log, byte for byte"
+            );
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2640,8 +2810,12 @@ fn snap_bandmap_to_edge(
 /// `%APPDATA%\tempo\log.adi` / `~/.config/tempo/log.adi` (unchanged for a single instance);
 /// `NEXUS_DATA_DIR` relocates it (multi-PC shack). See [`shared_data_dir`].
 fn logbook_path() -> PathBuf {
-    shared_data_dir().join("log.adi")
+    shared_data_dir().join(LOG_FILE_NAME)
 }
+
+/// The logbook's file name in the data folder. One constant, because the data-folder move asks
+/// the logbook for its files by this name and must name the same file the app opens.
+const LOG_FILE_NAME: &str = "log.adi";
 
 /// The LEGACY (pre-club-sync) Field Day journal location — kept only so the
 /// one-time rename in `run()` can find an existing file and carry it into the

@@ -772,6 +772,16 @@ pub struct LogSnapshot {
     pub records: Vec<Arc<QsoRecord>>,
 }
 
+/// The logbook's files in its data folder — see [`Logbook::data_files`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogFiles {
+    /// Plain files, safe to copy byte for byte: the log, its anchor, the pre-conversion copy
+    /// and the backup ring. Absolute paths, and only ones that exist.
+    pub files: Vec<PathBuf>,
+    /// The SQLite store, if there is one. Copied only through SQLite, never byte for byte.
+    pub database: Option<PathBuf>,
+}
+
 /// An in-memory logbook backed by an ADIF file.
 #[derive(Debug, Clone, Default)]
 pub struct Logbook {
@@ -1678,6 +1688,33 @@ impl Logbook {
             }
         }
         write_scrub_manifest(&marker, &next);
+    }
+
+    /// Every file in the data folder that belongs to the logbook at `path`, and that exists — the
+    /// ONE list of them, so a caller that carries the log somewhere else (the data-folder move)
+    /// carries exactly what this module writes and cannot fall behind it the way a second,
+    /// hand-kept list did (it knew `log.adi` and nothing else: the anchor, the pre-conversion
+    /// copy, the ring and the database all stayed behind).
+    ///
+    /// Two kinds, because they must be copied differently:
+    /// - [`LogFiles::files`] — plain files, safe to copy byte for byte: the log, the anchor,
+    ///   the pre-conversion copy and the ring snapshots.
+    /// - [`LogFiles::database`] — the SQLite store. ⛔ NEVER byte-copied: a committed contact
+    ///   can live in its `-wal` until a checkpoint, and a file-by-file copy of a database
+    ///   another connection is writing is not a consistent picture of it. It is copied through
+    ///   SQLite ([`sqlite::copy_database`]), which folds the WAL in, so its `-wal` and `-shm`
+    ///   are deliberately in neither list.
+    pub fn data_files(path: &Path) -> LogFiles {
+        let mut files = Vec::new();
+        if path.is_file() {
+            files.push(path.to_path_buf());
+        }
+        files.extend(Self::backup_copy_paths(path));
+        let db = migrate::database_path(path);
+        LogFiles {
+            files,
+            database: db.is_file().then_some(db),
+        }
     }
 
     /// The safety copies beside `path` that currently EXIST — the `.bak` anchor and every dated

@@ -135,6 +135,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Moving your data folder now takes the logbook's safety copies with it.** "Copy my log and data
+  there" in Settings carried `log.adi` and nothing else that belongs to it: the untouched copy of
+  your log as Nexus first opened it (`log.adi.bak`), the dated copies in the `backups` folder, and
+  the copy kept from before the logbook database, all stayed behind in the folder Nexus stops
+  reading. They now move with the log, checked byte for byte like everything else. The logbook
+  database moves too, and it is copied through the database itself rather than file by file: a
+  contact you have just logged can still be in the database's working file, and a plain file copy
+  of a database that is open can miss it. The copy is checked row for row against the original
+  before the new folder is used, and if anything does not match, nothing is changed.
+
 - **The SSTV screen now says where the switch is that keeps your radio in the data mode.** On an
   IC-7300 or IC-7100 the rig drops back to plain USB between pictures, taking its data-mode
   filter settings with it, and two operators independently ended up setting USB-D by hand every

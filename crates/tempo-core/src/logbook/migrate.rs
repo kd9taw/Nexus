@@ -150,6 +150,26 @@ impl From<sqlite::Error> for Error {
 /// This module's result.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Where the logbook database for `log_path` lives: beside it, named for the log's own stem —
+/// `log.adi` → `log.sqlite3`. The ONE place the name is decided; every caller that needs it
+/// (the conversion, the store, the data-folder copy) asks here, so the name cannot drift between
+/// the file that is written and the file that is carried.
+///
+/// SQLite also keeps `log.sqlite3-wal` and `log.sqlite3-shm` beside it while it is open. They
+/// are part of the database, not separate files: a committed contact can live in the `-wal`
+/// until a checkpoint, which is why the database is only ever copied through SQLite
+/// ([`super::sqlite::copy_database`]) and never file by file.
+pub fn database_path(log_path: &Path) -> PathBuf {
+    let stem = log_path.file_stem().unwrap_or_default().to_os_string();
+    let mut name = if stem.is_empty() {
+        std::ffi::OsString::from("log")
+    } else {
+        stem
+    };
+    name.push(".sqlite3");
+    log_path.with_file_name(name)
+}
+
 /// Where the permanent pre-conversion copy of `log_path` lives: beside it, never rotated.
 pub fn pre_sqlite_path(log_path: &Path) -> PathBuf {
     let mut name = log_path.file_name().unwrap_or_default().to_os_string();
@@ -335,6 +355,55 @@ mod tests {
 
     fn unresolved(_: &QsoRecord) -> Resolved<'static> {
         Resolved::default()
+    }
+
+    /// The database sits beside the log under the log's own stem, and `Logbook::data_files`
+    /// names it apart from the files that may be byte-copied — with its `-wal`/`-shm` in NEITHER
+    /// list, because they are not files a copy may carry on their own.
+    #[test]
+    fn the_database_is_named_beside_the_log_and_listed_apart_from_the_plain_files() {
+        let d = Dir::new("names");
+        assert_eq!(database_path(&d.log()), d.0.join("log.sqlite3"));
+        assert_eq!(
+            database_path(Path::new("/x/other.adi")),
+            Path::new("/x/other.sqlite3")
+        );
+        for name in [
+            "log.adi",
+            "log.adi.bak",
+            "log.adi.pre-sqlite",
+            "log.sqlite3",
+            "log.sqlite3-wal",
+            "log.sqlite3-shm",
+            "backups/log-20260901-120000.adi",
+            "backups/unrelated.txt",
+        ] {
+            let p = d.0.join(name);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        }
+        let files = Logbook::data_files(&d.log());
+        let mut plain: Vec<_> = files
+            .files
+            .iter()
+            .map(|p| p.strip_prefix(&d.0).unwrap().to_string_lossy().into_owned())
+            .collect();
+        plain.sort();
+        assert_eq!(
+            plain,
+            [
+                "backups/log-20260901-120000.adi",
+                "log.adi",
+                "log.adi.bak",
+                "log.adi.pre-sqlite",
+            ],
+            "the log and its three kinds of safety copy — and nothing of the database's"
+        );
+        assert_eq!(files.database, Some(d.0.join("log.sqlite3")));
+
+        // Only what exists: a folder with no database names none.
+        std::fs::remove_file(d.0.join("log.sqlite3")).unwrap();
+        assert_eq!(Logbook::data_files(&d.log()).database, None);
     }
 
     /// The whole point, and the assertion is on the RECORDS in the store — not on an export of
