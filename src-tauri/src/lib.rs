@@ -2499,11 +2499,11 @@ mod logbook_startup_tests {
         out
     }
 
-    /// The shipped launch, as `run()` makes it: the database opened outside the engine lock,
-    /// then — the resolvers set — adopted. `places` is whether this launch's country table can
-    /// place the log's calls: a newer cty.dat places calls an older one could not.
+    /// The shipped launch, as `finish_launch` makes it: the database opened outside the engine
+    /// lock, then — the resolvers set — adopted. `places` is whether this launch's country table
+    /// can place the log's calls: a newer cty.dat places calls an older one could not.
     fn launch(log: &Path, network: Option<String>, places: bool) -> Engine {
-        let opened = open_logbook_store(log, network);
+        let opened = open_logbook_store(log, network, &mut |_| {});
         let mut e = Engine::new("K2DEF", "FN31", 0);
         e.set_dxcc_resolver(move |call| places.then(|| format!("Entity of {call}")));
         adopt_logbook(&mut e, log, opened);
@@ -2743,16 +2743,24 @@ mod logbook_startup_tests {
     #[test]
     fn the_launch_every_exit_and_the_folder_move_reach_the_store() {
         let src = include_str!("lib.rs");
-        let run = body_of(src, "pub fn run() {");
+        let finish = body_of(src, "fn finish_launch(");
+        let start = body_of(src, "fn start_on_the_logbook(");
         assert!(
-            run.contains("open_logbook_store(\n        &logbook_path(),")
-                && run.contains("adopt_logbook(&mut eng, &logbook_path(), logbook_store);"),
-            "the launch opens the store and hands it to the engine"
+            finish.contains("open_logbook_store(&log, network,")
+                && finish.contains("start_on_the_logbook(&d, logbook_store, rest);")
+                && start.contains("adopt_logbook(&mut eng, &logbook_path(), logbook_store);"),
+            "the launch opens the store and hands it to the engine, whatever the open answered"
         );
-        assert!(
-            !run.contains("set_log_path("),
-            "the launch never opens log.adi directly"
-        );
+        for (name, body) in [
+            ("run", body_of(src, "pub fn run() {")),
+            ("finish_launch", finish),
+            ("start_on_the_logbook", start),
+        ] {
+            assert!(
+                !body.contains("set_log_path("),
+                "the launch never opens log.adi directly ({name})"
+            );
+        }
         assert!(
             body_of(src, "fn persist_journals(").contains("flush_logbook("),
             "the journals every exit path writes include the log"
@@ -2760,6 +2768,376 @@ mod logbook_startup_tests {
         assert!(
             body_of(src, "fn set_data_folder(").contains("log_store_writer()"),
             "a folder move copies the open store through its writer"
+        );
+    }
+
+    /// The window configuration, as `tauri.conf.json` declares it.
+    fn window_conf(label: &str) -> serde_json::Value {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        conf["app"]["windows"]
+            .as_array()
+            .expect("windows")
+            .iter()
+            .find(|w| w["label"] == label)
+            .unwrap_or_else(|| panic!("a `{label}` window is declared"))
+            .clone()
+    }
+
+    /// Where `needle` sits in `hay`, which must hold it.
+    fn at(hay: &str, needle: &str) -> usize {
+        hay.find(needle)
+            .unwrap_or_else(|| panic!("`{needle}` is there"))
+    }
+
+    /// ⛔ THE SPLASH IS UP BEFORE THE LOGBOOK CONVERTS. Tauri makes the configured windows — the
+    /// splash, and the hidden main window — inside `App::run`, before the setup hook runs; the
+    /// hook starts the launch's second half on a thread of its own, and only that half opens
+    /// (and on a first launch converts) the logbook. So `run()`, which is everything before the
+    /// event loop and so before any window, must open no logbook and start nothing that does.
+    /// Source-scanned, because what is under test is which side of `app.run` the code runs on,
+    /// and no type sees that; the diagnostic log's milestones show the same order at run time.
+    #[test]
+    fn the_splash_is_on_screen_before_the_logbook_converts() {
+        let src = include_str!("lib.rs");
+        let run = body_of(src, "pub fn run() {");
+        for starts_the_conversion in [
+            "open_logbook_store(",
+            "start_on_the_logbook(",
+            "finish_launch(",
+            "finish_launch_or_say_why(",
+        ] {
+            assert!(
+                !run.contains(starts_the_conversion),
+                "run() — all of it before any window exists — must not reach \
+                 `{starts_the_conversion}`"
+            );
+        }
+        let build = body_of(src, "fn build_app(");
+        let hook = &build[at(build, ".setup(move |app| {")..];
+        assert!(
+            hook.contains(".spawn(move || finish_launch_or_say_why(handle, launch, rest))"),
+            "the setup hook — which runs once the splash exists — starts the rest on its own thread"
+        );
+        let finish = body_of(src, "fn finish_launch(");
+        assert!(
+            at(finish, "splash_notes(&handle)") < at(finish, "open_logbook_store("),
+            "the splash is told about the conversion before it starts"
+        );
+        let splash = window_conf("splashscreen");
+        assert_ne!(
+            splash["create"], false,
+            "the splash is made by Tauri with the app"
+        );
+        assert_ne!(splash["visible"], false, "and is visible from the start");
+    }
+
+    /// ⛔ THE MAIN WINDOW IS NOT SHOWN, AND RUNS NOTHING, UNTIL THE LOG IS ATTACHED. It starts
+    /// hidden, on a page with no script — so no command reaches the engine from it — and the
+    /// launch sends it to the app and shows it only after the log is attached and the Remote
+    /// service (which reconnects by itself) is built.
+    #[test]
+    fn the_main_window_is_shown_only_once_the_log_is_attached() {
+        let main = window_conf("main");
+        assert_eq!(main["visible"], false, "the main window starts hidden");
+        assert_eq!(
+            main["url"], "blank.html",
+            "on the page it waits on, not the app"
+        );
+        let blank = include_str!("../../ui/public/blank.html");
+        assert!(
+            !blank.to_ascii_lowercase().contains("<script"),
+            "the page it waits on runs nothing"
+        );
+
+        let src = include_str!("lib.rs");
+        let finish = body_of(src, "fn finish_launch(");
+        let order = [
+            "start_on_the_logbook(&d, logbook_store, rest);",
+            "LAUNCH_ATTACHED.store(true",
+            "remote_service_for(",
+            "send_main_window_to_the_app(&handle)",
+            "main.show()",
+        ];
+        for pair in order.windows(2) {
+            assert!(
+                at(finish, pair[0]) < at(finish, pair[1]),
+                "`{}` comes before `{}`",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(
+            body_of(src, "fn start_on_the_logbook(")
+                .contains("adopt_logbook(&mut eng, &logbook_path(), logbook_store);"),
+            "and the second half attaches the log, whatever the open answered"
+        );
+        let build = body_of(src, "fn build_app(");
+        assert!(
+            !build.contains(".show()"),
+            "the setup hook no longer shows the main window on a timer"
+        );
+        assert!(
+            !build.contains("remote_service::Service::new(")
+                && !build.contains("remote_service_for("),
+            "the Remote service is not built with the app: it reconnects as it is built"
+        );
+    }
+
+    /// The main window is sent to the root beside the page it waits on — the address Tauri itself
+    /// loads for `index.html`, in a Windows build, a Linux or macOS build, and under the dev
+    /// server.
+    #[test]
+    fn the_main_window_is_sent_to_the_address_tauri_loads_the_app_at() {
+        for (waiting, app) in [
+            (
+                "http://tauri.localhost/blank.html",
+                "http://tauri.localhost/",
+            ),
+            ("tauri://localhost/blank.html", "tauri://localhost/"),
+            ("http://localhost:5173/blank.html", "http://localhost:5173/"),
+        ] {
+            let waiting = tauri::Url::parse(waiting).expect("url");
+            assert_eq!(
+                app_address(&waiting).map(|u| u.to_string()).as_deref(),
+                Some(app),
+                "from {waiting}"
+            );
+        }
+    }
+
+    /// ⛔ A SECOND LAUNCH DURING A CONVERSION STANDS DOWN, BEFORE IT DOES ANYTHING. Driven with a
+    /// real conversion held part way: `migrate_log` resolves each contact while it holds its
+    /// lock, so a resolver that waits keeps it converting for as long as the test needs.
+    #[test]
+    fn a_second_launch_during_a_conversion_stands_down_before_doing_anything() {
+        let dir = folder("second", Some(40));
+        let log = dir.join("log.adi");
+        assert!(
+            !converting_elsewhere(&log),
+            "control: nothing is converting"
+        );
+
+        let (reached, reached_rx) = std::sync::mpsc::channel::<()>();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let converting = std::thread::spawn({
+            let log = log.clone();
+            move || {
+                tempo_core::logbook::migrate::migrate_log(&log, &database_path(&log), move |_| {
+                    let _ = reached.send(());
+                    let _ = released.recv(); // until the test lets go; at once after that
+                    tempo_core::logbook::sqlite::Resolved::default()
+                })
+            }
+        });
+        reached_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the conversion reached its first contact, holding its lock");
+        assert!(
+            converting_elsewhere(&log),
+            "a launch now sees another window converting, and stands down"
+        );
+        drop(release);
+        converting
+            .join()
+            .expect("joined")
+            .expect("the conversion completes");
+        assert!(
+            !converting_elsewhere(&log),
+            "once it is done, a launch goes ahead"
+        );
+
+        // …and asking comes before this launch does anything at all.
+        let src = include_str!("lib.rs");
+        let run = body_of(src, "pub fn run() {");
+        let gate = at(run, "if converting_elsewhere(&logbook_path()) {");
+        assert!(
+            run[gate..].starts_with(
+                "if converting_elsewhere(&logbook_path()) {\n        \
+                 stand_down_for_a_conversion_elsewhere();\n        return;\n    }"
+            ),
+            "and standing down returns before anything else runs"
+        );
+        for first_side_effect in [
+            "hold_profile_lock(",
+            "Settings::load(",
+            "settings.save(",
+            "start_cluster_feeds(",
+            "start_pskr_feed(",
+            "sync_rotctld(",
+            "build_app(",
+        ] {
+            assert!(
+                gate < at(run, first_side_effect),
+                "the stand-down comes before `{first_side_effect}`"
+            );
+        }
+        let finish = body_of(src, "fn finish_launch(");
+        assert!(
+            at(finish, "if converting_elsewhere(&log) {") < at(finish, "open_logbook_store("),
+            "and it is asked again right before this launch would convert"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ A QUIT BEFORE THE LOG IS ATTACHED WRITES NO JOURNAL. The event loop now runs during a
+    /// first launch's conversion, so a quit can arrive while the engine still holds the empty
+    /// conversation list it was built with, and writing that would replace the operator's saved
+    /// history with nothing. The flag is raised only once the second half has read the journals
+    /// back.
+    #[test]
+    fn a_quit_before_the_log_is_attached_writes_no_journal() {
+        let src = include_str!("lib.rs");
+        let quit = body_of(src, "fn quit_cleanup(");
+        assert!(
+            quit.contains(
+                "    if attached {\n        persist_journals(app_handle);\n    } else {\n        \
+                 flush_logbook("
+            ),
+            "the journals are written only by a quit after the attach; the log is flushed on every one"
+        );
+        assert!(
+            quit.contains("if attached {\n        capture_all_window_geometry(app_handle);"),
+            "and the window box only then too"
+        );
+        assert_eq!(
+            quit.matches("persist_journals(").count(),
+            1,
+            "no other road to the journals"
+        );
+        let finish = body_of(src, "fn finish_launch(");
+        assert!(
+            at(finish, "start_on_the_logbook(") < at(finish, "LAUNCH_ATTACHED.store(true"),
+            "the flag is raised once the journals are back"
+        );
+    }
+
+    /// The fallback survives the move to the launch's second half: a database that cannot be
+    /// opened still runs the session on `log.adi`, whole, and a contact logged in it lands there.
+    /// Through the two calls the launch makes — `open_logbook_store`, with a progress sink as
+    /// `finish_launch` passes one, then `adopt_logbook`.
+    #[test]
+    fn a_database_that_will_not_open_still_runs_a_usable_session_on_log_adi() {
+        let dir = folder("fallback", Some(6));
+        let log = dir.join("log.adi");
+        // A directory where the database file must go: SQLite cannot create it.
+        std::fs::create_dir(database_path(&log)).expect("block the database");
+        let opened = open_logbook_store(&log, None, &mut |_| {});
+        assert!(opened.is_err(), "premise: the database would not open");
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        adopt_logbook(&mut e, &log, opened);
+        assert!(!e.log_store_open(), "the session is not on the database");
+        assert_eq!(
+            e.log_records().len(),
+            6,
+            "it holds the whole log, from log.adi"
+        );
+        let mut rec = (*e.log_records()[0]).clone();
+        rec.id = None;
+        rec.call = "W1NEW".into();
+        e.log_qso(rec);
+        assert!(
+            std::fs::read_to_string(&log)
+                .expect("log.adi")
+                .contains("W1NEW"),
+            "and a contact logged in it is written to log.adi"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The splash speaks of a conversion only on the launch that has one to do: a log and no
+    /// database marked converted beside it — including a conversion that was interrupted.
+    #[test]
+    fn the_splash_speaks_of_a_conversion_only_when_there_is_one() {
+        let fresh = folder("ahead-fresh", None);
+        assert!(
+            !conversion_ahead(&fresh.join("log.adi")),
+            "a fresh install has nothing to convert"
+        );
+
+        let dir = folder("ahead", Some(10));
+        let log = dir.join("log.adi");
+        assert!(
+            conversion_ahead(&log),
+            "a log from before the database is converted"
+        );
+        drop(LogDb::open(&database_path(&log)).expect("a store, never marked converted"));
+        assert!(
+            conversion_ahead(&log),
+            "so is one whose conversion was interrupted"
+        );
+        let e = launch(&log, None, true);
+        assert!(e.log_store_open(), "premise: this launch converted it");
+        e.flush_log_store(Duration::from_secs(60)).expect("written");
+        drop(e);
+        assert!(
+            !conversion_ahead(&log),
+            "and the launches after that are ordinary ones"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The splash page reads a note in exactly this shape — `ui/src/i18n/splash.test.ts` feeds
+    /// it these same two literals.
+    #[test]
+    fn the_splash_is_told_the_state_in_the_shape_its_page_reads() {
+        assert_eq!(
+            splash_script(&SplashNote::Converting {
+                done: 12,
+                total: 34
+            }),
+            r#"window.nexusSplash&&window.nexusSplash.show({"state":"converting","done":12,"total":34})"#
+        );
+        assert_eq!(
+            splash_script(&SplashNote::Opening),
+            r#"window.nexusSplash&&window.nexusSplash.show({"state":"opening"})"#
+        );
+    }
+
+    /// The relay hands the splash the NEWEST note at a bounded rate however fast the conversion
+    /// reports, sends it again while nothing new arrives (a note that reached the page before its
+    /// script loaded is otherwise lost), and always delivers the last one.
+    #[test]
+    fn the_splash_gets_the_newest_note_at_a_bounded_rate_and_always_the_last() {
+        let (notes, rx) = std::sync::mpsc::channel();
+        let relay = std::thread::spawn(move || {
+            let mut shown = Vec::new();
+            relay_splash_notes(rx, |js| shown.push(js.to_string()));
+            shown
+        });
+        for done in 0..=10_000 {
+            notes
+                .send(SplashNote::Converting {
+                    done,
+                    total: 10_000,
+                })
+                .expect("send");
+        }
+        std::thread::sleep(SPLASH_RESEND * 5); // nothing new: the newest goes again
+        notes.send(SplashNote::Opening).expect("send");
+        drop(notes);
+        let shown = relay
+            .join()
+            .expect("the relay ends when the channel closes");
+
+        assert!(
+            shown.len() <= 12,
+            "10,002 notes reach the page as a handful of calls, not one each: {}",
+            shown.len()
+        );
+        assert_eq!(
+            shown.last(),
+            Some(&splash_script(&SplashNote::Opening)),
+            "the last note always reaches the page"
+        );
+        let newest = splash_script(&SplashNote::Converting {
+            done: 10_000,
+            total: 10_000,
+        });
+        assert!(
+            shown.iter().filter(|s| **s == newest).count() >= 2,
+            "the newest note is sent again while nothing new arrives: {shown:?}"
         );
     }
 }
@@ -3473,10 +3851,11 @@ const LOG_FILE_NAME: &str = "log.adi";
 ///
 /// `network` is the data folder's verdict (`data_folder_location`): a database is never opened
 /// on certain network storage. Every refusal leaves the operator's file as it was (see
-/// `tempo_app::logstore::open`).
+/// `tempo_app::logstore::open`). `progress` hears how far a conversion has got, for the splash.
 fn open_logbook_store(
     log: &Path,
     network: Option<String>,
+    progress: &mut dyn FnMut(tempo_core::logbook::migrate::Progress),
 ) -> Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError> {
     // The folder, as the 1.13 write path makes it on the first contact: a fresh install has
     // none yet, and the database cannot be created without it.
@@ -3491,7 +3870,68 @@ fn open_logbook_store(
             }
         })
     });
-    tempo_app::logstore::open(log, resolve, network)
+    tempo_app::logstore::open_reporting(log, resolve, network, progress)
+}
+
+/// Whether opening the logbook is about to convert `log.adi`: there is a log, and no database
+/// marked converted beside it — the first launch after the database arrived, or one resuming a
+/// conversion that was interrupted. It decides only what the splash says; the conversion decides
+/// for itself whether to run (`migrate::migrate_log`).
+fn conversion_ahead(log: &Path) -> bool {
+    use tempo_core::logbook::migrate;
+    let db = migrate::database_path(log);
+    let converted = db.is_file() && migrate::is_converted(&db).unwrap_or(false);
+    !converted && std::fs::metadata(log).is_ok_and(|m| m.len() > 0)
+}
+
+/// Whether another Nexus is converting this data folder's logbook right now — asked of the
+/// conversion's own lock, without waiting on it (`migrate::conversion_in_progress`).
+fn converting_elsewhere(log: &Path) -> bool {
+    use tempo_core::logbook::migrate;
+    migrate::conversion_in_progress(&migrate::database_path(log))
+}
+
+/// This launch stands down: another window is converting the logbook, and its splash says so.
+///
+/// Said in the diagnostic log and on stderr and, on Windows, in a message box. Linux and macOS
+/// get no box: drawing one there would take either a direct GTK or AppKit dependency this app
+/// does not carry, or Tauri's dialog plugin, which needs the event loop this launch stands down
+/// rather than start. On macOS a second launch from Finder or the Dock activates the running app
+/// instead, so it rarely gets here.
+fn stand_down_for_a_conversion_elsewhere() {
+    const WHY: &str = "Nexus is already open and is moving your logbook into its new database. \
+                       This happens once, and Nexus opens by itself when it is done, so there is \
+                       no need to start it again.";
+    tempo_core::applog::warn(
+        "startup",
+        "another Nexus is converting this logbook; this launch stands down and opens nothing",
+    );
+    tempo_core::applog::flush();
+    eprintln!("nexus: {WHY}");
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn MessageBoxW(
+                hwnd: *mut std::ffi::c_void,
+                text: *const u16,
+                caption: *const u16,
+                utype: u32,
+            ) -> i32;
+        }
+        const MB_ICONINFORMATION: u32 = 0x0000_0040;
+        const MB_SETFOREGROUND: u32 = 0x0001_0000;
+        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let text = wide(WHY);
+        let caption = wide("Nexus");
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_ICONINFORMATION | MB_SETFOREGROUND,
+            );
+        }
+    }
 }
 
 /// Hand this session's log to the engine: the database, when [`open_logbook_store`] opened it —
@@ -24417,6 +24857,16 @@ static QUIT_CLEANUP_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 static QUIT_SKIP_GEOMETRY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// The launch has attached the logbook and read back everything the engine keeps on disk
+/// (`finish_launch`).
+///
+/// ⛔ Until then a quit has nothing of the operator's in memory, and must write nothing. The event
+/// loop runs through a first launch's conversion now, so a quit can arrive while the engine still
+/// holds the empty conversation list it was built with: `persist_journals` would write that over
+/// the operator's saved history. The hidden main window's box is not one they sized, either. The
+/// logbook is flushed on every quit regardless — without an attached store that is a no-op.
+static LAUNCH_ATTACHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Everything a quit must flush, in one place — reached from BOTH `RunEvent::ExitRequested`
 /// and `RunEvent::Exit` (see the `.run` closure for why two events mean one cleanup).
 ///
@@ -24435,8 +24885,12 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     if QUIT_CLEANUP_RAN.swap(true, Ordering::SeqCst) {
         return;
     }
-    // Window geometry FIRST, while the windows still exist.
-    capture_all_window_geometry(app_handle);
+    // Window geometry FIRST, while the windows still exist — once the launch got that far (see
+    // `LAUNCH_ATTACHED`).
+    let attached = LAUNCH_ATTACHED.load(Ordering::SeqCst);
+    if attached {
+        capture_all_window_geometry(app_handle);
+    }
     // Unkey the transmitter before the process dies: signal the radio
     // loop to drop PTT and give it a brief window to flush the un-key
     // command to the rig. A stuck carrier on quit is a TX-safety
@@ -24463,7 +24917,14 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
         // ordinary case where the loop's drops already ran.
         tempo_audio::rigctld_proc::kill_leftover_daemons();
     }
-    persist_journals(app_handle);
+    if attached {
+        persist_journals(app_handle);
+    } else {
+        flush_logbook(
+            app_handle.state::<SharedEngine>().inner(),
+            LOG_FLUSH_ON_EXIT,
+        );
+    }
     // LAST: a clean exit is itself diagnostic — its absence in the file says the process
     // died rather than quit. Bounded wait; a wedged writer can never hold up an exit.
     tempo_core::applog::info("startup", "clean shutdown");
@@ -24578,6 +25039,19 @@ struct BuildDeps {
     /// at all; present but silent until a browser with station control asks for it.
     #[cfg(feature = "radio")]
     receive_audio: std::sync::Arc<tempo_audio::receive_audio::ReceiveAudioFeed>,
+    /// The launch's second half ([`finish_launch`]) — a take-once cell like `pounce_rx`, and for
+    /// the same reason: the radio config in it cannot be cloned for a second build attempt.
+    launch_rest: Arc<Mutex<Option<LaunchRest>>>,
+}
+
+/// The part of `run()`'s state that only the launch's second half uses, handed to it through the
+/// setup hook (see [`finish_launch`]).
+struct LaunchRest {
+    /// The signal source the operator left the app on.
+    persisted_source: SourceKind,
+    /// The radio loop's config, built from the settings before the engine took them.
+    #[cfg(feature = "radio")]
+    radio_cfg: tempo_audio::service::RadioConfig,
 }
 
 /// Where Tauri puts the WebView2 user-data folder on Windows — and, when it is corrupt, the
@@ -24803,6 +25277,16 @@ pub fn run() {
         ),
     );
     install_panic_logger();
+
+    // ⛔ A second launch while another window converts this data folder's logbook stands down
+    // HERE, before it has done anything — no settings written, no feed logged in, no daemon
+    // started. The other window's splash already says what is happening; without this, this
+    // launch would wait on the conversion with nothing on screen and then open a second copy of
+    // Nexus over the same log.
+    if converting_elsewhere(&logbook_path()) {
+        stand_down_for_a_conversion_elsewhere();
+        return;
+    }
 
     // Take this profile's advisory lock (named profiles only — the default single-instance is a
     // no-op). Lets the launch picker grey out a radio already open in another window, and marks
@@ -25247,20 +25731,136 @@ pub fn run() {
         });
     }
 
+    // ⭐ THE LAUNCH HAS TWO HALVES, AND THE SECOND WAITS FOR THE SPLASH. Everything above is what
+    // the window needs before it can exist. The logbook — converted from `log.adi` on the first
+    // launch after the database arrived, which on a lifetime log takes long enough to read as
+    // "Nexus did not start" — and everything that must not start before it is attached run in
+    // `finish_launch`, on a thread of its own, once the splash is on screen. See it for why
+    // nothing can read or write the log, log a contact or key the rig before that.
+    //
+    // The state the builder manages for that half is made here, because the builder needs it
+    // before that half runs.
+    let fd_board_state: SharedFdBoardState = Arc::new(Mutex::new(FdBoardState::default()));
+    let prop_cache: PropCache = Arc::new(Mutex::new(None));
+    let aurora_cache: AuroraCache = Arc::new(Mutex::new(None));
+    let kc2g_cache: Kc2gCache = Arc::new(Mutex::new(None));
+    let kp_forecast_cache: KpForecastCache = Arc::new(Mutex::new(None));
+    let proton_cache: ProtonCache = Arc::new(Mutex::new(None));
+    let scales_cache: ScalesCache = Arc::new(Mutex::new(None));
+    let connect_web_state: SharedConnectWebState = Arc::new(Mutex::new(ConnectWebState::default()));
+
+    // NOT registered as managed state, deliberately. `Chains` would have to be keyed by
+    // `RadioProfile::id`, and the only id available here is a BOOT SNAPSHOT of
+    // `settings.active_radio`. Switching radios in Settings does not rebuild the engine —
+    // `Engine::set_active_radio` mutates settings in place on the same engine — so the entry
+    // would sit filed under a dead profile id the moment the operator switches, with no refresh
+    // hook and no assertion. The first caller writing the obvious
+    // `chains.get(chain_of(w).unwrap_or(active))` would then get `None` for the LIVE radio: the
+    // exact wrong-rig class this addressing layer exists to make unrepresentable, reintroduced
+    // one layer down.
+    //
+    // Nothing reads the registry yet, so managing it buys nothing and stores a fact that is
+    // knowably wrong. Re-keying on radio-switch is the cap-lift's problem, and the cap-lift is
+    // where the registry acquires its first reader. The type and its tests stay — they are the
+    // proven artifact that branch starts from.
+    // Pounce: the detector thread + the app's push channel to the UI. The cluster feeds hand
+    // spots to `POUNCE_TX` (non-blocking); this thread does the scoring and emits an event only
+    // when something genuinely rare appears. Everything else in the app is polled — this is
+    // deliberately not, because the whole value of the feature is that the alert arrives the
+    // MOMENT the spot does, and a poll is late by construction.
+    let (pounce_tx, pounce_rx) = pouncer::channel();
+    let _ = POUNCE_TX.set(pounce_tx);
+
+    // Everything the builder chain moves, bundled so a retry can be handed an identical set.
+    let deps = BuildDeps {
+        engine,
+        spectrum_feed,
+        meter_feed,
+        prop_cache,
+        aurora_cache,
+        kc2g_cache,
+        kp_forecast_cache,
+        proton_cache,
+        scales_cache,
+        spots,
+        live_paths,
+        ota_spots,
+        parks,
+        region_paths,
+        health,
+        fd_board: fd_board_state,
+        connect_web: connect_web_state,
+        // The pounce receiver is the one non-clonable thing the chain takes. Shared as a
+        // take-once cell so both attempts can hold the bundle: whichever setup runs first
+        // gets the receiver, and a retry whose predecessor already consumed it skips the
+        // detector rather than failing the launch over an alerting nicety.
+        pounce_rx: Arc::new(Mutex::new(Some(pounce_rx))),
+        #[cfg(feature = "radio")]
+        receive_audio,
+        pounces: Default::default(),
+        launch_rest: Arc::new(Mutex::new(Some(LaunchRest {
+            persisted_source,
+            #[cfg(feature = "radio")]
+            radio_cfg,
+        }))),
+    };
+
+    let app = match build_app(deps.clone()) {
+        Ok(app) => app,
+        Err(e) => match rebuild_after_setting_webview_data_aside(&e, deps) {
+            Some(app) => app,
+            None => return,
+        },
+    };
+    app.run(|app_handle, event| {
+        // Flush conversation history, Field Day log, opening episodes and window
+        // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
+        //
+        // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
+        // deliver different events and neither is a superset of the other:
+        //  - window close (all platforms) and `app.exit()`/`request_restart()`:
+        //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
+        //    exactly as it always did, and the second arm no-ops on the guard;
+        //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
+        //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
+        //    is never emitted on that path, which is how Cmd+Q used to skip the
+        //    whole cleanup. `Exit` arrives synchronously inside the terminate
+        //    callback, so the unkey wait still completes before the process dies.
+        match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                quit_cleanup(app_handle);
+            }
+            _ => {}
+        }
+    });
+}
+
+/// The launch from the logbook on: [`finish_launch`] calls it once the splash is on screen and the
+/// logbook is open.
+///
+/// **Moved out of `run()` whole, in its original order, and otherwise unchanged.** The engine
+/// adopts the log (after the resolvers, so its first index is right), the journals come back, and
+/// only then does anything start that reads or writes the log or can key the rig: the connector
+/// workers, the radio loop, the CAT broker, the club and board servers. What changed is the thread
+/// it runs on, which is what keeps a window on screen while a first launch converts a lifetime log.
+fn start_on_the_logbook(
+    d: &BuildDeps,
+    logbook_store: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
+    rest: LaunchRest,
+) {
+    let LaunchRest {
+        persisted_source,
+        #[cfg(feature = "radio")]
+        radio_cfg,
+    } = rest;
+    let engine = d.engine.clone();
+    let fd_board_state = d.fd_board.clone();
+    let prop_cache = d.prop_cache.clone();
+    let kp_forecast_cache = d.kp_forecast_cache.clone();
+    let connect_web_state = d.connect_web.clone();
     // Point the logbook at its ADIF file and load prior contacts (so worked-
     // before highlighting and the log view reflect previous sessions), and
     // restore the persisted signal source.
-    //
-    // The logbook database first, outside the lock (see `open_logbook_store`); the engine
-    // adopts it below, once the resolvers are set.
-    let logbook_store = open_logbook_store(
-        &logbook_path(),
-        data_folder_location::FolderLocation::of(
-            &shared_data_dir(),
-            data_folder_location::mount_table().as_deref(),
-        )
-        .network,
-    );
     {
         let mut eng = engine_lock(&engine);
         // Wire the DXCC entity resolver (cty.dat lives in the propagation crate)
@@ -26278,7 +26878,6 @@ pub fn run() {
     // only in the host role — elsewhere the page says "served from the host
     // station". Deliberately NOT under cfg(feature = "radio"): a scoreboard
     // needs no soundcard.
-    let fd_board_state: SharedFdBoardState = Arc::new(Mutex::new(FdBoardState::default()));
     {
         use std::sync::atomic::{AtomicBool, Ordering};
         let mgr_engine = engine.clone();
@@ -26369,13 +26968,6 @@ pub fn run() {
         });
     }
 
-    let prop_cache: PropCache = Arc::new(Mutex::new(None));
-    let aurora_cache: AuroraCache = Arc::new(Mutex::new(None));
-    let kc2g_cache: Kc2gCache = Arc::new(Mutex::new(None));
-    let kp_forecast_cache: KpForecastCache = Arc::new(Mutex::new(None));
-    let proton_cache: ProtonCache = Arc::new(Mutex::new(None));
-    let scales_cache: ScalesCache = Arc::new(Mutex::new(None));
-
     // Connect on the shack TV: the same manager-thread shape as the spectator
     // scoreboard — poll settings 1 s, hot-apply, retry a failed bind quietly on a
     // timer. While `connect_web` is on, `tempo_app::connect_web` serves through the
@@ -26386,7 +26978,6 @@ pub fn run() {
     // provider below is the ONLY thing the serve thread can reach, and it hands over
     // the propagation picture plus callsign and grid: no dial frequency, no log, no
     // needs board. A payload-shape test in `connect_web` fails if that widens.
-    let connect_web_state: SharedConnectWebState = Arc::new(Mutex::new(ConnectWebState::default()));
     {
         use std::sync::atomic::{AtomicBool, Ordering};
         let mgr_engine = engine.clone();
@@ -26481,86 +27072,307 @@ pub fn run() {
             }
         });
     }
+}
 
-    // NOT registered as managed state, deliberately. `Chains` would have to be keyed by
-    // `RadioProfile::id`, and the only id available here is a BOOT SNAPSHOT of
-    // `settings.active_radio`. Switching radios in Settings does not rebuild the engine —
-    // `Engine::set_active_radio` mutates settings in place on the same engine — so the entry
-    // would sit filed under a dead profile id the moment the operator switches, with no refresh
-    // hook and no assertion. The first caller writing the obvious
-    // `chains.get(chain_of(w).unwrap_or(active))` would then get `None` for the LIVE radio: the
-    // exact wrong-rig class this addressing layer exists to make unrepresentable, reintroduced
-    // one layer down.
-    //
-    // Nothing reads the registry yet, so managing it buys nothing and stores a fact that is
-    // knowably wrong. Re-keying on radio-switch is the cap-lift's problem, and the cap-lift is
-    // where the registry acquires its first reader. The type and its tests stay — they are the
-    // proven artifact that branch starts from.
-    // Pounce: the detector thread + the app's push channel to the UI. The cluster feeds hand
-    // spots to `POUNCE_TX` (non-blocking); this thread does the scoring and emits an event only
-    // when something genuinely rare appears. Everything else in the app is polled — this is
-    // deliberately not, because the whole value of the feature is that the alert arrives the
-    // MOMENT the spot does, and a poll is late by construction.
-    let (pounce_tx, pounce_rx) = pouncer::channel();
-    let _ = POUNCE_TX.set(pounce_tx);
-
-    // Everything the builder chain moves, bundled so a retry can be handed an identical set.
-    let deps = BuildDeps {
-        engine,
-        spectrum_feed,
-        meter_feed,
-        prop_cache,
-        aurora_cache,
-        kc2g_cache,
-        kp_forecast_cache,
-        proton_cache,
-        scales_cache,
-        spots,
-        live_paths,
-        ota_spots,
-        parks,
-        region_paths,
-        health,
-        fd_board: fd_board_state,
-        connect_web: connect_web_state,
-        // The pounce receiver is the one non-clonable thing the chain takes. Shared as a
-        // take-once cell so both attempts can hold the bundle: whichever setup runs first
-        // gets the receiver, and a retry whose predecessor already consumed it skips the
-        // detector rather than failing the launch over an alerting nicety.
-        pounce_rx: Arc::new(Mutex::new(Some(pounce_rx))),
-        #[cfg(feature = "radio")]
-        receive_audio,
-        pounces: Default::default(),
-    };
-
-    let app = match build_app(deps.clone()) {
-        Ok(app) => app,
-        Err(e) => match rebuild_after_setting_webview_data_aside(&e, deps) {
-            Some(app) => app,
-            None => return,
-        },
-    };
-    app.run(|app_handle, event| {
-        // Flush conversation history, Field Day log, opening episodes and window
-        // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
-        //
-        // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
-        // deliver different events and neither is a superset of the other:
-        //  - window close (all platforms) and `app.exit()`/`request_restart()`:
-        //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
-        //    exactly as it always did, and the second arm no-ops on the guard;
-        //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
-        //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
-        //    is never emitted on that path, which is how Cmd+Q used to skip the
-        //    whole cleanup. `Exit` arrives synchronously inside the terminate
-        //    callback, so the unkey wait still completes before the process dies.
-        match event {
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                quit_cleanup(app_handle);
-            }
-            _ => {}
+/// The launch from the moment the splash is on screen: open the logbook — converting `log.adi` on
+/// the first launch after the database arrived — attach it, start everything that waits on it,
+/// then swap the splash for the main window. The setup hook runs it on a thread of its own
+/// ([`finish_launch_or_say_why`]), so the splash stays alive and says what is happening.
+///
+/// ⛔ **The order is the startup's safety, and it is the order `run()` always had:**
+/// - nothing reads or writes the log before it is attached. The main window waits on a page that
+///   runs nothing (`blank.html`, from `tauri.conf.json`) instead of loading the app, so no command
+///   reaches the engine from it; the splash is granted no command at all (`capabilities/
+///   default.json` names only `main` and the pop-outs); the Remote service is built here, after the
+///   attach ([`remote_service_for`]); and a quit before the attach writes no journal
+///   (`LAUNCH_ATTACHED`);
+/// - nothing that can log a contact or key the rig starts before the attach either:
+///   [`start_on_the_logbook`] starts the radio loop after `adopt_logbook`, as `run()` did, and the
+///   RX decoders, the pounce detector and the AI CW decoder start after that, as the setup hook
+///   did;
+/// - the main window is shown last: two seconds after it is sent to the app, the time the setup
+///   hook always gave it to draw behind the splash.
+fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
+    use tauri::Manager;
+    let log = logbook_path();
+    let network = data_folder_location::FolderLocation::of(
+        &shared_data_dir(),
+        data_folder_location::mount_table().as_deref(),
+    )
+    .network;
+    // `run()` asked this before it did anything. Asked again right before this launch would begin
+    // converting, for a second window started so close behind another that neither had begun when
+    // `run()` asked.
+    if converting_elsewhere(&log) {
+        stand_down_for_a_conversion_elsewhere();
+        handle.exit(0);
+        return;
+    }
+    // The logbook database first, outside the engine lock (see `open_logbook_store`); the engine
+    // adopts it in `start_on_the_logbook`, once the resolvers are set. On the launch that
+    // converts, the splash says so while it works.
+    let notes = (network.is_none() && conversion_ahead(&log)).then(|| splash_notes(&handle));
+    if notes.is_some() {
+        tempo_core::applog::info(
+            "startup",
+            "converting log.adi into the logbook database; the splash says so",
+        );
+    }
+    let logbook_store = open_logbook_store(&log, network, &mut |p| {
+        if let Some(notes) = &notes {
+            let _ = notes.send(SplashNote::Converting {
+                done: p.done,
+                total: p.total,
+            });
         }
     });
+    if let Some(notes) = notes {
+        // The last note. The relay delivers it, then ends when this sender drops.
+        let _ = notes.send(SplashNote::Opening);
+    }
+    start_on_the_logbook(&d, logbook_store, rest);
+    LAUNCH_ATTACHED.store(true, std::sync::atomic::Ordering::SeqCst);
+    tempo_core::applog::info("startup", "logbook attached; starting what waits on it");
+    handle.manage(remote_service_for(
+        &d,
+        handle.state::<remote_monitor::Publisher>().inner().clone(),
+    ));
+    // Pounce detector. Emits `pounce` to every window when a rare one appears — the
+    // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
+    // panel windows get it too without tracking listener lifetimes.
+    {
+        use tauri::Emitter;
+        // Take-once: the dependency bundle is cloned for a possible retry, so the
+        // receiver is shared and whichever setup runs first claims it. `None` on a
+        // retry whose predecessor already took it — the detector is an alerting
+        // nicety, and going without it is strictly better than failing a launch that
+        // has just healed itself.
+        let claimed = d.pounce_rx.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(rx) = claimed {
+            let eng = handle.state::<SharedEngine>().inner().clone();
+            let emit_handle = handle.clone();
+            let recent = d.pounces.clone();
+            std::thread::Builder::new()
+                .name("nexus-pounce".into())
+                .spawn(move || {
+                    pouncer::run(eng, rx, recent, move |p| {
+                        let _ = emit_handle.emit("pounce", &p);
+                    });
+                })
+                .expect("spawn pounce detector");
+        } else {
+            tempo_core::applog::warn(
+                "startup",
+                "pounce detector not started (receiver already claimed by a prior build attempt)",
+            );
+        }
+    }
+    // AI CW decoder (beta): resolve the DeepCW model from the app's cross-platform
+    // RESOURCE dir (where Tauri bundles `resources/deepcw/*`) — next to the exe on
+    // Windows, under usr/lib/<app>/resources on a Linux .deb/AppImage. The prior
+    // exe-adjacent lookup only worked on Windows, so Linux reported "model not
+    // installed" though the model ships in the bundle. Try the resource-dir candidates
+    // (and the exe-adjacent one) and pick the first that exists; a genuinely missing
+    // model just surfaces the honest status.
+    #[cfg(feature = "radio")]
+    {
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(res) = handle.path().resource_dir() {
+            candidates.push(res.join("resources").join("deepcw"));
+            candidates.push(res.join("deepcw"));
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(d) = exe.parent() {
+                candidates.push(d.join("resources").join("deepcw"));
+            }
+        }
+        let dir = candidates
+            .iter()
+            .find(|d| d.is_dir())
+            .cloned()
+            .unwrap_or_else(|| std::path::PathBuf::from("resources/deepcw"));
+        let eng = handle.state::<SharedEngine>().inner().clone();
+        tempo_audio::aicw::spawn_ai_cw(eng, dir);
+    }
+    // Seed the SSTV gallery session list from the persisted gallery.json
+    // so past images are browsable immediately (the decode thread only
+    // appends). Parsed here (not via tempo-audio) so non-radio builds
+    // still show the gallery.
+    {
+        // Reconciled against the directory, not trusted. The index could name images
+        // that are gone (a hand-deleted .bmp used to leave a thumbnail over nothing) and
+        // the folder could hold images the index never knew about — a hand-copied file, or
+        // one evicted from the in-memory cap and still on disk. #23.
+        let dir = sstv_gallery_dir();
+        let entries: Vec<tempo_app::dto::SstvGalleryEntry> = reconcile_gallery(
+            &dir,
+            std::fs::read_to_string(dir.join("gallery.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or_default(),
+        );
+        if !entries.is_empty() {
+            if let Ok(mut eng) = handle.state::<SharedEngine>().inner().lock() {
+                eng.load_sstv_gallery(entries);
+            }
+        }
+    }
+    // RTTY + PSK + SSTV RX decode threads, and the amplifier status poll — RX ONLY
+    // (arming is per-session runtime state; nothing here can key PTT or emit TX audio).
+    //
+    // The amplifier belongs in THIS family and nowhere else, and that is the whole
+    // isolation argument spent in one place. It must never be folded into the radio
+    // loop's heavy CAT block: that loop ticks every 20 ms and caps its entire read-back
+    // at HEAVY_POLL_BUDGET_MS = 250, asking have_budget() before every single read,
+    // while ONE amplifier poll is 0.5-2.4 s of blocking serial (SPE: two read_exact at
+    // a 500 ms budget; KPA: six sequential verbs at 400 ms each) — 25 to 120 ticks. A
+    // reader that long inside the budget does not fail loudly; it silently STARVES the
+    // readers after it, which is exactly what \dump_caps did to the split read it was
+    // meant to qualify. Nor may it live in RadioLoop, and nor may it become a
+    // spawn_blocking per UI poll: that model reopens its transport on every call, which
+    // for a serial amplifier means opening and closing a COM port every second.
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::rttyrx::spawn_rtty_rx(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::amppoll::spawn_amp_poll(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::pskrx::spawn_psk_rx(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::aprsrx::spawn_aprs_rx(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::sstvrx::spawn_sstv_rx(
+            handle.state::<SharedEngine>().inner().clone(),
+            sstv_gallery_dir(),
+        );
+    }
+    // Everything the main window reads is in place. Send it to the app and, as the setup hook
+    // always did, give the app two seconds to draw behind the splash before swapping them.
+    let main = match send_main_window_to_the_app(&handle) {
+        Ok(main) => main,
+        Err(why) => {
+            let why = format!("the main window could not be sent to the app: {why}");
+            tempo_core::applog::error("startup", &why);
+            show_startup_failure(&why);
+            handle.exit(1);
+            return;
+        }
+    };
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let _ = main.show();
+    let _ = main.set_focus();
+    if let Some(splash) = handle.get_webview_window("splashscreen") {
+        let _ = splash.close();
+    }
+    tempo_core::applog::info("startup", "main window shown");
+}
+
+/// [`finish_launch`], and what happens if it panics: the main window would never be shown, and
+/// the operator would be left looking at the splash. The panic hook has logged it; say so the way
+/// a start that failed is said, and exit.
+fn finish_launch_or_say_why(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
+    let exit = handle.clone();
+    let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        finish_launch(handle, d, rest)
+    }));
+    if finished.is_err() {
+        show_startup_failure("Nexus stopped while opening the logbook.");
+        exit.exit(1);
+    }
+}
+
+/// Send the main window from the page it waits on to the app, and hand it back.
+fn send_main_window_to_the_app(handle: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+    use tauri::Manager;
+    let main = handle
+        .get_webview_window("main")
+        .ok_or("there is no main window")?;
+    let waiting = main.url().map_err(|e| e.to_string())?;
+    let app = app_address(&waiting).ok_or_else(|| format!("no app address beside {waiting}"))?;
+    main.navigate(app).map_err(|e| e.to_string())?;
+    Ok(main)
+}
+
+/// The app's address, from the address of the page the main window waits on: the root beside it.
+/// That is where Tauri itself loads a window whose page is `index.html` — it drops the file name,
+/// and its asset server answers the root with `index.html` — in a build and under the dev server
+/// alike.
+fn app_address(waiting: &tauri::Url) -> Option<tauri::Url> {
+    waiting.join("./").ok()
+}
+
+/// What the splash says while the launch converts the logbook, as `nexusSplash.show` in
+/// `ui/public/splashscreen.html` reads it. The words are the page's, in the operator's language;
+/// a note carries only the state and the counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+enum SplashNote {
+    /// Moving the log into the database: `done` of `total` contacts, `total` 0 while the
+    /// conversion has not counted them yet.
+    Converting { done: usize, total: usize },
+    /// The conversion is over, and the rest of the launch is starting.
+    Opening,
+}
+
+/// The script that hands `note` to the splash page. It does nothing on a page whose own script
+/// has not loaded yet, which is why the relay sends the newest note again.
+fn splash_script(note: &SplashNote) -> String {
+    format!(
+        "window.nexusSplash&&window.nexusSplash.show({})",
+        serde_json::to_string(note).unwrap_or_default()
+    )
+}
+
+/// How often the relay sends the splash the newest note — at most, however fast the conversion
+/// reports, and at least, while nothing new arrives.
+const SPLASH_RESEND: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Hand the splash the newest note from `rx` through `show`: at most once per [`SPLASH_RESEND`]
+/// however fast notes arrive, again every [`SPLASH_RESEND`] while none does — a note that reached
+/// the page before its script had loaded is lost otherwise — and the last one always, when the
+/// channel closes.
+fn relay_splash_notes(rx: std::sync::mpsc::Receiver<SplashNote>, mut show: impl FnMut(&str)) {
+    use std::sync::mpsc::RecvTimeoutError;
+    let mut newest: Option<SplashNote> = None;
+    let mut shown_at: Option<std::time::Instant> = None;
+    loop {
+        let closed = match rx.recv_timeout(SPLASH_RESEND) {
+            Ok(note) => {
+                newest = Some(note);
+                false
+            }
+            Err(RecvTimeoutError::Timeout) => false,
+            Err(RecvTimeoutError::Disconnected) => true,
+        };
+        // A burst is one note: the newest.
+        while let Ok(note) = rx.try_recv() {
+            newest = Some(note);
+        }
+        let due = closed || shown_at.is_none_or(|at| at.elapsed() >= SPLASH_RESEND);
+        if let (true, Some(note)) = (due, &newest) {
+            show(&splash_script(note));
+            shown_at = Some(std::time::Instant::now());
+        }
+        if closed {
+            return;
+        }
+    }
+}
+
+/// Start telling the splash what the conversion is doing: the channel its progress goes into, with
+/// a thread of its own relaying it to the page. The first note — converting, count not yet known —
+/// is already on its way.
+fn splash_notes(handle: &tauri::AppHandle) -> std::sync::mpsc::Sender<SplashNote> {
+    use tauri::Manager;
+    let (notes, rx) = std::sync::mpsc::channel();
+    let _ = notes.send(SplashNote::Converting { done: 0, total: 0 });
+    let handle = handle.clone();
+    let _ = std::thread::Builder::new()
+        .name("nexus-splash".into())
+        .spawn(move || {
+            relay_splash_notes(rx, |js| {
+                if let Some(splash) = handle.get_webview_window("splashscreen") {
+                    let _ = splash.eval(js);
+                }
+            })
+        });
+    notes
 }
 
 /// One attempt at building the Tauri application.
@@ -26576,37 +27388,8 @@ pub fn run() {
 /// second identical set to a retry after setting a corrupt WebView2 user-data folder aside.
 fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
     let remote_publisher = remote_monitor::Publisher::default();
-    let remote_service = remote_service::Service::new(
-        d.engine.clone(),
-        remote_publisher.clone(),
-        d.spectrum_feed.clone(),
-        d.meter_feed.clone(),
-        Some(remote_service::query::Sources {
-            spots: d.spots.clone(),
-            live_paths: d.live_paths.clone(),
-            region_paths: d.region_paths.clone(),
-            ota: d.ota_spots.clone(),
-            parks: d.parks.clone(),
-            pounces: d.pounces.clone(),
-            health: d.health.clone(),
-            propagation: d.prop_cache.clone(),
-            memories: Default::default(),
-            navigation: remote_service::query::navigation::Source::new(
-                d.aurora_cache.clone(),
-                d.kc2g_cache.clone(),
-                d.proton_cache.clone(),
-                d.scales_cache.clone(),
-            ),
-            sstv: remote_service::sstv::Source::new(vec![
-                sstv_gallery_dir(),
-                legacy_sstv_gallery_dir(),
-            ]),
-        }),
-        // Receive audio for a listening browser. Without this the lane is never
-        // advertised and no browser is ever offered the control.
-        #[cfg(feature = "radio")]
-        Some(d.receive_audio.clone()),
-    );
+    // The launch's second half gets the whole bundle: the builder chain below moves its fields.
+    let launch = d.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -26618,7 +27401,6 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .plugin(tauri_plugin_dialog::init())
         .manage(d.engine)
         .manage(remote_publisher)
-        .manage(remote_service)
         .manage(d.spectrum_feed)
         .manage(d.meter_feed)
         .manage(d.prop_cache)
@@ -27036,12 +27818,14 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             qsy_pause,
             qsy_stop
         ])
-        // `move`: the hook claims the pounce receiver out of the shared bundle, so it owns
-        // its half of `d` rather than borrowing a local that is about to go out of scope.
+        // `move`: the hook hands the launch's second half its own copy of the bundle (`launch`),
+        // which it owns rather than borrowing a local that is about to go out of scope.
         .setup(move |app| {
-            // Classic startup splash: the borderless `splashscreen` window shows on top for ~3s
-            // while the `main` window (declared hidden) loads behind it; then reveal main and
-            // close the splash. A plain thread timer — no dependency on the frontend being ready.
+            // The startup splash. Tauri made the borderless `splashscreen` window and the hidden
+            // `main` window before this hook runs. The hook does what needs the main thread or the
+            // app handle, then starts the rest of the launch on a thread of its own
+            // (`finish_launch`), which swaps the splash for the main window once the logbook is
+            // attached.
             use tauri::Manager;
             // Capture the bundled-resource dir FIRST: it is the only handle-derived path
             // the TLE seed loader can use, and the first satellite/Now-Bar poll may arrive
@@ -27087,122 +27871,22 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             // is the answer the Greek-Windows report needed and could not get.
             tempo_core::applog::info("startup", "main window created; app setup running");
             STARTUP_REACHED_WINDOW.store(true, std::sync::atomic::Ordering::SeqCst);
-            // Pounce detector. Emits `pounce` to every window when a rare one appears — the
-            // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
-            // panel windows get it too without tracking listener lifetimes.
-            {
-                use tauri::Emitter;
-                // Take-once: the dependency bundle is cloned for a possible retry, so the
-                // receiver is shared and whichever setup runs first claims it. `None` on a
-                // retry whose predecessor already took it — the detector is an alerting
-                // nicety, and going without it is strictly better than failing a launch that
-                // has just healed itself.
-                let claimed = d.pounce_rx.lock().unwrap_or_else(|e| e.into_inner()).take();
-                if let Some(rx) = claimed {
-                    let eng = app.state::<SharedEngine>().inner().clone();
-                    let emit_handle = app.handle().clone();
-                    let recent = d.pounces.clone();
-                    std::thread::Builder::new()
-                        .name("nexus-pounce".into())
-                        .spawn(move || {
-                            pouncer::run(eng, rx, recent, move |p| {
-                                let _ = emit_handle.emit("pounce", &p);
-                            });
-                        })
-                        .expect("spawn pounce detector");
-                } else {
-                    tempo_core::applog::warn(
-                        "startup",
-                        "pounce detector not started (receiver already claimed by a prior build attempt)",
-                    );
-                }
-            }
-
-            let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if let Some(main) = handle.get_webview_window("main") {
-                    let _ = main.show();
-                    let _ = main.set_focus();
-                }
-                if let Some(splash) = handle.get_webview_window("splashscreen") {
-                    let _ = splash.close();
-                }
-            });
-            // AI CW decoder (beta): resolve the DeepCW model from the app's cross-platform
-            // RESOURCE dir (where Tauri bundles `resources/deepcw/*`) — next to the exe on
-            // Windows, under usr/lib/<app>/resources on a Linux .deb/AppImage. The prior
-            // exe-adjacent lookup only worked on Windows, so Linux reported "model not
-            // installed" though the model ships in the bundle. Try the resource-dir candidates
-            // (and the exe-adjacent one) and pick the first that exists; a genuinely missing
-            // model just surfaces the honest status.
-            #[cfg(feature = "radio")]
-            {
-                let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-                if let Ok(res) = app.path().resource_dir() {
-                    candidates.push(res.join("resources").join("deepcw"));
-                    candidates.push(res.join("deepcw"));
-                }
-                if let Ok(exe) = std::env::current_exe() {
-                    if let Some(d) = exe.parent() {
-                        candidates.push(d.join("resources").join("deepcw"));
-                    }
-                }
-                let dir = candidates
-                    .iter()
-                    .find(|d| d.is_dir())
-                    .cloned()
-                    .unwrap_or_else(|| std::path::PathBuf::from("resources/deepcw"));
-                let eng = app.state::<SharedEngine>().inner().clone();
-                tempo_audio::aicw::spawn_ai_cw(eng, dir);
-            }
-            // Seed the SSTV gallery session list from the persisted gallery.json
-            // so past images are browsable immediately (the decode thread only
-            // appends). Parsed here (not via tempo-audio) so non-radio builds
-            // still show the gallery.
-            {
-                // Reconciled against the directory, not trusted. The index could name images
-                // that are gone (a hand-deleted .bmp used to leave a thumbnail over nothing) and
-                // the folder could hold images the index never knew about — a hand-copied file, or
-                // one evicted from the in-memory cap and still on disk. #23.
-                let dir = sstv_gallery_dir();
-                let entries: Vec<tempo_app::dto::SstvGalleryEntry> = reconcile_gallery(
-                    &dir,
-                    std::fs::read_to_string(dir.join("gallery.json"))
-                        .ok()
-                        .and_then(|text| serde_json::from_str(&text).ok())
-                        .unwrap_or_default(),
-                );
-                if !entries.is_empty() {
-                    if let Ok(mut eng) = app.state::<SharedEngine>().inner().lock() {
-                        eng.load_sstv_gallery(entries);
-                    }
-                }
-            }
-            // RTTY + PSK + SSTV RX decode threads, and the amplifier status poll — RX ONLY
-            // (arming is per-session runtime state; nothing here can key PTT or emit TX audio).
-            //
-            // The amplifier belongs in THIS family and nowhere else, and that is the whole
-            // isolation argument spent in one place. It must never be folded into the radio
-            // loop's heavy CAT block: that loop ticks every 20 ms and caps its entire read-back
-            // at HEAVY_POLL_BUDGET_MS = 250, asking have_budget() before every single read,
-            // while ONE amplifier poll is 0.5-2.4 s of blocking serial (SPE: two read_exact at
-            // a 500 ms budget; KPA: six sequential verbs at 400 ms each) — 25 to 120 ticks. A
-            // reader that long inside the budget does not fail loudly; it silently STARVES the
-            // readers after it, which is exactly what \dump_caps did to the split read it was
-            // meant to qualify. Nor may it live in RadioLoop, and nor may it become a
-            // spawn_blocking per UI poll: that model reopens its transport on every call, which
-            // for a serial amplifier means opening and closing a COM port every second.
-            #[cfg(feature = "radio")]
-            {
-                tempo_audio::rttyrx::spawn_rtty_rx(app.state::<SharedEngine>().inner().clone());
-                tempo_audio::amppoll::spawn_amp_poll(app.state::<SharedEngine>().inner().clone());
-                tempo_audio::pskrx::spawn_psk_rx(app.state::<SharedEngine>().inner().clone());
-                tempo_audio::aprsrx::spawn_aprs_rx(app.state::<SharedEngine>().inner().clone());
-                tempo_audio::sstvrx::spawn_sstv_rx(
-                    app.state::<SharedEngine>().inner().clone(),
-                    sstv_gallery_dir(),
-                );
+            // The rest of the launch — opening the logbook, converting it on the first launch after
+            // the database arrived, and everything that must wait for it — runs on a thread of its
+            // own, so the splash stays on screen, alive, and says what is happening. That thread
+            // shows the main window when it is done. Take-once, like the pounce receiver: whichever
+            // setup runs first claims it.
+            let rest = launch
+                .launch_rest
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            if let Some(rest) = rest {
+                let handle = app.handle().clone();
+                std::thread::Builder::new()
+                    .name("nexus-launch".into())
+                    .spawn(move || finish_launch_or_say_why(handle, launch, rest))
+                    .expect("spawn the launch thread");
             }
             Ok(())
         })
@@ -27229,6 +27913,50 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             }
         })
         .build(tauri::generate_context!())
+}
+
+/// The Remote service, built — and so started — once the launch has attached the log.
+///
+/// Not in [`build_app`], because it goes to work as it is built: when Remote was on at the last
+/// exit it reconnects to the relay and restores the grants of approved browsers, which may log
+/// contacts and control the station. Built with the app, it would do that while a first launch was
+/// still converting the log, before anything was attached. Its three commands read it as managed
+/// state, and nothing that could send them exists before the main window is sent to the app.
+fn remote_service_for(
+    d: &BuildDeps,
+    publisher: remote_monitor::Publisher,
+) -> remote_service::Service {
+    remote_service::Service::new(
+        d.engine.clone(),
+        publisher,
+        d.spectrum_feed.clone(),
+        d.meter_feed.clone(),
+        Some(remote_service::query::Sources {
+            spots: d.spots.clone(),
+            live_paths: d.live_paths.clone(),
+            region_paths: d.region_paths.clone(),
+            ota: d.ota_spots.clone(),
+            parks: d.parks.clone(),
+            pounces: d.pounces.clone(),
+            health: d.health.clone(),
+            propagation: d.prop_cache.clone(),
+            memories: Default::default(),
+            navigation: remote_service::query::navigation::Source::new(
+                d.aurora_cache.clone(),
+                d.kc2g_cache.clone(),
+                d.proton_cache.clone(),
+                d.scales_cache.clone(),
+            ),
+            sstv: remote_service::sstv::Source::new(vec![
+                sstv_gallery_dir(),
+                legacy_sstv_gallery_dir(),
+            ]),
+        }),
+        // Receive audio for a listening browser. Without this the lane is never
+        // advertised and no browser is ever offered the control.
+        #[cfg(feature = "radio")]
+        Some(d.receive_audio.clone()),
+    )
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════

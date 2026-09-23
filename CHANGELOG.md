@@ -137,7 +137,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the screen hesitate each time a contact was saved or an upload was marked. The log is now kept
   in `log.sqlite3` beside `log.adi`, where a change writes only the contacts it touched. The first
   time this version starts it converts your log — a lifetime log can take several seconds, once,
-  before the window appears — and keeps the file exactly as it was, as `log.adi.pre-sqlite`.
+  and the start-up screen says so while it works, in your language — and keeps the file exactly as
+  it was, as `log.adi.pre-sqlite`. Starting Nexus again while it converts does not open a second
+  copy; on Windows it says Nexus is already moving the logbook and will open by itself.
   `log.adi` stays where it always was and keeps up with every change, a moment later, so other
   loggers, backup scripts and sync tools that read it still see every contact. Starting Nexus no
   longer rewrites the log at all, and quitting waits for the last change to reach the disk. A
