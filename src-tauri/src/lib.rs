@@ -2125,7 +2125,7 @@ mod durable_command_tests {
     use std::time::Duration;
 
     /// A store-backed engine on a folder of the test's own, with `n` contacts.
-    fn engine_on_store(tag: &str, n: usize) -> (PathBuf, SharedEngine) {
+    pub(super) fn engine_on_store(tag: &str, n: usize) -> (PathBuf, SharedEngine) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -2268,6 +2268,147 @@ mod durable_command_tests {
             .find(|r| r.id == id)
             .expect("stored");
         assert!(row.qsl_rcvd.card, "on disk when the command returned");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod lotw_batch_tests {
+    use super::durable_command_tests::engine_on_store;
+    use super::*;
+    use tempo_core::logbook::{QsoRecord, RecordId, UploadOutcome};
+
+    /// A store-backed engine with `n` signable contacts and a Station Location to sign with.
+    fn station(tag: &str, n: usize) -> (PathBuf, SharedEngine, Vec<RecordId>) {
+        let (dir, engine) = engine_on_store(tag, n);
+        let ids = {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.lotw_station_location = "Home".into();
+            eng.apply_settings(s);
+            eng.log_records()
+                .iter()
+                .map(|r| r.id.expect("a held row has an id"))
+                .collect()
+        };
+        (dir, engine, ids)
+    }
+
+    /// Each contact's LoTW outcome by id, as memory holds it and as the store does. `None` for
+    /// a contact the log no longer holds; `Some(None)` for one never stamped.
+    fn outcomes(
+        dir: &Path,
+        engine: &SharedEngine,
+        ids: &[RecordId],
+    ) -> [Vec<Option<Option<UploadOutcome>>>; 2] {
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let stored = tempo_core::logbook::sqlite::LogDb::open(&db)
+            .and_then(|d| d.load_all())
+            .expect("read the store");
+        let eng = engine_lock(engine);
+        let of = |rows: &mut dyn Iterator<Item = &QsoRecord>| {
+            let rows: Vec<&QsoRecord> = rows.collect();
+            ids.iter()
+                .map(|id| {
+                    rows.iter()
+                        .find(|r| r.id == Some(*id))
+                        .map(|r| r.upload.lotw.as_ref().map(|s| s.outcome))
+                })
+                .collect()
+        };
+        [
+            of(&mut eng.log_records().iter().map(|r| r.as_ref())),
+            of(&mut stored.iter()),
+        ]
+    }
+
+    fn skip_report() -> Vec<String> {
+        get_connection_log()
+            .into_iter()
+            .filter(|e| e.connector == "LoTW" && e.message.contains("changed while TQSL"))
+            .map(|e| format!("{}: {}", e.level, e.message))
+            .collect()
+    }
+
+    /// ★ PROPERTY 6 — A DELETE MID-BATCH STAMPS ONLY THE UPLOADED CONTACTS. The Awards buttons
+    /// upload a chosen set; here rows 0, 1 and 3, with row 2 — never uploaded — outside it.
+    /// While TQSL signs, the operator deletes row 0. Stamped by POSITION, the result lands on
+    /// the rows that slid up: row 2 is marked sent though LoTW never saw it (and so is never
+    /// offered again), and row 3, which was uploaded, is left unmarked. By id, exactly the
+    /// uploaded contacts still in the log carry it — in memory and on disk when the command
+    /// returns.
+    #[test]
+    fn a_contact_deleted_while_tqsl_runs_moves_no_stamp_onto_another() {
+        let (dir, engine, ids) = station("lotw-delete", 4);
+        let report = lotw_upload_batch_with(&engine, Some(vec![0, 1, 3]), true, |_, args| {
+            assert!(
+                std::fs::read_to_string(args.last().expect("the batch file"))
+                    .expect("TQSL can read it")
+                    .contains("K3DUR"),
+                "premise: TQSL is handed the batch"
+            );
+            assert!(
+                engine_lock(&engine).delete_qso(0),
+                "deleted while TQSL runs"
+            );
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (3, "pending"));
+
+        let pending = Some(Some(UploadOutcome::Pending));
+        for (held, what) in outcomes(&dir, &engine, &ids)
+            .iter()
+            .zip(["memory", "store"])
+        {
+            assert_eq!(
+                held,
+                &vec![None, pending, Some(None), pending],
+                "{what}: the deleted contact is gone, row 2 — never uploaded — is unmarked, \
+                 and both uploaded contacts still in the log are marked"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A contact CORRECTED while TQSL signs is not the contact TQSL signed: LoTW holds the old
+    /// version. Marked sent, the correction would never be uploaded. So it is left unmarked —
+    /// offered again with the next upload, as it now stands — and the connection log says why.
+    #[test]
+    fn a_contact_edited_while_tqsl_runs_is_offered_again_not_stamped() {
+        let (dir, engine, ids) = station("lotw-edit", 4);
+        let report = lotw_upload_batch_with(&engine, None, true, |_, _| {
+            let mut eng = engine_lock(&engine);
+            let mut fixed = QsoRecord::clone(&eng.log_records()[1]);
+            fixed.call = "K1DUX".into();
+            assert!(eng.update_qso(1, fixed), "corrected while TQSL runs");
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (4, "pending"));
+
+        let pending = Some(Some(UploadOutcome::Pending));
+        for (held, what) in outcomes(&dir, &engine, &ids)
+            .iter()
+            .zip(["memory", "store"])
+        {
+            assert_eq!(
+                held,
+                &vec![pending, Some(None), pending, pending],
+                "{what}: every contact but the corrected one is marked"
+            );
+        }
+        assert!(
+            engine_lock(&engine).lotw_unsent_indices() == vec![1],
+            "the corrected contact is offered again"
+        );
+        assert!(
+            skip_report()
+                .iter()
+                .any(|l| l.starts_with("info: ") && l.contains("(1 edited, 0 deleted)")),
+            "the connection log says why it was not marked: {:?}",
+            skip_report()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -18600,6 +18741,25 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(if cfg!(windows) { "tqsl.exe" } else { "tqsl" })
 }
 
+/// Run TQSL once with `args`, to completion: its exit code (-1 when it has none) and what it
+/// wrote to stderr. `tqsl_path` is the Settings override, resolved by [`resolve_tqsl`].
+fn run_tqsl(tqsl_path: &str, args: &[String]) -> Result<(i32, String), String> {
+    let tqsl = resolve_tqsl(tqsl_path);
+    let mut cmd = tempo_core::process::command(&tqsl); // no console window on Windows
+    cmd.args(args);
+    let output = cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "TQSL isn't installed (or its path is wrong). LoTW uploads are signed locally by TQSL — install it from lotw.arrl.org, or set the TQSL path in Settings.".to_string()
+        } else {
+            format!("Couldn't run TQSL: {e}")
+        }
+    })?;
+    Ok((
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
 /// Sign + upload QSOs to LoTW via the operator's installed TQSL. `indices` selects
 /// specific log rows; `None` = the default unsent-unconfirmed batch. No secret is
 /// handled here — TQSL owns the Callsign Certificate; we pass only the non-secret
@@ -18653,10 +18813,23 @@ fn lotw_upload_batch(
     indices: Option<Vec<usize>>,
     wait: bool,
 ) -> Result<UploadReportDto, String> {
+    lotw_upload_batch_with(state, indices, wait, run_tqsl)
+}
+
+/// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over the batch file, to
+/// completion, and answers its exit code and stderr. The shipped runner is [`run_tqsl`]; a test
+/// stands in for it to change the log while "TQSL" runs — the window this function's stamp has
+/// to survive.
+fn lotw_upload_batch_with(
+    state: &SharedEngine,
+    indices: Option<Vec<usize>>,
+    wait: bool,
+    tqsl: impl FnOnce(&str, &[String]) -> Result<(i32, String), String>,
+) -> Result<UploadReportDto, String> {
     // Brief lock: read config + build the batch + ADIF, then release before spawn.
     // Held across the TQSL spawn it would freeze the whole UI for as long as ARRL takes
     // to answer, which is tens of seconds on a big batch.
-    let (batch, adif, location, tqsl_path) = {
+    let (batch, signed, adif, location, tqsl_path) = {
         let eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
@@ -18686,10 +18859,13 @@ fn lotw_upload_batch(
             });
         }
         let adif = eng.lotw_upload_adif(&batch);
+        // The contacts by id, taken with the file: the stamp below finds them by id once TQSL
+        // is done, because by then the positions in `batch` may name other contacts.
+        let signed = eng.lotw_signed(&batch);
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
         let location = (!use_adif_location).then_some(location);
-        (batch, adif, location, tqsl_path)
+        (batch, signed, adif, location, tqsl_path)
     };
 
     // Write the batch ADIF to a temp file for TQSL to sign. Use a UNIQUE,
@@ -18721,20 +18897,9 @@ fn lotw_upload_batch(
     let _tmp_guard = TmpFile(path.clone());
     let path_str = path.to_string_lossy().to_string();
 
-    // Resolve + run TQSL one-shot, capturing its result.
-    let tqsl = resolve_tqsl(&tqsl_path);
+    // Run TQSL one-shot, capturing its result.
     let args = tempo_core::lotw_upload::tqsl_args(location.as_deref(), &path_str);
-    let mut cmd = tempo_core::process::command(&tqsl); // no console window on Windows
-    cmd.args(&args);
-    let output = cmd.output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            "TQSL isn't installed (or its path is wrong). LoTW uploads are signed locally by TQSL — install it from lotw.arrl.org, or set the TQSL path in Settings.".to_string()
-        } else {
-            format!("Couldn't run TQSL: {e}")
-        }
-    })?;
-    let code = output.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (code, stderr) = tqsl(&tqsl_path, &args)?;
     // ⛔ TWO details, and they are not interchangeable. `detail` is TQSL's own tail and goes
     // to the operator's toast — a screen. `stamped` is the CLASS and is the only one written
     // into `log.adi`, because `log.adi` is the file TQSL then signs and uploads to ARRL: a
@@ -18751,9 +18916,24 @@ fn lotw_upload_batch(
             detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
         }),
         Some(outcome) => {
-            let ((), durable) = engine_lock(state).with_log_tickets(|eng| {
-                eng.stamp_lotw_upload(&batch, outcome, now_unix(), stamped);
+            let (done, durable) = engine_lock(state).with_log_tickets(|eng| {
+                eng.stamp_lotw_batch(&signed, outcome, now_unix(), stamped)
             });
+            if done.changed + done.gone > 0 {
+                conn_log(
+                    "LoTW",
+                    "info",
+                    format!(
+                        "{} of the {} contacts in this upload changed while TQSL was signing \
+                         ({} edited, {} deleted), so the result was not recorded on them. An \
+                         edited contact is offered again with the next upload.",
+                        done.changed + done.gone,
+                        batch.len(),
+                        done.changed,
+                        done.gone
+                    ),
+                );
+            }
             // The Logbook button waits for the stamps to reach the disk; the six-hourly
             // automatic batch does not (a stamp it loses is re-derived by the next echo).
             if wait {

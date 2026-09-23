@@ -1185,6 +1185,44 @@ mod tests {
         );
     }
 
+    /// ⛔ A LoTW STAMP DOES NOT BRING BACK A CONTACT ANOTHER WINDOW DELETED WHILE TQSL RAN.
+    /// The stamp finds its contacts by id, so it holds no position and its re-read may move
+    /// rows: the contact the other window deleted is gone before the stamp looks for it. The
+    /// in-place re-read a change by position makes would keep it, stamp it, and so write it
+    /// back into the store.
+    #[test]
+    fn a_lotw_stamp_does_not_bring_back_a_contact_another_window_deleted() {
+        use tempo_core::logbook::UploadOutcome;
+        let d = Dir::new("lotw-two");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let mut a = engine_on_store(&d);
+        let mut b = engine_on_store(&d);
+        let signed = a.lotw_signed(&[0, 1, 2, 3, 4]);
+        assert_eq!(signed.len(), 5, "premise: A hands TQSL five contacts");
+
+        let deleted = b.log_records()[2].id;
+        assert!(b.delete_qso(2), "B deletes one while A's TQSL runs");
+        flush(&b);
+        assert!(eventually(|| a.log_store_foreign_pending()));
+        let done = a.stamp_lotw_batch(&signed, UploadOutcome::Pending, 1_788_000_000, None);
+        flush(&a);
+        let rows = stored(&d);
+        assert!(
+            rows.iter().all(|r| r.id != deleted),
+            "the deleted contact stays deleted"
+        );
+        assert!(
+            rows.iter().all(|r| r.upload.lotw.is_some()),
+            "and every other contact carries the stamp"
+        );
+        same_log(a.log_records(), &rows, "A holds what the store holds");
+        assert_eq!(
+            (done.stamped, done.changed, done.gone),
+            (4, 0, 1),
+            "four stamped; the deleted contact is counted gone"
+        );
+    }
+
     // ── a log.adi the store does not account for ────────────────────────────
 
     /// ★ The transition hazard, at the door. The store was converted; then a 1.13 build (the

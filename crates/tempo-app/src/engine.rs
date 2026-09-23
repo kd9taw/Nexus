@@ -22497,6 +22497,23 @@ contact yourself."
             .stamp_lotw_upload(indices, outcome, when_unix, detail)
     }
 
+    /// See [`StationCore::lotw_signed`].
+    pub fn lotw_signed(&self, indices: &[usize]) -> Vec<crate::station::LotwSigned> {
+        self.station.lotw_signed(indices)
+    }
+
+    /// See [`StationCore::stamp_lotw_batch`].
+    pub fn stamp_lotw_batch(
+        &mut self,
+        batch: &[crate::station::LotwSigned],
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<tempo_core::logbook::UploadDetail>,
+    ) -> crate::station::LotwStamped {
+        self.station
+            .stamp_lotw_batch(batch, outcome, when_unix, detail)
+    }
+
     /// See [`StationCore::push_sstv_gallery`].
     pub fn push_sstv_gallery(&mut self, entry: crate::dto::SstvGalleryEntry) {
         self.station.push_sstv_gallery(entry)
@@ -33799,6 +33816,57 @@ mod tests {
             !adif.contains("K2DEF"),
             "the home call must never sign an event contact: {adif}"
         );
+    }
+
+    /// What decides whether a LoTW result lands on a contact once TQSL is done: the contact is
+    /// still in the log, AND it is still what TQSL signed. A change LoTW never saw — another
+    /// connector's upload stamp landing meanwhile, the operator's private note — does not stop
+    /// it. A change to what was signed does: LoTW holds the old version, so the contact must
+    /// stay unsent to be signed again as it now stands.
+    #[test]
+    fn a_lotw_result_lands_on_each_contact_still_as_it_was_signed() {
+        use tempo_core::logbook::UploadOutcome;
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for (i, call) in ["W1AAA", "W2BBB", "W3CCC", "W4DDD", "W5EEE"]
+            .iter()
+            .enumerate()
+        {
+            let mut r = e.qso_record(call.to_string(), None, None);
+            r.when_unix = 1_788_000_000 + i as u64 * 60;
+            e.log_qso(r);
+        }
+        let signed = e.lotw_signed(&[0, 1, 2, 3, 4]);
+
+        // While TQSL runs:
+        let row = |e: &Engine, i: usize| QsoRecord::clone(&e.log_records()[i]);
+        let w1 = row(&e, 0);
+        assert!(e.stamp_qrz_upload(&w1, UploadOutcome::Accepted, 1_788_000_500, None));
+        let mut w2 = row(&e, 1);
+        w2.notes = Some("private: worked him at the club".into());
+        assert!(e.update_qso(1, w2));
+        assert!(e.set_sat_tag(2, Some("AO-91")));
+        let mut w4 = row(&e, 3);
+        w4.band = "40m".into();
+        assert!(e.update_qso(3, w4));
+        assert!(e.delete_qso(4));
+
+        let done = e.stamp_lotw_batch(&signed, UploadOutcome::Pending, 1_788_000_900, None);
+        let stamped: Vec<(String, bool)> = e
+            .log_records()
+            .iter()
+            .map(|r| (r.call.clone(), r.upload.lotw.is_some()))
+            .collect();
+        assert_eq!(
+            stamped,
+            vec![
+                ("W1AAA".to_string(), true),
+                ("W2BBB".to_string(), true),
+                ("W3CCC".to_string(), false),
+                ("W4DDD".to_string(), false),
+            ],
+            "stamped: the QRZ stamp and the private note; not: the satellite tag and the band"
+        );
+        assert_eq!((done.stamped, done.changed, done.gone), (2, 2, 1));
     }
 
     /// The other half of that guard, and the one that keeps old logs working: a record written

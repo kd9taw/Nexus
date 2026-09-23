@@ -145,6 +145,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a database that is open can miss it. The copy is checked row for row against the original
   before the new folder is used, and if anything does not match, nothing is changed.
 
+- **Deleting a contact while an upload to LoTW is running no longer marks the wrong contacts as
+  uploaded.** TQSL takes a while to sign and send a batch, and the log stays open while it works.
+  Nexus then recorded the result on contacts by where they sat in the log, so deleting one in that
+  time shifted every contact after it: a contact that was never sent could be marked uploaded, and
+  a contact marked uploaded is never offered to LoTW again, while one that was sent stayed
+  unmarked. The result now goes on exactly the contacts that were sent, found by their identity
+  rather than their place in the log. A contact you correct while TQSL is working is left unmarked
+  too, because LoTW has the version from before your correction; it is offered again with your
+  next upload. The connection log says when either happens.
+
 - **The SSTV screen now says where the switch is that keeps your radio in the data mode.** On an
   IC-7300 or IC-7100 the rig drops back to plain USB between pictures, taking its data-mode
   filter settings with it, and two operators independently ended up setting USB-D by hand every

@@ -44,6 +44,40 @@ fn log_file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
         .and_then(|m| m.modified().ok().map(|t| (t, m.len())))
 }
 
+/// One contact of a LoTW upload batch, as TQSL was handed it. See
+/// [`StationCore::stamp_lotw_batch`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LotwSigned {
+    id: tempo_core::logbook::RecordId,
+    fingerprint: u64,
+}
+
+/// What [`StationCore::stamp_lotw_batch`] did with a batch.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LotwStamped {
+    /// Contacts stamped with the batch's outcome.
+    pub stamped: usize,
+    /// Contacts still in the log that changed after TQSL was handed them — not stamped.
+    pub changed: usize,
+    /// Contacts no longer in the log.
+    pub gone: usize,
+}
+
+/// A LoTW batch's measure of "the contact that was signed": the row as the upload serialises
+/// it — [`tempo_core::logbook::adif_record`], the outbound form, so a private note the upload
+/// withholds is no part of it — hashed, WITHOUT its connector stamps: another connector on
+/// auto-upload stamping the contact while TQSL runs changes nothing LoTW received. The station
+/// fields a location-in-ADIF upload adds come from Settings, not from the row, and are no part
+/// of it either.
+fn lotw_fingerprint(r: &QsoRecord) -> u64 {
+    use std::hash::Hasher;
+    let mut row = r.clone();
+    row.upload = Default::default();
+    let mut h = std::hash::DefaultHasher::new();
+    h.write(tempo_core::logbook::adif_record(&row).as_bytes());
+    h.finish()
+}
+
 /// Canonical band key for the per-band worked indices.
 ///
 /// Lower-cased, because the band spellings that actually reach the log differ by
@@ -1913,6 +1947,11 @@ impl StationCore {
     }
 
     /// Stamp `upload.lotw` on the given records after an upload attempt, then save.
+    ///
+    /// BY POSITION, so only for positions taken in the same hold of the engine lock (the
+    /// operator's "already uploaded" declaration). An upload releases the lock while TQSL runs,
+    /// and the positions it took may name other contacts by the time it is done: that is
+    /// [`Self::stamp_lotw_batch`].
     pub fn stamp_lotw_upload(
         &mut self,
         indices: &[usize],
@@ -1938,6 +1977,83 @@ impl StationCore {
             }
         }
         self.persist_change(base, "lotw upload stamp");
+    }
+
+    /// The contacts at `indices` as a LoTW batch hands them to TQSL: each one's id, and its
+    /// fingerprint as the upload serialises it. Taken in the same hold of the lock as the
+    /// batch file, so the two describe one state of the log. A row without an id cannot be
+    /// named later and is left out — every row the log holds carries one.
+    pub fn lotw_signed(&self, indices: &[usize]) -> Vec<LotwSigned> {
+        let records = self.logbook.records();
+        indices
+            .iter()
+            .filter_map(|&i| records.get(i))
+            .filter_map(|r| {
+                Some(LotwSigned {
+                    id: r.id?,
+                    fingerprint: lotw_fingerprint(r),
+                })
+            })
+            .collect()
+    }
+
+    /// Stamp `upload.lotw` on the contacts of a batch TQSL signed — found BY ID, and only where
+    /// the row is still the one that was signed.
+    ///
+    /// TQSL runs for tens of seconds with the engine lock released, and the log moves under it:
+    /// the operator deletes or corrects a contact, another window's commit is folded in. A
+    /// stamp addressed by position lands on whatever row slid into the gap — a contact LoTW
+    /// never saw, marked sent, and so never uploaded at all. By id, a deleted contact is simply
+    /// not found. A contact changed since it was signed is not stamped either: LoTW holds the
+    /// version that was signed, so the row stays unsent and the next batch signs it as it now
+    /// stands (LoTW dedupes what it already has). What is left unstamped is counted, for the
+    /// caller to report.
+    pub fn stamp_lotw_batch(
+        &mut self,
+        batch: &[LotwSigned],
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<tempo_core::logbook::UploadDetail>,
+    ) -> LotwStamped {
+        // Nothing is held by position across this, so the re-read may move rows — and should:
+        // a contact another window deleted while TQSL ran is then gone before the stamp looks
+        // for it, rather than lingering to be stamped and so written back into the store.
+        if self.store.is_some() {
+            self.refresh_from_store(false);
+        } else {
+            self.recover_external_appends();
+        }
+        let base = self.change_base();
+        let mut signed: HashMap<tempo_core::logbook::RecordId, u64> =
+            batch.iter().map(|s| (s.id, s.fingerprint)).collect();
+        let mut report = LotwStamped::default();
+        let mut hits = Vec::new();
+        for (i, r) in self.logbook.records().iter().enumerate() {
+            let Some(fingerprint) = r.id.and_then(|id| signed.remove(&id)) else {
+                continue;
+            };
+            if lotw_fingerprint(r) == fingerprint {
+                hits.push(i);
+            } else {
+                report.changed += 1;
+            }
+        }
+        report.gone = signed.len();
+        report.stamped = hits.len();
+        if !hits.is_empty() {
+            // One classified write for the whole batch, as `stamp_lotw_upload` makes.
+            let records = self.logbook.records_mut(OpClass::Stamp);
+            for i in hits {
+                Arc::make_mut(&mut records[i]).upload.lotw =
+                    Some(tempo_core::logbook::UploadStatus {
+                        outcome,
+                        when_unix,
+                        detail,
+                    });
+            }
+        }
+        self.persist_change(base, "lotw upload stamp");
+        report
     }
 
     /// Append a completed SSTV image to the session gallery (newest last),
