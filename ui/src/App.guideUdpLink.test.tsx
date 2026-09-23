@@ -215,5 +215,7 @@ describe('#353 — the WSJT-X note in Getting started opens the switch it names'
       ).toBe('true'),
     )
     expect(document.getElementById('settings-integrations-feeds')).not.toBeNull()
-  })
+    // It mounts the whole App and follows the link three times: about 1 s alone, and past the
+    // default 5 s on a loaded box, where it timed out without a single assertion failing.
+  }, 15_000)
 })
