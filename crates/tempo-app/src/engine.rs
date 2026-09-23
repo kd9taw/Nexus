@@ -19531,6 +19531,7 @@ contact yourself."
         s.upload_ok = self.station.upload_ok;
         s.upload_tick = self.station.upload_tick;
         s.log_tick = self.station.log_tick();
+        s.log_store_problem = self.station.store_problem.clone();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
@@ -22038,14 +22039,20 @@ contact yourself."
     }
 
     /// Record why the store could not be opened this session: the log runs on `log.adi` as
-    /// 1.13 ran it, and this is what says so.
-    pub fn note_log_store_problem(&mut self, why: String) {
-        self.station.store_problem = Some(why);
+    /// 1.13 ran it, and this is what says so — in the snapshot, which the screen shows.
+    pub fn note_log_store_problem(&mut self, why: &crate::logstore::OpenError) {
+        self.station.store_problem = Some(crate::dto::LogStoreProblem {
+            network_folder: matches!(why, crate::logstore::OpenError::NetworkFolder(_)),
+            reason: why.to_string(),
+        });
     }
 
     /// Why the store is not in use this session, if it was refused.
     pub fn log_store_problem(&self) -> Option<&str> {
-        self.station.store_problem.as_deref()
+        self.station
+            .store_problem
+            .as_ref()
+            .map(|p| p.reason.as_str())
     }
 
     /// Whether the store owns the log this session.

@@ -24,6 +24,7 @@
     "state": "rx",
     "tier": "FT4"
   },
+  "logStoreProblem": null,
   "logTick": null,
   "loggedTick": null,
   "mode": "chat",

@@ -979,6 +979,8 @@ impl AppState {
             upload_ok: false,
             upload_tick: 0,
             log_tick: 0,
+            // Filled by the engine when the logbook database could not be opened; None here.
+            log_store_problem: None,
         }
     }
 

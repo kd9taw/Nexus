@@ -28,6 +28,7 @@
     "state": "idle",
     "tier": "FT8"
   },
+  "logStoreProblem": null,
   "logTick": null,
   "loggedTick": null,
   "mode": "chat",

@@ -2063,6 +2063,12 @@ export interface UploadReport {
   /** "pending" | "duplicate" | "rejected" | "authfail" | "retry" | "none". */
   outcome: string
   detail?: string | null
+  /** Contacts of the batch EDITED while TQSL was signing it: the outcome is not recorded on
+   *  them, and they are offered again with the next upload. Absent from an older station. */
+  skippedEdited?: number
+  /** Contacts of the batch DELETED from the log while TQSL was signing it. Absent from an
+   *  older station. */
+  skippedDeleted?: number
 }
 
 /** A confirmation in a synced report with no matching logged QSO (diagnostic). */
@@ -4183,6 +4189,19 @@ export interface AppSnapshot {
   uploadNote?: string | null
   uploadOk?: boolean
   uploadTick?: number
+  /** Why the logbook database is not in use this session: set at launch when it could not be
+   *  opened, and the session then keeps the log in log.adi. Null while the database owns the
+   *  log; absent from a station older than the database. */
+  logStoreProblem?: LogStoreProblem | null
+}
+
+/** Why the logbook database could not be opened at launch (mirror of the Rust
+ *  LogStoreProblem). */
+export interface LogStoreProblem {
+  /** The data folder is on network storage — the one cause the operator fixes in Settings. */
+  networkFolder: boolean
+  /** Why, as the station's diagnostic log records it (English, from the station). */
+  reason: string
 }
 
 // ── Program section (radio programming): repeater search + channel projects ──
