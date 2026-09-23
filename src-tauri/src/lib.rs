@@ -34,6 +34,9 @@
 mod chains;
 /// The human DX-cluster node feeds: which run, which should, and how each node is doing.
 mod cluster_nodes;
+/// Is the data folder somewhere a DATABASE must not live — a network share, or a folder some
+/// consumer sync client is also writing to? The log is the one thing here that cannot be rebuilt.
+mod data_folder_location;
 mod pouncer;
 mod profile_sync;
 mod remote_monitor;
@@ -1801,7 +1804,11 @@ fn clear_data_dir_pointer_in(base: &Path) -> Result<(), String> {
 /// Is `target` a folder Nexus may keep the operator's log in? Absolute, creatable, writable, and
 /// not inside the installed application (an upgrade replaces that tree — a log there is a log
 /// waiting to be deleted by the installer).
-fn validate_data_dir_target(target: &Path, install_dir: Option<&Path>) -> Result<PathBuf, String> {
+fn validate_data_dir_target(
+    target: &Path,
+    install_dir: Option<&Path>,
+    mounts: Option<&str>,
+) -> Result<PathBuf, String> {
     if target.as_os_str().is_empty() {
         return Err("Choose a folder first.".to_string());
     }
@@ -1828,6 +1835,16 @@ fn validate_data_dir_target(target: &Path, install_dir: Option<&Path>) -> Result
                     .to_string(),
             );
         }
+    }
+    // C8 — the logbook is a DATABASE now, and a database on network storage can be corrupted by
+    // advisory locking across the network. Checked on the RESOLVED path so a local symlink
+    // pointing at a share is caught, and only where the operator is CHOOSING a folder: refusing
+    // here costs them nothing, because the log they already have stays exactly where it is. The
+    // heuristic sync check deliberately does NOT refuse — see `data_folder_location`.
+    if let Some(why) =
+        data_folder_location::FolderLocation::of(&resolved, mounts).refusal(&resolved)
+    {
+        return Err(why);
     }
     let probe = resolved.join(".nexus-write-probe");
     std::fs::write(&probe, b"nexus")
@@ -1918,8 +1935,9 @@ fn apply_data_folder(
     target: &Path,
     copy: bool,
     install_dir: Option<&Path>,
+    mounts: Option<&str>,
 ) -> Result<DataCopyReport, String> {
-    let resolved = validate_data_dir_target(target, install_dir)?;
+    let resolved = validate_data_dir_target(target, install_dir, mounts)?;
     let same = resolved
         == current
             .canonicalize()
@@ -1956,6 +1974,18 @@ struct DataFolderInfo {
     chosen: Option<String>,
     /// Is there a log.adi in the folder in use?
     log_present: bool,
+    /// C8 — the folder in use is CERTAINLY on network storage, where a database can be corrupted.
+    ///
+    /// This is the readout for the two paths that bypass `validate_data_dir_target` entirely:
+    /// `NEXUS_DATA_DIR`, which `shared_data_dir` reads with no validation at all and which is the
+    /// documented way to put the log on a NAS, and a `data-dir.json` that was hand-edited or
+    /// synced in from another machine. Neither can be REFUSED the way a newly chosen folder is:
+    /// the log is already there, and silently falling back to the default folder would open an
+    /// empty logbook, which reads as "my contacts are gone". So they are reported, loudly.
+    network: bool,
+    /// The folder in use LOOKS like a consumer sync folder. A guess about an ordinary local
+    /// filesystem — it warns and never refuses, here or anywhere else.
+    sync_suspected: bool,
 }
 
 /// Read the data folder for Settings.
@@ -1967,7 +1997,14 @@ fn get_data_folder() -> DataFolderInfo {
         .filter(|s| !s.is_empty())
         .is_some();
     let current = shared_data_dir();
+    let location = data_folder_location::FolderLocation::of(
+        &current,
+        data_folder_location::mount_table().as_deref(),
+    );
     DataFolderInfo {
+        network: location.network.is_some(),
+        sync_suspected: location.sync_suspected.is_some()
+            || data_folder_location::sync_marker_beside(&current).is_some(),
         source: if env_set {
             "env"
         } else if chosen.is_some() {
@@ -2007,6 +2044,7 @@ fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
         Path::new(path.trim()),
         copy,
         install.as_deref(),
+        data_folder_location::mount_table().as_deref(),
     )
 }
 
@@ -2114,7 +2152,7 @@ mod data_folder_tests {
             .map(|rel| (rel.clone(), std::fs::read(current.join(rel)).expect("read")))
             .collect();
 
-        let report = apply_data_folder(&base, &current, &target, true, None).expect("copy");
+        let report = apply_data_folder(&base, &current, &target, true, None, None).expect("copy");
         assert_eq!(report.files, 3, "log, table and the mailbox file");
         assert!(report.bytes > 0);
         for (rel, body) in &before {
@@ -2147,7 +2185,8 @@ mod data_folder_tests {
         // `log.adi` is a DIRECTORY in the target: the copy of the one irreplaceable file fails.
         std::fs::create_dir_all(target.join("log.adi")).expect("blocker");
 
-        let err = apply_data_folder(&base, &current, &target, true, None).expect_err("must refuse");
+        let err =
+            apply_data_folder(&base, &current, &target, true, None, None).expect_err("must refuse");
         assert!(err.contains("log.adi"), "the failure names the file: {err}");
         assert_eq!(
             read_data_dir_pointer_in(&base).as_deref(),
@@ -2167,18 +2206,20 @@ mod data_folder_tests {
         let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
         station(&current);
 
-        let err = apply_data_folder(&base, &current, &target, false, None).expect_err("refused");
+        let err =
+            apply_data_folder(&base, &current, &target, false, None, None).expect_err("refused");
         assert!(
             err.contains("empty logbook"),
             "says what would happen: {err}"
         );
         assert_eq!(read_data_dir_pointer_in(&base), None, "nothing was chosen");
         // The same folder WITH the copy is accepted…
-        apply_data_folder(&base, &current, &target, true, None).expect("copy accepted");
+        apply_data_folder(&base, &current, &target, true, None, None).expect("copy accepted");
         // …and a folder that already holds a log needs no copy (the second machine on a synced log).
         let synced = root.join("synced");
         write(&synced.join("log.adi"), b"<CALL:5>K1ABC <EOR>\n");
-        apply_data_folder(&base, &current, &synced, false, None).expect("adopting a log is fine");
+        apply_data_folder(&base, &current, &synced, false, None, None)
+            .expect("adopting a log is fine");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2190,7 +2231,7 @@ mod data_folder_tests {
         let install = root.join("Program Files/Nexus");
         std::fs::create_dir_all(&install).expect("install dir");
         for target in [install.join("data"), install.join("../Nexus/data")] {
-            let err = apply_data_folder(&base, &current, &target, true, Some(&install))
+            let err = apply_data_folder(&base, &current, &target, true, Some(&install), None)
                 .expect_err("inside the program folder");
             assert!(err.contains("program folder"), "{err}");
         }
@@ -2202,8 +2243,113 @@ mod data_folder_tests {
             &root.join("documents/nexus"),
             true,
             Some(&install),
+            None,
         )
         .expect("outside is fine");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A `/proc/mounts` that puts `root` on `fstype`, with an ordinary local line above it so the
+    /// longest-prefix rule is the thing being exercised and not an empty table.
+    fn mounts_placing(root: &Path, fstype: &str) -> String {
+        format!(
+            "/dev/sda2 / ext4 rw,relatime 0 0\nserver:/export {} {fstype} rw,relatime 0 0\n",
+            root.display()
+        )
+    }
+
+    #[test]
+    fn a_folder_on_a_network_filesystem_is_refused() {
+        let root = scratch("remote").canonicalize().expect("canonical scratch");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("nas-log"));
+        station(&current);
+
+        let err = apply_data_folder(
+            &base,
+            &current,
+            &target,
+            true,
+            None,
+            Some(&mounts_placing(&root, "nfs4")),
+        )
+        .expect_err("a database must not be put on a network filesystem");
+        assert!(err.contains("nfs4"), "states the technical reason: {err}");
+        assert!(
+            err.contains("drive inside this computer"),
+            "says what to do instead: {err}"
+        );
+        assert_eq!(
+            read_data_dir_pointer_in(&base),
+            None,
+            "a refused folder is never adopted"
+        );
+
+        // ⭐ POSITIVE CONTROL. The SAME target, the same station, the same call — one token of the
+        // mount table different. Without it this test would pass against a `validate_data_dir_target`
+        // that refuses everything, and against one that never reads the table at all.
+        apply_data_folder(
+            &base,
+            &current,
+            &target,
+            true,
+            None,
+            Some(&mounts_placing(&root, "ext4")),
+        )
+        .expect("the same folder on a local filesystem is fine");
+        assert_eq!(
+            read_data_dir_pointer_in(&base).map(|p| p.canonicalize().unwrap_or(p)),
+            Some(target.clone()),
+            "and it really was adopted"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_synced_folder_is_accepted_because_the_check_is_a_guess() {
+        // "Dropbox" is a name match on an ordinary local filesystem. It cannot be allowed to
+        // refuse: an operator whose contacts are in a folder that merely looks synced would be
+        // locked out of their own logbook by a guess.
+        let root = scratch("synced").canonicalize().expect("canonical scratch");
+        let (base, current) = (root.join("base"), root.join("old"));
+        station(&current);
+        let target = root.join("Dropbox/nexus");
+
+        apply_data_folder(
+            &base,
+            &current,
+            &target,
+            true,
+            None,
+            Some(&mounts_placing(&root, "ext4")),
+        )
+        .expect("a suspected sync folder warns, it does not refuse");
+        assert!(
+            data_folder_location::FolderLocation::of(&target, None)
+                .sync_suspected
+                .is_some(),
+            "…and it IS suspected, so the acceptance above is not just an unreached check"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_sync_marker_is_found_in_a_folder_above_the_target() {
+        // The name match misses a RENAMED sync root; the client's own marker file does not.
+        let root = scratch("marker").canonicalize().expect("canonical scratch");
+        let renamed = root.join("HamStuff");
+        let target = renamed.join("deep/nexus");
+        std::fs::create_dir_all(&target).expect("target");
+        assert_eq!(
+            data_folder_location::sync_marker_beside(&target),
+            None,
+            "positive control: nothing is suspected before the marker exists"
+        );
+        write(&renamed.join(".dropbox"), b"");
+        assert_eq!(
+            data_folder_location::sync_marker_beside(&target).as_deref(),
+            Some(renamed.to_string_lossy().as_ref()),
+            "the marker names the sync root, not the target"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

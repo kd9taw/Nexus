@@ -3286,6 +3286,20 @@ export function SettingsPanel({
                     {t('settings.dataFolder.pending', { path: dataFolder.chosen })}
                   </span>
                 )}
+                {/* C8 — the folder IN USE, which NEXUS_DATA_DIR and a hand-edited data-dir.json
+                    both reach without passing the refusal below. Nexus will not relocate it by
+                    itself: the log is in there, and opening the default folder instead would look
+                    like the contacts had gone. So it says so, every time Settings is opened. */}
+                {dataFolder?.network && (
+                  <span className="settings-warn" role="status">
+                    {t('settings.dataFolder.onNetwork')}
+                  </span>
+                )}
+                {dataFolder?.syncSuspected && (
+                  <span className="settings-warn" role="status">
+                    {t('settings.dataFolder.onSync')}
+                  </span>
+                )}
               </div>
               <div className="settings-field">
                 <span className="settings-label">{t('settings.dataFolder.path.label')}</span>

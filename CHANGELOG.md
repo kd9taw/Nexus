@@ -113,6 +113,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unless you change it, and the listen clock starts when your over has finished going out rather
   than when it was queued. The repeat count does not limit CQ: an unanswered CQ still repeats
   until you stop it. (#304)
+### Changed
+
+- **Nexus now refuses to put your data and log folder on a network drive, and tells you why.**
+  Settings ▸ Config ▸ Data & log folder used to accept a NAS or a mapped network drive, and the
+  manual suggested exactly that for a multi-PC shack. That was survivable while the logbook was a
+  plain ADIF file — the worst a share could do was cost you the most recent contacts, and the rest
+  of the file still read back. Nexus is moving the logbook into a database, and a database is not
+  so forgiving: file locking across a network is the classic way to corrupt one, and the worst case
+  is a log that will not open at all. So a Windows share (`\\nas\ham\nexus`) or a folder on an
+  NFS or SMB mount is refused now, with the reason and what to do instead.
+  **A folder already in use is never moved for you.** If `NEXUS_DATA_DIR` or a `data-dir.json`
+  copied in from another machine already points at a network drive, your contacts are in there, and
+  quietly opening a different folder would read as losing them. Settings says so in **Folder in
+  use** instead, every time you open it.
+- **A data folder that looks like Dropbox, OneDrive, iCloud or Google Drive is flagged rather than
+  refused.** Those are ordinary local drives, and nothing about the one-Nexus-at-a-time rule has
+  changed — two machines writing one logbook through a sync client still make a conflicted copy,
+  not a merged log. The check is a guess from the folder's name, so it will miss a sync folder you
+  have renamed, which is why it only ever warns.
 
 ### Fixed
 

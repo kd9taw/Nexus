@@ -50,6 +50,11 @@ const FOLDER = {
   source: 'default',
   chosen: null,
   logPresent: true,
+  // Stated rather than left off. These are the values under test below, and a fixture that simply
+  // omitted them would make `undefined` the "no warning" case — the warning tests would then pass
+  // against a panel that never reads the fields at all.
+  network: false,
+  syncSuspected: false,
 }
 
 beforeEach(() => {
@@ -183,6 +188,40 @@ describe('#289 the data & log folder control', () => {
       renderPanel()
       await waitFor(() => expect(api.get('getDataFolder')).toHaveBeenCalled())
       expect(browseBtn()).not.toBeNull()
+    })
+  })
+
+  // C8 — NEXUS_DATA_DIR and a hand-edited data-dir.json both reach the folder in use without
+  // passing the Rust refusal, and neither can be undone by relocating the operator's log. This
+  // readout is what covers them, so it has to be shown to appear AND to stay away.
+  describe('the folder in use is reported when it is somewhere a database is at risk', () => {
+    const withFolder = async (extra: Partial<typeof FOLDER>) => {
+      api.get('getDataFolder').mockImplementation(() => Promise.resolve({ ...FOLDER, ...extra }))
+      renderPanel()
+      await waitFor(() => expect(api.get('getDataFolder')).toHaveBeenCalled())
+    }
+
+    it('warns when the folder in use is on network storage', async () => {
+      await withFolder({ network: true, current: '/mnt/nas/nexus' })
+      expect(await screen.findByText(EN['settings.dataFolder.onNetwork'])).toBeTruthy()
+      expect(screen.queryByText(EN['settings.dataFolder.onSync'])).toBeNull()
+    })
+
+    it('warns separately when the folder in use only LOOKS synced', async () => {
+      await withFolder({ syncSuspected: true, current: '/home/op/Dropbox/nexus' })
+      expect(await screen.findByText(EN['settings.dataFolder.onSync'])).toBeTruthy()
+      // The heuristic must not borrow the certain warning's words — one refuses, one does not.
+      expect(screen.queryByText(EN['settings.dataFolder.onNetwork'])).toBeNull()
+    })
+
+    it('says neither about an ordinary local folder', async () => {
+      // POSITIVE CONTROL for both assertions above: the same panel, the same render path, with
+      // the two flags false. Without it a panel that showed both warnings unconditionally would
+      // pass every check in this block.
+      await withFolder({})
+      expect(screen.getByText(FOLDER.current)).toBeTruthy()
+      expect(screen.queryByText(EN['settings.dataFolder.onNetwork'])).toBeNull()
+      expect(screen.queryByText(EN['settings.dataFolder.onSync'])).toBeNull()
     })
   })
 

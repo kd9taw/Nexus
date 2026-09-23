@@ -1807,6 +1807,10 @@ export interface DataFolderInfo {
   chosen: string | null
   /** Is there a log.adi in the folder in use? */
   logPresent: boolean
+  /** The folder in use is certainly on network storage, where the logbook database is at risk. */
+  network: boolean
+  /** The folder in use looks like a consumer sync folder. A guess — it warns, never refuses. */
+  syncSuspected: boolean
 }
 
 /** What a verified data-folder copy carried. */
