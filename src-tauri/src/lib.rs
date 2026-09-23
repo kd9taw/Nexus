@@ -1853,12 +1853,21 @@ fn validate_data_dir_target(
     Ok(resolved)
 }
 
-/// The data files a copy carries: the logbook, the refreshed tables beside it, and the Winlink
-/// mailbox tree. Relative to `from`, and only what exists.
+/// The data files a copy carries BYTE FOR BYTE: the logbook's own files, the refreshed tables
+/// beside it, and the Winlink mailbox tree. Relative to `from`, and only what exists.
+///
+/// The logbook's files are not listed here: they come from `Logbook::data_files`, the one list
+/// of what the logbook writes (the log, its anchor, the pre-conversion copy, the backup ring).
+/// A second, hand-kept list here knew only `log.adi`, so every other file the log depends on
+/// stayed behind on a move. The logbook DATABASE is deliberately not in this list — see
+/// [`data_dir_database`].
 fn data_dir_entries(from: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
+    let mut out: Vec<PathBuf> = tempo_core::logbook::Logbook::data_files(&from.join(LOG_FILE_NAME))
+        .files
+        .into_iter()
+        .filter_map(|p| p.strip_prefix(from).ok().map(Path::to_path_buf))
+        .collect();
     for name in [
-        "log.adi",
         "cty.dat",
         "cty.meta.json",
         "fcc-states.bin",
@@ -1890,6 +1899,16 @@ fn data_dir_entries(from: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// The logbook database a copy carries, relative to `from` — copied THROUGH SQLite, never byte
+/// for byte (see `tempo_core::logbook::sqlite::copy_database`): a committed contact can still be
+/// in its `-wal` file, and a live database cannot be copied file by file. Its `-wal` and `-shm`
+/// are therefore in neither list; the copy is one self-contained file with the WAL folded in.
+fn data_dir_database(from: &Path) -> Option<PathBuf> {
+    tempo_core::logbook::Logbook::data_files(&from.join(LOG_FILE_NAME))
+        .database
+        .and_then(|p| p.strip_prefix(from).ok().map(Path::to_path_buf))
+}
+
 /// What a verified copy carried.
 #[derive(serde::Serialize, Clone, Copy, Default, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1901,7 +1920,11 @@ struct DataCopyReport {
 /// Copy the data files from `from` to `to` and VERIFY each one byte for byte. Never deletes or
 /// modifies anything under `from`. Any failure — copy or verify — returns Err, and the caller
 /// must then leave the pointer alone: a half-copied folder must not become the live one.
-fn copy_data_dir_verified(from: &Path, to: &Path) -> Result<DataCopyReport, String> {
+fn copy_data_dir_verified(
+    from: &Path,
+    to: &Path,
+    live: Option<&tempo_core::logbook::writer::LogWriter>,
+) -> Result<DataCopyReport, String> {
     let mut report = DataCopyReport::default();
     for rel in data_dir_entries(from) {
         let src = from.join(&rel);
@@ -1924,8 +1947,35 @@ fn copy_data_dir_verified(from: &Path, to: &Path) -> Result<DataCopyReport, Stri
         report.files += 1;
         report.bytes += a.len() as u64;
     }
+    if let Some(rel) = data_dir_database(from) {
+        // Proved inside the copy itself (SQLite's integrity check, then every row compared with
+        // the original in one read transaction) — a byte compare is exactly what cannot work
+        // here, because the copy is not the same bytes: it is the same DATABASE.
+        //
+        // `live` is the writer of the database open in THIS process — the one in `from` — and
+        // the copy then runs on it: after every change submitted before the move, with none
+        // written while it runs. A copy taken beside it holds only what is already committed.
+        let (src, dst) = (from.join(&rel), to.join(&rel));
+        let copied = match live {
+            Some(writer) => writer.copy_database(&dst, LIVE_DATABASE_COPY_WAIT),
+            None => {
+                tempo_core::logbook::sqlite::copy_database(&src, &dst).map_err(|e| e.to_string())
+            }
+        };
+        let bytes = copied.map_err(|e| {
+            format!(
+                "Could not copy the logbook database {} — nothing was changed: {e}",
+                rel.display()
+            )
+        })?;
+        report.files += 1;
+        report.bytes += bytes;
+    }
     Ok(report)
 }
+
+/// How long a data-folder move waits for the open database's writer to copy it.
+const LIVE_DATABASE_COPY_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The policy behind `set_data_folder`, with every path handed in so a test can drive it.
 /// Returns the verified copy report (if one was asked for). The pointer is written LAST.
@@ -1936,6 +1986,7 @@ fn apply_data_folder(
     copy: bool,
     install_dir: Option<&Path>,
     mounts: Option<&str>,
+    live: Option<&tempo_core::logbook::writer::LogWriter>,
 ) -> Result<DataCopyReport, String> {
     let resolved = validate_data_dir_target(target, install_dir, mounts)?;
     let same = resolved
@@ -1951,7 +2002,7 @@ fn apply_data_folder(
         );
     }
     let report = if copy && !same {
-        copy_data_dir_verified(current, &resolved)?
+        copy_data_dir_verified(current, &resolved, live)?
     } else {
         DataCopyReport::default()
     };
@@ -2023,7 +2074,11 @@ fn get_data_folder() -> DataFolderInfo {
 /// Choose the data folder (#289). `copy` carries the log and data across, verified, first.
 /// Takes effect at the next launch — see `shared_data_dir`.
 #[tauri::command(async)]
-fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
+fn set_data_folder(
+    state: State<'_, SharedEngine>,
+    path: String,
+    copy: bool,
+) -> Result<DataCopyReport, String> {
     if std::env::var_os("NEXUS_DATA_DIR")
         .filter(|s| !s.is_empty())
         .is_some()
@@ -2038,6 +2093,9 @@ fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
     let install = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    // The database in this folder is open in this process: its copy goes through its writer.
+    // Taken under the engine lock, used after it is released.
+    let live = engine_lock(&state).log_store_writer();
     apply_data_folder(
         &base,
         &shared_data_dir(),
@@ -2045,6 +2103,7 @@ fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
         copy,
         install.as_deref(),
         data_folder_location::mount_table().as_deref(),
+        live.as_deref(),
     )
 }
 
@@ -2084,6 +2143,576 @@ async fn pick_data_folder(app: tauri::AppHandle) -> Option<String> {
         .flatten()
         .and_then(|p| p.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod durable_command_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A store-backed engine on a folder of the test's own, with `n` contacts.
+    pub(super) fn engine_on_store(tag: &str, n: usize) -> (PathBuf, SharedEngine) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-durable-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let mut adif = tempo_core::logbook::adif_header();
+        for i in 0..n {
+            let call = format!("K{i}DUR");
+            adif.push_str(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260901<TIME_ON:6>1200{:02}<EOR>\n",
+                call.len(),
+                i % 60
+            ));
+        }
+        std::fs::write(dir.join("log.adi"), adif).expect("log");
+        let opened = tempo_app::logstore::open(
+            &dir.join("log.adi"),
+            std::sync::Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+            None,
+        )
+        .expect("the store opens");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.attach_log_store(opened);
+        (dir, std::sync::Arc::new(std::sync::Mutex::new(e)))
+    }
+
+    /// The naive shape this replaces: the change and its wait run INSIDE the async task, so the
+    /// wait holds a runtime worker for as long as the disk takes. Kept only as the control.
+    async fn waits_on_the_worker<T>(
+        body: impl FnOnce() -> (Result<T, String>, tempo_app::logstore::Durability),
+    ) -> Result<T, String> {
+        let (out, durability) = body();
+        let out = out?;
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        Ok(out)
+    }
+
+    /// Does a lock-free command get a runtime worker within `budget` while `waits` log
+    /// commands are waiting on a stalled write? A task spawned on the runtime answers only if
+    /// some worker is free to run it.
+    fn lock_free_answers_while(naive: bool, budget: Duration) -> bool {
+        const WORKERS: usize = 2;
+        const WAITS: usize = 6; // more waiting commands than the runtime has workers
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(WORKERS)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (dir, engine) = engine_on_store(if naive { "naive" } else { "pool" }, 20);
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let hold = tempo_core::logbook::sqlite::WriteHold::take(&db).expect("stall the store");
+        let mut waits = Vec::new();
+        for i in 0..WAITS {
+            let engine = std::sync::Arc::clone(&engine);
+            let body = move || {
+                let mut eng = engine_lock(&engine);
+                eng.with_log_tickets(|eng| Ok::<bool, String>(eng.mark_qsl_card(i, true)))
+            };
+            waits.push(if naive {
+                rt.spawn(async move { waits_on_the_worker(body).await })
+            } else {
+                rt.spawn(async move { durable_command(body).await })
+            });
+        }
+        // Real time, on this thread: with every worker pinned the runtime's own timers cannot
+        // be relied on to fire, and the question is exactly whether a worker is free.
+        std::thread::sleep(Duration::from_millis(300));
+        let (tx, rx) = std::sync::mpsc::channel();
+        rt.spawn(async move {
+            let _ = tx.send("73");
+        });
+        let answered = rx.recv_timeout(budget).is_ok();
+        assert!(
+            waits.iter().all(|w| !w.is_finished()),
+            "premise: every log command is still waiting on the stalled store"
+        );
+        drop(hold);
+        // Everything completes once the store is released — nothing was lost to the stall.
+        rt.block_on(async {
+            for w in waits {
+                assert_eq!(
+                    w.await.expect("task"),
+                    Ok(true),
+                    "each command's change landed"
+                );
+            }
+        });
+        drop(rt);
+        let _ = std::fs::remove_dir_all(&dir);
+        answered
+    }
+
+    /// ★ PROPERTY 5, second half — NO WAIT MAY PIN A RUNTIME WORKER. More operator log
+    /// commands than the runtime has workers are waiting on a stalled store write, and a
+    /// command that needs no lock still gets a worker and answers at once.
+    ///
+    /// The control is the same scene with the waits run on the workers themselves (the shape
+    /// the commands had to avoid): the lock-free command does NOT answer. So the green half is
+    /// the blocking pool doing its job, not a runtime that happened to have a spare thread.
+    #[test]
+    fn a_lock_free_command_answers_while_more_waits_than_workers_are_pending() {
+        assert!(
+            !lock_free_answers_while(true, Duration::from_millis(500)),
+            "control: waits run on the workers starve the runtime"
+        );
+        assert!(
+            lock_free_answers_while(false, Duration::from_millis(500)),
+            "the waits are on the blocking pool, so the runtime keeps answering"
+        );
+    }
+
+    /// A command returns only once its change is on disk, and says so plainly when it is not:
+    /// the change is kept, and the words say that too.
+    #[test]
+    fn a_log_command_returns_after_its_change_is_on_disk() {
+        let (dir, engine) = engine_on_store("returns", 10);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let eng = std::sync::Arc::clone(&engine);
+        let marked = rt
+            .block_on(durable_command(move || {
+                let mut e = engine_lock(&eng);
+                e.with_log_tickets(|e| Ok::<bool, String>(e.mark_qsl_card(4, true)))
+            }))
+            .expect("durable");
+        assert!(marked);
+        // Read through a connection of the test's own: the change is already there.
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let id = engine_lock(&engine).log_records()[4].id;
+        let row = tempo_core::logbook::sqlite::LogDb::open(&db)
+            .and_then(|d| d.load_all())
+            .expect("read")
+            .into_iter()
+            .find(|r| r.id == id)
+            .expect("stored");
+        assert!(row.qsl_rcvd.card, "on disk when the command returned");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod lotw_batch_tests {
+    use super::durable_command_tests::engine_on_store;
+    use super::*;
+    use tempo_core::logbook::{QsoRecord, RecordId, UploadOutcome};
+
+    /// A store-backed engine with `n` signable contacts and a Station Location to sign with.
+    fn station(tag: &str, n: usize) -> (PathBuf, SharedEngine, Vec<RecordId>) {
+        let (dir, engine) = engine_on_store(tag, n);
+        let ids = {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.lotw_station_location = "Home".into();
+            eng.apply_settings(s);
+            eng.log_records()
+                .iter()
+                .map(|r| r.id.expect("a held row has an id"))
+                .collect()
+        };
+        (dir, engine, ids)
+    }
+
+    /// Each contact's LoTW outcome by id, as memory holds it and as the store does. `None` for
+    /// a contact the log no longer holds; `Some(None)` for one never stamped.
+    fn outcomes(
+        dir: &Path,
+        engine: &SharedEngine,
+        ids: &[RecordId],
+    ) -> [Vec<Option<Option<UploadOutcome>>>; 2] {
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let stored = tempo_core::logbook::sqlite::LogDb::open(&db)
+            .and_then(|d| d.load_all())
+            .expect("read the store");
+        let eng = engine_lock(engine);
+        let of = |rows: &mut dyn Iterator<Item = &QsoRecord>| {
+            let rows: Vec<&QsoRecord> = rows.collect();
+            ids.iter()
+                .map(|id| {
+                    rows.iter()
+                        .find(|r| r.id == Some(*id))
+                        .map(|r| r.upload.lotw.as_ref().map(|s| s.outcome))
+                })
+                .collect()
+        };
+        [
+            of(&mut eng.log_records().iter().map(|r| r.as_ref())),
+            of(&mut stored.iter()),
+        ]
+    }
+
+    fn skip_report() -> Vec<String> {
+        get_connection_log()
+            .into_iter()
+            .filter(|e| e.connector == "LoTW" && e.message.contains("changed while TQSL"))
+            .map(|e| format!("{}: {}", e.level, e.message))
+            .collect()
+    }
+
+    /// ★ PROPERTY 6 — A DELETE MID-BATCH STAMPS ONLY THE UPLOADED CONTACTS. The Awards buttons
+    /// upload a chosen set; here rows 0, 1 and 3, with row 2 — never uploaded — outside it.
+    /// While TQSL signs, the operator deletes row 0. Stamped by POSITION, the result lands on
+    /// the rows that slid up: row 2 is marked sent though LoTW never saw it (and so is never
+    /// offered again), and row 3, which was uploaded, is left unmarked. By id, exactly the
+    /// uploaded contacts still in the log carry it — in memory and on disk when the command
+    /// returns.
+    #[test]
+    fn a_contact_deleted_while_tqsl_runs_moves_no_stamp_onto_another() {
+        let (dir, engine, ids) = station("lotw-delete", 4);
+        let report = lotw_upload_batch_with(&engine, Some(vec![0, 1, 3]), true, |_, args| {
+            assert!(
+                std::fs::read_to_string(args.last().expect("the batch file"))
+                    .expect("TQSL can read it")
+                    .contains("K3DUR"),
+                "premise: TQSL is handed the batch"
+            );
+            assert!(
+                engine_lock(&engine).delete_qso(0),
+                "deleted while TQSL runs"
+            );
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (3, "pending"));
+
+        let pending = Some(Some(UploadOutcome::Pending));
+        for (held, what) in outcomes(&dir, &engine, &ids)
+            .iter()
+            .zip(["memory", "store"])
+        {
+            assert_eq!(
+                held,
+                &vec![None, pending, Some(None), pending],
+                "{what}: the deleted contact is gone, row 2 — never uploaded — is unmarked, \
+                 and both uploaded contacts still in the log are marked"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A contact CORRECTED while TQSL signs is not the contact TQSL signed: LoTW holds the old
+    /// version. Marked sent, the correction would never be uploaded. So it is left unmarked —
+    /// offered again with the next upload, as it now stands — and the connection log says why.
+    #[test]
+    fn a_contact_edited_while_tqsl_runs_is_offered_again_not_stamped() {
+        let (dir, engine, ids) = station("lotw-edit", 4);
+        let report = lotw_upload_batch_with(&engine, None, true, |_, _| {
+            let mut eng = engine_lock(&engine);
+            let mut fixed = QsoRecord::clone(&eng.log_records()[1]);
+            fixed.call = "K1DUX".into();
+            assert!(eng.update_qso(1, fixed), "corrected while TQSL runs");
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (4, "pending"));
+
+        let pending = Some(Some(UploadOutcome::Pending));
+        for (held, what) in outcomes(&dir, &engine, &ids)
+            .iter()
+            .zip(["memory", "store"])
+        {
+            assert_eq!(
+                held,
+                &vec![pending, Some(None), pending, pending],
+                "{what}: every contact but the corrected one is marked"
+            );
+        }
+        assert!(
+            engine_lock(&engine).lotw_unsent_indices() == vec![1],
+            "the corrected contact is offered again"
+        );
+        assert!(
+            skip_report()
+                .iter()
+                .any(|l| l.starts_with("info: ") && l.contains("(1 edited, 0 deleted)")),
+            "the connection log says why it was not marked: {:?}",
+            skip_report()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod logbook_startup_tests {
+    use super::durable_command_tests::engine_on_store;
+    use super::*;
+    use std::time::{Duration, Instant};
+    use tempo_core::logbook::migrate::database_path;
+    use tempo_core::logbook::sqlite::{LogDb, WriteHold};
+
+    /// A folder of the test's own — created only when `contacts` is `Some`, holding a 1.13
+    /// `log.adi` of that many contacts.
+    fn folder(tag: &str, contacts: Option<usize>) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-startup-{tag}-{nanos}"));
+        if let Some(n) = contacts {
+            std::fs::create_dir_all(&dir).expect("scratch");
+            let mut adif = tempo_core::logbook::adif_header();
+            for i in 0..n {
+                let call = format!("K{i}LCH");
+                adif.push_str(&format!(
+                    "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260901<TIME_ON:6>1300{:02}<EOR>\n",
+                    call.len(),
+                    i % 60
+                ));
+            }
+            std::fs::write(dir.join("log.adi"), adif).expect("log");
+        }
+        dir
+    }
+
+    /// Every file under `dir`, with its bytes.
+    fn picture(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else {
+                    out.push((p.clone(), std::fs::read(&p).unwrap_or_default()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, &mut out);
+        out.sort();
+        out
+    }
+
+    /// The shipped launch, as `run()` makes it: the database opened outside the engine lock,
+    /// then — the resolvers set — adopted. `places` is whether this launch's country table can
+    /// place the log's calls: a newer cty.dat places calls an older one could not.
+    fn launch(log: &Path, network: Option<String>, places: bool) -> Engine {
+        let opened = open_logbook_store(log, network);
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(move |call| places.then(|| format!("Entity of {call}")));
+        adopt_logbook(&mut e, log, opened);
+        e
+    }
+
+    /// ★ PROPERTY 7 AT THE SHIPPED LAUNCH. The first launch converts the operator's `log.adi`
+    /// and hands the log to the database; the launches after write nothing — though their
+    /// country table, newer than the first launch's, fills every row in memory. (On the 1.13
+    /// path that fill rewrote the whole log at launch.)
+    ///
+    /// One file is allowed to move once: `log.adi.scrubbed`, the credential sweep's manifest of
+    /// the safety copies it has checked. The first launch's mirror write took a ring snapshot,
+    /// and the next launch sweeps that new copy and records it, as every launch after a save
+    /// that made a copy always has. A launch with nothing new to sweep writes nothing at all.
+    #[test]
+    fn the_launch_opens_the_store_and_the_next_launch_writes_nothing() {
+        let dir = folder("launch", Some(25));
+        let log = dir.join("log.adi");
+        {
+            let e = launch(&log, None, false);
+            assert!(
+                e.log_store_open(),
+                "the database owns the log: {:?}",
+                e.log_store_problem()
+            );
+            assert_eq!(e.log_records().len(), 25);
+            e.flush_log_store(Duration::from_secs(60)).expect("written");
+        }
+        assert!(database_path(&log).is_file(), "converted");
+        let again = || {
+            let e = launch(&log, None, true);
+            assert!(e.log_store_open());
+            assert!(
+                e.log_records().iter().all(|r| r.country.is_some()),
+                "premise: the backfill filled every row, in memory"
+            );
+            e.flush_log_store(Duration::from_secs(60)).expect("written");
+        };
+        let log_data = |p: Vec<(PathBuf, Vec<u8>)>| {
+            p.into_iter()
+                .filter(|(p, _)| !p.ends_with("log.adi.scrubbed"))
+                .collect::<Vec<_>>()
+        };
+        let before = picture(&dir);
+        again();
+        let settled = picture(&dir);
+        assert!(
+            log_data(settled.clone()) == log_data(before),
+            "the second launch wrote nothing but the sweep's manifest"
+        );
+        again();
+        assert!(
+            picture(&dir) == settled,
+            "a launch with nothing new to sweep writes nothing at all"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A data folder on network storage keeps the log in `log.adi` for the session — the 1.13
+    /// path, whole — says why, and no database is made there.
+    #[test]
+    fn a_network_folder_runs_the_session_on_log_adi_and_says_why() {
+        let dir = folder("network", Some(5));
+        let log = dir.join("log.adi");
+        let e = launch(&log, Some("an NFS share".into()), true);
+        assert!(!e.log_store_open());
+        assert_eq!(e.log_records().len(), 5, "the log is read from log.adi");
+        assert!(
+            e.log_store_problem().is_some_and(|p| p.contains("NFS")),
+            "and the reason is kept: {:?}",
+            e.log_store_problem()
+        );
+        assert!(!database_path(&log).exists(), "no database on a share");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh install has no data folder at all: the first launch starts on the database, and
+    /// writes no `log.adi` before there is a contact to put in it.
+    #[test]
+    fn a_fresh_install_starts_on_the_store() {
+        let dir = folder("fresh", None);
+        let log = dir.join("log.adi");
+        let e = launch(&log, None, true);
+        assert!(
+            e.log_store_open(),
+            "a fresh install starts on the database: {:?}",
+            e.log_store_problem()
+        );
+        assert!(!log.exists(), "and makes no log.adi before a contact");
+        drop(e);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Quitting carries every change still on its way to disk before the process goes, and a
+    /// disk that will not take it costs the exit a bounded wait, never a hang.
+    #[test]
+    fn quitting_writes_what_is_on_its_way_and_never_hangs() {
+        let (dir, engine) = engine_on_store("quit", 10);
+        let db = database_path(&dir.join("log.adi"));
+        let id = engine_lock(&engine).log_records()[3].id;
+        let marked = || {
+            LogDb::open(&db)
+                .and_then(|d| d.load_all())
+                .expect("read")
+                .into_iter()
+                .find(|r| r.id == id)
+                .is_some_and(|r| r.qsl_rcvd.card)
+        };
+        let hold = WriteHold::take(&db).expect("stall the store");
+        assert!(
+            engine_lock(&engine).mark_qsl_card(3, true),
+            "not waited for"
+        );
+
+        let started = Instant::now();
+        flush_logbook(&engine, Duration::from_millis(300));
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "a stalled disk costs the exit its cap: {:?}",
+            started.elapsed()
+        );
+
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(hold);
+        });
+        flush_logbook(&engine, Duration::from_secs(60));
+        assert!(marked(), "on disk when the exit's flush returns");
+        release.join().expect("released");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ Moving the data folder while the database is open copies it THROUGH ITS WRITER: after
+    /// every change submitted before the move, and with none written while the copy runs.
+    ///
+    /// The control is a copy taken beside the writer: it holds only what is committed, so a
+    /// change still on its way to disk is missing from it — and the new folder would open
+    /// without it.
+    #[test]
+    fn moving_the_data_folder_carries_a_change_still_on_its_way_to_disk() {
+        let (dir, engine) = engine_on_store("move-live", 10);
+        let db = database_path(&dir.join("log.adi"));
+        let writer = engine_lock(&engine)
+            .log_store_writer()
+            .expect("the store is open");
+        let marked = |to: &Path, row: usize| {
+            let id = engine_lock(&engine).log_records()[row].id;
+            LogDb::open(&database_path(&to.join("log.adi")))
+                .and_then(|d| d.load_all())
+                .expect("the copy opens")
+                .into_iter()
+                .find(|r| r.id == id)
+                .is_some_and(|r| r.qsl_rcvd.card)
+        };
+
+        // The control: beside the writer, while a change waits on a stalled disk.
+        let hold = WriteHold::take(&db).expect("stall the store");
+        assert!(engine_lock(&engine).mark_qsl_card(3, true));
+        let beside = dir.with_extension("beside");
+        copy_data_dir_verified(&dir, &beside, None).expect("copied");
+        drop(hold);
+        assert!(
+            !marked(&beside, 3),
+            "control: a copy beside the writer misses the change on its way"
+        );
+
+        // Through the writer: another change, the same stall, released while the copy waits.
+        let hold = WriteHold::take(&db).expect("stall the store");
+        assert!(engine_lock(&engine).mark_qsl_card(4, true));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(hold);
+        });
+        let moved = dir.with_extension("moved");
+        copy_data_dir_verified(&dir, &moved, Some(&writer)).expect("copied");
+        release.join().expect("released");
+        assert!(marked(&moved, 4), "the change on its way is in the copy");
+        assert!(marked(&moved, 3), "and so is everything before it");
+        for d in [&dir, &beside, &moved] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    /// The body of the top-level function `sig` in this file.
+    fn body_of<'a>(src: &'a str, sig: &str) -> &'a str {
+        let start = src
+            .find(&format!("\n{sig}"))
+            .unwrap_or_else(|| panic!("{sig} is defined"));
+        let rest = &src[start + 1..];
+        &rest[..rest.find("\n}\n").expect("the end of the function")]
+    }
+
+    /// The three places the shipped app reaches the store are wired to it: the launch opens it
+    /// (and falls back to `log.adi` only through `adopt_logbook`), every exit path flushes it,
+    /// and a data-folder move copies it through its writer. Source-scanned, because what is
+    /// under test is which function `run()` and the commands call, and no type sees that.
+    #[test]
+    fn the_launch_every_exit_and_the_folder_move_reach_the_store() {
+        let src = include_str!("lib.rs");
+        let run = body_of(src, "pub fn run() {");
+        assert!(
+            run.contains("open_logbook_store(\n        &logbook_path(),")
+                && run.contains("adopt_logbook(&mut eng, &logbook_path(), logbook_store);"),
+            "the launch opens the store and hands it to the engine"
+        );
+        assert!(
+            !run.contains("set_log_path("),
+            "the launch never opens log.adi directly"
+        );
+        assert!(
+            body_of(src, "fn persist_journals(").contains("flush_logbook("),
+            "the journals every exit path writes include the log"
+        );
+        assert!(
+            body_of(src, "fn set_data_folder(").contains("log_store_writer()"),
+            "a folder move copies the open store through its writer"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2152,7 +2781,8 @@ mod data_folder_tests {
             .map(|rel| (rel.clone(), std::fs::read(current.join(rel)).expect("read")))
             .collect();
 
-        let report = apply_data_folder(&base, &current, &target, true, None, None).expect("copy");
+        let report =
+            apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy");
         assert_eq!(report.files, 3, "log, table and the mailbox file");
         assert!(report.bytes > 0);
         for (rel, body) in &before {
@@ -2175,6 +2805,143 @@ mod data_folder_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A LIVE logbook database, as the running app holds it: the connection stays open, so the
+    /// contacts it committed are in `log.sqlite3-wal` and NOT yet in the main file — SQLite only
+    /// folds them in at a checkpoint. Returns the connection (keep it alive for the whole move)
+    /// and the records it holds, in the order the store will hand them back.
+    fn live_database(
+        dir: &Path,
+        n: usize,
+    ) -> (
+        tempo_core::logbook::sqlite::LogDb,
+        Vec<tempo_core::logbook::QsoRecord>,
+    ) {
+        use tempo_core::logbook::sqlite::{LogDb, Resolved};
+        let mut adif = tempo_core::logbook::adif_header();
+        for i in 0..n {
+            let call = format!("K{i}WAL");
+            adif.push_str(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20260901<TIME_ON:6>{:02}{:02}00<BAND:3>20m<MODE:3>FT8\
+                 <COMMENT:6>row{i:03}<EOR>\n",
+                call.len(),
+                i / 60 % 24,
+                i % 60
+            ));
+        }
+        let seed = dir.join("seed.adi");
+        write(&seed, adif.as_bytes());
+        let recs: Vec<_> = tempo_core::logbook::Logbook::load(&seed)
+            .records()
+            .iter()
+            .map(|r| r.as_ref().clone())
+            .collect();
+        let _ = std::fs::remove_file(&seed);
+        let _ = std::fs::remove_file(seed.with_extension("adi.bak"));
+        let _ = std::fs::remove_file(seed.with_extension("adi.scrubbed"));
+        let mut live = LogDb::open(&dir.join("log.sqlite3")).expect("open the live store");
+        live.insert_all(recs.iter().map(|r| (r, Resolved::default())))
+            .expect("commit the contacts");
+        (live, recs)
+    }
+
+    /// ⛔ MOVING THE DATA FOLDER MUST CARRY EVERY COMMITTED CONTACT IN A LIVE DATABASE.
+    ///
+    /// The log is a WAL-mode SQLite database. A contact the store has COMMITTED sits in the
+    /// `-wal` file until a checkpoint folds it into the main file, so the main file alone is
+    /// not the log — and `fs::copy`, file by file, cannot take a consistent picture of a
+    /// database another connection is writing. This drives the shipped "copy my log and data
+    /// there" action against a store that is OPEN, with its contacts in the WAL, and reads the
+    /// copy back through a fresh connection on the new folder.
+    #[test]
+    fn a_live_database_moves_with_every_committed_contact() {
+        use tempo_core::logbook::sqlite::LogDb;
+        const N: usize = 40;
+        let root = scratch("livedb");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
+        station(&current);
+        let (live, recs) = live_database(&current, N);
+        let db_name = "log.sqlite3";
+
+        // THE PREMISE, measured: the contacts are in the WAL and not in the main file. A copy
+        // of the main file ALONE opens as a database holding none of them.
+        let wal = current.join(format!("{db_name}-wal"));
+        assert!(
+            std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0) > 0,
+            "premise: the committed contacts are still in the -wal file"
+        );
+        let main_only = root.join("main-only");
+        std::fs::create_dir_all(&main_only).expect("control dir");
+        std::fs::copy(current.join(db_name), main_only.join(db_name)).expect("control copy");
+        let seen_by_main_file = LogDb::open(&main_only.join(db_name))
+            .and_then(|db| db.row_count())
+            .expect("control read");
+        assert_eq!(
+            seen_by_main_file, 0,
+            "control: the main file on its own holds none of the {N} contacts"
+        );
+
+        apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy");
+
+        let moved = LogDb::open(&target.join(db_name))
+            .and_then(|db| db.load_all())
+            .expect("the moved store opens");
+        assert_eq!(
+            moved.len(),
+            N,
+            "every committed contact moved with the folder (the store held {N})"
+        );
+        assert_eq!(
+            moved, recs,
+            "and they are the same contacts, in the same order"
+        );
+        assert_eq!(
+            live.row_count().expect("the original is still readable"),
+            N as u64,
+            "the original store is untouched"
+        );
+        drop(live);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The log's SAFETY COPIES move with it. The anchor (`log.adi.bak`, the bytes as first
+    /// loaded), the permanent pre-conversion copy (`log.adi.pre-sqlite`) and the dated backup
+    /// ring (`backups/`) are what an operator recovers from after a bad import, a purge or a
+    /// failed conversion — and the list this copy used to keep by hand knew only `log.adi`, so a
+    /// move left all three behind in the folder the app stops reading.
+    #[test]
+    fn the_logbooks_safety_copies_move_with_it() {
+        let root = scratch("safety");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
+        station(&current);
+        write(&current.join("log.adi.bak"), b"<CALL:5>W1AW <EOR>\n");
+        write(&current.join("log.adi.pre-sqlite"), b"<CALL:5>W1AW <EOR>\n");
+        write(
+            &current.join("backups/log-20260901-120000.adi"),
+            b"<CALL:5>W1AW <EOR>\n",
+        );
+        write(
+            &current.join("backups/log-20260902-120000-shrink.adi"),
+            b"<CALL:5>W1AW <EOR>\n<CALL:5>K1ABC <EOR>\n",
+        );
+
+        apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy");
+
+        for rel in [
+            "log.adi",
+            "log.adi.bak",
+            "log.adi.pre-sqlite",
+            "backups/log-20260901-120000.adi",
+            "backups/log-20260902-120000-shrink.adi",
+        ] {
+            assert_eq!(
+                std::fs::read(target.join(rel)).ok(),
+                std::fs::read(current.join(rel)).ok(),
+                "{rel} moved with the log, byte for byte"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_failed_copy_leaves_the_pointer_and_the_original_alone() {
         let root = scratch("failed");
@@ -2185,8 +2952,8 @@ mod data_folder_tests {
         // `log.adi` is a DIRECTORY in the target: the copy of the one irreplaceable file fails.
         std::fs::create_dir_all(target.join("log.adi")).expect("blocker");
 
-        let err =
-            apply_data_folder(&base, &current, &target, true, None, None).expect_err("must refuse");
+        let err = apply_data_folder(&base, &current, &target, true, None, None, None)
+            .expect_err("must refuse");
         assert!(err.contains("log.adi"), "the failure names the file: {err}");
         assert_eq!(
             read_data_dir_pointer_in(&base).as_deref(),
@@ -2206,19 +2973,19 @@ mod data_folder_tests {
         let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
         station(&current);
 
-        let err =
-            apply_data_folder(&base, &current, &target, false, None, None).expect_err("refused");
+        let err = apply_data_folder(&base, &current, &target, false, None, None, None)
+            .expect_err("refused");
         assert!(
             err.contains("empty logbook"),
             "says what would happen: {err}"
         );
         assert_eq!(read_data_dir_pointer_in(&base), None, "nothing was chosen");
         // The same folder WITH the copy is accepted…
-        apply_data_folder(&base, &current, &target, true, None, None).expect("copy accepted");
+        apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy accepted");
         // …and a folder that already holds a log needs no copy (the second machine on a synced log).
         let synced = root.join("synced");
         write(&synced.join("log.adi"), b"<CALL:5>K1ABC <EOR>\n");
-        apply_data_folder(&base, &current, &synced, false, None, None)
+        apply_data_folder(&base, &current, &synced, false, None, None, None)
             .expect("adopting a log is fine");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2231,7 +2998,7 @@ mod data_folder_tests {
         let install = root.join("Program Files/Nexus");
         std::fs::create_dir_all(&install).expect("install dir");
         for target in [install.join("data"), install.join("../Nexus/data")] {
-            let err = apply_data_folder(&base, &current, &target, true, Some(&install), None)
+            let err = apply_data_folder(&base, &current, &target, true, Some(&install), None, None)
                 .expect_err("inside the program folder");
             assert!(err.contains("program folder"), "{err}");
         }
@@ -2243,6 +3010,7 @@ mod data_folder_tests {
             &root.join("documents/nexus"),
             true,
             Some(&install),
+            None,
             None,
         )
         .expect("outside is fine");
@@ -2271,6 +3039,7 @@ mod data_folder_tests {
             true,
             None,
             Some(&mounts_placing(&root, "nfs4")),
+            None,
         )
         .expect_err("a database must not be put on a network filesystem");
         assert!(err.contains("nfs4"), "states the technical reason: {err}");
@@ -2294,6 +3063,7 @@ mod data_folder_tests {
             true,
             None,
             Some(&mounts_placing(&root, "ext4")),
+            None,
         )
         .expect("the same folder on a local filesystem is fine");
         assert_eq!(
@@ -2321,6 +3091,7 @@ mod data_folder_tests {
             true,
             None,
             Some(&mounts_placing(&root, "ext4")),
+            None,
         )
         .expect("a suspected sync folder warns, it does not refuse");
         assert!(
@@ -2640,7 +3411,104 @@ fn snap_bandmap_to_edge(
 /// `%APPDATA%\tempo\log.adi` / `~/.config/tempo/log.adi` (unchanged for a single instance);
 /// `NEXUS_DATA_DIR` relocates it (multi-PC shack). See [`shared_data_dir`].
 fn logbook_path() -> PathBuf {
-    shared_data_dir().join("log.adi")
+    shared_data_dir().join(LOG_FILE_NAME)
+}
+
+/// The logbook's file name in the data folder. One constant, because the data-folder move asks
+/// the logbook for its files by this name and must name the same file the app opens.
+const LOG_FILE_NAME: &str = "log.adi";
+
+/// Open the logbook database for `log` — converting `log.adi` into it the first time — ready
+/// for [`adopt_logbook`]. All of the launch's logbook I/O is here, and it runs BEFORE the engine
+/// lock is taken: a first launch's conversion of a lifetime log takes seconds.
+///
+/// `network` is the data folder's verdict (`data_folder_location`): a database is never opened
+/// on certain network storage. Every refusal leaves the operator's file as it was (see
+/// `tempo_app::logstore::open`).
+fn open_logbook_store(
+    log: &Path,
+    network: Option<String>,
+) -> Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError> {
+    // The folder, as the 1.13 write path makes it on the first contact: a fresh install has
+    // none yet, and the database cannot be created without it.
+    if let Some(dir) = log.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let resolve: tempo_app::logstore::StoreResolve = Arc::new(|r| {
+        propagation::dxcc::resolve(&r.call).map_or_else(Default::default, |i| {
+            tempo_core::logbook::sqlite::Resolved {
+                entity: Some(i.entity),
+                cq_zone: Some(i.cq_zone),
+            }
+        })
+    });
+    tempo_app::logstore::open(log, resolve, network)
+}
+
+/// Hand this session's log to the engine: the database, when [`open_logbook_store`] opened it —
+/// `log.adi` is from then on its mirror — or, when it could not, `log.adi` itself, run exactly
+/// as 1.13 ran it, with the reason kept and written to the diagnostic log.
+///
+/// Called once, at launch, after the country and state resolvers are set: their fills then
+/// happen in memory, and the launch writes nothing (see `StationCore::attach_store`).
+fn adopt_logbook(
+    eng: &mut Engine,
+    log: &Path,
+    opened: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
+) {
+    match opened {
+        Ok(opened) => {
+            let what = match opened.outcome {
+                tempo_core::logbook::migrate::Outcome::Empty => "a new logbook".to_string(),
+                tempo_core::logbook::migrate::Outcome::AlreadyDone => "opened".to_string(),
+                tempo_core::logbook::migrate::Outcome::Converted {
+                    total, resumed_at, ..
+                } => format!(
+                    "{total} contacts converted from log.adi{}",
+                    if resumed_at > 0 {
+                        format!(", resuming after {resumed_at}")
+                    } else {
+                        String::new()
+                    }
+                ),
+            };
+            tempo_core::applog::info("logbook", &format!("the logbook database: {what}"));
+            eng.attach_log_store(opened);
+        }
+        Err(e) => {
+            let why = e.to_string();
+            let line = format!("{why}. This session keeps the log in log.adi, as 1.13 did.");
+            match e {
+                tempo_app::logstore::OpenError::NetworkFolder(_) => {
+                    tempo_core::applog::warn("logbook", &line)
+                }
+                _ => tempo_core::applog::error("logbook", &line),
+            }
+            eng.set_log_path(log.to_path_buf());
+            eng.note_log_store_problem(why);
+        }
+    }
+}
+
+/// How long an exit waits for the logbook to reach the disk before it gives up and says so.
+const LOG_FLUSH_ON_EXIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Carry every change the logbook holds to disk before the process goes — the database's
+/// writer, then the `log.adi` mirror — waiting at most `cap`, and saying so in the diagnostic
+/// log when the disk would not take it in time.
+///
+/// Under the engine lock, deliberately: this is the last word on the log, and holding the lock
+/// is what keeps a change from landing after the flush and dying with the process. It runs
+/// once the radio loop has unkeyed and stopped (quit), or behind the install gate that refuses
+/// while anything is on the air (update), so nothing time-critical waits on it.
+fn flush_logbook(engine: &SharedEngine, cap: std::time::Duration) {
+    let flushed = engine_lock(engine).flush_log_store(cap);
+    if let Err(e) = flushed {
+        tempo_core::applog::error(
+            "logbook",
+            &format!("the logbook was not all on disk when Nexus exited: {e}"),
+        );
+    }
 }
 
 /// The LEGACY (pre-club-sync) Field Day journal location — kept only so the
@@ -14596,20 +15464,26 @@ const PENDING_LOG_MOVED_ON: &str = "pendingLogMovedOn";
 /// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
 /// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
 /// shown with. Returns the refreshed snapshot, whose `pendingLog` is the next held contact.
-#[tauri::command(async)]
-fn confirm_pending_log(
+#[tauri::command]
+async fn confirm_pending_log(
     state: State<'_, SharedEngine>,
     record: LoggedQso,
     expected_key: Option<String>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    // No key is a refusal, not a free pass: a caller that cannot say WHICH contact it is
-    // confirming cannot be allowed to log one (review R2).
-    let key = expected_key.unwrap_or_default();
-    if !eng.confirm_pending_log(&key, record.into()) {
-        return Err(PENDING_LOG_MOVED_ON.into());
-    }
-    Ok(eng.snapshot())
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            // No key is a refusal, not a free pass: a caller that cannot say WHICH contact it
+            // is confirming cannot be allowed to log one (review R2).
+            let key = expected_key.unwrap_or_default();
+            if !eng.confirm_pending_log(&key, record.into()) {
+                return Err(PENDING_LOG_MOVED_ON.into());
+            }
+            Ok(eng.snapshot())
+        })
+    })
+    .await
 }
 
 /// Discard the contact the prompt-to-log popup is showing without logging it. Same key rule.
@@ -14628,17 +15502,21 @@ fn discard_pending_log(
 
 /// Manually log a contact to the ADIF logbook (the UI "Log QSO" button). Adds in
 /// memory and persists to the log file. Returns the refreshed snapshot.
-#[tauri::command(async)]
-fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnapshot, String> {
+#[tauri::command]
+async fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnapshot, String> {
+    let engine = Arc::clone(&state);
     let call = record.call.clone();
-    let (snap, wav) = {
-        let mut eng = engine_lock(&state);
-        eng.log_qso(record.into());
-        // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
-        // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
-        let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
-        (eng.snapshot(), wav)
-    };
+    let (snap, wav) = durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            eng.log_qso(record.into());
+            // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
+            // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
+            let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
+            Ok((eng.snapshot(), wav))
+        })
+    })
+    .await?;
     if let Some(pcm) = wav {
         if !pcm.is_empty() {
             // Outside the lock (I/O), and the OUTCOME goes back into the engine so the next
@@ -14800,6 +15678,40 @@ fn locate_seen(eng: &mut Engine, seen: &LoggedQso) -> Result<usize, String> {
 const LOG_ROW_GONE: &str =
     "That contact changed or was removed since the log was loaded — reload the log and try again.";
 
+/// Run an operator's log command so that it returns only once its change is ON DISK — the
+/// store's promise that "logged" means the contact survives pulling the plug.
+///
+/// `body` takes the engine lock, makes the change, and hands back what it did with the
+/// durability of the changes it made ([`Engine::with_log_tickets`]); the lock is released when
+/// `body` returns, and only THEN is the change waited for. The whole of it runs on the blocking
+/// pool, never on a runtime worker: a wait can last up to a minute behind a slow disk, and a
+/// worker held that long is one the waterfall, the meters and every other command need —
+/// the #335 freeze. `tokio::task::spawn_blocking` rather than Tauri's wrapper so a test can run
+/// it on a runtime of its own; in the app both are the same runtime.
+///
+/// On the 1.13 path (no store) there is nothing to wait for: the change was written inline.
+async fn durable_command<T: Send + 'static>(
+    body: impl FnOnce() -> (Result<T, String>, tempo_app::logstore::Durability) + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || {
+        let (out, durability) = body();
+        let out = out?;
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("logbook task failed: {e}"))?
+}
+
+/// What a command says when its change is in the log but could not be shown to be on disk.
+/// The change is NOT undone — memory holds it and the writer keeps trying — so the words say
+/// exactly that, and carry the writer's own reason.
+fn durability_failed(why: String) -> String {
+    format!("The change is in your log, but Nexus could not confirm it was saved to disk: {why}")
+}
+
 /// The row at `index` as `get_log` would show it — what a log command hands back so a
 /// follow-up (a QSL mark from the same edit form) can key the row it just changed.
 fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
@@ -14816,18 +15728,24 @@ fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
 /// Edit the logged contact `target` — a correction. Confirmation/credit/upload state is
 /// preserved by the engine. Returns the row as stored; its key is the one any follow-up
 /// must use, since the edit changed the row and so its key.
-#[tauri::command(async)]
-fn edit_qso(
+#[tauri::command]
+async fn edit_qso(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     record: LoggedQso,
 ) -> Result<LoggedQso, String> {
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.update_qso(index, record.into()) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.update_qso(index, record.into()) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// What a `via` argument MEANS on [`mark_qsl_sent`] — the one decision the command layer owns
@@ -14873,19 +15791,25 @@ fn qsl_via_arg(via: Option<&str>) -> Result<Option<tempo_core::logbook::QslVia>,
 /// sent — the core records the cleared state as such so merge can tell "never sent" from
 /// "operator un-sent it". Nothing in this layer re-derives the mark or offers an import a way
 /// around that: the command forwards the operator's word and nothing else.
-#[tauri::command(async)]
-fn mark_qsl_sent(
+#[tauri::command]
+async fn mark_qsl_sent(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     via: Option<String>,
 ) -> Result<LoggedQso, String> {
     let via = qsl_via_arg(via.as_deref())?;
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.mark_qsl_sent(index, via) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.mark_qsl_sent(index, via) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// Record whether a PAPER QSL card arrived for the logged contact `target` (#152).
@@ -14895,18 +15819,24 @@ fn mark_qsl_sent(
 /// award-eligible — `QslRcvd::award` is card OR LoTW — so leaving it unrecordable left the
 /// awards view understating what the operator can actually claim. Returns the row as stored
 /// (see [`edit_qso`]).
-#[tauri::command(async)]
-fn mark_qsl_card(
+#[tauri::command]
+async fn mark_qsl_card(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     received: bool,
 ) -> Result<LoggedQso, String> {
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.mark_qsl_card(index, received) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.mark_qsl_card(index, received) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// What a `satName` argument MEANS on [`set_sat_tag`] — the one decision this layer owns,
@@ -14958,8 +15888,8 @@ fn sat_name_arg(sat_name: Option<&str>) -> Result<Option<String>, String> {
 /// ACCEPTS, and an empty string is an error rather than a removal for the same reason it is on
 /// [`qsl_via_arg`]: empty is what a select sits at when the operator has chosen nothing, and a
 /// non-choice must not erase a tag nobody asked to erase.
-#[tauri::command(async)]
-fn set_sat_tag(
+#[tauri::command]
+async fn set_sat_tag(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     sat_name: Option<String>,
@@ -14967,12 +15897,18 @@ fn set_sat_tag(
     // Gated BEFORE the lock: nothing that can be refused should hold the engine mutex, which
     // the radio loop needs every 20 ms.
     let name = sat_name_arg(sat_name.as_deref())?;
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.set_sat_tag(index, name.as_deref()) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.set_sat_tag(index, name.as_deref()) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// The satellite names LoTW accepts, for the Logbook row's tag picker — the backend owns the
@@ -14987,34 +15923,49 @@ fn lotw_sat_names() -> Vec<String> {
 }
 
 /// Delete the logged contact `target`. Returns the refreshed snapshot.
-#[tauri::command(async)]
-fn delete_qso(state: State<'_, SharedEngine>, target: LoggedQso) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.delete_qso(index) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    Ok(eng.snapshot())
+#[tauri::command]
+async fn delete_qso(
+    state: State<'_, SharedEngine>,
+    target: LoggedQso,
+) -> Result<AppSnapshot, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.delete_qso(index) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            Ok(eng.snapshot())
+        })
+    })
+    .await
 }
 
 /// Purge the ENTIRE logbook — delete every contact and truncate the ADIF file to
 /// an empty log. Destructive and irreversible; the UI gates this behind an explicit
 /// confirmation dialog. Returns the number of contacts removed (for the toast).
-#[tauri::command(async)]
-fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
-    let mut eng = engine_lock(&state);
-    let removed = eng.clear_logbook();
-    // `clear_logbook` also resets the LoTW/eQSL sync cursors (see its doc comment:
-    // an incremental cursor is a lie about an empty log). Persist that here — the
-    // engine holds settings, the command layer owns the file.
-    if let Err(e) = eng.settings().clone().save(&settings_path()) {
-        conn_log(
-            "LoTW",
-            "error",
-            format!("failed to reset the sync cursor after a purge: {e}"),
-        );
-    }
-    Ok(removed)
+#[tauri::command]
+async fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let removed = eng.clear_logbook();
+            // `clear_logbook` also resets the LoTW/eQSL sync cursors (see its doc comment:
+            // an incremental cursor is a lie about an empty log). Persist that here — the
+            // engine holds settings, the command layer owns the file.
+            if let Err(e) = eng.settings().clone().save(&settings_path()) {
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!("failed to reset the sync cursor after a purge: {e}"),
+                );
+            }
+            Ok(removed)
+        })
+    })
+    .await
 }
 
 /// Whether a logged QSO was made through a satellite (`PROP_MODE=SAT`) — the
@@ -16204,16 +17155,22 @@ fn read_need_alerts(
 
 /// Import an external ADIF logbook (deduped merge → real "needs"). Takes the
 /// file's text; the UI reads the file so no fs/dialog plugin is needed.
-#[tauri::command(async)]
-fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
-    let mut eng = engine_lock(&state);
-    let (added, skipped, updated, total) = eng.import_adif(&text);
-    Ok(ImportStats {
-        added,
-        skipped,
-        updated,
-        total,
+#[tauri::command]
+async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let (added, skipped, updated, total) = eng.import_adif(&text);
+            Ok(ImportStats {
+                added,
+                skipped,
+                updated,
+                total,
+            })
+        })
     })
+    .await
 }
 
 /// Reconcile a confirmation/credit report (LoTW ADIF export) INTO the existing
@@ -16235,8 +17192,12 @@ async fn sync_lotw_report(
             )
         },
         {
-            let mut eng = engine_lock(&state);
-            Ok(eng.merge_lotw_report(&text).into())
+            let engine = Arc::clone(&state);
+            durable_command(move || {
+                let mut eng = engine_lock(&engine);
+                eng.with_log_tickets(|eng| Ok(eng.merge_lotw_report(&text).into()))
+            })
+            .await
         },
     )
 }
@@ -18153,38 +19114,44 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // Merge via the shared reconcile path, then advance the cursor only on a real
     // high-water (re-lock: the fetch ran without the engine lock held). Capture the
     // own-echo lower bound (oldest in-flight upload) in the same lock, then release.
-    let (mut result, own_start): (LotwSyncResult, Option<String>) = {
+    let ((mut result, own_start), merged): ((LotwSyncResult, Option<String>), _) = {
         let mut eng = engine_lock(state);
-        let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
-        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
-            // Advance the cursor ONLY if (a) the download is structurally complete —
-            // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
-            // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
-            // advancing would make the next `qso_qslsince` pull skip them forever (the
-            // merge above already ran, so keeping the old cursor just re-fetches the
-            // tail — reconcile is idempotent) — AND (b) the username is still the one
-            // this download used. If `set_settings` changed it during the (lock-free)
-            // fetch, it already reset the cursor to a full pull for the new identity —
-            // this high-water belongs to the old query, so binding it would risk
-            // skipping records on the next incremental pull. Persist via a narrow
-            // setter so the sync never disturbs live operation (no mode reset /
-            // TX-queue clear).
-            if is_complete_lotw_body(&body)
-                && eng.settings().lotw_username.trim() == used_username.trim()
-            {
-                let updated = eng.set_lotw_cursor(high_water);
-                if let Err(e) = updated.save(&settings_path()) {
-                    conn_log(
-                        "LoTW",
-                        "error",
-                        format!("failed to persist the sync cursor: {e}"),
-                    );
+        eng.with_log_tickets(|eng| {
+            let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
+            if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
+                // Advance the cursor ONLY if (a) the download is structurally complete —
+                // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
+                // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
+                // advancing would make the next `qso_qslsince` pull skip them forever (the
+                // merge above already ran, so keeping the old cursor just re-fetches the
+                // tail — reconcile is idempotent) — AND (b) the username is still the one
+                // this download used. If `set_settings` changed it during the (lock-free)
+                // fetch, it already reset the cursor to a full pull for the new identity —
+                // this high-water belongs to the old query, so binding it would risk
+                // skipping records on the next incremental pull. Persist via a narrow
+                // setter so the sync never disturbs live operation (no mode reset /
+                // TX-queue clear).
+                if is_complete_lotw_body(&body)
+                    && eng.settings().lotw_username.trim() == used_username.trim()
+                {
+                    let updated = eng.set_lotw_cursor(high_water);
+                    if let Err(e) = updated.save(&settings_path()) {
+                        conn_log(
+                            "LoTW",
+                            "error",
+                            format!("failed to persist the sync cursor: {e}"),
+                        );
+                    }
                 }
             }
-        }
-        let own_start = eng.oldest_pending_lotw_date();
-        (summary, own_start)
+            let own_start = eng.oldest_pending_lotw_date();
+            (summary, own_start)
+        })
     }; // engine lock released before the second network fetch
+       // The confirmations are on disk before the sync says so (off the lock, on the blocking pool).
+    merged
+        .wait(tempo_app::logstore::DURABLE_WAIT)
+        .map_err(durability_failed)?;
 
     // --- Pull 2: own-echo (qso_qsl=no) — promote in-flight uploads to Accepted. ---
     // Best-effort: only run when something is actually in flight, and never fail the
@@ -18202,8 +19169,12 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         };
         match own_body {
             Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
-                let mut eng = engine_lock(state);
-                result.promoted = eng.merge_lotw_own_echo(&b, now_unix());
+                let (promoted, echoed) = engine_lock(state)
+                    .with_log_tickets(|eng| eng.merge_lotw_own_echo(&b, now_unix()));
+                result.promoted = promoted;
+                echoed
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .map_err(durability_failed)?;
             }
             Ok(_) => conn_log(
                 "LoTW",
@@ -18240,6 +19211,25 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(if cfg!(windows) { "tqsl.exe" } else { "tqsl" })
 }
 
+/// Run TQSL once with `args`, to completion: its exit code (-1 when it has none) and what it
+/// wrote to stderr. `tqsl_path` is the Settings override, resolved by [`resolve_tqsl`].
+fn run_tqsl(tqsl_path: &str, args: &[String]) -> Result<(i32, String), String> {
+    let tqsl = resolve_tqsl(tqsl_path);
+    let mut cmd = tempo_core::process::command(&tqsl); // no console window on Windows
+    cmd.args(args);
+    let output = cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "TQSL isn't installed (or its path is wrong). LoTW uploads are signed locally by TQSL — install it from lotw.arrl.org, or set the TQSL path in Settings.".to_string()
+        } else {
+            format!("Couldn't run TQSL: {e}")
+        }
+    })?;
+    Ok((
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
 /// Sign + upload QSOs to LoTW via the operator's installed TQSL. `indices` selects
 /// specific log rows; `None` = the default unsent-unconfirmed batch. No secret is
 /// handled here — TQSL owns the Callsign Certificate; we pass only the non-secret
@@ -18250,10 +19240,14 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
 /// Mark every currently-unsent QSO as already on LoTW — the operator's declaration that an
 /// imported legacy log was uploaded through another tool. Zeroes the "Upload to LoTW (N)" count
 /// so a big redundant re-upload isn't offered. Returns how many were marked.
-#[tauri::command(async)]
-fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
-    let mut eng = engine_lock(&state);
-    Ok(eng.mark_lotw_uploaded_all())
+#[tauri::command]
+async fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| Ok(eng.mark_lotw_uploaded_all()))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -18272,7 +19266,12 @@ async fn upload_lotw_report_impl(
     state: State<'_, SharedEngine>,
     indices: Option<Vec<usize>>,
 ) -> Result<UploadReportDto, String> {
-    lotw_upload_batch(&state, indices)
+    // On the blocking pool: TQSL can take tens of seconds, and the stamps are then waited for
+    // on disk. Neither may occupy a runtime worker (see `durable_command`).
+    let engine = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || lotw_upload_batch(&engine, indices, true))
+        .await
+        .map_err(|e| format!("LoTW upload task failed: {e}"))?
 }
 
 /// The whole LoTW upload, independent of Tauri's command shape, so the automatic worker
@@ -18282,11 +19281,25 @@ async fn upload_lotw_report_impl(
 fn lotw_upload_batch(
     state: &SharedEngine,
     indices: Option<Vec<usize>>,
+    wait: bool,
+) -> Result<UploadReportDto, String> {
+    lotw_upload_batch_with(state, indices, wait, run_tqsl)
+}
+
+/// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over the batch file, to
+/// completion, and answers its exit code and stderr. The shipped runner is [`run_tqsl`]; a test
+/// stands in for it to change the log while "TQSL" runs — the window this function's stamp has
+/// to survive.
+fn lotw_upload_batch_with(
+    state: &SharedEngine,
+    indices: Option<Vec<usize>>,
+    wait: bool,
+    tqsl: impl FnOnce(&str, &[String]) -> Result<(i32, String), String>,
 ) -> Result<UploadReportDto, String> {
     // Brief lock: read config + build the batch + ADIF, then release before spawn.
     // Held across the TQSL spawn it would freeze the whole UI for as long as ARRL takes
     // to answer, which is tens of seconds on a big batch.
-    let (batch, adif, location, tqsl_path) = {
+    let (batch, signed, adif, location, tqsl_path) = {
         let eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
@@ -18316,10 +19329,13 @@ fn lotw_upload_batch(
             });
         }
         let adif = eng.lotw_upload_adif(&batch);
+        // The contacts by id, taken with the file: the stamp below finds them by id once TQSL
+        // is done, because by then the positions in `batch` may name other contacts.
+        let signed = eng.lotw_signed(&batch);
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
         let location = (!use_adif_location).then_some(location);
-        (batch, adif, location, tqsl_path)
+        (batch, signed, adif, location, tqsl_path)
     };
 
     // Write the batch ADIF to a temp file for TQSL to sign. Use a UNIQUE,
@@ -18351,20 +19367,9 @@ fn lotw_upload_batch(
     let _tmp_guard = TmpFile(path.clone());
     let path_str = path.to_string_lossy().to_string();
 
-    // Resolve + run TQSL one-shot, capturing its result.
-    let tqsl = resolve_tqsl(&tqsl_path);
+    // Run TQSL one-shot, capturing its result.
     let args = tempo_core::lotw_upload::tqsl_args(location.as_deref(), &path_str);
-    let mut cmd = tempo_core::process::command(&tqsl); // no console window on Windows
-    cmd.args(&args);
-    let output = cmd.output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            "TQSL isn't installed (or its path is wrong). LoTW uploads are signed locally by TQSL — install it from lotw.arrl.org, or set the TQSL path in Settings.".to_string()
-        } else {
-            format!("Couldn't run TQSL: {e}")
-        }
-    })?;
-    let code = output.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (code, stderr) = tqsl(&tqsl_path, &args)?;
     // ⛔ TWO details, and they are not interchangeable. `detail` is TQSL's own tail and goes
     // to the operator's toast — a screen. `stamped` is the CLASS and is the only one written
     // into `log.adi`, because `log.adi` is the file TQSL then signs and uploads to ARRL: a
@@ -18381,9 +19386,30 @@ fn lotw_upload_batch(
             detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
         }),
         Some(outcome) => {
-            {
-                let mut eng = engine_lock(state);
-                eng.stamp_lotw_upload(&batch, outcome, now_unix(), stamped);
+            let (done, durable) = engine_lock(state).with_log_tickets(|eng| {
+                eng.stamp_lotw_batch(&signed, outcome, now_unix(), stamped)
+            });
+            if done.changed + done.gone > 0 {
+                conn_log(
+                    "LoTW",
+                    "info",
+                    format!(
+                        "{} of the {} contacts in this upload changed while TQSL was signing \
+                         ({} edited, {} deleted), so the result was not recorded on them. An \
+                         edited contact is offered again with the next upload.",
+                        done.changed + done.gone,
+                        batch.len(),
+                        done.changed,
+                        done.gone
+                    ),
+                );
+            }
+            // The Logbook button waits for the stamps to reach the disk; the six-hourly
+            // automatic batch does not (a stamp it loses is re-derived by the next echo).
+            if wait {
+                durable
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .map_err(durability_failed)?;
             }
             // ⛔ THE LINE THAT MAKES THE STAMP'S OWN SENTENCE TRUE.
             //
@@ -18505,16 +19531,26 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // complete — a truncated download must not skip unreceived records — AND (b) the
     // username is unchanged since this sync started (an in-flight change already
     // reset the cursor for the new account).
-    let mut eng = engine_lock(state);
-    let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
-    if tempo_core::eqsl::is_complete_eqsl_body(&body)
-        && eng.settings().eqsl_username.trim() == used_username.trim()
-    {
-        let updated = eng.set_eqsl_cursor(next_cursor);
-        if let Err(e) = updated.save(&settings_path()) {
-            eprintln!("tempo: failed to persist eQSL cursor: {e}");
+    let (summary, merged) = {
+        let mut eng = engine_lock(state);
+        let (summary, merged) = eng.with_log_tickets(|eng| {
+            let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
+            summary
+        });
+        if tempo_core::eqsl::is_complete_eqsl_body(&body)
+            && eng.settings().eqsl_username.trim() == used_username.trim()
+        {
+            let updated = eng.set_eqsl_cursor(next_cursor);
+            if let Err(e) = updated.save(&settings_path()) {
+                eprintln!("tempo: failed to persist eQSL cursor: {e}");
+            }
         }
-    }
+        (summary, merged)
+    };
+    // On disk before the sync says so — off the lock, on the blocking pool.
+    merged
+        .wait(tempo_app::logstore::DURABLE_WAIT)
+        .map_err(durability_failed)?;
     Ok(summary)
 }
 
@@ -18529,7 +19565,7 @@ async fn sync_qrz(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, Stri
     // Blocking HTTP against QRZ (a full logbook FETCH on the manual button) —
     // off the UI thread AND off the async executor, matching `qrz_push_qso`.
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || sync_qrz_since(&engine, None))
+    let res = tauri::async_runtime::spawn_blocking(move || sync_qrz_since(&engine, None, true))
         .await
         .map_err(|e| format!("QRZ sync task failed: {e}"))?;
     conn_logged(
@@ -18611,6 +19647,11 @@ const QRZ_SYNC_UNREACHABLE: ConnDetail = conn_detail!(
     "the sync never reached QRZ — check the network, and whether antivirus or a proxy is \
      inspecting HTTPS traffic. This session's connection log has the exact message."
 );
+/// The sync merged, and the merge could not be shown to be on disk. Nexus's own words.
+const QRZ_SYNC_NOT_SAVED: ConnDetail = conn_detail!(
+    "the sync merged QRZ's logbook into yours, but Nexus could not confirm the result was saved \
+     to disk. This session's connection log has the reason."
+);
 /// QRZ answered and refused. The class; never QRZ's wording, which is the leak.
 const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
     "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Logbook & \
@@ -18642,6 +19683,7 @@ fn qrz_fetch_refused(reason: Option<String>) -> QrzSyncFailure {
 fn sync_qrz_since(
     engine: &SharedEngine,
     since_unix: Option<u64>,
+    wait: bool,
 ) -> Result<LotwSyncResult, QrzSyncFailure> {
     let key = qrz_logbook_keychain()
         .map_err(|message| QrzSyncFailure {
@@ -18677,8 +19719,18 @@ fn sync_qrz_since(
     if !fetched.ok {
         return Err(qrz_fetch_refused(fetched.reason));
     }
-    let mut eng = engine_lock(engine);
-    let (added, summary) = eng.merge_qrz_report(&fetched.adif);
+    let ((added, summary), merged) =
+        engine_lock(engine).with_log_tickets(|eng| eng.merge_qrz_report(&fetched.adif));
+    // The operator's sync button waits for the merge to reach the disk; the hourly automatic
+    // sync does not (its next run would find the same state either way).
+    if wait {
+        merged
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(|e| QrzSyncFailure {
+                detail: QRZ_SYNC_NOT_SAVED,
+                message: ScreenReason::new(durability_failed(e)),
+            })?;
+    }
     let mut result: LotwSyncResult = summary.into();
     result.added = added;
     Ok(result)
@@ -19196,9 +20248,10 @@ async fn qrz_push_qso(
     // The impl does blocking HTTP (20 s timeout) — keep it off the async
     // executor so a slow QRZ can't stall every other Tauri command.
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || qrz_push_qso_impl(record, &engine))
-        .await
-        .map_err(|e| format!("upload task failed: {e}"))?;
+    let res =
+        tauri::async_runtime::spawn_blocking(move || qrz_push_qso_impl(record, &engine, true))
+            .await
+            .map_err(|e| format!("upload task failed: {e}"))?;
     // QRZ's `reason` rides the SESSION log, and only there. It stopped being persisted with
     // the stamp (it can carry the API key back — see `UploadDetail`), so this line is now
     // the one place an operator can read what QRZ actually said.
@@ -19444,6 +20497,7 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
 fn qrz_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
+    wait: bool,
 ) -> Result<tempo_app::dto::QrzPushResultDto, String> {
     let key = qrz_logbook_keychain()?
         .get_password()
@@ -19524,11 +20578,19 @@ fn qrz_push_qso_impl(
     // written into `log.adi`, which TQSL signs and uploads to ARRL. QRZ's own reason goes to
     // the connection log and the operator's toast, and dies with the session. See
     // `tempo_core::logbook::UploadDetail`.
-    {
+    let ((), stamped) = {
         let outcome = push.result.to_upload_outcome();
         let detail = push.result.to_upload_detail();
-        let mut eng = engine_lock(engine);
-        eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
+        engine_lock(engine).with_log_tickets(|eng| {
+            eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
+        })
+    };
+    // The operator's push button waits for the stamp to reach the disk; the upload worker
+    // does not (a stamp it loses is re-derived: a re-push answers Duplicate).
+    if wait {
+        stamped
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
     }
     Ok(push.into())
 }
@@ -20035,9 +21097,10 @@ async fn clublog_push_qso(
     let who = record.call.clone();
     // Blocking HTTP off the async executor (see qrz_push_qso).
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || clublog_push_qso_impl(record, &engine))
-        .await
-        .map_err(|e| format!("upload task failed: {e}"))?;
+    let res =
+        tauri::async_runtime::spawn_blocking(move || clublog_push_qso_impl(record, &engine, true))
+            .await
+            .map_err(|e| format!("upload task failed: {e}"))?;
     // ClubLog's own body rides the SESSION log, and only there — same reason as QRZ above.
     conn_logged(
         "ClubLog",
@@ -20059,6 +21122,7 @@ async fn clublog_push_qso(
 fn clublog_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
+    wait: bool,
 ) -> Result<tempo_app::dto::ClubLogPushResultDto, String> {
     use std::sync::atomic::Ordering;
     if CLUBLOG_SUSPENDED.load(Ordering::Relaxed) {
@@ -20131,8 +21195,15 @@ fn clublog_push_qso_impl(
     // `tempo_core::logbook::UploadDetail`.
     if let Some(outcome) = push.result.to_upload_outcome() {
         let detail = push.result.to_upload_detail();
-        let mut eng = engine_lock(engine);
-        eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
+        let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
+            eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
+        });
+        // The push button waits for the stamp; the upload worker does not (see QRZ's).
+        if wait {
+            stamped
+                .wait(tempo_app::logstore::DURABLE_WAIT)
+                .map_err(durability_failed)?;
+        }
     }
     Ok(push.into())
 }
@@ -20152,9 +21223,10 @@ async fn eqsl_push_qso(
     let who = record.call.clone();
     // Blocking HTTP off the async executor (see qrz_push_qso).
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine))
-        .await
-        .map_err(|e| format!("upload task failed: {e}"))?;
+    let res =
+        tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine, true))
+            .await
+            .map_err(|e| format!("upload task failed: {e}"))?;
     conn_logged(
         "eQSL",
         |r| format!("pushed {} — outcome: {}", who, r.outcome),
@@ -20162,7 +21234,11 @@ async fn eqsl_push_qso(
     )
 }
 
-fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<UploadReportDto, String> {
+fn eqsl_push_qso_impl(
+    record: LoggedQso,
+    engine: &SharedEngine,
+    wait: bool,
+) -> Result<UploadReportDto, String> {
     // eQSL matches on the two operators' times agreeing: a record with no known
     // time of day can never match — sending it just parks it at eQSL unmatched
     // forever. Refuse with the reason instead of fabricating a midnight.
@@ -20233,8 +21309,15 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
             detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
         }),
         Some(outcome) => {
-            let mut eng = engine_lock(engine);
-            eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
+            let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
+                eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
+            });
+            // The push button waits for the stamp; the upload worker does not (see QRZ's).
+            if wait {
+                stamped
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .map_err(durability_failed)?;
+            }
             Ok(UploadReportDto {
                 dispatched: 1,
                 outcome: outcome.code().to_string(),
@@ -20544,7 +21627,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
     // Legs that failed transiently → the worker retries just these.
     let mut failed: u8 = 0;
     if qrz_on && owed & legs::QRZ != 0 {
-        let (part, ok, transient) = match qrz_push_qso_impl(dto.clone(), engine) {
+        let (part, ok, transient) = match qrz_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "replace" | "duplicate");
                 conn_log(
@@ -20588,7 +21671,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         }
     }
     if clublog_on && owed & legs::CLUBLOG != 0 {
-        let (part, ok, transient) = match clublog_push_qso_impl(dto.clone(), engine) {
+        let (part, ok, transient) = match clublog_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "modified" | "duplicate");
                 conn_log(
@@ -20676,7 +21759,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         }
     }
     if eqsl_on && owed & legs::EQSL != 0 {
-        let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine) {
+        let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
                 conn_log(
@@ -21420,30 +22503,36 @@ struct FdMergeReportDto {
 /// own merge identity, and a row already in the logbook is skipped rather than
 /// duplicated. Whether the merged rows are also queued for connector upload is the
 /// SESSION's control (`fd_set_upload`), which is off unless the operator turned it on.
-#[tauri::command(async)]
-fn fd_merge_to_general(
+#[tauri::command]
+async fn fd_merge_to_general(
     state: State<'_, SharedEngine>,
 ) -> Result<(FdMergeReportDto, AppSnapshot), String> {
-    let mut eng = engine_lock(&state);
-    let report = eng.fd_merge_to_general()?;
-    // ONE snapshot, taken after the merge and read for both answers. Two would be two
-    // full logbook sweeps under the engine mutex — the shape that stalled the
-    // waterfall — and the policy cannot change across the merge anyway.
-    let snap = eng.snapshot();
-    let queued = snap
-        .field_day
-        .as_ref()
-        .map(|f| f.upload.enabled && !f.upload.destinations.is_empty())
-        .unwrap_or(false);
-    Ok((
-        FdMergeReportDto {
-            added: report.added(),
-            already: report.already,
-            refused: report.refused,
-            queued,
-        },
-        snap,
-    ))
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let report = eng.fd_merge_to_general()?;
+            // ONE snapshot, taken after the merge and read for both answers. Two would be two
+            // full logbook sweeps under the engine mutex — the shape that stalled the
+            // waterfall — and the policy cannot change across the merge anyway.
+            let snap = eng.snapshot();
+            let queued = snap
+                .field_day
+                .as_ref()
+                .map(|f| f.upload.enabled && !f.upload.destinations.is_empty())
+                .unwrap_or(false);
+            Ok((
+                FdMergeReportDto {
+                    added: report.added(),
+                    already: report.already,
+                    refused: report.refused,
+                    queued,
+                },
+                snap,
+            ))
+        })
+    })
+    .await
 }
 
 /// Set this session's upload destination (§18.1) — per session, default OFF.
@@ -23090,18 +24179,24 @@ struct PotaStampResult {
     unmatched: usize,
 }
 
-#[tauri::command(async)]
-fn import_pota_log(
+#[tauri::command]
+async fn import_pota_log(
     state: State<'_, SharedEngine>,
     text: String,
 ) -> Result<PotaStampResult, String> {
-    let mut eng = engine_lock(&state);
-    let (stamped, already, unmatched) = eng.import_pota_log(&text);
-    Ok(PotaStampResult {
-        stamped,
-        already,
-        unmatched,
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let (stamped, already, unmatched) = eng.import_pota_log(&text);
+            Ok(PotaStampResult {
+                stamped,
+                already,
+                unmatched,
+            })
+        })
     })
+    .await
 }
 
 /// The app version (from tauri.conf.json, e.g. "0.15.8") for display in the UI. NOTE: this is
@@ -23315,14 +24410,19 @@ fn capture_all_window_geometry(app_handle: &tauri::AppHandle) {
     }
 }
 
-/// Write out everything the engine is holding in memory: the conversations, the Field Day log,
-/// and any propagation opening still in progress (a 6m Es evening isn't lost because the app
-/// closed mid-opening).
+/// Write out everything the engine is holding in memory: the logbook's changes still on their
+/// way to disk ([`flush_logbook`], first — it is the one thing here that cannot be rebuilt), the
+/// conversations, the Field Day log, and any propagation opening still in progress (a 6m Es
+/// evening isn't lost because the app closed mid-opening).
 ///
 /// Split out of [`quit_cleanup`] so the Windows self-update path can reach it — see
 /// [`prepare_update_install`]. Every call is a plain overwrite of the same files, so running it
 /// twice costs a second write and changes nothing.
 fn persist_journals(app_handle: &tauri::AppHandle) {
+    flush_logbook(
+        app_handle.state::<SharedEngine>().inner(),
+        LOG_FLUSH_ON_EXIT,
+    );
     persist_conversations(app_handle.state::<SharedEngine>().inner());
     persist_field_day_log(app_handle.state::<SharedEngine>().inner());
     if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
@@ -24071,6 +25171,17 @@ pub fn run() {
     // Point the logbook at its ADIF file and load prior contacts (so worked-
     // before highlighting and the log view reflect previous sessions), and
     // restore the persisted signal source.
+    //
+    // The logbook database first, outside the lock (see `open_logbook_store`); the engine
+    // adopts it below, once the resolvers are set.
+    let logbook_store = open_logbook_store(
+        &logbook_path(),
+        data_folder_location::FolderLocation::of(
+            &shared_data_dir(),
+            data_folder_location::mount_table().as_deref(),
+        )
+        .network,
+    );
     {
         let mut eng = engine_lock(&engine);
         // Wire the DXCC entity resolver (cty.dat lives in the propagation crate)
@@ -24190,7 +25301,7 @@ pub fn run() {
                 .and_then(|m| m.get(&call.to_uppercase()).copied())
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
-        eng.set_log_path(logbook_path());
+        adopt_logbook(&mut eng, &logbook_path(), logbook_store);
         // Club-sync position identity: generated once (8 hex), persisted, and
         // never edited — QSO ids are (posid, seq), so a changed id would
         // re-push every contact as new.
@@ -24307,7 +25418,7 @@ pub fn run() {
                 continue;
             }
             // HTTP off the engine lock (the lock is taken inside, around the merge).
-            match sync_qrz_since(&sync_engine, Some(last)) {
+            match sync_qrz_since(&sync_engine, Some(last), false) {
                 Ok(r) => {
                     {
                         // The NARROW mutation — never `apply_settings` for one field: its
@@ -24384,7 +25495,7 @@ pub fn run() {
             // long as the outage lasted. Only a hard `Err` (no TQSL installed, unwritable
             // temp file) leaves it alone, and that case cannot loop because it never got
             // as far as a process.
-            match lotw_upload_batch(&auto_engine, None) {
+            match lotw_upload_batch(&auto_engine, None, false) {
                 Ok(r) => {
                     {
                         // The NARROW mutation — never `apply_settings` for one field
@@ -27336,8 +28447,11 @@ mod tests {
         // ⚠️ COLUMN-ZERO MATCH, not `contains`: `include_str!` pulls in THIS TEST too, so a
         // `contains` would be satisfied by the literal inside the assertion itself.
         for name in ["set_sat_tag", "lotw_sat_names"] {
+            // `async fn` counts: a log command waits for its change to reach the disk, and it
+            // does that on the blocking pool from an async command (see `durable_command`).
             assert!(
-                src.lines().any(|l| l.starts_with(&format!("fn {name}("))),
+                src.lines().any(|l| l.starts_with(&format!("fn {name}("))
+                    || l.starts_with(&format!("async fn {name}("))),
                 "{name} is invoked by the UI but defined nowhere"
             );
         }
@@ -27359,7 +28473,7 @@ mod tests {
         // into an empty name the core then refuses — a silent no-op on the one act this
         // feature exists for.
         let body = src
-            .split_once("\nfn set_sat_tag(")
+            .split_once("\nasync fn set_sat_tag(")
             .expect("the command")
             .1
             .split_once("\n}\n")

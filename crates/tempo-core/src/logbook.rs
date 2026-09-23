@@ -772,6 +772,16 @@ pub struct LogSnapshot {
     pub records: Vec<Arc<QsoRecord>>,
 }
 
+/// The logbook's files in its data folder — see [`Logbook::data_files`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogFiles {
+    /// Plain files, safe to copy byte for byte: the log, its anchor, the pre-conversion copy
+    /// and the backup ring. Absolute paths, and only ones that exist.
+    pub files: Vec<PathBuf>,
+    /// The SQLite store, if there is one. Copied only through SQLite, never byte for byte.
+    pub database: Option<PathBuf>,
+}
+
 /// An in-memory logbook backed by an ADIF file.
 #[derive(Debug, Clone, Default)]
 pub struct Logbook {
@@ -780,6 +790,7 @@ pub struct Logbook {
     minter: Minter,
 }
 
+pub mod dedup;
 mod edit;
 mod id;
 pub mod migrate;
@@ -1575,6 +1586,36 @@ impl Logbook {
         }
     }
 
+    /// The log as the STORE holds it — `records` as [`sqlite::LogDb::load_all`] hands them back,
+    /// in the order they were stored, each carrying the id it was stored under. Nothing is
+    /// settled or re-derived: an id in the store is the row's identity, full stop.
+    ///
+    /// The minter draws a nonce no minted row here already carries, exactly as [`Self::load`]
+    /// steers clear of the ones in a file, so a row minted this session can never take the id
+    /// of one minted in an earlier one.
+    pub fn from_store(records: Vec<QsoRecord>) -> Self {
+        let nonces: std::collections::HashSet<u64> = records
+            .iter()
+            .filter_map(|r| match r.id {
+                Some(RecordId::Minted { nonce, .. }) => Some(nonce),
+                _ => None,
+            })
+            .collect();
+        Self {
+            records: records.into(),
+            minter: Minter::new(0, &nonces),
+        }
+    }
+
+    /// Replace every row with `rows` — the log re-read from the store after ANOTHER process
+    /// changed it — keeping this log's minter. The rows are a new state of the log: every
+    /// watermark moves, so every cache built on the old rows rebuilds. Keeping the minter is
+    /// the point: its sequence has already handed out ids this session, and a fresh one could
+    /// hand them out again.
+    pub fn replace_rows(&mut self, rows: Vec<Arc<QsoRecord>>) {
+        *self.records.write_as(OpClass::Structural) = rows;
+    }
+
     /// Preserve the raw log bytes verbatim, exactly once, before any save can rewrite the file.
     /// Never overwrites an existing `.bak` (the earliest copy is the most complete — saves only
     /// ever shrink the file), and never fails the load: a backup that can't be written is logged
@@ -1678,6 +1719,42 @@ impl Logbook {
             }
         }
         write_scrub_manifest(&marker, &next);
+    }
+
+    /// Every file in the data folder that belongs to the logbook at `path`, and that exists — the
+    /// ONE list of them, so a caller that carries the log somewhere else (the data-folder move)
+    /// carries exactly what this module writes and cannot fall behind it the way a second,
+    /// hand-kept list did (it knew `log.adi` and nothing else: the anchor, the pre-conversion
+    /// copy, the ring and the database all stayed behind).
+    ///
+    /// Two kinds, because they must be copied differently:
+    /// - [`LogFiles::files`] — plain files, safe to copy byte for byte: the log, the anchor,
+    ///   the pre-conversion copy and the ring snapshots.
+    /// - [`LogFiles::database`] — the SQLite store. ⛔ NEVER byte-copied: a committed contact
+    ///   can live in its `-wal` until a checkpoint, and a file-by-file copy of a database
+    ///   another connection is writing is not a consistent picture of it. It is copied through
+    ///   SQLite ([`sqlite::copy_database`]), which folds the WAL in, so its `-wal` and `-shm`
+    ///   are deliberately in neither list.
+    pub fn data_files(path: &Path) -> LogFiles {
+        let mut files = Vec::new();
+        if path.is_file() {
+            files.push(path.to_path_buf());
+        }
+        files.extend(Self::backup_copy_paths(path));
+        let db = migrate::database_path(path);
+        LogFiles {
+            files,
+            database: db.is_file().then_some(db),
+        }
+    }
+
+    /// Sweep the safety copies beside the log at `path` of any service stamp, reading a copy
+    /// only when it has changed since the last sweep — what [`Self::load`] does on every launch.
+    /// Exposed for the store's open, which no longer loads `log.adi` at all: a poisoned copy
+    /// that ARRIVES (a restore, a profile sync) must still be swept, and the ordinary launch
+    /// still pays only a `stat` per copy.
+    pub fn sweep_safety_copies(path: &Path) {
+        Self::sweep_backups_if_changed(path);
     }
 
     /// The safety copies beside `path` that currently EXIST — the `.bak` anchor and every dated
@@ -1935,7 +2012,9 @@ impl Logbook {
         }
         #[cfg(not(unix))]
         let _ = (receipt, new, &mut parent);
-        Ok(LogAppendReceipt { file, parent })
+        Ok(LogAppendReceipt {
+            inner: Receipt::File { file, parent },
+        })
     }
 
     /// Rewrite the entire ADIF file from the in-memory records (write-tmp +
@@ -4017,20 +4096,66 @@ fn sync_parent_dir(path: &Path) {
     let _ = path;
 }
 
-/// A specific append's open file handles, never a path to reopen later. This
-/// receipt can cross out of the engine lock before its potentially slow sync.
+/// Proof-to-be that one append reached the disk: taken under the engine lock, redeemed with
+/// [`LogAppendReceipt::sync`] after it is released, because the wait can be slow.
+///
+/// Two kinds, because the log has two owners. Against a bare `log.adi` it is the append's open
+/// file handles (never a path to reopen later). Against the logbook database it is the
+/// writer's [`writer::Ticket`] for the change, and `sync` waits for that transaction to commit
+/// — the same promise, "this contact survives pulling the plug", kept by the store that holds it.
 #[derive(Debug)]
 pub struct LogAppendReceipt {
-    file: std::fs::File,
-    parent: Option<std::fs::File>,
+    inner: Receipt,
 }
+
+#[derive(Debug)]
+enum Receipt {
+    File {
+        file: std::fs::File,
+        parent: Option<std::fs::File>,
+    },
+    Durable {
+        writer: Arc<writer::LogWriter>,
+        ticket: writer::Ticket,
+        deadline: std::time::Duration,
+    },
+}
+
 impl LogAppendReceipt {
-    pub fn sync(self) -> std::io::Result<()> {
-        self.file.sync_all()?;
-        if let Some(parent) = self.parent {
-            parent.sync_all()?;
+    /// A receipt redeemed by the store's writer: `sync` returns once `ticket`'s change is
+    /// committed, or fails at `deadline` naming what the writer is doing.
+    pub fn durable(
+        writer: Arc<writer::LogWriter>,
+        ticket: writer::Ticket,
+        deadline: std::time::Duration,
+    ) -> LogAppendReceipt {
+        LogAppendReceipt {
+            inner: Receipt::Durable {
+                writer,
+                ticket,
+                deadline,
+            },
         }
-        Ok(())
+    }
+
+    /// Block until the append is on disk. ⚠️ Never call it holding a lock.
+    pub fn sync(self) -> std::io::Result<()> {
+        match self.inner {
+            Receipt::File { file, parent } => {
+                file.sync_all()?;
+                if let Some(parent) = parent {
+                    parent.sync_all()?;
+                }
+                Ok(())
+            }
+            Receipt::Durable {
+                writer,
+                ticket,
+                deadline,
+            } => writer
+                .wait_durable(&ticket, deadline)
+                .map_err(std::io::Error::other),
+        }
     }
 }
 

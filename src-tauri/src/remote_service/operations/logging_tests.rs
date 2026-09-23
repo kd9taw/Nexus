@@ -236,6 +236,37 @@ fn confirmation_sync_releases_engine_and_never_clears_a_newer_hold() {
     assert_eq!(f.engine.lock().unwrap().log_records().len(), 1);
 }
 
+/// The confirm-before-log popup, answered from a browser, against the STORE-owned log: the
+/// contact is in the store before the hold is cleared (the proof the clear waits on is the
+/// store's commit), and the answer is the one every page reads. The engine is free throughout
+/// the wait — the same `before_sync` check as the 1.13 path's test above.
+#[test]
+fn a_remote_confirm_is_in_the_store_before_the_hold_is_cleared() {
+    let mut f = Fixture::with_store();
+    let key = hold(&f);
+    let engine = f.engine.clone();
+    f.authority.before_sync = Some(Box::new(move || {
+        assert!(
+            engine.try_lock().is_ok(),
+            "the durable wait must release the engine"
+        );
+    }));
+    let request = command(&f, confirm(&key));
+    let result = run(&f, &request).unwrap();
+    assert_eq!(result["outcome"], "applied", "{result}");
+    assert_eq!(result["evidence"], "fileSynced");
+    assert!(
+        f.stored()
+            .iter()
+            .any(|r| r.call == "W1AW" && r.grid.as_deref() == Some("FN32")),
+        "the confirmed contact is in the store"
+    );
+    assert!(
+        f.engine.lock().unwrap().pending_qso_log_key().is_none(),
+        "and the hold is gone"
+    );
+}
+
 #[test]
 fn discard_is_durable_and_duplicate_receipts_do_not_discard_a_later_contact() {
     let f = Fixture::new();
@@ -424,6 +455,78 @@ fn an_edit_is_found_by_its_key_synced_and_replayed_without_a_second_write() {
     );
     assert_eq!(adif(&f), bytes);
     assert_ne!(target(&row(&f, "W1AW"))["key"], target(&before)["key"]);
+}
+
+/// ★ The Remote against the STORE-owned log — the ordinary launch since the logbook moved into
+/// its database. A manual entry, an edit, a paper-card mark and a delete each answer exactly as
+/// they always have — `applied` with evidence `fileSynced`, the token every supported page
+/// reads — and each is IN THE STORE, read through a connection of the test's own, by the time
+/// the answer is given. `log.adi` is only the mirror now, so a proof read off it would be a
+/// proof about a file that is allowed to lag.
+#[test]
+fn remote_log_actions_are_durable_in_the_store_and_answer_as_every_page_expects() {
+    let f = Fixture::with_store();
+    seed(&f);
+    let state = acquire(&f);
+    let applied = |result: &Value| {
+        assert_eq!(result["outcome"], "applied", "{result}");
+        assert_eq!(
+            result["evidence"], "fileSynced",
+            "the wire token is unchanged: {result}"
+        );
+    };
+
+    // A manual entry.
+    let entry = f.command(&state);
+    let result = run(&f, &entry).unwrap();
+    applied(&result);
+    assert!(
+        f.stored()
+            .iter()
+            .any(|r| r.comment.as_deref() == Some("Remote test")),
+        "the entry is in the store when the answer is given"
+    );
+
+    // An edit.
+    let request = change(&f, edit(&row(&f, "W1AW")));
+    applied(&run(&f, &request).unwrap());
+    let stored = f.stored();
+    let edited = stored
+        .iter()
+        .find(|r| r.name.as_deref() == Some("Hiram"))
+        .expect("the edit is in the store");
+    assert_eq!(
+        (edited.band.as_str(), edited.grid.as_deref()),
+        ("40m", Some("FN42"))
+    );
+
+    // A paper card.
+    let card = change(
+        &f,
+        json!({"kind":"qslCard","target":target(&row(&f, "K1ABC")),"received":true}),
+    );
+    applied(&run(&f, &card).unwrap());
+    assert!(
+        f.stored()
+            .iter()
+            .any(|r| r.call == "K1ABC" && r.qsl_rcvd.card),
+        "the card is in the store"
+    );
+
+    // A delete.
+    let delete = change(
+        &f,
+        json!({"kind":"delete","target":target(&row(&f, "K1ABC"))}),
+    );
+    applied(&run(&f, &delete).unwrap());
+    assert!(
+        f.stored().iter().all(|r| r.call != "K1ABC"),
+        "the delete is in the store"
+    );
+    // A dropped reply is answered from the receipt: no second change.
+    let before = f.stored().len();
+    assert_eq!(run(&f, &delete).unwrap()["outcome"], "applied");
+    assert_eq!(f.stored().len(), before);
 }
 
 #[test]

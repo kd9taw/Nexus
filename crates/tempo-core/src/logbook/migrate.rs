@@ -150,6 +150,26 @@ impl From<sqlite::Error> for Error {
 /// This module's result.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Where the logbook database for `log_path` lives: beside it, named for the log's own stem —
+/// `log.adi` → `log.sqlite3`. The ONE place the name is decided; every caller that needs it
+/// (the conversion, the store, the data-folder copy) asks here, so the name cannot drift between
+/// the file that is written and the file that is carried.
+///
+/// SQLite also keeps `log.sqlite3-wal` and `log.sqlite3-shm` beside it while it is open. They
+/// are part of the database, not separate files: a committed contact can live in the `-wal`
+/// until a checkpoint, which is why the database is only ever copied through SQLite
+/// ([`super::sqlite::copy_database`]) and never file by file.
+pub fn database_path(log_path: &Path) -> PathBuf {
+    let stem = log_path.file_stem().unwrap_or_default().to_os_string();
+    let mut name = if stem.is_empty() {
+        std::ffi::OsString::from("log")
+    } else {
+        stem
+    };
+    name.push(".sqlite3");
+    log_path.with_file_name(name)
+}
+
 /// Where the permanent pre-conversion copy of `log_path` lives: beside it, never rotated.
 pub fn pre_sqlite_path(log_path: &Path) -> PathBuf {
     let mut name = log_path.file_name().unwrap_or_default().to_os_string();
@@ -190,6 +210,80 @@ pub fn take_pre_sqlite_copy(log_path: &Path, bytes: &[u8]) -> Result<PathBuf> {
 /// ⚠️ This does NOT make the database canonical and does not change what owns the log. It
 /// converts, and stops.
 pub fn migrate_log<R>(log_path: &Path, db_path: &Path, resolve: R) -> Result<Outcome>
+where
+    R: Fn(&QsoRecord) -> Resolved<'static>,
+{
+    // The ordinary launch: a store that is already converted. Answered from the store alone,
+    // BEFORE the log is read — a lifetime log is tens of megabytes, and reading it on every
+    // launch to learn that there is nothing to do is the launch cost the operator ruled out.
+    // Only a store that EXISTS is asked: opening one that does not would create it, and the
+    // copy below has to be taken before the store is created.
+    if db_path.is_file() && is_converted(db_path)? {
+        return Ok(Outcome::AlreadyDone);
+    }
+    // ⛔ ONE conversion at a time per store. Two Nexus windows share one data folder, and the
+    // second can start while the first is still converting: without this it would read the
+    // half-converted store's row count as a resume point and convert alongside it. It waits
+    // here instead, then finds the store converted and does nothing.
+    let lock = ConversionLock::take(db_path);
+    if db_path.is_file() && is_converted(db_path)? {
+        return Ok(Outcome::AlreadyDone);
+    }
+    let out = convert(log_path, db_path, resolve)?;
+    // Converted: nobody will need the lock file again — a later caller answers from the store
+    // on the fast path above and never reaches it. Kept after a FAILURE, because a caller
+    // already waiting on it will try again and a newcomer must wait on the same file.
+    lock.finished();
+    Ok(out)
+}
+
+/// Whether the store at `db_path` is marked converted. The store must exist.
+pub fn is_converted(db_path: &Path) -> Result<bool> {
+    Ok(LogDb::open(db_path)?.meta(DONE)? == Some(1))
+}
+
+/// The advisory lock that keeps two processes from converting one log into one store at once.
+/// Best-effort by construction: a lock that cannot be taken (a filesystem without locks, a
+/// read-only folder) is no lock, and the conversion's own checks — a resume reads the store's
+/// own row count, a chunk is one transaction, and a duplicate id is refused by the primary key —
+/// still keep a concurrent conversion from duplicating or dropping a contact.
+struct ConversionLock {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+}
+
+impl ConversionLock {
+    /// Where the lock lives: beside the store, named for it.
+    fn path_for(db_path: &Path) -> PathBuf {
+        let mut name = db_path.file_name().unwrap_or_default().to_os_string();
+        name.push(".convert-lock");
+        db_path.with_file_name(name)
+    }
+
+    /// Take the lock, WAITING while another process holds it.
+    fn take(db_path: &Path) -> ConversionLock {
+        let path = Self::path_for(db_path);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .ok()
+            .filter(|f| f.lock().is_ok());
+        ConversionLock { path, file }
+    }
+
+    /// The conversion finished: remove the file while still holding it.
+    fn finished(mut self) {
+        if self.file.is_some() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+        self.file = None;
+    }
+}
+
+/// The conversion itself — [`migrate_log`] is the gatekeeping around it.
+fn convert<R>(log_path: &Path, db_path: &Path, resolve: R) -> Result<Outcome>
 where
     R: Fn(&QsoRecord) -> Resolved<'static>,
 {
@@ -335,6 +429,55 @@ mod tests {
 
     fn unresolved(_: &QsoRecord) -> Resolved<'static> {
         Resolved::default()
+    }
+
+    /// The database sits beside the log under the log's own stem, and `Logbook::data_files`
+    /// names it apart from the files that may be byte-copied — with its `-wal`/`-shm` in NEITHER
+    /// list, because they are not files a copy may carry on their own.
+    #[test]
+    fn the_database_is_named_beside_the_log_and_listed_apart_from_the_plain_files() {
+        let d = Dir::new("names");
+        assert_eq!(database_path(&d.log()), d.0.join("log.sqlite3"));
+        assert_eq!(
+            database_path(Path::new("/x/other.adi")),
+            Path::new("/x/other.sqlite3")
+        );
+        for name in [
+            "log.adi",
+            "log.adi.bak",
+            "log.adi.pre-sqlite",
+            "log.sqlite3",
+            "log.sqlite3-wal",
+            "log.sqlite3-shm",
+            "backups/log-20260901-120000.adi",
+            "backups/unrelated.txt",
+        ] {
+            let p = d.0.join(name);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        }
+        let files = Logbook::data_files(&d.log());
+        let mut plain: Vec<_> = files
+            .files
+            .iter()
+            .map(|p| p.strip_prefix(&d.0).unwrap().to_string_lossy().into_owned())
+            .collect();
+        plain.sort();
+        assert_eq!(
+            plain,
+            [
+                "backups/log-20260901-120000.adi",
+                "log.adi",
+                "log.adi.bak",
+                "log.adi.pre-sqlite",
+            ],
+            "the log and its three kinds of safety copy — and nothing of the database's"
+        );
+        assert_eq!(files.database, Some(d.0.join("log.sqlite3")));
+
+        // Only what exists: a folder with no database names none.
+        std::fs::remove_file(d.0.join("log.sqlite3")).unwrap();
+        assert_eq!(Logbook::data_files(&d.log()).database, None);
     }
 
     /// The whole point, and the assertion is on the RECORDS in the store — not on an export of
@@ -763,6 +906,148 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         None
+    }
+
+    /// ⛔ **A second instance starting while the first is still converting WAITS, and then
+    /// does nothing.** Two Nexus windows share one data folder. The first holds the conversion
+    /// lock while it works; the second must neither read the half-made store's row count as a
+    /// place to resume from nor convert alongside it — it waits, finds the store converted, and
+    /// answers `AlreadyDone`. Every contact is in the store exactly once.
+    ///
+    /// Driven for real: this thread takes the lock as the first instance would, a second thread
+    /// runs `migrate_log`, and it is shown NOT to have finished — or written a row — while the
+    /// lock is held.
+    #[test]
+    fn a_second_instance_waits_for_the_first_to_finish_converting() {
+        let d = Dir::new("twoinstances");
+        std::fs::write(d.log(), legacy_log(600)).unwrap();
+        let lock = ConversionLock::take(&d.db());
+        assert!(
+            lock.file.is_some(),
+            "premise: this filesystem takes the lock"
+        );
+
+        let (log, db) = (d.log(), d.db());
+        let second = std::thread::spawn(move || migrate_log(&log, &db, unresolved));
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert!(
+            !second.is_finished(),
+            "the second instance is waiting on the lock"
+        );
+        assert!(
+            !d.db().exists() || LogDb::open(&d.db()).unwrap().row_count().unwrap() == 0,
+            "and has written nothing"
+        );
+
+        // The first instance converts, then lets go.
+        let first = convert(&d.log(), &d.db(), unresolved).expect("the first converts");
+        assert!(matches!(first, Outcome::Converted { total: 600, .. }));
+        lock.finished();
+
+        let second = second.join().unwrap().expect("the second completes");
+        assert_eq!(second, Outcome::AlreadyDone, "and finds nothing left to do");
+        let stored = LogDb::open(&d.db()).unwrap().load_all().unwrap();
+        assert_eq!(stored.len(), 600, "every contact, once");
+        assert!(
+            !ConversionLock::path_for(&d.db()).exists(),
+            "the lock file is gone once the conversion is done"
+        );
+    }
+
+    /// ⛔ **A FULL DISK, for real.** The conversion runs in a child process whose file-size
+    /// limit (`ulimit -f`, with `SIGXFSZ` ignored so a write past it fails with `EFBIG` rather
+    /// than killing the process) lets the safety copy through and stops the database part way —
+    /// which SQLite reports exactly as it reports a full disk. Afterwards:
+    /// - the conversion is NOT marked done,
+    /// - `log.adi` is exactly as it was,
+    /// - `log.adi.pre-sqlite` exists and is the operator's log, byte for byte,
+    /// - and the next attempt, with room, converts every contact exactly once.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_full_disk_mid_conversion_leaves_the_log_and_its_copy_and_the_retry_completes() {
+        const TOTAL: usize = 6_000;
+        let d = Dir::new("fulldisk");
+        std::fs::write(d.log(), legacy_log(TOTAL)).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+        // 2048 blocks is 1 MiB (512-byte blocks) or 2 MiB (1 KiB) depending on the shell's
+        // unit — above the log (~0.8 MiB) either way, and far below the store (~6 MiB).
+        assert!(
+            before.len() < 1024 * 1024,
+            "premise: the copy fits under the limit"
+        );
+        let status = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("ulimit -f 2048 && trap '' XFSZ && exec \"$0\" \"$@\"")
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "logbook::migrate::tests::convert_for_the_full_disk_test",
+            ])
+            .env(KILL_DIR, &d.0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("the child runs");
+        assert!(
+            status.success(),
+            "the child ran to the end (its conversion failed inside it)"
+        );
+        let verdict = std::fs::read_to_string(d.0.join("verdict")).expect("the child's verdict");
+        assert!(
+            verdict.starts_with("err:"),
+            "the conversion must have FAILED on the limit, not finished: {verdict}"
+        );
+        assert!(
+            verdict.contains("full") || verdict.contains("large") || verdict.contains("I/O"),
+            "and failed on the disk, not on something else: {verdict}"
+        );
+
+        assert_eq!(
+            std::fs::read(d.log()).unwrap(),
+            before,
+            "log.adi is untouched"
+        );
+        assert_eq!(
+            std::fs::read(pre_sqlite_path(&d.log())).unwrap(),
+            before,
+            "the permanent copy exists and is the operator's log"
+        );
+        assert_ne!(
+            LogDb::open(&d.db()).unwrap().meta(DONE).unwrap(),
+            Some(1),
+            "a conversion the disk stopped is not marked done"
+        );
+
+        // With room again, the next attempt finishes the job — once per contact.
+        let out = migrate_log(&d.log(), &d.db(), unresolved).expect("completes with room");
+        assert!(
+            matches!(out, Outcome::Converted { total: TOTAL, .. }),
+            "{out:?}"
+        );
+        let db = LogDb::open(&d.db()).unwrap();
+        assert_eq!(db.row_count().unwrap(), TOTAL as u64);
+        let ids: std::collections::HashSet<_> =
+            db.load_all().unwrap().iter().filter_map(|r| r.id).collect();
+        assert_eq!(ids.len(), TOTAL, "no contact twice");
+    }
+
+    /// The child half of the full-disk test: convert, and write what happened where the parent
+    /// can read it (stdout is the test harness's).
+    #[test]
+    #[ignore = "invoked as a child process by the full-disk test"]
+    fn convert_for_the_full_disk_test() {
+        let Ok(dir) = std::env::var(KILL_DIR) else {
+            return;
+        };
+        let d = PathBuf::from(dir);
+        let verdict = match migrate_log(&d.join("log.adi"), &d.join("log.sqlite3"), unresolved) {
+            Ok(o) => format!("ok: {o:?}"),
+            Err(e) => format!("err: {e}"),
+        };
+        // The limit applies to this write too; the verdict is tiny.
+        let _ = std::fs::write(d.join("verdict"), verdict);
     }
 
     /// A log this build cannot read a single contact out of must NOT be mistaken for an empty

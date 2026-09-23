@@ -11080,13 +11080,15 @@ impl Engine {
         // it can never block a legitimate later re-work (that's minutes/hours later, or
         // a different band), coarse enough to catch a burst of identical seeds. Covers
         // every path into the log (auto, cockpit button, manual Logbook, companion).
-        const DEDUP_WINDOW_SECS: u64 = 300;
-        let is_dup = self.station.logbook.records().iter().any(|r| {
-            tempo_core::message::same_call(&r.call, &rec.call)
-                && r.band.eq_ignore_ascii_case(&rec.band)
-                && r.mode.eq_ignore_ascii_case(&rec.mode)
-                && rec.when_unix.abs_diff(r.when_unix) <= DEDUP_WINDOW_SECS
-        });
+        //
+        // ⛔ FT HARD GATE — operator yes 2026-09-19, for exactly this and nothing more: the
+        // guard is the SAME predicate (`tempo_core::logbook::dedup::is_recent_duplicate`, moved
+        // there verbatim from here: base call, band and mode case-insensitively, 300 s), asked
+        // of only the rows that share the contact's base call instead of every row in the log.
+        // Same accept/reject — held to the old scan, kept as `dedup::scan_for_duplicate`, by a
+        // parity property test — at the same point, before any enrichment. The index is built
+        // from the in-memory log and never touches the store.
+        let is_dup = self.station.dedup.is_duplicate(&self.station.logbook, &rec);
         if is_dup {
             return LogWriteOutcome::Duplicate;
         }
@@ -22027,6 +22029,85 @@ contact yourself."
         self.station.logbook.set_posid(log_posid(&self.settings));
     }
 
+    /// Make the store the owner of the log — the ordinary launch. See
+    /// [`StationCore::attach_store`] and [`crate::logstore`].
+    pub fn attach_log_store(&mut self, opened: crate::logstore::Opened) {
+        self.station.attach_store(opened);
+        // A fresh log, whose ids start without the position id — as after `set_log_path`.
+        self.sync_log_posid();
+    }
+
+    /// Record why the store could not be opened this session: the log runs on `log.adi` as
+    /// 1.13 ran it, and this is what says so.
+    pub fn note_log_store_problem(&mut self, why: String) {
+        self.station.store_problem = Some(why);
+    }
+
+    /// Why the store is not in use this session, if it was refused.
+    pub fn log_store_problem(&self) -> Option<&str> {
+        self.station.store_problem.as_deref()
+    }
+
+    /// Whether the store owns the log this session.
+    pub fn log_store_open(&self) -> bool {
+        self.station.store.is_some()
+    }
+
+    /// Whether ANOTHER process has committed to the store since this engine's log last matched
+    /// it — a change the next freshness poll, or the next change to existing rows, folds in.
+    pub fn log_store_foreign_pending(&self) -> bool {
+        self.station
+            .store
+            .as_ref()
+            .is_some_and(|s| s.foreign_changed())
+    }
+
+    /// The store's writer, for a caller that waits or copies with every lock released.
+    pub fn log_store_writer(
+        &self,
+    ) -> Option<std::sync::Arc<tempo_core::logbook::writer::LogWriter>> {
+        self.station.store.as_ref().map(|s| s.writer())
+    }
+
+    /// The store's mirror of `log.adi`, as it stands.
+    pub fn log_mirror_status(&self) -> Option<tempo_core::logbook::mirror::Status> {
+        self.station.store.as_ref().map(|s| s.mirror_status())
+    }
+
+    /// Write everything submitted to the store, and the mirror, waiting up to `deadline` —
+    /// the exit path. `Ok` at once when there is no store (the 1.13 path wrote inline).
+    ///
+    /// ⚠️ It WAITS, so a caller holding the engine lock holds it for the wait. The exit path
+    /// may: the radio loop has stopped by then. Anything else takes [`Self::log_store_writer`]
+    /// and waits with the lock released.
+    pub fn flush_log_store(&self, deadline: std::time::Duration) -> Result<(), String> {
+        match self.station.store.as_ref() {
+            Some(store) => store.flush(deadline),
+            None => Ok(()),
+        }
+    }
+
+    /// Run `f`, and hand back what it did together with the durability of every change it made
+    /// to the log — what an operator command waits on AFTER it has released the engine lock
+    /// ([`crate::logstore::Durability::wait`]). Empty on the 1.13 path, which wrote inline.
+    pub fn with_log_tickets<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> (T, crate::logstore::Durability) {
+        if let Some(store) = self.station.store.as_mut() {
+            store.begin_collecting();
+        }
+        let out = f(self);
+        let durability = match self.station.store.as_mut() {
+            Some(store) => {
+                let tickets = store.take_collected();
+                crate::logstore::Durability::new(Some(store.writer()), tickets)
+            }
+            None => crate::logstore::Durability::default(),
+        };
+        (out, durability)
+    }
+
     /// The general logbook file, when one is configured. Read-only: Remote re-reads it after a
     /// rewrite to prove the change reached the disk before it reports one.
     pub fn log_path(&self) -> Option<&std::path::Path> {
@@ -22424,6 +22505,23 @@ contact yourself."
     ) {
         self.station
             .stamp_lotw_upload(indices, outcome, when_unix, detail)
+    }
+
+    /// See [`StationCore::lotw_signed`].
+    pub fn lotw_signed(&self, indices: &[usize]) -> Vec<crate::station::LotwSigned> {
+        self.station.lotw_signed(indices)
+    }
+
+    /// See [`StationCore::stamp_lotw_batch`].
+    pub fn stamp_lotw_batch(
+        &mut self,
+        batch: &[crate::station::LotwSigned],
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<tempo_core::logbook::UploadDetail>,
+    ) -> crate::station::LotwStamped {
+        self.station
+            .stamp_lotw_batch(batch, outcome, when_unix, detail)
     }
 
     /// See [`StationCore::push_sstv_gallery`].
@@ -33728,6 +33826,57 @@ mod tests {
             !adif.contains("K2DEF"),
             "the home call must never sign an event contact: {adif}"
         );
+    }
+
+    /// What decides whether a LoTW result lands on a contact once TQSL is done: the contact is
+    /// still in the log, AND it is still what TQSL signed. A change LoTW never saw — another
+    /// connector's upload stamp landing meanwhile, the operator's private note — does not stop
+    /// it. A change to what was signed does: LoTW holds the old version, so the contact must
+    /// stay unsent to be signed again as it now stands.
+    #[test]
+    fn a_lotw_result_lands_on_each_contact_still_as_it_was_signed() {
+        use tempo_core::logbook::UploadOutcome;
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for (i, call) in ["W1AAA", "W2BBB", "W3CCC", "W4DDD", "W5EEE"]
+            .iter()
+            .enumerate()
+        {
+            let mut r = e.qso_record(call.to_string(), None, None);
+            r.when_unix = 1_788_000_000 + i as u64 * 60;
+            e.log_qso(r);
+        }
+        let signed = e.lotw_signed(&[0, 1, 2, 3, 4]);
+
+        // While TQSL runs:
+        let row = |e: &Engine, i: usize| QsoRecord::clone(&e.log_records()[i]);
+        let w1 = row(&e, 0);
+        assert!(e.stamp_qrz_upload(&w1, UploadOutcome::Accepted, 1_788_000_500, None));
+        let mut w2 = row(&e, 1);
+        w2.notes = Some("private: worked him at the club".into());
+        assert!(e.update_qso(1, w2));
+        assert!(e.set_sat_tag(2, Some("AO-91")));
+        let mut w4 = row(&e, 3);
+        w4.band = "40m".into();
+        assert!(e.update_qso(3, w4));
+        assert!(e.delete_qso(4));
+
+        let done = e.stamp_lotw_batch(&signed, UploadOutcome::Pending, 1_788_000_900, None);
+        let stamped: Vec<(String, bool)> = e
+            .log_records()
+            .iter()
+            .map(|r| (r.call.clone(), r.upload.lotw.is_some()))
+            .collect();
+        assert_eq!(
+            stamped,
+            vec![
+                ("W1AAA".to_string(), true),
+                ("W2BBB".to_string(), true),
+                ("W3CCC".to_string(), false),
+                ("W4DDD".to_string(), false),
+            ],
+            "stamped: the QRZ stamp and the private note; not: the satellite tag and the band"
+        );
+        assert_eq!((done.stamped, done.changed, done.gone), (2, 2, 1));
     }
 
     /// The other half of that guard, and the one that keeps old logs working: a record written
@@ -50290,6 +50439,235 @@ mod private_note_boundary_tests {
         assert_carried(
             "the DXKeeper ExternalLog message",
             &tempo_net::dxkeeper::build_externallog(&own, false),
+        );
+    }
+}
+
+/// ⛔ The FT hard gate on `log_qso`'s duplicate guard (operator yes 2026-09-19): the guard became
+/// an index lookup, with the behaviour IDENTICAL. These pin the ENGINE's behaviour around it —
+/// what a duplicate does and does not touch, and that every accept/reject matches the old scan —
+/// while `tempo_core::logbook::dedup`'s property test holds the index to the scan over every
+/// kind of change to the log.
+#[cfg(test)]
+mod dedup_gate_tests {
+    use super::*;
+
+    /// THE OLD GUARD, VERBATIM — the expression `log_qso_inner` ran before the index, kept here
+    /// as the oracle so the comparison is against the code that shipped, not a restatement.
+    fn old_scan(e: &Engine, rec: &QsoRecord) -> bool {
+        const DEDUP_WINDOW_SECS: u64 = 300;
+        e.station.logbook.records().iter().any(|r| {
+            tempo_core::message::same_call(&r.call, &rec.call)
+                && r.band.eq_ignore_ascii_case(&rec.band)
+                && r.mode.eq_ignore_ascii_case(&rec.mode)
+                && rec.when_unix.abs_diff(r.when_unix) <= DEDUP_WINDOW_SECS
+        })
+    }
+
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn pick<T: Copy>(&mut self, xs: &[T]) -> T {
+            xs[self.below(xs.len())]
+        }
+    }
+
+    const T0: u64 = 1_788_000_000;
+
+    fn contact(g: &mut Gen) -> QsoRecord {
+        let call = g.pick(&[
+            "W1AW",
+            "w1aw",
+            "W1AW/P",
+            "KH6/W1AW",
+            "<W1AW>",
+            "K1ABC",
+            "k1abc/mm",
+            "VP2E/AA9A",
+            "AA9A",
+            "DL1ZZZ",
+        ]);
+        let band = g.pick(&["20m", "20M", "40m", "2m"]);
+        let mode = g.pick(&["FT8", "ft8", "FT4", "CW"]);
+        let dt = g.pick(&[0i64, 120, 299, 300, 301, -300, -301, 900, -2000]);
+        let mut r = QsoRecord {
+            id: None,
+            call: call.into(),
+            grid: None,
+            country: None,
+            state: None,
+            band: band.into(),
+            freq_mhz: 14.074,
+            freq_rx_mhz: None,
+            mode: mode.into(),
+            rst_sent: Some("-10".into()),
+            rst_rcvd: Some("-12".into()),
+            name: None,
+            qth: None,
+            comment: None,
+            notes: None,
+            tx_power: None,
+            when_unix: (T0 as i64 + dt) as u64,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: vec![],
+            credit_submitted: vec![],
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            my_grid: None,
+            my_rig: None,
+            station_callsign: None,
+            extra: Vec::new(),
+            contest: None,
+        };
+        r.when_unix += g.below(3) as u64; // a little jitter off the edges too
+        r
+    }
+
+    /// ★ Every accept/reject `log_qso` makes is the one the OLD SCAN would have made, across a
+    /// long interleaving of logged contacts with every other change the engine makes to the log
+    /// (edits that move a row's keys, deletes, imports, stamps, card marks, the purge) — and a
+    /// duplicate touches exactly what it always touched: nothing in the log, no upload queued,
+    /// the pending hunt kept for the real contact; the logged-tick moves and the stalled-contact
+    /// stash clears, as they did before the check, because they come first in `log_qso`.
+    #[test]
+    fn log_qso_rejects_exactly_what_the_old_scan_rejected() {
+        for seed in [7u64, 11, 0xC0FF_EE00, 0x5EED] {
+            let mut g = Gen(seed);
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            let mut dups = 0;
+            let mut accepted = 0;
+            for step in 0..400 {
+                let n = e.station.logbook.len();
+                match g.below(10) {
+                    0 if n > 0 => {
+                        let i = g.below(n);
+                        let mut r = QsoRecord::clone(&e.station.logbook.records()[i]);
+                        r.call = g.pick(&["W1AW", "K1ABC", "N0NEW"]).into();
+                        r.band = g.pick(&["20m", "40m"]).into();
+                        e.update_qso(i, r);
+                    }
+                    1 if n > 0 => {
+                        e.delete_qso(g.below(n));
+                    }
+                    2 => {
+                        let c = contact(&mut g);
+                        let mut t = tempo_core::logbook::adif_header();
+                        t.push_str(&tempo_core::logbook::adif_record_own_log(&c));
+                        e.import_adif(&t);
+                    }
+                    3 if n > 0 => {
+                        e.mark_qsl_card(g.below(n), true);
+                    }
+                    4 if n > 0 => {
+                        let r = QsoRecord::clone(&e.station.logbook.records()[g.below(n)]);
+                        e.stamp_qrz_upload(
+                            &r,
+                            tempo_core::logbook::UploadOutcome::Accepted,
+                            1,
+                            None,
+                        );
+                    }
+                    5 if g.below(40) == 0 => {
+                        e.clear_logbook();
+                    }
+                    _ => {
+                        let rec = contact(&mut g);
+                        let expected = old_scan(&e, &rec);
+                        let hunt = e.station.pending_hunt.clone();
+                        let (len, uploads, tick) = (
+                            e.station.logbook.len(),
+                            e.station.pending_uploads.len(),
+                            e.logged_tick,
+                        );
+                        e.stalled_qso = Some(StalledQso {
+                            dxcall: "N0STALL".into(),
+                            dxgrid: None,
+                            rx_report: Some(-5),
+                            tx_report: None,
+                            start_unix: None,
+                        });
+                        let got =
+                            matches!(e.log_qso_for_sync(rec.clone()), LogWriteOutcome::Duplicate);
+                        assert_eq!(
+                            got, expected,
+                            "seed {seed:#x} step {step}: {} {} {} @{} — the index disagrees with \
+                             the old scan",
+                            rec.call, rec.band, rec.mode, rec.when_unix
+                        );
+                        assert_eq!(e.logged_tick, tick.wrapping_add(1), "the tick moves first");
+                        assert!(e.stalled_qso.is_none(), "the stash clears first, as before");
+                        if got {
+                            dups += 1;
+                            assert_eq!(e.station.logbook.len(), len, "a duplicate adds nothing");
+                            assert_eq!(e.station.pending_uploads.len(), uploads, "nor queues");
+                            assert_eq!(e.station.pending_hunt, hunt, "nor spends the hunt");
+                        } else {
+                            accepted += 1;
+                            assert_eq!(e.station.logbook.len(), len + 1);
+                        }
+                    }
+                }
+            }
+            assert!(
+                dups > 20 && accepted > 20,
+                "seed {seed:#x}: both answers exercised ({dups} dups, {accepted} accepted)"
+            );
+        }
+    }
+
+    /// The order the gate protects: the duplicate check comes BEFORE the hunt is spent, so a
+    /// duplicate of the hunted station leaves the hunt for the real contact.
+    #[test]
+    fn a_duplicate_does_not_spend_the_pending_hunt() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut g = Gen(3);
+        let mut first = contact(&mut g);
+        first.call = "K1ABC".into();
+        e.log_qso(first.clone());
+        e.set_hunt_target("K1ABC", "POTA", "US-0001").expect("hunt");
+        let hunt = e.station.pending_hunt.clone();
+        assert!(matches!(
+            e.log_qso_for_sync(first.clone()),
+            LogWriteOutcome::Duplicate
+        ));
+        assert_eq!(e.station.pending_hunt, hunt, "the hunt is still pending");
+        let mut real = first;
+        real.when_unix += 3_600;
+        assert!(!matches!(
+            e.log_qso_for_sync(real),
+            LogWriteOutcome::Duplicate
+        ));
+        assert!(
+            e.station.pending_hunt.is_none(),
+            "and the real contact spends it"
+        );
+        assert_eq!(
+            e.station
+                .logbook
+                .records()
+                .last()
+                .unwrap()
+                .ota
+                .their_ref
+                .as_deref(),
+            Some("US-0001")
         );
     }
 }

@@ -121,6 +121,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you stop it. (#304)
 ### Changed
 
+- **Your logbook now lives in a database, and `log.adi` is kept as an up-to-date copy of it.**
+  Every change to the log used to rewrite the whole of `log.adi` — every stamp, every
+  confirmation, every edit — and on a big log that rewrite was long enough to make the radio and
+  the screen hesitate each time a contact was saved or an upload was marked. The log is now kept
+  in `log.sqlite3` beside `log.adi`, where a change writes only the contacts it touched. The first
+  time this version starts it converts your log — a lifetime log can take several seconds, once,
+  before the window appears — and keeps the file exactly as it was, as `log.adi.pre-sqlite`.
+  `log.adi` stays where it always was and keeps up with every change, a moment later, so other
+  loggers, backup scripts and sync tools that read it still see every contact. Starting Nexus no
+  longer rewrites the log at all, and quitting waits for the last change to reach the disk. A
+  data folder on a network drive keeps the log in `log.adi` alone, as before.
+  Two radio windows on one data folder now see each other's corrections and deletions as they
+  are: a contact corrected in one window is corrected in the other, not logged a second time
+  beside the old one, and a contact deleted in one stays deleted instead of coming back when the
+  other window next saves.
+  Two things behave differently, and both are the safe side of a change. If something other
+  than Nexus writes to `log.adi` — an older Nexus on the same folder, a restored backup — Nexus
+  takes that file's contacts in the way the Logbook's Import does: new contacts are added and
+  confirmations come across, but a contact changed or removed only in that file is not changed or
+  removed in your log. And if Nexus stops in the middle of importing a large file, the contacts
+  it had already taken in are kept; importing the file again adds the rest without duplicating
+  any.
 - **Nexus now refuses to put your data and log folder on a network drive, and tells you why.**
   Settings ▸ Config ▸ Data & log folder used to accept a NAS or a mapped network drive, and the
   manual suggested exactly that for a multi-PC shack. That was survivable while the logbook was a
@@ -189,6 +211,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in this activation — stays on the list as before. The needs also refresh the moment Nexus logs
   a contact on its own after RR73 or 73; until now that waited for the next 30-second update.
   (#350)
+
+- **Moving your data folder now takes the logbook's safety copies with it.** "Copy my log and data
+  there" in Settings carried `log.adi` and nothing else that belongs to it: the untouched copy of
+  your log as Nexus first opened it (`log.adi.bak`), the dated copies in the `backups` folder, and
+  the copy kept from before the logbook database, all stayed behind in the folder Nexus stops
+  reading. They now move with the log, checked byte for byte like everything else. The logbook
+  database moves too, and it is copied through the database itself rather than file by file: a
+  contact you have just logged can still be in the database's working file, and a plain file copy
+  of a database that is open can miss it. The copy is checked row for row against the original
+  before the new folder is used, and if anything does not match, nothing is changed.
+
+- **Deleting a contact while an upload to LoTW is running no longer marks the wrong contacts as
+  uploaded.** TQSL takes a while to sign and send a batch, and the log stays open while it works.
+  Nexus then recorded the result on contacts by where they sat in the log, so deleting one in that
+  time shifted every contact after it: a contact that was never sent could be marked uploaded, and
+  a contact marked uploaded is never offered to LoTW again, while one that was sent stayed
+  unmarked. The result now goes on exactly the contacts that were sent, found by their identity
+  rather than their place in the log. A contact you correct while TQSL is working is left unmarked
+  too, because LoTW has the version from before your correction; it is offered again with your
+  next upload. The connection log says when either happens.
 
 - **The SSTV screen now says where the switch is that keeps your radio in the data mode.** On an
   IC-7300 or IC-7100 the rig drops back to plain USB between pictures, taking its data-mode
