@@ -1025,6 +1025,29 @@ impl Logbook {
                         rec.extra.retain(|(k, _)| k != "LOTW_QSL_SENT");
                     }
                 }
+                // The same resurrection, for a park. A side's OTHER programme's reference rides
+                // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
+                // `take_ota_side`), and it described the reference the side HAD. An edit that
+                // changes the side takes it along: left behind, it is written after the edited
+                // reference, a repeated tag's last copy is the one a reader keeps, and the next
+                // read would put the old park back over the correction, or bring back a park the
+                // operator removed.
+                if (&rec.ota.my_program, &rec.ota.my_ref) != (&old.ota.my_program, &old.ota.my_ref)
+                {
+                    rec.extra.retain(|(k, _)| {
+                        !matches!(
+                            k.as_str(),
+                            "MY_SIG" | "MY_SIG_INFO" | "MY_SOTA_REF" | "MY_POTA_REF"
+                        )
+                    });
+                }
+                if (&rec.ota.their_program, &rec.ota.their_ref)
+                    != (&old.ota.their_program, &old.ota.their_ref)
+                {
+                    rec.extra.retain(|(k, _)| {
+                        !matches!(k.as_str(), "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF")
+                    });
+                }
                 // An edit that did not touch the TIME OF DAY must not fabricate
                 // time-knowledge onto an imported, time-less record — keyed on
                 // the time-of-day, not the whole timestamp, so a DATE fix on a
@@ -3682,8 +3705,24 @@ fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Op
 }
 
 /// Consume one OTA side (my_* or their_*): a SOTA ref (dedicated field) takes
-/// precedence; else a SIG=POTA/WWFF pair; else the ADIF 3.1.4 dedicated
-/// POTA_REF (what pota.app's exports carry — may hold a comma list, verbatim).
+/// precedence; else, on a POTA side, the ADIF 3.1.4 dedicated POTA_REF when SIG_INFO
+/// agrees with it; else a SIG=POTA/WWFF pair; else a lone POTA_REF (what pota.app's
+/// exports carry — may hold a comma list, verbatim).
+///
+/// ⛔ **A TWO-FER'S LIST IS IN `POTA_REF`, SO THAT IS WHERE IT IS READ** (the read half of
+/// operator-review finding A2). [`ota_fields`] names ONE park in `SIG_INFO` and keeps the whole
+/// list in the dedicated field, and this reader took `SIG_INFO` first: every two-fer this build
+/// wrote, and every file another logger lays out the same way, read back as its first park, the
+/// second gone for good. The list now wins on a POTA side (`SIG` is POTA in any case, or absent)
+/// whenever `SIG_INFO` names only parks the list also names — the writer's own shape. A
+/// `SIG_INFO` naming a park the list does not (a disagreement, or the same park written with the
+/// `@location` suffix ADIF's POTARef type allows) is not settled by the list, and reads as before.
+///
+/// A side holds ONE programme, so another programme's reference beside the winner — the POTA
+/// tags beside a summit, the `POTA_REF` beside a WWFF park — is left in the map: it lands in
+/// [`QsoRecord::extra`] and goes back out verbatim, the rule an unpromoted `SUBMODE` already
+/// follows. It used to be removed here and dropped. The winner's own tags are consumed, since
+/// [`ota_fields`] writes them back.
 fn take_ota_side(
     f: &mut std::collections::HashMap<String, String>,
     sig: &str,
@@ -3694,9 +3733,42 @@ fn take_ota_side(
     let sota_v = f.remove(sota).filter(|s| !s.is_empty());
     let (sig_v, sig_info_v) = (f.remove(sig), f.remove(sig_info));
     let pota_v = f.remove(pota).filter(|s| !s.is_empty());
+    let parks = |s: &str| -> Vec<String> {
+        s.split([',', ';'])
+            .map(|p| p.trim().to_ascii_uppercase())
+            .filter(|p| !p.is_empty())
+            .collect()
+    };
+    let pota_side = sig_v
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(|p| p.is_empty() || p.eq_ignore_ascii_case("POTA"));
+    let list_wins = pota_side
+        && pota_v.as_deref().is_some_and(|list| {
+            let listed = parks(list);
+            sig_info_v
+                .as_deref()
+                .is_none_or(|info| parks(info).iter().all(|p| listed.contains(p)))
+        });
+    let mut park = |k: &str, v: Option<String>| {
+        if let Some(v) = v.filter(|v| !v.is_empty()) {
+            f.insert(k.to_string(), v);
+        }
+    };
     if let Some(r) = sota_v {
+        park(sig, sig_v);
+        park(sig_info, sig_info_v);
+        park(pota, pota_v);
         (Some("SOTA".to_string()), Some(r.to_ascii_uppercase()))
+    } else if list_wins {
+        (
+            Some("POTA".to_string()),
+            pota_v.map(|r| r.to_ascii_uppercase()),
+        )
     } else if let (Some(p), Some(r)) = (sig_v, sig_info_v) {
+        if !pota_side {
+            park(pota, pota_v);
+        }
         (Some(p.to_ascii_uppercase()), Some(r.to_ascii_uppercase()))
     } else if let Some(r) = pota_v {
         (Some("POTA".to_string()), Some(r.to_ascii_uppercase()))
@@ -5021,6 +5093,282 @@ mod tests {
         let adi1 = adif_record(&one);
         assert!(adi1.contains("<MY_SIG_INFO:7>US-1234"), "{adi1}");
         assert!(adi1.contains("<MY_POTA_REF:7>US-1234"), "{adi1}");
+    }
+
+    /// ⛔ **…AND A TWO-FER READS BACK AS TWO PARKS** — the read half the test above left open.
+    ///
+    /// The writer moved the pair out of `(MY_)SIG_INFO` into `(MY_)POTA_REF`, and the reader kept
+    /// preferring `SIG_INFO` — `remove`ing `POTA_REF` as it did, so the list did not even reach
+    /// `extra`. Reading back what this build wrote kept the first park and lost the second for
+    /// good: `log.adi` re-read, an export re-imported, the logbook-database conversion. Asserted
+    /// on the RECORD, on both sides, with DIFFERENT parks on each so a reader that crossed the
+    /// two sides could not pass.
+    #[test]
+    fn a_two_fer_reads_back_with_both_parks_on_either_side() {
+        let mut r = rec("K1ABC", "20m", 1_782_583_500);
+        r.ota = Ota {
+            my_program: Some("POTA".into()),
+            my_ref: Some("US-1234,US-5678".into()),
+            their_program: Some("POTA".into()),
+            their_ref: Some("US-2222,US-3333".into()),
+            iota: None,
+        };
+        let mut lb = Logbook::new();
+        lb.add(r.clone());
+        let exported = lb.adif();
+        let mut back = Logbook::new();
+        back.import_adif(&exported);
+        let got = &back.records()[0];
+        assert_eq!(
+            got.ota.my_ref.as_deref(),
+            Some("US-1234,US-5678"),
+            "my second park was lost: {exported}"
+        );
+        assert_eq!(
+            got.ota.their_ref.as_deref(),
+            Some("US-2222,US-3333"),
+            "their second park was lost: {exported}"
+        );
+        assert_eq!(got.ota, r.ota);
+        // A POTA side's three tags are all re-derived by the writer, so none is parked…
+        assert!(
+            !got.extra
+                .iter()
+                .any(|(k, _)| k.contains("SIG") || k.contains("_REF")),
+            "{:?}",
+            got.extra
+        );
+        // …and the next full save writes the same parks again: a fixed point, not a slow leak.
+        assert_eq!(parse_adif(&back.adif())[0].ota, r.ota);
+    }
+
+    /// The same read, of a file ANOTHER logger wrote the way ADIF 3.1.4 lays a two-fer out: one
+    /// park in `SIG_INFO`, the whole list in the dedicated `POTA_REF`. `SIG` in any case, or
+    /// absent — the dedicated field names the programme by itself.
+    #[test]
+    fn a_spec_style_two_fer_from_another_logger_keeps_both_parks() {
+        let text = "<CALL:5>K1ABC<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <MY_SIG:4>POTA<MY_SIG_INFO:7>US-1234<MY_POTA_REF:15>US-1234,US-5678\
+                    <SIG:4>pota<SIG_INFO:7>US-2222<POTA_REF:15>US-2222,US-3333<EOR>\n\
+                    <CALL:5>K2DEF<QSO_DATE:8>20260909<TIME_ON:6>130000<BAND:3>20m<MODE:3>SSB\
+                    <SIG_INFO:7>US-2222<POTA_REF:15>US-2222,US-3333<EOR>\n";
+        let recs = parse_adif(text);
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].ota.my_program.as_deref(), Some("POTA"));
+        assert_eq!(recs[0].ota.my_ref.as_deref(), Some("US-1234,US-5678"));
+        assert_eq!(recs[0].ota.their_program.as_deref(), Some("POTA"));
+        assert_eq!(recs[0].ota.their_ref.as_deref(), Some("US-2222,US-3333"));
+        assert_eq!(recs[1].ota.their_program.as_deref(), Some("POTA"));
+        assert_eq!(recs[1].ota.their_ref.as_deref(), Some("US-2222,US-3333"));
+    }
+
+    /// GUARD: the files that already exist. 1.14.0 wrote a two-fer into BOTH `MY_SIG_INFO` and
+    /// `MY_POTA_REF`; a writer from before the dedicated field — and a logger that never uses it
+    /// — puts it in `MY_SIG_INFO` alone. Both still read as two parks.
+    #[test]
+    fn a_two_fer_written_before_the_split_still_reads_both_parks() {
+        let text = "<CALL:5>K1ABC<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <MY_SIG:4>POTA<MY_SIG_INFO:15>US-1234,US-5678<MY_POTA_REF:15>US-1234,US-5678\
+                    <SIG:4>POTA<SIG_INFO:15>US-2222,US-3333<POTA_REF:15>US-2222,US-3333<EOR>\n\
+                    <CALL:5>K2DEF<QSO_DATE:8>20260909<TIME_ON:6>130000<BAND:3>20m<MODE:3>SSB\
+                    <MY_SIG:4>POTA<MY_SIG_INFO:15>US-1234,US-5678\
+                    <SIG:4>POTA<SIG_INFO:15>US-2222,US-3333<EOR>\n";
+        let recs = parse_adif(text);
+        assert_eq!(recs.len(), 2);
+        for r in &recs {
+            assert_eq!(
+                r.ota.my_ref.as_deref(),
+                Some("US-1234,US-5678"),
+                "{}",
+                r.call
+            );
+            assert_eq!(
+                r.ota.their_ref.as_deref(),
+                Some("US-2222,US-3333"),
+                "{}",
+                r.call
+            );
+        }
+    }
+
+    /// GUARD: the precedence the two-fer fix must NOT move. A SOTA reference still wins over a
+    /// POTA pair on the same side; a `SIG` that is not POTA (WWFF) still reads its own
+    /// `SIG_INFO`, not the `POTA_REF` beside it; and a `SIG_INFO` that names a park the list
+    /// does NOT — here the same park, written with the location suffix ADIF's POTARef type
+    /// allows (`xxxx-nnnnn@yyyyyy`) — is read as before. Every candidate carries a DIFFERENT
+    /// value, so each assertion names its winner.
+    #[test]
+    fn sota_still_wins_and_a_sig_the_list_does_not_agree_with_still_reads_its_own_info() {
+        let text = "<CALL:5>K1ABC<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <SOTA_REF:10>W7A/MN-001<SIG:4>POTA<SIG_INFO:7>US-1234\
+                    <POTA_REF:15>US-1234,US-5678<MY_SOTA_REF:10>W7A/MN-002<MY_SIG:4>POTA\
+                    <MY_SIG_INFO:7>US-4444<MY_POTA_REF:7>US-4444<EOR>\n\
+                    <CALL:5>K2DEF<QSO_DATE:8>20260909<TIME_ON:6>130000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>WWFF<SIG_INFO:8>KFF-1234<POTA_REF:7>US-1234\
+                    <MY_SIG:4>WWFF<MY_SIG_INFO:8>KFF-4444<MY_POTA_REF:7>US-4444<EOR>\n\
+                    <CALL:5>K3GHI<QSO_DATE:8>20260909<TIME_ON:6>140000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>POTA<SIG_INFO:7>US-4567<POTA_REF:13>US-4567@US-VA<EOR>\n";
+        let recs = parse_adif(text);
+        assert_eq!(recs.len(), 3);
+        let side = |program: &Option<String>, reference: &Option<String>| {
+            (program.clone(), reference.clone())
+        };
+        let (sota, wwff, located) = (&recs[0].ota, &recs[1].ota, &recs[2].ota);
+        assert_eq!(
+            side(&sota.their_program, &sota.their_ref),
+            (Some("SOTA".into()), Some("W7A/MN-001".into()))
+        );
+        assert_eq!(
+            side(&sota.my_program, &sota.my_ref),
+            (Some("SOTA".into()), Some("W7A/MN-002".into()))
+        );
+        assert_eq!(
+            side(&wwff.their_program, &wwff.their_ref),
+            (Some("WWFF".into()), Some("KFF-1234".into()))
+        );
+        assert_eq!(
+            side(&wwff.my_program, &wwff.my_ref),
+            (Some("WWFF".into()), Some("KFF-4444".into()))
+        );
+        assert_eq!(
+            side(&located.their_program, &located.their_ref),
+            (Some("POTA".into()), Some("US-4567".into()))
+        );
+    }
+
+    /// The reference a side cannot hold is PARKED in `extra`, not dropped. A side holds one
+    /// programme, so a WWFF park that is also a POTA park, or a summit inside a park, reads as
+    /// the one that wins above — and the reader used to `remove` the other programme's tags and
+    /// throw them away on every import. Nothing models them, which is what `extra` is for:
+    /// kept verbatim, written back out once, and read the same way again.
+    #[test]
+    fn the_reference_a_side_cannot_hold_rides_in_extra_instead_of_being_dropped() {
+        let text = "<CALL:5>K1ABC<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <SOTA_REF:10>W7A/MN-001<SIG:4>POTA<SIG_INFO:7>US-1234\
+                    <POTA_REF:15>US-1234,US-5678<MY_SOTA_REF:10>W7A/MN-002<MY_SIG:4>POTA\
+                    <MY_SIG_INFO:7>US-4444<MY_POTA_REF:7>US-4444<EOR>\n\
+                    <CALL:5>K2DEF<QSO_DATE:8>20260909<TIME_ON:6>130000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>WWFF<SIG_INFO:8>KFF-1234<POTA_REF:7>US-1234\
+                    <MY_SIG:4>WWFF<MY_SIG_INFO:8>KFF-4444<MY_POTA_REF:7>US-4444<EOR>\n";
+        let recs = parse_adif(text);
+        assert_eq!(recs.len(), 2);
+        let parked = |r: &QsoRecord, k: &str| {
+            r.extra
+                .iter()
+                .find(|(name, _)| name == k)
+                .map(|(_, v)| v.clone())
+        };
+        let (summit, wwff) = (&recs[0], &recs[1]);
+        assert_eq!(parked(wwff, "POTA_REF").as_deref(), Some("US-1234"));
+        assert_eq!(parked(wwff, "MY_POTA_REF").as_deref(), Some("US-4444"));
+        assert_eq!(parked(summit, "SIG").as_deref(), Some("POTA"));
+        assert_eq!(parked(summit, "SIG_INFO").as_deref(), Some("US-1234"));
+        assert_eq!(
+            parked(summit, "POTA_REF").as_deref(),
+            Some("US-1234,US-5678")
+        );
+        assert_eq!(parked(summit, "MY_SIG").as_deref(), Some("POTA"));
+        assert_eq!(parked(summit, "MY_SIG_INFO").as_deref(), Some("US-4444"));
+        assert_eq!(parked(summit, "MY_POTA_REF").as_deref(), Some("US-4444"));
+        // What wins is modelled, never parked as well.
+        assert_eq!(parked(summit, "SOTA_REF"), None);
+        assert_eq!(parked(wwff, "SIG"), None);
+        for r in &recs {
+            let out = adif_record(r);
+            for tag in [
+                "SIG",
+                "SIG_INFO",
+                "SOTA_REF",
+                "POTA_REF",
+                "MY_SIG",
+                "MY_SIG_INFO",
+                "MY_SOTA_REF",
+                "MY_POTA_REF",
+            ] {
+                assert!(
+                    out.matches(&format!("<{tag}:")).count() <= 1,
+                    "{tag} written twice: {out}"
+                );
+            }
+            let again = &parse_adif(&out)[0];
+            assert_eq!(again.ota, r.ota, "{out}");
+            assert_eq!(again.extra, r.extra, "{out}");
+        }
+    }
+
+    /// An edit that CHANGES a side takes that side's parked reference with it. The parked tag
+    /// described the reference the side had; left in `extra` it is written AFTER the edited one,
+    /// and a repeated tag's LAST copy is the one a reader keeps. So the next read of the log would
+    /// put the old park back over the operator's correction — or bring back a park they removed.
+    #[test]
+    fn an_edit_that_changes_a_side_takes_its_parked_reference_with_it() {
+        let text = "<CALL:5>K2DEF<QSO_DATE:8>20260909<TIME_ON:6>130000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>WWFF<SIG_INFO:8>KFF-1234<POTA_REF:7>US-1234\
+                    <MY_SIG:4>WWFF<MY_SIG_INFO:8>KFF-4444<MY_POTA_REF:7>US-4444<EOR>\n";
+        let mut lb = Logbook::new();
+        lb.import_adif(text);
+        // Their park corrected to a different POTA park, and my own park removed.
+        let mut edited = lb.records()[0].as_ref().clone();
+        edited.extra = Vec::new(); // the edit payload always arrives without it
+        edited.ota.their_program = Some("POTA".into());
+        edited.ota.their_ref = Some("US-9999".into());
+        edited.ota.my_program = None;
+        edited.ota.my_ref = None;
+        assert!(lb.update_record(0, edited));
+        let out = lb.adif();
+        assert_eq!(out.matches("<POTA_REF:").count(), 1, "{out}");
+        let back = &parse_adif(&out)[0];
+        assert_eq!(
+            back.ota.their_ref.as_deref(),
+            Some("US-9999"),
+            "the correction did not hold: {out}"
+        );
+        assert_eq!(
+            (back.ota.my_program.as_deref(), back.ota.my_ref.as_deref()),
+            (None, None),
+            "the removed park came back: {out}"
+        );
+
+        // Where the stale copy WINS the read: a summit hunted inside a park, corrected to a
+        // different park. The parked POTA pair agrees with itself, so left behind it would be
+        // read back in place of the correction.
+        let summit = "<CALL:5>K1ABC<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                      <SOTA_REF:10>W7A/MN-001<SIG:4>POTA<SIG_INFO:7>US-1234\
+                      <POTA_REF:15>US-1234,US-5678<EOR>\n";
+        let mut lb = Logbook::new();
+        lb.import_adif(summit);
+        let mut edited = lb.records()[0].as_ref().clone();
+        edited.extra = Vec::new();
+        edited.ota.their_program = Some("POTA".into());
+        edited.ota.their_ref = Some("US-9999".into());
+        assert!(lb.update_record(0, edited));
+        let out = lb.adif();
+        assert_eq!(
+            parse_adif(&out)[0].ota.their_ref.as_deref(),
+            Some("US-9999"),
+            "the old park came back over the correction: {out}"
+        );
+
+        // CONTROL — an edit that leaves the parks alone keeps what rides with them.
+        let mut lb = Logbook::new();
+        lb.import_adif(text);
+        let mut named = lb.records()[0].as_ref().clone();
+        named.extra = Vec::new();
+        named.name = Some("Hiram".into());
+        assert!(lb.update_record(0, named));
+        let kept = &lb.records()[0];
+        assert!(
+            kept.extra
+                .contains(&("POTA_REF".to_string(), "US-1234".to_string())),
+            "{:?}",
+            kept.extra
+        );
+        assert!(
+            kept.extra
+                .contains(&("MY_POTA_REF".to_string(), "US-4444".to_string())),
+            "{:?}",
+            kept.extra
+        );
     }
 
     /// ⛔ **AN EMPTY ENUMERATION FIELD IS NEVER EMITTED** (operator review of 1.15.0, A4).

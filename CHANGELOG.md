@@ -163,6 +163,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A park reference next to a WWFF area or a SOTA summit no longer disappears when you import a
+  log.** Several loggers write a combined activation as a WWFF or SOTA reference plus a `POTA_REF`.
+  Importing that record into Nexus kept the WWFF or SOTA reference and silently dropped the POTA one,
+  and a SOTA record lost any POTA tags it carried. They now stay with the contact and are written
+  back out with it.
+
 - **The Linux AppImage no longer prints `Failed to load module "canberra-gtk-module"` when it
   starts.** The 1.14.0 AppImage stopped looking in your system's own GTK folders, so the add-ons
   your desktop asks every GTK program to load — the event-sound module, and on some desktops the
