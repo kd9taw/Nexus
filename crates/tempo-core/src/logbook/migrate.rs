@@ -292,9 +292,10 @@ fn marked_converted(db_path: &Path) -> Result<bool> {
     Ok(LogDb::open_for_conversion(db_path)?.meta(DONE)? == Some(1))
 }
 
-/// Whether the store at `db_path` is marked converted. The store must exist.
+/// Whether the store at `db_path` is marked converted. The store must exist. Asked the way the
+/// conversion asks it ([`marked_converted`]), because a launch asks it before taking the lock.
 pub fn is_converted(db_path: &Path) -> Result<bool> {
-    Ok(LogDb::open(db_path)?.meta(DONE)? == Some(1))
+    marked_converted(db_path)
 }
 
 /// How far a conversion has got, for a screen that shows it: `done` of `total` records are in the
@@ -1250,6 +1251,30 @@ mod tests {
             ordinary_schema(),
             "control: an ordinary open builds every missing index"
         );
+    }
+
+    /// ⛔ **The start-up screen's check writes nothing either.** A launch asks [`is_converted`] to
+    /// decide whether to show the conversion, after its look for another window's conversion and
+    /// before it takes the lock itself, so a window started close behind another can ask it of a
+    /// store that one is still filling.
+    #[test]
+    fn the_start_up_check_writes_nothing_to_a_store_in_progress() {
+        let d = Dir::new("askstartup");
+        std::fs::write(d.log(), legacy_log(300)).unwrap();
+        let source = Logbook::load(&d.log());
+        {
+            let mut db = LogDb::open_for_conversion(&d.db()).unwrap();
+            let rows: Vec<_> = source.records()[..200]
+                .iter()
+                .map(|r| (&**r, Resolved::default()))
+                .collect();
+            db.insert_all(rows).unwrap();
+        }
+        let before = schema(&d.db());
+        assert!(index_names(&d.db()).is_empty(), "premise: no index yet");
+
+        assert!(!is_converted(&d.db()).unwrap(), "it is not converted");
+        assert_eq!(schema(&d.db()), before, "and asking built nothing");
     }
 
     /// What a conversion reports is the contract the start-up screen is built on: `total` 0 while
