@@ -11,11 +11,15 @@
 //
 // Pure data and pure functions, no JSX: the same discipline `panelHost` keeps, and for the
 // same reason — the decisions stay trivially testable and cannot mutate anything.
-import type { RadioStatus } from '../types'
+import type { RadioStatus, ReceiversStatus } from '../types'
 
 /** What a control's value IS, which decides how it is drawn and what a reason may say about
  *  it. `dbSteps` exists for ATT/PRE, whose Hamlib caps carry a step list. */
 export type ControlKind = 'fraction' | 'hz' | 'enum' | 'toggle' | 'dbSteps'
+
+/** The receive stage a row belongs to — `dualrx::RxStage`'s three, in the snapshot's words:
+ *  ATT·PRE·RF·AGC the front end; BW·NB·NR·NRLVL·ANF·MN·NOTCHF the DSP; AF·SQL the audio. */
+export type RxStage = 'frontEnd' | 'dsp' | 'audio'
 
 /**
  * WHY a control cannot be driven. ONE ENTRY PER CAUSE — the catalogue key is chosen from
@@ -91,6 +95,20 @@ export interface RigControl {
   field?: keyof RadioStatus
   chain: 'rx' | 'tx'
   /**
+   * RECEIVE ROWS ONLY: the receive stage this control belongs to — the key a receiver's own
+   * capability joins on (dual-receiver ruling D7: capabilities are PER RECEIVER). The mapping is
+   * `dualrx::RxStage`'s table in the Rust crate, and a test reads that table and holds this one
+   * to it row for row. A transmit row has none: the radio has one transmitter.
+   */
+  stage?: RxStage
+  /**
+   * HAS NEXUS BUILT A PATH FOR THIS CONTROL ON THE **SUB** RECEIVER? The per-receiver twin of
+   * `built` below, with the same teeth: `false` (or absent) = no Sub row and no mention, because
+   * "not confirmed for the sub receiver" would be a claim about the radio made on behalf of a
+   * path Nexus never built. Only the rows whose Sub command reaches the Sub carry it.
+   */
+  subBuilt?: boolean
+  /**
    * ⛔ HAS NEXUS BUILT A PATH FOR THIS AT ALL? `false` = the row is OMITTED everywhere — not
    * drawn, and NOT named in the pane-foot line either, because "not on this radio" would be
    * false about a control no radio can reach.
@@ -112,24 +130,24 @@ export const RIG_CONTROLS: readonly RigControl[] = [
   // "unknown or the rig's default" — the stepper still commands the rig perfectly well from
   // its 2.4 kHz base and only the READOUT is blank, so treating a missing read-back as "this
   // radio has no filter" would collapse a control that works into the foot line.
-  { id: 'BW', plate: 'BW', token: { hamlib: 'PASSBAND' }, kind: 'hz', chain: 'rx', built: true },
+  { id: 'BW', plate: 'BW', token: { hamlib: 'PASSBAND' }, kind: 'hz', chain: 'rx', stage: 'dsp', built: true },
   // ⭐ BUILT 2026-09-22, and their capability answer is the STEP LIST, never the read-back.
   // `attStepsDb` / `preampStepsDb` are what this radio declared in `\dump_state`, so the
   // three states fall straight out of it: a list with entries → chips; an EMPTY list → the
   // rig positively has no pad fitted, which is `absent`; no list at all → `noSteps`.
   // `field` is still declared, because the READING is what the active chip is drawn from.
-  { id: 'ATT', plate: 'ATT', token: { hamlib: 'ATT' }, kind: 'dbSteps', field: 'attDb', chain: 'rx', built: true },
-  { id: 'PRE', plate: 'PRE', token: { hamlib: 'PREAMP' }, kind: 'dbSteps', field: 'preampDb', chain: 'rx', built: true },
-  { id: 'RF', plate: 'RF', token: { hamlib: 'RF' }, kind: 'fraction', field: 'rfGain', chain: 'rx', built: true },
-  { id: 'NB', plate: 'NB', token: { hamlib: 'NB' }, kind: 'toggle', field: 'nb', chain: 'rx', built: true },
-  { id: 'NR', plate: 'NR', token: { hamlib: 'NR' }, kind: 'toggle', field: 'nr', chain: 'rx', built: true },
-  { id: 'NRLVL', plate: 'NR', token: { hamlib: 'NR' }, kind: 'fraction', field: 'nrLevel', chain: 'rx', built: true },
-  { id: 'ANF', plate: 'Auto notch', token: { hamlib: 'ANF' }, kind: 'toggle', field: 'notch', chain: 'rx', built: true },
-  { id: 'MN', plate: 'Manual notch', token: { hamlib: 'MN' }, kind: 'toggle', field: 'manualNotch', chain: 'rx', built: true },
-  { id: 'NOTCHF', plate: 'NOTCH', token: { hamlib: 'NOTCHF' }, kind: 'hz', field: 'notchFreqHz', chain: 'rx', built: true },
-  { id: 'AGC', plate: 'AGC', token: { hamlib: 'AGC' }, kind: 'enum', field: 'agc', chain: 'rx', built: true },
-  { id: 'AF', plate: 'AF', token: { hamlib: 'AF' }, kind: 'fraction', field: 'afGain', chain: 'rx', built: true },
-  { id: 'SQL', plate: 'SQL', token: { hamlib: 'SQL' }, kind: 'fraction', field: 'squelch', chain: 'rx', built: true },
+  { id: 'ATT', plate: 'ATT', token: { hamlib: 'ATT' }, kind: 'dbSteps', field: 'attDb', chain: 'rx', stage: 'frontEnd', built: true },
+  { id: 'PRE', plate: 'PRE', token: { hamlib: 'PREAMP' }, kind: 'dbSteps', field: 'preampDb', chain: 'rx', stage: 'frontEnd', built: true },
+  { id: 'RF', plate: 'RF', token: { hamlib: 'RF' }, kind: 'fraction', field: 'rfGain', chain: 'rx', stage: 'frontEnd', built: true, subBuilt: true },
+  { id: 'NB', plate: 'NB', token: { hamlib: 'NB' }, kind: 'toggle', field: 'nb', chain: 'rx', stage: 'dsp', built: true },
+  { id: 'NR', plate: 'NR', token: { hamlib: 'NR' }, kind: 'toggle', field: 'nr', chain: 'rx', stage: 'dsp', built: true },
+  { id: 'NRLVL', plate: 'NR', token: { hamlib: 'NR' }, kind: 'fraction', field: 'nrLevel', chain: 'rx', stage: 'dsp', built: true },
+  { id: 'ANF', plate: 'Auto notch', token: { hamlib: 'ANF' }, kind: 'toggle', field: 'notch', chain: 'rx', stage: 'dsp', built: true },
+  { id: 'MN', plate: 'Manual notch', token: { hamlib: 'MN' }, kind: 'toggle', field: 'manualNotch', chain: 'rx', stage: 'dsp', built: true },
+  { id: 'NOTCHF', plate: 'NOTCH', token: { hamlib: 'NOTCHF' }, kind: 'hz', field: 'notchFreqHz', chain: 'rx', stage: 'dsp', built: true },
+  { id: 'AGC', plate: 'AGC', token: { hamlib: 'AGC' }, kind: 'enum', field: 'agc', chain: 'rx', stage: 'frontEnd', built: true },
+  { id: 'AF', plate: 'AF', token: { hamlib: 'AF' }, kind: 'fraction', field: 'afGain', chain: 'rx', stage: 'audio', built: true, subBuilt: true },
+  { id: 'SQL', plate: 'SQL', token: { hamlib: 'SQL' }, kind: 'fraction', field: 'squelch', chain: 'rx', stage: 'audio', built: true, subBuilt: true },
   { id: 'MIC', plate: 'Mic', token: { hamlib: 'MICGAIN' }, kind: 'fraction', field: 'micGain', chain: 'tx', built: true },
   { id: 'COMP', plate: 'COMP', token: { hamlib: 'COMP' }, kind: 'toggle', field: 'comp', chain: 'tx', built: true },
   { id: 'COMPLVL', plate: 'COMP', token: { hamlib: 'COMP' }, kind: 'fraction', field: 'compLevel', chain: 'tx', built: true },
@@ -307,6 +325,77 @@ export function absentPlates(chain: 'rx' | 'tx', s: ControlState): string[] {
 /** The controls that draw a row, in registry order. */
 export function chainControls(chain: 'rx' | 'tx', s: ControlState): RigControl[] {
   return RIG_CONTROLS.filter((c) => c.chain === chain && rendersRow(c, s))
+}
+
+// ── THE RECEIVER AXIS — the same table, drawn for the SUB ──────────────────────────────────
+//
+// ⭐ MAIN'S ANSWERS ARE `causeFor`'s AND NOTHING HERE TOUCHES THEM. A radio with one receiver
+// is drawn exactly as it always was; everything below answers only "may this row be drawn for
+// the Sub, and if not, why".
+//
+// The Sub's answer rests on four facts, and each has its own cause so no two failures read
+// alike: is a Sub OFFERED at all (the snapshot's `receivers.sub`), has Nexus BUILT a Sub path
+// for this row (`subBuilt`), may the Sub be CREDITED with this row's stage (D7 — the snapshot's
+// per-receiver `stages`), and can the CAT path serving the radio NAME the Sub (the loop's
+// `subCommandable`). Then the ordinary one: is CAT up.
+
+/** Why a row is not drawn live for the Sub. */
+export type SubCause =
+  /** No Sub in the snapshot — UNKNOWN, ABSENT or a second receiver this build does not offer
+   *  alike (D3). Nothing Sub is drawn. */
+  | 'noSub'
+  /** Nexus has no Sub path for this row, or it is a transmit row. No row, and NO mention. */
+  | 'notBuilt'
+  /** D7: no vendor statement credits the Sub with this row's stage. Not offered — and named
+   *  as NOT CONFIRMED, never as absent: UNKNOWN is never a "no". */
+  | 'stageUnknown'
+  /** The stage is ONE physical stage serving both receivers. A Sub control here would move
+   *  Main's, so it is not the Sub's to offer. (No offered radio reaches this in v1.) */
+  | 'stageShared'
+  /** The CAT path serving this radio cannot name the Sub (Hamlib, OmniRig). */
+  | 'noRoute'
+  /** The radio loop has not said yet whether it can. Offers nothing until it has. */
+  | 'routeUnknown'
+  /** No CAT link. The row stays, dead; the pane already says why once. */
+  | 'noCat'
+
+/** What the Sub's answer needs. `receivers` absent = a station that predates the field. */
+export interface SubState {
+  catOk: boolean
+  receivers?: ReceiversStatus | null
+}
+
+/** THE ONE DECISION for a Sub row: why it cannot be driven, or `null` when it can. */
+export function subCauseFor(c: RigControl, s: SubState): SubCause | null {
+  const sub = s.receivers?.sub
+  if (!sub) return 'noSub'
+  if (c.chain !== 'rx' || !c.stage || !c.subBuilt) return 'notBuilt'
+  const owner = sub.stages[c.stage]
+  // ⛔ ANYTHING BUT A POSITIVE `own` IS NOT AN OFFER — and an unrecognised word is treated as
+  // the unknown it is, never as ownership.
+  if (owner === 'sharedWithMain') return 'stageShared'
+  if (owner !== 'own') return 'stageUnknown'
+  if (!s.catOk) return 'noCat'
+  if (s.receivers?.subCommandable === false) return 'noRoute'
+  if (s.receivers?.subCommandable !== true) return 'routeUnknown'
+  return null
+}
+
+/** Does this row get drawn for the Sub — live, or dead behind the pane's no-CAT banner. */
+export function subRendersRow(c: RigControl, s: SubState): boolean {
+  const cause = subCauseFor(c, s)
+  return cause === null || cause === 'noCat'
+}
+
+/** The rows the Sub strip draws, in registry (signal) order. */
+export function subChainControls(s: SubState): RigControl[] {
+  return RIG_CONTROLS.filter((c) => c.chain === 'rx' && subRendersRow(c, s))
+}
+
+/** The plates of rows Nexus built for the Sub whose stage no vendor statement credits to it —
+ *  the Sub strip's "not confirmed" line. Never mixed into "not on this radio". */
+export function subUnconfirmedPlates(s: SubState): string[] {
+  return RIG_CONTROLS.filter((c) => subCauseFor(c, s) === 'stageUnknown').map((c) => c.plate)
 }
 
 /**

@@ -16,10 +16,18 @@ import {
   guard,
   capStateFor,
   stepsFor,
+  subCauseFor,
+  subRendersRow,
+  subChainControls,
+  subUnconfirmedPlates,
   type ControlState,
   type RigControl,
+  type SubState,
   type UnavailableCause,
 } from './rigControls'
+import type { ReceiversStatus, ReceiverStatus, StageOwner, SubCapability } from '../types'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const byId = (id: string) => RIG_CONTROLS.find((c) => c.id === id)!
 
@@ -316,5 +324,141 @@ describe('the a11y primitive', () => {
     expect(fired, 'an aria-disabled control still fired').toBe(0)
     guard(false, () => { fired += 1 })()
     expect(fired, 'a live control was swallowed').toBe(1)
+  })
+})
+
+// ── THE RECEIVER AXIS (dual-receiver programme) ──────────────────────────────────────────────
+//
+// The registry grew a second axis beside `chain`: WHICH RECEIVER a row is drawn for. Main's
+// answers are `causeFor`'s, untouched. The Sub's come from three facts the snapshot carries —
+// whether a Sub is offered at all, which stages the Sub may be credited with (D7), and whether
+// the CAT path serving the radio can name the Sub — and one this table owns: which controls
+// Nexus has BUILT a Sub path for.
+
+/** A receiver in the snapshot's shape. The stages are required arguments — NO defaults — so a
+ *  case can never quietly inherit "own" for the stage it is about. */
+const rx = (id: 'main' | 'sub', frontEnd: StageOwner, dsp: StageOwner, audio: StageOwner): ReceiverStatus => ({
+  id,
+  stages: { frontEnd, dsp, audio },
+})
+const MAIN = rx('main', 'own', 'own', 'own')
+/** The IC-7610's Sub by the vendor table: its own front end and AF, no documented DSP. */
+const SUB_7610 = rx('sub', 'own', 'unknown', 'own')
+/** The IC-9700's Sub: its own front end; neither DSP nor AF documented per receiver. */
+const SUB_9700 = rx('sub', 'own', 'unknown', 'unknown')
+
+const receivers = (
+  sub: ReceiverStatus | null,
+  subCommandable: boolean | null,
+  subCapability: SubCapability = sub ? 'present' : 'unknown',
+): ReceiversStatus => ({ main: MAIN, sub, subCapability, subCommandable })
+
+const sub = (r: ReceiversStatus | null | undefined, catOk = true): SubState => ({ catOk, receivers: r })
+
+describe('the receiver axis — which receiver a row is drawn for', () => {
+  it('every RECEIVE row names its stage, and the stages are the Rust table’s, row for row', () => {
+    // `dualrx::RxStage` documents the join: "The mapping onto the 13 chain: 'rx' rows of
+    // ui/src/features/rigControls.ts". Read it out of the Rust source, so the two cannot drift.
+    const src = readFileSync(resolve(process.cwd(), '../crates/tempo-app/src/dualrx.rs'), 'utf8')
+    const rust: Record<string, string> = {}
+    const word = { FrontEnd: 'frontEnd', Dsp: 'dsp', Audio: 'audio' } as const
+    for (const m of src.matchAll(/^\/\/\/ \| \[`RxStage::(FrontEnd|Dsp|Audio)`\] \| (.+?) \|$/gm)) {
+      for (const id of m[2].split(' · ')) rust[id.trim()] = word[m[1] as keyof typeof word]
+    }
+    // Parser sanity: a pattern that matched nothing would make the comparison below vacuous.
+    expect(Object.keys(rust).length, 'the Rust stage table did not parse').toBe(13)
+    const ours = Object.fromEntries(RIG_CONTROLS.filter((c) => c.chain === 'rx').map((c) => [c.id, c.stage]))
+    expect(ours).toEqual(rust)
+    // A transmit row belongs to no receiver: the radio has one transmitter.
+    expect(RIG_CONTROLS.filter((c) => c.chain === 'tx' && c.stage !== undefined).map((c) => c.id)).toEqual([])
+  })
+
+  it('no Sub in the snapshot: no Sub control, on UNKNOWN, ABSENT and PRESENT-not-offered alike', () => {
+    for (const cap of ['unknown', 'absent', 'present'] as const) {
+      const s = sub(receivers(null, null, cap))
+      expect(subChainControls(s), cap).toEqual([])
+      expect(subUnconfirmedPlates(s), cap).toEqual([])
+      for (const c of RIG_CONTROLS) expect(subCauseFor(c, s), `${cap} ${c.id}`).toBe('noSub')
+    }
+    // A station older than the field says nothing, and nothing is claimed for it either.
+    expect(subChainControls(sub(undefined))).toEqual([])
+    expect(subChainControls(sub(null))).toEqual([])
+  })
+
+  it('an offered Sub on a route that names it: the rows Nexus built for the Sub, in signal order', () => {
+    const s = sub(receivers(SUB_7610, true))
+    expect(subChainControls(s).map((c) => c.id)).toEqual(['RF', 'AF', 'SQL'])
+    for (const id of ['RF', 'AF', 'SQL']) expect(subCauseFor(byId(id), s), id).toBeNull()
+  })
+
+  it('⛔ UNKNOWN NEVER OFFERS A SUB CONTROL — and never calls it absent', () => {
+    // The IC-9700: AF and SQL sit in the audio stage, which no vendor statement credits to its
+    // Sub. They are not offered — and they are named as NOT CONFIRMED, never "not on this
+    // radio", which would be the forbidden collapse wearing per-receiver clothes.
+    const s = sub(receivers(SUB_9700, true))
+    expect(subChainControls(s).map((c) => c.id)).toEqual(['RF'])
+    expect(subCauseFor(byId('AF'), s)).toBe('stageUnknown')
+    expect(subCauseFor(byId('SQL'), s)).toBe('stageUnknown')
+    expect(subUnconfirmedPlates(s)).toEqual(['AF', 'SQL'])
+    // …and MAIN's pane-foot "not on this radio" line is untouched by any of it.
+    const main: ControlState = { catOk: true, reported: () => true, mode: 'USB' }
+    expect(absentPlates('rx', main)).toEqual([])
+  })
+
+  it('⭐ D7: the same control on two receivers of two radios of ONE class gets two answers', () => {
+    // Both radios are independent dual receivers; only the per-receiver stage table separates
+    // them, so an axis keyed on the radio (or on the class) cannot pass this.
+    const af = byId('AF')
+    expect(subCauseFor(af, sub(receivers(SUB_7610, true)))).toBeNull()
+    expect(subCauseFor(af, sub(receivers(SUB_9700, true)))).toBe('stageUnknown')
+    // And Main's answer for the same row does not move with either — `causeFor` never reads
+    // the receivers.
+    const main: ControlState = { catOk: true, reported: () => true, mode: 'USB' }
+    expect(causeFor(af, main)).toBeNull()
+  })
+
+  it('a stage the Sub SHARES with Main is never offered as the Sub’s own', () => {
+    // A shared front end (category 2): driving the Sub's RF gain would move Main's, because
+    // there is only one. v1 offers no such radio, and the table still refuses it.
+    const s = sub(receivers(rx('sub', 'sharedWithMain', 'unknown', 'own'), true))
+    expect(subCauseFor(byId('RF'), s)).toBe('stageShared')
+    expect(subChainControls(s).map((c) => c.id)).toEqual(['AF', 'SQL'])
+    expect(subUnconfirmedPlates(s), 'shared is not unknown').toEqual([])
+  })
+
+  it('a control Nexus has not built for the Sub is omitted and never named, whatever the stage', () => {
+    // An FTDX101's Sub owns its DSP by Yaesu's manual; Nexus has no Sub path for NB, NR or the
+    // notches, so they get no row and no mention — blaming the radio for Nexus is the lie
+    // `built: false` exists to prevent.
+    const s = sub(receivers(rx('sub', 'own', 'own', 'own'), true))
+    for (const id of ['BW', 'NB', 'NR', 'NRLVL', 'ANF', 'MN', 'NOTCHF', 'ATT', 'PRE', 'AGC']) {
+      expect(subCauseFor(byId(id), s), id).toBe('notBuilt')
+    }
+    expect(subUnconfirmedPlates(sub(receivers(rx('sub', 'own', 'unknown', 'unknown'), true))),
+      'an unbuilt DSP row is not named even when its stage is unknown').toEqual(['AF', 'SQL'])
+  })
+
+  it('the route: a path that cannot name the Sub, or one not yet heard from, offers nothing', () => {
+    expect(subCauseFor(byId('AF'), sub(receivers(SUB_7610, false)))).toBe('noRoute')
+    expect(subCauseFor(byId('AF'), sub(receivers(SUB_7610, null)))).toBe('routeUnknown')
+    expect(subChainControls(sub(receivers(SUB_7610, false)))).toEqual([])
+    expect(subChainControls(sub(receivers(SUB_7610, null)))).toEqual([])
+  })
+
+  it('no CAT keeps the offered rows, dead — the pane says why once', () => {
+    const s = sub(receivers(SUB_7610, true), false)
+    for (const id of ['RF', 'AF', 'SQL']) {
+      expect(subCauseFor(byId(id), s), id).toBe('noCat')
+      expect(subRendersRow(byId(id), s), id).toBe(true)
+    }
+    // …but no CAT does not revive a stage nobody documented.
+    expect(subCauseFor(byId('AF'), sub(receivers(SUB_9700, true), false))).toBe('stageUnknown')
+  })
+
+  it('a transmit row is never a Sub control — the radio has one transmitter', () => {
+    const s = sub(receivers(rx('sub', 'own', 'own', 'own'), true))
+    for (const c of RIG_CONTROLS.filter((r) => r.chain === 'tx')) {
+      expect(subCauseFor(c, s), c.id).toBe('notBuilt')
+    }
   })
 })
