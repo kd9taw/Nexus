@@ -68,9 +68,11 @@ impl Engine {
         Ok(())
     }
 
-    /// The station's own emission model for the current section and sideband.
+    /// The station's own key-time judgement of a transmit carrier — the one `tx_allowed` applies,
+    /// Phone judged in the mode the rig is actually in — so a split or XIT is refused here
+    /// exactly where the station would then refuse to key it.
     fn remote_emission_allowed(&self, mhz: f64) -> bool {
-        self.emission_allowed(self.settings.operating_mode, mhz, &self.settings.sideband)
+        self.emission_in_use_allowed(mhz)
     }
 
     pub fn queue_remote_split(
