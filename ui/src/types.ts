@@ -1333,6 +1333,10 @@ export interface RadioStatus {
   ritHz?: number
   /** XIT (transmit incremental tuning) offset in Hz — last commanded (0 = off). */
   xitHz?: number
+  /** This radio has NO XIT at all (the IC-9700), so nothing that draws XIT draws it, and the
+   * station refuses one aimed at it. Absent = offered, which is how every station behaved
+   * before the field existed. */
+  xitUnsupported?: boolean
   /** Active VFO ("A" / "B") — last commanded. */
   activeVfo?: string
   rxLevel: number

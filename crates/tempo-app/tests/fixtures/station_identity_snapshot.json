@@ -134,7 +134,8 @@
     "txSwr": null,
     "txWatchdog": false,
     "vox": null,
-    "xitHz": 0
+    "xitHz": 0,
+    "xitUnsupported": false
   },
   "radioPegged": false,
   "radios": [],

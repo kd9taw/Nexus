@@ -138,6 +138,12 @@ impl CivBackend {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Does this radio have ΔTX (Icom's XIT)? See [`commands::has_delta_tx`]. An unknown
+    /// model keeps the behaviour it always had.
+    fn has_delta_tx(&self) -> bool {
+        self.model.is_none_or(commands::has_delta_tx)
+    }
+
     /// Select a band/VFO by token (`Main`/`Sub`), acked. Callers hold the band lock.
     fn select(&self, vfo: &str) -> bool {
         commands::select_vfo(self.addr, vfo).is_some_and(|f| self.ack(f))
@@ -731,6 +737,11 @@ impl RigBackend for CivBackend {
     }
 
     fn set_func(&self, token: &str, on: bool) -> Option<bool> {
+        // No ΔTX, no ΔTX switch: `21 02` is not a command this radio has, so it is not sent.
+        // `None` is `RPRT -11`, the answer Hamlib gives for the same radio.
+        if token == "XIT" && !self.has_delta_tx() {
+            return None;
+        }
         match token {
             "RIT" => Some(self.ack(commands::set_rit_on(self.addr, on))),
             "XIT" => Some(self.ack(commands::set_dtx_on(self.addr, on))),
@@ -870,7 +881,12 @@ impl RigBackend for CivBackend {
     }
 
     fn set_xit(&self, hz: i32) -> Option<bool> {
-        // Icom's ΔTX shares the RIT offset register.
+        // ⛔ Icom's ΔTX shares the RIT offset register, which is exactly why a radio with no
+        // ΔTX must refuse here: on an IC-9700 `21 00` IS the RIT offset, and an XIT written
+        // into it lands on the receiver's clarifier and never on the transmitter.
+        if !self.has_delta_tx() {
+            return None;
+        }
         Some(self.ack(commands::set_rit_offset(self.addr, hz)))
     }
 
@@ -2038,5 +2054,89 @@ mod tests {
         assert_eq!(backend.set_func("MON", true), Some(true));
         assert_eq!(backend.func("MON"), Some(true));
         assert_eq!(backend.set_level("MONITOR_GAIN", "0.50"), Some(true));
+    }
+
+    /// The lines Nexus's own `Rig::set_xit` sends (`U XIT n`, then `Z <hz>`): both signs, and
+    /// a clear.
+    const XIT_LINES: [&str; 5] = ["U XIT 1\n", "Z 500\n", "Z -1234\n", "U XIT 0\n", "Z 0\n"];
+
+    /// Drive [`XIT_LINES`] through a native daemon for `model`, then `J 500` (RIT) as the
+    /// positive control: RIT rides the same `21` command, so its frame proves the bus log
+    /// can see one. Returns the reply to each XIT line and the payload of every `21` frame
+    /// the radio received, in order.
+    ///
+    /// One connection per line, because the server hangs up on a peer after three `RPRT -11`
+    /// in a row (`MAX_CONSECUTIVE_UNKNOWN`, its defence against a web page posting to the
+    /// port). Nexus's own `Rig::set_xit` stops at the first refusal, so it never sends more.
+    fn xit_then_rit(addr: u8, model: IcomModel) -> (Vec<String>, Vec<Vec<u8>>) {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let (radio, _push) = FakeRadio::new(addr);
+        let regs = radio.regs();
+        let _d = CivDaemon::start_with_io(Box::new(radio), addr, port, 1, Some(model)).unwrap();
+        let send = |line: &str| {
+            let (mut c, mut rd) = client(port);
+            roundtrip(&mut c, &mut rd, line)
+        };
+        let replies = XIT_LINES.iter().map(|l| send(l)).collect();
+        let _ = send("J 500\n");
+        let on_21 = regs
+            .lock()
+            .unwrap()
+            .log
+            .iter()
+            .filter(|(cmd, _)| *cmd == 0x21)
+            .map(|(_, d)| d.clone())
+            .collect();
+        (replies, on_21)
+    }
+
+    /// ⛔ THE IC-9700 HAS NO ΔTX, SO NOTHING AN XIT ASKS FOR MAY REACH ITS `21` REGISTERS.
+    ///
+    /// Icom's CI-V reference for the 9700 (A7508-3EX-4) has `21 00` (RIT frequency) and
+    /// `21 01` (RIT on/off), and no `21 02`. The daemon sent XIT the IC-7610's way regardless:
+    /// `U XIT 1` became `21 02 01`, a command this radio does not have, and `Z` became
+    /// `21 00`, which on a 9700 IS the RIT offset, so an XIT rewrote the receiver's clarifier.
+    /// Hamlib refuses both verbs for this model with `RPRT -11`, and so does the daemon.
+    #[test]
+    fn an_ic9700_puts_no_xit_on_the_wire_because_its_21_00_is_the_rit_offset() {
+        let (replies, on_21) = xit_then_rit(0xA2, IcomModel::Ic9700);
+        // The bus first, because that is the defect itself: only the RIT control belongs here.
+        assert_eq!(
+            on_21,
+            vec![vec![0x00, 0x00, 0x05, 0x00]],
+            "an XIT reached the IC-9700's `21` registers; only `J 500` (RIT) may: {on_21:02x?}"
+        );
+        for (line, reply) in XIT_LINES.iter().zip(&replies) {
+            assert_eq!(
+                reply, "RPRT -11\n",
+                "{line:?} must answer not-implemented, as Hamlib does for this radio"
+            );
+        }
+    }
+
+    /// THE GUARD, on the same lines: the IC-7610 has ΔTX (A7380-7EX-4 lists `21 02`), and its
+    /// XIT reaches the wire byte for byte as it always has, the switch and the shared offset.
+    /// The fixture models no `21` register and NAKs each one, so these answer `RPRT -1` (the
+    /// rig refused); what must never come back is `RPRT -11`, the IC-9700's refusal.
+    #[test]
+    fn an_ic7610_keeps_its_xit_on_the_wire_exactly_as_before() {
+        let (replies, on_21) = xit_then_rit(0x98, IcomModel::Ic7610);
+        assert_eq!(
+            on_21,
+            vec![
+                vec![0x02, 0x01],             // U XIT 1: ΔTX on
+                vec![0x00, 0x00, 0x05, 0x00], // Z 500
+                vec![0x00, 0x34, 0x12, 0x01], // Z -1234: BCD magnitude, then the sign
+                vec![0x02, 0x00],             // U XIT 0: ΔTX off
+                vec![0x00, 0x00, 0x00, 0x00], // Z 0
+                vec![0x00, 0x00, 0x05, 0x00], // J 500: RIT, the same offset register
+            ],
+            "{on_21:02x?}"
+        );
+        for (line, reply) in XIT_LINES.iter().zip(&replies) {
+            assert_ne!(reply, "RPRT -11\n", "{line:?} must stay implemented");
+        }
     }
 }

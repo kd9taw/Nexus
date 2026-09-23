@@ -7380,8 +7380,22 @@ impl Engine {
             self.rit_hz
         })
     }
+    /// Does the ACTIVE radio have XIT at all ([`crate::settings::rig_has_xit`])? The IC-9700
+    /// does not, so on it XIT is not offered (the snapshot's `xit_unsupported`) and not taken
+    /// ([`Self::request_xit`], `queue_remote_xit`).
+    pub fn xit_supported(&self) -> bool {
+        crate::settings::rig_has_xit(self.settings.rig_model)
+    }
     /// Request an XIT (transmit incremental tuning) offset in Hz (0 = off).
+    ///
+    /// ⛔ A NO-OP ON A RADIO WITH NO XIT ([`Self::xit_supported`]): nothing is queued for the
+    /// radio loop and no offset is believed. The belief matters as much as the write, because
+    /// `xit_hz` rides into [`Self::tx_emission_mhz`], and the licence gate would then judge a
+    /// transmit frequency the radio never moved to.
     pub fn request_xit(&mut self, hz: i32) {
+        if !self.xit_supported() {
+            return;
+        }
         self.remote_actuation.revoke();
         self.xit_hz = hz;
         self.xit_dirty = true;
@@ -18296,7 +18310,20 @@ contact yourself."
     /// dialled on the radio's own clarifier knob is invisible here and the licence gate cannot
     /// see it. Named rather than left implicit because it bounds the guarantee.
     fn xit_offset_mhz(&self) -> f64 {
-        f64::from(self.xit_hz) / 1_000_000.0
+        f64::from(self.xit_hz_effective()) / 1_000_000.0
+    }
+
+    /// The XIT offset (Hz) the ACTIVE radio can be carrying: the commanded belief, or 0 on a
+    /// radio with no XIT at all ([`Self::xit_supported`]). There a belief can only be left over
+    /// from another model on the same profile (a Settings change is not a handoff, so nothing
+    /// cleared it), and the radio cannot move its transmitter by it. The licence gate and the
+    /// snapshot read this one answer.
+    fn xit_hz_effective(&self) -> i32 {
+        if self.xit_supported() {
+            self.xit_hz
+        } else {
+            0
+        }
     }
 
     /// The FM repeater shift as MHz — SIGNED (`plus` is up), 0.0 when no shift is in force.
@@ -19132,7 +19159,8 @@ contact yourself."
         s.radio.atu_start_tune_unsupported = !self.rig_atu_start_tune;
         s.radio.filter_width_hz = self.rig_passband;
         s.radio.rit_hz = self.rit_hz;
-        s.radio.xit_hz = self.xit_hz;
+        s.radio.xit_hz = self.xit_hz_effective();
+        s.radio.xit_unsupported = !self.xit_supported();
         // The RADIO's selection when it answered one, the commanded value otherwise — never the
         // raw `active_vfo_b`, which is only ever what Nexus asked for.
         s.radio.active_vfo = if self.active_vfo_b_effective() {
@@ -26510,6 +26538,76 @@ mod tests {
         assert!(
             !e.tx_allowed(),
             "unknown means the safe side: an XIT-shifted split that could land Extra-only locks"
+        );
+    }
+
+    /// ⛔ AN IC-9700 IS NOT OFFERED XIT, BECAUSE IT HAS NONE (Icom A7508-3EX-4 lists RIT and no
+    /// ΔTX). The capability rides the snapshot so every surface that draws XIT reads one answer,
+    /// and the verb itself refuses: nothing is queued for the radio loop, and no offset is
+    /// believed, because a believed offset rides into the emission the licence gate judges.
+    #[test]
+    fn an_ic9700_is_not_offered_xit_and_an_xit_aimed_at_it_changes_nothing() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.rig_model = 3081; // IC-9700
+        let emission = e.tx_emission_mhz();
+        assert!(
+            e.snapshot().radio.xit_unsupported,
+            "the IC-9700 was offered XIT"
+        );
+
+        e.request_xit(500);
+        assert_eq!(
+            e.take_xit_apply(),
+            None,
+            "an XIT was queued for a radio that has none"
+        );
+        assert_eq!(
+            e.snapshot().radio.xit_hz,
+            0,
+            "the snapshot shows an XIT the radio never took"
+        );
+        assert!(
+            (e.tx_emission_mhz() - emission).abs() < 1e-12,
+            "the licence gate would judge an offset the radio cannot apply: {} vs {emission}",
+            e.tx_emission_mhz()
+        );
+    }
+
+    /// THE GUARD, on the same steps: the IC-7610 has ΔTX (A7380-7EX-4, `21 02`), and its XIT is
+    /// offered, queued, shown and judged exactly as before.
+    #[test]
+    fn an_ic7610_keeps_xit_exactly_as_before() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.rig_model = 3078; // IC-7610
+        let emission = e.tx_emission_mhz();
+        assert!(!e.snapshot().radio.xit_unsupported);
+
+        e.request_xit(500);
+        assert_eq!(e.take_xit_apply(), Some(500));
+        assert_eq!(e.snapshot().radio.xit_hz, 500);
+        assert!((e.tx_emission_mhz() - (emission + 0.000_5)).abs() < 1e-9);
+    }
+
+    /// AN XIT LEFT OVER FROM ANOTHER MODEL COUNTS FOR NOTHING ON AN IC-9700. Re-setting the
+    /// active profile's model in Settings is not a handoff, so nothing clears `xit_hz`; with the
+    /// 9700's XIT control and cell hidden, a leftover offset would be invisible and unclearable
+    /// while the licence gate still judged it. The radio cannot carry it, so it is zero.
+    #[test]
+    fn an_xit_left_from_another_model_counts_for_nothing_on_an_ic9700() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.rig_model = 3078; // IC-7610, where the offset is real
+        let dial = e.tx_emission_mhz();
+        e.request_xit(500);
+        assert!(
+            (e.tx_emission_mhz() - (dial + 0.000_5)).abs() < 1e-9,
+            "precondition: the 7610 carries it"
+        );
+
+        e.settings.rig_model = 3081; // the same profile, now an IC-9700
+        assert_eq!(e.snapshot().radio.xit_hz, 0, "a leftover XIT is shown");
+        assert!(
+            (e.tx_emission_mhz() - dial).abs() < 1e-12,
+            "the licence gate judges a leftover XIT the IC-9700 cannot apply"
         );
     }
 

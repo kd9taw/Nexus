@@ -184,6 +184,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Settings hints and a line of the setup wizard. They show the space now, and a check stops a
   translation from bringing the code back.
 
+- **An IC-9700 is no longer offered XIT.** The radio has no XIT: Icom's CI-V reference for it
+  lists RIT and no transmit offset. Nexus drew the XIT buttons anyway. Over Nexus's own CI-V
+  connection an XIT change went out as Icom's transmit-offset commands, whose offset register on
+  the 9700 is the RIT offset, and over Hamlib the radio refused it. In both cases Nexus went on
+  showing an XIT offset the radio never applied, on the transmit line and in the frequency it
+  checks against your licence privileges. On an IC-9700 the XIT buttons and the transmit line's
+  XIT figure are gone, and an XIT change aimed at one is refused, including from a browser. RIT
+  is unchanged, and so is XIT on every other radio.
+
 - **The Linux AppImage no longer prints `Failed to load module "canberra-gtk-module"` when it
   starts.** The 1.14.0 AppImage stopped looking in your system's own GTK folders, so the add-ons
   your desktop asks every GTK program to load — the event-sound module, and on some desktops the

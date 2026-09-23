@@ -107,7 +107,7 @@ impl Engine {
             if crate::bandplan::band_for_dial(tx) != Some(self.settings.band.as_str()) {
                 return Err(Reason::InvalidAction);
             }
-            let xit = f64::from(self.xit_hz) / 1e6;
+            let xit = self.xit_offset_mhz();
             if !self.remote_emission_allowed(tx) || !self.remote_emission_allowed(tx + xit) {
                 return Err(Reason::OutsidePrivileges);
             }
@@ -125,6 +125,11 @@ impl Engine {
         permit: &Permit,
     ) -> Result<(), Reason> {
         self.remote_clarifier_ready(connection, permit, true)?;
+        // A radio with no XIT (the IC-9700) says so, rather than admitting a change the
+        // station's own verb will not make.
+        if !self.xit_supported() {
+            return Err(Reason::UnsupportedAction);
+        }
         if self.xit_dirty {
             return Err(Reason::StationBusy);
         }
