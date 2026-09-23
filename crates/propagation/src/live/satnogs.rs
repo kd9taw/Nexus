@@ -107,8 +107,25 @@ impl Transmitter {
     /// classification itself lives in [`tempo_core::doppler::downlink_class`] —
     /// one map, shared with the routing class and the commanded rig mode, so
     /// the three cannot disagree about the same bird.
+    ///
+    /// ⭐ A PUBLISHED BAND PLAN OUTRANKS AN FM TAG. SatNOGS tags every live QO-100
+    /// narrowband segment FM, where the band plan allows no FM, so a downlink inside a
+    /// range [`tempo_core::doppler::band_plan_linear_downlink`] names is read as the
+    /// linear class — USB, the side that transponder is worked on — never FM. Asked HERE,
+    /// where the class is read, and not when the catalogue is parsed: the on-disk snapshot
+    /// can be a week old, and it must not carry a stale answer to this.
     pub fn downlink_class(&self) -> tempo_core::doppler::DownlinkClass {
-        tempo_core::doppler::downlink_class(self.downlink_mode.as_deref().or(self.mode.as_deref()))
+        let class = tempo_core::doppler::downlink_class(
+            self.downlink_mode.as_deref().or(self.mode.as_deref()),
+        );
+        if class.is_fm()
+            && self
+                .downlink_centre_hz()
+                .is_some_and(tempo_core::doppler::band_plan_linear_downlink)
+        {
+            return tempo_core::doppler::DownlinkClass::Usb;
+        }
+        class
     }
 
     /// True when the RADIO must be in FM to work this transmitter — the FM/AFSK
@@ -117,6 +134,28 @@ impl Transmitter {
     /// [`Self::downlink_class`], derived from it so the two cannot drift.
     pub fn is_fm(&self) -> bool {
         self.downlink_class().is_fm()
+    }
+
+    /// ⭐ True when the uplink takes **CW over an FM-class downlink** — the one shape whose
+    /// TX mode cannot come from the downlink. KOSEN-1's onboard SDR (NORAD 49402) takes CW on
+    /// 21.125–21.150 MHz and relays AFSK on 435.525 MHz, so deriving the uplink from the
+    /// downlink put the TX VFO in FM on a CW-only 15 m segment. It is the only such record in
+    /// the live catalogue (2026-09-23: ten records list a CW uplink, the other nine over a CW
+    /// downlink, which is linear-class).
+    ///
+    /// Both halves are needed. A CW uplink over a LINEAR downlink (AO-7's "Lin CW", QO-100's
+    /// "CW Only" segments) is CW through a passband, worked like any linear bird. An FM-class
+    /// downlink with any other uplink is an FM bird. An absent or empty `uplink_mode` is
+    /// `false`, so a record that says nothing changes nothing.
+    ///
+    /// This names the MODE only, never a SIDE: some inverting records list USB up, so the
+    /// engine derives any sideband itself rather than reading one here.
+    pub fn uplink_is_cw_only(&self) -> bool {
+        self.is_fm()
+            && self
+                .uplink_mode
+                .as_deref()
+                .is_some_and(tempo_core::doppler::mode_is_cw)
     }
 
     /// Centre of the downlink passband (or the single downlink frequency).
@@ -417,6 +456,115 @@ mod tests {
 
         // An uncharacterised transmitter (mode null) is not claimed as FM.
         assert!(!x[2].is_fm());
+    }
+
+    #[test]
+    fn only_a_cw_uplink_over_an_fm_downlink_is_cw_only() {
+        // KOSEN-1's onboard-SDR transponder, verbatim as db.satnogs.org served it on
+        // 2026-09-23. `mode` is the DOWNLINK's (SatNOGS sends no `downlink_mode`), and it is
+        // AFSK — FM-class — under a CW `uplink_mode`.
+        let kosen1 = &parse_transmitters(
+            r#"[{"uuid":"YcezEz4dXU5uTwzYEFFrtk","description":"Mode HF/U - Onboard SDR","alive":true,"type":"Transponder","uplink_low":21125000,"uplink_high":21150000,"uplink_drift":null,"uplink_drifted":21125000,"downlink_low":435525000,"downlink_high":435525000,"downlink_drift":null,"downlink_drifted":435525000,"mode":"AFSK","mode_id":49,"uplink_mode":"CW","invert":false,"baud":1200.0,"sat_id":"NJBJ-3838-9654-0508-8247","norad_cat_id":49402,"norad_follow_id":null,"status":"active","updated":"2021-09-30T18:19:40.605018Z","citation":"http://space.kochi-ct.jp/kosen-1/ and https://iaru.amsat-uk.org/finished_detail.php?serialnum=687","service":"Amateur","iaru_coordination":"IARU Coordinated","iaru_coordination_url":"https://iaru.amsat-uk.org/finished_detail.php?serialnum=687","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null}]"#,
+        )[0];
+        assert!(kosen1.is_fm(), "scene: AFSK down is FM-class");
+        assert!(
+            kosen1.uplink_is_cw_only(),
+            "KOSEN-1 takes CW up over its AFSK downlink"
+        );
+
+        // Everything else keeps today's answer. The same catalogue, the same day — the fields
+        // the parser reads, values verbatim.
+        let others = parse_transmitters(
+            r#"[
+              {"norad_cat_id":44909,"description":"Mode V/U - Transponder","alive":true,"type":"Transponder","invert":true,"uplink_low":145935000,"uplink_high":145995000,"uplink_mode":"LSB","downlink_low":435610000,"downlink_high":435670000,"mode":"USB"},
+              {"norad_cat_id":27607,"description":"Mode V/U FM Voice CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145850000,"uplink_high":null,"uplink_mode":"FM","downlink_low":436795000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"Mode V APRS","alive":true,"type":"Transceiver","invert":false,"uplink_low":145825000,"uplink_high":null,"uplink_mode":"AFSK","downlink_low":145825000,"downlink_high":null,"mode":"AFSK"},
+              {"norad_cat_id":7530,"description":"Mode V/A (A) Lin CW","alive":true,"type":"Transponder","invert":false,"uplink_low":145850000,"uplink_high":145950000,"uplink_mode":"CW","downlink_low":29400000,"downlink_high":29500000,"mode":"CW"},
+              {"norad_cat_id":43700,"description":"CW Only Transpoder","alive":true,"type":"Transponder","invert":false,"uplink_low":2400005000,"uplink_high":2400040000,"uplink_mode":"CW","downlink_low":10489505000,"downlink_high":10489540000,"mode":"CW"},
+              {"norad_cat_id":99054,"description":"Mode U/V Transponder","alive":true,"type":"Transponder","invert":true,"uplink_low":435012500,"uplink_high":435037500,"uplink_mode":"USB","downlink_low":145962500,"downlink_high":145987500,"mode":"USB"}
+            ]"#,
+        );
+        assert_eq!(others.len(), 6, "scene: six records parsed");
+        for t in &others {
+            assert!(
+                !t.uplink_is_cw_only(),
+                "{} {:?}: not a CW uplink over an FM downlink",
+                t.norad,
+                t.description
+            );
+        }
+        // The two CW-uplink controls are CW-over-LINEAR: it is the FM half that rules them out.
+        assert!(others[3].uplink_mode.as_deref() == Some("CW") && !others[3].is_fm());
+        assert!(others[4].uplink_mode.as_deref() == Some("CW") && !others[4].is_fm());
+
+        // No uplink mode, or an empty one, says nothing.
+        let mut quiet = kosen1.clone();
+        quiet.uplink_mode = None;
+        assert!(!quiet.uplink_is_cw_only(), "absent uplink_mode");
+        quiet.uplink_mode = Some(String::new());
+        assert!(!quiet.uplink_is_cw_only(), "empty uplink_mode");
+    }
+
+    #[test]
+    fn qo100_narrowband_is_linear_by_band_plan_whatever_satnogs_tags_it() {
+        use tempo_core::doppler::DownlinkClass;
+        // Every live QO-100 row SatNOGS tags FM, verbatim as db.satnogs.org served them on
+        // 2026-09-23: the five narrowband segments (FM up AND down) and a receive-only beacon.
+        // The band plan allows no FM on that transponder.
+        let nb = parse_transmitters(
+            r#"[
+{"uuid":"URSfwDDuDJUh6MTN7UPrAj","description":"Narrowband digimodes(500Hz max BW)","alive":true,"type":"Transponder","uplink_low":2400040000,"uplink_high":2400080000,"uplink_drift":null,"uplink_drifted":2400040000,"downlink_low":10489540000,"downlink_high":10489580000,"downlink_drift":null,"downlink_drifted":10489540000,"mode":"FM","mode_id":1,"uplink_mode":"FM","invert":false,"baud":null,"sat_id":"LBQI-9987-6865-3928-8294","norad_cat_id":43700,"norad_follow_id":null,"status":"active","updated":"2020-03-18T21:13:52.221618Z","citation":"https://amsat-dl.org/en/neuer-qo-100-bandplan/","service":"Unknown","iaru_coordination":"N/A","iaru_coordination_url":"","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null},
+{"uuid":"dX48avS4dR5KSA22RyX6rb","description":"digimodes(2700Hz max BW)","alive":true,"type":"Transponder","uplink_low":2400080000,"uplink_high":2400150000,"uplink_drift":null,"uplink_drifted":2400080000,"downlink_low":10489580000,"downlink_high":10489650000,"downlink_drift":null,"downlink_drifted":10489580000,"mode":"FM","mode_id":1,"uplink_mode":"FM","invert":false,"baud":null,"sat_id":"LBQI-9987-6865-3928-8294","norad_cat_id":43700,"norad_follow_id":null,"status":"active","updated":"2020-03-18T21:13:52.213029Z","citation":"https://amsat-dl.org/en/neuer-qo-100-bandplan/","service":"Unknown","iaru_coordination":"N/A","iaru_coordination_url":"","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null},
+{"uuid":"yubm5DLaq5jrab2p9eTrt7","description":"SSB Only Transpoder","alive":true,"type":"Transponder","uplink_low":2400150000,"uplink_high":2400245000,"uplink_drift":null,"uplink_drifted":2400150000,"downlink_low":10489650000,"downlink_high":10489745000,"downlink_drift":null,"downlink_drifted":10489650000,"mode":"FM","mode_id":1,"uplink_mode":"FM","invert":false,"baud":null,"sat_id":"LBQI-9987-6865-3928-8294","norad_cat_id":43700,"norad_follow_id":null,"status":"active","updated":"2020-03-18T21:13:52.224099Z","citation":"https://amsat-dl.org/en/neuer-qo-100-bandplan/","service":"Unknown","iaru_coordination":"N/A","iaru_coordination_url":"","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null},
+{"uuid":"VJqQe6wpik5Lb9itkrP3cf","description":"SSB Only Transpoder","alive":true,"type":"Transponder","uplink_low":2400255000,"uplink_high":2400350000,"uplink_drift":null,"uplink_drifted":2400255000,"downlink_low":10489755000,"downlink_high":10489850000,"downlink_drift":null,"downlink_drifted":10489755000,"mode":"FM","mode_id":1,"uplink_mode":"FM","invert":false,"baud":null,"sat_id":"LBQI-9987-6865-3928-8294","norad_cat_id":43700,"norad_follow_id":null,"status":"active","updated":"2020-03-18T21:13:52.222837Z","citation":"https://amsat-dl.org/en/neuer-qo-100-bandplan/","service":"Unknown","iaru_coordination":"N/A","iaru_coordination_url":"","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null},
+{"uuid":"M7jS8zxq8x6P4Jy8mM4KHA","description":"Mixed modes(2700Hz max BW)","alive":true,"type":"Transponder","uplink_low":2400350000,"uplink_high":2400495000,"uplink_drift":null,"uplink_drifted":2400350000,"downlink_low":10489850000,"downlink_high":10489995000,"downlink_drift":null,"downlink_drifted":10489850000,"mode":"FM","mode_id":1,"uplink_mode":"FM","invert":false,"baud":null,"sat_id":"LBQI-9987-6865-3928-8294","norad_cat_id":43700,"norad_follow_id":null,"status":"active","updated":"2020-03-18T21:13:52.215801Z","citation":"https://amsat-dl.org/en/neuer-qo-100-bandplan/","service":"Unknown","iaru_coordination":"N/A","iaru_coordination_url":"","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null},
+{"uuid":"RNNoHdKN73KSQWTim9J8Co","description":"Experimental Beacon","alive":true,"type":"Transponder","uplink_low":null,"uplink_high":null,"uplink_drift":null,"uplink_drifted":null,"downlink_low":10489995000,"downlink_high":10490000000,"downlink_drift":null,"downlink_drifted":10489995000,"mode":"FM","mode_id":1,"uplink_mode":null,"invert":false,"baud":null,"sat_id":"LBQI-9987-6865-3928-8294","norad_cat_id":43700,"norad_follow_id":null,"status":"active","updated":"2020-03-18T21:13:52.218988Z","citation":"https://amsat-dl.org/en/neuer-qo-100-bandplan/","service":"Unknown","iaru_coordination":"N/A","iaru_coordination_url":"","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null}
+            ]"#,
+        );
+        assert_eq!(nb.len(), 6, "scene: six rows parsed");
+        for t in &nb {
+            assert_eq!(
+                t.mode.as_deref(),
+                Some("FM"),
+                "scene: SatNOGS tags {:?} FM",
+                t.description
+            );
+            assert_eq!(
+                t.downlink_class(),
+                DownlinkClass::Usb,
+                "{:?}: linear by band plan, not FM",
+                t.description
+            );
+            assert!(!t.is_fm(), "{:?}", t.description);
+        }
+
+        // The FM birds stay FM, and the linear ones stay as they were. Same catalogue, same
+        // day — the fields the parser reads, values verbatim.
+        let guards = parse_transmitters(
+            r#"[
+              {"norad_cat_id":27607,"description":"Mode V/U FM Voice CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145850000,"uplink_high":null,"uplink_mode":"FM","downlink_low":436795000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":43017,"description":"Mode U/V FM Voice (no CTCSS any longer)","alive":true,"type":"Transceiver","invert":false,"uplink_low":435250000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145960000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"Mode V/U FM - Voice Repeater CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145990000,"uplink_high":null,"uplink_mode":"FM","downlink_low":437800000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"Mode V/V FM (crew R2+3)","alive":true,"type":"Transceiver","invert":false,"uplink_low":144490000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145800000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"Mode V APRS","alive":true,"type":"Transceiver","invert":false,"uplink_low":145825000,"uplink_high":null,"uplink_mode":"AFSK","downlink_low":145825000,"downlink_high":null,"mode":"AFSK"},
+              {"norad_cat_id":43678,"description":"FM VOICE","alive":true,"type":"Transceiver","invert":false,"uplink_low":437500000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145900000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":49402,"description":"Mode HF/U - Onboard SDR","alive":true,"type":"Transponder","invert":false,"uplink_low":21125000,"uplink_high":21150000,"uplink_mode":"CW","downlink_low":435525000,"downlink_high":435525000,"mode":"AFSK"},
+              {"norad_cat_id":44909,"description":"Mode V/U - Transponder","alive":true,"type":"Transponder","invert":true,"uplink_low":145935000,"uplink_high":145995000,"uplink_mode":"LSB","downlink_low":435610000,"downlink_high":435670000,"mode":"USB"},
+              {"norad_cat_id":43700,"description":"CW Only Transpoder","alive":true,"type":"Transponder","invert":false,"uplink_low":2400005000,"uplink_high":2400040000,"uplink_mode":"CW","downlink_low":10489505000,"downlink_high":10489540000,"mode":"CW"}
+            ]"#,
+        );
+        let class: Vec<DownlinkClass> = guards.iter().map(Transmitter::downlink_class).collect();
+        use DownlinkClass::{Fm, Usb};
+        assert_eq!(
+            class,
+            [Fm, Fm, Fm, Fm, Fm, Fm, Fm, Usb, Usb],
+            "SO-50, AO-91, the ISS voice and APRS channels, PO-101 and KOSEN-1 stay FM; \
+             RS-44 and QO-100's CW-only segment stay linear"
+        );
+        assert!(
+            guards[6].uplink_is_cw_only(),
+            "KOSEN-1's CW uplink is untouched"
+        );
     }
 
     #[test]

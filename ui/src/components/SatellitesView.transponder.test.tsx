@@ -14,7 +14,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
-import type { SatDetail, SatTransmitter } from '../types'
+import type {
+  SatBinding,
+  SatDetail,
+  SatTrackStatus,
+  SatTransmitter,
+  SatTransponderHeld,
+} from '../types'
 
 const api = vi.hoisted(() => ({
   getSatellites: vi.fn(() => Promise.resolve(null)),
@@ -27,7 +33,7 @@ const api = vi.hoisted(() => ({
   getSatTransponder: vi.fn((): Promise<import('../types').SatTransponderHeld | null> => Promise.resolve(null)),
   startSatTrack: vi.fn(() => Promise.resolve(null)),
   stopSatTrack: vi.fn(() => Promise.resolve()),
-  getSatTrackStatus: vi.fn(() => Promise.resolve(null)),
+  getSatTrackStatus: vi.fn((): Promise<import('../types').SatTrackStatus | null> => Promise.resolve(null)),
 }))
 vi.mock('../api', () => api)
 // The detail pane embeds the globe; it needs a canvas and nothing here is about the map.
@@ -104,6 +110,10 @@ beforeEach(() => {
   api.getSettings.mockImplementation(() => Promise.resolve(settings()))
   api.setSatTransponder.mockReset()
   api.setSatTransponder.mockImplementation(() => Promise.resolve())
+  api.getSatTransponder.mockReset()
+  api.getSatTransponder.mockImplementation(() => Promise.resolve(null))
+  api.getSatTrackStatus.mockReset()
+  api.getSatTrackStatus.mockImplementation(() => Promise.resolve(null))
 })
 afterEach(cleanup)
 
@@ -251,32 +261,151 @@ describe('the downlink mode, as SatNOGS actually sends it', () => {
     expect((await screen.findByTestId('sat-tp-txmode')).textContent).toMatch(/LSB up \/ USB down/)
   })
 
-  // The note forecasts "the TX (split) VFO is set to match" the uplink the record lists. The
-  // engine commands uplink_mode_for(downlink rig mode, invert): only an INVERTING bird swaps, and
-  // only between USB and LSB. Anywhere else the record's uplink is not what the engine would set.
-  const onboardSdr = {
-    description: 'Mode HF/U - Onboard SDR',
-    kind: 'Transponder',
-    mode: 'AFSK',
-    uplinkMode: 'CW',
-    uplinkLowHz: 21_125_000,
-    uplinkHighHz: 21_150_000,
-    downlinkLowHz: 435_525_000,
-  }
-  it.each([
-    // KOSEN-1 exactly as listed: the engine would put FM on the TX VFO, never CW.
-    ['KOSEN-1: CW up over an AFSK downlink', { ...onboardSdr, invert: false }],
-    // The same legs on an inverting bird: FM has no sideband to swap, so still FM.
-    ['the same legs on an inverting bird', { ...onboardSdr, invert: true }],
-    // A non-inverting bird keeps the downlink's sideband: USB, not the LSB listed.
-    ['a non-inverting LSB/USB pair', { ...transponder, description: 'Mode V/U - Transponder', invert: false }],
-  ])('says nothing about the TX sideband for %s', async (_, over) => {
-    show(asSent(over))
+  // The swap forecast says "the TX (split) VFO is set to match" the uplink the record lists. The
+  // engine commands uplink_mode_for(downlink rig mode, invert), so a NON-inverting bird keeps the
+  // downlink's sideband up — USB, not the LSB listed — and there the forecast would be false.
+  it('says nothing about the TX mode for a non-inverting LSB/USB pair', async () => {
+    show(asSent({ ...transponder, invert: false }))
     render(<SatellitesView focusSat="RS-44" />)
-    fireEvent.click(await screen.findByLabelText(`Work ${over.description}`))
+    fireEvent.click(await screen.findByLabelText('Work Mode V/U - Transponder'))
     // The pick has landed (this line and the note render from the same hold), so an absent note
     // is a decision, not a render that has not happened yet.
     await screen.findByText(/Doppler tunes this transponder while auto-track/)
+    expect(screen.queryByTestId('sat-tp-txmode')).toBeNull()
+  })
+})
+
+describe('a CW uplink over an FM downlink (KOSEN-1)', () => {
+  // KOSEN-1's onboard SDR as SatNOGS lists it: CW up across 21.125–21.150 MHz over an AFSK
+  // downlink. The engine takes this uplink's TX mode from the uplink — CW from Phone or on the
+  // radio's own CW keyer, the data mode a soundcard keyer's tone needs, and FM (unchanged) from
+  // Digital — so the note may name CW only as far as that goes. The FM class that makes a record
+  // this shape is the ENGINE's, read off the held transponder's binding.
+  type Tx = SatDetail['transmitters'][number]
+  const onboardSdr = (over: Partial<Tx> = {}): Tx => ({
+    description: 'Mode HF/U - Onboard SDR',
+    alive: true,
+    mode: 'AFSK',
+    uplinkLowHz: 21_125_000,
+    downlinkLowHz: 435_525_000,
+    invert: false,
+    uplinkHighHz: 21_150_000,
+    downlinkHighHz: 435_525_000,
+    uplinkMode: 'CW',
+    downlinkMode: null,
+    kind: 'Transponder',
+    baud: 1200,
+    ...over,
+  })
+  const binding = (fm: boolean): SatBinding => ({
+    radioId: 0,
+    radioName: 'FT-991A',
+    band: '70cm',
+    fm,
+    simplex: false,
+    downlinkMhz: 435.525,
+    uplinkMhz: 21.1375,
+    pendingDownlinkMhz: null,
+    pendingUplinkMhz: null,
+    note: null,
+  })
+  /** The engine holds the row once it is picked, and classes its downlink with `fm`. */
+  const holdOnPick = (tx: Tx, fm: boolean) => {
+    let held: SatTransponderHeld | null = null
+    api.getSatDetail.mockImplementation(() => Promise.resolve({ ...detail(), transmitters: [tx] }))
+    api.setSatTransponder.mockImplementation(() => {
+      held = { name: 'RS-44', index: 0, description: tx.description, binding: binding(fm) }
+      return Promise.resolve()
+    })
+    api.getSatTransponder.mockImplementation(() => Promise.resolve(held))
+  }
+  const pick = async (description: string) => {
+    render(<SatellitesView focusSat="RS-44" />)
+    fireEvent.click(await screen.findByLabelText(`Work ${description}`))
+  }
+  const track = (over: Partial<SatTrackStatus>): SatTrackStatus => ({
+    name: 'RS-44',
+    state: 'tracking',
+    mode: 'doppler-only',
+    dopplerDownlink: true,
+    dopplerUplink: true,
+    uplinkOffer: 'none',
+    uplinkOfferMap: null,
+    uplinkRadio: 'FT-991A',
+    uplinkRadioId: 0,
+    azDeg: null,
+    elDeg: null,
+    aosAzDeg: 100,
+    maxElDeg: 45,
+    satAzDeg: null,
+    satElDeg: null,
+    rangeKm: null,
+    rangeRateKmS: null,
+    downlinkHz: 435_525_000,
+    uplinkHz: 21_137_500,
+    downlinkShiftHz: null,
+    uplinkShiftHz: null,
+    transponder: 'Mode HF/U - Onboard SDR',
+    transponderIndex: 0,
+    inverting: false,
+    offsetHz: null,
+    halfWidthHz: null,
+    elementAgeDays: 1.2,
+    elementEpochUnix: Math.floor(Date.now() / 1000) - 104_000,
+    aosUnix: Math.floor(Date.now() / 1000) - 60,
+    losUnix: Math.floor(Date.now() / 1000) + 600,
+    ...over,
+  })
+
+  it.each([
+    ['as listed', false],
+    // CW names no sideband, so the inverting flag changes nothing about the answer.
+    ['on a record marked inverting', true],
+  ])('forecasts CW without promising it to a soundcard keyer (%s)', async (_, invert) => {
+    holdOnPick(onboardSdr({ invert }), true)
+    await pick('Mode HF/U - Onboard SDR')
+    const note = (await screen.findByTestId('sat-tp-txmode')).textContent ?? ''
+    expect(note).toMatch(/^TX mode: this bird runs CW up \/ AFSK down \(SatNOGS\)/)
+    expect(note).toMatch(/sets the TX \(split\) VFO to CW when you work it from Phone or with the radio's own CW keyer/)
+    expect(note).toMatch(/a soundcard CW keyer gets the data mode its keyed tone needs/)
+    expect(note).not.toMatch(/set to match/)
+  })
+
+  it("prints the mode the engine commands on a tracked pass — a soundcard keyer's PKTUSB, not CW", async () => {
+    holdOnPick(onboardSdr(), true)
+    api.getSatTrackStatus.mockImplementation(() => Promise.resolve(track({ txMode: 'PKTUSB' })))
+    await pick('Mode HF/U - Onboard SDR')
+    await waitFor(() =>
+      expect(screen.getByTestId('sat-tp-txmode').textContent).toMatch(
+        /^TX mode: the uplink \(split\) VFO is set to PKTUSB — the downlink stays AFSK/,
+      ),
+    )
+    expect(screen.getByTestId('sat-tp-txmode').textContent).not.toMatch(/\bCW\b/)
+  })
+
+  it.each([
+    // The same record, had the ENGINE not classed its downlink FM: the gate reads the engine.
+    ['KOSEN-1 with a downlink the engine did not class FM', 'Mode HF/U - Onboard SDR', {}],
+    // AO-7's "Lin CW": CW up over a LINEAR CW downlink — worked like any linear bird.
+    [
+      'a CW uplink over a linear downlink (AO-7 "Lin CW")',
+      'Mode V/A (A) Lin CW',
+      {
+        description: 'Mode V/A (A) Lin CW',
+        mode: 'CW',
+        baud: null,
+        uplinkLowHz: 145_850_000,
+        uplinkHighHz: 145_950_000,
+        downlinkLowHz: 29_400_000,
+        downlinkHighHz: 29_500_000,
+      },
+    ],
+  ])('says nothing for %s', async (_, description, over) => {
+    holdOnPick(onboardSdr(over), false)
+    await pick(description)
+    await screen.findByText(/Doppler tunes this transponder while auto-track/)
+    // …and the binding really did arrive, so the absence is the gate's answer.
+    await screen.findByTestId('sat-radio-binding')
     expect(screen.queryByTestId('sat-tp-txmode')).toBeNull()
   })
 })

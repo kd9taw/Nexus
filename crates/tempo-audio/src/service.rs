@@ -25806,6 +25806,90 @@ mod tests {
         );
     }
 
+    /// A station on an all-band radio OUTSIDE the four Main/Sub satellite Icoms — an FT-991A
+    /// (Hamlib 1035), HF through 70 cm on one A/B pair — with the A/B mapping confirmed, that
+    /// has just picked `tp` from `section` the way the Tauri command does: hold, the
+    /// catalogue's facts, then the tune that arms the loop's one-shots.
+    fn ab_sat_pick_engine(
+        section: &str,
+        tp: tempo_core::doppler::Transponder,
+        class: tempo_core::doppler::DownlinkClass,
+        uplink_cw: bool,
+    ) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.rig_model = 1035;
+            eng.apply_settings(s);
+            eng.set_operating_mode(section, false);
+            eng.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::ADownBUp));
+            eng.set_sat_transponder(Some(("bird|transponder".into(), 0, tp)));
+            eng.set_sat_single_channel_fm(false);
+            eng.set_sat_uplink_cw(uplink_cw);
+            eng.sat_tune_nominal(class, 1_000_000);
+        }
+        engine
+    }
+
+    #[test]
+    fn a_cw_uplink_over_an_fm_downlink_reaches_the_tx_vfo_as_cw() {
+        // KOSEN-1: CW up on 21.1375 MHz over an AFSK (FM-class) downlink on 435.525, worked
+        // from the CW section on the radio's own keyer. The TX VFO's mode used to follow the
+        // FM downlink, which put `X FM -1` on a CW-only 15 m segment.
+        let (addr, seen) = recording_rigctld_stub();
+        let kosen1 = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 21_137_500,
+            downlink_centre_hz: 435_525_000,
+            invert: false,
+            half_width_hz: 0,
+        };
+        let engine = ab_sat_pick_engine("cw", kosen1, FM_BIRD, true);
+
+        step_with_watchdog(&engine, Rig::rigctld(&addr), None, Duration::from_secs(10));
+
+        assert_eq!(
+            split_verbs(&seen),
+            vec!["S 1 VFOB", "I 21137500", "X CW -1"],
+            "the uplink rides VFO B, in CW"
+        );
+        let lines = seen.lock().unwrap().clone();
+        assert!(
+            lines.iter().any(|l| l.trim() == "F 435525000")
+                && lines.iter().any(|l| l.trim().starts_with("M FM")),
+            "…while the downlink is still received in FM: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_inverting_birds_data_submode_reaches_the_tx_vfo_mirrored() {
+        // RS-44 (inverting, USB down) worked from the Digital section: the receive leg stays
+        // PKTUSB and the TX VFO takes PKTLSB. It used to be `X PKTUSB 3000`, which an
+        // inverting transponder turns tone-reversed on the way down.
+        let (addr, seen) = recording_rigctld_stub();
+        let rs44 = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: true,
+            half_width_hz: 30_000,
+        };
+        let engine = ab_sat_pick_engine("digital", rs44, SSB_BIRD, false);
+
+        step_with_watchdog(&engine, Rig::rigctld(&addr), None, Duration::from_secs(10));
+
+        assert_eq!(
+            split_verbs(&seen),
+            vec!["S 1 VFOB", "I 145965000", "X PKTLSB 3000"],
+            "the uplink rides VFO B in the mirrored data submode"
+        );
+        let lines = seen.lock().unwrap().clone();
+        assert!(
+            lines.iter().any(|l| l.trim() == "F 435640000")
+                && lines.iter().any(|l| l.trim().starts_with("M PKTUSB")),
+            "…while the downlink is still received in PKTUSB: {lines:?}"
+        );
+    }
+
     #[test]
     fn terrestrial_up_split_apply_stays_live_and_rides_vfob() {
         // The same one-shot serves every pile-up "UP n" spot — pre-fix those
