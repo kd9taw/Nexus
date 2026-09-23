@@ -582,8 +582,14 @@ struct D1Answer {
 ///
 /// Read it as: switching the gate to D1 moves the band strip's phone shade on every cross-band
 /// pass (Main's 70 cm segment becomes the uplink's 2 m one), never moves the judged frequency,
-/// and changes a licence answer in exactly one state — the uplink's sideband unknown and a
-/// sideband-sensitive emission within an offset of a segment edge.
+/// and changes a licence answer in two states. Both are on the constructed edge bird and in the
+/// Digital section, where the gate judges the data offset on the DIAL's sideband and D1 on the
+/// uplink's:
+/// - the uplink's sideband unknown (the mode taken back mid-pass): D1 judges both halves;
+/// - ⚠️ the uplink's KNOWN sideband, since `2d4300ad` mirrors the data submode on an inverting
+///   transponder (PKTUSB ↔ PKTLSB): the uplink goes up in PKTLSB, so its data carrier sits one
+///   offset BELOW the 144.101 dial, inside the 2 m CW-only segment. That row read `true` when
+///   the table was pinned, because the uplink was then commanded PKTUSB, the downlink's word.
 const D1_DIFFERS: &[D1Answer] = &[
     D1Answer {
         row: "IC-9700 RS-44 phone, native CI-V: uplink rides Sub, General",
@@ -597,9 +603,11 @@ const D1_DIFFERS: &[D1Answer] = &[
         emission_mhz: 145.965,
         phone_seg: Some((144.1, 148.0)),
     },
+    // `true` until `2d4300ad` was merged: the uplink is now commanded PKTLSB, so D1 judges the
+    // data carrier 1.5 kHz below 144.101. The gate still allows this row (the table above).
     D1Answer {
         row: "IC-9700 constructed edge bird (up 144.101, inverting) digital, General",
-        tx_allowed: true,
+        tx_allowed: false,
         emission_mhz: 144.101,
         phone_seg: Some((144.1, 148.0)),
     },
