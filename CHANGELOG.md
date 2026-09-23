@@ -135,6 +135,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The filter no longer stays at 6 kHz when you switch from phone or CW into a digital mode.**
+  A Flex over SmartSDR CAT answers "done" to the 3 kHz data filter Nexus asks for and then keeps
+  its own 6 kHz SSB filter. Nexus already read the filter back and put the right one in — but
+  only on the retunes it drives itself, not on the one gesture that shows the fault: clicking a
+  digital section yourself from phone or CW. That click now checks the filter the same way, sets
+  it again if the radio ignored it, and, when the radio still will not take it, says on the CAT
+  line which filter you are on and which one the mode needs — instead of confirming the mode and
+  saying nothing about a passband twice as wide as FT8 wants. Moving the dial inside a band still
+  leaves your filter exactly where you put it. (#349)
+
 - **The SSTV screen now says where the switch is that keeps your radio in the data mode.** On an
   IC-7300 or IC-7100 the rig drops back to plain USB between pictures, taking its data-mode
   filter settings with it, and two operators independently ended up setting USB-D by hand every

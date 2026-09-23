@@ -6258,21 +6258,32 @@ impl RadioLoop {
                         // …and it is re-asserted WITHOUT re-commanding the width when neither the
                         // mode nor the band moved — see `retune_passband` for why that gate is not
                         // `mode_changed` alone (#67).
-                        match rig.set_mode(
-                            &md,
-                            retune_passband(&md, mode_changed, self.last_dial, dial),
-                        ) {
+                        let sent_pb = retune_passband(&md, mode_changed, self.last_dial, dial);
+                        match rig.set_mode(&md, sent_pb) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
                                 self.rig_asserted = true; // a real assert — credit the latch
                                 retuned = true;
-                                if mode_changed {
-                                    // Read the mode straight back FROM the rig to confirm it
-                                    // actually applied — rigctld can answer RPRT 0 without the rig
-                                    // changing, which is the only way to tell those apart.
-                                    retune_note =
-                                        Some(mode_set_note(rig, &md, self.applied.rig_model));
-                                }
+                                // ISSUE #349 (ve3wej's Flex 6400 again, on 1.14.0): #114's width
+                                // read-back went in on the STEADY-STATE retune only, and the
+                                // gesture in his report — clicking a digital section from CW or
+                                // phone — raises `immediate_retune` and lands HERE. This path
+                                // asked only whether the MODE had applied, so a rig that answers
+                                // `RPRT 0` and keeps its own 6 kHz filter read as success and the
+                                // app said nothing about the filter. A refused width OUTRANKS the
+                                // mode note for the same reason it does on the other path: a
+                                // cheerful "rig confirmed in PKTUSB" beside a 6 kHz filter is how
+                                // this stayed mysterious across three reports.
+                                retune_note = width_reassert_after_default_rung(rig, &md, sent_pb)
+                                    .or_else(|| {
+                                        mode_changed.then(|| {
+                                            // Read the mode straight back FROM the rig to confirm
+                                            // it actually applied — rigctld can answer RPRT 0
+                                            // without the rig changing, which is the only way to
+                                            // tell those apart.
+                                            mode_set_note(rig, &md, self.applied.rig_model)
+                                        })
+                                    });
                             }
                             // `last_mode` is unchanged, so the steady-state path below re-tries
                             // on later loops and re-gives-up past the budget — a non-supporting
@@ -12212,10 +12223,15 @@ fn retry_passband(md: &str, prior_fails: u32) -> i32 {
     }
 }
 
-/// The mode has just been ACCEPTED on the filter-agnostic rung (`sent_pb == 0` —
-/// `RIG_PASSBAND_NORMAL`, i.e. "use YOUR own default width"). Put the width we actually
-/// wanted back, as its own `set_mode`, once. Returns the note to surface when the rig kept
-/// its own width; `None` when there is nothing to say (any other rung, or the width landed).
+/// A `set_mode` has just been ACCEPTED — on the steady-state ladder or on an operator force
+/// retune — and `sent_pb` is the width that went with it. Hold the rig to that width: read
+/// back what it actually took and, if it kept its own, put ours back as its own `set_mode`,
+/// once. Returns the note to surface when the rig still kept its own width; `None` when there
+/// is nothing to say (no width was commanded, or the width landed).
+///
+/// Two shapes of "accepted" reach here and both are the same bug wearing different clothes:
+/// `sent_pb == 0` is the filter-agnostic rung (`RIG_PASSBAND_NORMAL` — "use YOUR own default
+/// width"), and `sent_pb > 0` is an ordinary width the rig answered `RPRT 0` and ignored.
 ///
 /// ISSUE #82 (ve3wej, Flex 6400): "the filter lands at 6000 Hz on a mode/band change." The
 /// escalation to passband 0 is deliberate and stays — it is what gets the MODE accepted from a
@@ -12246,6 +12262,14 @@ fn width_reassert_after_default_rung(rig: &mut Rig, md: &str, sent_pb: i32) -> O
     let want = passband_for(md);
     if want <= 0 {
         return None; // non-DATA: we sent NOCHANGE and have no width opinion to enforce
+    }
+    if sent_pb < 0 {
+        // `RIG_PASSBAND_NOCHANGE` — we deliberately did NOT command a width, so there is
+        // nothing to hold the rig to and no reason to spend a round-trip asking. That is #67's
+        // in-band dial-only case, and only the FORCE path can produce it: `retry_passband`
+        // never returns a negative for a DATA mode. The guard lives here rather than at the
+        // call site so a third caller cannot reintroduce the per-QSY filter pop #67 removed.
+        return None;
     }
     if sent_pb != 0 {
         // ── THE ACCEPTED-BUT-IGNORED CASE (ve3wej again, #114 on 1.7.0, AFTER the rung fix
@@ -26556,6 +26580,161 @@ mod tests {
         assert_eq!(
             state.mode_giveup, None,
             "a refused WIDTH is not a refused MODE: the give-up loop must not come back"
+        );
+    }
+
+    /// A Flex over SmartSDR CAT: it ACCEPTS `M <mode> <width>` with a cheerful `RPRT 0` and
+    /// then keeps its own 6 kHz SSB filter, while `F`/`f`/`m` are otherwise truthful. That
+    /// combination — a write that SUCCEEDS and a width that is discarded — is the whole of
+    /// #114/#349, and no other mock here has it: [`mock_stateful_rigctld`] reports a fixed
+    /// 2400 (which the check correctly reads as the radio picking its nearest filter), and
+    /// [`mock_rigctld_with_width`] answers `RPRT 0` to `f`, so the retune loop cannot run
+    /// against it.
+    fn mock_flex_keeping_its_own_filter(start_hz: u64) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        let rec = Arc::clone(&log);
+        std::thread::spawn(move || {
+            let mut cur_hz = start_hz;
+            let mut live_mode = "USB".to_string();
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut out = match stream.try_clone() {
+                    Ok(o) => o,
+                    Err(_) => return,
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let mut p = line.split_whitespace();
+                    let reply: String = match p.next() {
+                        Some("M") => {
+                            live_mode = p.next().unwrap_or("USB").to_string();
+                            // The width arrives, is discarded, and the write reports success.
+                            "RPRT 0\n".into()
+                        }
+                        Some("F") => {
+                            cur_hz = p
+                                .next()
+                                .and_then(|s| s.parse::<u64>().ok())
+                                .unwrap_or(cur_hz);
+                            "RPRT 0\n".into()
+                        }
+                        Some("f") => format!("{cur_hz}\n"),
+                        Some("m") => format!("{live_mode}\n6000\n"),
+                        _ => "RPRT 0\n".into(),
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, log)
+    }
+
+    /// Run one scene — settle on Phone/20 m, then CLICK the Digital section — against `addr`,
+    /// and hand back what the operator was told. Two rigs, one gesture: the only difference
+    /// between the case and its control is which radio is on the other end of the socket.
+    fn detail_after_clicking_digital(addr: &str) -> String {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        let mut rig = Rig::rigctld(addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        const TICK_MS: f64 = 20.0;
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        for _ in 0..3 {
+            run(&mut state, &mut rig, &mut backend, t); // settle Phone / 20 m
+            t += TICK_MS;
+        }
+        // THE GESTURE IN THE REPORT: "setting to any digital mode from cw/phone".
+        engine.lock().unwrap().set_operating_mode("digital", true);
+        for _ in 0..4 {
+            run(&mut state, &mut rig, &mut backend, t);
+            t += TICK_MS;
+        }
+        let said = engine.lock().unwrap().snapshot().radio.cat_detail;
+        said
+    }
+
+    /// ⭐ ISSUE #349 (ve3wej, Flex 6400 over SmartSDR DAX, 1.14.0 — the THIRD report of this
+    /// filter): "whenever the mode is selected as a digital mode, coming from cw or phone, the
+    /// radio goes to 6000 Hz", and, asked what the app said: "it said nothing."
+    ///
+    /// #114's fix — command the width, then READ BACK what the rig actually took, because this
+    /// radio answers `RPRT 0` and keeps its own filter — went in on the STEADY-STATE retune
+    /// only. Clicking a section raises `immediate_retune`
+    /// (`Engine::set_operating_mode_with_reset`), which is the FORCE path, and that path asked
+    /// only whether the MODE had landed. So the one gesture in his report was the one gesture
+    /// with no width check, and the app reported success over a 6 kHz filter — which is
+    /// precisely what "it said nothing" describes.
+    ///
+    /// ⚠️ NEEDS BENCH, exactly as #114 is: what is pinned here is that the read-back is ISSUED
+    /// and that the operator is TOLD when the rig keeps its own filter. Whether a Flex then
+    /// TAKES the second width is hardware, and no mock can answer it.
+    #[test]
+    fn an_operator_mode_click_reads_back_the_width_the_rig_took() {
+        let (addr, log) = mock_flex_keeping_its_own_filter(14_250_000);
+        let detail = detail_after_clicking_digital(&addr);
+
+        let cmds = log.lock().unwrap().clone();
+        let widths: Vec<&String> = cmds
+            .iter()
+            .filter(|c| c.as_str() == "M PKTUSB 3000")
+            .collect();
+        assert!(
+            !widths.is_empty(),
+            "control: the click itself must command the DATA width, or nothing below is about \
+             this bug at all: {cmds:?}"
+        );
+        assert!(
+            cmds.iter().any(|c| c == "m"),
+            "the width the rig TOOK has to be read back — a bare RPRT 0 is not evidence that a \
+             filter moved: {cmds:?}"
+        );
+        assert!(
+            widths.len() >= 2,
+            "…and once the read-back shows 6 kHz, the width the mode needs is asserted again: \
+             {cmds:?}"
+        );
+        assert!(
+            detail.contains("6000") && detail.contains("3000"),
+            "the operator is TOLD which filter the rig is on and which one FT8 needs — 'it said \
+             nothing' is the report: {detail:?}"
+        );
+
+        // CONTROL, and it is the whole reason this is two scenes: a radio that answers the same
+        // gesture with a filter near the one asked for must say NOTHING. Without it the
+        // assertions above would pass for a check that complains unconditionally.
+        let (ok_addr, _ok_log) = mock_stateful_rigctld(14_250_000, false);
+        let quiet = detail_after_clicking_digital(&ok_addr);
+        assert!(
+            !quiet.contains("filter"),
+            "a rig on a sane filter is not a fault to report: {quiet:?}"
         );
     }
 
