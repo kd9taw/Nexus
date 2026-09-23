@@ -41,6 +41,7 @@ import type {
   SatPassEarn,
   SatSked,
   SatTrackStatus,
+  SatTransmitter,
   SatVfoMap,
   SatView,
   Settings,
@@ -1619,6 +1620,13 @@ const fmtLeg = (lowHz: number | null, highHz: number | null) => {
   return highHz != null && highHz > lowHz ? `${low}–${(highHz / 1e6).toFixed(3)}` : low
 }
 
+/** The DOWNLINK's mode. SatNOGS sends no per-leg downlink field: its `mode` IS the downlink's
+ * mode and `uplink_mode` its only per-leg one, so `downlinkMode` is null on every record it
+ * sends. Read alone, it left the ↓ leg blank on every card with an uplink mode and kept the
+ * TX-sideband note from ever rendering. The backend's `Transmitter::downlink_class` makes this
+ * same fallback. */
+const downMode = (tx: SatTransmitter) => tx.downlinkMode ?? tx.mode
+
 /** SatNOGS `type` in operator words, for the chooser cards. Unknown = no chip
  * — never guess a kind. */
 const kindWord = (k: string | null) =>
@@ -2819,8 +2827,8 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
   // command the radio never gets.
   const txSwapMode =
     heldT?.uplinkMode != null &&
-    heldT.downlinkMode != null &&
-    heldT.uplinkMode !== heldT.downlinkMode
+    downMode(heldT) != null &&
+    heldT.uplinkMode !== downMode(heldT)
       ? heldT.uplinkMode
       : null
 
@@ -4019,7 +4027,10 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                             <span className="sat-tp-legs">
                               <span className="sat-tp-leg">
                                 ↓ <b>{fmtLeg(tx.downlinkLowHz, tx.downlinkHighHz)}</b>
-                                {tx.downlinkMode ? ` ${tx.downlinkMode}` : ''}
+                                {/* A single-mode card's chip carries its mode; a per-leg card prints it here. */}
+                                {(tx.downlinkMode != null || tx.uplinkMode != null) &&
+                                  downMode(tx) &&
+                                  ` ${downMode(tx)}`}
                               </span>
                               <span className="sat-tp-leg">
                                 ↑ <b>{fmtLeg(tx.uplinkLowHz, tx.uplinkHighHz)}</b>
@@ -4097,7 +4108,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                             tags={{ b: <b /> }}
                             vals={{
                               tx: detailTrack.txMode,
-                              down: heldT.downlinkMode ?? '',
+                              down: downMode(heldT) ?? '',
                             }}
                           />
                         ) : (
@@ -4107,7 +4118,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                           // row under "correcting the downlink".
                           t('sat.transponder.txMode.notCommanded', {
                             up: txSwapMode,
-                            down: heldT.downlinkMode ?? '',
+                            down: downMode(heldT) ?? '',
                             why: !dopplerOn
                               ? t('sat.transponder.txMode.why.dopplerOff')
                               : !detailTrack.dopplerUplink
@@ -4118,7 +4129,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                       ) : (
                         t('sat.transponder.txMode.forecast', {
                           up: txSwapMode,
-                          down: heldT.downlinkMode ?? '',
+                          down: downMode(heldT) ?? '',
                         })
                       )}
                     </div>

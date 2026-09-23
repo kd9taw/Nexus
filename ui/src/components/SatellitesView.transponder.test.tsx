@@ -179,6 +179,79 @@ describe('a bird with no transmitters on screen (#269)', () => {
   })
 })
 
+describe('the downlink mode, as SatNOGS actually sends it', () => {
+  // RS-44's transponder and beacon exactly as the live catalog sent them on 2026-09-23. SatNOGS
+  // has no per-leg DOWNLINK field: its `mode` IS the downlink's mode and `uplink_mode` the only
+  // per-leg one, so `downlinkMode` arrives null on every record — unlike the fixture above.
+  type Tx = SatDetail['transmitters'][number]
+  const asSent = (over: Partial<Tx>): Tx => ({
+    description: '',
+    alive: true,
+    mode: null,
+    uplinkLowHz: null,
+    downlinkLowHz: null,
+    invert: false,
+    uplinkHighHz: null,
+    downlinkHighHz: null,
+    uplinkMode: null,
+    downlinkMode: null,
+    kind: null,
+    ...over,
+  })
+  const transponder = asSent({
+    description: 'Mode V/U - Transponder',
+    kind: 'Transponder',
+    mode: 'USB',
+    uplinkMode: 'LSB',
+    invert: true,
+    uplinkLowHz: 145_935_000,
+    uplinkHighHz: 145_995_000,
+    downlinkLowHz: 435_610_000,
+    downlinkHighHz: 435_670_000,
+  })
+  const beacon = asSent({
+    description: 'Mode U - Beacon',
+    kind: 'Transmitter',
+    mode: 'CW',
+    downlinkLowHz: 435_605_000,
+  })
+  const card = async (description: string) => {
+    const el = (await screen.findByText(description)).closest('.sat-tp-card')
+    const text = (sel: string) => Array.from(el?.querySelectorAll(sel) ?? []).map((e) => e.textContent)
+    return { legs: text('.sat-tp-leg'), chips: text('.sat-tp-kind') }
+  }
+  const show = (...transmitters: Tx[]) =>
+    api.getSatDetail.mockImplementation(() => Promise.resolve({ ...detail(), transmitters }))
+
+  it('puts the downlink mode on the ↓ leg of a card whose uplink has its own', async () => {
+    // The ↓ side read the empty per-leg field and printed nothing, so an inverting transponder
+    // never said it wants USB down — the half of the pair the receiver is tuned to.
+    show(transponder)
+    render(<SatellitesView focusSat="RS-44" />)
+    expect(await card('Mode V/U - Transponder')).toEqual({
+      legs: ['↓ 435.610–435.670 USB', '↑ 145.935–145.995 LSB'],
+      chips: ['linear'],
+    })
+  })
+
+  it('keeps a single-mode card showing its mode once, in the chip', async () => {
+    show(beacon)
+    render(<SatellitesView focusSat="RS-44" />)
+    expect(await card('Mode U - Beacon')).toEqual({
+      legs: ['↓ 435.605', '↑ —'],
+      chips: ['beacon', 'CW'],
+    })
+  })
+
+  it('says which sideband the TX VFO takes once the inverting transponder is picked', async () => {
+    // The TX-sideband note keyed on the same empty field, so it never appeared for a real bird.
+    show(transponder)
+    render(<SatellitesView focusSat="RS-44" />)
+    fireEvent.click(await screen.findByLabelText('Work Mode V/U - Transponder'))
+    expect((await screen.findByTestId('sat-tp-txmode')).textContent).toMatch(/LSB up \/ USB down/)
+  })
+})
+
 describe('what the row tells the operator', () => {
   it('marks the inverting transponder, and only that one', async () => {
     render(<SatellitesView focusSat="RS-44" />)
