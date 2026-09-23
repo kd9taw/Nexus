@@ -2120,6 +2120,159 @@ async fn pick_data_folder(app: tauri::AppHandle) -> Option<String> {
 }
 
 #[cfg(test)]
+mod durable_command_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A store-backed engine on a folder of the test's own, with `n` contacts.
+    fn engine_on_store(tag: &str, n: usize) -> (PathBuf, SharedEngine) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-durable-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let mut adif = tempo_core::logbook::adif_header();
+        for i in 0..n {
+            let call = format!("K{i}DUR");
+            adif.push_str(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260901<TIME_ON:6>1200{:02}<EOR>\n",
+                call.len(),
+                i % 60
+            ));
+        }
+        std::fs::write(dir.join("log.adi"), adif).expect("log");
+        let opened = tempo_app::logstore::open(
+            &dir.join("log.adi"),
+            std::sync::Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+            None,
+        )
+        .expect("the store opens");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.attach_log_store(opened);
+        (dir, std::sync::Arc::new(std::sync::Mutex::new(e)))
+    }
+
+    /// The naive shape this replaces: the change and its wait run INSIDE the async task, so the
+    /// wait holds a runtime worker for as long as the disk takes. Kept only as the control.
+    async fn waits_on_the_worker<T>(
+        body: impl FnOnce() -> (Result<T, String>, tempo_app::logstore::Durability),
+    ) -> Result<T, String> {
+        let (out, durability) = body();
+        let out = out?;
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        Ok(out)
+    }
+
+    /// Does a lock-free command get a runtime worker within `budget` while `waits` log
+    /// commands are waiting on a stalled write? A task spawned on the runtime answers only if
+    /// some worker is free to run it.
+    fn lock_free_answers_while(naive: bool, budget: Duration) -> bool {
+        const WORKERS: usize = 2;
+        const WAITS: usize = 6; // more waiting commands than the runtime has workers
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(WORKERS)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (dir, engine) = engine_on_store(if naive { "naive" } else { "pool" }, 20);
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let hold = tempo_core::logbook::sqlite::WriteHold::take(&db).expect("stall the store");
+        let mut waits = Vec::new();
+        for i in 0..WAITS {
+            let engine = std::sync::Arc::clone(&engine);
+            let body = move || {
+                let mut eng = engine_lock(&engine);
+                eng.with_log_tickets(|eng| Ok::<bool, String>(eng.mark_qsl_card(i, true)))
+            };
+            waits.push(if naive {
+                rt.spawn(async move { waits_on_the_worker(body).await })
+            } else {
+                rt.spawn(async move { durable_command(body).await })
+            });
+        }
+        // Real time, on this thread: with every worker pinned the runtime's own timers cannot
+        // be relied on to fire, and the question is exactly whether a worker is free.
+        std::thread::sleep(Duration::from_millis(300));
+        let (tx, rx) = std::sync::mpsc::channel();
+        rt.spawn(async move {
+            let _ = tx.send("73");
+        });
+        let answered = rx.recv_timeout(budget).is_ok();
+        assert!(
+            waits.iter().all(|w| !w.is_finished()),
+            "premise: every log command is still waiting on the stalled store"
+        );
+        drop(hold);
+        // Everything completes once the store is released — nothing was lost to the stall.
+        rt.block_on(async {
+            for w in waits {
+                assert_eq!(
+                    w.await.expect("task"),
+                    Ok(true),
+                    "each command's change landed"
+                );
+            }
+        });
+        drop(rt);
+        let _ = std::fs::remove_dir_all(&dir);
+        answered
+    }
+
+    /// ★ PROPERTY 5, second half — NO WAIT MAY PIN A RUNTIME WORKER. More operator log
+    /// commands than the runtime has workers are waiting on a stalled store write, and a
+    /// command that needs no lock still gets a worker and answers at once.
+    ///
+    /// The control is the same scene with the waits run on the workers themselves (the shape
+    /// the commands had to avoid): the lock-free command does NOT answer. So the green half is
+    /// the blocking pool doing its job, not a runtime that happened to have a spare thread.
+    #[test]
+    fn a_lock_free_command_answers_while_more_waits_than_workers_are_pending() {
+        assert!(
+            !lock_free_answers_while(true, Duration::from_millis(500)),
+            "control: waits run on the workers starve the runtime"
+        );
+        assert!(
+            lock_free_answers_while(false, Duration::from_millis(500)),
+            "the waits are on the blocking pool, so the runtime keeps answering"
+        );
+    }
+
+    /// A command returns only once its change is on disk, and says so plainly when it is not:
+    /// the change is kept, and the words say that too.
+    #[test]
+    fn a_log_command_returns_after_its_change_is_on_disk() {
+        let (dir, engine) = engine_on_store("returns", 10);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let eng = std::sync::Arc::clone(&engine);
+        let marked = rt
+            .block_on(durable_command(move || {
+                let mut e = engine_lock(&eng);
+                e.with_log_tickets(|e| Ok::<bool, String>(e.mark_qsl_card(4, true)))
+            }))
+            .expect("durable");
+        assert!(marked);
+        // Read through a connection of the test's own: the change is already there.
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let id = engine_lock(&engine).log_records()[4].id;
+        let row = tempo_core::logbook::sqlite::LogDb::open(&db)
+            .and_then(|d| d.load_all())
+            .expect("read")
+            .into_iter()
+            .find(|r| r.id == id)
+            .expect("stored");
+        assert!(row.qsl_rcvd.card, "on disk when the command returned");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
 mod data_folder_tests {
     use super::*;
 
@@ -14731,20 +14884,26 @@ const PENDING_LOG_MOVED_ON: &str = "pendingLogMovedOn";
 /// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
 /// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
 /// shown with. Returns the refreshed snapshot, whose `pendingLog` is the next held contact.
-#[tauri::command(async)]
-fn confirm_pending_log(
+#[tauri::command]
+async fn confirm_pending_log(
     state: State<'_, SharedEngine>,
     record: LoggedQso,
     expected_key: Option<String>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    // No key is a refusal, not a free pass: a caller that cannot say WHICH contact it is
-    // confirming cannot be allowed to log one (review R2).
-    let key = expected_key.unwrap_or_default();
-    if !eng.confirm_pending_log(&key, record.into()) {
-        return Err(PENDING_LOG_MOVED_ON.into());
-    }
-    Ok(eng.snapshot())
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            // No key is a refusal, not a free pass: a caller that cannot say WHICH contact it
+            // is confirming cannot be allowed to log one (review R2).
+            let key = expected_key.unwrap_or_default();
+            if !eng.confirm_pending_log(&key, record.into()) {
+                return Err(PENDING_LOG_MOVED_ON.into());
+            }
+            Ok(eng.snapshot())
+        })
+    })
+    .await
 }
 
 /// Discard the contact the prompt-to-log popup is showing without logging it. Same key rule.
@@ -14763,17 +14922,21 @@ fn discard_pending_log(
 
 /// Manually log a contact to the ADIF logbook (the UI "Log QSO" button). Adds in
 /// memory and persists to the log file. Returns the refreshed snapshot.
-#[tauri::command(async)]
-fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnapshot, String> {
+#[tauri::command]
+async fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnapshot, String> {
+    let engine = Arc::clone(&state);
     let call = record.call.clone();
-    let (snap, wav) = {
-        let mut eng = engine_lock(&state);
-        eng.log_qso(record.into());
-        // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
-        // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
-        let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
-        (eng.snapshot(), wav)
-    };
+    let (snap, wav) = durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            eng.log_qso(record.into());
+            // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
+            // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
+            let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
+            Ok((eng.snapshot(), wav))
+        })
+    })
+    .await?;
     if let Some(pcm) = wav {
         if !pcm.is_empty() {
             // Outside the lock (I/O), and the OUTCOME goes back into the engine so the next
@@ -14935,6 +15098,40 @@ fn locate_seen(eng: &mut Engine, seen: &LoggedQso) -> Result<usize, String> {
 const LOG_ROW_GONE: &str =
     "That contact changed or was removed since the log was loaded — reload the log and try again.";
 
+/// Run an operator's log command so that it returns only once its change is ON DISK — the
+/// store's promise that "logged" means the contact survives pulling the plug.
+///
+/// `body` takes the engine lock, makes the change, and hands back what it did with the
+/// durability of the changes it made ([`Engine::with_log_tickets`]); the lock is released when
+/// `body` returns, and only THEN is the change waited for. The whole of it runs on the blocking
+/// pool, never on a runtime worker: a wait can last up to a minute behind a slow disk, and a
+/// worker held that long is one the waterfall, the meters and every other command need —
+/// the #335 freeze. `tokio::task::spawn_blocking` rather than Tauri's wrapper so a test can run
+/// it on a runtime of its own; in the app both are the same runtime.
+///
+/// On the 1.13 path (no store) there is nothing to wait for: the change was written inline.
+async fn durable_command<T: Send + 'static>(
+    body: impl FnOnce() -> (Result<T, String>, tempo_app::logstore::Durability) + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || {
+        let (out, durability) = body();
+        let out = out?;
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("logbook task failed: {e}"))?
+}
+
+/// What a command says when its change is in the log but could not be shown to be on disk.
+/// The change is NOT undone — memory holds it and the writer keeps trying — so the words say
+/// exactly that, and carry the writer's own reason.
+fn durability_failed(why: String) -> String {
+    format!("The change is in your log, but Nexus could not confirm it was saved to disk: {why}")
+}
+
 /// The row at `index` as `get_log` would show it — what a log command hands back so a
 /// follow-up (a QSL mark from the same edit form) can key the row it just changed.
 fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
@@ -14951,18 +15148,24 @@ fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
 /// Edit the logged contact `target` — a correction. Confirmation/credit/upload state is
 /// preserved by the engine. Returns the row as stored; its key is the one any follow-up
 /// must use, since the edit changed the row and so its key.
-#[tauri::command(async)]
-fn edit_qso(
+#[tauri::command]
+async fn edit_qso(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     record: LoggedQso,
 ) -> Result<LoggedQso, String> {
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.update_qso(index, record.into()) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.update_qso(index, record.into()) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// What a `via` argument MEANS on [`mark_qsl_sent`] — the one decision the command layer owns
@@ -15008,19 +15211,25 @@ fn qsl_via_arg(via: Option<&str>) -> Result<Option<tempo_core::logbook::QslVia>,
 /// sent — the core records the cleared state as such so merge can tell "never sent" from
 /// "operator un-sent it". Nothing in this layer re-derives the mark or offers an import a way
 /// around that: the command forwards the operator's word and nothing else.
-#[tauri::command(async)]
-fn mark_qsl_sent(
+#[tauri::command]
+async fn mark_qsl_sent(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     via: Option<String>,
 ) -> Result<LoggedQso, String> {
     let via = qsl_via_arg(via.as_deref())?;
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.mark_qsl_sent(index, via) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.mark_qsl_sent(index, via) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// Record whether a PAPER QSL card arrived for the logged contact `target` (#152).
@@ -15030,18 +15239,24 @@ fn mark_qsl_sent(
 /// award-eligible — `QslRcvd::award` is card OR LoTW — so leaving it unrecordable left the
 /// awards view understating what the operator can actually claim. Returns the row as stored
 /// (see [`edit_qso`]).
-#[tauri::command(async)]
-fn mark_qsl_card(
+#[tauri::command]
+async fn mark_qsl_card(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     received: bool,
 ) -> Result<LoggedQso, String> {
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.mark_qsl_card(index, received) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.mark_qsl_card(index, received) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// What a `satName` argument MEANS on [`set_sat_tag`] — the one decision this layer owns,
@@ -15093,8 +15308,8 @@ fn sat_name_arg(sat_name: Option<&str>) -> Result<Option<String>, String> {
 /// ACCEPTS, and an empty string is an error rather than a removal for the same reason it is on
 /// [`qsl_via_arg`]: empty is what a select sits at when the operator has chosen nothing, and a
 /// non-choice must not erase a tag nobody asked to erase.
-#[tauri::command(async)]
-fn set_sat_tag(
+#[tauri::command]
+async fn set_sat_tag(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     sat_name: Option<String>,
@@ -15102,12 +15317,18 @@ fn set_sat_tag(
     // Gated BEFORE the lock: nothing that can be refused should hold the engine mutex, which
     // the radio loop needs every 20 ms.
     let name = sat_name_arg(sat_name.as_deref())?;
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.set_sat_tag(index, name.as_deref()) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.set_sat_tag(index, name.as_deref()) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// The satellite names LoTW accepts, for the Logbook row's tag picker — the backend owns the
@@ -15122,34 +15343,49 @@ fn lotw_sat_names() -> Vec<String> {
 }
 
 /// Delete the logged contact `target`. Returns the refreshed snapshot.
-#[tauri::command(async)]
-fn delete_qso(state: State<'_, SharedEngine>, target: LoggedQso) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.delete_qso(index) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    Ok(eng.snapshot())
+#[tauri::command]
+async fn delete_qso(
+    state: State<'_, SharedEngine>,
+    target: LoggedQso,
+) -> Result<AppSnapshot, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.delete_qso(index) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            Ok(eng.snapshot())
+        })
+    })
+    .await
 }
 
 /// Purge the ENTIRE logbook — delete every contact and truncate the ADIF file to
 /// an empty log. Destructive and irreversible; the UI gates this behind an explicit
 /// confirmation dialog. Returns the number of contacts removed (for the toast).
-#[tauri::command(async)]
-fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
-    let mut eng = engine_lock(&state);
-    let removed = eng.clear_logbook();
-    // `clear_logbook` also resets the LoTW/eQSL sync cursors (see its doc comment:
-    // an incremental cursor is a lie about an empty log). Persist that here — the
-    // engine holds settings, the command layer owns the file.
-    if let Err(e) = eng.settings().clone().save(&settings_path()) {
-        conn_log(
-            "LoTW",
-            "error",
-            format!("failed to reset the sync cursor after a purge: {e}"),
-        );
-    }
-    Ok(removed)
+#[tauri::command]
+async fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let removed = eng.clear_logbook();
+            // `clear_logbook` also resets the LoTW/eQSL sync cursors (see its doc comment:
+            // an incremental cursor is a lie about an empty log). Persist that here — the
+            // engine holds settings, the command layer owns the file.
+            if let Err(e) = eng.settings().clone().save(&settings_path()) {
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!("failed to reset the sync cursor after a purge: {e}"),
+                );
+            }
+            Ok(removed)
+        })
+    })
+    .await
 }
 
 /// Whether a logged QSO was made through a satellite (`PROP_MODE=SAT`) — the
@@ -16308,16 +16544,22 @@ fn read_need_alerts(
 
 /// Import an external ADIF logbook (deduped merge → real "needs"). Takes the
 /// file's text; the UI reads the file so no fs/dialog plugin is needed.
-#[tauri::command(async)]
-fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
-    let mut eng = engine_lock(&state);
-    let (added, skipped, updated, total) = eng.import_adif(&text);
-    Ok(ImportStats {
-        added,
-        skipped,
-        updated,
-        total,
+#[tauri::command]
+async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let (added, skipped, updated, total) = eng.import_adif(&text);
+            Ok(ImportStats {
+                added,
+                skipped,
+                updated,
+                total,
+            })
+        })
     })
+    .await
 }
 
 /// Reconcile a confirmation/credit report (LoTW ADIF export) INTO the existing
@@ -16339,8 +16581,12 @@ async fn sync_lotw_report(
             )
         },
         {
-            let mut eng = engine_lock(&state);
-            Ok(eng.merge_lotw_report(&text).into())
+            let engine = Arc::clone(&state);
+            durable_command(move || {
+                let mut eng = engine_lock(&engine);
+                eng.with_log_tickets(|eng| Ok(eng.merge_lotw_report(&text).into()))
+            })
+            .await
         },
     )
 }
@@ -18257,38 +18503,44 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // Merge via the shared reconcile path, then advance the cursor only on a real
     // high-water (re-lock: the fetch ran without the engine lock held). Capture the
     // own-echo lower bound (oldest in-flight upload) in the same lock, then release.
-    let (mut result, own_start): (LotwSyncResult, Option<String>) = {
+    let ((mut result, own_start), merged): ((LotwSyncResult, Option<String>), _) = {
         let mut eng = engine_lock(state);
-        let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
-        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
-            // Advance the cursor ONLY if (a) the download is structurally complete —
-            // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
-            // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
-            // advancing would make the next `qso_qslsince` pull skip them forever (the
-            // merge above already ran, so keeping the old cursor just re-fetches the
-            // tail — reconcile is idempotent) — AND (b) the username is still the one
-            // this download used. If `set_settings` changed it during the (lock-free)
-            // fetch, it already reset the cursor to a full pull for the new identity —
-            // this high-water belongs to the old query, so binding it would risk
-            // skipping records on the next incremental pull. Persist via a narrow
-            // setter so the sync never disturbs live operation (no mode reset /
-            // TX-queue clear).
-            if is_complete_lotw_body(&body)
-                && eng.settings().lotw_username.trim() == used_username.trim()
-            {
-                let updated = eng.set_lotw_cursor(high_water);
-                if let Err(e) = updated.save(&settings_path()) {
-                    conn_log(
-                        "LoTW",
-                        "error",
-                        format!("failed to persist the sync cursor: {e}"),
-                    );
+        eng.with_log_tickets(|eng| {
+            let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
+            if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
+                // Advance the cursor ONLY if (a) the download is structurally complete —
+                // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
+                // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
+                // advancing would make the next `qso_qslsince` pull skip them forever (the
+                // merge above already ran, so keeping the old cursor just re-fetches the
+                // tail — reconcile is idempotent) — AND (b) the username is still the one
+                // this download used. If `set_settings` changed it during the (lock-free)
+                // fetch, it already reset the cursor to a full pull for the new identity —
+                // this high-water belongs to the old query, so binding it would risk
+                // skipping records on the next incremental pull. Persist via a narrow
+                // setter so the sync never disturbs live operation (no mode reset /
+                // TX-queue clear).
+                if is_complete_lotw_body(&body)
+                    && eng.settings().lotw_username.trim() == used_username.trim()
+                {
+                    let updated = eng.set_lotw_cursor(high_water);
+                    if let Err(e) = updated.save(&settings_path()) {
+                        conn_log(
+                            "LoTW",
+                            "error",
+                            format!("failed to persist the sync cursor: {e}"),
+                        );
+                    }
                 }
             }
-        }
-        let own_start = eng.oldest_pending_lotw_date();
-        (summary, own_start)
+            let own_start = eng.oldest_pending_lotw_date();
+            (summary, own_start)
+        })
     }; // engine lock released before the second network fetch
+       // The confirmations are on disk before the sync says so (off the lock, on the blocking pool).
+    merged
+        .wait(tempo_app::logstore::DURABLE_WAIT)
+        .map_err(durability_failed)?;
 
     // --- Pull 2: own-echo (qso_qsl=no) — promote in-flight uploads to Accepted. ---
     // Best-effort: only run when something is actually in flight, and never fail the
@@ -18306,8 +18558,12 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         };
         match own_body {
             Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
-                let mut eng = engine_lock(state);
-                result.promoted = eng.merge_lotw_own_echo(&b, now_unix());
+                let (promoted, echoed) = engine_lock(state)
+                    .with_log_tickets(|eng| eng.merge_lotw_own_echo(&b, now_unix()));
+                result.promoted = promoted;
+                echoed
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .map_err(durability_failed)?;
             }
             Ok(_) => conn_log(
                 "LoTW",
@@ -18354,10 +18610,14 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
 /// Mark every currently-unsent QSO as already on LoTW — the operator's declaration that an
 /// imported legacy log was uploaded through another tool. Zeroes the "Upload to LoTW (N)" count
 /// so a big redundant re-upload isn't offered. Returns how many were marked.
-#[tauri::command(async)]
-fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
-    let mut eng = engine_lock(&state);
-    Ok(eng.mark_lotw_uploaded_all())
+#[tauri::command]
+async fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| Ok(eng.mark_lotw_uploaded_all()))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -18376,7 +18636,12 @@ async fn upload_lotw_report_impl(
     state: State<'_, SharedEngine>,
     indices: Option<Vec<usize>>,
 ) -> Result<UploadReportDto, String> {
-    lotw_upload_batch(&state, indices)
+    // On the blocking pool: TQSL can take tens of seconds, and the stamps are then waited for
+    // on disk. Neither may occupy a runtime worker (see `durable_command`).
+    let engine = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || lotw_upload_batch(&engine, indices, true))
+        .await
+        .map_err(|e| format!("LoTW upload task failed: {e}"))?
 }
 
 /// The whole LoTW upload, independent of Tauri's command shape, so the automatic worker
@@ -18386,6 +18651,7 @@ async fn upload_lotw_report_impl(
 fn lotw_upload_batch(
     state: &SharedEngine,
     indices: Option<Vec<usize>>,
+    wait: bool,
 ) -> Result<UploadReportDto, String> {
     // Brief lock: read config + build the batch + ADIF, then release before spawn.
     // Held across the TQSL spawn it would freeze the whole UI for as long as ARRL takes
@@ -18485,9 +18751,15 @@ fn lotw_upload_batch(
             detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
         }),
         Some(outcome) => {
-            {
-                let mut eng = engine_lock(state);
+            let ((), durable) = engine_lock(state).with_log_tickets(|eng| {
                 eng.stamp_lotw_upload(&batch, outcome, now_unix(), stamped);
+            });
+            // The Logbook button waits for the stamps to reach the disk; the six-hourly
+            // automatic batch does not (a stamp it loses is re-derived by the next echo).
+            if wait {
+                durable
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .map_err(durability_failed)?;
             }
             // ⛔ THE LINE THAT MAKES THE STAMP'S OWN SENTENCE TRUE.
             //
@@ -18609,16 +18881,26 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // complete — a truncated download must not skip unreceived records — AND (b) the
     // username is unchanged since this sync started (an in-flight change already
     // reset the cursor for the new account).
-    let mut eng = engine_lock(state);
-    let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
-    if tempo_core::eqsl::is_complete_eqsl_body(&body)
-        && eng.settings().eqsl_username.trim() == used_username.trim()
-    {
-        let updated = eng.set_eqsl_cursor(next_cursor);
-        if let Err(e) = updated.save(&settings_path()) {
-            eprintln!("tempo: failed to persist eQSL cursor: {e}");
+    let (summary, merged) = {
+        let mut eng = engine_lock(state);
+        let (summary, merged) = eng.with_log_tickets(|eng| {
+            let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
+            summary
+        });
+        if tempo_core::eqsl::is_complete_eqsl_body(&body)
+            && eng.settings().eqsl_username.trim() == used_username.trim()
+        {
+            let updated = eng.set_eqsl_cursor(next_cursor);
+            if let Err(e) = updated.save(&settings_path()) {
+                eprintln!("tempo: failed to persist eQSL cursor: {e}");
+            }
         }
-    }
+        (summary, merged)
+    };
+    // On disk before the sync says so — off the lock, on the blocking pool.
+    merged
+        .wait(tempo_app::logstore::DURABLE_WAIT)
+        .map_err(durability_failed)?;
     Ok(summary)
 }
 
@@ -18633,7 +18915,7 @@ async fn sync_qrz(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, Stri
     // Blocking HTTP against QRZ (a full logbook FETCH on the manual button) —
     // off the UI thread AND off the async executor, matching `qrz_push_qso`.
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || sync_qrz_since(&engine, None))
+    let res = tauri::async_runtime::spawn_blocking(move || sync_qrz_since(&engine, None, true))
         .await
         .map_err(|e| format!("QRZ sync task failed: {e}"))?;
     conn_logged(
@@ -18715,6 +18997,11 @@ const QRZ_SYNC_UNREACHABLE: ConnDetail = conn_detail!(
     "the sync never reached QRZ — check the network, and whether antivirus or a proxy is \
      inspecting HTTPS traffic. This session's connection log has the exact message."
 );
+/// The sync merged, and the merge could not be shown to be on disk. Nexus's own words.
+const QRZ_SYNC_NOT_SAVED: ConnDetail = conn_detail!(
+    "the sync merged QRZ's logbook into yours, but Nexus could not confirm the result was saved \
+     to disk. This session's connection log has the reason."
+);
 /// QRZ answered and refused. The class; never QRZ's wording, which is the leak.
 const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
     "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Logbook & \
@@ -18746,6 +19033,7 @@ fn qrz_fetch_refused(reason: Option<String>) -> QrzSyncFailure {
 fn sync_qrz_since(
     engine: &SharedEngine,
     since_unix: Option<u64>,
+    wait: bool,
 ) -> Result<LotwSyncResult, QrzSyncFailure> {
     let key = qrz_logbook_keychain()
         .map_err(|message| QrzSyncFailure {
@@ -18781,8 +19069,18 @@ fn sync_qrz_since(
     if !fetched.ok {
         return Err(qrz_fetch_refused(fetched.reason));
     }
-    let mut eng = engine_lock(engine);
-    let (added, summary) = eng.merge_qrz_report(&fetched.adif);
+    let ((added, summary), merged) =
+        engine_lock(engine).with_log_tickets(|eng| eng.merge_qrz_report(&fetched.adif));
+    // The operator's sync button waits for the merge to reach the disk; the hourly automatic
+    // sync does not (its next run would find the same state either way).
+    if wait {
+        merged
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(|e| QrzSyncFailure {
+                detail: QRZ_SYNC_NOT_SAVED,
+                message: ScreenReason::new(durability_failed(e)),
+            })?;
+    }
     let mut result: LotwSyncResult = summary.into();
     result.added = added;
     Ok(result)
@@ -19300,9 +19598,10 @@ async fn qrz_push_qso(
     // The impl does blocking HTTP (20 s timeout) — keep it off the async
     // executor so a slow QRZ can't stall every other Tauri command.
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || qrz_push_qso_impl(record, &engine))
-        .await
-        .map_err(|e| format!("upload task failed: {e}"))?;
+    let res =
+        tauri::async_runtime::spawn_blocking(move || qrz_push_qso_impl(record, &engine, true))
+            .await
+            .map_err(|e| format!("upload task failed: {e}"))?;
     // QRZ's `reason` rides the SESSION log, and only there. It stopped being persisted with
     // the stamp (it can carry the API key back — see `UploadDetail`), so this line is now
     // the one place an operator can read what QRZ actually said.
@@ -19548,6 +19847,7 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
 fn qrz_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
+    wait: bool,
 ) -> Result<tempo_app::dto::QrzPushResultDto, String> {
     let key = qrz_logbook_keychain()?
         .get_password()
@@ -19628,11 +19928,19 @@ fn qrz_push_qso_impl(
     // written into `log.adi`, which TQSL signs and uploads to ARRL. QRZ's own reason goes to
     // the connection log and the operator's toast, and dies with the session. See
     // `tempo_core::logbook::UploadDetail`.
-    {
+    let ((), stamped) = {
         let outcome = push.result.to_upload_outcome();
         let detail = push.result.to_upload_detail();
-        let mut eng = engine_lock(engine);
-        eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
+        engine_lock(engine).with_log_tickets(|eng| {
+            eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
+        })
+    };
+    // The operator's push button waits for the stamp to reach the disk; the upload worker
+    // does not (a stamp it loses is re-derived: a re-push answers Duplicate).
+    if wait {
+        stamped
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
     }
     Ok(push.into())
 }
@@ -20139,9 +20447,10 @@ async fn clublog_push_qso(
     let who = record.call.clone();
     // Blocking HTTP off the async executor (see qrz_push_qso).
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || clublog_push_qso_impl(record, &engine))
-        .await
-        .map_err(|e| format!("upload task failed: {e}"))?;
+    let res =
+        tauri::async_runtime::spawn_blocking(move || clublog_push_qso_impl(record, &engine, true))
+            .await
+            .map_err(|e| format!("upload task failed: {e}"))?;
     // ClubLog's own body rides the SESSION log, and only there — same reason as QRZ above.
     conn_logged(
         "ClubLog",
@@ -20163,6 +20472,7 @@ async fn clublog_push_qso(
 fn clublog_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
+    wait: bool,
 ) -> Result<tempo_app::dto::ClubLogPushResultDto, String> {
     use std::sync::atomic::Ordering;
     if CLUBLOG_SUSPENDED.load(Ordering::Relaxed) {
@@ -20235,8 +20545,15 @@ fn clublog_push_qso_impl(
     // `tempo_core::logbook::UploadDetail`.
     if let Some(outcome) = push.result.to_upload_outcome() {
         let detail = push.result.to_upload_detail();
-        let mut eng = engine_lock(engine);
-        eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
+        let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
+            eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
+        });
+        // The push button waits for the stamp; the upload worker does not (see QRZ's).
+        if wait {
+            stamped
+                .wait(tempo_app::logstore::DURABLE_WAIT)
+                .map_err(durability_failed)?;
+        }
     }
     Ok(push.into())
 }
@@ -20256,9 +20573,10 @@ async fn eqsl_push_qso(
     let who = record.call.clone();
     // Blocking HTTP off the async executor (see qrz_push_qso).
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine))
-        .await
-        .map_err(|e| format!("upload task failed: {e}"))?;
+    let res =
+        tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine, true))
+            .await
+            .map_err(|e| format!("upload task failed: {e}"))?;
     conn_logged(
         "eQSL",
         |r| format!("pushed {} — outcome: {}", who, r.outcome),
@@ -20266,7 +20584,11 @@ async fn eqsl_push_qso(
     )
 }
 
-fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<UploadReportDto, String> {
+fn eqsl_push_qso_impl(
+    record: LoggedQso,
+    engine: &SharedEngine,
+    wait: bool,
+) -> Result<UploadReportDto, String> {
     // eQSL matches on the two operators' times agreeing: a record with no known
     // time of day can never match — sending it just parks it at eQSL unmatched
     // forever. Refuse with the reason instead of fabricating a midnight.
@@ -20337,8 +20659,15 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
             detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
         }),
         Some(outcome) => {
-            let mut eng = engine_lock(engine);
-            eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
+            let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
+                eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
+            });
+            // The push button waits for the stamp; the upload worker does not (see QRZ's).
+            if wait {
+                stamped
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .map_err(durability_failed)?;
+            }
             Ok(UploadReportDto {
                 dispatched: 1,
                 outcome: outcome.code().to_string(),
@@ -20648,7 +20977,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
     // Legs that failed transiently → the worker retries just these.
     let mut failed: u8 = 0;
     if qrz_on && owed & legs::QRZ != 0 {
-        let (part, ok, transient) = match qrz_push_qso_impl(dto.clone(), engine) {
+        let (part, ok, transient) = match qrz_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "replace" | "duplicate");
                 conn_log(
@@ -20692,7 +21021,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         }
     }
     if clublog_on && owed & legs::CLUBLOG != 0 {
-        let (part, ok, transient) = match clublog_push_qso_impl(dto.clone(), engine) {
+        let (part, ok, transient) = match clublog_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "modified" | "duplicate");
                 conn_log(
@@ -20780,7 +21109,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         }
     }
     if eqsl_on && owed & legs::EQSL != 0 {
-        let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine) {
+        let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
                 conn_log(
@@ -21524,30 +21853,36 @@ struct FdMergeReportDto {
 /// own merge identity, and a row already in the logbook is skipped rather than
 /// duplicated. Whether the merged rows are also queued for connector upload is the
 /// SESSION's control (`fd_set_upload`), which is off unless the operator turned it on.
-#[tauri::command(async)]
-fn fd_merge_to_general(
+#[tauri::command]
+async fn fd_merge_to_general(
     state: State<'_, SharedEngine>,
 ) -> Result<(FdMergeReportDto, AppSnapshot), String> {
-    let mut eng = engine_lock(&state);
-    let report = eng.fd_merge_to_general()?;
-    // ONE snapshot, taken after the merge and read for both answers. Two would be two
-    // full logbook sweeps under the engine mutex — the shape that stalled the
-    // waterfall — and the policy cannot change across the merge anyway.
-    let snap = eng.snapshot();
-    let queued = snap
-        .field_day
-        .as_ref()
-        .map(|f| f.upload.enabled && !f.upload.destinations.is_empty())
-        .unwrap_or(false);
-    Ok((
-        FdMergeReportDto {
-            added: report.added(),
-            already: report.already,
-            refused: report.refused,
-            queued,
-        },
-        snap,
-    ))
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let report = eng.fd_merge_to_general()?;
+            // ONE snapshot, taken after the merge and read for both answers. Two would be two
+            // full logbook sweeps under the engine mutex — the shape that stalled the
+            // waterfall — and the policy cannot change across the merge anyway.
+            let snap = eng.snapshot();
+            let queued = snap
+                .field_day
+                .as_ref()
+                .map(|f| f.upload.enabled && !f.upload.destinations.is_empty())
+                .unwrap_or(false);
+            Ok((
+                FdMergeReportDto {
+                    added: report.added(),
+                    already: report.already,
+                    refused: report.refused,
+                    queued,
+                },
+                snap,
+            ))
+        })
+    })
+    .await
 }
 
 /// Set this session's upload destination (§18.1) — per session, default OFF.
@@ -23194,18 +23529,24 @@ struct PotaStampResult {
     unmatched: usize,
 }
 
-#[tauri::command(async)]
-fn import_pota_log(
+#[tauri::command]
+async fn import_pota_log(
     state: State<'_, SharedEngine>,
     text: String,
 ) -> Result<PotaStampResult, String> {
-    let mut eng = engine_lock(&state);
-    let (stamped, already, unmatched) = eng.import_pota_log(&text);
-    Ok(PotaStampResult {
-        stamped,
-        already,
-        unmatched,
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let (stamped, already, unmatched) = eng.import_pota_log(&text);
+            Ok(PotaStampResult {
+                stamped,
+                already,
+                unmatched,
+            })
+        })
     })
+    .await
 }
 
 /// The app version (from tauri.conf.json, e.g. "0.15.8") for display in the UI. NOTE: this is
@@ -24411,7 +24752,7 @@ pub fn run() {
                 continue;
             }
             // HTTP off the engine lock (the lock is taken inside, around the merge).
-            match sync_qrz_since(&sync_engine, Some(last)) {
+            match sync_qrz_since(&sync_engine, Some(last), false) {
                 Ok(r) => {
                     {
                         // The NARROW mutation — never `apply_settings` for one field: its
@@ -24488,7 +24829,7 @@ pub fn run() {
             // long as the outage lasted. Only a hard `Err` (no TQSL installed, unwritable
             // temp file) leaves it alone, and that case cannot loop because it never got
             // as far as a process.
-            match lotw_upload_batch(&auto_engine, None) {
+            match lotw_upload_batch(&auto_engine, None, false) {
                 Ok(r) => {
                     {
                         // The NARROW mutation — never `apply_settings` for one field
@@ -27440,8 +27781,11 @@ mod tests {
         // ⚠️ COLUMN-ZERO MATCH, not `contains`: `include_str!` pulls in THIS TEST too, so a
         // `contains` would be satisfied by the literal inside the assertion itself.
         for name in ["set_sat_tag", "lotw_sat_names"] {
+            // `async fn` counts: a log command waits for its change to reach the disk, and it
+            // does that on the blocking pool from an async command (see `durable_command`).
             assert!(
-                src.lines().any(|l| l.starts_with(&format!("fn {name}("))),
+                src.lines().any(|l| l.starts_with(&format!("fn {name}("))
+                    || l.starts_with(&format!("async fn {name}("))),
                 "{name} is invoked by the UI but defined nowhere"
             );
         }
@@ -27463,7 +27807,7 @@ mod tests {
         // into an empty name the core then refuses — a silent no-op on the one act this
         // feature exists for.
         let body = src
-            .split_once("\nfn set_sat_tag(")
+            .split_once("\nasync fn set_sat_tag(")
             .expect("the command")
             .1
             .split_once("\n}\n")
