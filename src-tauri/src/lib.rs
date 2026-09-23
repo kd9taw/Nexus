@@ -5825,7 +5825,12 @@ async fn get_aurora(
             }
         }
     }
-    match propagation::live::aurora::fetch_aurora() {
+    // Blocking HTTP: on the blocking pool, never this runtime worker — see
+    // `no_command_makes_a_blocking_http_request_where_it_runs`.
+    let fetched = tauri::async_runtime::spawn_blocking(propagation::live::aurora::fetch_aurora)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match fetched {
         Ok(pts) => {
             if let Ok(mut g) = cache.lock() {
                 *g = Some((std::time::Instant::now(), pts.clone()));
@@ -10848,7 +10853,11 @@ async fn get_kp_forecast(
             }
         }
     }
-    match propagation::live::swpc::fetch_kp_forecast() {
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let fetched = tauri::async_runtime::spawn_blocking(propagation::live::swpc::fetch_kp_forecast)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match fetched {
         Ok(v) => {
             if let Ok(mut g) = cache.lock() {
                 *g = Some((std::time::Instant::now(), v.clone()));
@@ -10876,7 +10885,11 @@ async fn get_kc2g_muf(cache: State<'_, Kc2gCache>) -> Result<Vec<propagation::Mu
             }
         }
     }
-    match propagation::live::kc2g::fetch_kc2g_muf() {
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let fetched = tauri::async_runtime::spawn_blocking(propagation::live::kc2g::fetch_kc2g_muf)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match fetched {
         Ok(v) => {
             if let Ok(mut g) = cache.lock() {
                 *g = Some((std::time::Instant::now(), v.clone()));
@@ -10962,11 +10975,16 @@ async fn get_space_wx_scales(
             }
         }
     }
-    match (
-        propagation::live::swpc_scales::fetch_noaa_scales(),
-        propagation::live::swpc_scales::fetch_alerts(),
-    ) {
-        (Ok(mut scales), Ok(alerts)) => {
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let fetched = tauri::async_runtime::spawn_blocking(|| {
+        (
+            propagation::live::swpc_scales::fetch_noaa_scales(),
+            propagation::live::swpc_scales::fetch_alerts(),
+        )
+    })
+    .await;
+    match fetched {
+        Ok((Ok(mut scales), Ok(alerts))) => {
             // Provenance stamp: only a REAL fetch carries as_of — the cold-cache
             // default below stays None so the UI can't render "offline" as calm.
             scales.as_of = Some(now_unix());
@@ -20671,8 +20689,19 @@ async fn qrz_lookup(
         if !qrz_username.is_empty() {
             if let Ok(password) = qrz_keychain()?.get_password() {
                 queried_any = true;
-                let attempt =
-                    qrz_lookup_attempt(cand, &qrz_username, &password, qrz_session.inner());
+                // Blocking HTTP: on the blocking pool (see `get_aurora`).
+                let attempt = {
+                    let (cand, user, session) = (
+                        cand.clone(),
+                        qrz_username.clone(),
+                        qrz_session.inner().clone(),
+                    );
+                    tauri::async_runtime::spawn_blocking(move || {
+                        qrz_lookup_attempt(&cand, &user, &password, &session)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?
+                };
                 // #245, defect 1. This is the ONLY live evidence the QRZ XML subscription
                 // works, and it was never recorded — see `qrz_xml_stamp` for what counts.
                 let (ok, detail) = qrz_xml_stamp(&attempt);
@@ -20705,12 +20734,20 @@ async fn qrz_lookup(
         if !hamqth_username.is_empty() {
             if let Ok(password) = hamqth_keychain()?.get_password() {
                 queried_any = true;
-                if let Some(dto) = hamqth_lookup_attempt(
-                    cand,
-                    &hamqth_username,
-                    &password,
-                    hamqth_session.inner(),
-                )? {
+                // Blocking HTTP: on the blocking pool (see `get_aurora`).
+                let attempt = {
+                    let (cand, user, session) = (
+                        cand.clone(),
+                        hamqth_username.clone(),
+                        SharedHamQthSession(hamqth_session.0.clone()),
+                    );
+                    tauri::async_runtime::spawn_blocking(move || {
+                        hamqth_lookup_attempt(&cand, &user, &password, &session)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?
+                };
+                if let Some(dto) = attempt? {
                     note_lookup_name(&state, &call, &dto);
                     return Ok(dto);
                 }
@@ -20986,7 +21023,12 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
                 .to_string()
         })?;
     let body = tempo_core::qrz::build_status_body(&key);
-    let resp = propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?;
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let resp = tauri::async_runtime::spawn_blocking(move || {
+        propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let st = tempo_core::qrz::parse_status_response(&resp);
     if st.ok {
         let owner_raw = st.owner.clone().unwrap_or_default();
@@ -22513,8 +22555,8 @@ fn cached_ota_spots(
 
 /// `cached`: re-derive the log's flags over the cached rows instead of fetching — see
 /// [`cached_ota_spots`]. Absent or false is the poll and the Refresh button, which fetch.
-#[tauri::command(async)]
-fn get_ota_spots(
+#[tauri::command]
+async fn get_ota_spots(
     program: String,
     cached: Option<bool>,
     state: State<'_, SharedEngine>,
@@ -22525,11 +22567,21 @@ fn get_ota_spots(
     let spots = if cached == Some(true) {
         cached_ota_spots(&ota_cache, &program)?
     } else {
+        // Blocking HTTP: on the blocking pool (see `get_aurora`).
         let spots = match program.as_str() {
-            "POTA" => propagation::live::pota::fetch_pota_spots()?,
-            "SOTA" => propagation::live::pota::fetch_sota_spots(30)?,
+            "POTA" => {
+                tauri::async_runtime::spawn_blocking(propagation::live::pota::fetch_pota_spots)
+                    .await
+            }
+            "SOTA" => {
+                tauri::async_runtime::spawn_blocking(|| {
+                    propagation::live::pota::fetch_sota_spots(30)
+                })
+                .await
+            }
             other => return Err(format!("Unknown program '{other}' — use POTA or SOTA.")),
-        };
+        }
+        .map_err(|e| e.to_string())??;
         // Refresh the lock-only cache the Needed scorer reads for POTA/SOTA tags —
         // keyed PER PROGRAM ("Both" mode fetches POTA and SOTA concurrently; a
         // single slot let the last writer evict the other program's activators).
@@ -22735,7 +22787,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_aurora" => ok(get_aurora(app.state()).await),
             "get_pca" => ok(get_pca(app.state(), app.state()).await),
             "get_satellites" => ok(get_satellites(app.state()).await),
-            "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state())),
+            "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
             "get_path_outlook" => {
@@ -22823,8 +22875,8 @@ fn place_ota(sp: &propagation::OtaSpot) -> Option<(f64, f64, bool)> {
 /// POTA only, deliberately. A SOTA spot carries no position — its payload has an
 /// association and summit code and nothing else — so a summit cannot be plotted
 /// from that feed without a second lookup against a different endpoint.
-#[tauri::command(async)]
-fn get_ota_map_spots(
+#[tauri::command]
+async fn get_ota_map_spots(
     state: State<'_, SharedEngine>,
     ota_cache: State<'_, SharedOtaSpots>,
 ) -> Result<Vec<OtaMapSpot>, String> {
@@ -22837,7 +22889,11 @@ fn get_ota_map_spots(
     let spots = match cached {
         Some(v) => v,
         None => {
-            let fresh = propagation::live::pota::fetch_pota_spots()?;
+            // Blocking HTTP: on the blocking pool (see `get_aurora`).
+            let fresh =
+                tauri::async_runtime::spawn_blocking(propagation::live::pota::fetch_pota_spots)
+                    .await
+                    .map_err(|e| e.to_string())??;
             if let Ok(mut c) = ota_cache.lock() {
                 c.insert("POTA".into(), (now, fresh.clone()));
             }
@@ -31934,6 +31990,245 @@ mod tests {
         );
     }
 
+    /// The `propagation::live` functions this file calls that never touch the network — parsers
+    /// and cache readers. Every other `propagation::live::…(` call is a blocking HTTP request.
+    const LIVE_WITHOUT_NETWORK: [&str; 8] = [
+        "contests::parse_contest_rss",
+        "dxped::cached_active_calls",
+        "dxped::call_matches",
+        "dxped::set_clublog_key",
+        "lotw_users::parse_user_activity",
+        "tle::parse_mirror_manifest",
+        "tle::tle_bird_ok",
+        "tle::tle_fetch_target",
+    ];
+
+    /// Each command body and each `async fn` in `src` that makes a blocking HTTP request on the
+    /// thread it runs on, as `name: request` — a `propagation::live` fetch, `reqwest::blocking`,
+    /// or a function here that makes one (followed to any depth). A request inside
+    /// `spawn_blocking(…)` or a spawned thread's closure is off that thread and does not count.
+    fn http_where_a_command_runs(src: &str) -> Vec<String> {
+        let lines: Vec<&str> = src.lines().collect();
+        // (name, a command or an async fn, body) for every top-level fn.
+        let mut fns: Vec<(String, bool, String)> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let line = line
+                .strip_prefix("pub(crate) ")
+                .or_else(|| line.strip_prefix("pub "))
+                .unwrap_or(line);
+            let (is_async, rest) = match (line.strip_prefix("async fn "), line.strip_prefix("fn "))
+            {
+                (Some(rest), _) => (true, rest),
+                (None, Some(rest)) => (false, rest),
+                _ => continue,
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let command = lines[..i]
+                .iter()
+                .rev()
+                .take_while(|l| l.starts_with("#[") || l.starts_with("//"))
+                .any(|l| l.starts_with("#[tauri::command"));
+            // Body extent by brace balance, as the scans above do.
+            let (mut depth, mut opened, mut end) = (0i32, false, i);
+            for (j, l) in lines.iter().enumerate().skip(i) {
+                depth += l.matches('{').count() as i32 - l.matches('}').count() as i32;
+                opened |= l.contains('{');
+                end = j;
+                if opened && depth <= 0 {
+                    break;
+                }
+            }
+            fns.push((name, command || is_async, lines[i..=end].join("\n")));
+        }
+        // The requests `body` makes on its own thread.
+        let requests = |body: &str, helpers: &[String]| -> Vec<String> {
+            let mut elsewhere: Vec<(usize, usize)> = Vec::new();
+            for guard in ["spawn_blocking(", "thread::spawn(", ".spawn(move"] {
+                for (at, _) in body.match_indices(guard) {
+                    let open = at + guard.find('(').unwrap_or_default();
+                    let mut depth = 0;
+                    for (k, c) in body[open..].char_indices() {
+                        match c {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    elsewhere.push((at, open + k));
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            let here = |at: usize| !elsewhere.iter().any(|&(a, b)| (a..=b).contains(&at));
+            let mut found = Vec::new();
+            const LIVE: &str = "propagation::live::";
+            for (at, _) in body.match_indices(LIVE) {
+                let path: String = body[at + LIVE.len()..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
+                    .collect();
+                let called = body[at + LIVE.len() + path.len()..].starts_with('(');
+                if here(at) && called && !LIVE_WITHOUT_NETWORK.contains(&path.as_str()) {
+                    found.push(path);
+                }
+            }
+            if body
+                .match_indices("reqwest::blocking")
+                .any(|(at, _)| here(at))
+            {
+                found.push("reqwest::blocking".to_string());
+            }
+            for helper in helpers {
+                let called = body.match_indices(&format!("{helper}(")).any(|(at, _)| {
+                    here(at)
+                        && body[..at]
+                            .chars()
+                            .next_back()
+                            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+                });
+                if called {
+                    found.push(helper.clone());
+                }
+            }
+            found
+        };
+        // Every function that makes a request on its caller's thread, to any depth.
+        let mut helpers: Vec<String> = Vec::new();
+        loop {
+            let more: Vec<String> = fns
+                .iter()
+                .filter(|(name, _, body)| {
+                    !helpers.contains(name) && !requests(body, &helpers).is_empty()
+                })
+                .map(|(name, ..)| name.clone())
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            helpers.extend(more);
+        }
+        let mut offenders = Vec::new();
+        for (name, runs_a_command, body) in &fns {
+            if !runs_a_command {
+                continue;
+            }
+            for request in requests(body, &helpers) {
+                // A function's own signature names it; that is not a call.
+                if request != *name {
+                    offenders.push(format!("{name}: {request}"));
+                }
+            }
+        }
+        offenders.dedup();
+        offenders
+    }
+
+    /// A command body runs on a runtime WORKER — an `async fn`, or a sync fn under
+    /// `#[tauri::command(async)]`, which Tauri runs inside `async_runtime::spawn` — or, bare, on
+    /// the UI thread. A blocking HTTP request there holds that thread for the whole request, up
+    /// to its timeout. In a debug build it is a crash as well: reqwest checks for it by building
+    /// and dropping a throwaway runtime, and dropping one on a worker panics ("Cannot drop a
+    /// runtime in a context where blocking is not allowed") — seen on first UI load, 2026-09-23.
+    /// So every request goes through `spawn_blocking`, as `with_engine` does for the engine.
+    #[test]
+    fn no_command_makes_a_blocking_http_request_where_it_runs() {
+        let offenders = http_where_a_command_runs(include_str!("lib.rs"));
+        assert!(
+            offenders.is_empty(),
+            "these make a blocking HTTP request on the thread a command runs on — move it into \
+             `tauri::async_runtime::spawn_blocking`:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// The scan above is only worth having if it can fail: a request on a worker, one reached
+    /// through two helpers from an `(async)` command, a pure `live` call, and requests moved
+    /// to the blocking pool or a thread — only the first two are named.
+    #[test]
+    fn the_http_scan_names_a_request_where_a_command_runs() {
+        // Built from quoted lines so that none of them starts a line of THIS file with `fn`.
+        let src = [
+            "#[tauri::command]",
+            "async fn on_a_worker() -> Result<propagation::KpForecast, String> {",
+            "    propagation::live::swpc::fetch_kp_forecast()",
+            "}",
+            "#[tauri::command]",
+            "async fn on_the_pool() -> Result<Vec<propagation::live::aurora::AuroraPoint>, String> {",
+            "    tauri::async_runtime::spawn_blocking(|| propagation::live::aurora::fetch_aurora())",
+            "        .await",
+            "        .map_err(|e| e.to_string())?",
+            "}",
+            "fn post(body: String) -> Result<String, String> {",
+            "    propagation::live::qrz::post_form(\"https://x\", body)",
+            "}",
+            "fn book(call: &str) -> Result<String, String> {",
+            "    post(call.to_string())",
+            "}",
+            "#[tauri::command(async)]",
+            "fn two_helpers_deep(call: String) -> Result<String, String> {",
+            "    book(&call)",
+            "}",
+            "#[tauri::command]",
+            "async fn a_pure_live_call() -> bool {",
+            "    propagation::live::dxped::call_matches(\"3Y0J\", \"3Y0J/MM\")",
+            "}",
+            "#[tauri::command]",
+            "fn on_a_thread() {",
+            "    std::thread::spawn(move || book(\"W1AW\"));",
+            "}",
+        ]
+        .join("\n");
+        assert_eq!(
+            http_where_a_command_runs(&src),
+            [
+                "on_a_worker: swpc::fetch_kp_forecast",
+                "two_helpers_deep: book"
+            ]
+        );
+    }
+
+    /// WHAT the scan prevents, measured in-process: in a debug build, starting a blocking HTTP
+    /// client on a runtime worker IS the "Cannot drop a runtime" panic, and the same thing on
+    /// the blocking pool is not. (A release build skips reqwest's check; there the request just
+    /// holds the worker until it answers.)
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_blocking_http_client_on_a_runtime_worker_is_the_runtime_drop_panic() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let on_a_worker =
+            rt.block_on(rt.spawn(async { reqwest::blocking::Client::builder().build().map(drop) }));
+        let payload = on_a_worker
+            .expect_err("a blocking client started on a worker panics")
+            .into_panic();
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or_default();
+        assert!(
+            message.contains("Cannot drop a runtime in a context where blocking is not allowed"),
+            "{message}"
+        );
+        let on_the_pool = rt.block_on(rt.spawn(async {
+            tokio::task::spawn_blocking(|| reqwest::blocking::Client::builder().build().map(drop))
+                .await
+        }));
+        assert!(
+            matches!(on_the_pool, Ok(Ok(Ok(())))),
+            "the same client on the blocking pool starts cleanly"
+        );
+    }
+
     /// #335 (N9RNT: on 1.13.0 the waterfall froze a few minutes in). The shape of the freeze,
     /// on a runtime with two workers so that a handful of calls can fill it: the radio loop
     /// holds the engine across a slow CAT round trip while the 300 ms snapshot poll, which does
@@ -35369,6 +35664,44 @@ mod tests {
         // CONTROL: the park comes from the feed — the same call with the activator not on it
         // logs none, or the fix is tagging something it never looked up.
         assert_eq!(work_then_log(fresh_engine(), &[], "K1ABC"), None);
+    }
+
+    /// THE LIVE CRASH, through the board's own body (2026-09-23, on 1.13.0 and 1.14.0): POTA's
+    /// feed carried `"activator": "KK4JAB ☕️"`, and the country lookup panicked on it, so every
+    /// Needed-board read failed and the board stopped updating while the spot was up. The row is
+    /// a US station, and the board around it reads normally.
+    #[test]
+    fn a_pota_activator_with_an_emoji_does_not_take_down_the_needed_board() {
+        use std::sync::{Arc, Mutex};
+        let now = crate::now_unix();
+        let mut feed = propagation::parse_pota_spots(
+            r#"[{"activator":"KK4JAB ☕️","reference":"US-7615","frequency":"14236.5",
+                "mode":"SSB"},
+               {"activator":"W9XYZ","reference":"US-0002","frequency":"14250","mode":"SSB"}]"#,
+        );
+        assert_eq!(feed.len(), 2, "control: both feed rows parse");
+        for sp in &mut feed {
+            sp.spot_time_unix = Some(now);
+        }
+        let ota = hunter_cache(&[("POTA", &feed)]);
+        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        let region =
+            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+        let spots: crate::SharedSpots =
+            Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::default()));
+        let engine = fresh_engine();
+        let alerts = crate::read_need_alerts(engine_lock(&engine), &live, &region, &spots, &ota)
+            .expect("the board reads");
+        let entity = |call: &str| {
+            alerts
+                .iter()
+                .find(|a| a.call.starts_with(call))
+                .unwrap_or_else(|| panic!("no {call} row in {alerts:?}"))
+                .entity
+                .clone()
+        };
+        assert_eq!(entity("KK4JAB"), "United States");
+        assert_eq!(entity("W9XYZ"), "United States", "control: its neighbour");
     }
 
     /// BY CONSTRUCTION, the way the roster and the Needed board are held together in the UI: for

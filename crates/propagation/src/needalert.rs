@@ -2659,6 +2659,45 @@ mod tests {
         }
     }
 
+    /// THE LIVE ROW, end to end (2026-09-23). POTA's feed carried an activator typed with an
+    /// emoji after the call. It parsed, then crashed the country lookup inside
+    /// `activation_alert` on every Needed-board read while the spot was up — the whole board,
+    /// not just this row. It is a US station at a US park, and scores as one.
+    #[test]
+    fn a_pota_activator_with_an_emoji_scores_as_its_call() {
+        let spots = crate::pota::parse_pota_spots(
+            r#"[{"activator":"KK4JAB ☕️","reference":"US-7615","frequency":"14236.5",
+                "mode":"SSB","spotter":"KK4JAB ☕️"}]"#,
+        );
+        assert_eq!(spots.len(), 1, "control: the feed row parses");
+        let needs = LogNeeds::new();
+        let a = activation_alert(
+            &spots[0],
+            &needs,
+            &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
+        )
+        .expect("an active park is a row");
+        assert_eq!(a.entity, "United States");
+        assert!(a.tags.contains(&NeedTag::NewEntity), "{:?}", a.tags);
+    }
+
+    /// The same lookup sits under the cluster locality gate, which the feed thread asks for
+    /// every spotter while it holds the spot buffer. A spotter carrying a non-ASCII character is
+    /// placed exactly where its call is.
+    #[test]
+    fn a_spotter_with_a_non_ascii_character_is_placed_like_its_call() {
+        assert!(
+            spotter_origin("KK4JAB").is_some(),
+            "control: the call places"
+        );
+        assert_eq!(spotter_origin("KK4JAB☕️"), spotter_origin("KK4JAB"));
+        assert_eq!(
+            hf_admit_spotters(&["KK4JAB☕️"], "KD9TAW"),
+            Some(vec!["KK4JAB☕️"])
+        );
+    }
+
     #[test]
     fn activation_alert_merges_a_dx_award_with_the_program_tag() {
         // A park that IS also a new one keeps the award tier + gains the program chip.

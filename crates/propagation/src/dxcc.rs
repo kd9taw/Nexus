@@ -255,12 +255,10 @@ fn spot_entity<'a>(r: &'a Resolver, call: &str) -> Option<&'a str> {
     if let Some(&(i, _)) = r.exact.get(call) {
         return Some(r.entities[i as usize].name.as_str());
     }
-    let mut n = call.len();
-    while n > 0 {
-        if let Some(&(i, _)) = r.prefixes.get(&call[..n]) {
+    for prefix in prefixes_longest_first(call) {
+        if let Some(&(i, _)) = r.prefixes.get(prefix) {
             return Some(r.entities[i as usize].name.as_str());
         }
-        n -= 1;
     }
     None
 }
@@ -397,6 +395,15 @@ pub(crate) fn base_call(up: &str) -> &str {
     }
 }
 
+/// Every prefix of `s`, longest first — the candidates of a longest-prefix walk. Each ends on a
+/// character boundary, so the walk cannot cut a multi-byte character in half, which counting the
+/// length down one BYTE at a time (`&s[..n]`) does on the first one it meets.
+fn prefixes_longest_first(s: &str) -> impl Iterator<Item = &str> {
+    s.char_indices()
+        .rev()
+        .map(move |(i, c)| &s[..i + c.len_utf8()])
+}
+
 /// Is `base` a Guantanamo Bay call under the 2×2 rule? (#52)
 ///
 /// cty.dat gives Guantanamo the bare `KG4` prefix plus a list of exact calls, and a prefix that
@@ -424,6 +431,17 @@ fn kg4_is_guantanamo(base: &str) -> bool {
 /// Resolve a callsign to a DXCC entity + representative location.
 pub fn resolve(call: &str) -> Option<DxccInfo> {
     let r = resolver();
+    // ⚠️ A NON-ASCII CHARACTER ENDS THE CALL. A callsign is ASCII by definition, but what
+    // reaches here is outside input — POTA spots, cluster lines, decodes, imported logs — and
+    // the POTA feed carried `KK4JAB ☕️` (2026-09-23): the call, then decoration. The prefix
+    // walk below already answers a call with trailing ASCII junk by its longest real prefix
+    // (`KK4JAB XYZ` is United States), and the #84 bracket strip below reads the call inside
+    // its decoration rather than refusing it; this is the same reading. Every all-ASCII input
+    // resolves exactly as before, and nothing ahead of the first non-ASCII character means no
+    // call at all (`☕️KK4JAB`, full-width letters → `None`).
+    let call = call
+        .find(|c: char| !c.is_ascii())
+        .map_or(call, |i| &call[..i]);
     // ⚠️ STRIP THE HASHED-CALL BRACKETS FIRST (issue #84). FT8's 77-bit protocol sends a
     // compound call as `<DX1ABC>` when the message will not otherwise fit, and the decoded
     // token keeps its brackets all the way here. `cty.dat` contains no `<` anywhere, so a
@@ -446,20 +464,17 @@ pub fn resolve(call: &str) -> Option<DxccInfo> {
     }
     // Longest-prefix on the base call.
     let base = base_call(&full);
-    let mut n = base.len();
-    while n > 0 {
+    for prefix in prefixes_longest_first(base) {
         // The one prefix in the file that is wrong on its own: `KG4` covers a block shared with
         // the United States, and only a 2-character suffix is Guantanamo Bay (#52). Skipping the
         // entry rather than special-casing the RESULT lets the walk carry on to `K`, so the call
         // picks up the United States entity, its CQ zone and its continent by the ordinary path.
-        if &base[..n] == "KG4" && !kg4_is_guantanamo(base) {
-            n -= 1;
+        if prefix == "KG4" && !kg4_is_guantanamo(base) {
             continue;
         }
-        if let Some(&(i, zone)) = r.prefixes.get(&base[..n]) {
+        if let Some(&(i, zone)) = r.prefixes.get(prefix) {
             return Some(info(r, i, zone));
         }
-        n -= 1;
     }
     None
 }
@@ -1057,5 +1072,92 @@ mod hashed_call_tests {
         let plain = resolve("KH8/W1AW").map(|d| d.entity);
         assert!(plain.is_some(), "control: the compound form resolves");
         assert_eq!(resolve("<KH8/W1AW>").map(|d| d.entity), plain);
+    }
+}
+
+#[cfg(test)]
+mod non_ascii_calls {
+    use super::*;
+
+    /// THE LIVE CASE, 2026-09-23: the POTA feed carried `"activator": "KK4JAB ☕️"` (US-7615,
+    /// 14236.5). The longest-prefix walk sliced the call one BYTE at a time, landed inside the
+    /// emoji's variation selector and panicked ("byte index 12 is not a char boundary") on every
+    /// Needed-board read while the spot was up. The station is KK4JAB, at a US park.
+    #[test]
+    fn the_live_pota_activator_resolves_to_its_call() {
+        assert_eq!(
+            resolve("KK4JAB ☕️").map(|d| d.entity),
+            Some("United States")
+        );
+    }
+
+    /// The rule: a callsign is ASCII, so its first non-ASCII character ends it, and whatever
+    /// follows cannot change the answer. Each plain call is paired with its own answer, so a
+    /// tail that changed it would show — including the two answers a walk over the whole string
+    /// gets wrong even where it does not panic: an exact-call override (KG4BBX is Alaska) and
+    /// the KG4 2×2 rule (KG4AB is Guantanamo), both of which read the call as a whole.
+    #[test]
+    fn a_non_ascii_tail_never_changes_the_answer() {
+        let tails = [
+            " ☕️",
+            "☕",
+            "é",
+            "\u{301}",
+            "Ø",
+            "\u{a0}",
+            "ＡＢ",
+            "\u{3000}73",
+        ];
+        for call in [
+            "KK4JAB", "W1AW", "JA1XYZ", "KG4BBX", "KG4AB", "KH8/W1AW", "DL1ABC/P",
+        ] {
+            let plain = resolve(call).map(|d| d.entity);
+            assert!(plain.is_some(), "control: {call} must resolve on its own");
+            for tail in tails {
+                assert_eq!(
+                    resolve(&format!("{call}{tail}")).map(|d| d.entity),
+                    plain,
+                    "{call:?} + {tail:?}"
+                );
+            }
+        }
+        // The hashed-call brackets (#84) still come off when decoration follows them.
+        assert_eq!(
+            resolve("<KK4JAB>☕").map(|d| d.entity),
+            Some("United States")
+        );
+    }
+
+    /// Nothing callsign-shaped in front of the first non-ASCII character means no call at all:
+    /// the same `None` a call that starts with junk has always had.
+    #[test]
+    fn no_leading_call_resolves_to_nothing() {
+        for s in [
+            "☕️KK4JAB",       // emoji first
+            "ＫＫ４ＪＡＢ",   // full-width letters: callsign-shaped, not callsign characters
+            "é",              // a lone two-byte character
+            "☕",             // a lone three-byte character
+            "𝐊𝐊4𝐉𝐀𝐁",         // four-byte letters
+            "\u{feff}KD9TAW", // a byte-order mark from a spreadsheet export
+            "\u{301}",        // a lone combining mark
+        ] {
+            assert_eq!(resolve(s).map(|d| d.entity), None, "{s:?}");
+        }
+    }
+
+    /// The walk itself, independent of the cut above: every candidate ends on a character
+    /// boundary, longest first. This is what keeps a non-ASCII key in a downloaded cty.dat, or
+    /// any future caller of the walk, from ever splitting a character.
+    #[test]
+    fn the_prefix_walk_never_splits_a_character() {
+        assert_eq!(
+            prefixes_longest_first("K☕é").collect::<Vec<_>>(),
+            ["K☕é", "K☕", "K"]
+        );
+        assert_eq!(
+            prefixes_longest_first("W1AW").collect::<Vec<_>>(),
+            ["W1AW", "W1A", "W1", "W"]
+        );
+        assert_eq!(prefixes_longest_first("").count(), 0);
     }
 }
