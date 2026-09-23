@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A station on your watch list now stands out on the Call Roster, the Stations list and Spots.**
+  The watch list (Settings ▸ Spots & Alerts) sounded one loud alert when a station you asked for
+  was decoded, and after that nothing on the screen said which row it was. Every station the list
+  names, by call or prefix, by DXCC entity or by grid square, now carries a **WATCH** tile. It is
+  the same lime tile on all three lists, and hovering it names the entry that matched. A watched
+  station counts as a need: **Needed only** keeps it, **Hide worked** keeps it even after you have
+  worked it (on the roster and on Spots), and the Stations list's **Needed** counts it too. There
+  is nothing to set up. It reads the list you already keep and follows it as you edit it. In a
+  Remote browser it reads that browser's own watch list, the one its alerts already use.
+
 - **The Satellites section can now work out when you and another station can both see the same
   bird.** Nexus could always tell you when a satellite rises over your own QTH, which is half of
   what a satellite QSO needs: the other operator has to be able to see it at the same moment, and

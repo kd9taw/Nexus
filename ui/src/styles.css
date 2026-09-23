@@ -5419,6 +5419,10 @@ select optgroup {
   --need-pota: #4ade80; /* green — live POTA activator */
   --need-sota: #a78bfa; /* purple — live SOTA activator */
   --need-wanted: #fbbf24; /* amber — on your wanted watch list */
+  /* lime — on your watch list (Settings ▸ Spots & Alerts): the WATCH tile on the Call Roster,
+     the Stations list and Spots. The one hue on those rows nothing else uses — the nearest
+     need, rarity or row-state colour is ΔE2000 ≥ 15 away here and ≥ 10 in the light ink. */
+  --need-watch: #a3e635;
   /* Needed-board submode hues (RTTY/FT4 get their own so an RTTY opportunity
      reads apart from an FT8 one). Declared rather than left to a var() fallback:
      a fallback is a DARK value that fires in both themes, which is the whole of
@@ -5448,6 +5452,7 @@ select optgroup {
   --need-pota: #15803d;
   --need-sota: #6d28d9;
   --need-wanted: #9a5b00; /* amber — on your wanted watch list */
+  --need-watch: #3f6212; /* lime — on your watch list (the WATCH tile) */
   --need-mode-rtty: #8a5200;
   --need-mode-ft4: #0f7038;
   --need-ink: #ffffff;
@@ -5494,6 +5499,9 @@ select optgroup {
 }
 .need-wanted {
   --need-color: var(--need-wanted);
+}
+.need-watch {
+  --need-color: var(--need-watch);
 }
 /* A subtle left accent on the card so needed stations stand out in the list. */
 .station-card.needed {
@@ -15443,6 +15451,19 @@ button.cq-skiptx1.on {
   color: var(--text-faint);
   background: color-mix(in srgb, var(--text-faint) 18%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-faint) 35%, transparent);
+}
+/* The WATCH tile leads the same cell, ahead of that badge, and keeps the badge's gap. The cell is
+   ONE line that clips (`overflow: hidden`, for the comment's ellipsis), about 16 px tall, and the
+   need-chip pill inline is 18 px: measured in Chrome, it lost its bottom 2 px, border and all.
+   One em tall with the 1 px padding the roster's other pills use, it is 14.5 px, and top-aligned
+   its top IS the line's top in any font, so it sits wholly inside and the row keeps its height. */
+.np-why > .need-watch {
+  display: inline-block;
+  margin-right: 6px;
+  padding-top: 1px;
+  padding-bottom: 1px;
+  line-height: 1;
+  vertical-align: top;
 }
 /* How far back Hide worked reaches — a chip-sized picker beside it in the filter bar. The
    `select` base rule owns the arrow (background-image / padding-right, both !important), so
