@@ -45,7 +45,7 @@ impl Publisher {
             return Err("monitorSequenceExhausted");
         }
         let station = {
-            let guard = engine.try_lock().map_err(|_| "monitorBusy")?;
+            let guard = tempo_app::engine::engine_try_lock(engine).map_err(|_| "monitorBusy")?;
             guard.remote_monitor_observation_at(now)
         }; // engine guard drops BEFORE framing and IPC serialization
         let frame = Frame {

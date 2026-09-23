@@ -10,12 +10,11 @@ use tempo_app::settings::{RadioProfile, Settings};
 pub(super) fn build(kind: Collection, engine: &crate::SharedEngine) -> Result<Value, &'static str> {
     match kind {
         Collection::Settings => {
-            let e = engine.try_lock().map_err(|_| "applicationBusy")?;
+            let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
             settings(e.settings())
         }
         Collection::Programming => {
-            let grid = engine
-                .try_lock()
+            let grid = tempo_app::engine::engine_try_lock(engine)
                 .map_err(|_| "applicationBusy")?
                 .settings()
                 .mygrid

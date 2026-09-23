@@ -64,7 +64,7 @@ struct Context {
 }
 impl Context {
     fn read(engine: &crate::SharedEngine) -> Result<Self, &'static str> {
-        let e = engine.try_lock().map_err(|_| "applicationBusy")?;
+        let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
         let s = e.settings();
         if s.mycall.len() > 64
             || s.mygrid.len() > 16
@@ -128,7 +128,7 @@ fn settings_revision(
     if kind != Collection::Settings {
         return Ok(None);
     }
-    let e = engine.try_lock().map_err(|_| "applicationBusy")?;
+    let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
     super::configuration::settings_revision(e.settings()).map(Some)
 }
 impl Source {
@@ -680,7 +680,7 @@ fn log_context(
 ) -> Result<LogContext, &'static str> {
     let deadline = Instant::now() + Duration::from_secs(2);
     let count = {
-        let e = engine.try_lock().map_err(|_| "applicationBusy")?;
+        let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
         e.log_records().len()
     };
     if count > 1_000_000 {
@@ -698,7 +698,7 @@ fn log_context(
             return Err("applicationBusy");
         }
         let rows = {
-            let e = engine.try_lock().map_err(|_| "applicationBusy")?;
+            let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
             if !Arc::ptr_eq(&context.log, &e.log_read_token())
                 || e.settings().mycall != context.call
                 || e.settings().mygrid != context.grid

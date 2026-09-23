@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
 use tempo_app::dto::Spectrum;
-use tempo_app::engine::{engine_lock, Engine, MeterFeed};
+use tempo_app::engine::{engine_lock, engine_lock_result, Engine, MeterFeed};
 use tempo_net::flexcat::{
     parse_create_stream_id, parse_meter_defs, parse_pan_status, FlexCat, FlexMsg, FlexRecv,
     MeterDef, PanStatus,
@@ -255,8 +255,7 @@ pub fn fft_to_row(bins: &[u16]) -> Vec<f32> {
 
 /// The active radio's current dial in Hz, from the engine (0 if the lock is unavailable).
 fn engine_dial_hz(engine: &Arc<Mutex<Engine>>) -> u64 {
-    engine
-        .lock()
+    engine_lock_result(engine)
         .ok()
         .map(|e| (e.settings().dial_mhz * 1_000_000.0) as u64)
         .unwrap_or(0)
@@ -264,8 +263,7 @@ fn engine_dial_hz(engine: &Arc<Mutex<Engine>>) -> u64 {
 
 /// The operator's desired pan bandwidth (Hz) + reference (dBm, `None`=auto), from the engine.
 fn engine_flex_controls(engine: &Arc<Mutex<Engine>>) -> (f64, Option<i32>) {
-    engine
-        .lock()
+    engine_lock_result(engine)
         .ok()
         .map(|e| (e.flex_pan_span_hz(), e.flex_pan_ref_dbm()))
         .unwrap_or((SPAN_HZ, None))
@@ -376,8 +374,7 @@ impl FlexSpectrum {
         // Which slice's meters are OURS: the one the CAT link drives (audit #1016/#1028 — see
         // `meter_is_ours`). Read once here, like the Flex IP; the worker restarts on a radio
         // re-select, which is when the CAT address can change.
-        let our_slice = engine
-            .lock()
+        let our_slice = engine_lock_result(&engine)
             .ok()
             .map(|e| e.settings().rig_addr.clone())
             .and_then(|addr| crate::rigmodels::flex_slice_for_cat_addr(&addr))

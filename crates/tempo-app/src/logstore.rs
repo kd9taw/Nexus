@@ -167,6 +167,9 @@ fn open_reporting_with(
     mut mirror_options: MirrorOptions,
     progress: &mut dyn FnMut(migrate::Progress),
 ) -> Result<Opened, OpenError> {
+    // All of it — the conversion, the load, the read of a foreign `log.adi`, the sweep — before
+    // the engine is locked.
+    tempo_core::logbook::io_fence::off_engine_lock("opening the logbook store");
     if let Some(why) = network {
         return Err(OpenError::NetworkFolder(why));
     }
@@ -404,7 +407,7 @@ impl Durability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::Engine;
+    use crate::engine::{engine_lock, engine_try_lock, Engine};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
     use std::time::Instant;
@@ -1025,7 +1028,7 @@ mod tests {
         let hold = WriteHold::take(&d.db()).expect("hold the write lock");
         let started = Instant::now();
         let durability = {
-            let mut e = engine.lock().unwrap();
+            let mut e = engine_lock(&engine);
             let (_, a) = e.with_log_tickets(|e| e.log_qso(qso("W1STALL", 1_788_000_000)));
             let (_, b) = e.with_log_tickets(|e| e.mark_qsl_card(2, true));
             let (_, c) = e.with_log_tickets(|e| e.delete_qso(5));
@@ -1040,7 +1043,7 @@ mod tests {
 
         // Another thread takes the engine lock while the write is still stalled.
         let other = Arc::clone(&engine);
-        let took = std::thread::spawn(move || other.try_lock().is_ok())
+        let took = std::thread::spawn(move || engine_try_lock(&other).is_ok())
             .join()
             .unwrap();
         assert!(took, "try_lock succeeds during the stalled write");
@@ -1056,8 +1059,114 @@ mod tests {
             w.wait(DURABLE_WAIT)
                 .expect("durable once the lock is released");
         }
-        let e = engine.lock().unwrap();
+        let e = engine_lock(&engine);
         same_log(&stored(&d), e.log_records(), "after the stall");
+    }
+
+    // ── C11: the fence ──────────────────────────────────────────────────────
+
+    /// A store-backed engine behind the Engine mutex, as the app holds it.
+    fn shared_on_store(d: &Dir) -> Arc<Mutex<Engine>> {
+        Arc::new(Mutex::new(engine_on_store(d)))
+    }
+
+    /// ★ C11 POSITIVE CONTROL. A command that waited for its change while still holding the
+    /// Engine lock would hold the radio loop for as long as the disk takes; in a debug build the
+    /// fence stops it at the wait.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "io_fence: a wait for a logbook change to reach the disk ran while this thread \
+                    holds the Engine lock"
+    )]
+    fn a_durable_wait_under_the_engine_lock_trips_the_fence() {
+        let d = Dir::new("fence-wait");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = shared_on_store(&d);
+        let mut e = engine_lock(&engine);
+        let (_, durability) = e.with_log_tickets(|e| e.mark_qsl_card(1, true));
+        let _ = durability.wait(DURABLE_WAIT); // `e` is still held
+    }
+
+    /// The other direction: the same wait with the guard dropped first passes, and the change
+    /// is on disk.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_durable_wait_after_the_engine_lock_is_released_passes_the_fence() {
+        let d = Dir::new("fence-wait-ok");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = shared_on_store(&d);
+        let durability = {
+            let mut e = engine_lock(&engine);
+            e.with_log_tickets(|e| e.mark_qsl_card(1, true)).1
+        };
+        durability
+            .wait(DURABLE_WAIT)
+            .expect("durable, with no lock held");
+        let id = engine_lock(&engine).log_records()[1].id;
+        assert!(
+            stored(&d).iter().any(|r| r.id == id && r.qsl_rcvd.card),
+            "the mark is on disk"
+        );
+    }
+
+    /// ★ C11 POSITIVE CONTROL. Remote redeems an append's receipt after it has released the
+    /// engine; redeemed under the lock, the fence stops it.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "io_fence: a wait for an append to reach the disk ran while this thread holds \
+                    the Engine lock"
+    )]
+    fn an_append_receipt_synced_under_the_engine_lock_trips_the_fence() {
+        let d = Dir::new("fence-receipt");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = shared_on_store(&d);
+        let mut e = engine_lock(&engine);
+        let crate::engine::LogWriteOutcome::PendingSync(receipts) =
+            e.log_qso_for_sync(qso("W1FNC", 1_788_000_000))
+        else {
+            panic!("premise: the contact is appended and owes a receipt");
+        };
+        for r in receipts {
+            let _ = r.sync(); // `e` is still held
+        }
+    }
+
+    /// ★ C11 POSITIVE CONTROL. Opening the store — at launch, a conversion of a lifetime log —
+    /// belongs before the engine is locked.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "io_fence: opening the logbook store ran while this thread holds the Engine lock"
+    )]
+    fn opening_the_store_under_the_engine_lock_trips_the_fence() {
+        let d = Dir::new("fence-open");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = Arc::new(Mutex::new(Engine::new("K2DEF", "FN31", 0)));
+        let _e = engine_lock(&engine);
+        let _ = open_fast(&d);
+    }
+
+    /// Why `tests/engine_guard.rs` scans for raw locks: a guard taken with `Mutex::lock()` is the
+    /// same lock, and the fence cannot see it — the very wait the first control above stops goes
+    /// through here unremarked.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_raw_engine_lock_is_invisible_to_the_fence() {
+        let d = Dir::new("fence-raw");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = shared_on_store(&d);
+        let mut raw = engine.lock().unwrap();
+        let (_, durability) = raw.with_log_tickets(|e| e.mark_qsl_card(1, true));
+        assert_eq!(
+            tempo_core::logbook::io_fence::engine_guards_held(),
+            0,
+            "a raw guard is not counted"
+        );
+        durability
+            .wait(DURABLE_WAIT)
+            .expect("the fence does not fire: it cannot see this lock");
     }
 
     /// The datagram WSJT-X sends when it logs a contact (UDP type 12, LoggedAdif), as it

@@ -284,7 +284,7 @@ pub(super) fn stop_station(engine: &crate::SharedEngine) {
         #[cfg(not(feature = "radio"))]
         let _ = addr;
     }
-    match engine.try_lock() {
+    match tempo_app::engine::engine_try_lock(engine) {
         Ok(mut e) => {
             let halt = stop(&mut e);
             drop(e);
@@ -300,8 +300,7 @@ pub(super) fn stop_station(engine: &crate::SharedEngine) {
             let engine = engine.clone();
             std::thread::spawn(move || {
                 let halt = stop(
-                    &mut engine
-                        .lock()
+                    &mut tempo_app::engine::engine_lock_result(&engine)
                         .unwrap_or_else(|poisoned| poisoned.into_inner()),
                 );
                 // Already off the accepting thread; the mast halt needs no second one.

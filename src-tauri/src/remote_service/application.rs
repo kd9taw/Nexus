@@ -248,7 +248,7 @@ impl Publisher {
             }
             // Never queue behind the radio loop. The browser retries a refused READ;
             // there is no deferred engine operation that can execute after disconnect.
-            let eng = match engine.try_lock() {
+            let eng = match tempo_app::engine::engine_try_lock(engine) {
                 Ok(eng) => eng,
                 Err(_) => return self.cached(command, request_id, base, now),
             };

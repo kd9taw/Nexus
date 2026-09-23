@@ -48,7 +48,7 @@ impl Cache {
             if Instant::now() >= deadline {
                 return Err("applicationBusy");
             }
-            match engine.try_lock() {
+            match tempo_app::engine::engine_try_lock(engine) {
                 Ok(e) => return Ok(e),
                 Err(TryLockError::Poisoned(_)) => return Err("applicationUnavailable"),
                 Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),

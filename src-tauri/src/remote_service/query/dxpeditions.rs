@@ -100,7 +100,7 @@ fn read_cached(
         return Err("applicationUnavailable");
     }
     let (call, grid, log, model, power, gain) = {
-        let eng = engine.try_lock().map_err(|_| "applicationBusy")?;
+        let eng = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
         let s = eng.settings();
         if !text(&[&s.mycall, &s.mygrid, &s.prop_engine]) {
             return Err("applicationTooLarge");
@@ -187,7 +187,7 @@ fn read_cached(
     };
     // Keep every projection tied to the same settings/log at the end of copying.
     // No engine lock is held while serializing or looking up cached predictions.
-    let eng = engine.try_lock().map_err(|_| "applicationBusy")?;
+    let eng = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
     let s = eng.settings();
     if crate::unassisted()
         || s.mycall != call

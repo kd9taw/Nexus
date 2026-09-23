@@ -32,7 +32,7 @@ pub(super) fn read(
     recent: &crate::pouncer::SharedRecent,
     engine: &crate::SharedEngine,
 ) -> Result<(Vec<Value>, usize, Value), &'static str> {
-    let threshold = match engine.try_lock() {
+    let threshold = match tempo_app::engine::engine_try_lock(engine) {
         Ok(e) => e.settings().pounce_threshold,
         Err(TryLockError::WouldBlock) => return Err("applicationBusy"),
         Err(TryLockError::Poisoned(_)) => return Err("applicationUnavailable"),

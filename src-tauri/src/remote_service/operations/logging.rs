@@ -132,8 +132,7 @@ impl Work {
                 Self::Append(_) => Err(Reason::PersistenceFailed),
                 Self::Pending(write) => {
                     let prepared = write.prepare().map_err(|_| Reason::PersistenceFailed)?;
-                    let receipt = shared
-                        .lock()
+                    let receipt = tempo_app::engine::engine_lock_result(shared)
                         .map_err(|_| Reason::StationBusy)?
                         .publish_pending_qso_journal(prepared)
                         .map_err(reason)?;
@@ -142,8 +141,7 @@ impl Work {
                 }
                 Self::Confirm(append) => {
                     let confirmed = append.sync().map_err(reason)?;
-                    let clear = shared
-                        .lock()
+                    let clear = tempo_app::engine::engine_lock_result(shared)
                         .map_err(|_| Reason::StationBusy)?
                         .finish_pending_log_confirmation(confirmed);
                     match clear {
