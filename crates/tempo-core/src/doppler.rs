@@ -418,6 +418,29 @@ pub fn uplink_tone_hz(uplink_centre_hz: u64) -> Option<f32> {
     })
 }
 
+/// Downlink ranges a published BAND PLAN reserves for linear operation (SSB, CW and
+/// narrow data), as `(low_hz, high_hz)`, both ends inclusive.
+///
+/// ⚠️ CURATED, AND DELIBERATELY SHORT, like [`uplink_tone_hz`]: a transponder's mode
+/// class normally comes from the satellite database, and an entry here exists only
+/// where that database is wrong about a whole transponder and the band plan says so.
+///
+/// - QO-100 (Es'hail-2) NARROWBAND, 10489.500–10490.000 MHz down (2400.000–2400.500 up,
+///   NON-inverting, since the 2020 extension). The AMSAT-DL band plan allows no FM on
+///   it, yet SatNOGS tags every live narrowband segment FM up and FM down — the
+///   digimode, "SSB Only" and mixed-mode rows, and a receive-only beacon row too — so
+///   Nexus put both legs in FM, routed the pick by the operator's FM rule and forced
+///   the FM plumbing, on a transponder where FM is not allowed.
+const LINEAR_BAND_PLAN_DOWNLINKS: [(u64, u64); 1] = [(10_489_500_000, 10_490_000_000)];
+
+/// Does a published band plan make a downlink at `downlink_hz` LINEAR, whatever mode the
+/// satellite database tags it with? See [`LINEAR_BAND_PLAN_DOWNLINKS`].
+pub fn band_plan_linear_downlink(downlink_hz: u64) -> bool {
+    LINEAR_BAND_PLAN_DOWNLINKS
+        .iter()
+        .any(|&(lo, hi)| (lo..=hi).contains(&downlink_hz))
+}
+
 /// The sideband pair for a transponder, given the downlink mode the satellite
 /// database reports. An inverting transponder swaps the uplink sideband — the
 /// single most-missed detail in satellite operating.
@@ -804,6 +827,27 @@ mod tests {
         // Only the sideband-named words mirror: these name no side.
         for m in ["PKTFM", "FM", "AM", "RTTY", "CW", "CWR"] {
             assert_eq!(uplink_mode_for(m, true), m, "{m} has no sideband to mirror");
+        }
+    }
+
+    #[test]
+    fn the_band_plan_makes_qo100_narrowband_linear_edge_to_edge() {
+        // QO-100's narrowband transponder, 10489.500–10490.000 MHz down, both edges inside.
+        for hz in [10_489_500_000, 10_489_750_000, 10_490_000_000] {
+            assert!(band_plan_linear_downlink(hz), "{hz} is QO-100 narrowband");
+        }
+        // One hertz outside either edge, QO-100's wideband (DATV) transponder, and the FM
+        // birds the FM map exists for are not.
+        for hz in [
+            10_489_499_999,
+            10_490_000_001,
+            10_491_500_000,
+            436_795_000,
+            145_800_000,
+            435_525_000,
+            0,
+        ] {
+            assert!(!band_plan_linear_downlink(hz), "{hz} is not in the table");
         }
     }
 

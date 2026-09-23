@@ -31358,6 +31358,119 @@ mod tests {
         }
     }
 
+    /// A one-radio station in `section`, the A/B uplink mapping confirmed, ready to pick.
+    fn sat_pick_station(section: &str) -> SharedEngine {
+        let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&shared);
+            let s = e.settings().clone();
+            e.apply_settings(s);
+            e.set_operating_mode(section, false);
+            e.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::ADownBUp));
+        }
+        shared
+    }
+
+    /// ⭐ QO-100'S NARROWBAND IS WORKED LINEAR — the band plan allows no FM there, and SatNOGS
+    /// tags every live narrowband segment FM up and down. Each of the five, through the real
+    /// pick into each section: the section's ordinary linear form on both legs, and the FM
+    /// class gone from the routing binding. Non-inverting, so both legs take the same side.
+    #[test]
+    fn qo100_narrowband_is_worked_linear_in_every_section() {
+        // The five live narrowband segments, the fields the parser reads, values verbatim
+        // (db.satnogs.org, 2026-09-23).
+        let rows = propagation::live::satnogs::parse_transmitters(
+            r#"[
+              {"norad_cat_id":43700,"description":"Narrowband digimodes(500Hz max BW)","alive":true,"type":"Transponder","invert":false,"uplink_low":2400040000,"uplink_high":2400080000,"uplink_mode":"FM","downlink_low":10489540000,"downlink_high":10489580000,"mode":"FM"},
+              {"norad_cat_id":43700,"description":"digimodes(2700Hz max BW)","alive":true,"type":"Transponder","invert":false,"uplink_low":2400080000,"uplink_high":2400150000,"uplink_mode":"FM","downlink_low":10489580000,"downlink_high":10489650000,"mode":"FM"},
+              {"norad_cat_id":43700,"description":"SSB Only Transpoder","alive":true,"type":"Transponder","invert":false,"uplink_low":2400150000,"uplink_high":2400245000,"uplink_mode":"FM","downlink_low":10489650000,"downlink_high":10489745000,"mode":"FM"},
+              {"norad_cat_id":43700,"description":"SSB Only Transpoder","alive":true,"type":"Transponder","invert":false,"uplink_low":2400255000,"uplink_high":2400350000,"uplink_mode":"FM","downlink_low":10489755000,"downlink_high":10489850000,"mode":"FM"},
+              {"norad_cat_id":43700,"description":"Mixed modes(2700Hz max BW)","alive":true,"type":"Transponder","invert":false,"uplink_low":2400350000,"uplink_high":2400495000,"uplink_mode":"FM","downlink_low":10489850000,"downlink_high":10489995000,"mode":"FM"}
+            ]"#,
+        );
+        assert_eq!(rows.len(), 5, "scene: five segments parsed");
+        for (section, down, up) in [
+            ("phone", "USB", "USB"),
+            ("cw", "CW", "CW"),
+            ("digital", "PKTUSB", "PKTUSB"),
+        ] {
+            let shared = sat_pick_station(section);
+            for row in &rows {
+                super::hold_sat_row(&shared, "QO-100", &[row], 0).expect("the pick lands");
+                let e = engine_lock(&shared);
+                let b = e.sat_binding().expect("the pick leaves a binding");
+                assert!(
+                    b.pending_downlink_mhz.is_some() && b.pending_uplink_mhz.is_some(),
+                    "scene: {section}/{:?} tuned both legs: {b:?}",
+                    row.description
+                );
+                assert!(!b.fm, "{section}/{:?}: not routed as FM", row.description);
+                assert_eq!(
+                    e.rig_mode_effective(),
+                    down,
+                    "{section}/{:?}: the downlink",
+                    row.description
+                );
+                assert_eq!(
+                    e.sat_tx_mode().as_deref(),
+                    Some(up),
+                    "{section}/{:?}: the uplink",
+                    row.description
+                );
+            }
+        }
+    }
+
+    /// …and nothing else moves. The FM birds stay FM through the same pick (SO-50 and PO-101
+    /// keep their tones), KOSEN-1 keeps (a)'s CW uplink, RS-44 keeps its inverting pair, and
+    /// QO-100's CW-only segment — never tagged FM — is worked exactly as before. Phone.
+    #[test]
+    fn the_band_plan_table_leaves_every_other_bird_as_it_was() {
+        let rows = propagation::live::satnogs::parse_transmitters(
+            r#"[
+              {"norad_cat_id":27607,"description":"Mode V/U FM Voice CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145850000,"uplink_high":null,"uplink_mode":"FM","downlink_low":436795000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":43017,"description":"Mode U/V FM Voice (no CTCSS any longer)","alive":true,"type":"Transceiver","invert":false,"uplink_low":435250000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145960000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"Mode V/U FM - Voice Repeater CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145990000,"uplink_high":null,"uplink_mode":"FM","downlink_low":437800000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"Mode V APRS","alive":true,"type":"Transceiver","invert":false,"uplink_low":145825000,"uplink_high":null,"uplink_mode":"AFSK","downlink_low":145825000,"downlink_high":null,"mode":"AFSK"},
+              {"norad_cat_id":43678,"description":"FM VOICE","alive":true,"type":"Transceiver","invert":false,"uplink_low":437500000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145900000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":49402,"description":"Mode HF/U - Onboard SDR","alive":true,"type":"Transponder","invert":false,"uplink_low":21125000,"uplink_high":21150000,"uplink_mode":"CW","downlink_low":435525000,"downlink_high":435525000,"mode":"AFSK"},
+              {"norad_cat_id":44909,"description":"Mode V/U - Transponder","alive":true,"type":"Transponder","invert":true,"uplink_low":145935000,"uplink_high":145995000,"uplink_mode":"LSB","downlink_low":435610000,"downlink_high":435670000,"mode":"USB"},
+              {"norad_cat_id":43700,"description":"CW Only Transpoder","alive":true,"type":"Transponder","invert":false,"uplink_low":2400005000,"uplink_high":2400040000,"uplink_mode":"CW","downlink_low":10489505000,"downlink_high":10489540000,"mode":"CW"}
+            ]"#,
+        );
+        // (bird, FM class, downlink, uplink — `None` where there is no uplink leg, tone)
+        let want: [(&str, bool, &str, Option<&str>, f32); 8] = [
+            ("SO-50", true, "FM", Some("FM"), 67.0),
+            ("AO-91", true, "FM", Some("FM"), 67.0),
+            ("ISS", true, "FM", Some("FM"), 67.0),
+            // ONE channel both ways: no split, so no transmit-VFO mode to command.
+            ("ISS", true, "FM", None, 0.0),
+            ("PO-101", true, "FM", Some("FM"), 141.3),
+            ("KOSEN-1", true, "FM", Some("CW"), 0.0),
+            ("RS-44", false, "USB", Some("LSB"), 0.0),
+            ("QO-100", false, "USB", Some("USB"), 0.0),
+        ];
+        assert_eq!(rows.len(), want.len(), "scene: every guard parsed");
+        let shared = sat_pick_station("phone");
+        for (row, (name, fm, down, up, tone)) in rows.iter().zip(want) {
+            super::hold_sat_row(&shared, name, &[row], 0).expect("the pick lands");
+            let e = engine_lock(&shared);
+            let d = &row.description;
+            assert_eq!(
+                e.sat_binding().map(|b| b.fm),
+                Some(fm),
+                "{name} {d:?}: class"
+            );
+            assert_eq!(e.rig_mode_effective(), down, "{name} {d:?}: downlink");
+            assert_eq!(e.sat_tx_mode().as_deref(), up, "{name} {d:?}: uplink");
+            if fm {
+                assert_eq!(e.fm_repeater_config().2, tone, "{name} {d:?}: CTCSS");
+            }
+        }
+    }
+
     /// The engine mid-pass with a transponder HELD — the exact state the removed
     /// "SATELLITE STAMP" fired on. `label` is the raw form the Tauri command
     /// builds, CATALOG name and all, because that is what made the stamp

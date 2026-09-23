@@ -198,6 +198,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sideband changes: FT timing, sequencing and audio are exactly as before, and a non-inverting
   bird is untouched.
 
+- **QO-100's narrowband transponder is now worked in SSB, not FM.** The satellite database
+  labels every narrowband segment on QO-100 as FM up and FM down, the "SSB only" segments
+  included, and Nexus believed it: picking one put both legs in FM, routed the pick by your FM
+  rules and set up the FM repeater plumbing — on a transponder whose band plan allows no FM at
+  all. Anything between 10489.500 and 10490.000 MHz down is now treated as the linear
+  transponder it is, so Phone gets USB on both legs, CW gets CW, and Digital gets DATA-U. Nothing
+  else about the pick changes, and every other satellite is worked exactly as before.
+
 - **The filter no longer stays at 6 kHz when you switch from phone or CW into a digital mode.**
   A Flex over SmartSDR CAT answers "done" to the 3 kHz data filter Nexus asks for and then keeps
   its own 6 kHz SSB filter. Nexus already read the filter back and put the right one in — but
