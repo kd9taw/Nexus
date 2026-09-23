@@ -16,6 +16,7 @@ import { useLogbookGlobe } from '../features/logbookGlobe'
 import { modeKey } from '../features/callHistory'
 import { NO_LOG, refreshSharedLog, useSharedLog } from '../features/logStore'
 import { lotwBacklog } from '../features/lotwBacklog'
+import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
 
@@ -579,6 +580,10 @@ export function Logbook({
           : t('logbook.lotw.upload.failed'),
         'error',
       )
+    // Contacts that changed while TQSL signed are not marked (features/lotwSkips): say so, or
+    // an upload count that does not clear reads as an upload that failed.
+    const skipped = lotwSkipNote(r)
+    if (skipped) pushToast(skipped, 'info', LOTW_SKIP_TOAST_MS)
     load()
   }
 

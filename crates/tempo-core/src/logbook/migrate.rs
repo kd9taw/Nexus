@@ -10,10 +10,11 @@
 //!    the log, written from the same bytes this conversion goes on to read. So it is there and
 //!    correct after a conversion that fails at any later point — including one that never got
 //!    as far as creating a database.
-//! 2. Only then is the database opened or created.
+//! 2. Only then is the database opened or created — its tables, not yet its indexes.
 //! 3. The records go in in file order, one transaction per chunk.
-//! 4. The conversion is marked done as its LAST act, so an interrupted run is never mistaken
-//!    for a finished one.
+//! 4. The indexes are built over the finished table, one transaction each.
+//! 5. The conversion is marked done as its LAST act, so an interrupted run is never mistaken
+//!    for a finished one — including one interrupted while it built the indexes.
 //!
 //! # Why the copy is not in `backups/`, and not `log.adi.bak`
 //!
@@ -52,11 +53,29 @@ use super::sqlite::{self, Batch, LogDb, Resolved};
 use super::{Logbook, QsoRecord};
 use std::path::{Path, PathBuf};
 
-/// Records per transaction. The same value the writer thread chunks at, and for the same
-/// reason: a transaction spanning a whole import holds SQLite's write lock for its length.
-/// Here it doubles as the resume granularity — an interrupted conversion loses at most this
-/// many records' worth of work, never a record.
-const CHUNK_ROWS: usize = 256;
+/// Records per transaction. It is also the resume granularity: an interrupted conversion loses
+/// at most this many records' worth of WORK — about a second's, measured at 150,000 contacts —
+/// and never a record.
+///
+/// ⭐ **Chosen from measurements; after deferring the indexes it is the biggest lever left.** A
+/// record's id is a hash, so its rows land at random places in the primary keys of `qso` and of
+/// its six-odd `qso_extra` rows, and every commit rewrites every key page it touched. At the
+/// writer thread's 256, with the nine indexes already deferred, a 150,000-contact conversion
+/// still wrote 3.8 GB and spent 12 s in the store. The store's time and bytes, measured at
+/// 150,000 / 300,000 contacts: 16,384 → 2.9 s, 0.68 GB / 6.4 s, 2.0 GB; **65,536 → 2.5 s,
+/// 0.39 GB / 5.4 s, 0.96 GB**; the whole log in one transaction → no faster (5.7 s at 300,000,
+/// the transaction outgrowing the page cache), a write-ahead log as big as the database, and all
+/// the work lost to a crash. On an SD card or a spinning disk it is the bytes that cost, so the
+/// gap there is wider than on the machine these were measured on.
+///
+/// The writer thread's reason for small chunks — a long transaction holds the write lock a
+/// contest keystroke may be waiting on — does not arise here: the conversion runs before the
+/// session starts, and a second window waits on the conversion lock, not on the store.
+const CHUNK_ROWS: usize = 65_536;
+
+/// Contacts between two [`Progress`] reports inside one chunk. A chunk is one transaction and now
+/// a big one, so reports at commits alone would move a progress bar in a few large jumps.
+const PROGRESS_EVERY: usize = 4_096;
 
 /// `log_meta` key: the byte length of the source this conversion is reading. Written before the
 /// first insert, so a resume can tell "carry on" from "that was a different file".
@@ -150,6 +169,26 @@ impl From<sqlite::Error> for Error {
 /// This module's result.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Where the logbook database for `log_path` lives: beside it, named for the log's own stem —
+/// `log.adi` → `log.sqlite3`. The ONE place the name is decided; every caller that needs it
+/// (the conversion, the store, the data-folder copy) asks here, so the name cannot drift between
+/// the file that is written and the file that is carried.
+///
+/// SQLite also keeps `log.sqlite3-wal` and `log.sqlite3-shm` beside it while it is open. They
+/// are part of the database, not separate files: a committed contact can live in the `-wal`
+/// until a checkpoint, which is why the database is only ever copied through SQLite
+/// ([`super::sqlite::copy_database`]) and never file by file.
+pub fn database_path(log_path: &Path) -> PathBuf {
+    let stem = log_path.file_stem().unwrap_or_default().to_os_string();
+    let mut name = if stem.is_empty() {
+        std::ffi::OsString::from("log")
+    } else {
+        stem
+    };
+    name.push(".sqlite3");
+    log_path.with_file_name(name)
+}
+
 /// Where the permanent pre-conversion copy of `log_path` lives: beside it, never rotated.
 pub fn pre_sqlite_path(log_path: &Path) -> PathBuf {
     let mut name = log_path.file_name().unwrap_or_default().to_os_string();
@@ -193,6 +232,177 @@ pub fn migrate_log<R>(log_path: &Path, db_path: &Path, resolve: R) -> Result<Out
 where
     R: Fn(&QsoRecord) -> Resolved<'static>,
 {
+    migrate_log_reporting(log_path, db_path, resolve, &mut |_| {})
+}
+
+/// [`migrate_log_reporting`] with two things only the tests change. The transaction size: the
+/// properties they check — whole chunks, a resume from the row count — hold for any size, but a
+/// fixture has to SPAN several chunks to show them, and at [`CHUNK_ROWS`] that would be a fixture
+/// of hundreds of thousands of contacts. And `index_built`, told `(built, of)` after each index
+/// ([`LogDb::build_indexes`]) — the one step [`Progress`] does not count, and the one a test has
+/// to be able to stop a conversion in the middle of.
+fn migrate_in_chunks<R>(
+    log_path: &Path,
+    db_path: &Path,
+    resolve: R,
+    progress: &mut dyn FnMut(Progress),
+    chunk_rows: usize,
+    index_built: &mut dyn FnMut(usize, usize),
+) -> Result<Outcome>
+where
+    R: Fn(&QsoRecord) -> Resolved<'static>,
+{
+    // The ordinary launch: a store that is already converted. Answered from the store alone,
+    // BEFORE the log is read — a lifetime log is tens of megabytes, and reading it on every
+    // launch to learn that there is nothing to do is the launch cost the operator ruled out.
+    // Only a store that EXISTS is asked: opening one that does not would create it, and the
+    // copy below has to be taken before the store is created.
+    if db_path.is_file() && marked_converted(db_path)? {
+        return Ok(Outcome::AlreadyDone);
+    }
+    // ⛔ ONE conversion at a time per store. Two Nexus windows share one data folder, and the
+    // second can start while the first is still converting: without this it would read the
+    // half-converted store's row count as a resume point and convert alongside it. It waits
+    // here instead, then finds the store converted and does nothing.
+    let lock = ConversionLock::take(db_path);
+    if db_path.is_file() && marked_converted(db_path)? {
+        return Ok(Outcome::AlreadyDone);
+    }
+    let out = convert(
+        log_path,
+        db_path,
+        resolve,
+        progress,
+        chunk_rows,
+        index_built,
+    )?;
+    // Converted: nobody will need the lock file again — a later caller answers from the store
+    // on the fast path above and never reaches it. Kept after a FAILURE, because a caller
+    // already waiting on it will try again and a newcomer must wait on the same file.
+    lock.finished();
+    Ok(out)
+}
+
+/// [`is_converted`], asked the way the conversion asks it: through
+/// [`LogDb::open_for_conversion`], which writes nothing to a store that has its tables. An
+/// ordinary open builds any missing index, and the store this is asked of may be one another
+/// window is converting right now, its indexes not built yet — building them would take the
+/// write lock out from under that conversion's next chunk.
+fn marked_converted(db_path: &Path) -> Result<bool> {
+    Ok(LogDb::open_for_conversion(db_path)?.meta(DONE)? == Some(1))
+}
+
+/// Whether the store at `db_path` is marked converted. The store must exist. Asked the way the
+/// conversion asks it ([`marked_converted`]), because a launch asks it before taking the lock.
+pub fn is_converted(db_path: &Path) -> Result<bool> {
+    marked_converted(db_path)
+}
+
+/// How far a conversion has got, for a screen that shows it: `done` of `total` records are in the
+/// store. `total` is 0 until the log has been read and counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// Records in the store so far, counting any an interrupted attempt had already written.
+    pub done: usize,
+    /// Records in the log; 0 while that is not known yet.
+    pub total: usize,
+}
+
+/// [`migrate_log`], telling `progress` how far it has got: `total` 0 while `log.adi` is read, copied
+/// and counted; then `done` from where an earlier attempt got to, every [`PROGRESS_EVERY`]
+/// contacts and at each commit; and `done == total` from the last contact on, while the indexes
+/// are built. A store already converted reports nothing, and neither does a second window waiting
+/// on the first one's conversion.
+///
+/// The callback runs on the converting thread, some of the time inside a transaction: a slow one
+/// slows the conversion and nothing else, since nothing else writes to the store while it
+/// converts. Keep it quick — hand the value to the thread that draws it.
+pub fn migrate_log_reporting<R>(
+    log_path: &Path,
+    db_path: &Path,
+    resolve: R,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<Outcome>
+where
+    R: Fn(&QsoRecord) -> Resolved<'static>,
+{
+    migrate_in_chunks(
+        log_path,
+        db_path,
+        resolve,
+        progress,
+        CHUNK_ROWS,
+        &mut |_, _| {},
+    )
+}
+
+/// Whether a conversion into `db_path` is running right now: some process holds its lock.
+///
+/// Asked without waiting, and without creating the lock file. A launch asks it before it does
+/// anything of its own, so a second double-click while the first launch converts stands down
+/// instead of queueing invisibly behind the conversion and then opening a second copy of Nexus.
+/// A lock file nobody holds is a conversion that was interrupted, not one that is running; and a
+/// lock that cannot be asked about reads as "no", as [`ConversionLock`] itself treats one.
+pub fn conversion_in_progress(db_path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(ConversionLock::path_for(db_path)) else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
+/// The advisory lock that keeps two processes from converting one log into one store at once.
+/// Best-effort by construction: a lock that cannot be taken (a filesystem without locks, a
+/// read-only folder) is no lock, and the conversion's own checks — a resume reads the store's
+/// own row count, a chunk is one transaction, and a duplicate id is refused by the primary key —
+/// still keep a concurrent conversion from duplicating or dropping a contact.
+struct ConversionLock {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+}
+
+impl ConversionLock {
+    /// Where the lock lives: beside the store, named for it.
+    fn path_for(db_path: &Path) -> PathBuf {
+        let mut name = db_path.file_name().unwrap_or_default().to_os_string();
+        name.push(".convert-lock");
+        db_path.with_file_name(name)
+    }
+
+    /// Take the lock, WAITING while another process holds it.
+    fn take(db_path: &Path) -> ConversionLock {
+        let path = Self::path_for(db_path);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .ok()
+            .filter(|f| f.lock().is_ok());
+        ConversionLock { path, file }
+    }
+
+    /// The conversion finished: remove the file while still holding it.
+    fn finished(mut self) {
+        if self.file.is_some() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+        self.file = None;
+    }
+}
+
+/// The conversion itself — [`migrate_log`] is the gatekeeping around it.
+fn convert<R>(
+    log_path: &Path,
+    db_path: &Path,
+    resolve: R,
+    progress: &mut dyn FnMut(Progress),
+    chunk_rows: usize,
+    index_built: &mut dyn FnMut(usize, usize),
+) -> Result<Outcome>
+where
+    R: Fn(&QsoRecord) -> Resolved<'static>,
+{
+    progress(Progress { done: 0, total: 0 });
     // The bytes, scrubbed of upload stamps exactly as the anchor's are. The copy is taken from
     // the CLEAN bytes on purpose: a pre-1.11 log can carry a service's echoed API key, and a
     // new file is not a place to write one. The scrub touches only `APP_TEMPO_UL_*` tails, so
@@ -211,7 +421,7 @@ where
         take_pre_sqlite_copy(log_path, source)?;
     }
 
-    let mut db = LogDb::open(db_path)?;
+    let mut db = LogDb::open_for_conversion(db_path)?;
     if db.meta(DONE)? == Some(1) {
         return Ok(Outcome::AlreadyDone);
     }
@@ -267,11 +477,29 @@ where
         resumed_at
     };
 
-    for chunk in log.records()[resumed_at..].chunks(CHUNK_ROWS) {
-        let rows: Vec<(&QsoRecord, Resolved<'static>)> =
-            chunk.iter().map(|r| (&**r, resolve(r))).collect();
+    let mut done = resumed_at;
+    progress(Progress { done, total });
+    for chunk in log.records()[resumed_at..].chunks(chunk_rows) {
+        let start = done;
+        // Reported as the rows go in, not only when the chunk commits: see `PROGRESS_EVERY`.
+        let rows = chunk.iter().enumerate().map(|(i, r)| {
+            if i > 0 && (start + i) % PROGRESS_EVERY == 0 {
+                progress(Progress {
+                    done: start + i,
+                    total,
+                });
+            }
+            (&**r, resolve(r))
+        });
         db.insert_all(rows)?;
+        done += chunk.len();
+        progress(Progress { done, total });
     }
+
+    // The indexes, over the finished table: one sorted pass each instead of nine kept up row by
+    // row. BEFORE the conversion is marked done, so a crash while they are built leaves a store
+    // that is not done — and the resume, finding every row in, builds the ones still missing.
+    db.build_indexes(index_built)?;
 
     // LAST, so an interrupted run is never read as a finished one.
     db.set_meta(DONE, 1)?;
@@ -333,8 +561,71 @@ mod tests {
     /// Carries the scratch directory to the child process of the kill test.
     const KILL_DIR: &str = "NEXUS_MIGRATE_KILL_DIR";
 
+    /// The transaction size for a test whose fixture has to span several chunks (see
+    /// [`migrate_in_chunks`]).
+    const TEST_CHUNK_ROWS: usize = 256;
+
+    /// `migration_done` as the store holds it, read on a read-only connection of its own. An
+    /// ordinary [`LogDb::open`] would build the indexes an interrupted conversion had not reached
+    /// yet, and so change the very state a resume is about to start from.
+    fn done_mark(db_path: &Path) -> Option<i64> {
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("the store opens read-only")
+            .query_row("SELECT v FROM log_meta WHERE k = ?1", [DONE], |r| r.get(0))
+            .ok()
+    }
+
     fn unresolved(_: &QsoRecord) -> Resolved<'static> {
         Resolved::default()
+    }
+
+    /// The database sits beside the log under the log's own stem, and `Logbook::data_files`
+    /// names it apart from the files that may be byte-copied — with its `-wal`/`-shm` in NEITHER
+    /// list, because they are not files a copy may carry on their own.
+    #[test]
+    fn the_database_is_named_beside_the_log_and_listed_apart_from_the_plain_files() {
+        let d = Dir::new("names");
+        assert_eq!(database_path(&d.log()), d.0.join("log.sqlite3"));
+        assert_eq!(
+            database_path(Path::new("/x/other.adi")),
+            Path::new("/x/other.sqlite3")
+        );
+        for name in [
+            "log.adi",
+            "log.adi.bak",
+            "log.adi.pre-sqlite",
+            "log.sqlite3",
+            "log.sqlite3-wal",
+            "log.sqlite3-shm",
+            "backups/log-20260901-120000.adi",
+            "backups/unrelated.txt",
+        ] {
+            let p = d.0.join(name);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        }
+        let files = Logbook::data_files(&d.log());
+        let mut plain: Vec<_> = files
+            .files
+            .iter()
+            .map(|p| p.strip_prefix(&d.0).unwrap().to_string_lossy().into_owned())
+            .collect();
+        plain.sort();
+        assert_eq!(
+            plain,
+            [
+                "backups/log-20260901-120000.adi",
+                "log.adi",
+                "log.adi.bak",
+                "log.adi.pre-sqlite",
+            ],
+            "the log and its three kinds of safety copy — and nothing of the database's"
+        );
+        assert_eq!(files.database, Some(d.0.join("log.sqlite3")));
+
+        // Only what exists: a folder with no database names none.
+        std::fs::remove_file(d.0.join("log.sqlite3")).unwrap();
+        assert_eq!(Logbook::data_files(&d.log()).database, None);
     }
 
     /// The whole point, and the assertion is on the RECORDS in the store — not on an export of
@@ -354,6 +645,14 @@ mod tests {
             }
         );
 
+        // Every index, read before anything could build a missing one: the conversion defers
+        // them to the end, so a store it finished without them would look complete to every
+        // other check here and only be slow.
+        assert_eq!(
+            schema(&d.db()),
+            ordinary_schema(),
+            "the converted store has every table and index an ordinary store has"
+        );
         let db = LogDb::open(&d.db()).unwrap();
         assert_eq!(db.row_count().unwrap(), 700, "every record is in");
         assert_eq!(db.meta(DONE).unwrap(), Some(1), "and the store says so");
@@ -646,8 +945,8 @@ mod tests {
     /// simulated — the child dies with the store open, mid-conversion, exactly as it would in a
     /// power cut or a force-quit.
     ///
-    /// **Fixture: 6,000 contacts against `CHUNK_ROWS` = 256, so 24 chunks.** Well above the
-    /// batch boundary, which matters twice over: a handful of contacts could not tell a
+    /// **Fixture: 6,000 contacts in chunks of [`TEST_CHUNK_ROWS`] = 256, so 24 chunks.** Well
+    /// above the batch boundary, which matters twice over: a handful of contacts could not tell a
     /// conversion that migrated everything from one that migrated only the first chunk, and a
     /// conversion that finished before the kill landed would leave nothing to resume. The test
     /// ASSERTS that it caught a genuine partial state rather than passing quietly if it did not.
@@ -660,7 +959,7 @@ mod tests {
         assert_eq!(source.len(), TOTAL, "fixture: the log holds what we think");
         // Checked at COMPILE time, so shrinking the fixture below the batch boundary fails
         // the build rather than quietly turning this into a first-page test.
-        const _: () = assert!(TOTAL > CHUNK_ROWS * 4);
+        const _: () = assert!(TOTAL > TEST_CHUNK_ROWS * 4);
 
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -688,7 +987,7 @@ mod tests {
             "the kill landed on a genuine partial state: {partial} of {TOTAL}"
         );
         assert_eq!(
-            LogDb::open(&d.db()).unwrap().meta(DONE).unwrap(),
+            done_mark(&d.db()),
             None,
             "a killed conversion is not marked done"
         );
@@ -717,8 +1016,8 @@ mod tests {
         for i in [
             0,
             1,
-            CHUNK_ROWS - 1,
-            CHUNK_ROWS,
+            TEST_CHUNK_ROWS - 1,
+            TEST_CHUNK_ROWS,
             partial as usize - 1,
             partial as usize,
             TOTAL - 1,
@@ -740,7 +1039,14 @@ mod tests {
             return;
         };
         let d = PathBuf::from(dir);
-        let _ = migrate_log(&d.join("log.adi"), &d.join("log.sqlite3"), unresolved);
+        let _ = migrate_in_chunks(
+            &d.join("log.adi"),
+            &d.join("log.sqlite3"),
+            unresolved,
+            &mut |_| {},
+            TEST_CHUNK_ROWS,
+            &mut |_, _| {},
+        );
     }
 
     /// How many records the store holds once it holds SOME but not all, read without disturbing
@@ -763,6 +1069,528 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         None
+    }
+
+    /// The store's schema as SQLite records it: every table and index, by name and definition.
+    /// Read on a connection of its own, READ-ONLY — an ordinary [`LogDb::open`] builds any index
+    /// that is missing, which is exactly the state some of these tests have to look at.
+    fn schema(db_path: &Path) -> Vec<(String, String, Option<String>)> {
+        let conn = rusqlite::Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .expect("the store opens read-only");
+        let mut stmt = conn
+            .prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    }
+
+    /// The schema an ordinary open gives a new store — every table, every index.
+    fn ordinary_schema() -> Vec<(String, String, Option<String>)> {
+        let d = Dir::new("ordinary-schema");
+        drop(LogDb::open(&d.db()).unwrap());
+        schema(&d.db())
+    }
+
+    /// The names of the store's secondary indexes (the ones SQLite does not make for a key).
+    fn index_names(db_path: &Path) -> Vec<String> {
+        schema(db_path)
+            .into_iter()
+            .filter(|(kind, _, sql)| kind == "index" && sql.is_some())
+            .map(|(_, name, _)| name)
+            .collect()
+    }
+
+    /// ⛔ **A conversion killed while it builds the indexes resumes, builds the rest, and only
+    /// then says it is done.** The indexes are built over the finished table, after the last
+    /// contact and BEFORE `migration_done` — so the crash this test makes leaves every contact
+    /// in, some indexes built and some not, and the store NOT marked converted. The resume must
+    /// then write no contact twice, build only what is missing (building one that exists would
+    /// fail the whole resume), and finish with the same schema an ordinary store has.
+    ///
+    /// The kill is real and lands where it is aimed: the child stops itself in the conversion's
+    /// index hook once half the indexes are built — between two index builds, the store open, the
+    /// write-ahead log unflushed — and this process kills it there.
+    #[test]
+    fn a_conversion_killed_while_it_builds_the_indexes_resumes_and_builds_the_rest() {
+        const TOTAL: usize = 600;
+        let d = Dir::new("killindex");
+        std::fs::write(d.log(), legacy_log(TOTAL)).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "logbook::migrate::tests::convert_until_half_the_indexes_are_built",
+            ])
+            .env(KILL_DIR, &d.0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the child conversion starts");
+        let marker = d.0.join("stopped-while-indexing");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !marker.exists() && std::time::Instant::now() < deadline {
+            if child.try_wait().ok().flatten().is_some() {
+                break; // it ran to the end without ever stopping in the index phase
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        let stopped_at = std::fs::read_to_string(&marker)
+            .expect("the child must be caught while it builds the indexes, not after");
+
+        // What the crash left.
+        let all = ordinary_schema();
+        let all_indexes = all
+            .iter()
+            .filter(|(kind, _, sql)| kind == "index" && sql.is_some())
+            .count();
+        let built = index_names(&d.db()).len();
+        assert!(
+            built > 0 && built < all_indexes,
+            "the kill landed part-way through the indexes ({stopped_at}): {built} of \
+             {all_indexes} built"
+        );
+        {
+            let probe = rusqlite::Connection::open_with_flags(
+                d.db(),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            let rows: i64 = probe
+                .query_row("SELECT COUNT(*) FROM qso", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                rows, TOTAL as i64,
+                "every contact was in before the indexes"
+            );
+        }
+        assert_eq!(
+            done_mark(&d.db()),
+            None,
+            "a conversion killed mid-index is NOT marked done"
+        );
+        assert_eq!(
+            std::fs::read(d.log()).unwrap(),
+            before,
+            "log.adi is untouched"
+        );
+
+        // The resume.
+        let out = migrate_log(&d.log(), &d.db(), unresolved).expect("the resume completes");
+        assert_eq!(
+            out,
+            Outcome::Converted {
+                written: 0,
+                resumed_at: TOTAL,
+                total: TOTAL
+            },
+            "nothing left to insert — only the indexes to finish"
+        );
+        assert_eq!(
+            schema(&d.db()),
+            all,
+            "every index is built, as an ordinary store has"
+        );
+        let db = LogDb::open(&d.db()).unwrap();
+        assert_eq!(db.meta(DONE).unwrap(), Some(1), "and it is marked done now");
+        let stored = db.load_all().unwrap();
+        let source = Logbook::load(&d.log());
+        assert_eq!(
+            stored.len(),
+            TOTAL,
+            "no contact dropped, none written twice"
+        );
+        for (a, b) in stored.iter().zip(source.records()) {
+            assert_eq!(a, &**b);
+        }
+        assert_eq!(
+            std::fs::read(pre_sqlite_path(&d.log())).unwrap(),
+            before,
+            "the copy is the operator's log"
+        );
+    }
+
+    /// ⛔ **The conversion's own "already converted?" writes nothing.** A second window asks it
+    /// while the first may still be converting, and that store has no indexes yet: an ordinary
+    /// open would build them — holding the write lock for as long as that takes, out from under
+    /// the first window's next chunk, whose wait is bounded by `busy_timeout`.
+    #[test]
+    fn the_conversions_own_check_writes_nothing_to_a_store_in_progress() {
+        let d = Dir::new("askonly");
+        std::fs::write(d.log(), legacy_log(300)).unwrap();
+        let source = Logbook::load(&d.log());
+        {
+            // A store part-way through its conversion: rows in, no indexes, not done.
+            let mut db = LogDb::open_for_conversion(&d.db()).unwrap();
+            let rows: Vec<_> = source.records()[..200]
+                .iter()
+                .map(|r| (&**r, Resolved::default()))
+                .collect();
+            db.insert_all(rows).unwrap();
+        }
+        let before = schema(&d.db());
+        assert!(index_names(&d.db()).is_empty(), "premise: no index yet");
+
+        assert!(!marked_converted(&d.db()).unwrap(), "it is not converted");
+        assert_eq!(schema(&d.db()), before, "and asking built nothing");
+
+        // Control: an ordinary open, on the same store, does build them — so the check above
+        // could have seen a write had there been one.
+        drop(LogDb::open(&d.db()).unwrap());
+        assert_eq!(
+            schema(&d.db()),
+            ordinary_schema(),
+            "control: an ordinary open builds every missing index"
+        );
+    }
+
+    /// ⛔ **The start-up screen's check writes nothing either.** A launch asks [`is_converted`] to
+    /// decide whether to show the conversion, after its look for another window's conversion and
+    /// before it takes the lock itself, so a window started close behind another can ask it of a
+    /// store that one is still filling.
+    #[test]
+    fn the_start_up_check_writes_nothing_to_a_store_in_progress() {
+        let d = Dir::new("askstartup");
+        std::fs::write(d.log(), legacy_log(300)).unwrap();
+        let source = Logbook::load(&d.log());
+        {
+            let mut db = LogDb::open_for_conversion(&d.db()).unwrap();
+            let rows: Vec<_> = source.records()[..200]
+                .iter()
+                .map(|r| (&**r, Resolved::default()))
+                .collect();
+            db.insert_all(rows).unwrap();
+        }
+        let before = schema(&d.db());
+        assert!(index_names(&d.db()).is_empty(), "premise: no index yet");
+
+        assert!(!is_converted(&d.db()).unwrap(), "it is not converted");
+        assert_eq!(schema(&d.db()), before, "and asking built nothing");
+    }
+
+    /// What a conversion reports is the contract the start-up screen is built on: `total` 0 while
+    /// the log is read and counted; then the contacts, from where an earlier attempt got to,
+    /// never going back and never more than [`PROGRESS_EVERY`] apart — inside one big chunk as
+    /// well as across small ones — up to every contact; then nothing more while the indexes are
+    /// built (the screen shows `done == total` as finishing up). From a store already converted,
+    /// nothing at all.
+    #[test]
+    fn a_conversion_reports_how_far_it_has_got() {
+        let check = |seen: &[Progress], from: usize, total: usize, what: &str| {
+            assert_eq!(
+                seen.first(),
+                Some(&Progress { done: 0, total: 0 }),
+                "{what}: not counted yet: {seen:?}"
+            );
+            let counts: Vec<usize> = seen[1..]
+                .iter()
+                .map(|p| {
+                    assert_eq!(p.total, total, "{what}: counted once, for good: {seen:?}");
+                    p.done
+                })
+                .collect();
+            assert_eq!(
+                counts.first(),
+                Some(&from),
+                "{what}: starts where it resumes"
+            );
+            assert_eq!(counts.last(), Some(&total), "{what}: ends at every contact");
+            for w in counts.windows(2) {
+                assert!(
+                    w[0] < w[1] && w[1] - w[0] <= PROGRESS_EVERY,
+                    "{what}: moves forward, never more than {PROGRESS_EVERY} at a time: {counts:?}"
+                );
+            }
+        };
+
+        // The shipped chunk size, with a log inside one chunk: the count still moves as the
+        // rows go in, not only when the chunk commits.
+        const ONE_CHUNK: usize = PROGRESS_EVERY * 2 + 11;
+        const _: () = assert!(ONE_CHUNK < CHUNK_ROWS);
+        let d = Dir::new("progress");
+        std::fs::write(d.log(), legacy_log(ONE_CHUNK)).unwrap();
+        let mut seen = Vec::new();
+        migrate_log_reporting(&d.log(), &d.db(), unresolved, &mut |p| seen.push(p))
+            .expect("converts");
+        check(&seen, 0, ONE_CHUNK, "one big chunk");
+        assert!(
+            seen.contains(&Progress {
+                done: PROGRESS_EVERY,
+                total: ONE_CHUNK
+            }),
+            "reported from inside the chunk: {seen:?}"
+        );
+
+        seen.clear();
+        let again = migrate_log_reporting(&d.log(), &d.db(), unresolved, &mut |p| seen.push(p))
+            .expect("opens");
+        assert_eq!(again, Outcome::AlreadyDone);
+        assert!(
+            seen.is_empty(),
+            "a converted store reports nothing: {seen:?}"
+        );
+
+        // Many small chunks, and a resume: the count starts at what the earlier attempt
+        // committed.
+        const MANY: usize = TEST_CHUNK_ROWS * 3 + 7;
+        let d = Dir::new("progress-resume");
+        std::fs::write(d.log(), legacy_log(MANY)).unwrap();
+        let source = Logbook::load(&d.log());
+        {
+            let mut db = LogDb::open_for_conversion(&d.db()).unwrap();
+            let len = std::fs::read(d.log()).unwrap().len() as i64;
+            db.set_meta(SOURCE_LEN, len).unwrap();
+            let rows: Vec<_> = source.records()[..TEST_CHUNK_ROWS]
+                .iter()
+                .map(|r| (&**r, Resolved::default()))
+                .collect();
+            db.insert_all(rows).unwrap();
+        }
+        seen.clear();
+        migrate_in_chunks(
+            &d.log(),
+            &d.db(),
+            unresolved,
+            &mut |p| seen.push(p),
+            TEST_CHUNK_ROWS,
+            &mut |_, _| {},
+        )
+        .expect("resumes");
+        check(&seen, TEST_CHUNK_ROWS, MANY, "a resume in small chunks");
+    }
+
+    /// The child half of the index-phase kill test: convert, and once half the indexes are
+    /// built, say so and wait to be killed right there.
+    #[test]
+    #[ignore = "invoked as a child process by the index-phase kill test"]
+    fn convert_until_half_the_indexes_are_built() {
+        let Ok(dir) = std::env::var(KILL_DIR) else {
+            return;
+        };
+        let d = PathBuf::from(dir);
+        let marker = d.join("stopped-while-indexing");
+        let _ = migrate_in_chunks(
+            &d.join("log.adi"),
+            &d.join("log.sqlite3"),
+            unresolved,
+            &mut |_| {},
+            CHUNK_ROWS,
+            &mut |built, of| {
+                if built > 0 && built * 2 >= of {
+                    let _ = std::fs::write(&marker, format!("{built} of {of}"));
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                    }
+                }
+            },
+        );
+    }
+
+    /// ⛔ **A second instance starting while the first is still converting WAITS, and then
+    /// does nothing.** Two Nexus windows share one data folder. The first holds the conversion
+    /// lock while it works; the second must neither read the half-made store's row count as a
+    /// place to resume from nor convert alongside it — it waits, finds the store converted, and
+    /// answers `AlreadyDone`. Every contact is in the store exactly once.
+    ///
+    /// Driven for real: this thread takes the lock as the first instance would, a second thread
+    /// runs `migrate_log`, and it is shown NOT to have finished — or written a row — while the
+    /// lock is held.
+    #[test]
+    fn a_second_instance_waits_for_the_first_to_finish_converting() {
+        let d = Dir::new("twoinstances");
+        std::fs::write(d.log(), legacy_log(600)).unwrap();
+        let lock = ConversionLock::take(&d.db());
+        assert!(
+            lock.file.is_some(),
+            "premise: this filesystem takes the lock"
+        );
+
+        let (log, db) = (d.log(), d.db());
+        let second = std::thread::spawn(move || migrate_log(&log, &db, unresolved));
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert!(
+            !second.is_finished(),
+            "the second instance is waiting on the lock"
+        );
+        assert!(
+            !d.db().exists() || LogDb::open(&d.db()).unwrap().row_count().unwrap() == 0,
+            "and has written nothing"
+        );
+
+        // The first instance converts, then lets go.
+        let first = convert(
+            &d.log(),
+            &d.db(),
+            unresolved,
+            &mut |_| {},
+            CHUNK_ROWS,
+            &mut |_, _| {},
+        )
+        .expect("the first converts");
+        assert!(matches!(first, Outcome::Converted { total: 600, .. }));
+        lock.finished();
+
+        let second = second.join().unwrap().expect("the second completes");
+        assert_eq!(second, Outcome::AlreadyDone, "and finds nothing left to do");
+        let stored = LogDb::open(&d.db()).unwrap().load_all().unwrap();
+        assert_eq!(stored.len(), 600, "every contact, once");
+        assert!(
+            !ConversionLock::path_for(&d.db()).exists(),
+            "the lock file is gone once the conversion is done"
+        );
+    }
+
+    /// ⛔ **A launch can see another window's conversion without joining its queue.** The answer
+    /// comes from the lock a conversion really holds — not from the lock FILE, which an
+    /// interrupted conversion leaves behind — and asking must neither wait nor create the file.
+    #[test]
+    fn a_conversion_in_progress_is_seen_from_its_lock_and_only_while_it_is_held() {
+        let d = Dir::new("inprogress");
+        let file = ConversionLock::path_for(&d.db());
+        assert!(
+            !conversion_in_progress(&d.db()),
+            "no lock file: nothing is converting"
+        );
+        assert!(!file.exists(), "and asking did not create one");
+
+        let lock = ConversionLock::take(&d.db());
+        assert!(
+            lock.file.is_some(),
+            "premise: this filesystem takes the lock"
+        );
+        // Asked from another thread with a deadline, so a check that WAITS on the lock fails
+        // here instead of hanging the suite.
+        let db = d.db();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(conversion_in_progress(&db));
+        });
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(true),
+            "held: a conversion is running, and asking did not wait for it"
+        );
+
+        drop(lock); // what a crash or a kill leaves: the file, and nobody holding it
+        assert!(
+            file.exists(),
+            "premise: an interrupted conversion leaves its file"
+        );
+        assert!(
+            !conversion_in_progress(&d.db()),
+            "a lock file nobody holds is an interrupted conversion, not a running one"
+        );
+
+        ConversionLock::take(&d.db()).finished();
+        assert!(
+            !conversion_in_progress(&d.db()),
+            "finished: nothing is converting"
+        );
+    }
+
+    /// ⛔ **A FULL DISK, for real.** The conversion runs in a child process whose file-size
+    /// limit (`ulimit -f`, with `SIGXFSZ` ignored so a write past it fails with `EFBIG` rather
+    /// than killing the process) lets the safety copy through and stops the database part way —
+    /// which SQLite reports exactly as it reports a full disk. Afterwards:
+    /// - the conversion is NOT marked done,
+    /// - `log.adi` is exactly as it was,
+    /// - `log.adi.pre-sqlite` exists and is the operator's log, byte for byte,
+    /// - and the next attempt, with room, converts every contact exactly once.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_full_disk_mid_conversion_leaves_the_log_and_its_copy_and_the_retry_completes() {
+        const TOTAL: usize = 6_000;
+        let d = Dir::new("fulldisk");
+        std::fs::write(d.log(), legacy_log(TOTAL)).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+        // 2048 blocks is 1 MiB (512-byte blocks) or 2 MiB (1 KiB) depending on the shell's
+        // unit — above the log (~0.8 MiB) either way, and far below the store (~6 MiB).
+        assert!(
+            before.len() < 1024 * 1024,
+            "premise: the copy fits under the limit"
+        );
+        let status = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("ulimit -f 2048 && trap '' XFSZ && exec \"$0\" \"$@\"")
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "logbook::migrate::tests::convert_for_the_full_disk_test",
+            ])
+            .env(KILL_DIR, &d.0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("the child runs");
+        assert!(
+            status.success(),
+            "the child ran to the end (its conversion failed inside it)"
+        );
+        let verdict = std::fs::read_to_string(d.0.join("verdict")).expect("the child's verdict");
+        assert!(
+            verdict.starts_with("err:"),
+            "the conversion must have FAILED on the limit, not finished: {verdict}"
+        );
+        assert!(
+            verdict.contains("full") || verdict.contains("large") || verdict.contains("I/O"),
+            "and failed on the disk, not on something else: {verdict}"
+        );
+
+        assert_eq!(
+            std::fs::read(d.log()).unwrap(),
+            before,
+            "log.adi is untouched"
+        );
+        assert_eq!(
+            std::fs::read(pre_sqlite_path(&d.log())).unwrap(),
+            before,
+            "the permanent copy exists and is the operator's log"
+        );
+        assert_ne!(
+            done_mark(&d.db()),
+            Some(1),
+            "a conversion the disk stopped is not marked done"
+        );
+
+        // With room again, the next attempt finishes the job — once per contact.
+        let out = migrate_log(&d.log(), &d.db(), unresolved).expect("completes with room");
+        assert!(
+            matches!(out, Outcome::Converted { total: TOTAL, .. }),
+            "{out:?}"
+        );
+        let db = LogDb::open(&d.db()).unwrap();
+        assert_eq!(db.row_count().unwrap(), TOTAL as u64);
+        let ids: std::collections::HashSet<_> =
+            db.load_all().unwrap().iter().filter_map(|r| r.id).collect();
+        assert_eq!(ids.len(), TOTAL, "no contact twice");
+    }
+
+    /// The child half of the full-disk test: convert, and write what happened where the parent
+    /// can read it (stdout is the test harness's).
+    #[test]
+    #[ignore = "invoked as a child process by the full-disk test"]
+    fn convert_for_the_full_disk_test() {
+        let Ok(dir) = std::env::var(KILL_DIR) else {
+            return;
+        };
+        let d = PathBuf::from(dir);
+        let verdict = match migrate_log(&d.join("log.adi"), &d.join("log.sqlite3"), unresolved) {
+            Ok(o) => format!("ok: {o:?}"),
+            Err(e) => format!("err: {e}"),
+        };
+        // The limit applies to this write too; the verdict is tiny.
+        let _ = std::fs::write(d.join("verdict"), verdict);
     }
 
     /// A log this build cannot read a single contact out of must NOT be mistaken for an empty

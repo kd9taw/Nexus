@@ -123,6 +123,36 @@ if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   continue. Those are the LGPL license texts Hamlib requires us to distribute; restore with
   'git checkout -- src-tauri/resources/hamlib/'."
 fi
+# THE GTK PLUGIN IS PINNED. The AppImage's GTK start-up hook (apprun-hooks/linuxdeploy-plugin-gtk.sh:
+# where GTK looks for modules, which theme, GDK_BACKEND=x11) is written by linuxdeploy-plugin-gtk.sh,
+# which tauri's bundler downloads from the `master` branch of tauri's fork — skipping the download
+# only when the file is already in its tools directory (tauri-bundler 2.9.4,
+# bundle/linux/appimage/linuxdeploy.rs, `if !gtk.exists()`). A moving branch let the shipped
+# AppImage change with no commit here, and it did: the fork's 2026-09-20 sync with upstream is why
+# 1.14.0 printed `Failed to load module "canberra-gtk-module"` at start-up and 1.13.0 did not (the
+# GTK_PATH repair further down). So the file is put there first, from a fixed commit, and refused
+# unless its digest matches. The pin is the commit 1.14.0 was built with, so the hook is the one
+# already in the field plus that repair. To move it, read the script's diff, then change both
+# values together. The directory is the bundler's own: dirs::cache_dir() (an absolute
+# XDG_CACHE_HOME, else ~/.cache) joined with `tauri` — bundle.useLocalToolsDir would move it, and
+# nothing sets that.
+gtk_plugin_rev=dda522bce37387f1b853d9095713bfaa924c8423
+gtk_plugin_sha256=7804c9eef13e59bf2783aad9882ef9db8f3f3f9e8d631874b1d348d550a3693f
+case "${XDG_CACHE_HOME:-}" in /*) tauri_tools="$XDG_CACHE_HOME/tauri" ;; *) tauri_tools="$HOME/.cache/tauri" ;; esac
+gtk_plugin="$tauri_tools/linuxdeploy-plugin-gtk.sh"
+if ! echo "$gtk_plugin_sha256  $gtk_plugin" | sha256sum -c --status - 2>/dev/null; then
+  mkdir -p "$tauri_tools"
+  curl -fsSL -o "$gtk_plugin.part" \
+    "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/$gtk_plugin_rev/linuxdeploy-plugin-gtk.sh" \
+    || die "could not download linuxdeploy-plugin-gtk.sh at $gtk_plugin_rev"
+  echo "$gtk_plugin_sha256  $gtk_plugin.part" | sha256sum -c --status - \
+    || die "linuxdeploy-plugin-gtk.sh at $gtk_plugin_rev does not match its pinned sha256 (got
+  $(sha256sum "$gtk_plugin.part" | cut -d' ' -f1)) — refusing to build an AppImage whose GTK
+  start-up hook nobody has read."
+  mv -f "$gtk_plugin.part" "$gtk_plugin"
+fi
+chmod +x "$gtk_plugin"
+ok "linuxdeploy-plugin-gtk pinned at ${gtk_plugin_rev:0:10} (sha256 verified)"
 # The signature Tauri makes HERE is over bytes the repack below replaces, so it is deleted the
 # moment the build finishes and remade at the end over the final file. `latest.json` is generated
 # FROM the `.sig`, and a stale one does NOT fail anything: it ships, and every Linux self-update
@@ -139,6 +169,11 @@ fi
 # stale one could be picked up by anything.
 find "$REPO/src-tauri/target/release/bundle/appimage" -name '*.AppImage.sig' -delete 2>/dev/null || true
 ok "Nexus .deb + AppImage"
+# The pin only holds while the bundler leaves the file alone; a later tauri-cli (it floats on ^2)
+# that re-downloads every time would build from `master` again without a word.
+echo "$gtk_plugin_sha256  $gtk_plugin" | sha256sum -c --status - \
+  || die "the pinned linuxdeploy-plugin-gtk.sh was replaced during the build — the AppImage's GTK
+  hook came from an unpinned copy. Check the bundler's download logic before shipping it."
 
 # --- The Wayland client library has to come from the HOST (#138) --------------------------------
 #
@@ -264,6 +299,57 @@ else
   fi
 fi
 
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# THE DESKTOP'S OWN GTK MODULES — event sounds (canberra-gtk-module), and the theme and
+# window-decoration helpers some desktops add. The desktop asks GTK to load them (GTK_MODULES, or
+# the Gtk/Modules XSETTING gnome-settings-daemon publishes), and GTK 3 looks ONLY in GTK_PATH and
+# then $GTK_EXE_PREFIX/lib/gtk-3.0. The hook points both inside the AppImage, which carries none
+# of them, so each one fails on every start, once per place the desktop names it:
+#     Gtk-Message: ...: Failed to load module "canberra-gtk-module"
+# Up to 1.13.0 the hook came from tauri's fork of the plugin, which appended the host's GTK 3
+# directories (fork commit c273eb7a96, after tauri#3715 — these same messages); its 2026-09-20
+# sync with upstream dropped them, and 1.14.0 printed the lines. They go back AFTER the bundled
+# directory, in 1.13's order, so a module the AppImage carries still wins. Measured on GTK 3.24.41
+# with the shipped hooks: 1.13.0's loads the host's canberra module, 1.14.0's cannot see it.
+#
+# The hook is EVALUATED, the way AppRun sources it, not grepped: the fork's wording listed the host
+# directories inline and upstream's does not, and both must come out right — a hook that already
+# reaches them is left alone. The appended line is a bare export on purpose: AppRun sources the hook
+# under `set -e`, so a line there that can fail stops the AppImage from starting at all.
+hook_gtk_path() {  # the GTK_PATH a hook hands GTK, with APPDIR stubbed as /APPDIR
+  ( set +euo pipefail; export APPDIR=/APPDIR; unset GTK_PATH
+    # shellcheck disable=SC1090  # the hook is generated at bundle time, so there is no fixed path
+    . "$1" >/dev/null 2>&1; printf '%s' "${GTK_PATH:-}" )
+}
+hook_reaches_host_gtk3() {  # <hook> <dirs>: bundled directory first, then every one of <dirs>
+  local path d
+  path=":$(hook_gtk_path "$1"):"
+  case "$path" in ":/APPDIR/"*) ;; *) return 1 ;; esac
+  local IFS=:
+  for d in $2; do
+    case "$path" in *":$d:"*) ;; *) return 1 ;; esac
+  done
+}
+host_gtk3="/usr/lib64/gtk-3.0:/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null \
+  || echo "$(uname -m)-linux-gnu")/gtk-3.0"
+gtk_hook="$work/squashfs-root/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+[ -f "$gtk_hook" ] || die "the AppImage has no apprun-hooks/linuxdeploy-plugin-gtk.sh — the GTK plugin
+  did not run, and the AppImage would start without its GTK environment. Refusing to repack."
+if hook_reaches_host_gtk3 "$gtk_hook" "$host_gtk3"; then
+  ok "the GTK hook already reaches the host's GTK 3 modules — leaving it alone"
+else
+  # shellcheck disable=SC2016  # $GTK_PATH is for the hook to expand at launch, not for this script
+  printf '\nexport GTK_PATH="$GTK_PATH:%s" # the host GTK 3 modules, after the bundled ones — see build-linux.sh\n' \
+    "$host_gtk3" >> "$gtk_hook"
+  # Positive control: the hook we ship must now evaluate to the bundled directory first and the
+  # host's after it, or the repack below would ship the lines while reporting success.
+  hook_reaches_host_gtk3 "$gtk_hook" "$host_gtk3" \
+    || die "the AppImage's GTK_PATH still does not reach the host's GTK 3 modules
+  ($(hook_gtk_path "$gtk_hook")) — refusing to repack"
+  ok "GTK_PATH: bundled modules first, then the host's ($host_gtk3)"
+  repack_needed=1
+fi
+
 if [ -e "$work/squashfs-root/usr/lib/libwayland-client.so.0" ]; then
   bold "Dropping the host-owned libwayland-client"
   rm -f "$work/squashfs-root/usr/lib/libwayland-client.so.0"
@@ -278,7 +364,7 @@ else
   warn "fixed it)."
 fi
 
-# ONE repack for whatever the two steps above changed. This used to hang off the libwayland
+# ONE repack for whatever the steps above changed. This used to hang off the libwayland
 # branch alone, so a bundle that only needed the GStreamer plugins would have been rebuilt in
 # the work directory and then thrown away — the plugins copied, the report cheerful, the
 # shipped file unchanged.

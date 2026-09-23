@@ -541,6 +541,10 @@ export interface SatTransmitter {
   /** SatNOGS `type`: "Transmitter" (beacon, downlink only), "Transponder"
    * (linear passband), "Transceiver" (FM repeater). */
   kind: string | null
+  /** The DOWNLINK's symbol rate as SatNOGS lists it — it qualifies `mode`, never
+   * `uplinkMode`. May be fractional (45.45). null = not known (the backend reads
+   * SatNOGS's 0 as not known too); absent = a station that predates the field. */
+  baud?: number | null
 }
 
 /** Which VFO carries the UPLINK during a pass (Settings.satVfoMap).
@@ -1329,6 +1333,10 @@ export interface RadioStatus {
   ritHz?: number
   /** XIT (transmit incremental tuning) offset in Hz — last commanded (0 = off). */
   xitHz?: number
+  /** This radio has NO XIT at all (the IC-9700), so nothing that draws XIT draws it, and the
+   * station refuses one aimed at it. Absent = offered, which is how every station behaved
+   * before the field existed. */
+  xitUnsupported?: boolean
   /** Active VFO ("A" / "B") — last commanded. */
   activeVfo?: string
   rxLevel: number
@@ -2059,6 +2067,12 @@ export interface UploadReport {
   /** "pending" | "duplicate" | "rejected" | "authfail" | "retry" | "none". */
   outcome: string
   detail?: string | null
+  /** Contacts of the batch EDITED while TQSL was signing it: the outcome is not recorded on
+   *  them, and they are offered again with the next upload. Absent from an older station. */
+  skippedEdited?: number
+  /** Contacts of the batch DELETED from the log while TQSL was signing it. Absent from an
+   *  older station. */
+  skippedDeleted?: number
 }
 
 /** A confirmation in a synced report with no matching logged QSO (diagnostic). */
@@ -4179,6 +4193,19 @@ export interface AppSnapshot {
   uploadNote?: string | null
   uploadOk?: boolean
   uploadTick?: number
+  /** Why the logbook database is not in use this session: set at launch when it could not be
+   *  opened, and the session then keeps the log in log.adi. Null while the database owns the
+   *  log; absent from a station older than the database. */
+  logStoreProblem?: LogStoreProblem | null
+}
+
+/** Why the logbook database could not be opened at launch (mirror of the Rust
+ *  LogStoreProblem). */
+export interface LogStoreProblem {
+  /** The data folder is on network storage — the one cause the operator fixes in Settings. */
+  networkFolder: boolean
+  /** Why, as the station's diagnostic log records it (English, from the station). */
+  reason: string
 }
 
 // ── Program section (radio programming): repeater search + channel projects ──

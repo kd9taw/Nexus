@@ -39,6 +39,10 @@ import { Dialog } from './ui/Dialog'
 
 interface Props {
   onClose: () => void
+  /** Opens Settings at a section id (App's `openSettingsAt`). Left out where Settings cannot
+   * take the operator there — the Remote page does not render Integrations & Feeds — and the
+   * WSJT-X note's path then reads as plain text instead of a link that goes nowhere. */
+  onOpenSettings?: (target: string) => void
 }
 
 /** The wordmark in the breadcrumb strip. A brand, not prose — invariant in every language. */
@@ -142,7 +146,7 @@ function WizardShot({ caption, children }: { caption: string; children: React.Re
   )
 }
 
-export function GettingStartedGuide({ onClose }: Props) {
+export function GettingStartedGuide({ onClose, onOpenSettings }: Props) {
   const [step, setStep] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -648,7 +652,29 @@ export function GettingStartedGuide({ onClose }: Props) {
             <aside className="gsg-wsjtx">
               <p className="gsg-wsjtx-label">{t('gettingStarted.wsjtx.label')}</p>
               <p className="gsg-wsjtx-body">
-                <T k="gettingStarted.wsjtx.body" tags={{ code: <code /> }} />
+                {/* #353: JTAlert and GridTracker need the WSJT-X UDP API switch, which ships
+                    off, so the note names it and links the section it lives in. The link comes
+                    from HERE, never from the catalog, and closes the guide on the way — a modal
+                    left open would cover the section it just opened. */}
+                <T
+                  k="gettingStarted.wsjtx.body"
+                  tags={{
+                    code: <code />,
+                    b: <strong />,
+                    a: onOpenSettings ? (
+                      <button
+                        type="button"
+                        className="settings-linkbtn"
+                        onClick={() => {
+                          onOpenSettings('integrations-feeds')
+                          onClose()
+                        }}
+                      />
+                    ) : (
+                      <span />
+                    ),
+                  }}
+                />
                 {/* Default Mac keyboards eat bare F-keys as media keys — same OS constraint
                     WSJT-X's own mac docs call out; say it where the F-keys are advertised.
                     A whole sentence of its own, so a translator may place it freely. */}

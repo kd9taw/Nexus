@@ -14,7 +14,9 @@ import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { useUnits } from '../units'
 import { RarityChip } from './RarityChip'
+import { WatchTile } from './WatchTile'
 import { NEED_CHIP } from '../features/needVisuals'
+import type { WatchFilter } from '../watchlist'
 
 interface Props {
   station: Station
@@ -28,6 +30,10 @@ interface Props {
   /** EVERY need form for this call — one chip each, matching the decode feed /
    * GridTracker roster (so the roster isn't missing pills the decodes show). */
   needAll: NeedTag[]
+  /** The watch-list entry that names this station, or null — drawn as the WATCH tile the Call
+   * Roster and Spots draw. The list resolves it (`useWatchMatch`), so the card never reads the
+   * watch list itself. */
+  watch?: WatchFilter | null
   onSelect: (call: string) => void
   /** Work / call this station (enters QSO answering it). Same positional signature as the
    * cockpit's shared handler, exactly like the roster table's — the card passes the station's
@@ -73,6 +79,7 @@ export function StationCard({
   unread,
   need,
   needAll,
+  watch = null,
   onSelect,
   onCall,
 }: Props) {
@@ -120,6 +127,9 @@ export function StationCard({
         <span className="station-main">
           <span className="station-line1">
             <span className="station-call">{station.call}</span>
+            {/* The WATCH tile first, as on the roster: this line does not wrap, so whatever
+                comes last is what a narrow rail loses. */}
+            {watch && <WatchTile entry={watch} />}
             {/* One chip per need form (new-DXCC, band, zone, …) — matches the decode
                 feed so the roster no longer looks emptier than Band Activity. */}
             {needAll.map((t) => {

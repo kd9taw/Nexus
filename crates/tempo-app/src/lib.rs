@@ -23,6 +23,7 @@ pub mod fd_scoreboard;
 pub mod fdbridge;
 pub mod fdevent;
 pub mod keyboard;
+pub mod logstore;
 pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;
@@ -305,6 +306,7 @@ impl AppState {
                 filter_width_hz: None, // engine fills from the CAT `m` passband read-back
                 rit_hz: 0,
                 xit_hz: 0,
+                xit_unsupported: false, // engine fills from the active radio's model
                 active_vfo: String::new(), // engine fills ("A"/"B")
                 rx_level: 0.0,
                 tx_level: 0.9,
@@ -979,6 +981,8 @@ impl AppState {
             upload_ok: false,
             upload_tick: 0,
             log_tick: 0,
+            // Filled by the engine when the logbook database could not be opened; None here.
+            log_store_problem: None,
         }
     }
 

@@ -217,6 +217,9 @@ interface Props {
    * toasts and the docs told the operator a path in prose and then made them walk it, and the
    * panel had no way to be told where to go. */
   target?: string
+  /** Changes with every deep-link request, a repeat of the current `target` included, so the
+   * panel moves again after the operator has changed tab since the last one. */
+  targetSeq?: number
   /** Live radio status, so the Audio section can show the real RX meter. */
   radio?: RadioStatus
   /** The live active radio id (dual-radio). The form reloads when this changes so a switch made from
@@ -944,6 +947,7 @@ export function SettingsPanel({
   fieldDay,
   onSaved,
   target,
+  targetSeq,
   radio,
   activeRadioId,
   onProveTx,
@@ -1430,10 +1434,11 @@ export function SettingsPanel({
       setCloudlogStationsBusy(false)
     }
   }
-  // Where a deep link asked us to land. Resolved once per `target` change so a caller can pass
-  // prose ("Settings ▸ Radio ▸ Audio") or a bare section id and get the same result; an
-  // unresolvable target leaves the default landing rather than doing nothing.
-  const resolvedTarget = useMemo(() => (target ? resolveTarget(target) : null), [target])
+  // Where a deep link asked us to land. Resolved once per REQUEST (`targetSeq`), not merely per
+  // `target` string, so a caller can pass prose ("Settings ▸ Radio ▸ Audio") or a bare section
+  // id and get the same result, and a repeat of the same target still lands; an unresolvable
+  // target leaves the default landing rather than doing nothing.
+  const resolvedTarget = useMemo(() => (target ? resolveTarget(target) : null), [target, targetSeq])
   const [tab, setTab] = useState<SettingsTab>(resolvedTarget?.tab ?? 'station')
   useEffect(() => {
     if(remote)return
@@ -1492,7 +1497,8 @@ export function SettingsPanel({
   }, [resolvedTarget])
   // Scroll AFTER the tab's JSX has mounted — only the active tab renders, so the anchor does not
   // exist until the tab switch has painted. Two frames: one for the tab body, one for a
-  // disclosure that `SettingsGroup` opens in its own effect.
+  // disclosure that `SettingsGroup` opens in its own effect. Every request scrolls, a repeat of
+  // the section already open included (`resolvedTarget` is new per request).
   useEffect(() => {
     if (!openTarget) return
     let inner = 0
@@ -1508,7 +1514,7 @@ export function SettingsPanel({
       cancelAnimationFrame(outer)
       cancelAnimationFrame(inner)
     }
-  }, [openTarget, tab])
+  }, [openTarget, tab, resolvedTarget])
   // Which radio the Radio-tab form is currently EDITING — decoupled from which radio is operating
   // (activeRadioId). Editing a non-active radio writes just that profile (no live rig swap).
   const [editingRadioId, setEditingRadioId] = useState<number | undefined>(activeRadioId)

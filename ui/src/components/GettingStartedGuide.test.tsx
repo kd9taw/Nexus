@@ -16,8 +16,14 @@
 // themes — reads styles.css from disk and so lives in `styles-getting-started.
 // test.ts`, with the other node-environment sheet guards.
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
 import { GettingStartedGuide } from './GettingStartedGuide'
+import { EN } from '../i18n'
+import { DE } from '../i18n/de'
+import { ES } from '../i18n/es'
+import { FR } from '../i18n/fr'
+import { JA } from '../i18n/ja'
+import { resolveTarget } from '../settings/registry'
 
 beforeAll(() => {
   // jsdom has neither; the guide asks matchMedia about reduced motion and
@@ -112,5 +118,63 @@ describe('the wizard recreations are pictures, not controls', () => {
       `a recreated wizard panel grew a real control — it is documentation of the wizard, ` +
         `and a control here would look live and do nothing:\n${seen.join('\n')}`,
     ).toHaveLength(0)
+  })
+})
+
+// #353 — the "Coming from WSJT-X?" note promised that JTAlert and GridTracker keep working, and
+// they do, but only once the WSJT-X UDP API switch is on, and it ships OFF. A GridTracker2 user
+// went looking for an ADIF file instead. The note has to name the switch and say where it is.
+describe('Coming from WSJT-X: the switch JTAlert and GridTracker need', () => {
+  /** The switch's label in Settings. A name, not prose: SettingsPanel.tsx renders this same
+   *  literal in every language, so every translation must carry it verbatim. */
+  const SWITCH = 'WSJT-X UDP API'
+  /** Where it lives, in the labels the English Settings actually shows. */
+  const PATH = `${EN['nav.settings.label']} ▸ ${EN['settings.tabs.logging']} ▸ ${EN['settings.integrations.legend']}`
+  const note = () => document.querySelector<HTMLElement>('.gsg-wsjtx') as HTMLElement
+
+  it('names the switch, and the path to it in the words Settings shows', () => {
+    render(<GettingStartedGuide onClose={() => {}} onOpenSettings={() => {}} />)
+    const text = note().textContent ?? ''
+    expect(text).toContain(SWITCH)
+    expect(text).toContain(PATH)
+  })
+
+  it('links straight to the section that holds the switch, and gets out of the way', () => {
+    const onOpenSettings = vi.fn()
+    const onClose = vi.fn()
+    render(<GettingStartedGuide onClose={onClose} onOpenSettings={onOpenSettings} />)
+    fireEvent.click(
+      within(note()).getByRole('button', { name: EN['settings.integrations.legend'] }),
+    )
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    expect(onOpenSettings).toHaveBeenCalledWith('integrations-feeds')
+    // The guide is a modal; left open, it would sit on top of the section it just opened.
+    expect(onClose).toHaveBeenCalledTimes(1)
+    // …and the id is a live one. A pointer at a section that no longer resolves fails silently.
+    expect(resolveTarget('integrations-feeds')).toEqual({
+      tab: 'logging',
+      section: 'integrations-feeds',
+    })
+  })
+
+  it('with no way into Settings (the Remote page), the path is text, not a dead button', () => {
+    render(<GettingStartedGuide onClose={() => {}} />)
+    expect(within(note()).queryAllByRole('button')).toHaveLength(0)
+    expect(note().textContent).toContain(PATH)
+  })
+
+  it('every language names the same switch and links the section by the name its Settings shows', () => {
+    const problems: string[] = []
+    const catalogs = { en: EN, de: DE, es: ES, fr: FR, ja: JA } as Record<
+      string,
+      Record<string, unknown>
+    >
+    for (const [lang, cat] of Object.entries(catalogs)) {
+      const body = String(cat['gettingStarted.wsjtx.body'])
+      if (!body.includes(SWITCH)) problems.push(`${lang}: never names "${SWITCH}"`)
+      const path = `${cat['nav.settings.label']} ▸ ${cat['settings.tabs.logging']} ▸ <a>${cat['settings.integrations.legend']}</a>`
+      if (!body.includes(path)) problems.push(`${lang}: no "${path}" in "${body}"`)
+    }
+    expect(problems).toEqual([])
   })
 })

@@ -28,6 +28,7 @@
     "state": "idle",
     "tier": "FT8"
   },
+  "logStoreProblem": null,
   "logTick": null,
   "loggedTick": null,
   "mode": "chat",
@@ -133,7 +134,8 @@
     "txSwr": null,
     "txWatchdog": false,
     "vox": null,
-    "xitHz": 0
+    "xitHz": 0,
+    "xitUnsupported": false
   },
   "radioPegged": false,
   "radios": [],

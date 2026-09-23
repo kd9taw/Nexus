@@ -420,8 +420,9 @@ fn parse_date(cell: &str) -> Option<i64> {
     if md.len() < 4 {
         return None;
     }
-    let month = month_num(&md[..3])?;
-    let day: u32 = md[3..].trim().parse().ok()?;
+    // `get`: third-party HTML — a multi-byte character across byte 3 is an unreadable date.
+    let month = month_num(md.get(..3)?)?;
+    let day: u32 = md.get(3..)?.trim().parse().ok()?;
     Some(ymd_to_unix(year, month, day))
 }
 
@@ -612,6 +613,19 @@ mod tests {
         assert_eq!(c9.entity, "Mozambique");
         assert_eq!(c9.ft8_mode, Some(Ft8DxpMode::SuperFox));
         assert!(c9.bands.contains(&Band::B20)); // HF expands
+    }
+
+    /// NG3K's page is third-party HTML. A date cell with a multi-byte character across the
+    /// month's third byte split that character and panicked the whole fetch; it is a date this
+    /// cannot read, and the row is skipped like any other.
+    #[test]
+    fn a_non_ascii_date_cell_is_unreadable_not_a_panic() {
+        assert_eq!(parse_date("2026 ééé01"), None);
+        assert_eq!(parse_date("2026 J日n01"), None);
+        assert!(
+            parse_date("2026 Jun01").is_some(),
+            "control: a real date still reads"
+        );
     }
 
     /// The call cell exactly as NG3K emits it, both shapes: an operation WITH its

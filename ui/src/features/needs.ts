@@ -152,6 +152,25 @@ export function topNeedByCall(alertsByCall: Map<string, NeedAlert[]>): Map<strin
 }
 
 /**
+ * True when a row's needs are a confirmation and nothing else, on a station already worked on
+ * this band (#350) — the case the roster's Needed only / Hide worked and the station list's
+ * Needed stop counting.
+ *
+ * A contact starts out unconfirmed, so the backend's Confirm tier tags a station's slots the
+ * moment it is worked and keeps the tag until the QSL arrives. That is deliberate
+ * (needalert.rs pins it) and the LoTW chip keeps saying so. But another contact with a station
+ * already worked on this band cannot confirm anything the first one will not, so on its own
+ * that tag is no reason to keep the row on a filtered list. Anywhere else — a station not yet
+ * worked on this band, or a confirmation beside any real need — it still counts.
+ *
+ * `tags` is the need set the view already counts. The activity labels (DXped/POTA/SOTA) are not
+ * Confirm, so a view that counts them keeps a row they are on, exactly as before.
+ */
+export function confirmOnlyOnWorkedBand(tags: readonly NeedTag[], workedBand: boolean | undefined): boolean {
+  return workedBand === true && tags.length > 0 && tags.every((t) => t === 'Confirm')
+}
+
+/**
  * How badly the operator should want this station right now — the weight behind "sort by
  * need".
  *

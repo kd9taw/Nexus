@@ -896,6 +896,13 @@ pub struct RadioStatus {
     /// XIT (transmit incremental tuning) offset in Hz — last commanded (0 = off). Optimistic.
     #[serde(default)]
     pub xit_hz: i32,
+    /// This radio has NO XIT at all (`settings::rig_has_xit`; the IC-9700), so every surface
+    /// that draws XIT leaves it out and the engine refuses one aimed at it.
+    ///
+    /// NEGATIVE ON PURPOSE, like `atu_start_tune_unsupported`: a snapshot from a station older
+    /// than the page leaves this out, and `false` (XIT offered) is how that station behaves.
+    #[serde(default)]
+    pub xit_unsupported: bool,
     /// Active VFO ("A" / "B") — last commanded. Optimistic (no read-back).
     #[serde(default)]
     pub active_vfo: String,
@@ -2473,6 +2480,14 @@ pub struct UploadReportDto {
     pub outcome: String,
     /// Sanitized TQSL message on a non-success outcome.
     pub detail: Option<String>,
+    /// Contacts of the batch EDITED while TQSL was signing it: the outcome is not recorded on
+    /// them, because LoTW holds the version that was signed, and they are offered again with
+    /// the next upload. The connection log carries the same count.
+    #[serde(default)]
+    pub skipped_edited: usize,
+    /// Contacts of the batch DELETED from the log while TQSL was signing it.
+    #[serde(default)]
+    pub skipped_deleted: usize,
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).
@@ -3109,6 +3124,23 @@ pub struct AppSnapshot {
     /// browser's delete cannot leave the shack's list pointing at rows that have moved.
     #[serde(default)]
     pub log_tick: u32,
+    /// Why the logbook database is not in use this session: set at launch when it could not be
+    /// opened, and the session then keeps the log in `log.adi`, as 1.13 did. `None` while the
+    /// database owns the log. The screen says so once per session.
+    #[serde(default)]
+    pub log_store_problem: Option<LogStoreProblem>,
+}
+
+/// Why the logbook database could not be opened at launch — see
+/// [`AppSnapshot::log_store_problem`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogStoreProblem {
+    /// The data folder is on network storage, where the database is never opened. The one cause
+    /// the operator fixes in Settings: a data folder on a drive inside the computer.
+    pub network_folder: bool,
+    /// Why, as the diagnostic log records it.
+    pub reason: String,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────

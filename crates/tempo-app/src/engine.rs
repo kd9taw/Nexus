@@ -4303,6 +4303,13 @@ struct SatTune {
     /// too, and that mistake fails in the direction that refuses a legal contact. The
     /// satellite catalogue answers it exactly — see [`Engine::set_sat_single_channel_fm`].
     single_channel_fm: bool,
+    /// ⭐ **The uplink takes CW over an FM-class downlink** — KOSEN-1's shape, and the one
+    /// transponder whose TX mode cannot be derived from its downlink's. Read by
+    /// [`Engine::sat_tx_mode`].
+    ///
+    /// Set by the pick and cleared by every pick, on the terms of `single_channel_fm` above —
+    /// see [`Engine::set_sat_uplink_cw`].
+    uplink_cw: bool,
 }
 
 /// How far off a CHANNELISED bird's own frequency a rig-reported dial may be
@@ -7394,8 +7401,22 @@ impl Engine {
             self.rit_hz
         })
     }
+    /// Does the ACTIVE radio have XIT at all ([`crate::settings::rig_has_xit`])? The IC-9700
+    /// does not, so on it XIT is not offered (the snapshot's `xit_unsupported`) and not taken
+    /// ([`Self::request_xit`], `queue_remote_xit`).
+    pub fn xit_supported(&self) -> bool {
+        crate::settings::rig_has_xit(self.settings.rig_model)
+    }
     /// Request an XIT (transmit incremental tuning) offset in Hz (0 = off).
+    ///
+    /// ⛔ A NO-OP ON A RADIO WITH NO XIT ([`Self::xit_supported`]): nothing is queued for the
+    /// radio loop and no offset is believed. The belief matters as much as the write, because
+    /// `xit_hz` rides into [`Self::tx_emission_mhz`], and the licence gate would then judge a
+    /// transmit frequency the radio never moved to.
     pub fn request_xit(&mut self, hz: i32) {
+        if !self.xit_supported() {
+            return;
+        }
         self.remote_actuation.revoke();
         self.xit_hz = hz;
         self.xit_dirty = true;
@@ -11094,13 +11115,15 @@ impl Engine {
         // it can never block a legitimate later re-work (that's minutes/hours later, or
         // a different band), coarse enough to catch a burst of identical seeds. Covers
         // every path into the log (auto, cockpit button, manual Logbook, companion).
-        const DEDUP_WINDOW_SECS: u64 = 300;
-        let is_dup = self.station.logbook.records().iter().any(|r| {
-            tempo_core::message::same_call(&r.call, &rec.call)
-                && r.band.eq_ignore_ascii_case(&rec.band)
-                && r.mode.eq_ignore_ascii_case(&rec.mode)
-                && rec.when_unix.abs_diff(r.when_unix) <= DEDUP_WINDOW_SECS
-        });
+        //
+        // ⛔ FT HARD GATE — operator yes 2026-09-19, for exactly this and nothing more: the
+        // guard is the SAME predicate (`tempo_core::logbook::dedup::is_recent_duplicate`, moved
+        // there verbatim from here: base call, band and mode case-insensitively, 300 s), asked
+        // of only the rows that share the contact's base call instead of every row in the log.
+        // Same accept/reject — held to the old scan, kept as `dedup::scan_for_duplicate`, by a
+        // parity property test — at the same point, before any enrichment. The index is built
+        // from the in-memory log and never touches the store.
+        let is_dup = self.station.dedup.is_duplicate(&self.station.logbook, &rec);
         if is_dup {
             return LogWriteOutcome::Duplicate;
         }
@@ -11812,6 +11835,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// [`call_station`]: Engine::call_station
     pub fn call_station_with_grid(&mut self, dxcall: &str, dxgrid: Option<&str>) {
         let _ = self.call_station_ctx(dxcall, dxgrid, None, None, None);
+    }
+
+    /// The station the directed QSO in progress is working, or `None` outside one. Lets a
+    /// caller of [`Self::call_station_ctx`] tell a QSO that really started from the benign
+    /// no-ops it also answers `Ok` to (our own call, a tier that cannot answer).
+    pub fn qso_dxcall(&self) -> Option<&str> {
+        match &self.mode {
+            Mode::Qso { station, .. } => station.dxcall.as_deref(),
+            _ => None,
+        }
     }
 
     /// The faithful WSJT-X "double-click to work" entry point. `reply_msg` is the
@@ -13570,6 +13603,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     // default: it treats an unclassified bird as a linear transponder,
                     // which under-reports the limit instead of refusing a legal QSO.
                     single_channel_fm: false,
+                    // Cleared on the same terms: `false` is today's TX mode, derived from
+                    // the downlink, so a pick that never states it changes nothing.
+                    uplink_cw: false,
                 });
                 // Remembered past this hold's release — see `sat_last_worked`.
                 self.sat_last_worked = self.sat_tune.clone();
@@ -13675,6 +13711,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let label = st.label.clone();
         if let Some(last) = self.sat_last_worked.as_mut().filter(|l| l.label == label) {
             last.single_channel_fm = on;
+        }
+    }
+
+    /// ⭐ **Tell the engine the held transponder's uplink takes CW over an FM-class downlink**
+    /// (KOSEN-1). The downlink cannot supply this fact — [`Self::sat_tx_mode`] derives the TX
+    /// mode from it, and on this shape it is FM — so the command layer states it from the
+    /// catalogue record, exactly as it states [`Self::set_sat_single_channel_fm`].
+    ///
+    /// Call it AFTER [`Self::set_sat_transponder`], which clears it, so the outgoing bird's
+    /// answer can never outlive it.
+    ///
+    /// Unlike the FM-satellite fact it stops at the live hold and does not reach
+    /// `sat_last_worked`: that record is read for LOGGING, and a TX mode is only asked while a
+    /// hold is live.
+    pub fn set_sat_uplink_cw(&mut self, on: bool) {
+        if let Some(st) = self.sat_tune.as_mut() {
+            st.uplink_cw = on;
         }
     }
 
@@ -14329,6 +14382,36 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return None;
         }
         let st = self.sat_tune.as_ref()?;
+        // ⭐ A CW UPLINK OVER AN FM DOWNLINK (KOSEN-1; operator ruling 2026-09-23). Everything
+        // below derives the uplink from the DOWNLINK's mode, which on this shape is FM, so the
+        // TX VFO went to FM on a CW-only 15 m segment in every section: an emission Nexus's own
+        // licence table permits nowhere below 21.200 MHz, while in the CW section the licence
+        // gate was approving a CW one. The catalogue's `uplink_mode` is what knows, and it
+        // decides the MODE here — never the side (`set_sat_uplink_cw`):
+        //
+        // - Phone → `CW`. Phone keys no CW, but the TX VFO must hold the one emission this
+        //   uplink takes, not FM: an unwritten TX VFO keeps whatever the last pass left in it
+        //   (the doc comment above).
+        // - CW → the CW section's own form, through the ONE per-section policy
+        //   (`rig_mode_on_sideband`), on the side the UPLINK's band gives — the same 10 MHz
+        //   line the terrestrial convention draws: the radio's keyer gets `CW` (or `CWR`), the
+        //   soundcard keyer the DATA submode its keyed tone needs (`PKTUSB` on 21 MHz).
+        // - Digital is EXCLUDED and keeps today's answer: what an FT section puts on a CW-only
+        //   uplink is a separate FT decision. RTTY and Keyboard were not part of the ruling
+        //   either, so they keep today's answer too rather than a guessed one.
+        if st.uplink_cw {
+            use crate::settings::OperatingMode;
+            match self.settings.operating_mode {
+                OperatingMode::Phone => return Some("CW".to_string()),
+                OperatingMode::Cw => {
+                    return Some(
+                        self.settings
+                            .rig_mode_on_sideband(st.transponder.uplink_centre_hz < 10_000_000),
+                    );
+                }
+                OperatingMode::Digital | OperatingMode::Rtty | OperatingMode::Keyboard => {}
+            }
+        }
         // The DOWNLINK mode is whatever the loop is commanding for the dial —
         // read from the one write-side canon rather than a second guess at it,
         // so the two legs can never be derived from different beliefs.
@@ -18304,17 +18387,17 @@ contact yourself."
     /// `Open` always permits. Judges the EMITTED RF, not the bare dial: for digital the signal
     /// sits at the dial + the TX audio offset (≈+1.5 kHz on USB), so a dial just below a
     /// higher-class-only edge can still emit inside it; on an FM channel the transmitter is
-    /// moved bodily by the repeater shift, which on 70 cm is 5 MHz. Every TX path ANDs this in;
-    /// the snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
+    /// moved bodily by the repeater shift, which on 70 cm is 5 MHz; in Phone the passband is
+    /// judged in the mode the rig is actually commanded, the cockpit's pick included
+    /// ([`Self::emission_in_use_allowed`]). Every TX path ANDs this in; the snapshot exposes it
+    /// so the cockpit can show a lockout indicator. See `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
         // The rig says split and we cannot say where it transmits — refuse rather than judge
         // the dial, which under split is an unrelated number.
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
             return false;
         }
-        let judge = |mhz: f64| {
-            self.emission_allowed(self.settings.operating_mode, mhz, &self.settings.sideband)
-        };
+        let judge = |mhz: f64| self.emission_in_use_allowed(mhz);
         // `tx_emission_mhz` already carries XIT.
         let emission = self.tx_emission_mhz();
         // ⚠️ SPLIT **AND** XIT IS THE ONE COMBINATION NO DOCUMENT HERE SETTLES. Whether a radio
@@ -18336,7 +18419,20 @@ contact yourself."
     /// dialled on the radio's own clarifier knob is invisible here and the licence gate cannot
     /// see it. Named rather than left implicit because it bounds the guarantee.
     fn xit_offset_mhz(&self) -> f64 {
-        f64::from(self.xit_hz) / 1_000_000.0
+        f64::from(self.xit_hz_effective()) / 1_000_000.0
+    }
+
+    /// The XIT offset (Hz) the ACTIVE radio can be carrying: the commanded belief, or 0 on a
+    /// radio with no XIT at all ([`Self::xit_supported`]). There a belief can only be left over
+    /// from another model on the same profile (a Settings change is not a handoff, so nothing
+    /// cleared it), and the radio cannot move its transmitter by it. The licence gate and the
+    /// snapshot read this one answer.
+    fn xit_hz_effective(&self) -> i32 {
+        if self.xit_supported() {
+            self.xit_hz
+        } else {
+            0
+        }
     }
 
     /// The FM repeater shift as MHz — SIGNED (`plus` is up), 0.0 when no shift is in force.
@@ -18439,10 +18535,53 @@ contact yourself."
         }
     }
 
+    /// THE key-time judgement of one transmit carrier `mhz`: what [`Self::tx_allowed`] asks of
+    /// every frequency it judges, and what the Remote's split/XIT admission asks of the one it
+    /// is about to write, so the two cannot disagree.
+    ///
+    /// Two models, and BOTH must pass:
+    /// * [`Self::emission_allowed`], the section's own model, with Phone on the band's
+    ///   convention (LSB below 10 MHz, USB above). Unchanged, so every refusal the gate made
+    ///   before still stands.
+    /// * in Phone, the passband of the mode the transmitting VFO is actually COMMANDED
+    ///   ([`Self::tx_mode_effective`]): the same word the radio loop writes, so the gate and the
+    ///   radio cannot drift apart.
+    ///
+    /// ⭐ THE SECOND TERM IS THE FIX. From the day it arrived (0.4.0) the cockpit's mode pick
+    /// (`sideband_override`, which a saved-memory recall also sets) reached the radio through
+    /// `rig_mode_effective` and never reached this gate, which went on judging the convention's
+    /// sideband. A General who picked USB at 7.299 transmitted across the 7.300 band edge, and
+    /// LSB at 14.226 went under the 14.225 General phone floor, with the gate saying allowed.
+    ///
+    /// ⚠️ Keeping the convention term means a pick on the band's OTHER side is judged on both
+    /// sides of the carrier: USB at the very bottom of a General's 40 m segment stays refused,
+    /// exactly as before, although its own passband is legal. That is the cost of this fix only
+    /// ever refusing more than before; dropping the convention term for a pick is a separate
+    /// decision, not a defect.
+    fn emission_in_use_allowed(&self, mhz: f64) -> bool {
+        let om = self.settings.operating_mode;
+        self.emission_allowed(om, mhz, &self.settings.sideband)
+            && (om != crate::settings::OperatingMode::Phone
+                || self.phone_emission_allowed(mhz, &self.tx_mode_effective()))
+    }
+
+    /// The mode word the TRANSMITTING VFO is commanded into — each VFO read from the one place
+    /// the radio loop reads it. Under a satellite pass that owns the split, that is the uplink
+    /// VFO's own word ([`Self::sat_tx_mode_for_split`]): an inverting transponder transmits LSB
+    /// while the dial listens USB, so judging the dial's word there would put the passband on the
+    /// wrong side of the uplink carrier. Everywhere else it is the dial's word,
+    /// [`Self::rig_mode_effective`].
+    fn tx_mode_effective(&self) -> String {
+        self.tx_split_confirmed_hz
+            .and_then(|hz| self.sat_tx_mode_for_split(hz))
+            .unwrap_or_else(|| self.rig_mode_effective())
+    }
+
     /// May the operator's class key `om`'s EMISSION with the dial at `dial` (`sideband`
     /// only matters for Digital, whose audio offset is sideband-signed)? THE one
-    /// emission-passband model: [`Engine::tx_allowed`] judges the live dial through it,
-    /// and the per-(band, mode) dial memory re-runs it at restore time — the license
+    /// emission-passband model: [`Engine::tx_allowed`] judges the live dial through it (and, in
+    /// Phone, the mode actually commanded on top — [`Self::emission_in_use_allowed`]), and the
+    /// per-(band, mode) dial memory re-runs it at restore time — the license
     /// class can change mid-session, so a remembered dial is re-checked, never trusted.
     fn emission_allowed(
         &self,
@@ -18461,18 +18600,12 @@ contact yourself."
                 allow(if lsb { dial - off } else { dial + off })
             }
             OperatingMode::Phone => {
-                // SSB occupies ~2.8 kHz above the carrier (USB) / below it (LSB). The WHOLE
-                // passband must be in a privileged phone segment, so a dial within a passband
-                // of a band edge can't bleed out of band. Phone sideband is band-aware (LSB <10 MHz).
-                // The width is `privileges::SSB_BW_MHZ` — the SAME constant the phone home parks
-                // by, so a picker can never choose a dial this gate then refuses.
-                use crate::privileges::SSB_BW_MHZ as SSB_BW;
-                let (lo, hi) = if dial < 10.0 {
-                    (dial - SSB_BW, dial)
-                } else {
-                    (dial, dial + SSB_BW)
-                };
-                allow(lo) && allow(hi)
+                // The band CONVENTION's sideband (LSB below 10 MHz, USB from 30 m up) through the
+                // one phone passband model. Right as it stands for a band pick and a dial-memory
+                // recall — both follow a band change, which drops the cockpit's pick — and the
+                // key-time gate judges the mode the rig is actually in on top of it
+                // (`emission_in_use_allowed`).
+                self.phone_emission_allowed(dial, if dial < 10.0 { "LSB" } else { "USB" })
             }
             // CW: the carrier sits at the dial.
             OperatingMode::Cw => allow(dial),
@@ -18483,6 +18616,37 @@ contact yourself."
             // above the always-USB dial.
             OperatingMode::Keyboard => self.psk_emission_ok(dial),
         }
+    }
+
+    /// May the operator's class key a PHONE emission whose carrier is at `carrier`, in the rig
+    /// mode `word` (`USB`, `LSB`, `AM`, `FM`, or a DATA form of one)? THE one phone passband
+    /// model: the band convention ([`Self::emission_allowed`]) and the mode actually commanded
+    /// ([`Self::emission_in_use_allowed`]) are both judged through it.
+    ///
+    /// The width is `privileges::SSB_BW_MHZ` — the SAME constant the phone home parks by, so a
+    /// picker can never choose a dial this gate then refuses — and it is the voice audio one
+    /// sideband carries. The WHOLE emission must sit in a privileged phone segment, so a dial
+    /// within a passband of an edge cannot bleed out of it:
+    /// * USB / LSB, and the PKTUSB / PKTLSB an SSTV image rides: one passband above / below.
+    /// * AM: the carrier plus BOTH sidebands of the same audio, one passband either side.
+    /// * FM: ⚠️ NO WIDTH MODEL. An FM signal's width is set by its deviation, which Nexus does
+    ///   not know (`repeater_tune` records the same decision), so only the carrier is judged.
+    ///   Every caller also judges the convention's passband, so an FM pick is judged exactly as
+    ///   it was before this model knew the pick at all — never less.
+    /// * any other word: both sides. A mode this model does not know must never unlock anything.
+    fn phone_emission_allowed(&self, carrier: f64, word: &str) -> bool {
+        use crate::privileges::SSB_BW_MHZ as SSB_BW;
+        let class = self.settings.license_class;
+        let allow =
+            |f: f64| crate::privileges::tx_allowed(class, f, crate::settings::OperatingMode::Phone);
+        let (above, below) = match word.trim().to_ascii_uppercase().as_str() {
+            "USB" | "PKTUSB" => (true, false),
+            "LSB" | "PKTLSB" => (false, true),
+            "FM" | "PKTFM" => (false, false),
+            // AM, and any word this model does not know.
+            _ => (true, true),
+        };
+        allow(carrier) && (!above || allow(carrier + SSB_BW)) && (!below || allow(carrier - SSB_BW))
     }
 
     /// UDP HighlightCallsign (JTAlert): paint/clear a callsign in the decode
@@ -19172,7 +19336,8 @@ contact yourself."
         s.radio.atu_start_tune_unsupported = !self.rig_atu_start_tune;
         s.radio.filter_width_hz = self.rig_passband;
         s.radio.rit_hz = self.rit_hz;
-        s.radio.xit_hz = self.xit_hz;
+        s.radio.xit_hz = self.xit_hz_effective();
+        s.radio.xit_unsupported = !self.xit_supported();
         // The RADIO's selection when it answered one, the commanded value otherwise — never the
         // raw `active_vfo_b`, which is only ever what Nexus asked for.
         s.radio.active_vfo = if self.active_vfo_b_effective() {
@@ -19571,6 +19736,7 @@ contact yourself."
         s.upload_ok = self.station.upload_ok;
         s.upload_tick = self.station.upload_tick;
         s.log_tick = self.station.log_tick();
+        s.log_store_problem = self.station.store_problem.clone();
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
@@ -22069,6 +22235,91 @@ contact yourself."
         self.station.logbook.set_posid(log_posid(&self.settings));
     }
 
+    /// Make the store the owner of the log — the ordinary launch. See
+    /// [`StationCore::attach_store`] and [`crate::logstore`].
+    pub fn attach_log_store(&mut self, opened: crate::logstore::Opened) {
+        self.station.attach_store(opened);
+        // A fresh log, whose ids start without the position id — as after `set_log_path`.
+        self.sync_log_posid();
+    }
+
+    /// Record why the store could not be opened this session: the log runs on `log.adi` as
+    /// 1.13 ran it, and this is what says so — in the snapshot, which the screen shows.
+    pub fn note_log_store_problem(&mut self, why: &crate::logstore::OpenError) {
+        self.station.store_problem = Some(crate::dto::LogStoreProblem {
+            network_folder: matches!(why, crate::logstore::OpenError::NetworkFolder(_)),
+            reason: why.to_string(),
+        });
+    }
+
+    /// Why the store is not in use this session, if it was refused.
+    pub fn log_store_problem(&self) -> Option<&str> {
+        self.station
+            .store_problem
+            .as_ref()
+            .map(|p| p.reason.as_str())
+    }
+
+    /// Whether the store owns the log this session.
+    pub fn log_store_open(&self) -> bool {
+        self.station.store.is_some()
+    }
+
+    /// Whether ANOTHER process has committed to the store since this engine's log last matched
+    /// it — a change the next freshness poll, or the next change to existing rows, folds in.
+    pub fn log_store_foreign_pending(&self) -> bool {
+        self.station
+            .store
+            .as_ref()
+            .is_some_and(|s| s.foreign_changed())
+    }
+
+    /// The store's writer, for a caller that waits or copies with every lock released.
+    pub fn log_store_writer(
+        &self,
+    ) -> Option<std::sync::Arc<tempo_core::logbook::writer::LogWriter>> {
+        self.station.store.as_ref().map(|s| s.writer())
+    }
+
+    /// The store's mirror of `log.adi`, as it stands.
+    pub fn log_mirror_status(&self) -> Option<tempo_core::logbook::mirror::Status> {
+        self.station.store.as_ref().map(|s| s.mirror_status())
+    }
+
+    /// Write everything submitted to the store, and the mirror, waiting up to `deadline` —
+    /// the exit path. `Ok` at once when there is no store (the 1.13 path wrote inline).
+    ///
+    /// ⚠️ It WAITS, so a caller holding the engine lock holds it for the wait. The exit path
+    /// may: the radio loop has stopped by then. Anything else takes [`Self::log_store_writer`]
+    /// and waits with the lock released.
+    pub fn flush_log_store(&self, deadline: std::time::Duration) -> Result<(), String> {
+        match self.station.store.as_ref() {
+            Some(store) => store.flush(deadline),
+            None => Ok(()),
+        }
+    }
+
+    /// Run `f`, and hand back what it did together with the durability of every change it made
+    /// to the log — what an operator command waits on AFTER it has released the engine lock
+    /// ([`crate::logstore::Durability::wait`]). Empty on the 1.13 path, which wrote inline.
+    pub fn with_log_tickets<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> (T, crate::logstore::Durability) {
+        if let Some(store) = self.station.store.as_mut() {
+            store.begin_collecting();
+        }
+        let out = f(self);
+        let durability = match self.station.store.as_mut() {
+            Some(store) => {
+                let tickets = store.take_collected();
+                crate::logstore::Durability::new(Some(store.writer()), tickets)
+            }
+            None => crate::logstore::Durability::default(),
+        };
+        (out, durability)
+    }
+
     /// The general logbook file, when one is configured. Read-only: Remote re-reads it after a
     /// rewrite to prove the change reached the disk before it reports one.
     pub fn log_path(&self) -> Option<&std::path::Path> {
@@ -22466,6 +22717,23 @@ contact yourself."
     ) {
         self.station
             .stamp_lotw_upload(indices, outcome, when_unix, detail)
+    }
+
+    /// See [`StationCore::lotw_signed`].
+    pub fn lotw_signed(&self, indices: &[usize]) -> Vec<crate::station::LotwSigned> {
+        self.station.lotw_signed(indices)
+    }
+
+    /// See [`StationCore::stamp_lotw_batch`].
+    pub fn stamp_lotw_batch(
+        &mut self,
+        batch: &[crate::station::LotwSigned],
+        outcome: tempo_core::logbook::UploadOutcome,
+        when_unix: i64,
+        detail: Option<tempo_core::logbook::UploadDetail>,
+    ) -> crate::station::LotwStamped {
+        self.station
+            .stamp_lotw_batch(batch, outcome, when_unix, detail)
     }
 
     /// See [`StationCore::push_sstv_gallery`].
@@ -26447,6 +26715,76 @@ mod tests {
         assert!(
             !e.tx_allowed(),
             "unknown means the safe side: an XIT-shifted split that could land Extra-only locks"
+        );
+    }
+
+    /// ⛔ AN IC-9700 IS NOT OFFERED XIT, BECAUSE IT HAS NONE (Icom A7508-3EX-4 lists RIT and no
+    /// ΔTX). The capability rides the snapshot so every surface that draws XIT reads one answer,
+    /// and the verb itself refuses: nothing is queued for the radio loop, and no offset is
+    /// believed, because a believed offset rides into the emission the licence gate judges.
+    #[test]
+    fn an_ic9700_is_not_offered_xit_and_an_xit_aimed_at_it_changes_nothing() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.rig_model = 3081; // IC-9700
+        let emission = e.tx_emission_mhz();
+        assert!(
+            e.snapshot().radio.xit_unsupported,
+            "the IC-9700 was offered XIT"
+        );
+
+        e.request_xit(500);
+        assert_eq!(
+            e.take_xit_apply(),
+            None,
+            "an XIT was queued for a radio that has none"
+        );
+        assert_eq!(
+            e.snapshot().radio.xit_hz,
+            0,
+            "the snapshot shows an XIT the radio never took"
+        );
+        assert!(
+            (e.tx_emission_mhz() - emission).abs() < 1e-12,
+            "the licence gate would judge an offset the radio cannot apply: {} vs {emission}",
+            e.tx_emission_mhz()
+        );
+    }
+
+    /// THE GUARD, on the same steps: the IC-7610 has ΔTX (A7380-7EX-4, `21 02`), and its XIT is
+    /// offered, queued, shown and judged exactly as before.
+    #[test]
+    fn an_ic7610_keeps_xit_exactly_as_before() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.rig_model = 3078; // IC-7610
+        let emission = e.tx_emission_mhz();
+        assert!(!e.snapshot().radio.xit_unsupported);
+
+        e.request_xit(500);
+        assert_eq!(e.take_xit_apply(), Some(500));
+        assert_eq!(e.snapshot().radio.xit_hz, 500);
+        assert!((e.tx_emission_mhz() - (emission + 0.000_5)).abs() < 1e-9);
+    }
+
+    /// AN XIT LEFT OVER FROM ANOTHER MODEL COUNTS FOR NOTHING ON AN IC-9700. Re-setting the
+    /// active profile's model in Settings is not a handoff, so nothing clears `xit_hz`; with the
+    /// 9700's XIT control and cell hidden, a leftover offset would be invisible and unclearable
+    /// while the licence gate still judged it. The radio cannot carry it, so it is zero.
+    #[test]
+    fn an_xit_left_from_another_model_counts_for_nothing_on_an_ic9700() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.rig_model = 3078; // IC-7610, where the offset is real
+        let dial = e.tx_emission_mhz();
+        e.request_xit(500);
+        assert!(
+            (e.tx_emission_mhz() - (dial + 0.000_5)).abs() < 1e-9,
+            "precondition: the 7610 carries it"
+        );
+
+        e.settings.rig_model = 3081; // the same profile, now an IC-9700
+        assert_eq!(e.snapshot().radio.xit_hz, 0, "a leftover XIT is shown");
+        assert!(
+            (e.tx_emission_mhz() - dial).abs() < 1e-12,
+            "the licence gate judges a leftover XIT the IC-9700 cannot apply"
         );
     }
 
@@ -33770,6 +34108,57 @@ mod tests {
             !adif.contains("K2DEF"),
             "the home call must never sign an event contact: {adif}"
         );
+    }
+
+    /// What decides whether a LoTW result lands on a contact once TQSL is done: the contact is
+    /// still in the log, AND it is still what TQSL signed. A change LoTW never saw — another
+    /// connector's upload stamp landing meanwhile, the operator's private note — does not stop
+    /// it. A change to what was signed does: LoTW holds the old version, so the contact must
+    /// stay unsent to be signed again as it now stands.
+    #[test]
+    fn a_lotw_result_lands_on_each_contact_still_as_it_was_signed() {
+        use tempo_core::logbook::UploadOutcome;
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for (i, call) in ["W1AAA", "W2BBB", "W3CCC", "W4DDD", "W5EEE"]
+            .iter()
+            .enumerate()
+        {
+            let mut r = e.qso_record(call.to_string(), None, None);
+            r.when_unix = 1_788_000_000 + i as u64 * 60;
+            e.log_qso(r);
+        }
+        let signed = e.lotw_signed(&[0, 1, 2, 3, 4]);
+
+        // While TQSL runs:
+        let row = |e: &Engine, i: usize| QsoRecord::clone(&e.log_records()[i]);
+        let w1 = row(&e, 0);
+        assert!(e.stamp_qrz_upload(&w1, UploadOutcome::Accepted, 1_788_000_500, None));
+        let mut w2 = row(&e, 1);
+        w2.notes = Some("private: worked him at the club".into());
+        assert!(e.update_qso(1, w2));
+        assert!(e.set_sat_tag(2, Some("AO-91")));
+        let mut w4 = row(&e, 3);
+        w4.band = "40m".into();
+        assert!(e.update_qso(3, w4));
+        assert!(e.delete_qso(4));
+
+        let done = e.stamp_lotw_batch(&signed, UploadOutcome::Pending, 1_788_000_900, None);
+        let stamped: Vec<(String, bool)> = e
+            .log_records()
+            .iter()
+            .map(|r| (r.call.clone(), r.upload.lotw.is_some()))
+            .collect();
+        assert_eq!(
+            stamped,
+            vec![
+                ("W1AAA".to_string(), true),
+                ("W2BBB".to_string(), true),
+                ("W3CCC".to_string(), false),
+                ("W4DDD".to_string(), false),
+            ],
+            "stamped: the QRZ stamp and the private note; not: the satellite tag and the band"
+        );
+        assert_eq!((done.stamped, done.changed, done.gone), (2, 2, 1));
     }
 
     /// The other half of that guard, and the one that keeps old logs working: a record written
@@ -45324,6 +45713,37 @@ mod tests {
         );
     }
 
+    /// The licence gate judges a pass in the UPLINK VFO's own sideband — the word the radio loop
+    /// writes to the transmit VFO — not the dial's. An inverting bird transmits LSB while the
+    /// dial listens USB, so near a segment floor the two put the passband on opposite sides of
+    /// the uplink carrier. The transponder is synthetic, parked just above 2 m's CW-only bottom:
+    /// every real VHF/UHF uplink sits deep inside an all-mode segment, where the two agree.
+    #[test]
+    fn a_satellite_pass_is_judged_in_the_uplink_vfos_own_sideband() {
+        let (mut e, tp) = sat_mode_engine(true, 144_101_000);
+        e.set_license_class("technician");
+        e.set_sat_transponder(Some(("TEST|linear".into(), 0, tp)));
+        let c = e
+            .sat_doppler_tick(-0.5, 10_000, false)
+            .expect("first tick sends a correction");
+        let up = c.uplink_hz.expect("the mapping drives the uplink");
+        e.rig_split_applied(up);
+        assert_eq!(e.rig_mode_effective(), "USB", "precondition: USB down");
+        assert_eq!(
+            e.sat_tx_mode_for_split(up).as_deref(),
+            Some("LSB"),
+            "precondition: LSB up"
+        );
+        assert!(
+            (144_100_000..144_102_800).contains(&up),
+            "precondition: the uplink carrier is within one passband above 144.100: {up}"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "LSB on {up} Hz reaches below 144.100, where 2 m is CW-only"
+        );
+    }
+
     #[test]
     fn an_fm_bird_commands_fm_on_the_transmit_leg() {
         // ⭐ THE REPLACED BELIEF. This test used to be called
@@ -45377,6 +45797,181 @@ mod tests {
         // Releasing still says nothing — the hand-back rule is unchanged.
         e.set_sat_transponder(None);
         assert_eq!(e.sat_tx_mode(), None, "released ⇒ silent, never a restore");
+    }
+
+    /// KOSEN-1's onboard SDR (NORAD 49402) as the pick hands it to the engine: CW up across
+    /// 21.125–21.150 MHz, AFSK down on 435.525 MHz. One downlink frequency, so no passband
+    /// to tune inside; not inverting.
+    const KOSEN1: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 21_137_500,
+        downlink_centre_hz: 435_525_000,
+        invert: false,
+        half_width_hz: 0,
+    };
+
+    /// Pick KOSEN-1 the way the command layer does: the hold, the two facts its catalogue
+    /// record supplies (typed a Transponder, so not a single-channel FM bird; a CW uplink
+    /// over an FM downlink), then the tune on its FM class.
+    fn pick_kosen1(e: &mut Engine) {
+        e.set_sat_transponder(Some(("KOSEN-1|Mode HF/U - Onboard SDR".into(), 0, KOSEN1)));
+        e.set_sat_single_channel_fm(false);
+        e.set_sat_uplink_cw(true);
+        e.sat_tune_nominal(FM_BIRD, 1_000_000);
+    }
+
+    /// A one-radio station in `section`, uplink mapping (A/B) confirmed, that has just
+    /// picked KOSEN-1.
+    fn kosen1_station(
+        section: &str,
+        keyer: crate::settings::CwKeyerBackend,
+        cw_reverse: bool,
+    ) -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.cw_keyer = keyer;
+        e.settings.cw_reverse = cw_reverse;
+        e.set_operating_mode(section, false);
+        confirm_map_for_all(&mut e, crate::settings::SatVfoMap::ADownBUp);
+        pick_kosen1(&mut e);
+        e
+    }
+
+    #[test]
+    fn a_cw_uplink_over_an_fm_downlink_is_commanded_cw_not_fm() {
+        // THE DEFECT. The TX VFO's mode was derived from the DOWNLINK's, and KOSEN-1's
+        // downlink is AFSK — FM-class — so its CW uplink on 21.1375 MHz was commanded FM in
+        // every section: an emission the licence table allows nowhere below 21.200 MHz,
+        // while in the CW section the licence gate approved a CW one.
+        //
+        // The ruling (2026-09-23): Phone → CW; CW → the section's own CW form, which for
+        // the soundcard keyer is the DATA submode its keyed tone needs (never a promise of
+        // CW mode); Digital EXCLUDED — it stays FM pending its own FT decision. RTTY and
+        // Keyboard were outside the ruling and keep today's answer.
+        use crate::settings::CwKeyerBackend as K;
+        for (section, keyer, cw_reverse, want) in [
+            ("phone", K::Cat, false, "CW"),
+            ("cw", K::Cat, false, "CW"),
+            ("cw", K::WinKeyer, false, "CW"),
+            ("cw", K::Serial, false, "CW"),
+            ("cw", K::Cat, true, "CWR"),
+            ("cw", K::Soundcard, false, "PKTUSB"),
+            ("digital", K::Cat, false, "FM"),
+            ("rtty", K::Cat, false, "FM"),
+            ("keyboard", K::Cat, false, "FM"),
+        ] {
+            let e = kosen1_station(section, keyer, cw_reverse);
+            assert_eq!(
+                e.rig_mode_effective(),
+                "FM",
+                "{section}/{keyer:?}: the downlink is still received in FM"
+            );
+            assert_eq!(
+                e.sat_tx_mode().as_deref(),
+                Some(want),
+                "{section}/{keyer:?} (cw_reverse {cw_reverse}): the TX VFO's mode"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cw_uplink_still_needs_every_consent_the_tx_mode_does() {
+        // The CW answer sits AFTER the release and consent checks, so everything that
+        // silences the TX mode for any bird silences it here too.
+        use crate::settings::{CwKeyerBackend, SatVfoMap};
+        let mut e = kosen1_station("phone", CwKeyerBackend::Cat, false);
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "precondition");
+
+        e.settings.sat_vfo_map = SatVfoMap::DownlinkOnly;
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "a downlink-only mapping never commands a transmit mode"
+        );
+        e.settings.sat_vfo_map = SatVfoMap::ADownBUp;
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "control: restored");
+
+        let confirmed = e.settings.sat_uplink_radios.clone();
+        e.settings.sat_uplink_radios = Some(Vec::new());
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "an unconfirmed mapping commands nothing onto a transmit VFO"
+        );
+        e.settings.sat_uplink_radios = confirmed;
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "control: restored");
+
+        e.request_sideband_override(Some("FM"));
+        assert_eq!(
+            e.sat_tx_mode(),
+            None,
+            "the operator's own mode pick mid-pass stands the CW answer down too"
+        );
+    }
+
+    #[test]
+    fn a_cw_uplink_never_outlives_its_bird() {
+        // KOSEN-1, then RS-44, then SO-50. Only the first pick states the CW fact: the
+        // next two are deliberately NOT told it is false, so a flag the pick failed to
+        // clear would show here as CW on a linear or an FM uplink.
+        let mut e = kosen1_station("phone", crate::settings::CwKeyerBackend::Cat, false);
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "KOSEN-1: CW up");
+
+        e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+        e.sat_tune_nominal(SSB_BIRD, 2_000_000);
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("LSB"),
+            "RS-44: the inverting swap of its USB downlink, not CW"
+        );
+
+        e.set_sat_transponder(Some(("SO-50|FM repeater".into(), 0, fm_bird())));
+        e.sat_tune_nominal(FM_BIRD, 3_000_000);
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("FM"),
+            "SO-50: FM up, not CW"
+        );
+
+        // …and a fresh KOSEN-1 pick states it again.
+        pick_kosen1(&mut e);
+        assert_eq!(e.sat_tx_mode().as_deref(), Some("CW"), "KOSEN-1 again");
+    }
+
+    #[test]
+    fn an_inverting_bird_mirrors_the_data_submode_on_the_transmit_leg() {
+        // FT through an inverting transponder (operator sign-off 2026-09-23): the DATA
+        // submode mirrors the way the voice sideband always has. Sent up in PKTUSB, an FT8
+        // over comes down tone-reversed and nothing decodes it. The RECEIVE leg is untouched.
+        for (class, down, up) in [
+            (SSB_BIRD, "PKTUSB", "PKTLSB"),
+            (LSB_BIRD, "PKTLSB", "PKTUSB"),
+        ] {
+            let (mut e, _, _) = sat_station();
+            e.set_operating_mode("digital", false);
+            e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
+            e.sat_tune_nominal(class, 1_000_000);
+            assert_eq!(e.rig_mode_effective(), down, "{class:?}: the downlink");
+            assert_eq!(
+                e.sat_tx_mode().as_deref(),
+                Some(up),
+                "{class:?}: an inverting bird takes the opposite data sideband up"
+            );
+        }
+
+        // A NON-inverting bird is the same side both ways, exactly as before.
+        let (mut e, _, _) = sat_station();
+        e.set_operating_mode("digital", false);
+        let straight = tempo_core::doppler::Transponder {
+            invert: false,
+            ..RS44
+        };
+        e.set_sat_transponder(Some(("FO-29|linear".into(), 0, straight)));
+        e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+        assert_eq!(e.rig_mode_effective(), "PKTUSB");
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("PKTUSB"),
+            "non-inverting: unchanged"
+        );
     }
 
     // ===================== tune-on-pick (the S.A.T.-box behaviour) =====================
@@ -47681,8 +48276,9 @@ mod tests {
         // (a) make the displayed dial mean something rig- and menu-dependent
         // while the Doppler engine steers it at up to ~100 Hz/s, and (b) lose
         // the inverting transponder's sideband swap entirely, because
-        // `uplink_mode_for` can only mirror USB↔LSB. A CW BEACON is not
-        // special-cased for the same two reasons.
+        // `uplink_mode_for` can only mirror a sideband-named mode (USB↔LSB and
+        // their DATA forms). A CW BEACON is not special-cased for the same two
+        // reasons.
         //
         // LSB: a record that names the LOWER sideband is the one case that must
         // not be commanded USB. It is an inverted-sideband error on the
@@ -49911,6 +50507,411 @@ mod am_override_tests {
     }
 }
 
+/// The licence gate judges the Phone mode the rig is actually COMMANDED — the cockpit's
+/// USB/LSB/FM/AM pick included — and never less than the band convention it judged before.
+///
+/// Wrong from the day the pick arrived (0.4.0) through 1.14.0: the pick reached the radio through
+/// `rig_mode_effective` and never reached `tx_allowed`, which went on judging the band's
+/// convention (LSB below 10 MHz). A pick is reachable from the Phone cockpit's mode buttons and
+/// from recalling a saved SSB memory, which re-asserts the memory's own sideband after the tune.
+#[cfg(test)]
+mod phone_pick_licence_tests {
+    use super::*;
+    use crate::privileges::SSB_BW_MHZ;
+
+    /// A Phone station as `class` on `band` at `dial`, with the cockpit's mode pick `pick`
+    /// (`None` = AUTO) — built through the operator's own verbs in the cockpit's order: the tune
+    /// first, THEN the pick, because a band change drops the pick.
+    fn phone_at(class: &str, band: &str, dial: f64, pick: Option<&str>) -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class(class);
+        e.set_operating_mode("phone", false);
+        e.set_frequency(dial, band, if dial < 10.0 { "LSB" } else { "USB" });
+        e.request_sideband_override(pick);
+        assert!(
+            (e.settings.dial_mhz - dial).abs() < 1e-9,
+            "precondition: the tune landed on {dial}"
+        );
+        assert_eq!(
+            e.sideband_override().as_deref(),
+            pick,
+            "precondition: the pick is in force — otherwise the verdict is about AUTO"
+        );
+        e
+    }
+
+    /// Every case whose verdict is not `want`, named, so a red run lists all of them rather than
+    /// the first.
+    fn wrong_verdicts(class: &str, cases: &[(&str, f64, Option<&str>)], want: bool) -> Vec<String> {
+        cases
+            .iter()
+            .filter_map(|&(band, dial, pick)| {
+                let got = phone_at(class, band, dial, pick).tx_allowed();
+                (got != want).then(|| format!("{class} {band} {dial:.4} {pick:?}: allowed={got}"))
+            })
+            .collect()
+    }
+
+    /// Today's model, written out independently: the band CONVENTION's passband (LSB below
+    /// 10 MHz, USB from 30 m up), both edges inside a phone segment.
+    fn convention_allows(class: crate::settings::LicenseClass, dial: f64) -> bool {
+        let (lo, hi) = if dial < 10.0 {
+            (dial - SSB_BW_MHZ, dial)
+        } else {
+            (dial, dial + SSB_BW_MHZ)
+        };
+        let phone = crate::settings::OperatingMode::Phone;
+        crate::privileges::tx_allowed(class, lo, phone)
+            && crate::privileges::tx_allowed(class, hi, phone)
+    }
+
+    /// The US phone-segment boundaries from 160 m to 70 cm, as (band, edge MHz). Channelized 60 m
+    /// and the bands above 70 cm are not swept.
+    const PHONE_EDGES: &[(&str, f64)] = &[
+        ("160m", 1.800),
+        ("160m", 2.000),
+        ("80m", 3.600),
+        ("80m", 3.800),
+        ("80m", 4.000),
+        ("40m", 7.125),
+        ("40m", 7.175),
+        ("40m", 7.300),
+        ("20m", 14.150),
+        ("20m", 14.225),
+        ("20m", 14.350),
+        ("17m", 18.110),
+        ("17m", 18.168),
+        ("15m", 21.200),
+        ("15m", 21.275),
+        ("15m", 21.450),
+        ("12m", 24.930),
+        ("12m", 24.990),
+        ("10m", 28.300),
+        ("10m", 28.500),
+        ("10m", 29.700),
+        ("6m", 50.100),
+        ("6m", 54.000),
+        ("2m", 144.100),
+        ("2m", 148.000),
+        ("1.25m", 222.000),
+        ("1.25m", 225.000),
+        ("70cm", 420.000),
+        ("70cm", 450.000),
+    ];
+
+    /// One case of a sweep: the gate's verdict, the convention's, which case, and whether the rig
+    /// was commanded FM there.
+    struct Verdict {
+        got: bool,
+        want: bool,
+        case: String,
+        fm: bool,
+    }
+
+    /// Every edge in [`PHONE_EDGES`] ±6 kHz in 0.5 kHz steps for every US class, with `pick` in
+    /// force (re-asserted after each tune) and the station-wide `phone_mode` as given.
+    fn sweep(phone_mode: &str, pick: Option<&str>) -> Vec<Verdict> {
+        use crate::settings::LicenseClass;
+        let mut out = Vec::new();
+        for class in [
+            LicenseClass::Technician,
+            LicenseClass::General,
+            LicenseClass::Extra,
+        ] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.settings.license_class = class;
+            e.set_operating_mode("phone", false);
+            e.settings.phone_mode = phone_mode.into();
+            e.settings.rptr_shift = "simplex".into(); // the emission stays on the dial
+            for &(band, edge) in PHONE_EDGES {
+                for k in -12..=12 {
+                    let dial = edge + f64::from(k) * 0.0005;
+                    e.set_frequency(dial, band, if dial < 10.0 { "LSB" } else { "USB" });
+                    e.request_sideband_override(pick);
+                    assert_eq!(e.sideband_override().as_deref(), pick, "precondition");
+                    out.push(Verdict {
+                        got: e.tx_allowed(),
+                        want: convention_allows(class, dial),
+                        case: format!(
+                            "{class:?} {band} {dial:.4} {pick:?} phone_mode={phone_mode}"
+                        ),
+                        fm: e.rig_mode_effective() == "FM",
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// The cases whose verdict differs from the convention's, and how many the convention
+    /// allowed, refused, and saw commanded FM — so a sweep that proved nothing cannot pass as
+    /// one that did.
+    fn against_the_convention(v: &[Verdict]) -> (Vec<String>, usize, usize, usize) {
+        let wrong = v
+            .iter()
+            .filter(|v| v.got != v.want)
+            .map(|v| {
+                format!(
+                    "{}: allowed={}, the convention says {}",
+                    v.case, v.got, v.want
+                )
+            })
+            .collect();
+        let allowed = v.iter().filter(|v| v.want).count();
+        let fm = v.iter().filter(|v| v.fm).count();
+        (wrong, allowed, v.len() - allowed, fm)
+    }
+
+    /// ⭐ THE REPORTED CASE, AT THE TOP OF 40 M. A General's 40 m phone runs to the 7.300 band
+    /// edge. USB at 7.299 puts its voice passband ABOVE the dial — across the edge, out of the
+    /// amateur band — and that is what the rig is commanded. The gate judged the convention
+    /// (LSB), whose passband hangs safely below the dial, and said allowed.
+    #[test]
+    fn a_usb_pick_at_the_top_of_40m_is_refused_for_a_general() {
+        let e = phone_at("general", "40m", 7.299, Some("USB"));
+        assert_eq!(
+            e.rig_mode_effective(),
+            "USB",
+            "precondition: the radio is commanded USB"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "USB at 7.299 transmits 7.2990–7.3018 MHz, across the 7.300 band edge"
+        );
+    }
+
+    /// The mirror case, inside the band: a General's 20 m phone starts at 14.225. LSB at 14.226
+    /// hangs its passband down to 14.2232 — under the floor, where only an Extra may talk —
+    /// while the convention (USB) judged 14.2260–14.2288.
+    #[test]
+    fn an_lsb_pick_at_the_bottom_of_the_20m_general_segment_is_refused() {
+        let e = phone_at("general", "20m", 14.226, Some("LSB"));
+        assert_eq!(
+            e.rig_mode_effective(),
+            "LSB",
+            "precondition: the radio is commanded LSB"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "LSB at 14.226 transmits 14.2232–14.2260 MHz, under the 14.225 General phone floor"
+        );
+    }
+
+    /// What the operator SEES is the same refusal: the cockpit's 🔒 TX LOCKED reads
+    /// `radio.tx_allowed` off the snapshot, live PTT does not key, and a send that reports a
+    /// reason gives the usual outside-privileges one.
+    #[test]
+    fn the_refusal_reaches_the_lock_indicator_the_ptt_and_the_reason() {
+        let mut e = phone_at("general", "40m", 7.299, Some("USB"));
+        assert!(
+            e.tx_enabled(),
+            "precondition: entering Phone arms TX, so any refusal below is the licence's"
+        );
+        assert!(
+            !e.snapshot().radio.tx_allowed,
+            "the snapshot the cockpit's lock indicator reads must show the lock"
+        );
+        e.set_ptt(true);
+        assert!(!e.manual_ptt(), "live PTT must not key");
+        let why = e
+            .sstv_tx_gate()
+            .expect_err("an image send on the same dial must be refused");
+        assert!(
+            why.contains("outside your license privileges"),
+            "the usual reason, got: {why}"
+        );
+    }
+
+    /// An Extra, with the OTHER sideband picked at its own edges: the passband crosses the edge.
+    #[test]
+    fn an_extra_picking_the_other_sideband_at_an_edge_is_refused() {
+        let wrong = wrong_verdicts(
+            "extra",
+            &[
+                ("40m", 7.2990, Some("USB")), // 7.2990–7.3018: across the 7.300 band edge
+                ("20m", 14.1510, Some("LSB")), // 14.1482–14.1510: under the 14.150 Extra floor
+            ],
+            false,
+        );
+        assert!(wrong.is_empty(), "must be refused: {wrong:#?}");
+    }
+
+    /// The guard the other way round: an Extra keeps both 40 m and both 20 m phone edges when the
+    /// pick is the band's own sideband, or AUTO. This fix must not cost a legal dial.
+    #[test]
+    fn an_extra_keeps_its_own_edges_with_the_bands_own_sideband() {
+        let wrong = wrong_verdicts(
+            "extra",
+            &[
+                ("40m", 7.1280, Some("LSB")), // 7.1252–7.1280: just clear of the 7.125 floor
+                ("40m", 7.1280, None),
+                ("40m", 7.2990, Some("LSB")), // 7.2962–7.2990: under the band edge
+                ("40m", 7.2990, None),
+                ("20m", 14.1500, Some("USB")), // 14.1500–14.1528: ON the 14.150 floor
+                ("20m", 14.1500, None),
+                ("20m", 14.3470, Some("USB")), // 14.3470–14.3498: under the band edge
+                ("20m", 14.3470, None),
+            ],
+            true,
+        );
+        assert!(wrong.is_empty(), "must stay keyable: {wrong:#?}");
+    }
+
+    /// A General on the band's own side mid-segment, and a pick of either side well inside the
+    /// segment, all stay keyable — the pick itself is not what gets refused.
+    #[test]
+    fn a_pick_well_inside_the_segment_stays_keyable() {
+        let wrong = wrong_verdicts(
+            "general",
+            &[
+                ("40m", 7.2000, Some("LSB")),
+                ("40m", 7.2000, None),
+                ("40m", 7.2500, Some("USB")), // 7.2500–7.2528: the other side, nowhere near an edge
+                ("20m", 14.3000, Some("USB")),
+                ("20m", 14.3000, None),
+                ("20m", 14.3000, Some("LSB")), // 14.2972–14.3000
+            ],
+            true,
+        );
+        assert!(wrong.is_empty(), "must stay keyable: {wrong:#?}");
+    }
+
+    /// With NO pick the gate is exactly what it was, at every swept phone edge, for every US
+    /// class — on SSB, and on the station-wide FM policy that commands FM at 29 MHz and up.
+    #[test]
+    fn with_no_pick_every_phone_verdict_is_what_it_was() {
+        for phone_mode in ["ssb", "fm"] {
+            let (wrong, allowed, refused, fm) = against_the_convention(&sweep(phone_mode, None));
+            assert!(wrong.is_empty(), "a verdict moved with no pick: {wrong:#?}");
+            assert!(
+                allowed > 100 && refused > 100,
+                "the sweep must straddle the edges: {allowed} allowed, {refused} refused"
+            );
+            if phone_mode == "fm" {
+                assert!(fm > 100, "the FM policy must actually command FM: {fm}");
+            }
+        }
+    }
+
+    /// `Open` (no US class) is never refused by a pick: the lockout is operator-declared.
+    #[test]
+    fn open_is_never_refused_whatever_the_pick() {
+        let cases: Vec<(&str, f64, Option<&str>)> = [
+            ("40m", 7.299),
+            ("40m", 7.176),
+            ("20m", 14.226),
+            ("20m", 14.349),
+            ("10m", 29.699),
+            ("2m", 144.100),
+        ]
+        .into_iter()
+        .flat_map(|(band, dial)| {
+            [None, Some("USB"), Some("LSB"), Some("FM"), Some("AM")]
+                .into_iter()
+                .map(move |pick| (band, dial, pick))
+        })
+        .collect();
+        let wrong = wrong_verdicts("open", &cases, true);
+        assert!(wrong.is_empty(), "Open must never be refused: {wrong:#?}");
+    }
+
+    /// AM is the carrier plus BOTH sidebands of the same voice audio — two SSB passbands at
+    /// once — so either sideband crossing an edge refuses it.
+    #[test]
+    fn an_am_pick_is_judged_on_both_sidebands() {
+        let wrong = wrong_verdicts(
+            "general",
+            &[
+                ("40m", 7.2990, Some("AM")), // upper sideband to 7.3018: across the band edge
+                ("20m", 14.2260, Some("AM")), // lower sideband to 14.2232: under the General floor
+                ("40m", 7.1760, Some("AM")), // lower sideband to 7.1732: under the 7.175 floor
+            ],
+            false,
+        );
+        assert!(wrong.is_empty(), "must be refused: {wrong:#?}");
+    }
+
+    /// …and AM clear of the edges stays keyable: the 80 m and 20 m AM calling frequencies.
+    #[test]
+    fn an_am_pick_clear_of_the_edges_stays_keyable() {
+        let wrong = wrong_verdicts(
+            "general",
+            &[("80m", 3.8850, Some("AM")), ("20m", 14.2860, Some("AM"))],
+            true,
+        );
+        assert!(wrong.is_empty(), "must stay keyable: {wrong:#?}");
+    }
+
+    /// ⚠️ FM HAS NO WIDTH MODEL, so an FM pick is judged exactly as the band convention judged
+    /// it before — never less, and nothing new refused on a width the gate cannot know. An FM
+    /// signal's width is set by its deviation, which Nexus does not know (`repeater_tune`
+    /// records the same decision). Pinned across every edge in [`PHONE_EDGES`], both ways.
+    #[test]
+    fn an_fm_pick_is_judged_as_the_band_convention_judged_it() {
+        let (wrong, allowed, refused, fm) = against_the_convention(&sweep("ssb", Some("FM")));
+        assert!(wrong.is_empty(), "an FM pick moved a verdict: {wrong:#?}");
+        assert!(
+            allowed > 100 && refused > 100 && fm > 100,
+            "the sweep must straddle the edges with FM commanded: {allowed}/{refused}/{fm}"
+        );
+    }
+
+    /// ⛔ NEVER LESS. Whatever is picked, nothing the band convention refused is unlocked: the
+    /// gate may only ever refuse MORE than it did before it knew the pick. Swept across every
+    /// phone edge in [`PHONE_EDGES`], for every US class and every pick.
+    #[test]
+    fn no_pick_unlocks_a_dial_the_convention_refused() {
+        for pick in ["USB", "LSB", "AM", "FM"] {
+            let verdicts = sweep("ssb", Some(pick));
+            let unlocked: Vec<&str> = verdicts
+                .iter()
+                .filter(|v| v.got && !v.want)
+                .map(|v| v.case.as_str())
+                .collect();
+            assert!(unlocked.is_empty(), "{pick} unlocked: {unlocked:#?}");
+            let refused = verdicts.iter().filter(|v| !v.want).count();
+            assert!(
+                refused > 100,
+                "{pick}: the sweep must reach dials the convention refuses: {refused}"
+            );
+        }
+    }
+
+    /// The split + XIT branch judges TWO carriers — whether a rig adds XIT on top of split is
+    /// per-rig — and both must be judged in the mode actually picked. Here the carrier only that
+    /// branch looks at (the split TX without the clarifier) is the one the USB pick carries
+    /// across the band edge; the emission itself is legal.
+    #[test]
+    fn the_split_and_xit_branch_judges_both_carriers_in_the_picked_mode() {
+        let scene = |split_hz: u64| {
+            let mut e = phone_at("general", "40m", 7.250, Some("USB"));
+            e.rig_split_applied(split_hz);
+            e.request_xit(-4_000);
+            e
+        };
+        // Control: both carriers clear of the edge in USB (7.2920 and 7.2960).
+        let ok = scene(7_296_000);
+        assert!(
+            (ok.tx_emission_mhz() - 7.292).abs() < 1e-9,
+            "precondition: the emission is split + XIT"
+        );
+        assert!(
+            ok.tx_allowed(),
+            "control: both USB carriers are inside the segment"
+        );
+
+        let e = scene(7_299_000);
+        assert!(
+            (e.tx_emission_mhz() - 7.295).abs() < 1e-9,
+            "precondition: the emission (7.2950 USB) is itself legal"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "the split TX without XIT is 7.2990 USB, across the 7.300 band edge"
+        );
+    }
+}
+
 #[cfg(test)]
 mod stalled_qso_log_tests {
     use super::tests::dec_snr;
@@ -50332,6 +51333,235 @@ mod private_note_boundary_tests {
         assert_carried(
             "the DXKeeper ExternalLog message",
             &tempo_net::dxkeeper::build_externallog(&own, false),
+        );
+    }
+}
+
+/// ⛔ The FT hard gate on `log_qso`'s duplicate guard (operator yes 2026-09-19): the guard became
+/// an index lookup, with the behaviour IDENTICAL. These pin the ENGINE's behaviour around it —
+/// what a duplicate does and does not touch, and that every accept/reject matches the old scan —
+/// while `tempo_core::logbook::dedup`'s property test holds the index to the scan over every
+/// kind of change to the log.
+#[cfg(test)]
+mod dedup_gate_tests {
+    use super::*;
+
+    /// THE OLD GUARD, VERBATIM — the expression `log_qso_inner` ran before the index, kept here
+    /// as the oracle so the comparison is against the code that shipped, not a restatement.
+    fn old_scan(e: &Engine, rec: &QsoRecord) -> bool {
+        const DEDUP_WINDOW_SECS: u64 = 300;
+        e.station.logbook.records().iter().any(|r| {
+            tempo_core::message::same_call(&r.call, &rec.call)
+                && r.band.eq_ignore_ascii_case(&rec.band)
+                && r.mode.eq_ignore_ascii_case(&rec.mode)
+                && rec.when_unix.abs_diff(r.when_unix) <= DEDUP_WINDOW_SECS
+        })
+    }
+
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+        fn pick<T: Copy>(&mut self, xs: &[T]) -> T {
+            xs[self.below(xs.len())]
+        }
+    }
+
+    const T0: u64 = 1_788_000_000;
+
+    fn contact(g: &mut Gen) -> QsoRecord {
+        let call = g.pick(&[
+            "W1AW",
+            "w1aw",
+            "W1AW/P",
+            "KH6/W1AW",
+            "<W1AW>",
+            "K1ABC",
+            "k1abc/mm",
+            "VP2E/AA9A",
+            "AA9A",
+            "DL1ZZZ",
+        ]);
+        let band = g.pick(&["20m", "20M", "40m", "2m"]);
+        let mode = g.pick(&["FT8", "ft8", "FT4", "CW"]);
+        let dt = g.pick(&[0i64, 120, 299, 300, 301, -300, -301, 900, -2000]);
+        let mut r = QsoRecord {
+            id: None,
+            call: call.into(),
+            grid: None,
+            country: None,
+            state: None,
+            band: band.into(),
+            freq_mhz: 14.074,
+            freq_rx_mhz: None,
+            mode: mode.into(),
+            rst_sent: Some("-10".into()),
+            rst_rcvd: Some("-12".into()),
+            name: None,
+            qth: None,
+            comment: None,
+            notes: None,
+            tx_power: None,
+            when_unix: (T0 as i64 + dt) as u64,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: vec![],
+            credit_submitted: vec![],
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            my_grid: None,
+            my_rig: None,
+            station_callsign: None,
+            extra: Vec::new(),
+            contest: None,
+        };
+        r.when_unix += g.below(3) as u64; // a little jitter off the edges too
+        r
+    }
+
+    /// ★ Every accept/reject `log_qso` makes is the one the OLD SCAN would have made, across a
+    /// long interleaving of logged contacts with every other change the engine makes to the log
+    /// (edits that move a row's keys, deletes, imports, stamps, card marks, the purge) — and a
+    /// duplicate touches exactly what it always touched: nothing in the log, no upload queued,
+    /// the pending hunt kept for the real contact; the logged-tick moves and the stalled-contact
+    /// stash clears, as they did before the check, because they come first in `log_qso`.
+    #[test]
+    fn log_qso_rejects_exactly_what_the_old_scan_rejected() {
+        for seed in [7u64, 11, 0xC0FF_EE00, 0x5EED] {
+            let mut g = Gen(seed);
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            let mut dups = 0;
+            let mut accepted = 0;
+            for step in 0..400 {
+                let n = e.station.logbook.len();
+                match g.below(10) {
+                    0 if n > 0 => {
+                        let i = g.below(n);
+                        let mut r = QsoRecord::clone(&e.station.logbook.records()[i]);
+                        r.call = g.pick(&["W1AW", "K1ABC", "N0NEW"]).into();
+                        r.band = g.pick(&["20m", "40m"]).into();
+                        e.update_qso(i, r);
+                    }
+                    1 if n > 0 => {
+                        e.delete_qso(g.below(n));
+                    }
+                    2 => {
+                        let c = contact(&mut g);
+                        let mut t = tempo_core::logbook::adif_header();
+                        t.push_str(&tempo_core::logbook::adif_record_own_log(&c));
+                        e.import_adif(&t);
+                    }
+                    3 if n > 0 => {
+                        e.mark_qsl_card(g.below(n), true);
+                    }
+                    4 if n > 0 => {
+                        let r = QsoRecord::clone(&e.station.logbook.records()[g.below(n)]);
+                        e.stamp_qrz_upload(
+                            &r,
+                            tempo_core::logbook::UploadOutcome::Accepted,
+                            1,
+                            None,
+                        );
+                    }
+                    5 if g.below(40) == 0 => {
+                        e.clear_logbook();
+                    }
+                    _ => {
+                        let rec = contact(&mut g);
+                        let expected = old_scan(&e, &rec);
+                        let hunt = e.station.pending_hunt.clone();
+                        let (len, uploads, tick) = (
+                            e.station.logbook.len(),
+                            e.station.pending_uploads.len(),
+                            e.logged_tick,
+                        );
+                        e.stalled_qso = Some(StalledQso {
+                            dxcall: "N0STALL".into(),
+                            dxgrid: None,
+                            rx_report: Some(-5),
+                            tx_report: None,
+                            start_unix: None,
+                        });
+                        let got =
+                            matches!(e.log_qso_for_sync(rec.clone()), LogWriteOutcome::Duplicate);
+                        assert_eq!(
+                            got, expected,
+                            "seed {seed:#x} step {step}: {} {} {} @{} — the index disagrees with \
+                             the old scan",
+                            rec.call, rec.band, rec.mode, rec.when_unix
+                        );
+                        assert_eq!(e.logged_tick, tick.wrapping_add(1), "the tick moves first");
+                        assert!(e.stalled_qso.is_none(), "the stash clears first, as before");
+                        if got {
+                            dups += 1;
+                            assert_eq!(e.station.logbook.len(), len, "a duplicate adds nothing");
+                            assert_eq!(e.station.pending_uploads.len(), uploads, "nor queues");
+                            assert_eq!(e.station.pending_hunt, hunt, "nor spends the hunt");
+                        } else {
+                            accepted += 1;
+                            assert_eq!(e.station.logbook.len(), len + 1);
+                        }
+                    }
+                }
+            }
+            assert!(
+                dups > 20 && accepted > 20,
+                "seed {seed:#x}: both answers exercised ({dups} dups, {accepted} accepted)"
+            );
+        }
+    }
+
+    /// The order the gate protects: the duplicate check comes BEFORE the hunt is spent, so a
+    /// duplicate of the hunted station leaves the hunt for the real contact.
+    #[test]
+    fn a_duplicate_does_not_spend_the_pending_hunt() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let mut g = Gen(3);
+        let mut first = contact(&mut g);
+        first.call = "K1ABC".into();
+        e.log_qso(first.clone());
+        e.set_hunt_target("K1ABC", "POTA", "US-0001").expect("hunt");
+        let hunt = e.station.pending_hunt.clone();
+        assert!(matches!(
+            e.log_qso_for_sync(first.clone()),
+            LogWriteOutcome::Duplicate
+        ));
+        assert_eq!(e.station.pending_hunt, hunt, "the hunt is still pending");
+        let mut real = first;
+        real.when_unix += 3_600;
+        assert!(!matches!(
+            e.log_qso_for_sync(real),
+            LogWriteOutcome::Duplicate
+        ));
+        assert!(
+            e.station.pending_hunt.is_none(),
+            "and the real contact spends it"
+        );
+        assert_eq!(
+            e.station
+                .logbook
+                .records()
+                .last()
+                .unwrap()
+                .ota
+                .their_ref
+                .as_deref(),
+            Some("US-0001")
         );
     }
 }

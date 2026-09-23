@@ -136,7 +136,7 @@ When the FD workspace is open and a digital contact is in progress, the TempoFas
 
 Entering Field Day from the nav always starts in **Search-and-Pounce**. Switch to Running via the button pair in the FieldDay header.
 
-The WSJT-X UDP `Status` message sets `special_op = 3` (Field Day) while FD mode is active. JTAlert and GridTracker will automatically activate their FD-specific behavior without any configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
+The WSJT-X UDP `Status` message sets `special_op = 3` (Field Day) while FD mode is active. Once the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker will automatically activate their FD-specific behavior without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
 
 ### CW
 

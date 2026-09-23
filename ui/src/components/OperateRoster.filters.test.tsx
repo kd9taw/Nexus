@@ -238,3 +238,103 @@ describe('Hide worked and the Needed board agree about a park activator', () => 
     }
   })
 })
+
+// ── #350: a confirmation already on its way is not a reason to keep a row ────────────────
+//
+// Operator report: "Needed only" and "Hide worked" still showed the station he had just worked.
+// The row survived on its LoTW chip. A fresh contact is unconfirmed, so the backend's Confirm
+// tier tags that slot at once — deliberately (needalert.rs pins it: a worked-but-unconfirmed
+// row "must NOT be 'fixed'"), and the chip stays. What changes is only what the two FILTERS
+// count: with the station already worked on this band, another contact with them cannot
+// confirm anything the first one will not, so a need that is ONLY that confirmation stops
+// holding the row on the list.
+//
+// The controls matter as much as the case: a Confirm on a station NOT worked on this band is
+// still a slot a contact here can confirm, and any real chase need (a park, a state) riding
+// beside the Confirm keeps the row exactly as before.
+describe('the filters and a need that is only a confirmation (#350)', () => {
+  const confirmAlert = (call: string, tags: NeedTag[]): NeedAlert => ({
+    call,
+    entity: 'United States',
+    band: '20m',
+    zone: 4,
+    tags,
+    priority: NEED_TIER[tags[0]],
+    headline: '',
+    mode: 'FT8',
+    freqMhz: 14.074,
+  })
+
+  const ROWS = [
+    // Worked on THIS band a moment ago; all the backend still says is "confirm it".
+    station('JUSTWORKED1', { worked: true, workedBand: true }),
+    // Worked, but on another band: here the same Confirm is a 20 m slot a contact can confirm.
+    station('OTHERBAND1', { worked: true, workedBand: false }),
+    // Never worked: the Confirm is a slot somebody else filled, which this station can confirm.
+    station('NEVERWORKED1'),
+    // Worked on this band, but at a park not yet worked in the activation running now.
+    station('PARKTOO1', { worked: true, workedBand: true }),
+    // Worked on this band, and still a new state here.
+    station('STATETOO1', { worked: true, workedBand: true }),
+  ]
+  const ALERTS = new Map<string, NeedAlert[]>([
+    ['JUSTWORKED1', [confirmAlert('JUSTWORKED1', ['Confirm'])]],
+    ['OTHERBAND1', [confirmAlert('OTHERBAND1', ['Confirm'])]],
+    ['NEVERWORKED1', [confirmAlert('NEVERWORKED1', ['Confirm'])]],
+    ['PARKTOO1', [confirmAlert('PARKTOO1', ['NewPark', 'Confirm', 'Pota'])]],
+    ['STATETOO1', [confirmAlert('STATETOO1', ['NewState', 'Confirm'])]],
+  ])
+
+  function mountWith(filters: { neededOnly: boolean; hideWorked: boolean }) {
+    localStorage.setItem(ROSTER_FILTER_KEY, JSON.stringify({ ...filters, hideBlocked: false }))
+    return render(
+      <OperateRoster
+        stations={ROWS}
+        myGrid="EN52"
+        currentSlot={SLOT}
+        needByCall={new Map()}
+        needAlertsByCall={ALERTS}
+        band="20m"
+        feedMode="FT8"
+        selectedCall={null}
+        onSelect={() => {}}
+        onCall={() => {}}
+      />,
+    )
+  }
+
+  const shown = (call: string) => screen.queryByText(call) != null
+
+  it('Hide worked hides a station worked on this band whose only need is the confirmation', () => {
+    mountWith({ neededOnly: false, hideWorked: true })
+    expect(shown('JUSTWORKED1'), 'the station just worked is still on the list').toBe(false)
+  })
+
+  it('Needed only hides it too', () => {
+    mountWith({ neededOnly: true, hideWorked: false })
+    expect(shown('JUSTWORKED1'), 'the station just worked is still on the list').toBe(false)
+  })
+
+  it('keeps the same confirmation when the station was worked on another band', () => {
+    mountWith({ neededOnly: true, hideWorked: true })
+    expect(shown('OTHERBAND1')).toBe(true)
+  })
+
+  it('keeps a confirmation on a station never worked', () => {
+    mountWith({ neededOnly: true, hideWorked: true })
+    expect(shown('NEVERWORKED1')).toBe(true)
+  })
+
+  it('keeps a station worked on this band that still has a real need beside the confirmation', () => {
+    mountWith({ neededOnly: true, hideWorked: true })
+    expect(shown('PARKTOO1'), 'a park not yet worked in this activation').toBe(true)
+    expect(shown('STATETOO1'), 'a new state').toBe(true)
+  })
+
+  it('with the filters off, the station just worked still wears its LoTW chip', () => {
+    mountWith({ neededOnly: false, hideWorked: false })
+    const row = screen.getByText('JUSTWORKED1').closest('[role="row"]') as HTMLElement
+    expect(row, 'the row is on the list').not.toBeNull()
+    expect(row.querySelector('.need-chip.need-confirm')?.textContent).toBe('LoTW')
+  })
+})

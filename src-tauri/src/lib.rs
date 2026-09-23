@@ -1853,12 +1853,21 @@ fn validate_data_dir_target(
     Ok(resolved)
 }
 
-/// The data files a copy carries: the logbook, the refreshed tables beside it, and the Winlink
-/// mailbox tree. Relative to `from`, and only what exists.
+/// The data files a copy carries BYTE FOR BYTE: the logbook's own files, the refreshed tables
+/// beside it, and the Winlink mailbox tree. Relative to `from`, and only what exists.
+///
+/// The logbook's files are not listed here: they come from `Logbook::data_files`, the one list
+/// of what the logbook writes (the log, its anchor, the pre-conversion copy, the backup ring).
+/// A second, hand-kept list here knew only `log.adi`, so every other file the log depends on
+/// stayed behind on a move. The logbook DATABASE is deliberately not in this list — see
+/// [`data_dir_database`].
 fn data_dir_entries(from: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
+    let mut out: Vec<PathBuf> = tempo_core::logbook::Logbook::data_files(&from.join(LOG_FILE_NAME))
+        .files
+        .into_iter()
+        .filter_map(|p| p.strip_prefix(from).ok().map(Path::to_path_buf))
+        .collect();
     for name in [
-        "log.adi",
         "cty.dat",
         "cty.meta.json",
         "fcc-states.bin",
@@ -1890,6 +1899,16 @@ fn data_dir_entries(from: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// The logbook database a copy carries, relative to `from` — copied THROUGH SQLite, never byte
+/// for byte (see `tempo_core::logbook::sqlite::copy_database`): a committed contact can still be
+/// in its `-wal` file, and a live database cannot be copied file by file. Its `-wal` and `-shm`
+/// are therefore in neither list; the copy is one self-contained file with the WAL folded in.
+fn data_dir_database(from: &Path) -> Option<PathBuf> {
+    tempo_core::logbook::Logbook::data_files(&from.join(LOG_FILE_NAME))
+        .database
+        .and_then(|p| p.strip_prefix(from).ok().map(Path::to_path_buf))
+}
+
 /// What a verified copy carried.
 #[derive(serde::Serialize, Clone, Copy, Default, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1901,7 +1920,11 @@ struct DataCopyReport {
 /// Copy the data files from `from` to `to` and VERIFY each one byte for byte. Never deletes or
 /// modifies anything under `from`. Any failure — copy or verify — returns Err, and the caller
 /// must then leave the pointer alone: a half-copied folder must not become the live one.
-fn copy_data_dir_verified(from: &Path, to: &Path) -> Result<DataCopyReport, String> {
+fn copy_data_dir_verified(
+    from: &Path,
+    to: &Path,
+    live: Option<&tempo_core::logbook::writer::LogWriter>,
+) -> Result<DataCopyReport, String> {
     let mut report = DataCopyReport::default();
     for rel in data_dir_entries(from) {
         let src = from.join(&rel);
@@ -1924,8 +1947,35 @@ fn copy_data_dir_verified(from: &Path, to: &Path) -> Result<DataCopyReport, Stri
         report.files += 1;
         report.bytes += a.len() as u64;
     }
+    if let Some(rel) = data_dir_database(from) {
+        // Proved inside the copy itself (SQLite's integrity check, then every row compared with
+        // the original in one read transaction) — a byte compare is exactly what cannot work
+        // here, because the copy is not the same bytes: it is the same DATABASE.
+        //
+        // `live` is the writer of the database open in THIS process — the one in `from` — and
+        // the copy then runs on it: after every change submitted before the move, with none
+        // written while it runs. A copy taken beside it holds only what is already committed.
+        let (src, dst) = (from.join(&rel), to.join(&rel));
+        let copied = match live {
+            Some(writer) => writer.copy_database(&dst, LIVE_DATABASE_COPY_WAIT),
+            None => {
+                tempo_core::logbook::sqlite::copy_database(&src, &dst).map_err(|e| e.to_string())
+            }
+        };
+        let bytes = copied.map_err(|e| {
+            format!(
+                "Could not copy the logbook database {} — nothing was changed: {e}",
+                rel.display()
+            )
+        })?;
+        report.files += 1;
+        report.bytes += bytes;
+    }
     Ok(report)
 }
+
+/// How long a data-folder move waits for the open database's writer to copy it.
+const LIVE_DATABASE_COPY_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The policy behind `set_data_folder`, with every path handed in so a test can drive it.
 /// Returns the verified copy report (if one was asked for). The pointer is written LAST.
@@ -1936,6 +1986,7 @@ fn apply_data_folder(
     copy: bool,
     install_dir: Option<&Path>,
     mounts: Option<&str>,
+    live: Option<&tempo_core::logbook::writer::LogWriter>,
 ) -> Result<DataCopyReport, String> {
     let resolved = validate_data_dir_target(target, install_dir, mounts)?;
     let same = resolved
@@ -1951,7 +2002,7 @@ fn apply_data_folder(
         );
     }
     let report = if copy && !same {
-        copy_data_dir_verified(current, &resolved)?
+        copy_data_dir_verified(current, &resolved, live)?
     } else {
         DataCopyReport::default()
     };
@@ -2023,7 +2074,11 @@ fn get_data_folder() -> DataFolderInfo {
 /// Choose the data folder (#289). `copy` carries the log and data across, verified, first.
 /// Takes effect at the next launch — see `shared_data_dir`.
 #[tauri::command(async)]
-fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
+fn set_data_folder(
+    state: State<'_, SharedEngine>,
+    path: String,
+    copy: bool,
+) -> Result<DataCopyReport, String> {
     if std::env::var_os("NEXUS_DATA_DIR")
         .filter(|s| !s.is_empty())
         .is_some()
@@ -2038,6 +2093,9 @@ fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
     let install = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    // The database in this folder is open in this process: its copy goes through its writer.
+    // Taken under the engine lock, used after it is released.
+    let live = engine_lock(&state).log_store_writer();
     apply_data_folder(
         &base,
         &shared_data_dir(),
@@ -2045,6 +2103,7 @@ fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
         copy,
         install.as_deref(),
         data_folder_location::mount_table().as_deref(),
+        live.as_deref(),
     )
 }
 
@@ -2084,6 +2143,1003 @@ async fn pick_data_folder(app: tauri::AppHandle) -> Option<String> {
         .flatten()
         .and_then(|p| p.into_path().ok())
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod durable_command_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A store-backed engine on a folder of the test's own, with `n` contacts.
+    pub(super) fn engine_on_store(tag: &str, n: usize) -> (PathBuf, SharedEngine) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-durable-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let mut adif = tempo_core::logbook::adif_header();
+        for i in 0..n {
+            let call = format!("K{i}DUR");
+            adif.push_str(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260901<TIME_ON:6>1200{:02}<EOR>\n",
+                call.len(),
+                i % 60
+            ));
+        }
+        std::fs::write(dir.join("log.adi"), adif).expect("log");
+        let opened = tempo_app::logstore::open(
+            &dir.join("log.adi"),
+            std::sync::Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+            None,
+        )
+        .expect("the store opens");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.attach_log_store(opened);
+        (dir, std::sync::Arc::new(std::sync::Mutex::new(e)))
+    }
+
+    /// The naive shape this replaces: the change and its wait run INSIDE the async task, so the
+    /// wait holds a runtime worker for as long as the disk takes. Kept only as the control.
+    async fn waits_on_the_worker<T>(
+        body: impl FnOnce() -> (Result<T, String>, tempo_app::logstore::Durability),
+    ) -> Result<T, String> {
+        let (out, durability) = body();
+        let out = out?;
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        Ok(out)
+    }
+
+    /// Does a lock-free command get a runtime worker within `budget` while `waits` log
+    /// commands are waiting on a stalled write? A task spawned on the runtime answers only if
+    /// some worker is free to run it.
+    fn lock_free_answers_while(naive: bool, budget: Duration) -> bool {
+        const WORKERS: usize = 2;
+        const WAITS: usize = 6; // more waiting commands than the runtime has workers
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(WORKERS)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (dir, engine) = engine_on_store(if naive { "naive" } else { "pool" }, 20);
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let hold = tempo_core::logbook::sqlite::WriteHold::take(&db).expect("stall the store");
+        let mut waits = Vec::new();
+        for i in 0..WAITS {
+            let engine = std::sync::Arc::clone(&engine);
+            let body = move || {
+                let mut eng = engine_lock(&engine);
+                eng.with_log_tickets(|eng| Ok::<bool, String>(eng.mark_qsl_card(i, true)))
+            };
+            waits.push(if naive {
+                rt.spawn(async move { waits_on_the_worker(body).await })
+            } else {
+                rt.spawn(async move { durable_command(body).await })
+            });
+        }
+        // Real time, on this thread: with every worker pinned the runtime's own timers cannot
+        // be relied on to fire, and the question is exactly whether a worker is free.
+        std::thread::sleep(Duration::from_millis(300));
+        let (tx, rx) = std::sync::mpsc::channel();
+        rt.spawn(async move {
+            let _ = tx.send("73");
+        });
+        let answered = rx.recv_timeout(budget).is_ok();
+        assert!(
+            waits.iter().all(|w| !w.is_finished()),
+            "premise: every log command is still waiting on the stalled store"
+        );
+        drop(hold);
+        // Everything completes once the store is released — nothing was lost to the stall.
+        rt.block_on(async {
+            for w in waits {
+                assert_eq!(
+                    w.await.expect("task"),
+                    Ok(true),
+                    "each command's change landed"
+                );
+            }
+        });
+        drop(rt);
+        let _ = std::fs::remove_dir_all(&dir);
+        answered
+    }
+
+    /// ★ PROPERTY 5, second half — NO WAIT MAY PIN A RUNTIME WORKER. More operator log
+    /// commands than the runtime has workers are waiting on a stalled store write, and a
+    /// command that needs no lock still gets a worker and answers at once.
+    ///
+    /// The control is the same scene with the waits run on the workers themselves (the shape
+    /// the commands had to avoid): the lock-free command does NOT answer. So the green half is
+    /// the blocking pool doing its job, not a runtime that happened to have a spare thread.
+    #[test]
+    fn a_lock_free_command_answers_while_more_waits_than_workers_are_pending() {
+        assert!(
+            !lock_free_answers_while(true, Duration::from_millis(500)),
+            "control: waits run on the workers starve the runtime"
+        );
+        assert!(
+            lock_free_answers_while(false, Duration::from_millis(500)),
+            "the waits are on the blocking pool, so the runtime keeps answering"
+        );
+    }
+
+    /// A command returns only once its change is on disk, and says so plainly when it is not:
+    /// the change is kept, and the words say that too.
+    #[test]
+    fn a_log_command_returns_after_its_change_is_on_disk() {
+        let (dir, engine) = engine_on_store("returns", 10);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let eng = std::sync::Arc::clone(&engine);
+        let marked = rt
+            .block_on(durable_command(move || {
+                let mut e = engine_lock(&eng);
+                e.with_log_tickets(|e| Ok::<bool, String>(e.mark_qsl_card(4, true)))
+            }))
+            .expect("durable");
+        assert!(marked);
+        // Read through a connection of the test's own: the change is already there.
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let id = engine_lock(&engine).log_records()[4].id;
+        let row = tempo_core::logbook::sqlite::LogDb::open(&db)
+            .and_then(|d| d.load_all())
+            .expect("read")
+            .into_iter()
+            .find(|r| r.id == id)
+            .expect("stored");
+        assert!(row.qsl_rcvd.card, "on disk when the command returned");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod lotw_batch_tests {
+    use super::durable_command_tests::engine_on_store;
+    use super::*;
+    use tempo_core::logbook::{QsoRecord, RecordId, UploadOutcome};
+
+    /// A store-backed engine with `n` signable contacts and a Station Location to sign with.
+    fn station(tag: &str, n: usize) -> (PathBuf, SharedEngine, Vec<RecordId>) {
+        let (dir, engine) = engine_on_store(tag, n);
+        let ids = {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.lotw_station_location = "Home".into();
+            eng.apply_settings(s);
+            eng.log_records()
+                .iter()
+                .map(|r| r.id.expect("a held row has an id"))
+                .collect()
+        };
+        (dir, engine, ids)
+    }
+
+    /// Each contact's LoTW outcome by id, as memory holds it and as the store does. `None` for
+    /// a contact the log no longer holds; `Some(None)` for one never stamped.
+    fn outcomes(
+        dir: &Path,
+        engine: &SharedEngine,
+        ids: &[RecordId],
+    ) -> [Vec<Option<Option<UploadOutcome>>>; 2] {
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let stored = tempo_core::logbook::sqlite::LogDb::open(&db)
+            .and_then(|d| d.load_all())
+            .expect("read the store");
+        let eng = engine_lock(engine);
+        let of = |rows: &mut dyn Iterator<Item = &QsoRecord>| {
+            let rows: Vec<&QsoRecord> = rows.collect();
+            ids.iter()
+                .map(|id| {
+                    rows.iter()
+                        .find(|r| r.id == Some(*id))
+                        .map(|r| r.upload.lotw.as_ref().map(|s| s.outcome))
+                })
+                .collect()
+        };
+        [
+            of(&mut eng.log_records().iter().map(|r| r.as_ref())),
+            of(&mut stored.iter()),
+        ]
+    }
+
+    fn skip_report() -> Vec<String> {
+        get_connection_log()
+            .into_iter()
+            .filter(|e| e.connector == "LoTW" && e.message.contains("changed while TQSL"))
+            .map(|e| format!("{}: {}", e.level, e.message))
+            .collect()
+    }
+
+    /// ★ PROPERTY 6 — A DELETE MID-BATCH STAMPS ONLY THE UPLOADED CONTACTS. The Awards buttons
+    /// upload a chosen set; here rows 0, 1 and 3, with row 2 — never uploaded — outside it.
+    /// While TQSL signs, the operator deletes row 0. Stamped by POSITION, the result lands on
+    /// the rows that slid up: row 2 is marked sent though LoTW never saw it (and so is never
+    /// offered again), and row 3, which was uploaded, is left unmarked. By id, exactly the
+    /// uploaded contacts still in the log carry it — in memory and on disk when the command
+    /// returns.
+    #[test]
+    fn a_contact_deleted_while_tqsl_runs_moves_no_stamp_onto_another() {
+        let (dir, engine, ids) = station("lotw-delete", 4);
+        let report = lotw_upload_batch_with(&engine, Some(vec![0, 1, 3]), true, |_, args| {
+            assert!(
+                std::fs::read_to_string(args.last().expect("the batch file"))
+                    .expect("TQSL can read it")
+                    .contains("K3DUR"),
+                "premise: TQSL is handed the batch"
+            );
+            assert!(
+                engine_lock(&engine).delete_qso(0),
+                "deleted while TQSL runs"
+            );
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (3, "pending"));
+        assert_eq!(
+            (report.skipped_edited, report.skipped_deleted),
+            (0, 1),
+            "the report counts the contact deleted while TQSL ran, for the screen"
+        );
+
+        let pending = Some(Some(UploadOutcome::Pending));
+        for (held, what) in outcomes(&dir, &engine, &ids)
+            .iter()
+            .zip(["memory", "store"])
+        {
+            assert_eq!(
+                held,
+                &vec![None, pending, Some(None), pending],
+                "{what}: the deleted contact is gone, row 2 — never uploaded — is unmarked, \
+                 and both uploaded contacts still in the log are marked"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A contact CORRECTED while TQSL signs is not the contact TQSL signed: LoTW holds the old
+    /// version. Marked sent, the correction would never be uploaded. So it is left unmarked —
+    /// offered again with the next upload, as it now stands — and the connection log says why.
+    #[test]
+    fn a_contact_edited_while_tqsl_runs_is_offered_again_not_stamped() {
+        let (dir, engine, ids) = station("lotw-edit", 4);
+        let report = lotw_upload_batch_with(&engine, None, true, |_, _| {
+            let mut eng = engine_lock(&engine);
+            let mut fixed = QsoRecord::clone(&eng.log_records()[1]);
+            fixed.call = "K1DUX".into();
+            assert!(eng.update_qso(1, fixed), "corrected while TQSL runs");
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (4, "pending"));
+        assert_eq!(
+            (report.skipped_edited, report.skipped_deleted),
+            (1, 0),
+            "the report counts the contact edited while TQSL ran, for the screen"
+        );
+
+        let pending = Some(Some(UploadOutcome::Pending));
+        for (held, what) in outcomes(&dir, &engine, &ids)
+            .iter()
+            .zip(["memory", "store"])
+        {
+            assert_eq!(
+                held,
+                &vec![pending, Some(None), pending, pending],
+                "{what}: every contact but the corrected one is marked"
+            );
+        }
+        assert!(
+            engine_lock(&engine).lotw_unsent_indices() == vec![1],
+            "the corrected contact is offered again"
+        );
+        assert!(
+            skip_report()
+                .iter()
+                .any(|l| l.starts_with("info: ") && l.contains("(1 edited, 0 deleted)")),
+            "the connection log says why it was not marked: {:?}",
+            skip_report()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod logbook_startup_tests {
+    use super::durable_command_tests::engine_on_store;
+    use super::*;
+    use std::time::{Duration, Instant};
+    use tempo_core::logbook::migrate::database_path;
+    use tempo_core::logbook::sqlite::{LogDb, WriteHold};
+
+    /// A folder of the test's own — created only when `contacts` is `Some`, holding a 1.13
+    /// `log.adi` of that many contacts.
+    fn folder(tag: &str, contacts: Option<usize>) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-startup-{tag}-{nanos}"));
+        if let Some(n) = contacts {
+            std::fs::create_dir_all(&dir).expect("scratch");
+            let mut adif = tempo_core::logbook::adif_header();
+            for i in 0..n {
+                let call = format!("K{i}LCH");
+                adif.push_str(&format!(
+                    "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260901<TIME_ON:6>1300{:02}<EOR>\n",
+                    call.len(),
+                    i % 60
+                ));
+            }
+            std::fs::write(dir.join("log.adi"), adif).expect("log");
+        }
+        dir
+    }
+
+    /// Every file under `dir`, with its bytes.
+    fn picture(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else {
+                    out.push((p.clone(), std::fs::read(&p).unwrap_or_default()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, &mut out);
+        out.sort();
+        out
+    }
+
+    /// The shipped launch, as `finish_launch` makes it: the database opened outside the engine
+    /// lock, then — the resolvers set — adopted. `places` is whether this launch's country table
+    /// can place the log's calls: a newer cty.dat places calls an older one could not.
+    fn launch(log: &Path, network: Option<String>, places: bool) -> Engine {
+        let opened = open_logbook_store(log, network, &mut |_| {});
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(move |call| places.then(|| format!("Entity of {call}")));
+        adopt_logbook(&mut e, log, opened);
+        e
+    }
+
+    /// ★ PROPERTY 7 AT THE SHIPPED LAUNCH. The first launch converts the operator's `log.adi`
+    /// and hands the log to the database; the launches after write nothing — though their
+    /// country table, newer than the first launch's, fills every row in memory. (On the 1.13
+    /// path that fill rewrote the whole log at launch.)
+    ///
+    /// One file is allowed to move once: `log.adi.scrubbed`, the credential sweep's manifest of
+    /// the safety copies it has checked. The first launch's mirror write took a ring snapshot,
+    /// and the next launch sweeps that new copy and records it, as every launch after a save
+    /// that made a copy always has. A launch with nothing new to sweep writes nothing at all.
+    #[test]
+    fn the_launch_opens_the_store_and_the_next_launch_writes_nothing() {
+        let dir = folder("launch", Some(25));
+        let log = dir.join("log.adi");
+        {
+            let e = launch(&log, None, false);
+            assert!(
+                e.log_store_open(),
+                "the database owns the log: {:?}",
+                e.log_store_problem()
+            );
+            assert_eq!(e.log_records().len(), 25);
+            e.flush_log_store(Duration::from_secs(60)).expect("written");
+        }
+        assert!(database_path(&log).is_file(), "converted");
+        let again = || {
+            let e = launch(&log, None, true);
+            assert!(e.log_store_open());
+            assert!(
+                e.log_records().iter().all(|r| r.country.is_some()),
+                "premise: the backfill filled every row, in memory"
+            );
+            e.flush_log_store(Duration::from_secs(60)).expect("written");
+        };
+        let log_data = |p: Vec<(PathBuf, Vec<u8>)>| {
+            p.into_iter()
+                .filter(|(p, _)| !p.ends_with("log.adi.scrubbed"))
+                .collect::<Vec<_>>()
+        };
+        let before = picture(&dir);
+        again();
+        let settled = picture(&dir);
+        assert!(
+            log_data(settled.clone()) == log_data(before),
+            "the second launch wrote nothing but the sweep's manifest"
+        );
+        again();
+        assert!(
+            picture(&dir) == settled,
+            "a launch with nothing new to sweep writes nothing at all"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A data folder on network storage keeps the log in `log.adi` for the session — the 1.13
+    /// path, whole — says why, and no database is made there.
+    #[test]
+    fn a_network_folder_runs_the_session_on_log_adi_and_says_why() {
+        let dir = folder("network", Some(5));
+        let log = dir.join("log.adi");
+        let e = launch(&log, Some("an NFS share".into()), true);
+        assert!(!e.log_store_open());
+        assert_eq!(e.log_records().len(), 5, "the log is read from log.adi");
+        assert!(
+            e.log_store_problem().is_some_and(|p| p.contains("NFS")),
+            "and the reason is kept: {:?}",
+            e.log_store_problem()
+        );
+        let shown = e.snapshot().log_store_problem;
+        assert!(
+            shown
+                .as_ref()
+                .is_some_and(|p| p.network_folder && p.reason.contains("NFS")),
+            "and the snapshot carries it to the screen, as the folder's doing: {shown:?}"
+        );
+        assert!(!database_path(&log).exists(), "no database on a share");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A log the conversion cannot read one contact out of: the session runs on `log.adi`, and
+    /// the snapshot says why — a problem that is not the folder's, so the screen points at the
+    /// diagnostic log rather than at the data folder.
+    #[test]
+    fn a_store_that_will_not_open_puts_its_reason_in_the_snapshot() {
+        let dir = folder("unreadable", Some(0));
+        let log = dir.join("log.adi");
+        std::fs::write(
+            &log,
+            format!(
+                "{}\u{0}\u{1}not an adif file at all\n",
+                tempo_core::logbook::adif_header()
+            ),
+        )
+        .expect("log");
+        let e = launch(&log, None, true);
+        assert!(!e.log_store_open());
+        let shown = e.snapshot().log_store_problem;
+        assert!(
+            shown
+                .as_ref()
+                .is_some_and(|p| !p.network_folder && p.reason.contains("no readable contacts")),
+            "the snapshot says why, and it is not the folder: {shown:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh install has no data folder at all: the first launch starts on the database, and
+    /// writes no `log.adi` before there is a contact to put in it.
+    #[test]
+    fn a_fresh_install_starts_on_the_store() {
+        let dir = folder("fresh", None);
+        let log = dir.join("log.adi");
+        let e = launch(&log, None, true);
+        assert!(
+            e.log_store_open(),
+            "a fresh install starts on the database: {:?}",
+            e.log_store_problem()
+        );
+        assert_eq!(
+            e.snapshot().log_store_problem,
+            None,
+            "and the snapshot has nothing to show"
+        );
+        assert!(!log.exists(), "and makes no log.adi before a contact");
+        drop(e);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Quitting carries every change still on its way to disk before the process goes, and a
+    /// disk that will not take it costs the exit a bounded wait, never a hang.
+    #[test]
+    fn quitting_writes_what_is_on_its_way_and_never_hangs() {
+        let (dir, engine) = engine_on_store("quit", 10);
+        let db = database_path(&dir.join("log.adi"));
+        let id = engine_lock(&engine).log_records()[3].id;
+        let marked = || {
+            LogDb::open(&db)
+                .and_then(|d| d.load_all())
+                .expect("read")
+                .into_iter()
+                .find(|r| r.id == id)
+                .is_some_and(|r| r.qsl_rcvd.card)
+        };
+        let hold = WriteHold::take(&db).expect("stall the store");
+        assert!(
+            engine_lock(&engine).mark_qsl_card(3, true),
+            "not waited for"
+        );
+
+        let started = Instant::now();
+        flush_logbook(&engine, Duration::from_millis(300));
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "a stalled disk costs the exit its cap: {:?}",
+            started.elapsed()
+        );
+
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(hold);
+        });
+        flush_logbook(&engine, Duration::from_secs(60));
+        assert!(marked(), "on disk when the exit's flush returns");
+        release.join().expect("released");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ Moving the data folder while the database is open copies it THROUGH ITS WRITER: after
+    /// every change submitted before the move, and with none written while the copy runs.
+    ///
+    /// The control is a copy taken beside the writer: it holds only what is committed, so a
+    /// change still on its way to disk is missing from it — and the new folder would open
+    /// without it.
+    #[test]
+    fn moving_the_data_folder_carries_a_change_still_on_its_way_to_disk() {
+        let (dir, engine) = engine_on_store("move-live", 10);
+        let db = database_path(&dir.join("log.adi"));
+        let writer = engine_lock(&engine)
+            .log_store_writer()
+            .expect("the store is open");
+        let marked = |to: &Path, row: usize| {
+            let id = engine_lock(&engine).log_records()[row].id;
+            LogDb::open(&database_path(&to.join("log.adi")))
+                .and_then(|d| d.load_all())
+                .expect("the copy opens")
+                .into_iter()
+                .find(|r| r.id == id)
+                .is_some_and(|r| r.qsl_rcvd.card)
+        };
+
+        // The control: beside the writer, while a change waits on a stalled disk.
+        let hold = WriteHold::take(&db).expect("stall the store");
+        assert!(engine_lock(&engine).mark_qsl_card(3, true));
+        let beside = dir.with_extension("beside");
+        copy_data_dir_verified(&dir, &beside, None).expect("copied");
+        drop(hold);
+        assert!(
+            !marked(&beside, 3),
+            "control: a copy beside the writer misses the change on its way"
+        );
+
+        // Through the writer: another change, the same stall, released while the copy waits.
+        let hold = WriteHold::take(&db).expect("stall the store");
+        assert!(engine_lock(&engine).mark_qsl_card(4, true));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(hold);
+        });
+        let moved = dir.with_extension("moved");
+        copy_data_dir_verified(&dir, &moved, Some(&writer)).expect("copied");
+        release.join().expect("released");
+        assert!(marked(&moved, 4), "the change on its way is in the copy");
+        assert!(marked(&moved, 3), "and so is everything before it");
+        for d in [&dir, &beside, &moved] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    /// The body of the top-level function `sig` in this file.
+    fn body_of<'a>(src: &'a str, sig: &str) -> &'a str {
+        let start = src
+            .find(&format!("\n{sig}"))
+            .unwrap_or_else(|| panic!("{sig} is defined"));
+        let rest = &src[start + 1..];
+        &rest[..rest.find("\n}\n").expect("the end of the function")]
+    }
+
+    /// The three places the shipped app reaches the store are wired to it: the launch opens it
+    /// (and falls back to `log.adi` only through `adopt_logbook`), every exit path flushes it,
+    /// and a data-folder move copies it through its writer. Source-scanned, because what is
+    /// under test is which function `run()` and the commands call, and no type sees that.
+    #[test]
+    fn the_launch_every_exit_and_the_folder_move_reach_the_store() {
+        let src = include_str!("lib.rs");
+        let finish = body_of(src, "fn finish_launch(");
+        let start = body_of(src, "fn start_on_the_logbook(");
+        assert!(
+            finish.contains("open_logbook_store(&log, network,")
+                && finish.contains("start_on_the_logbook(&d, logbook_store, rest);")
+                && start.contains("adopt_logbook(&mut eng, &logbook_path(), logbook_store);"),
+            "the launch opens the store and hands it to the engine, whatever the open answered"
+        );
+        for (name, body) in [
+            ("run", body_of(src, "pub fn run() {")),
+            ("finish_launch", finish),
+            ("start_on_the_logbook", start),
+        ] {
+            assert!(
+                !body.contains("set_log_path("),
+                "the launch never opens log.adi directly ({name})"
+            );
+        }
+        assert!(
+            body_of(src, "fn persist_journals(").contains("flush_logbook("),
+            "the journals every exit path writes include the log"
+        );
+        assert!(
+            body_of(src, "fn set_data_folder(").contains("log_store_writer()"),
+            "a folder move copies the open store through its writer"
+        );
+    }
+
+    /// The window configuration, as `tauri.conf.json` declares it.
+    fn window_conf(label: &str) -> serde_json::Value {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        conf["app"]["windows"]
+            .as_array()
+            .expect("windows")
+            .iter()
+            .find(|w| w["label"] == label)
+            .unwrap_or_else(|| panic!("a `{label}` window is declared"))
+            .clone()
+    }
+
+    /// Where `needle` sits in `hay`, which must hold it.
+    fn at(hay: &str, needle: &str) -> usize {
+        hay.find(needle)
+            .unwrap_or_else(|| panic!("`{needle}` is there"))
+    }
+
+    /// ⛔ THE SPLASH IS UP BEFORE THE LOGBOOK CONVERTS. Tauri makes the configured windows — the
+    /// splash, and the hidden main window — inside `App::run`, before the setup hook runs; the
+    /// hook starts the launch's second half on a thread of its own, and only that half opens
+    /// (and on a first launch converts) the logbook. So `run()`, which is everything before the
+    /// event loop and so before any window, must open no logbook and start nothing that does.
+    /// Source-scanned, because what is under test is which side of `app.run` the code runs on,
+    /// and no type sees that; the diagnostic log's milestones show the same order at run time.
+    #[test]
+    fn the_splash_is_on_screen_before_the_logbook_converts() {
+        let src = include_str!("lib.rs");
+        let run = body_of(src, "pub fn run() {");
+        for starts_the_conversion in [
+            "open_logbook_store(",
+            "start_on_the_logbook(",
+            "finish_launch(",
+            "finish_launch_or_say_why(",
+        ] {
+            assert!(
+                !run.contains(starts_the_conversion),
+                "run() — all of it before any window exists — must not reach \
+                 `{starts_the_conversion}`"
+            );
+        }
+        let build = body_of(src, "fn build_app(");
+        let hook = &build[at(build, ".setup(move |app| {")..];
+        assert!(
+            hook.contains(".spawn(move || finish_launch_or_say_why(handle, launch, rest))"),
+            "the setup hook — which runs once the splash exists — starts the rest on its own thread"
+        );
+        let finish = body_of(src, "fn finish_launch(");
+        assert!(
+            at(finish, "splash_notes(&handle)") < at(finish, "open_logbook_store("),
+            "the splash is told about the conversion before it starts"
+        );
+        let splash = window_conf("splashscreen");
+        assert_ne!(
+            splash["create"], false,
+            "the splash is made by Tauri with the app"
+        );
+        assert_ne!(splash["visible"], false, "and is visible from the start");
+    }
+
+    /// ⛔ THE MAIN WINDOW IS NOT SHOWN, AND RUNS NOTHING, UNTIL THE LOG IS ATTACHED. It starts
+    /// hidden, on a page with no script — so no command reaches the engine from it — and the
+    /// launch sends it to the app and shows it only after the log is attached and the Remote
+    /// service (which reconnects by itself) is built.
+    #[test]
+    fn the_main_window_is_shown_only_once_the_log_is_attached() {
+        let main = window_conf("main");
+        assert_eq!(main["visible"], false, "the main window starts hidden");
+        assert_eq!(
+            main["url"], "blank.html",
+            "on the page it waits on, not the app"
+        );
+        let blank = include_str!("../../ui/public/blank.html");
+        assert!(
+            !blank.to_ascii_lowercase().contains("<script"),
+            "the page it waits on runs nothing"
+        );
+
+        let src = include_str!("lib.rs");
+        let finish = body_of(src, "fn finish_launch(");
+        let order = [
+            "start_on_the_logbook(&d, logbook_store, rest);",
+            "LAUNCH_ATTACHED.store(true",
+            "remote_service_for(",
+            "send_main_window_to_the_app(&handle)",
+            "main.show()",
+        ];
+        for pair in order.windows(2) {
+            assert!(
+                at(finish, pair[0]) < at(finish, pair[1]),
+                "`{}` comes before `{}`",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(
+            body_of(src, "fn start_on_the_logbook(")
+                .contains("adopt_logbook(&mut eng, &logbook_path(), logbook_store);"),
+            "and the second half attaches the log, whatever the open answered"
+        );
+        let build = body_of(src, "fn build_app(");
+        assert!(
+            !build.contains(".show()"),
+            "the setup hook no longer shows the main window on a timer"
+        );
+        assert!(
+            !build.contains("remote_service::Service::new(")
+                && !build.contains("remote_service_for("),
+            "the Remote service is not built with the app: it reconnects as it is built"
+        );
+    }
+
+    /// The main window is sent to the root beside the page it waits on — the address Tauri itself
+    /// loads for `index.html`, in a Windows build, a Linux or macOS build, and under the dev
+    /// server.
+    #[test]
+    fn the_main_window_is_sent_to_the_address_tauri_loads_the_app_at() {
+        for (waiting, app) in [
+            (
+                "http://tauri.localhost/blank.html",
+                "http://tauri.localhost/",
+            ),
+            ("tauri://localhost/blank.html", "tauri://localhost/"),
+            ("http://localhost:5173/blank.html", "http://localhost:5173/"),
+        ] {
+            let waiting = tauri::Url::parse(waiting).expect("url");
+            assert_eq!(
+                app_address(&waiting).map(|u| u.to_string()).as_deref(),
+                Some(app),
+                "from {waiting}"
+            );
+        }
+    }
+
+    /// ⛔ A SECOND LAUNCH DURING A CONVERSION STANDS DOWN, BEFORE IT DOES ANYTHING. Driven with a
+    /// real conversion held part way: `migrate_log` resolves each contact while it holds its
+    /// lock, so a resolver that waits keeps it converting for as long as the test needs.
+    #[test]
+    fn a_second_launch_during_a_conversion_stands_down_before_doing_anything() {
+        let dir = folder("second", Some(40));
+        let log = dir.join("log.adi");
+        assert!(
+            !converting_elsewhere(&log),
+            "control: nothing is converting"
+        );
+
+        let (reached, reached_rx) = std::sync::mpsc::channel::<()>();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let converting = std::thread::spawn({
+            let log = log.clone();
+            move || {
+                tempo_core::logbook::migrate::migrate_log(&log, &database_path(&log), move |_| {
+                    let _ = reached.send(());
+                    let _ = released.recv(); // until the test lets go; at once after that
+                    tempo_core::logbook::sqlite::Resolved::default()
+                })
+            }
+        });
+        reached_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the conversion reached its first contact, holding its lock");
+        assert!(
+            converting_elsewhere(&log),
+            "a launch now sees another window converting, and stands down"
+        );
+        drop(release);
+        converting
+            .join()
+            .expect("joined")
+            .expect("the conversion completes");
+        assert!(
+            !converting_elsewhere(&log),
+            "once it is done, a launch goes ahead"
+        );
+
+        // …and asking comes before this launch does anything at all.
+        let src = include_str!("lib.rs");
+        let run = body_of(src, "pub fn run() {");
+        let gate = at(run, "if converting_elsewhere(&logbook_path()) {");
+        assert!(
+            run[gate..].starts_with(
+                "if converting_elsewhere(&logbook_path()) {\n        \
+                 stand_down_for_a_conversion_elsewhere();\n        return;\n    }"
+            ),
+            "and standing down returns before anything else runs"
+        );
+        for first_side_effect in [
+            "hold_profile_lock(",
+            "Settings::load(",
+            "settings.save(",
+            "start_cluster_feeds(",
+            "start_pskr_feed(",
+            "sync_rotctld(",
+            "build_app(",
+        ] {
+            assert!(
+                gate < at(run, first_side_effect),
+                "the stand-down comes before `{first_side_effect}`"
+            );
+        }
+        let finish = body_of(src, "fn finish_launch(");
+        assert!(
+            at(finish, "if converting_elsewhere(&log) {") < at(finish, "open_logbook_store("),
+            "and it is asked again right before this launch would convert"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ A QUIT BEFORE THE LOG IS ATTACHED WRITES NO JOURNAL. The event loop now runs during a
+    /// first launch's conversion, so a quit can arrive while the engine still holds the empty
+    /// conversation list it was built with, and writing that would replace the operator's saved
+    /// history with nothing. The flag is raised only once the second half has read the journals
+    /// back.
+    #[test]
+    fn a_quit_before_the_log_is_attached_writes_no_journal() {
+        let src = include_str!("lib.rs");
+        let quit = body_of(src, "fn quit_cleanup(");
+        assert!(
+            quit.contains(
+                "    if attached {\n        persist_journals(app_handle);\n    } else {\n        \
+                 flush_logbook("
+            ),
+            "the journals are written only by a quit after the attach; the log is flushed on every one"
+        );
+        assert!(
+            quit.contains("if attached {\n        capture_all_window_geometry(app_handle);"),
+            "and the window box only then too"
+        );
+        assert_eq!(
+            quit.matches("persist_journals(").count(),
+            1,
+            "no other road to the journals"
+        );
+        let finish = body_of(src, "fn finish_launch(");
+        assert!(
+            at(finish, "start_on_the_logbook(") < at(finish, "LAUNCH_ATTACHED.store(true"),
+            "the flag is raised once the journals are back"
+        );
+    }
+
+    /// The fallback survives the move to the launch's second half: a database that cannot be
+    /// opened still runs the session on `log.adi`, whole, and a contact logged in it lands there.
+    /// Through the two calls the launch makes — `open_logbook_store`, with a progress sink as
+    /// `finish_launch` passes one, then `adopt_logbook`.
+    #[test]
+    fn a_database_that_will_not_open_still_runs_a_usable_session_on_log_adi() {
+        let dir = folder("fallback", Some(6));
+        let log = dir.join("log.adi");
+        // A directory where the database file must go: SQLite cannot create it.
+        std::fs::create_dir(database_path(&log)).expect("block the database");
+        let opened = open_logbook_store(&log, None, &mut |_| {});
+        assert!(opened.is_err(), "premise: the database would not open");
+
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        adopt_logbook(&mut e, &log, opened);
+        assert!(!e.log_store_open(), "the session is not on the database");
+        assert_eq!(
+            e.log_records().len(),
+            6,
+            "it holds the whole log, from log.adi"
+        );
+        let mut rec = (*e.log_records()[0]).clone();
+        rec.id = None;
+        rec.call = "W1NEW".into();
+        e.log_qso(rec);
+        assert!(
+            std::fs::read_to_string(&log)
+                .expect("log.adi")
+                .contains("W1NEW"),
+            "and a contact logged in it is written to log.adi"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The splash speaks of a conversion only on the launch that has one to do: a log and no
+    /// database marked converted beside it — including a conversion that was interrupted.
+    #[test]
+    fn the_splash_speaks_of_a_conversion_only_when_there_is_one() {
+        let fresh = folder("ahead-fresh", None);
+        assert!(
+            !conversion_ahead(&fresh.join("log.adi")),
+            "a fresh install has nothing to convert"
+        );
+
+        let dir = folder("ahead", Some(10));
+        let log = dir.join("log.adi");
+        assert!(
+            conversion_ahead(&log),
+            "a log from before the database is converted"
+        );
+        drop(LogDb::open(&database_path(&log)).expect("a store, never marked converted"));
+        assert!(
+            conversion_ahead(&log),
+            "so is one whose conversion was interrupted"
+        );
+        let e = launch(&log, None, true);
+        assert!(e.log_store_open(), "premise: this launch converted it");
+        e.flush_log_store(Duration::from_secs(60)).expect("written");
+        drop(e);
+        assert!(
+            !conversion_ahead(&log),
+            "and the launches after that are ordinary ones"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The splash page reads a note in exactly this shape — `ui/src/i18n/splash.test.ts` feeds
+    /// it these same two literals.
+    #[test]
+    fn the_splash_is_told_the_state_in_the_shape_its_page_reads() {
+        assert_eq!(
+            splash_script(&SplashNote::Converting {
+                done: 12,
+                total: 34
+            }),
+            r#"window.nexusSplash&&window.nexusSplash.show({"state":"converting","done":12,"total":34})"#
+        );
+        assert_eq!(
+            splash_script(&SplashNote::Opening),
+            r#"window.nexusSplash&&window.nexusSplash.show({"state":"opening"})"#
+        );
+    }
+
+    /// The relay hands the splash the NEWEST note at a bounded rate however fast the conversion
+    /// reports, sends it again while nothing new arrives (a note that reached the page before its
+    /// script loaded is otherwise lost), and always delivers the last one.
+    #[test]
+    fn the_splash_gets_the_newest_note_at_a_bounded_rate_and_always_the_last() {
+        let (notes, rx) = std::sync::mpsc::channel();
+        let relay = std::thread::spawn(move || {
+            let mut shown = Vec::new();
+            relay_splash_notes(rx, |js| shown.push(js.to_string()));
+            shown
+        });
+        for done in 0..=10_000 {
+            notes
+                .send(SplashNote::Converting {
+                    done,
+                    total: 10_000,
+                })
+                .expect("send");
+        }
+        std::thread::sleep(SPLASH_RESEND * 5); // nothing new: the newest goes again
+        notes.send(SplashNote::Opening).expect("send");
+        drop(notes);
+        let shown = relay
+            .join()
+            .expect("the relay ends when the channel closes");
+
+        assert!(
+            shown.len() <= 12,
+            "10,002 notes reach the page as a handful of calls, not one each: {}",
+            shown.len()
+        );
+        assert_eq!(
+            shown.last(),
+            Some(&splash_script(&SplashNote::Opening)),
+            "the last note always reaches the page"
+        );
+        let newest = splash_script(&SplashNote::Converting {
+            done: 10_000,
+            total: 10_000,
+        });
+        assert!(
+            shown.iter().filter(|s| **s == newest).count() >= 2,
+            "the newest note is sent again while nothing new arrives: {shown:?}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2152,7 +3208,8 @@ mod data_folder_tests {
             .map(|rel| (rel.clone(), std::fs::read(current.join(rel)).expect("read")))
             .collect();
 
-        let report = apply_data_folder(&base, &current, &target, true, None, None).expect("copy");
+        let report =
+            apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy");
         assert_eq!(report.files, 3, "log, table and the mailbox file");
         assert!(report.bytes > 0);
         for (rel, body) in &before {
@@ -2175,6 +3232,143 @@ mod data_folder_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A LIVE logbook database, as the running app holds it: the connection stays open, so the
+    /// contacts it committed are in `log.sqlite3-wal` and NOT yet in the main file — SQLite only
+    /// folds them in at a checkpoint. Returns the connection (keep it alive for the whole move)
+    /// and the records it holds, in the order the store will hand them back.
+    fn live_database(
+        dir: &Path,
+        n: usize,
+    ) -> (
+        tempo_core::logbook::sqlite::LogDb,
+        Vec<tempo_core::logbook::QsoRecord>,
+    ) {
+        use tempo_core::logbook::sqlite::{LogDb, Resolved};
+        let mut adif = tempo_core::logbook::adif_header();
+        for i in 0..n {
+            let call = format!("K{i}WAL");
+            adif.push_str(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20260901<TIME_ON:6>{:02}{:02}00<BAND:3>20m<MODE:3>FT8\
+                 <COMMENT:6>row{i:03}<EOR>\n",
+                call.len(),
+                i / 60 % 24,
+                i % 60
+            ));
+        }
+        let seed = dir.join("seed.adi");
+        write(&seed, adif.as_bytes());
+        let recs: Vec<_> = tempo_core::logbook::Logbook::load(&seed)
+            .records()
+            .iter()
+            .map(|r| r.as_ref().clone())
+            .collect();
+        let _ = std::fs::remove_file(&seed);
+        let _ = std::fs::remove_file(seed.with_extension("adi.bak"));
+        let _ = std::fs::remove_file(seed.with_extension("adi.scrubbed"));
+        let mut live = LogDb::open(&dir.join("log.sqlite3")).expect("open the live store");
+        live.insert_all(recs.iter().map(|r| (r, Resolved::default())))
+            .expect("commit the contacts");
+        (live, recs)
+    }
+
+    /// ⛔ MOVING THE DATA FOLDER MUST CARRY EVERY COMMITTED CONTACT IN A LIVE DATABASE.
+    ///
+    /// The log is a WAL-mode SQLite database. A contact the store has COMMITTED sits in the
+    /// `-wal` file until a checkpoint folds it into the main file, so the main file alone is
+    /// not the log — and `fs::copy`, file by file, cannot take a consistent picture of a
+    /// database another connection is writing. This drives the shipped "copy my log and data
+    /// there" action against a store that is OPEN, with its contacts in the WAL, and reads the
+    /// copy back through a fresh connection on the new folder.
+    #[test]
+    fn a_live_database_moves_with_every_committed_contact() {
+        use tempo_core::logbook::sqlite::LogDb;
+        const N: usize = 40;
+        let root = scratch("livedb");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
+        station(&current);
+        let (live, recs) = live_database(&current, N);
+        let db_name = "log.sqlite3";
+
+        // THE PREMISE, measured: the contacts are in the WAL and not in the main file. A copy
+        // of the main file ALONE opens as a database holding none of them.
+        let wal = current.join(format!("{db_name}-wal"));
+        assert!(
+            std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0) > 0,
+            "premise: the committed contacts are still in the -wal file"
+        );
+        let main_only = root.join("main-only");
+        std::fs::create_dir_all(&main_only).expect("control dir");
+        std::fs::copy(current.join(db_name), main_only.join(db_name)).expect("control copy");
+        let seen_by_main_file = LogDb::open(&main_only.join(db_name))
+            .and_then(|db| db.row_count())
+            .expect("control read");
+        assert_eq!(
+            seen_by_main_file, 0,
+            "control: the main file on its own holds none of the {N} contacts"
+        );
+
+        apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy");
+
+        let moved = LogDb::open(&target.join(db_name))
+            .and_then(|db| db.load_all())
+            .expect("the moved store opens");
+        assert_eq!(
+            moved.len(),
+            N,
+            "every committed contact moved with the folder (the store held {N})"
+        );
+        assert_eq!(
+            moved, recs,
+            "and they are the same contacts, in the same order"
+        );
+        assert_eq!(
+            live.row_count().expect("the original is still readable"),
+            N as u64,
+            "the original store is untouched"
+        );
+        drop(live);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The log's SAFETY COPIES move with it. The anchor (`log.adi.bak`, the bytes as first
+    /// loaded), the permanent pre-conversion copy (`log.adi.pre-sqlite`) and the dated backup
+    /// ring (`backups/`) are what an operator recovers from after a bad import, a purge or a
+    /// failed conversion — and the list this copy used to keep by hand knew only `log.adi`, so a
+    /// move left all three behind in the folder the app stops reading.
+    #[test]
+    fn the_logbooks_safety_copies_move_with_it() {
+        let root = scratch("safety");
+        let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
+        station(&current);
+        write(&current.join("log.adi.bak"), b"<CALL:5>W1AW <EOR>\n");
+        write(&current.join("log.adi.pre-sqlite"), b"<CALL:5>W1AW <EOR>\n");
+        write(
+            &current.join("backups/log-20260901-120000.adi"),
+            b"<CALL:5>W1AW <EOR>\n",
+        );
+        write(
+            &current.join("backups/log-20260902-120000-shrink.adi"),
+            b"<CALL:5>W1AW <EOR>\n<CALL:5>K1ABC <EOR>\n",
+        );
+
+        apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy");
+
+        for rel in [
+            "log.adi",
+            "log.adi.bak",
+            "log.adi.pre-sqlite",
+            "backups/log-20260901-120000.adi",
+            "backups/log-20260902-120000-shrink.adi",
+        ] {
+            assert_eq!(
+                std::fs::read(target.join(rel)).ok(),
+                std::fs::read(current.join(rel)).ok(),
+                "{rel} moved with the log, byte for byte"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_failed_copy_leaves_the_pointer_and_the_original_alone() {
         let root = scratch("failed");
@@ -2185,8 +3379,8 @@ mod data_folder_tests {
         // `log.adi` is a DIRECTORY in the target: the copy of the one irreplaceable file fails.
         std::fs::create_dir_all(target.join("log.adi")).expect("blocker");
 
-        let err =
-            apply_data_folder(&base, &current, &target, true, None, None).expect_err("must refuse");
+        let err = apply_data_folder(&base, &current, &target, true, None, None, None)
+            .expect_err("must refuse");
         assert!(err.contains("log.adi"), "the failure names the file: {err}");
         assert_eq!(
             read_data_dir_pointer_in(&base).as_deref(),
@@ -2206,19 +3400,19 @@ mod data_folder_tests {
         let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
         station(&current);
 
-        let err =
-            apply_data_folder(&base, &current, &target, false, None, None).expect_err("refused");
+        let err = apply_data_folder(&base, &current, &target, false, None, None, None)
+            .expect_err("refused");
         assert!(
             err.contains("empty logbook"),
             "says what would happen: {err}"
         );
         assert_eq!(read_data_dir_pointer_in(&base), None, "nothing was chosen");
         // The same folder WITH the copy is accepted…
-        apply_data_folder(&base, &current, &target, true, None, None).expect("copy accepted");
+        apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy accepted");
         // …and a folder that already holds a log needs no copy (the second machine on a synced log).
         let synced = root.join("synced");
         write(&synced.join("log.adi"), b"<CALL:5>K1ABC <EOR>\n");
-        apply_data_folder(&base, &current, &synced, false, None, None)
+        apply_data_folder(&base, &current, &synced, false, None, None, None)
             .expect("adopting a log is fine");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2231,7 +3425,7 @@ mod data_folder_tests {
         let install = root.join("Program Files/Nexus");
         std::fs::create_dir_all(&install).expect("install dir");
         for target in [install.join("data"), install.join("../Nexus/data")] {
-            let err = apply_data_folder(&base, &current, &target, true, Some(&install), None)
+            let err = apply_data_folder(&base, &current, &target, true, Some(&install), None, None)
                 .expect_err("inside the program folder");
             assert!(err.contains("program folder"), "{err}");
         }
@@ -2243,6 +3437,7 @@ mod data_folder_tests {
             &root.join("documents/nexus"),
             true,
             Some(&install),
+            None,
             None,
         )
         .expect("outside is fine");
@@ -2271,6 +3466,7 @@ mod data_folder_tests {
             true,
             None,
             Some(&mounts_placing(&root, "nfs4")),
+            None,
         )
         .expect_err("a database must not be put on a network filesystem");
         assert!(err.contains("nfs4"), "states the technical reason: {err}");
@@ -2294,6 +3490,7 @@ mod data_folder_tests {
             true,
             None,
             Some(&mounts_placing(&root, "ext4")),
+            None,
         )
         .expect("the same folder on a local filesystem is fine");
         assert_eq!(
@@ -2321,6 +3518,7 @@ mod data_folder_tests {
             true,
             None,
             Some(&mounts_placing(&root, "ext4")),
+            None,
         )
         .expect("a suspected sync folder warns, it does not refuse");
         assert!(
@@ -2640,7 +3838,167 @@ fn snap_bandmap_to_edge(
 /// `%APPDATA%\tempo\log.adi` / `~/.config/tempo/log.adi` (unchanged for a single instance);
 /// `NEXUS_DATA_DIR` relocates it (multi-PC shack). See [`shared_data_dir`].
 fn logbook_path() -> PathBuf {
-    shared_data_dir().join("log.adi")
+    shared_data_dir().join(LOG_FILE_NAME)
+}
+
+/// The logbook's file name in the data folder. One constant, because the data-folder move asks
+/// the logbook for its files by this name and must name the same file the app opens.
+const LOG_FILE_NAME: &str = "log.adi";
+
+/// Open the logbook database for `log` — converting `log.adi` into it the first time — ready
+/// for [`adopt_logbook`]. All of the launch's logbook I/O is here, and it runs BEFORE the engine
+/// lock is taken: a first launch's conversion of a lifetime log takes seconds.
+///
+/// `network` is the data folder's verdict (`data_folder_location`): a database is never opened
+/// on certain network storage. Every refusal leaves the operator's file as it was (see
+/// `tempo_app::logstore::open`). `progress` hears how far a conversion has got, for the splash.
+fn open_logbook_store(
+    log: &Path,
+    network: Option<String>,
+    progress: &mut dyn FnMut(tempo_core::logbook::migrate::Progress),
+) -> Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError> {
+    // The folder, as the 1.13 write path makes it on the first contact: a fresh install has
+    // none yet, and the database cannot be created without it.
+    if let Some(dir) = log.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let resolve: tempo_app::logstore::StoreResolve = Arc::new(|r| {
+        propagation::dxcc::resolve(&r.call).map_or_else(Default::default, |i| {
+            tempo_core::logbook::sqlite::Resolved {
+                entity: Some(i.entity),
+                cq_zone: Some(i.cq_zone),
+            }
+        })
+    });
+    tempo_app::logstore::open_reporting(log, resolve, network, progress)
+}
+
+/// Whether opening the logbook is about to convert `log.adi`: there is a log, and no database
+/// marked converted beside it — the first launch after the database arrived, or one resuming a
+/// conversion that was interrupted. It decides only what the splash says; the conversion decides
+/// for itself whether to run (`migrate::migrate_log`).
+fn conversion_ahead(log: &Path) -> bool {
+    use tempo_core::logbook::migrate;
+    let db = migrate::database_path(log);
+    let converted = db.is_file() && migrate::is_converted(&db).unwrap_or(false);
+    !converted && std::fs::metadata(log).is_ok_and(|m| m.len() > 0)
+}
+
+/// Whether another Nexus is converting this data folder's logbook right now — asked of the
+/// conversion's own lock, without waiting on it (`migrate::conversion_in_progress`).
+fn converting_elsewhere(log: &Path) -> bool {
+    use tempo_core::logbook::migrate;
+    migrate::conversion_in_progress(&migrate::database_path(log))
+}
+
+/// This launch stands down: another window is converting the logbook, and its splash says so.
+///
+/// Said in the diagnostic log and on stderr and, on Windows, in a message box. Linux and macOS
+/// get no box: drawing one there would take either a direct GTK or AppKit dependency this app
+/// does not carry, or Tauri's dialog plugin, which needs the event loop this launch stands down
+/// rather than start. On macOS a second launch from Finder or the Dock activates the running app
+/// instead, so it rarely gets here.
+fn stand_down_for_a_conversion_elsewhere() {
+    const WHY: &str = "Nexus is already open and is moving your logbook into its new database. \
+                       This happens once, and Nexus opens by itself when it is done, so there is \
+                       no need to start it again.";
+    tempo_core::applog::warn(
+        "startup",
+        "another Nexus is converting this logbook; this launch stands down and opens nothing",
+    );
+    tempo_core::applog::flush();
+    eprintln!("nexus: {WHY}");
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn MessageBoxW(
+                hwnd: *mut std::ffi::c_void,
+                text: *const u16,
+                caption: *const u16,
+                utype: u32,
+            ) -> i32;
+        }
+        const MB_ICONINFORMATION: u32 = 0x0000_0040;
+        const MB_SETFOREGROUND: u32 = 0x0001_0000;
+        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let text = wide(WHY);
+        let caption = wide("Nexus");
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_ICONINFORMATION | MB_SETFOREGROUND,
+            );
+        }
+    }
+}
+
+/// Hand this session's log to the engine: the database, when [`open_logbook_store`] opened it —
+/// `log.adi` is from then on its mirror — or, when it could not, `log.adi` itself, run exactly
+/// as 1.13 ran it, with the reason kept, written to the diagnostic log and carried in the
+/// snapshot, where the screen shows it once a session.
+///
+/// Called once, at launch, after the country and state resolvers are set: their fills then
+/// happen in memory, and the launch writes nothing (see `StationCore::attach_store`).
+fn adopt_logbook(
+    eng: &mut Engine,
+    log: &Path,
+    opened: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
+) {
+    match opened {
+        Ok(opened) => {
+            let what = match opened.outcome {
+                tempo_core::logbook::migrate::Outcome::Empty => "a new logbook".to_string(),
+                tempo_core::logbook::migrate::Outcome::AlreadyDone => "opened".to_string(),
+                tempo_core::logbook::migrate::Outcome::Converted {
+                    total, resumed_at, ..
+                } => format!(
+                    "{total} contacts converted from log.adi{}",
+                    if resumed_at > 0 {
+                        format!(", resuming after {resumed_at}")
+                    } else {
+                        String::new()
+                    }
+                ),
+            };
+            tempo_core::applog::info("logbook", &format!("the logbook database: {what}"));
+            eng.attach_log_store(opened);
+        }
+        Err(e) => {
+            let why = e.to_string();
+            let line = format!("{why}. This session keeps the log in log.adi, as 1.13 did.");
+            match e {
+                tempo_app::logstore::OpenError::NetworkFolder(_) => {
+                    tempo_core::applog::warn("logbook", &line)
+                }
+                _ => tempo_core::applog::error("logbook", &line),
+            }
+            eng.set_log_path(log.to_path_buf());
+            eng.note_log_store_problem(&e);
+        }
+    }
+}
+
+/// How long an exit waits for the logbook to reach the disk before it gives up and says so.
+const LOG_FLUSH_ON_EXIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Carry every change the logbook holds to disk before the process goes — the database's
+/// writer, then the `log.adi` mirror — waiting at most `cap`, and saying so in the diagnostic
+/// log when the disk would not take it in time.
+///
+/// Under the engine lock, deliberately: this is the last word on the log, and holding the lock
+/// is what keeps a change from landing after the flush and dying with the process. It runs
+/// once the radio loop has unkeyed and stopped (quit), or behind the install gate that refuses
+/// while anything is on the air (update), so nothing time-critical waits on it.
+fn flush_logbook(engine: &SharedEngine, cap: std::time::Duration) {
+    let flushed = engine_lock(engine).flush_log_store(cap);
+    if let Err(e) = flushed {
+        tempo_core::applog::error(
+            "logbook",
+            &format!("the logbook was not all on disk when Nexus exited: {e}"),
+        );
+    }
 }
 
 /// The LEGACY (pre-club-sync) Field Day journal location — kept only so the
@@ -4467,7 +5825,12 @@ async fn get_aurora(
             }
         }
     }
-    match propagation::live::aurora::fetch_aurora() {
+    // Blocking HTTP: on the blocking pool, never this runtime worker — see
+    // `no_command_makes_a_blocking_http_request_where_it_runs`.
+    let fetched = tauri::async_runtime::spawn_blocking(propagation::live::aurora::fetch_aurora)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match fetched {
         Ok(pts) => {
             if let Ok(mut g) = cache.lock() {
                 *g = Some((std::time::Instant::now(), pts.clone()));
@@ -7857,6 +9220,19 @@ fn pick_sat_transponder(
         // by name, rather than shifting everything after it.
         .filter(|t| t.norad == norad)
         .collect();
+    hold_sat_row(state, &name, &rows, index)
+}
+
+/// The pick's engine half: hold row `index` of `rows` — the list `get_sat_detail` showed for
+/// bird `name` — tell the engine what the catalogue says about it, and tune. It reads no
+/// global, so a test drives the real pick with catalogue records instead of a hand-copied
+/// list of engine calls.
+fn hold_sat_row(
+    state: &SharedEngine,
+    name: &str,
+    rows: &[&propagation::live::satnogs::Transmitter],
+    index: usize,
+) -> Result<(), String> {
     let tp = (*rows
         .get(index)
         .ok_or_else(|| format!("{name}: no transponder #{index}"))?)
@@ -7944,6 +9320,10 @@ fn pick_sat_transponder(
     // than to the zero. A CW/telemetry beacon is excluded for free — `downlink_class`
     // puts it in the SSB class, not FM.
     eng.set_sat_single_channel_fm(!tp.is_linear() && class.is_fm());
+    // …and, on the same terms, whether its uplink takes CW over that FM downlink (KOSEN-1).
+    // The downlink cannot say so, and the TX VFO's mode is otherwise derived from it
+    // (`Engine::sat_tx_mode`), which put FM on a CW-only uplink.
+    eng.set_sat_uplink_cw(tp.uplink_is_cw_only());
     // TUNE ON PICK — the click IS the consent for the dial, exactly as it is for
     // a spot, a repeater favourite or a band-map click. The hold is set FIRST so
     // the tune reads the transponder it is tuning to; a refused tune (Doppler
@@ -9473,7 +10853,11 @@ async fn get_kp_forecast(
             }
         }
     }
-    match propagation::live::swpc::fetch_kp_forecast() {
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let fetched = tauri::async_runtime::spawn_blocking(propagation::live::swpc::fetch_kp_forecast)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match fetched {
         Ok(v) => {
             if let Ok(mut g) = cache.lock() {
                 *g = Some((std::time::Instant::now(), v.clone()));
@@ -9501,7 +10885,11 @@ async fn get_kc2g_muf(cache: State<'_, Kc2gCache>) -> Result<Vec<propagation::Mu
             }
         }
     }
-    match propagation::live::kc2g::fetch_kc2g_muf() {
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let fetched = tauri::async_runtime::spawn_blocking(propagation::live::kc2g::fetch_kc2g_muf)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match fetched {
         Ok(v) => {
             if let Ok(mut g) = cache.lock() {
                 *g = Some((std::time::Instant::now(), v.clone()));
@@ -9587,11 +10975,16 @@ async fn get_space_wx_scales(
             }
         }
     }
-    match (
-        propagation::live::swpc_scales::fetch_noaa_scales(),
-        propagation::live::swpc_scales::fetch_alerts(),
-    ) {
-        (Ok(mut scales), Ok(alerts)) => {
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let fetched = tauri::async_runtime::spawn_blocking(|| {
+        (
+            propagation::live::swpc_scales::fetch_noaa_scales(),
+            propagation::live::swpc_scales::fetch_alerts(),
+        )
+    })
+    .await;
+    match fetched {
+        Ok((Ok(mut scales), Ok(alerts))) => {
             // Provenance stamp: only a REAL fetch carries as_of — the cold-cache
             // default below stays None so the UI can't render "offline" as calm.
             scales.as_of = Some(now_unix());
@@ -14459,13 +15852,33 @@ async fn close_panel_window(app: tauri::AppHandle, panel: String) -> Result<(), 
 #[tauri::command(async)]
 fn call_station(
     state: State<'_, SharedEngine>,
+    ota_cache: State<'_, SharedOtaSpots>,
     call: String,
     grid: Option<String>,
     message: Option<String>,
     snr: Option<i32>,
     freq: Option<f32>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
+    call_station_on(&state, &ota_cache, &call, grid, message, snr, freq)
+}
+
+/// [`call_station`]'s body, over plain handles so a test drives exactly what the command runs.
+fn call_station_on(
+    engine: &SharedEngine,
+    ota_cache: &SharedOtaSpots,
+    call: &str,
+    grid: Option<String>,
+    message: Option<String>,
+    snr: Option<i32>,
+    freq: Option<f32>,
+) -> Result<AppSnapshot, String> {
+    // #351 — the park this contact belongs to, when the hunter feed says it can only be one.
+    // This is the one path the Call Roster, Band Activity, the station list and their pop-outs
+    // share, and none of them set a hunt the way HUNT, the map and the Needed board's Work do,
+    // so a contact started here logged with no park. Read BEFORE the engine lock (an in-memory
+    // cache, never nested inside it) and applied only after the call has gone through.
+    let park = sole_live_activation(ota_cache, call, now_unix());
+    let mut eng = engine_lock(engine);
     // Working a station keys a standard structured message (your grid in Tx1) — refuse
     // without a valid callsign + grid so we never emit a grid-less directed call. The
     // mode plugin decides which tiers are gated (Capabilities::structured_identity).
@@ -14475,7 +15888,26 @@ fn call_station(
     // `freq` = the decoded station's audio offset (Hz); move our RX/TX onto it (WSJT-X
     // double-click). Ignore non-positive values (no usable frequency).
     let dx_freq = freq.filter(|f| *f > 0.0);
-    eng.call_station_ctx(&call, g, msg, snr, dx_freq)?;
+    eng.call_station_ctx(call, g, msg, snr, dx_freq)?;
+    // Tag only a QSO that really started — `call_station_ctx` answers `Ok` to a few calls it
+    // does not act on, and a pend armed for one would wait four hours to stamp the park on some
+    // later contact. Ambiguous or absent: the pending hunt is left exactly as it was, so a park
+    // the operator picked on the POTA/SOTA board survives. And the tag never costs the call: a
+    // reference `set_hunt_target` will not accept leaves this contact untagged, as an
+    // ambiguous one does.
+    if let Some((program, reference)) = park {
+        let started = eng
+            .qso_dxcall()
+            .is_some_and(|c| tempo_core::message::same_call(c, call));
+        if started {
+            if let Err(e) = eng.set_hunt_target(call, &program, &reference) {
+                tempo_core::applog::warn(
+                    "hunt",
+                    &format!("{call}: {program} {reference} not tagged: {e}"),
+                );
+            }
+        }
+    }
     Ok(eng.snapshot())
 }
 
@@ -14557,20 +15989,26 @@ const PENDING_LOG_MOVED_ON: &str = "pendingLogMovedOn";
 /// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
 /// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
 /// shown with. Returns the refreshed snapshot, whose `pendingLog` is the next held contact.
-#[tauri::command(async)]
-fn confirm_pending_log(
+#[tauri::command]
+async fn confirm_pending_log(
     state: State<'_, SharedEngine>,
     record: LoggedQso,
     expected_key: Option<String>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    // No key is a refusal, not a free pass: a caller that cannot say WHICH contact it is
-    // confirming cannot be allowed to log one (review R2).
-    let key = expected_key.unwrap_or_default();
-    if !eng.confirm_pending_log(&key, record.into()) {
-        return Err(PENDING_LOG_MOVED_ON.into());
-    }
-    Ok(eng.snapshot())
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            // No key is a refusal, not a free pass: a caller that cannot say WHICH contact it
+            // is confirming cannot be allowed to log one (review R2).
+            let key = expected_key.unwrap_or_default();
+            if !eng.confirm_pending_log(&key, record.into()) {
+                return Err(PENDING_LOG_MOVED_ON.into());
+            }
+            Ok(eng.snapshot())
+        })
+    })
+    .await
 }
 
 /// Discard the contact the prompt-to-log popup is showing without logging it. Same key rule.
@@ -14589,17 +16027,21 @@ fn discard_pending_log(
 
 /// Manually log a contact to the ADIF logbook (the UI "Log QSO" button). Adds in
 /// memory and persists to the log file. Returns the refreshed snapshot.
-#[tauri::command(async)]
-fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnapshot, String> {
+#[tauri::command]
+async fn log_qso(state: State<'_, SharedEngine>, record: LoggedQso) -> Result<AppSnapshot, String> {
+    let engine = Arc::clone(&state);
     let call = record.call.clone();
-    let (snap, wav) = {
-        let mut eng = engine_lock(&state);
-        eng.log_qso(record.into());
-        // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
-        // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
-        let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
-        (eng.snapshot(), wav)
-    };
+    let (snap, wav) = durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            eng.log_qso(record.into());
+            // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
+            // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
+            let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
+            Ok((eng.snapshot(), wav))
+        })
+    })
+    .await?;
     if let Some(pcm) = wav {
         if !pcm.is_empty() {
             // Outside the lock (I/O), and the OUTCOME goes back into the engine so the next
@@ -14761,6 +16203,40 @@ fn locate_seen(eng: &mut Engine, seen: &LoggedQso) -> Result<usize, String> {
 const LOG_ROW_GONE: &str =
     "That contact changed or was removed since the log was loaded — reload the log and try again.";
 
+/// Run an operator's log command so that it returns only once its change is ON DISK — the
+/// store's promise that "logged" means the contact survives pulling the plug.
+///
+/// `body` takes the engine lock, makes the change, and hands back what it did with the
+/// durability of the changes it made ([`Engine::with_log_tickets`]); the lock is released when
+/// `body` returns, and only THEN is the change waited for. The whole of it runs on the blocking
+/// pool, never on a runtime worker: a wait can last up to a minute behind a slow disk, and a
+/// worker held that long is one the waterfall, the meters and every other command need —
+/// the #335 freeze. `tokio::task::spawn_blocking` rather than Tauri's wrapper so a test can run
+/// it on a runtime of its own; in the app both are the same runtime.
+///
+/// On the 1.13 path (no store) there is nothing to wait for: the change was written inline.
+async fn durable_command<T: Send + 'static>(
+    body: impl FnOnce() -> (Result<T, String>, tempo_app::logstore::Durability) + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || {
+        let (out, durability) = body();
+        let out = out?;
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("logbook task failed: {e}"))?
+}
+
+/// What a command says when its change is in the log but could not be shown to be on disk.
+/// The change is NOT undone — memory holds it and the writer keeps trying — so the words say
+/// exactly that, and carry the writer's own reason.
+fn durability_failed(why: String) -> String {
+    format!("The change is in your log, but Nexus could not confirm it was saved to disk: {why}")
+}
+
 /// The row at `index` as `get_log` would show it — what a log command hands back so a
 /// follow-up (a QSL mark from the same edit form) can key the row it just changed.
 fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
@@ -14777,18 +16253,24 @@ fn log_row(eng: &Engine, index: usize) -> Result<LoggedQso, String> {
 /// Edit the logged contact `target` — a correction. Confirmation/credit/upload state is
 /// preserved by the engine. Returns the row as stored; its key is the one any follow-up
 /// must use, since the edit changed the row and so its key.
-#[tauri::command(async)]
-fn edit_qso(
+#[tauri::command]
+async fn edit_qso(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     record: LoggedQso,
 ) -> Result<LoggedQso, String> {
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.update_qso(index, record.into()) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.update_qso(index, record.into()) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// What a `via` argument MEANS on [`mark_qsl_sent`] — the one decision the command layer owns
@@ -14834,19 +16316,25 @@ fn qsl_via_arg(via: Option<&str>) -> Result<Option<tempo_core::logbook::QslVia>,
 /// sent — the core records the cleared state as such so merge can tell "never sent" from
 /// "operator un-sent it". Nothing in this layer re-derives the mark or offers an import a way
 /// around that: the command forwards the operator's word and nothing else.
-#[tauri::command(async)]
-fn mark_qsl_sent(
+#[tauri::command]
+async fn mark_qsl_sent(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     via: Option<String>,
 ) -> Result<LoggedQso, String> {
     let via = qsl_via_arg(via.as_deref())?;
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.mark_qsl_sent(index, via) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.mark_qsl_sent(index, via) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// Record whether a PAPER QSL card arrived for the logged contact `target` (#152).
@@ -14856,18 +16344,24 @@ fn mark_qsl_sent(
 /// award-eligible — `QslRcvd::award` is card OR LoTW — so leaving it unrecordable left the
 /// awards view understating what the operator can actually claim. Returns the row as stored
 /// (see [`edit_qso`]).
-#[tauri::command(async)]
-fn mark_qsl_card(
+#[tauri::command]
+async fn mark_qsl_card(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     received: bool,
 ) -> Result<LoggedQso, String> {
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.mark_qsl_card(index, received) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.mark_qsl_card(index, received) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// What a `satName` argument MEANS on [`set_sat_tag`] — the one decision this layer owns,
@@ -14919,8 +16413,8 @@ fn sat_name_arg(sat_name: Option<&str>) -> Result<Option<String>, String> {
 /// ACCEPTS, and an empty string is an error rather than a removal for the same reason it is on
 /// [`qsl_via_arg`]: empty is what a select sits at when the operator has chosen nothing, and a
 /// non-choice must not erase a tag nobody asked to erase.
-#[tauri::command(async)]
-fn set_sat_tag(
+#[tauri::command]
+async fn set_sat_tag(
     state: State<'_, SharedEngine>,
     target: LoggedQso,
     sat_name: Option<String>,
@@ -14928,12 +16422,18 @@ fn set_sat_tag(
     // Gated BEFORE the lock: nothing that can be refused should hold the engine mutex, which
     // the radio loop needs every 20 ms.
     let name = sat_name_arg(sat_name.as_deref())?;
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.set_sat_tag(index, name.as_deref()) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    log_row(&eng, index)
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.set_sat_tag(index, name.as_deref()) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            log_row(eng, index)
+        })
+    })
+    .await
 }
 
 /// The satellite names LoTW accepts, for the Logbook row's tag picker — the backend owns the
@@ -14948,34 +16448,49 @@ fn lotw_sat_names() -> Vec<String> {
 }
 
 /// Delete the logged contact `target`. Returns the refreshed snapshot.
-#[tauri::command(async)]
-fn delete_qso(state: State<'_, SharedEngine>, target: LoggedQso) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    let index = locate_seen(&mut eng, &target)?;
-    if !eng.delete_qso(index) {
-        return Err(LOG_ROW_GONE.into());
-    }
-    Ok(eng.snapshot())
+#[tauri::command]
+async fn delete_qso(
+    state: State<'_, SharedEngine>,
+    target: LoggedQso,
+) -> Result<AppSnapshot, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let index = locate_seen(eng, &target)?;
+            if !eng.delete_qso(index) {
+                return Err(LOG_ROW_GONE.into());
+            }
+            Ok(eng.snapshot())
+        })
+    })
+    .await
 }
 
 /// Purge the ENTIRE logbook — delete every contact and truncate the ADIF file to
 /// an empty log. Destructive and irreversible; the UI gates this behind an explicit
 /// confirmation dialog. Returns the number of contacts removed (for the toast).
-#[tauri::command(async)]
-fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
-    let mut eng = engine_lock(&state);
-    let removed = eng.clear_logbook();
-    // `clear_logbook` also resets the LoTW/eQSL sync cursors (see its doc comment:
-    // an incremental cursor is a lie about an empty log). Persist that here — the
-    // engine holds settings, the command layer owns the file.
-    if let Err(e) = eng.settings().clone().save(&settings_path()) {
-        conn_log(
-            "LoTW",
-            "error",
-            format!("failed to reset the sync cursor after a purge: {e}"),
-        );
-    }
-    Ok(removed)
+#[tauri::command]
+async fn purge_log(state: State<'_, SharedEngine>) -> Result<usize, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let removed = eng.clear_logbook();
+            // `clear_logbook` also resets the LoTW/eQSL sync cursors (see its doc comment:
+            // an incremental cursor is a lie about an empty log). Persist that here — the
+            // engine holds settings, the command layer owns the file.
+            if let Err(e) = eng.settings().clone().save(&settings_path()) {
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!("failed to reset the sync cursor after a purge: {e}"),
+                );
+            }
+            Ok(removed)
+        })
+    })
+    .await
 }
 
 /// Whether a logged QSO was made through a satellite (`PROP_MODE=SAT`) — the
@@ -15728,6 +17243,47 @@ fn live_activations<'a>(
     found
 }
 
+/// The hunter-feed rows that describe an activation happening NOW, across every programme in
+/// the cache. The cache STAMP proves the poller is alive (fetched within 10 min); the per-spot
+/// TIME proves the activation itself is current — see `OTA_ACTIVE_SECS`. Without the second
+/// filter a stale summit could both win the park and, worse, hide a live one behind an
+/// ambiguity that was never real.
+///
+/// ONE definition for the two readers that name a park: the Needed board's decoration pass
+/// (the row's PARK chip) and a call started from the roster ([`sole_live_activation`]), so
+/// the chip and the park the contact logs with can never come from different spots.
+fn live_ota_spots<'a>(
+    cache: &'a std::collections::HashMap<String, (i64, Vec<propagation::OtaSpot>)>,
+    now: i64,
+) -> impl Iterator<Item = &'a propagation::OtaSpot> + 'a {
+    cache
+        .values()
+        .filter(move |(stamp, _)| now.saturating_sub(*stamp) <= 600)
+        .flat_map(|(_, v)| v.iter())
+        .filter(move |sp| {
+            sp.spot_time_unix
+                .is_none_or(|t| now.saturating_sub(t) <= OTA_ACTIVE_SECS)
+        })
+}
+
+/// The ONE activation a contact with `call` can belong to right now, or `None`: none live, or
+/// more than one (the 2026-09-17 ruling, see [`live_activations`] — a wrong park is a hunt POTA
+/// never credits, a missing one the operator can add by hand).
+///
+/// An in-memory read of the cache the poller keeps. It never reaches the network, and a
+/// poisoned lock reads as "nothing live", the same as every other reader of this cache.
+fn sole_live_activation(
+    ota_cache: &SharedOtaSpots,
+    call: &str,
+    now: i64,
+) -> Option<(String, String)> {
+    let cache = ota_cache.lock().ok()?;
+    match live_activations(live_ota_spots(&cache, now), call).as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
 /// What a row says INSTEAD of a park when it cannot tell which one — the operator picks, from
 /// the POTA/SOTA board, where every live activation has its own HUNT button. Named references,
 /// because "ambiguous" alone gives the operator nothing to act on.
@@ -15943,19 +17499,9 @@ fn read_need_alerts(
     // (a park is a park — the award tier still drives the row).
     if let Ok(cache) = ota_cache.lock() {
         let now = now_unix();
-        // All fresh programs' activators (POTA + SOTA when both are polled). The cache STAMP
-        // proves the poller is alive; the per-spot TIME proves the activation itself is current
-        // — see `OTA_ACTIVE_SECS`. Without the second filter a stale summit could both win the
-        // park and, worse, hide a live one behind an ambiguity that was never real.
-        let spots: Vec<&propagation::OtaSpot> = cache
-            .values()
-            .filter(|(stamp, _)| now.saturating_sub(*stamp) <= 600)
-            .flat_map(|(_, v)| v.iter())
-            .filter(|sp| {
-                sp.spot_time_unix
-                    .is_none_or(|t| now.saturating_sub(t) <= OTA_ACTIVE_SECS)
-            })
-            .collect();
+        // All fresh programs' activators (POTA + SOTA when both are polled) — see
+        // `live_ota_spots`, which a call started from the roster reads too.
+        let spots: Vec<&propagation::OtaSpot> = live_ota_spots(&cache, now).collect();
         if !spots.is_empty() {
             for a in &mut alerts {
                 let live = live_activations(spots.iter().copied(), &a.call);
@@ -16134,16 +17680,22 @@ fn read_need_alerts(
 
 /// Import an external ADIF logbook (deduped merge → real "needs"). Takes the
 /// file's text; the UI reads the file so no fs/dialog plugin is needed.
-#[tauri::command(async)]
-fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
-    let mut eng = engine_lock(&state);
-    let (added, skipped, updated, total) = eng.import_adif(&text);
-    Ok(ImportStats {
-        added,
-        skipped,
-        updated,
-        total,
+#[tauri::command]
+async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<ImportStats, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let (added, skipped, updated, total) = eng.import_adif(&text);
+            Ok(ImportStats {
+                added,
+                skipped,
+                updated,
+                total,
+            })
+        })
     })
+    .await
 }
 
 /// Reconcile a confirmation/credit report (LoTW ADIF export) INTO the existing
@@ -16165,8 +17717,12 @@ async fn sync_lotw_report(
             )
         },
         {
-            let mut eng = engine_lock(&state);
-            Ok(eng.merge_lotw_report(&text).into())
+            let engine = Arc::clone(&state);
+            durable_command(move || {
+                let mut eng = engine_lock(&engine);
+                eng.with_log_tickets(|eng| Ok(eng.merge_lotw_report(&text).into()))
+            })
+            .await
         },
     )
 }
@@ -18083,38 +19639,44 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // Merge via the shared reconcile path, then advance the cursor only on a real
     // high-water (re-lock: the fetch ran without the engine lock held). Capture the
     // own-echo lower bound (oldest in-flight upload) in the same lock, then release.
-    let (mut result, own_start): (LotwSyncResult, Option<String>) = {
+    let ((mut result, own_start), merged): ((LotwSyncResult, Option<String>), _) = {
         let mut eng = engine_lock(state);
-        let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
-        if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
-            // Advance the cursor ONLY if (a) the download is structurally complete —
-            // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
-            // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
-            // advancing would make the next `qso_qslsince` pull skip them forever (the
-            // merge above already ran, so keeping the old cursor just re-fetches the
-            // tail — reconcile is idempotent) — AND (b) the username is still the one
-            // this download used. If `set_settings` changed it during the (lock-free)
-            // fetch, it already reset the cursor to a full pull for the new identity —
-            // this high-water belongs to the old query, so binding it would risk
-            // skipping records on the next incremental pull. Persist via a narrow
-            // setter so the sync never disturbs live operation (no mode reset /
-            // TX-queue clear).
-            if is_complete_lotw_body(&body)
-                && eng.settings().lotw_username.trim() == used_username.trim()
-            {
-                let updated = eng.set_lotw_cursor(high_water);
-                if let Err(e) = updated.save(&settings_path()) {
-                    conn_log(
-                        "LoTW",
-                        "error",
-                        format!("failed to persist the sync cursor: {e}"),
-                    );
+        eng.with_log_tickets(|eng| {
+            let summary: LotwSyncResult = eng.merge_lotw_report(&body).into();
+            if let Some(high_water) = tempo_core::lotw::extract_last_qsl(&body) {
+                // Advance the cursor ONLY if (a) the download is structurally complete —
+                // a truncated-but-HTTP-200 body lacks the `<APP_LoTW_EOF>` trailer, and
+                // every confirmation cut off in its tail carries qsl-date <= LASTQSL, so
+                // advancing would make the next `qso_qslsince` pull skip them forever (the
+                // merge above already ran, so keeping the old cursor just re-fetches the
+                // tail — reconcile is idempotent) — AND (b) the username is still the one
+                // this download used. If `set_settings` changed it during the (lock-free)
+                // fetch, it already reset the cursor to a full pull for the new identity —
+                // this high-water belongs to the old query, so binding it would risk
+                // skipping records on the next incremental pull. Persist via a narrow
+                // setter so the sync never disturbs live operation (no mode reset /
+                // TX-queue clear).
+                if is_complete_lotw_body(&body)
+                    && eng.settings().lotw_username.trim() == used_username.trim()
+                {
+                    let updated = eng.set_lotw_cursor(high_water);
+                    if let Err(e) = updated.save(&settings_path()) {
+                        conn_log(
+                            "LoTW",
+                            "error",
+                            format!("failed to persist the sync cursor: {e}"),
+                        );
+                    }
                 }
             }
-        }
-        let own_start = eng.oldest_pending_lotw_date();
-        (summary, own_start)
+            let own_start = eng.oldest_pending_lotw_date();
+            (summary, own_start)
+        })
     }; // engine lock released before the second network fetch
+       // The confirmations are on disk before the sync says so (off the lock, on the blocking pool).
+    merged
+        .wait(tempo_app::logstore::DURABLE_WAIT)
+        .map_err(durability_failed)?;
 
     // --- Pull 2: own-echo (qso_qsl=no) — promote in-flight uploads to Accepted. ---
     // Best-effort: only run when something is actually in flight, and never fail the
@@ -18132,8 +19694,12 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
         };
         match own_body {
             Ok(b) if tempo_core::lotw::is_lotw_adif(&b) => {
-                let mut eng = engine_lock(state);
-                result.promoted = eng.merge_lotw_own_echo(&b, now_unix());
+                let (promoted, echoed) = engine_lock(state)
+                    .with_log_tickets(|eng| eng.merge_lotw_own_echo(&b, now_unix()));
+                result.promoted = promoted;
+                echoed
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .map_err(durability_failed)?;
             }
             Ok(_) => conn_log(
                 "LoTW",
@@ -18170,6 +19736,25 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(if cfg!(windows) { "tqsl.exe" } else { "tqsl" })
 }
 
+/// Run TQSL once with `args`, to completion: its exit code (-1 when it has none) and what it
+/// wrote to stderr. `tqsl_path` is the Settings override, resolved by [`resolve_tqsl`].
+fn run_tqsl(tqsl_path: &str, args: &[String]) -> Result<(i32, String), String> {
+    let tqsl = resolve_tqsl(tqsl_path);
+    let mut cmd = tempo_core::process::command(&tqsl); // no console window on Windows
+    cmd.args(args);
+    let output = cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "TQSL isn't installed (or its path is wrong). LoTW uploads are signed locally by TQSL — install it from lotw.arrl.org, or set the TQSL path in Settings.".to_string()
+        } else {
+            format!("Couldn't run TQSL: {e}")
+        }
+    })?;
+    Ok((
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
 /// Sign + upload QSOs to LoTW via the operator's installed TQSL. `indices` selects
 /// specific log rows; `None` = the default unsent-unconfirmed batch. No secret is
 /// handled here — TQSL owns the Callsign Certificate; we pass only the non-secret
@@ -18180,10 +19765,14 @@ fn resolve_tqsl(override_path: &str) -> std::path::PathBuf {
 /// Mark every currently-unsent QSO as already on LoTW — the operator's declaration that an
 /// imported legacy log was uploaded through another tool. Zeroes the "Upload to LoTW (N)" count
 /// so a big redundant re-upload isn't offered. Returns how many were marked.
-#[tauri::command(async)]
-fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
-    let mut eng = engine_lock(&state);
-    Ok(eng.mark_lotw_uploaded_all())
+#[tauri::command]
+async fn mark_lotw_uploaded(state: State<'_, SharedEngine>) -> Result<usize, String> {
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| Ok(eng.mark_lotw_uploaded_all()))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -18202,7 +19791,12 @@ async fn upload_lotw_report_impl(
     state: State<'_, SharedEngine>,
     indices: Option<Vec<usize>>,
 ) -> Result<UploadReportDto, String> {
-    lotw_upload_batch(&state, indices)
+    // On the blocking pool: TQSL can take tens of seconds, and the stamps are then waited for
+    // on disk. Neither may occupy a runtime worker (see `durable_command`).
+    let engine = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || lotw_upload_batch(&engine, indices, true))
+        .await
+        .map_err(|e| format!("LoTW upload task failed: {e}"))?
 }
 
 /// The whole LoTW upload, independent of Tauri's command shape, so the automatic worker
@@ -18212,11 +19806,25 @@ async fn upload_lotw_report_impl(
 fn lotw_upload_batch(
     state: &SharedEngine,
     indices: Option<Vec<usize>>,
+    wait: bool,
+) -> Result<UploadReportDto, String> {
+    lotw_upload_batch_with(state, indices, wait, run_tqsl)
+}
+
+/// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over the batch file, to
+/// completion, and answers its exit code and stderr. The shipped runner is [`run_tqsl`]; a test
+/// stands in for it to change the log while "TQSL" runs — the window this function's stamp has
+/// to survive.
+fn lotw_upload_batch_with(
+    state: &SharedEngine,
+    indices: Option<Vec<usize>>,
+    wait: bool,
+    tqsl: impl FnOnce(&str, &[String]) -> Result<(i32, String), String>,
 ) -> Result<UploadReportDto, String> {
     // Brief lock: read config + build the batch + ADIF, then release before spawn.
     // Held across the TQSL spawn it would freeze the whole UI for as long as ARRL takes
     // to answer, which is tens of seconds on a big batch.
-    let (batch, adif, location, tqsl_path) = {
+    let (batch, signed, adif, location, tqsl_path) = {
         let eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
@@ -18243,13 +19851,18 @@ fn lotw_upload_batch(
                 dispatched: 0,
                 outcome: "none".into(),
                 detail: None,
+                skipped_edited: 0,
+                skipped_deleted: 0,
             });
         }
         let adif = eng.lotw_upload_adif(&batch);
+        // The contacts by id, taken with the file: the stamp below finds them by id once TQSL
+        // is done, because by then the positions in `batch` may name other contacts.
+        let signed = eng.lotw_signed(&batch);
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
         let location = (!use_adif_location).then_some(location);
-        (batch, adif, location, tqsl_path)
+        (batch, signed, adif, location, tqsl_path)
     };
 
     // Write the batch ADIF to a temp file for TQSL to sign. Use a UNIQUE,
@@ -18281,20 +19894,9 @@ fn lotw_upload_batch(
     let _tmp_guard = TmpFile(path.clone());
     let path_str = path.to_string_lossy().to_string();
 
-    // Resolve + run TQSL one-shot, capturing its result.
-    let tqsl = resolve_tqsl(&tqsl_path);
+    // Run TQSL one-shot, capturing its result.
     let args = tempo_core::lotw_upload::tqsl_args(location.as_deref(), &path_str);
-    let mut cmd = tempo_core::process::command(&tqsl); // no console window on Windows
-    cmd.args(&args);
-    let output = cmd.output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            "TQSL isn't installed (or its path is wrong). LoTW uploads are signed locally by TQSL — install it from lotw.arrl.org, or set the TQSL path in Settings.".to_string()
-        } else {
-            format!("Couldn't run TQSL: {e}")
-        }
-    })?;
-    let code = output.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (code, stderr) = tqsl(&tqsl_path, &args)?;
     // ⛔ TWO details, and they are not interchangeable. `detail` is TQSL's own tail and goes
     // to the operator's toast — a screen. `stamped` is the CLASS and is the only one written
     // into `log.adi`, because `log.adi` is the file TQSL then signs and uploads to ARRL: a
@@ -18309,11 +19911,34 @@ fn lotw_upload_batch(
             dispatched: batch.len(),
             outcome: "retry".into(),
             detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
+            skipped_edited: 0,
+            skipped_deleted: 0,
         }),
         Some(outcome) => {
-            {
-                let mut eng = engine_lock(state);
-                eng.stamp_lotw_upload(&batch, outcome, now_unix(), stamped);
+            let (done, durable) = engine_lock(state).with_log_tickets(|eng| {
+                eng.stamp_lotw_batch(&signed, outcome, now_unix(), stamped)
+            });
+            if done.changed + done.gone > 0 {
+                conn_log(
+                    "LoTW",
+                    "info",
+                    format!(
+                        "{} of the {} contacts in this upload changed while TQSL was signing \
+                         ({} edited, {} deleted), so the result was not recorded on them. An \
+                         edited contact is offered again with the next upload.",
+                        done.changed + done.gone,
+                        batch.len(),
+                        done.changed,
+                        done.gone
+                    ),
+                );
+            }
+            // The Logbook button waits for the stamps to reach the disk; the six-hourly
+            // automatic batch does not (a stamp it loses is re-derived by the next echo).
+            if wait {
+                durable
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .map_err(durability_failed)?;
             }
             // ⛔ THE LINE THAT MAKES THE STAMP'S OWN SENTENCE TRUE.
             //
@@ -18348,6 +19973,10 @@ fn lotw_upload_batch(
                 dispatched: batch.len(),
                 outcome: outcome.code().to_string(),
                 detail,
+                // The same counts as the connection-log line above, for the screen: an upload
+                // count that does not clear otherwise reads as an upload that failed.
+                skipped_edited: done.changed,
+                skipped_deleted: done.gone,
             })
         }
     }
@@ -18435,16 +20064,26 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     // complete — a truncated download must not skip unreceived records — AND (b) the
     // username is unchanged since this sync started (an in-flight change already
     // reset the cursor for the new account).
-    let mut eng = engine_lock(state);
-    let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
-    if tempo_core::eqsl::is_complete_eqsl_body(&body)
-        && eng.settings().eqsl_username.trim() == used_username.trim()
-    {
-        let updated = eng.set_eqsl_cursor(next_cursor);
-        if let Err(e) = updated.save(&settings_path()) {
-            eprintln!("tempo: failed to persist eQSL cursor: {e}");
+    let (summary, merged) = {
+        let mut eng = engine_lock(state);
+        let (summary, merged) = eng.with_log_tickets(|eng| {
+            let summary: LotwSyncResult = eng.merge_eqsl_report(&body).into();
+            summary
+        });
+        if tempo_core::eqsl::is_complete_eqsl_body(&body)
+            && eng.settings().eqsl_username.trim() == used_username.trim()
+        {
+            let updated = eng.set_eqsl_cursor(next_cursor);
+            if let Err(e) = updated.save(&settings_path()) {
+                eprintln!("tempo: failed to persist eQSL cursor: {e}");
+            }
         }
-    }
+        (summary, merged)
+    };
+    // On disk before the sync says so — off the lock, on the blocking pool.
+    merged
+        .wait(tempo_app::logstore::DURABLE_WAIT)
+        .map_err(durability_failed)?;
     Ok(summary)
 }
 
@@ -18459,7 +20098,7 @@ async fn sync_qrz(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, Stri
     // Blocking HTTP against QRZ (a full logbook FETCH on the manual button) —
     // off the UI thread AND off the async executor, matching `qrz_push_qso`.
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || sync_qrz_since(&engine, None))
+    let res = tauri::async_runtime::spawn_blocking(move || sync_qrz_since(&engine, None, true))
         .await
         .map_err(|e| format!("QRZ sync task failed: {e}"))?;
     conn_logged(
@@ -18541,6 +20180,11 @@ const QRZ_SYNC_UNREACHABLE: ConnDetail = conn_detail!(
     "the sync never reached QRZ — check the network, and whether antivirus or a proxy is \
      inspecting HTTPS traffic. This session's connection log has the exact message."
 );
+/// The sync merged, and the merge could not be shown to be on disk. Nexus's own words.
+const QRZ_SYNC_NOT_SAVED: ConnDetail = conn_detail!(
+    "the sync merged QRZ's logbook into yours, but Nexus could not confirm the result was saved \
+     to disk. This session's connection log has the reason."
+);
 /// QRZ answered and refused. The class; never QRZ's wording, which is the leak.
 const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
     "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Logbook & \
@@ -18572,6 +20216,7 @@ fn qrz_fetch_refused(reason: Option<String>) -> QrzSyncFailure {
 fn sync_qrz_since(
     engine: &SharedEngine,
     since_unix: Option<u64>,
+    wait: bool,
 ) -> Result<LotwSyncResult, QrzSyncFailure> {
     let key = qrz_logbook_keychain()
         .map_err(|message| QrzSyncFailure {
@@ -18607,8 +20252,18 @@ fn sync_qrz_since(
     if !fetched.ok {
         return Err(qrz_fetch_refused(fetched.reason));
     }
-    let mut eng = engine_lock(engine);
-    let (added, summary) = eng.merge_qrz_report(&fetched.adif);
+    let ((added, summary), merged) =
+        engine_lock(engine).with_log_tickets(|eng| eng.merge_qrz_report(&fetched.adif));
+    // The operator's sync button waits for the merge to reach the disk; the hourly automatic
+    // sync does not (its next run would find the same state either way).
+    if wait {
+        merged
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(|e| QrzSyncFailure {
+                detail: QRZ_SYNC_NOT_SAVED,
+                message: ScreenReason::new(durability_failed(e)),
+            })?;
+    }
     let mut result: LotwSyncResult = summary.into();
     result.added = added;
     Ok(result)
@@ -19034,8 +20689,19 @@ async fn qrz_lookup(
         if !qrz_username.is_empty() {
             if let Ok(password) = qrz_keychain()?.get_password() {
                 queried_any = true;
-                let attempt =
-                    qrz_lookup_attempt(cand, &qrz_username, &password, qrz_session.inner());
+                // Blocking HTTP: on the blocking pool (see `get_aurora`).
+                let attempt = {
+                    let (cand, user, session) = (
+                        cand.clone(),
+                        qrz_username.clone(),
+                        qrz_session.inner().clone(),
+                    );
+                    tauri::async_runtime::spawn_blocking(move || {
+                        qrz_lookup_attempt(&cand, &user, &password, &session)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?
+                };
                 // #245, defect 1. This is the ONLY live evidence the QRZ XML subscription
                 // works, and it was never recorded — see `qrz_xml_stamp` for what counts.
                 let (ok, detail) = qrz_xml_stamp(&attempt);
@@ -19068,12 +20734,20 @@ async fn qrz_lookup(
         if !hamqth_username.is_empty() {
             if let Ok(password) = hamqth_keychain()?.get_password() {
                 queried_any = true;
-                if let Some(dto) = hamqth_lookup_attempt(
-                    cand,
-                    &hamqth_username,
-                    &password,
-                    hamqth_session.inner(),
-                )? {
+                // Blocking HTTP: on the blocking pool (see `get_aurora`).
+                let attempt = {
+                    let (cand, user, session) = (
+                        cand.clone(),
+                        hamqth_username.clone(),
+                        SharedHamQthSession(hamqth_session.0.clone()),
+                    );
+                    tauri::async_runtime::spawn_blocking(move || {
+                        hamqth_lookup_attempt(&cand, &user, &password, &session)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?
+                };
+                if let Some(dto) = attempt? {
                     note_lookup_name(&state, &call, &dto);
                     return Ok(dto);
                 }
@@ -19126,9 +20800,10 @@ async fn qrz_push_qso(
     // The impl does blocking HTTP (20 s timeout) — keep it off the async
     // executor so a slow QRZ can't stall every other Tauri command.
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || qrz_push_qso_impl(record, &engine))
-        .await
-        .map_err(|e| format!("upload task failed: {e}"))?;
+    let res =
+        tauri::async_runtime::spawn_blocking(move || qrz_push_qso_impl(record, &engine, true))
+            .await
+            .map_err(|e| format!("upload task failed: {e}"))?;
     // QRZ's `reason` rides the SESSION log, and only there. It stopped being persisted with
     // the stamp (it can carry the API key back — see `UploadDetail`), so this line is now
     // the one place an operator can read what QRZ actually said.
@@ -19348,7 +21023,12 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
                 .to_string()
         })?;
     let body = tempo_core::qrz::build_status_body(&key);
-    let resp = propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?;
+    // Blocking HTTP: on the blocking pool (see `get_aurora`).
+    let resp = tauri::async_runtime::spawn_blocking(move || {
+        propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let st = tempo_core::qrz::parse_status_response(&resp);
     if st.ok {
         let owner_raw = st.owner.clone().unwrap_or_default();
@@ -19374,6 +21054,7 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
 fn qrz_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
+    wait: bool,
 ) -> Result<tempo_app::dto::QrzPushResultDto, String> {
     let key = qrz_logbook_keychain()?
         .get_password()
@@ -19454,11 +21135,19 @@ fn qrz_push_qso_impl(
     // written into `log.adi`, which TQSL signs and uploads to ARRL. QRZ's own reason goes to
     // the connection log and the operator's toast, and dies with the session. See
     // `tempo_core::logbook::UploadDetail`.
-    {
+    let ((), stamped) = {
         let outcome = push.result.to_upload_outcome();
         let detail = push.result.to_upload_detail();
-        let mut eng = engine_lock(engine);
-        eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
+        engine_lock(engine).with_log_tickets(|eng| {
+            eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
+        })
+    };
+    // The operator's push button waits for the stamp to reach the disk; the upload worker
+    // does not (a stamp it loses is re-derived: a re-push answers Duplicate).
+    if wait {
+        stamped
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
     }
     Ok(push.into())
 }
@@ -19965,9 +21654,10 @@ async fn clublog_push_qso(
     let who = record.call.clone();
     // Blocking HTTP off the async executor (see qrz_push_qso).
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || clublog_push_qso_impl(record, &engine))
-        .await
-        .map_err(|e| format!("upload task failed: {e}"))?;
+    let res =
+        tauri::async_runtime::spawn_blocking(move || clublog_push_qso_impl(record, &engine, true))
+            .await
+            .map_err(|e| format!("upload task failed: {e}"))?;
     // ClubLog's own body rides the SESSION log, and only there — same reason as QRZ above.
     conn_logged(
         "ClubLog",
@@ -19989,6 +21679,7 @@ async fn clublog_push_qso(
 fn clublog_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
+    wait: bool,
 ) -> Result<tempo_app::dto::ClubLogPushResultDto, String> {
     use std::sync::atomic::Ordering;
     if CLUBLOG_SUSPENDED.load(Ordering::Relaxed) {
@@ -20061,8 +21752,15 @@ fn clublog_push_qso_impl(
     // `tempo_core::logbook::UploadDetail`.
     if let Some(outcome) = push.result.to_upload_outcome() {
         let detail = push.result.to_upload_detail();
-        let mut eng = engine_lock(engine);
-        eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
+        let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
+            eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
+        });
+        // The push button waits for the stamp; the upload worker does not (see QRZ's).
+        if wait {
+            stamped
+                .wait(tempo_app::logstore::DURABLE_WAIT)
+                .map_err(durability_failed)?;
+        }
     }
     Ok(push.into())
 }
@@ -20082,9 +21780,10 @@ async fn eqsl_push_qso(
     let who = record.call.clone();
     // Blocking HTTP off the async executor (see qrz_push_qso).
     let engine = state.inner().clone();
-    let res = tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine))
-        .await
-        .map_err(|e| format!("upload task failed: {e}"))?;
+    let res =
+        tauri::async_runtime::spawn_blocking(move || eqsl_push_qso_impl(record, &engine, true))
+            .await
+            .map_err(|e| format!("upload task failed: {e}"))?;
     conn_logged(
         "eQSL",
         |r| format!("pushed {} — outcome: {}", who, r.outcome),
@@ -20092,7 +21791,11 @@ async fn eqsl_push_qso(
     )
 }
 
-fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<UploadReportDto, String> {
+fn eqsl_push_qso_impl(
+    record: LoggedQso,
+    engine: &SharedEngine,
+    wait: bool,
+) -> Result<UploadReportDto, String> {
     // eQSL matches on the two operators' times agreeing: a record with no known
     // time of day can never match — sending it just parks it at eQSL unmatched
     // forever. Refuse with the reason instead of fabricating a midnight.
@@ -20161,14 +21864,25 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
             dispatched: 1,
             outcome: "retry".into(),
             detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
+            skipped_edited: 0,
+            skipped_deleted: 0,
         }),
         Some(outcome) => {
-            let mut eng = engine_lock(engine);
-            eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
+            let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
+                eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
+            });
+            // The push button waits for the stamp; the upload worker does not (see QRZ's).
+            if wait {
+                stamped
+                    .wait(tempo_app::logstore::DURABLE_WAIT)
+                    .map_err(durability_failed)?;
+            }
             Ok(UploadReportDto {
                 dispatched: 1,
                 outcome: outcome.code().to_string(),
                 detail: None,
+                skipped_edited: 0,
+                skipped_deleted: 0,
             })
         }
     }
@@ -20474,7 +22188,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
     // Legs that failed transiently → the worker retries just these.
     let mut failed: u8 = 0;
     if qrz_on && owed & legs::QRZ != 0 {
-        let (part, ok, transient) = match qrz_push_qso_impl(dto.clone(), engine) {
+        let (part, ok, transient) = match qrz_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "replace" | "duplicate");
                 conn_log(
@@ -20518,7 +22232,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         }
     }
     if clublog_on && owed & legs::CLUBLOG != 0 {
-        let (part, ok, transient) = match clublog_push_qso_impl(dto.clone(), engine) {
+        let (part, ok, transient) = match clublog_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "modified" | "duplicate");
                 conn_log(
@@ -20606,7 +22320,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         }
     }
     if eqsl_on && owed & legs::EQSL != 0 {
-        let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine) {
+        let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
                 conn_log(
@@ -20841,8 +22555,8 @@ fn cached_ota_spots(
 
 /// `cached`: re-derive the log's flags over the cached rows instead of fetching — see
 /// [`cached_ota_spots`]. Absent or false is the poll and the Refresh button, which fetch.
-#[tauri::command(async)]
-fn get_ota_spots(
+#[tauri::command]
+async fn get_ota_spots(
     program: String,
     cached: Option<bool>,
     state: State<'_, SharedEngine>,
@@ -20853,11 +22567,21 @@ fn get_ota_spots(
     let spots = if cached == Some(true) {
         cached_ota_spots(&ota_cache, &program)?
     } else {
+        // Blocking HTTP: on the blocking pool (see `get_aurora`).
         let spots = match program.as_str() {
-            "POTA" => propagation::live::pota::fetch_pota_spots()?,
-            "SOTA" => propagation::live::pota::fetch_sota_spots(30)?,
+            "POTA" => {
+                tauri::async_runtime::spawn_blocking(propagation::live::pota::fetch_pota_spots)
+                    .await
+            }
+            "SOTA" => {
+                tauri::async_runtime::spawn_blocking(|| {
+                    propagation::live::pota::fetch_sota_spots(30)
+                })
+                .await
+            }
             other => return Err(format!("Unknown program '{other}' — use POTA or SOTA.")),
-        };
+        }
+        .map_err(|e| e.to_string())??;
         // Refresh the lock-only cache the Needed scorer reads for POTA/SOTA tags —
         // keyed PER PROGRAM ("Both" mode fetches POTA and SOTA concurrently; a
         // single slot let the last writer evict the other program's activators).
@@ -21063,7 +22787,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_aurora" => ok(get_aurora(app.state()).await),
             "get_pca" => ok(get_pca(app.state(), app.state()).await),
             "get_satellites" => ok(get_satellites(app.state()).await),
-            "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state())),
+            "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
             "get_path_outlook" => {
@@ -21151,8 +22875,8 @@ fn place_ota(sp: &propagation::OtaSpot) -> Option<(f64, f64, bool)> {
 /// POTA only, deliberately. A SOTA spot carries no position — its payload has an
 /// association and summit code and nothing else — so a summit cannot be plotted
 /// from that feed without a second lookup against a different endpoint.
-#[tauri::command(async)]
-fn get_ota_map_spots(
+#[tauri::command]
+async fn get_ota_map_spots(
     state: State<'_, SharedEngine>,
     ota_cache: State<'_, SharedOtaSpots>,
 ) -> Result<Vec<OtaMapSpot>, String> {
@@ -21165,7 +22889,11 @@ fn get_ota_map_spots(
     let spots = match cached {
         Some(v) => v,
         None => {
-            let fresh = propagation::live::pota::fetch_pota_spots()?;
+            // Blocking HTTP: on the blocking pool (see `get_aurora`).
+            let fresh =
+                tauri::async_runtime::spawn_blocking(propagation::live::pota::fetch_pota_spots)
+                    .await
+                    .map_err(|e| e.to_string())??;
             if let Ok(mut c) = ota_cache.lock() {
                 c.insert("POTA".into(), (now, fresh.clone()));
             }
@@ -21350,30 +23078,36 @@ struct FdMergeReportDto {
 /// own merge identity, and a row already in the logbook is skipped rather than
 /// duplicated. Whether the merged rows are also queued for connector upload is the
 /// SESSION's control (`fd_set_upload`), which is off unless the operator turned it on.
-#[tauri::command(async)]
-fn fd_merge_to_general(
+#[tauri::command]
+async fn fd_merge_to_general(
     state: State<'_, SharedEngine>,
 ) -> Result<(FdMergeReportDto, AppSnapshot), String> {
-    let mut eng = engine_lock(&state);
-    let report = eng.fd_merge_to_general()?;
-    // ONE snapshot, taken after the merge and read for both answers. Two would be two
-    // full logbook sweeps under the engine mutex — the shape that stalled the
-    // waterfall — and the policy cannot change across the merge anyway.
-    let snap = eng.snapshot();
-    let queued = snap
-        .field_day
-        .as_ref()
-        .map(|f| f.upload.enabled && !f.upload.destinations.is_empty())
-        .unwrap_or(false);
-    Ok((
-        FdMergeReportDto {
-            added: report.added(),
-            already: report.already,
-            refused: report.refused,
-            queued,
-        },
-        snap,
-    ))
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let report = eng.fd_merge_to_general()?;
+            // ONE snapshot, taken after the merge and read for both answers. Two would be two
+            // full logbook sweeps under the engine mutex — the shape that stalled the
+            // waterfall — and the policy cannot change across the merge anyway.
+            let snap = eng.snapshot();
+            let queued = snap
+                .field_day
+                .as_ref()
+                .map(|f| f.upload.enabled && !f.upload.destinations.is_empty())
+                .unwrap_or(false);
+            Ok((
+                FdMergeReportDto {
+                    added: report.added(),
+                    already: report.already,
+                    refused: report.refused,
+                    queued,
+                },
+                snap,
+            ))
+        })
+    })
+    .await
 }
 
 /// Set this session's upload destination (§18.1) — per session, default OFF.
@@ -23020,18 +24754,24 @@ struct PotaStampResult {
     unmatched: usize,
 }
 
-#[tauri::command(async)]
-fn import_pota_log(
+#[tauri::command]
+async fn import_pota_log(
     state: State<'_, SharedEngine>,
     text: String,
 ) -> Result<PotaStampResult, String> {
-    let mut eng = engine_lock(&state);
-    let (stamped, already, unmatched) = eng.import_pota_log(&text);
-    Ok(PotaStampResult {
-        stamped,
-        already,
-        unmatched,
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let mut eng = engine_lock(&engine);
+        eng.with_log_tickets(|eng| {
+            let (stamped, already, unmatched) = eng.import_pota_log(&text);
+            Ok(PotaStampResult {
+                stamped,
+                already,
+                unmatched,
+            })
+        })
     })
+    .await
 }
 
 /// The app version (from tauri.conf.json, e.g. "0.15.8") for display in the UI. NOTE: this is
@@ -23173,6 +24913,16 @@ static QUIT_CLEANUP_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 static QUIT_SKIP_GEOMETRY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// The launch has attached the logbook and read back everything the engine keeps on disk
+/// (`finish_launch`).
+///
+/// ⛔ Until then a quit has nothing of the operator's in memory, and must write nothing. The event
+/// loop runs through a first launch's conversion now, so a quit can arrive while the engine still
+/// holds the empty conversation list it was built with: `persist_journals` would write that over
+/// the operator's saved history. The hidden main window's box is not one they sized, either. The
+/// logbook is flushed on every quit regardless — without an attached store that is a no-op.
+static LAUNCH_ATTACHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Everything a quit must flush, in one place — reached from BOTH `RunEvent::ExitRequested`
 /// and `RunEvent::Exit` (see the `.run` closure for why two events mean one cleanup).
 ///
@@ -23191,8 +24941,12 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     if QUIT_CLEANUP_RAN.swap(true, Ordering::SeqCst) {
         return;
     }
-    // Window geometry FIRST, while the windows still exist.
-    capture_all_window_geometry(app_handle);
+    // Window geometry FIRST, while the windows still exist — once the launch got that far (see
+    // `LAUNCH_ATTACHED`).
+    let attached = LAUNCH_ATTACHED.load(Ordering::SeqCst);
+    if attached {
+        capture_all_window_geometry(app_handle);
+    }
     // Unkey the transmitter before the process dies: signal the radio
     // loop to drop PTT and give it a brief window to flush the un-key
     // command to the rig. A stuck carrier on quit is a TX-safety
@@ -23219,7 +24973,14 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
         // ordinary case where the loop's drops already ran.
         tempo_audio::rigctld_proc::kill_leftover_daemons();
     }
-    persist_journals(app_handle);
+    if attached {
+        persist_journals(app_handle);
+    } else {
+        flush_logbook(
+            app_handle.state::<SharedEngine>().inner(),
+            LOG_FLUSH_ON_EXIT,
+        );
+    }
     // LAST: a clean exit is itself diagnostic — its absence in the file says the process
     // died rather than quit. Bounded wait; a wedged writer can never hold up an exit.
     tempo_core::applog::info("startup", "clean shutdown");
@@ -23245,14 +25006,19 @@ fn capture_all_window_geometry(app_handle: &tauri::AppHandle) {
     }
 }
 
-/// Write out everything the engine is holding in memory: the conversations, the Field Day log,
-/// and any propagation opening still in progress (a 6m Es evening isn't lost because the app
-/// closed mid-opening).
+/// Write out everything the engine is holding in memory: the logbook's changes still on their
+/// way to disk ([`flush_logbook`], first — it is the one thing here that cannot be rebuilt), the
+/// conversations, the Field Day log, and any propagation opening still in progress (a 6m Es
+/// evening isn't lost because the app closed mid-opening).
 ///
 /// Split out of [`quit_cleanup`] so the Windows self-update path can reach it — see
 /// [`prepare_update_install`]. Every call is a plain overwrite of the same files, so running it
 /// twice costs a second write and changes nothing.
 fn persist_journals(app_handle: &tauri::AppHandle) {
+    flush_logbook(
+        app_handle.state::<SharedEngine>().inner(),
+        LOG_FLUSH_ON_EXIT,
+    );
     persist_conversations(app_handle.state::<SharedEngine>().inner());
     persist_field_day_log(app_handle.state::<SharedEngine>().inner());
     if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
@@ -23329,6 +25095,19 @@ struct BuildDeps {
     /// at all; present but silent until a browser with station control asks for it.
     #[cfg(feature = "radio")]
     receive_audio: std::sync::Arc<tempo_audio::receive_audio::ReceiveAudioFeed>,
+    /// The launch's second half ([`finish_launch`]) — a take-once cell like `pounce_rx`, and for
+    /// the same reason: the radio config in it cannot be cloned for a second build attempt.
+    launch_rest: Arc<Mutex<Option<LaunchRest>>>,
+}
+
+/// The part of `run()`'s state that only the launch's second half uses, handed to it through the
+/// setup hook (see [`finish_launch`]).
+struct LaunchRest {
+    /// The signal source the operator left the app on.
+    persisted_source: SourceKind,
+    /// The radio loop's config, built from the settings before the engine took them.
+    #[cfg(feature = "radio")]
+    radio_cfg: tempo_audio::service::RadioConfig,
 }
 
 /// Where Tauri puts the WebView2 user-data folder on Windows — and, when it is corrupt, the
@@ -23554,6 +25333,16 @@ pub fn run() {
         ),
     );
     install_panic_logger();
+
+    // ⛔ A second launch while another window converts this data folder's logbook stands down
+    // HERE, before it has done anything — no settings written, no feed logged in, no daemon
+    // started. The other window's splash already says what is happening; without this, this
+    // launch would wait on the conversion with nothing on screen and then open a second copy of
+    // Nexus over the same log.
+    if converting_elsewhere(&logbook_path()) {
+        stand_down_for_a_conversion_elsewhere();
+        return;
+    }
 
     // Take this profile's advisory lock (named profiles only — the default single-instance is a
     // no-op). Lets the launch picker grey out a radio already open in another window, and marks
@@ -23998,6 +25787,133 @@ pub fn run() {
         });
     }
 
+    // ⭐ THE LAUNCH HAS TWO HALVES, AND THE SECOND WAITS FOR THE SPLASH. Everything above is what
+    // the window needs before it can exist. The logbook — converted from `log.adi` on the first
+    // launch after the database arrived, which on a lifetime log takes long enough to read as
+    // "Nexus did not start" — and everything that must not start before it is attached run in
+    // `finish_launch`, on a thread of its own, once the splash is on screen. See it for why
+    // nothing can read or write the log, log a contact or key the rig before that.
+    //
+    // The state the builder manages for that half is made here, because the builder needs it
+    // before that half runs.
+    let fd_board_state: SharedFdBoardState = Arc::new(Mutex::new(FdBoardState::default()));
+    let prop_cache: PropCache = Arc::new(Mutex::new(None));
+    let aurora_cache: AuroraCache = Arc::new(Mutex::new(None));
+    let kc2g_cache: Kc2gCache = Arc::new(Mutex::new(None));
+    let kp_forecast_cache: KpForecastCache = Arc::new(Mutex::new(None));
+    let proton_cache: ProtonCache = Arc::new(Mutex::new(None));
+    let scales_cache: ScalesCache = Arc::new(Mutex::new(None));
+    let connect_web_state: SharedConnectWebState = Arc::new(Mutex::new(ConnectWebState::default()));
+
+    // NOT registered as managed state, deliberately. `Chains` would have to be keyed by
+    // `RadioProfile::id`, and the only id available here is a BOOT SNAPSHOT of
+    // `settings.active_radio`. Switching radios in Settings does not rebuild the engine —
+    // `Engine::set_active_radio` mutates settings in place on the same engine — so the entry
+    // would sit filed under a dead profile id the moment the operator switches, with no refresh
+    // hook and no assertion. The first caller writing the obvious
+    // `chains.get(chain_of(w).unwrap_or(active))` would then get `None` for the LIVE radio: the
+    // exact wrong-rig class this addressing layer exists to make unrepresentable, reintroduced
+    // one layer down.
+    //
+    // Nothing reads the registry yet, so managing it buys nothing and stores a fact that is
+    // knowably wrong. Re-keying on radio-switch is the cap-lift's problem, and the cap-lift is
+    // where the registry acquires its first reader. The type and its tests stay — they are the
+    // proven artifact that branch starts from.
+    // Pounce: the detector thread + the app's push channel to the UI. The cluster feeds hand
+    // spots to `POUNCE_TX` (non-blocking); this thread does the scoring and emits an event only
+    // when something genuinely rare appears. Everything else in the app is polled — this is
+    // deliberately not, because the whole value of the feature is that the alert arrives the
+    // MOMENT the spot does, and a poll is late by construction.
+    let (pounce_tx, pounce_rx) = pouncer::channel();
+    let _ = POUNCE_TX.set(pounce_tx);
+
+    // Everything the builder chain moves, bundled so a retry can be handed an identical set.
+    let deps = BuildDeps {
+        engine,
+        spectrum_feed,
+        meter_feed,
+        prop_cache,
+        aurora_cache,
+        kc2g_cache,
+        kp_forecast_cache,
+        proton_cache,
+        scales_cache,
+        spots,
+        live_paths,
+        ota_spots,
+        parks,
+        region_paths,
+        health,
+        fd_board: fd_board_state,
+        connect_web: connect_web_state,
+        // The pounce receiver is the one non-clonable thing the chain takes. Shared as a
+        // take-once cell so both attempts can hold the bundle: whichever setup runs first
+        // gets the receiver, and a retry whose predecessor already consumed it skips the
+        // detector rather than failing the launch over an alerting nicety.
+        pounce_rx: Arc::new(Mutex::new(Some(pounce_rx))),
+        #[cfg(feature = "radio")]
+        receive_audio,
+        pounces: Default::default(),
+        launch_rest: Arc::new(Mutex::new(Some(LaunchRest {
+            persisted_source,
+            #[cfg(feature = "radio")]
+            radio_cfg,
+        }))),
+    };
+
+    let app = match build_app(deps.clone()) {
+        Ok(app) => app,
+        Err(e) => match rebuild_after_setting_webview_data_aside(&e, deps) {
+            Some(app) => app,
+            None => return,
+        },
+    };
+    app.run(|app_handle, event| {
+        // Flush conversation history, Field Day log, opening episodes and window
+        // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
+        //
+        // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
+        // deliver different events and neither is a superset of the other:
+        //  - window close (all platforms) and `app.exit()`/`request_restart()`:
+        //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
+        //    exactly as it always did, and the second arm no-ops on the guard;
+        //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
+        //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
+        //    is never emitted on that path, which is how Cmd+Q used to skip the
+        //    whole cleanup. `Exit` arrives synchronously inside the terminate
+        //    callback, so the unkey wait still completes before the process dies.
+        match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                quit_cleanup(app_handle);
+            }
+            _ => {}
+        }
+    });
+}
+
+/// The launch from the logbook on: [`finish_launch`] calls it once the splash is on screen and the
+/// logbook is open.
+///
+/// **Moved out of `run()` whole, in its original order, and otherwise unchanged.** The engine
+/// adopts the log (after the resolvers, so its first index is right), the journals come back, and
+/// only then does anything start that reads or writes the log or can key the rig: the connector
+/// workers, the radio loop, the CAT broker, the club and board servers. What changed is the thread
+/// it runs on, which is what keeps a window on screen while a first launch converts a lifetime log.
+fn start_on_the_logbook(
+    d: &BuildDeps,
+    logbook_store: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
+    rest: LaunchRest,
+) {
+    let LaunchRest {
+        persisted_source,
+        #[cfg(feature = "radio")]
+        radio_cfg,
+    } = rest;
+    let engine = d.engine.clone();
+    let fd_board_state = d.fd_board.clone();
+    let prop_cache = d.prop_cache.clone();
+    let kp_forecast_cache = d.kp_forecast_cache.clone();
+    let connect_web_state = d.connect_web.clone();
     // Point the logbook at its ADIF file and load prior contacts (so worked-
     // before highlighting and the log view reflect previous sessions), and
     // restore the persisted signal source.
@@ -24120,7 +26036,7 @@ pub fn run() {
                 .and_then(|m| m.get(&call.to_uppercase()).copied())
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
-        eng.set_log_path(logbook_path());
+        adopt_logbook(&mut eng, &logbook_path(), logbook_store);
         // Club-sync position identity: generated once (8 hex), persisted, and
         // never edited — QSO ids are (posid, seq), so a changed id would
         // re-push every contact as new.
@@ -24237,7 +26153,7 @@ pub fn run() {
                 continue;
             }
             // HTTP off the engine lock (the lock is taken inside, around the merge).
-            match sync_qrz_since(&sync_engine, Some(last)) {
+            match sync_qrz_since(&sync_engine, Some(last), false) {
                 Ok(r) => {
                     {
                         // The NARROW mutation — never `apply_settings` for one field: its
@@ -24314,7 +26230,7 @@ pub fn run() {
             // long as the outage lasted. Only a hard `Err` (no TQSL installed, unwritable
             // temp file) leaves it alone, and that case cannot loop because it never got
             // as far as a process.
-            match lotw_upload_batch(&auto_engine, None) {
+            match lotw_upload_batch(&auto_engine, None, false) {
                 Ok(r) => {
                     {
                         // The NARROW mutation — never `apply_settings` for one field
@@ -25018,7 +26934,6 @@ pub fn run() {
     // only in the host role — elsewhere the page says "served from the host
     // station". Deliberately NOT under cfg(feature = "radio"): a scoreboard
     // needs no soundcard.
-    let fd_board_state: SharedFdBoardState = Arc::new(Mutex::new(FdBoardState::default()));
     {
         use std::sync::atomic::{AtomicBool, Ordering};
         let mgr_engine = engine.clone();
@@ -25109,13 +27024,6 @@ pub fn run() {
         });
     }
 
-    let prop_cache: PropCache = Arc::new(Mutex::new(None));
-    let aurora_cache: AuroraCache = Arc::new(Mutex::new(None));
-    let kc2g_cache: Kc2gCache = Arc::new(Mutex::new(None));
-    let kp_forecast_cache: KpForecastCache = Arc::new(Mutex::new(None));
-    let proton_cache: ProtonCache = Arc::new(Mutex::new(None));
-    let scales_cache: ScalesCache = Arc::new(Mutex::new(None));
-
     // Connect on the shack TV: the same manager-thread shape as the spectator
     // scoreboard — poll settings 1 s, hot-apply, retry a failed bind quietly on a
     // timer. While `connect_web` is on, `tempo_app::connect_web` serves through the
@@ -25126,7 +27034,6 @@ pub fn run() {
     // provider below is the ONLY thing the serve thread can reach, and it hands over
     // the propagation picture plus callsign and grid: no dial frequency, no log, no
     // needs board. A payload-shape test in `connect_web` fails if that widens.
-    let connect_web_state: SharedConnectWebState = Arc::new(Mutex::new(ConnectWebState::default()));
     {
         use std::sync::atomic::{AtomicBool, Ordering};
         let mgr_engine = engine.clone();
@@ -25221,86 +27128,307 @@ pub fn run() {
             }
         });
     }
+}
 
-    // NOT registered as managed state, deliberately. `Chains` would have to be keyed by
-    // `RadioProfile::id`, and the only id available here is a BOOT SNAPSHOT of
-    // `settings.active_radio`. Switching radios in Settings does not rebuild the engine —
-    // `Engine::set_active_radio` mutates settings in place on the same engine — so the entry
-    // would sit filed under a dead profile id the moment the operator switches, with no refresh
-    // hook and no assertion. The first caller writing the obvious
-    // `chains.get(chain_of(w).unwrap_or(active))` would then get `None` for the LIVE radio: the
-    // exact wrong-rig class this addressing layer exists to make unrepresentable, reintroduced
-    // one layer down.
-    //
-    // Nothing reads the registry yet, so managing it buys nothing and stores a fact that is
-    // knowably wrong. Re-keying on radio-switch is the cap-lift's problem, and the cap-lift is
-    // where the registry acquires its first reader. The type and its tests stay — they are the
-    // proven artifact that branch starts from.
-    // Pounce: the detector thread + the app's push channel to the UI. The cluster feeds hand
-    // spots to `POUNCE_TX` (non-blocking); this thread does the scoring and emits an event only
-    // when something genuinely rare appears. Everything else in the app is polled — this is
-    // deliberately not, because the whole value of the feature is that the alert arrives the
-    // MOMENT the spot does, and a poll is late by construction.
-    let (pounce_tx, pounce_rx) = pouncer::channel();
-    let _ = POUNCE_TX.set(pounce_tx);
-
-    // Everything the builder chain moves, bundled so a retry can be handed an identical set.
-    let deps = BuildDeps {
-        engine,
-        spectrum_feed,
-        meter_feed,
-        prop_cache,
-        aurora_cache,
-        kc2g_cache,
-        kp_forecast_cache,
-        proton_cache,
-        scales_cache,
-        spots,
-        live_paths,
-        ota_spots,
-        parks,
-        region_paths,
-        health,
-        fd_board: fd_board_state,
-        connect_web: connect_web_state,
-        // The pounce receiver is the one non-clonable thing the chain takes. Shared as a
-        // take-once cell so both attempts can hold the bundle: whichever setup runs first
-        // gets the receiver, and a retry whose predecessor already consumed it skips the
-        // detector rather than failing the launch over an alerting nicety.
-        pounce_rx: Arc::new(Mutex::new(Some(pounce_rx))),
-        #[cfg(feature = "radio")]
-        receive_audio,
-        pounces: Default::default(),
-    };
-
-    let app = match build_app(deps.clone()) {
-        Ok(app) => app,
-        Err(e) => match rebuild_after_setting_webview_data_aside(&e, deps) {
-            Some(app) => app,
-            None => return,
-        },
-    };
-    app.run(|app_handle, event| {
-        // Flush conversation history, Field Day log, opening episodes and window
-        // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
-        //
-        // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
-        // deliver different events and neither is a superset of the other:
-        //  - window close (all platforms) and `app.exit()`/`request_restart()`:
-        //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
-        //    exactly as it always did, and the second arm no-ops on the guard;
-        //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
-        //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
-        //    is never emitted on that path, which is how Cmd+Q used to skip the
-        //    whole cleanup. `Exit` arrives synchronously inside the terminate
-        //    callback, so the unkey wait still completes before the process dies.
-        match event {
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                quit_cleanup(app_handle);
-            }
-            _ => {}
+/// The launch from the moment the splash is on screen: open the logbook — converting `log.adi` on
+/// the first launch after the database arrived — attach it, start everything that waits on it,
+/// then swap the splash for the main window. The setup hook runs it on a thread of its own
+/// ([`finish_launch_or_say_why`]), so the splash stays alive and says what is happening.
+///
+/// ⛔ **The order is the startup's safety, and it is the order `run()` always had:**
+/// - nothing reads or writes the log before it is attached. The main window waits on a page that
+///   runs nothing (`blank.html`, from `tauri.conf.json`) instead of loading the app, so no command
+///   reaches the engine from it; the splash is granted no command at all (`capabilities/
+///   default.json` names only `main` and the pop-outs); the Remote service is built here, after the
+///   attach ([`remote_service_for`]); and a quit before the attach writes no journal
+///   (`LAUNCH_ATTACHED`);
+/// - nothing that can log a contact or key the rig starts before the attach either:
+///   [`start_on_the_logbook`] starts the radio loop after `adopt_logbook`, as `run()` did, and the
+///   RX decoders, the pounce detector and the AI CW decoder start after that, as the setup hook
+///   did;
+/// - the main window is shown last: two seconds after it is sent to the app, the time the setup
+///   hook always gave it to draw behind the splash.
+fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
+    use tauri::Manager;
+    let log = logbook_path();
+    let network = data_folder_location::FolderLocation::of(
+        &shared_data_dir(),
+        data_folder_location::mount_table().as_deref(),
+    )
+    .network;
+    // `run()` asked this before it did anything. Asked again right before this launch would begin
+    // converting, for a second window started so close behind another that neither had begun when
+    // `run()` asked.
+    if converting_elsewhere(&log) {
+        stand_down_for_a_conversion_elsewhere();
+        handle.exit(0);
+        return;
+    }
+    // The logbook database first, outside the engine lock (see `open_logbook_store`); the engine
+    // adopts it in `start_on_the_logbook`, once the resolvers are set. On the launch that
+    // converts, the splash says so while it works.
+    let notes = (network.is_none() && conversion_ahead(&log)).then(|| splash_notes(&handle));
+    if notes.is_some() {
+        tempo_core::applog::info(
+            "startup",
+            "converting log.adi into the logbook database; the splash says so",
+        );
+    }
+    let logbook_store = open_logbook_store(&log, network, &mut |p| {
+        if let Some(notes) = &notes {
+            let _ = notes.send(SplashNote::Converting {
+                done: p.done,
+                total: p.total,
+            });
         }
     });
+    if let Some(notes) = notes {
+        // The last note. The relay delivers it, then ends when this sender drops.
+        let _ = notes.send(SplashNote::Opening);
+    }
+    start_on_the_logbook(&d, logbook_store, rest);
+    LAUNCH_ATTACHED.store(true, std::sync::atomic::Ordering::SeqCst);
+    tempo_core::applog::info("startup", "logbook attached; starting what waits on it");
+    handle.manage(remote_service_for(
+        &d,
+        handle.state::<remote_monitor::Publisher>().inner().clone(),
+    ));
+    // Pounce detector. Emits `pounce` to every window when a rare one appears — the
+    // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
+    // panel windows get it too without tracking listener lifetimes.
+    {
+        use tauri::Emitter;
+        // Take-once: the dependency bundle is cloned for a possible retry, so the
+        // receiver is shared and whichever setup runs first claims it. `None` on a
+        // retry whose predecessor already took it — the detector is an alerting
+        // nicety, and going without it is strictly better than failing a launch that
+        // has just healed itself.
+        let claimed = d.pounce_rx.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(rx) = claimed {
+            let eng = handle.state::<SharedEngine>().inner().clone();
+            let emit_handle = handle.clone();
+            let recent = d.pounces.clone();
+            std::thread::Builder::new()
+                .name("nexus-pounce".into())
+                .spawn(move || {
+                    pouncer::run(eng, rx, recent, move |p| {
+                        let _ = emit_handle.emit("pounce", &p);
+                    });
+                })
+                .expect("spawn pounce detector");
+        } else {
+            tempo_core::applog::warn(
+                "startup",
+                "pounce detector not started (receiver already claimed by a prior build attempt)",
+            );
+        }
+    }
+    // AI CW decoder (beta): resolve the DeepCW model from the app's cross-platform
+    // RESOURCE dir (where Tauri bundles `resources/deepcw/*`) — next to the exe on
+    // Windows, under usr/lib/<app>/resources on a Linux .deb/AppImage. The prior
+    // exe-adjacent lookup only worked on Windows, so Linux reported "model not
+    // installed" though the model ships in the bundle. Try the resource-dir candidates
+    // (and the exe-adjacent one) and pick the first that exists; a genuinely missing
+    // model just surfaces the honest status.
+    #[cfg(feature = "radio")]
+    {
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(res) = handle.path().resource_dir() {
+            candidates.push(res.join("resources").join("deepcw"));
+            candidates.push(res.join("deepcw"));
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(d) = exe.parent() {
+                candidates.push(d.join("resources").join("deepcw"));
+            }
+        }
+        let dir = candidates
+            .iter()
+            .find(|d| d.is_dir())
+            .cloned()
+            .unwrap_or_else(|| std::path::PathBuf::from("resources/deepcw"));
+        let eng = handle.state::<SharedEngine>().inner().clone();
+        tempo_audio::aicw::spawn_ai_cw(eng, dir);
+    }
+    // Seed the SSTV gallery session list from the persisted gallery.json
+    // so past images are browsable immediately (the decode thread only
+    // appends). Parsed here (not via tempo-audio) so non-radio builds
+    // still show the gallery.
+    {
+        // Reconciled against the directory, not trusted. The index could name images
+        // that are gone (a hand-deleted .bmp used to leave a thumbnail over nothing) and
+        // the folder could hold images the index never knew about — a hand-copied file, or
+        // one evicted from the in-memory cap and still on disk. #23.
+        let dir = sstv_gallery_dir();
+        let entries: Vec<tempo_app::dto::SstvGalleryEntry> = reconcile_gallery(
+            &dir,
+            std::fs::read_to_string(dir.join("gallery.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or_default(),
+        );
+        if !entries.is_empty() {
+            if let Ok(mut eng) = handle.state::<SharedEngine>().inner().lock() {
+                eng.load_sstv_gallery(entries);
+            }
+        }
+    }
+    // RTTY + PSK + SSTV RX decode threads, and the amplifier status poll — RX ONLY
+    // (arming is per-session runtime state; nothing here can key PTT or emit TX audio).
+    //
+    // The amplifier belongs in THIS family and nowhere else, and that is the whole
+    // isolation argument spent in one place. It must never be folded into the radio
+    // loop's heavy CAT block: that loop ticks every 20 ms and caps its entire read-back
+    // at HEAVY_POLL_BUDGET_MS = 250, asking have_budget() before every single read,
+    // while ONE amplifier poll is 0.5-2.4 s of blocking serial (SPE: two read_exact at
+    // a 500 ms budget; KPA: six sequential verbs at 400 ms each) — 25 to 120 ticks. A
+    // reader that long inside the budget does not fail loudly; it silently STARVES the
+    // readers after it, which is exactly what \dump_caps did to the split read it was
+    // meant to qualify. Nor may it live in RadioLoop, and nor may it become a
+    // spawn_blocking per UI poll: that model reopens its transport on every call, which
+    // for a serial amplifier means opening and closing a COM port every second.
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::rttyrx::spawn_rtty_rx(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::amppoll::spawn_amp_poll(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::pskrx::spawn_psk_rx(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::aprsrx::spawn_aprs_rx(handle.state::<SharedEngine>().inner().clone());
+        tempo_audio::sstvrx::spawn_sstv_rx(
+            handle.state::<SharedEngine>().inner().clone(),
+            sstv_gallery_dir(),
+        );
+    }
+    // Everything the main window reads is in place. Send it to the app and, as the setup hook
+    // always did, give the app two seconds to draw behind the splash before swapping them.
+    let main = match send_main_window_to_the_app(&handle) {
+        Ok(main) => main,
+        Err(why) => {
+            let why = format!("the main window could not be sent to the app: {why}");
+            tempo_core::applog::error("startup", &why);
+            show_startup_failure(&why);
+            handle.exit(1);
+            return;
+        }
+    };
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let _ = main.show();
+    let _ = main.set_focus();
+    if let Some(splash) = handle.get_webview_window("splashscreen") {
+        let _ = splash.close();
+    }
+    tempo_core::applog::info("startup", "main window shown");
+}
+
+/// [`finish_launch`], and what happens if it panics: the main window would never be shown, and
+/// the operator would be left looking at the splash. The panic hook has logged it; say so the way
+/// a start that failed is said, and exit.
+fn finish_launch_or_say_why(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
+    let exit = handle.clone();
+    let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        finish_launch(handle, d, rest)
+    }));
+    if finished.is_err() {
+        show_startup_failure("Nexus stopped while opening the logbook.");
+        exit.exit(1);
+    }
+}
+
+/// Send the main window from the page it waits on to the app, and hand it back.
+fn send_main_window_to_the_app(handle: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+    use tauri::Manager;
+    let main = handle
+        .get_webview_window("main")
+        .ok_or("there is no main window")?;
+    let waiting = main.url().map_err(|e| e.to_string())?;
+    let app = app_address(&waiting).ok_or_else(|| format!("no app address beside {waiting}"))?;
+    main.navigate(app).map_err(|e| e.to_string())?;
+    Ok(main)
+}
+
+/// The app's address, from the address of the page the main window waits on: the root beside it.
+/// That is where Tauri itself loads a window whose page is `index.html` — it drops the file name,
+/// and its asset server answers the root with `index.html` — in a build and under the dev server
+/// alike.
+fn app_address(waiting: &tauri::Url) -> Option<tauri::Url> {
+    waiting.join("./").ok()
+}
+
+/// What the splash says while the launch converts the logbook, as `nexusSplash.show` in
+/// `ui/public/splashscreen.html` reads it. The words are the page's, in the operator's language;
+/// a note carries only the state and the counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+enum SplashNote {
+    /// Moving the log into the database: `done` of `total` contacts, `total` 0 while the
+    /// conversion has not counted them yet.
+    Converting { done: usize, total: usize },
+    /// The conversion is over, and the rest of the launch is starting.
+    Opening,
+}
+
+/// The script that hands `note` to the splash page. It does nothing on a page whose own script
+/// has not loaded yet, which is why the relay sends the newest note again.
+fn splash_script(note: &SplashNote) -> String {
+    format!(
+        "window.nexusSplash&&window.nexusSplash.show({})",
+        serde_json::to_string(note).unwrap_or_default()
+    )
+}
+
+/// How often the relay sends the splash the newest note — at most, however fast the conversion
+/// reports, and at least, while nothing new arrives.
+const SPLASH_RESEND: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Hand the splash the newest note from `rx` through `show`: at most once per [`SPLASH_RESEND`]
+/// however fast notes arrive, again every [`SPLASH_RESEND`] while none does — a note that reached
+/// the page before its script had loaded is lost otherwise — and the last one always, when the
+/// channel closes.
+fn relay_splash_notes(rx: std::sync::mpsc::Receiver<SplashNote>, mut show: impl FnMut(&str)) {
+    use std::sync::mpsc::RecvTimeoutError;
+    let mut newest: Option<SplashNote> = None;
+    let mut shown_at: Option<std::time::Instant> = None;
+    loop {
+        let closed = match rx.recv_timeout(SPLASH_RESEND) {
+            Ok(note) => {
+                newest = Some(note);
+                false
+            }
+            Err(RecvTimeoutError::Timeout) => false,
+            Err(RecvTimeoutError::Disconnected) => true,
+        };
+        // A burst is one note: the newest.
+        while let Ok(note) = rx.try_recv() {
+            newest = Some(note);
+        }
+        let due = closed || shown_at.is_none_or(|at| at.elapsed() >= SPLASH_RESEND);
+        if let (true, Some(note)) = (due, &newest) {
+            show(&splash_script(note));
+            shown_at = Some(std::time::Instant::now());
+        }
+        if closed {
+            return;
+        }
+    }
+}
+
+/// Start telling the splash what the conversion is doing: the channel its progress goes into, with
+/// a thread of its own relaying it to the page. The first note — converting, count not yet known —
+/// is already on its way.
+fn splash_notes(handle: &tauri::AppHandle) -> std::sync::mpsc::Sender<SplashNote> {
+    use tauri::Manager;
+    let (notes, rx) = std::sync::mpsc::channel();
+    let _ = notes.send(SplashNote::Converting { done: 0, total: 0 });
+    let handle = handle.clone();
+    let _ = std::thread::Builder::new()
+        .name("nexus-splash".into())
+        .spawn(move || {
+            relay_splash_notes(rx, |js| {
+                if let Some(splash) = handle.get_webview_window("splashscreen") {
+                    let _ = splash.eval(js);
+                }
+            })
+        });
+    notes
 }
 
 /// One attempt at building the Tauri application.
@@ -25316,37 +27444,8 @@ pub fn run() {
 /// second identical set to a retry after setting a corrupt WebView2 user-data folder aside.
 fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
     let remote_publisher = remote_monitor::Publisher::default();
-    let remote_service = remote_service::Service::new(
-        d.engine.clone(),
-        remote_publisher.clone(),
-        d.spectrum_feed.clone(),
-        d.meter_feed.clone(),
-        Some(remote_service::query::Sources {
-            spots: d.spots.clone(),
-            live_paths: d.live_paths.clone(),
-            region_paths: d.region_paths.clone(),
-            ota: d.ota_spots.clone(),
-            parks: d.parks.clone(),
-            pounces: d.pounces.clone(),
-            health: d.health.clone(),
-            propagation: d.prop_cache.clone(),
-            memories: Default::default(),
-            navigation: remote_service::query::navigation::Source::new(
-                d.aurora_cache.clone(),
-                d.kc2g_cache.clone(),
-                d.proton_cache.clone(),
-                d.scales_cache.clone(),
-            ),
-            sstv: remote_service::sstv::Source::new(vec![
-                sstv_gallery_dir(),
-                legacy_sstv_gallery_dir(),
-            ]),
-        }),
-        // Receive audio for a listening browser. Without this the lane is never
-        // advertised and no browser is ever offered the control.
-        #[cfg(feature = "radio")]
-        Some(d.receive_audio.clone()),
-    );
+    // The launch's second half gets the whole bundle: the builder chain below moves its fields.
+    let launch = d.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -25358,7 +27457,6 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .plugin(tauri_plugin_dialog::init())
         .manage(d.engine)
         .manage(remote_publisher)
-        .manage(remote_service)
         .manage(d.spectrum_feed)
         .manage(d.meter_feed)
         .manage(d.prop_cache)
@@ -25776,12 +27874,14 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             qsy_pause,
             qsy_stop
         ])
-        // `move`: the hook claims the pounce receiver out of the shared bundle, so it owns
-        // its half of `d` rather than borrowing a local that is about to go out of scope.
+        // `move`: the hook hands the launch's second half its own copy of the bundle (`launch`),
+        // which it owns rather than borrowing a local that is about to go out of scope.
         .setup(move |app| {
-            // Classic startup splash: the borderless `splashscreen` window shows on top for ~3s
-            // while the `main` window (declared hidden) loads behind it; then reveal main and
-            // close the splash. A plain thread timer — no dependency on the frontend being ready.
+            // The startup splash. Tauri made the borderless `splashscreen` window and the hidden
+            // `main` window before this hook runs. The hook does what needs the main thread or the
+            // app handle, then starts the rest of the launch on a thread of its own
+            // (`finish_launch`), which swaps the splash for the main window once the logbook is
+            // attached.
             use tauri::Manager;
             // Capture the bundled-resource dir FIRST: it is the only handle-derived path
             // the TLE seed loader can use, and the first satellite/Now-Bar poll may arrive
@@ -25827,122 +27927,22 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             // is the answer the Greek-Windows report needed and could not get.
             tempo_core::applog::info("startup", "main window created; app setup running");
             STARTUP_REACHED_WINDOW.store(true, std::sync::atomic::Ordering::SeqCst);
-            // Pounce detector. Emits `pounce` to every window when a rare one appears — the
-            // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
-            // panel windows get it too without tracking listener lifetimes.
-            {
-                use tauri::Emitter;
-                // Take-once: the dependency bundle is cloned for a possible retry, so the
-                // receiver is shared and whichever setup runs first claims it. `None` on a
-                // retry whose predecessor already took it — the detector is an alerting
-                // nicety, and going without it is strictly better than failing a launch that
-                // has just healed itself.
-                let claimed = d.pounce_rx.lock().unwrap_or_else(|e| e.into_inner()).take();
-                if let Some(rx) = claimed {
-                    let eng = app.state::<SharedEngine>().inner().clone();
-                    let emit_handle = app.handle().clone();
-                    let recent = d.pounces.clone();
-                    std::thread::Builder::new()
-                        .name("nexus-pounce".into())
-                        .spawn(move || {
-                            pouncer::run(eng, rx, recent, move |p| {
-                                let _ = emit_handle.emit("pounce", &p);
-                            });
-                        })
-                        .expect("spawn pounce detector");
-                } else {
-                    tempo_core::applog::warn(
-                        "startup",
-                        "pounce detector not started (receiver already claimed by a prior build attempt)",
-                    );
-                }
-            }
-
-            let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if let Some(main) = handle.get_webview_window("main") {
-                    let _ = main.show();
-                    let _ = main.set_focus();
-                }
-                if let Some(splash) = handle.get_webview_window("splashscreen") {
-                    let _ = splash.close();
-                }
-            });
-            // AI CW decoder (beta): resolve the DeepCW model from the app's cross-platform
-            // RESOURCE dir (where Tauri bundles `resources/deepcw/*`) — next to the exe on
-            // Windows, under usr/lib/<app>/resources on a Linux .deb/AppImage. The prior
-            // exe-adjacent lookup only worked on Windows, so Linux reported "model not
-            // installed" though the model ships in the bundle. Try the resource-dir candidates
-            // (and the exe-adjacent one) and pick the first that exists; a genuinely missing
-            // model just surfaces the honest status.
-            #[cfg(feature = "radio")]
-            {
-                let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-                if let Ok(res) = app.path().resource_dir() {
-                    candidates.push(res.join("resources").join("deepcw"));
-                    candidates.push(res.join("deepcw"));
-                }
-                if let Ok(exe) = std::env::current_exe() {
-                    if let Some(d) = exe.parent() {
-                        candidates.push(d.join("resources").join("deepcw"));
-                    }
-                }
-                let dir = candidates
-                    .iter()
-                    .find(|d| d.is_dir())
-                    .cloned()
-                    .unwrap_or_else(|| std::path::PathBuf::from("resources/deepcw"));
-                let eng = app.state::<SharedEngine>().inner().clone();
-                tempo_audio::aicw::spawn_ai_cw(eng, dir);
-            }
-            // Seed the SSTV gallery session list from the persisted gallery.json
-            // so past images are browsable immediately (the decode thread only
-            // appends). Parsed here (not via tempo-audio) so non-radio builds
-            // still show the gallery.
-            {
-                // Reconciled against the directory, not trusted. The index could name images
-                // that are gone (a hand-deleted .bmp used to leave a thumbnail over nothing) and
-                // the folder could hold images the index never knew about — a hand-copied file, or
-                // one evicted from the in-memory cap and still on disk. #23.
-                let dir = sstv_gallery_dir();
-                let entries: Vec<tempo_app::dto::SstvGalleryEntry> = reconcile_gallery(
-                    &dir,
-                    std::fs::read_to_string(dir.join("gallery.json"))
-                        .ok()
-                        .and_then(|text| serde_json::from_str(&text).ok())
-                        .unwrap_or_default(),
-                );
-                if !entries.is_empty() {
-                    if let Ok(mut eng) = app.state::<SharedEngine>().inner().lock() {
-                        eng.load_sstv_gallery(entries);
-                    }
-                }
-            }
-            // RTTY + PSK + SSTV RX decode threads, and the amplifier status poll — RX ONLY
-            // (arming is per-session runtime state; nothing here can key PTT or emit TX audio).
-            //
-            // The amplifier belongs in THIS family and nowhere else, and that is the whole
-            // isolation argument spent in one place. It must never be folded into the radio
-            // loop's heavy CAT block: that loop ticks every 20 ms and caps its entire read-back
-            // at HEAVY_POLL_BUDGET_MS = 250, asking have_budget() before every single read,
-            // while ONE amplifier poll is 0.5-2.4 s of blocking serial (SPE: two read_exact at
-            // a 500 ms budget; KPA: six sequential verbs at 400 ms each) — 25 to 120 ticks. A
-            // reader that long inside the budget does not fail loudly; it silently STARVES the
-            // readers after it, which is exactly what \dump_caps did to the split read it was
-            // meant to qualify. Nor may it live in RadioLoop, and nor may it become a
-            // spawn_blocking per UI poll: that model reopens its transport on every call, which
-            // for a serial amplifier means opening and closing a COM port every second.
-            #[cfg(feature = "radio")]
-            {
-                tempo_audio::rttyrx::spawn_rtty_rx(app.state::<SharedEngine>().inner().clone());
-                tempo_audio::amppoll::spawn_amp_poll(app.state::<SharedEngine>().inner().clone());
-                tempo_audio::pskrx::spawn_psk_rx(app.state::<SharedEngine>().inner().clone());
-                tempo_audio::aprsrx::spawn_aprs_rx(app.state::<SharedEngine>().inner().clone());
-                tempo_audio::sstvrx::spawn_sstv_rx(
-                    app.state::<SharedEngine>().inner().clone(),
-                    sstv_gallery_dir(),
-                );
+            // The rest of the launch — opening the logbook, converting it on the first launch after
+            // the database arrived, and everything that must wait for it — runs on a thread of its
+            // own, so the splash stays on screen, alive, and says what is happening. That thread
+            // shows the main window when it is done. Take-once, like the pounce receiver: whichever
+            // setup runs first claims it.
+            let rest = launch
+                .launch_rest
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            if let Some(rest) = rest {
+                let handle = app.handle().clone();
+                std::thread::Builder::new()
+                    .name("nexus-launch".into())
+                    .spawn(move || finish_launch_or_say_why(handle, launch, rest))
+                    .expect("spawn the launch thread");
             }
             Ok(())
         })
@@ -25969,6 +27969,50 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             }
         })
         .build(tauri::generate_context!())
+}
+
+/// The Remote service, built — and so started — once the launch has attached the log.
+///
+/// Not in [`build_app`], because it goes to work as it is built: when Remote was on at the last
+/// exit it reconnects to the relay and restores the grants of approved browsers, which may log
+/// contacts and control the station. Built with the app, it would do that while a first launch was
+/// still converting the log, before anything was attached. Its three commands read it as managed
+/// state, and nothing that could send them exists before the main window is sent to the app.
+fn remote_service_for(
+    d: &BuildDeps,
+    publisher: remote_monitor::Publisher,
+) -> remote_service::Service {
+    remote_service::Service::new(
+        d.engine.clone(),
+        publisher,
+        d.spectrum_feed.clone(),
+        d.meter_feed.clone(),
+        Some(remote_service::query::Sources {
+            spots: d.spots.clone(),
+            live_paths: d.live_paths.clone(),
+            region_paths: d.region_paths.clone(),
+            ota: d.ota_spots.clone(),
+            parks: d.parks.clone(),
+            pounces: d.pounces.clone(),
+            health: d.health.clone(),
+            propagation: d.prop_cache.clone(),
+            memories: Default::default(),
+            navigation: remote_service::query::navigation::Source::new(
+                d.aurora_cache.clone(),
+                d.kc2g_cache.clone(),
+                d.proton_cache.clone(),
+                d.scales_cache.clone(),
+            ),
+            sstv: remote_service::sstv::Source::new(vec![
+                sstv_gallery_dir(),
+                legacy_sstv_gallery_dir(),
+            ]),
+        }),
+        // Receive audio for a listening browser. Without this the lane is never
+        // advertised and no browser is ever offered the control.
+        #[cfg(feature = "radio")]
+        Some(d.receive_audio.clone()),
+    )
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -27266,8 +29310,11 @@ mod tests {
         // ⚠️ COLUMN-ZERO MATCH, not `contains`: `include_str!` pulls in THIS TEST too, so a
         // `contains` would be satisfied by the literal inside the assertion itself.
         for name in ["set_sat_tag", "lotw_sat_names"] {
+            // `async fn` counts: a log command waits for its change to reach the disk, and it
+            // does that on the blocking pool from an async command (see `durable_command`).
             assert!(
-                src.lines().any(|l| l.starts_with(&format!("fn {name}("))),
+                src.lines().any(|l| l.starts_with(&format!("fn {name}("))
+                    || l.starts_with(&format!("async fn {name}("))),
                 "{name} is invoked by the UI but defined nowhere"
             );
         }
@@ -27289,7 +29336,7 @@ mod tests {
         // into an empty name the core then refuses — a silent no-op on the one act this
         // feature exists for.
         let body = src
-            .split_once("\nfn set_sat_tag(")
+            .split_once("\nasync fn set_sat_tag(")
             .expect("the command")
             .1
             .split_once("\n}\n")
@@ -29943,6 +31990,245 @@ mod tests {
         );
     }
 
+    /// The `propagation::live` functions this file calls that never touch the network — parsers
+    /// and cache readers. Every other `propagation::live::…(` call is a blocking HTTP request.
+    const LIVE_WITHOUT_NETWORK: [&str; 8] = [
+        "contests::parse_contest_rss",
+        "dxped::cached_active_calls",
+        "dxped::call_matches",
+        "dxped::set_clublog_key",
+        "lotw_users::parse_user_activity",
+        "tle::parse_mirror_manifest",
+        "tle::tle_bird_ok",
+        "tle::tle_fetch_target",
+    ];
+
+    /// Each command body and each `async fn` in `src` that makes a blocking HTTP request on the
+    /// thread it runs on, as `name: request` — a `propagation::live` fetch, `reqwest::blocking`,
+    /// or a function here that makes one (followed to any depth). A request inside
+    /// `spawn_blocking(…)` or a spawned thread's closure is off that thread and does not count.
+    fn http_where_a_command_runs(src: &str) -> Vec<String> {
+        let lines: Vec<&str> = src.lines().collect();
+        // (name, a command or an async fn, body) for every top-level fn.
+        let mut fns: Vec<(String, bool, String)> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let line = line
+                .strip_prefix("pub(crate) ")
+                .or_else(|| line.strip_prefix("pub "))
+                .unwrap_or(line);
+            let (is_async, rest) = match (line.strip_prefix("async fn "), line.strip_prefix("fn "))
+            {
+                (Some(rest), _) => (true, rest),
+                (None, Some(rest)) => (false, rest),
+                _ => continue,
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let command = lines[..i]
+                .iter()
+                .rev()
+                .take_while(|l| l.starts_with("#[") || l.starts_with("//"))
+                .any(|l| l.starts_with("#[tauri::command"));
+            // Body extent by brace balance, as the scans above do.
+            let (mut depth, mut opened, mut end) = (0i32, false, i);
+            for (j, l) in lines.iter().enumerate().skip(i) {
+                depth += l.matches('{').count() as i32 - l.matches('}').count() as i32;
+                opened |= l.contains('{');
+                end = j;
+                if opened && depth <= 0 {
+                    break;
+                }
+            }
+            fns.push((name, command || is_async, lines[i..=end].join("\n")));
+        }
+        // The requests `body` makes on its own thread.
+        let requests = |body: &str, helpers: &[String]| -> Vec<String> {
+            let mut elsewhere: Vec<(usize, usize)> = Vec::new();
+            for guard in ["spawn_blocking(", "thread::spawn(", ".spawn(move"] {
+                for (at, _) in body.match_indices(guard) {
+                    let open = at + guard.find('(').unwrap_or_default();
+                    let mut depth = 0;
+                    for (k, c) in body[open..].char_indices() {
+                        match c {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    elsewhere.push((at, open + k));
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            let here = |at: usize| !elsewhere.iter().any(|&(a, b)| (a..=b).contains(&at));
+            let mut found = Vec::new();
+            const LIVE: &str = "propagation::live::";
+            for (at, _) in body.match_indices(LIVE) {
+                let path: String = body[at + LIVE.len()..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
+                    .collect();
+                let called = body[at + LIVE.len() + path.len()..].starts_with('(');
+                if here(at) && called && !LIVE_WITHOUT_NETWORK.contains(&path.as_str()) {
+                    found.push(path);
+                }
+            }
+            if body
+                .match_indices("reqwest::blocking")
+                .any(|(at, _)| here(at))
+            {
+                found.push("reqwest::blocking".to_string());
+            }
+            for helper in helpers {
+                let called = body.match_indices(&format!("{helper}(")).any(|(at, _)| {
+                    here(at)
+                        && body[..at]
+                            .chars()
+                            .next_back()
+                            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+                });
+                if called {
+                    found.push(helper.clone());
+                }
+            }
+            found
+        };
+        // Every function that makes a request on its caller's thread, to any depth.
+        let mut helpers: Vec<String> = Vec::new();
+        loop {
+            let more: Vec<String> = fns
+                .iter()
+                .filter(|(name, _, body)| {
+                    !helpers.contains(name) && !requests(body, &helpers).is_empty()
+                })
+                .map(|(name, ..)| name.clone())
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            helpers.extend(more);
+        }
+        let mut offenders = Vec::new();
+        for (name, runs_a_command, body) in &fns {
+            if !runs_a_command {
+                continue;
+            }
+            for request in requests(body, &helpers) {
+                // A function's own signature names it; that is not a call.
+                if request != *name {
+                    offenders.push(format!("{name}: {request}"));
+                }
+            }
+        }
+        offenders.dedup();
+        offenders
+    }
+
+    /// A command body runs on a runtime WORKER — an `async fn`, or a sync fn under
+    /// `#[tauri::command(async)]`, which Tauri runs inside `async_runtime::spawn` — or, bare, on
+    /// the UI thread. A blocking HTTP request there holds that thread for the whole request, up
+    /// to its timeout. In a debug build it is a crash as well: reqwest checks for it by building
+    /// and dropping a throwaway runtime, and dropping one on a worker panics ("Cannot drop a
+    /// runtime in a context where blocking is not allowed") — seen on first UI load, 2026-09-23.
+    /// So every request goes through `spawn_blocking`, as `with_engine` does for the engine.
+    #[test]
+    fn no_command_makes_a_blocking_http_request_where_it_runs() {
+        let offenders = http_where_a_command_runs(include_str!("lib.rs"));
+        assert!(
+            offenders.is_empty(),
+            "these make a blocking HTTP request on the thread a command runs on — move it into \
+             `tauri::async_runtime::spawn_blocking`:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// The scan above is only worth having if it can fail: a request on a worker, one reached
+    /// through two helpers from an `(async)` command, a pure `live` call, and requests moved
+    /// to the blocking pool or a thread — only the first two are named.
+    #[test]
+    fn the_http_scan_names_a_request_where_a_command_runs() {
+        // Built from quoted lines so that none of them starts a line of THIS file with `fn`.
+        let src = [
+            "#[tauri::command]",
+            "async fn on_a_worker() -> Result<propagation::KpForecast, String> {",
+            "    propagation::live::swpc::fetch_kp_forecast()",
+            "}",
+            "#[tauri::command]",
+            "async fn on_the_pool() -> Result<Vec<propagation::live::aurora::AuroraPoint>, String> {",
+            "    tauri::async_runtime::spawn_blocking(|| propagation::live::aurora::fetch_aurora())",
+            "        .await",
+            "        .map_err(|e| e.to_string())?",
+            "}",
+            "fn post(body: String) -> Result<String, String> {",
+            "    propagation::live::qrz::post_form(\"https://x\", body)",
+            "}",
+            "fn book(call: &str) -> Result<String, String> {",
+            "    post(call.to_string())",
+            "}",
+            "#[tauri::command(async)]",
+            "fn two_helpers_deep(call: String) -> Result<String, String> {",
+            "    book(&call)",
+            "}",
+            "#[tauri::command]",
+            "async fn a_pure_live_call() -> bool {",
+            "    propagation::live::dxped::call_matches(\"3Y0J\", \"3Y0J/MM\")",
+            "}",
+            "#[tauri::command]",
+            "fn on_a_thread() {",
+            "    std::thread::spawn(move || book(\"W1AW\"));",
+            "}",
+        ]
+        .join("\n");
+        assert_eq!(
+            http_where_a_command_runs(&src),
+            [
+                "on_a_worker: swpc::fetch_kp_forecast",
+                "two_helpers_deep: book"
+            ]
+        );
+    }
+
+    /// WHAT the scan prevents, measured in-process: in a debug build, starting a blocking HTTP
+    /// client on a runtime worker IS the "Cannot drop a runtime" panic, and the same thing on
+    /// the blocking pool is not. (A release build skips reqwest's check; there the request just
+    /// holds the worker until it answers.)
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_blocking_http_client_on_a_runtime_worker_is_the_runtime_drop_panic() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let on_a_worker =
+            rt.block_on(rt.spawn(async { reqwest::blocking::Client::builder().build().map(drop) }));
+        let payload = on_a_worker
+            .expect_err("a blocking client started on a worker panics")
+            .into_panic();
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or_default();
+        assert!(
+            message.contains("Cannot drop a runtime in a context where blocking is not allowed"),
+            "{message}"
+        );
+        let on_the_pool = rt.block_on(rt.spawn(async {
+            tokio::task::spawn_blocking(|| reqwest::blocking::Client::builder().build().map(drop))
+                .await
+        }));
+        assert!(
+            matches!(on_the_pool, Ok(Ok(Ok(())))),
+            "the same client on the blocking pool starts cleanly"
+        );
+    }
+
     /// #335 (N9RNT: on 1.13.0 the waterfall froze a few minutes in). The shape of the freeze,
     /// on a runtime with two workers so that a handful of calls can fill it: the radio loop
     /// holds the engine across a slow CAT round trip while the 300 ms snapshot poll, which does
@@ -30109,6 +32395,165 @@ mod tests {
         engine_lock(&shared).set_frequency(14.105, "20m", "USB");
         let rig = super::EngineRig::new(shared);
         assert_eq!(rig.freq_hz(), 14_105_000);
+    }
+
+    /// ⭐ THE PICK TELLS THE ENGINE WHAT THE UPLINK TAKES, and the next pick forgets it.
+    /// KOSEN-1 (CW up over an AFSK downlink), then RS-44 (an inverting linear), then SO-50 (an
+    /// FM repeater), each through the pick's own engine half with the catalogue's records,
+    /// worked from Phone. The engine tests pin what the fact DOES; this pins that the pick
+    /// states it from the record. Without that line KOSEN-1's uplink is still commanded FM,
+    /// however right the engine is.
+    #[test]
+    fn the_pick_states_a_cw_uplink_and_the_next_pick_drops_it() {
+        // KOSEN-1 verbatim as db.satnogs.org served it on 2026-09-23; RS-44 and SO-50 from the
+        // same catalogue, trimmed to the fields the parser reads.
+        let rows = propagation::live::satnogs::parse_transmitters(
+            r#"[
+              {"uuid":"YcezEz4dXU5uTwzYEFFrtk","description":"Mode HF/U - Onboard SDR","alive":true,"type":"Transponder","uplink_low":21125000,"uplink_high":21150000,"uplink_drift":null,"uplink_drifted":21125000,"downlink_low":435525000,"downlink_high":435525000,"downlink_drift":null,"downlink_drifted":435525000,"mode":"AFSK","mode_id":49,"uplink_mode":"CW","invert":false,"baud":1200.0,"sat_id":"NJBJ-3838-9654-0508-8247","norad_cat_id":49402,"norad_follow_id":null,"status":"active","updated":"2021-09-30T18:19:40.605018Z","citation":"http://space.kochi-ct.jp/kosen-1/ and https://iaru.amsat-uk.org/finished_detail.php?serialnum=687","service":"Amateur","iaru_coordination":"IARU Coordinated","iaru_coordination_url":"https://iaru.amsat-uk.org/finished_detail.php?serialnum=687","itu_notification":{"urls":[]},"frequency_violation":false,"unconfirmed":false,"params":null},
+              {"norad_cat_id":44909,"description":"Mode V/U - Transponder","alive":true,"type":"Transponder","invert":true,"uplink_low":145935000,"uplink_high":145995000,"uplink_mode":"LSB","downlink_low":435610000,"downlink_high":435670000,"mode":"USB"},
+              {"norad_cat_id":27607,"description":"Mode V/U FM Voice CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145850000,"uplink_high":null,"uplink_mode":"FM","downlink_low":436795000,"downlink_high":null,"mode":"FM"}
+            ]"#,
+        );
+        let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&shared);
+            // Materialise radio 0 the way a launch does, so the uplink consent has a radio
+            // to be recorded for.
+            let s = e.settings().clone();
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::ADownBUp));
+        }
+        for (name, norad, want) in [
+            ("KOSEN-1", 49402, "CW"),
+            ("RS-44", 44909, "LSB"),
+            ("SO-50", 27607, "FM"),
+        ] {
+            let bird: Vec<&propagation::live::satnogs::Transmitter> =
+                rows.iter().filter(|t| t.norad == norad).collect();
+            assert_eq!(bird.len(), 1, "scene: {name} parsed");
+            super::hold_sat_row(&shared, name, &bird, 0).expect("the pick lands");
+            assert_eq!(
+                engine_lock(&shared).sat_tx_mode().as_deref(),
+                Some(want),
+                "{name}: the TX VFO's mode"
+            );
+        }
+    }
+
+    /// A one-radio station in `section`, the A/B uplink mapping confirmed, ready to pick.
+    fn sat_pick_station(section: &str) -> SharedEngine {
+        let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        {
+            let mut e = engine_lock(&shared);
+            let s = e.settings().clone();
+            e.apply_settings(s);
+            e.set_operating_mode(section, false);
+            e.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::ADownBUp));
+        }
+        shared
+    }
+
+    /// ⭐ QO-100'S NARROWBAND IS WORKED LINEAR — the band plan allows no FM there, and SatNOGS
+    /// tags every live narrowband segment FM up and down. Each of the five, through the real
+    /// pick into each section: the section's ordinary linear form on both legs, and the FM
+    /// class gone from the routing binding. Non-inverting, so both legs take the same side.
+    #[test]
+    fn qo100_narrowband_is_worked_linear_in_every_section() {
+        // The five live narrowband segments, the fields the parser reads, values verbatim
+        // (db.satnogs.org, 2026-09-23).
+        let rows = propagation::live::satnogs::parse_transmitters(
+            r#"[
+              {"norad_cat_id":43700,"description":"Narrowband digimodes(500Hz max BW)","alive":true,"type":"Transponder","invert":false,"uplink_low":2400040000,"uplink_high":2400080000,"uplink_mode":"FM","downlink_low":10489540000,"downlink_high":10489580000,"mode":"FM"},
+              {"norad_cat_id":43700,"description":"digimodes(2700Hz max BW)","alive":true,"type":"Transponder","invert":false,"uplink_low":2400080000,"uplink_high":2400150000,"uplink_mode":"FM","downlink_low":10489580000,"downlink_high":10489650000,"mode":"FM"},
+              {"norad_cat_id":43700,"description":"SSB Only Transpoder","alive":true,"type":"Transponder","invert":false,"uplink_low":2400150000,"uplink_high":2400245000,"uplink_mode":"FM","downlink_low":10489650000,"downlink_high":10489745000,"mode":"FM"},
+              {"norad_cat_id":43700,"description":"SSB Only Transpoder","alive":true,"type":"Transponder","invert":false,"uplink_low":2400255000,"uplink_high":2400350000,"uplink_mode":"FM","downlink_low":10489755000,"downlink_high":10489850000,"mode":"FM"},
+              {"norad_cat_id":43700,"description":"Mixed modes(2700Hz max BW)","alive":true,"type":"Transponder","invert":false,"uplink_low":2400350000,"uplink_high":2400495000,"uplink_mode":"FM","downlink_low":10489850000,"downlink_high":10489995000,"mode":"FM"}
+            ]"#,
+        );
+        assert_eq!(rows.len(), 5, "scene: five segments parsed");
+        for (section, down, up) in [
+            ("phone", "USB", "USB"),
+            ("cw", "CW", "CW"),
+            ("digital", "PKTUSB", "PKTUSB"),
+        ] {
+            let shared = sat_pick_station(section);
+            for row in &rows {
+                super::hold_sat_row(&shared, "QO-100", &[row], 0).expect("the pick lands");
+                let e = engine_lock(&shared);
+                let b = e.sat_binding().expect("the pick leaves a binding");
+                assert!(
+                    b.pending_downlink_mhz.is_some() && b.pending_uplink_mhz.is_some(),
+                    "scene: {section}/{:?} tuned both legs: {b:?}",
+                    row.description
+                );
+                assert!(!b.fm, "{section}/{:?}: not routed as FM", row.description);
+                assert_eq!(
+                    e.rig_mode_effective(),
+                    down,
+                    "{section}/{:?}: the downlink",
+                    row.description
+                );
+                assert_eq!(
+                    e.sat_tx_mode().as_deref(),
+                    Some(up),
+                    "{section}/{:?}: the uplink",
+                    row.description
+                );
+            }
+        }
+    }
+
+    /// …and nothing else moves. The FM birds stay FM through the same pick (SO-50 and PO-101
+    /// keep their tones), KOSEN-1 keeps (a)'s CW uplink, RS-44 keeps its inverting pair, and
+    /// QO-100's CW-only segment — never tagged FM — is worked exactly as before. Phone.
+    #[test]
+    fn the_band_plan_table_leaves_every_other_bird_as_it_was() {
+        let rows = propagation::live::satnogs::parse_transmitters(
+            r#"[
+              {"norad_cat_id":27607,"description":"Mode V/U FM Voice CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145850000,"uplink_high":null,"uplink_mode":"FM","downlink_low":436795000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":43017,"description":"Mode U/V FM Voice (no CTCSS any longer)","alive":true,"type":"Transceiver","invert":false,"uplink_low":435250000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145960000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"Mode V/U FM - Voice Repeater CTCSS 67.0 Hz","alive":true,"type":"Transceiver","invert":false,"uplink_low":145990000,"uplink_high":null,"uplink_mode":"FM","downlink_low":437800000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":25544,"description":"Mode V APRS","alive":true,"type":"Transceiver","invert":false,"uplink_low":145825000,"uplink_high":null,"uplink_mode":"AFSK","downlink_low":145825000,"downlink_high":null,"mode":"AFSK"},
+              {"norad_cat_id":43678,"description":"FM VOICE","alive":true,"type":"Transceiver","invert":false,"uplink_low":437500000,"uplink_high":null,"uplink_mode":"FM","downlink_low":145900000,"downlink_high":null,"mode":"FM"},
+              {"norad_cat_id":49402,"description":"Mode HF/U - Onboard SDR","alive":true,"type":"Transponder","invert":false,"uplink_low":21125000,"uplink_high":21150000,"uplink_mode":"CW","downlink_low":435525000,"downlink_high":435525000,"mode":"AFSK"},
+              {"norad_cat_id":44909,"description":"Mode V/U - Transponder","alive":true,"type":"Transponder","invert":true,"uplink_low":145935000,"uplink_high":145995000,"uplink_mode":"LSB","downlink_low":435610000,"downlink_high":435670000,"mode":"USB"},
+              {"norad_cat_id":43700,"description":"CW Only Transpoder","alive":true,"type":"Transponder","invert":false,"uplink_low":2400005000,"uplink_high":2400040000,"uplink_mode":"CW","downlink_low":10489505000,"downlink_high":10489540000,"mode":"CW"}
+            ]"#,
+        );
+        // (bird, FM class, downlink, uplink — `None` where there is no uplink leg, tone)
+        let want: [(&str, bool, &str, Option<&str>, f32); 8] = [
+            ("SO-50", true, "FM", Some("FM"), 67.0),
+            ("AO-91", true, "FM", Some("FM"), 67.0),
+            ("ISS", true, "FM", Some("FM"), 67.0),
+            // ONE channel both ways: no split, so no transmit-VFO mode to command.
+            ("ISS", true, "FM", None, 0.0),
+            ("PO-101", true, "FM", Some("FM"), 141.3),
+            ("KOSEN-1", true, "FM", Some("CW"), 0.0),
+            ("RS-44", false, "USB", Some("LSB"), 0.0),
+            ("QO-100", false, "USB", Some("USB"), 0.0),
+        ];
+        assert_eq!(rows.len(), want.len(), "scene: every guard parsed");
+        let shared = sat_pick_station("phone");
+        for (row, (name, fm, down, up, tone)) in rows.iter().zip(want) {
+            super::hold_sat_row(&shared, name, &[row], 0).expect("the pick lands");
+            let e = engine_lock(&shared);
+            let d = &row.description;
+            assert_eq!(
+                e.sat_binding().map(|b| b.fm),
+                Some(fm),
+                "{name} {d:?}: class"
+            );
+            assert_eq!(e.rig_mode_effective(), down, "{name} {d:?}: downlink");
+            assert_eq!(e.sat_tx_mode().as_deref(), up, "{name} {d:?}: uplink");
+            if fm {
+                assert_eq!(e.fm_repeater_config().2, tone, "{name} {d:?}: CTCSS");
+            }
+        }
     }
 
     /// The engine mid-pass with a transponder HELD — the exact state the removed
@@ -33155,6 +35600,243 @@ mod tests {
             Some(("POTA".into(), "US-0001".into())),
             "same park twice is one candidate"
         );
+    }
+
+    // ── #351: a QSO started from the Call Roster or Band Activity carries the park ──────────
+    //
+    // The pending hunt is the ONLY way a park reaches a logged contact (`Engine::log_qso` stamps
+    // `their_ref` from it), and only HUNT, the map and the Needed board's Work set one. A
+    // double-click on the Call Roster, Band Activity or the station list runs `call_station`,
+    // which never did — so the contact logged with no park, the hunter lost the credit, and the
+    // station's NEW PARK need never cleared.
+
+    /// The hunter cache as the background poller leaves it: each programme's rows, stamped now.
+    fn hunter_cache(feed: &[(&str, &[propagation::OtaSpot])]) -> crate::SharedOtaSpots {
+        let now = crate::now_unix();
+        let cache: crate::SharedOtaSpots =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        for (program, rows) in feed {
+            cache
+                .lock()
+                .unwrap()
+                .insert((*program).into(), (now, rows.to_vec()));
+        }
+        cache
+    }
+
+    fn fresh_engine() -> SharedEngine {
+        std::sync::Arc::new(std::sync::Mutex::new(tempo_app::engine::Engine::new(
+            "KD9TAW", "EN52", 0,
+        )))
+    }
+
+    /// Work `call` through the command's own body — a roster double-click carries no decoded
+    /// line — then log the contact the way the sequencer does, with no park of its own, and hand
+    /// back the park the log holds for it as (programme, reference).
+    fn work_then_log(
+        engine: SharedEngine,
+        feed: &[(&str, &[propagation::OtaSpot])],
+        call: &str,
+    ) -> Option<(String, String)> {
+        crate::call_station_on(&engine, &hunter_cache(feed), call, None, None, None, None)
+            .expect("the call itself goes through");
+        let mut eng = engine_lock(&engine);
+        eng.log_qso(park_rec(call, None, crate::now_unix()));
+        let log = eng.get_log();
+        let rec = log
+            .iter()
+            .find(|r| r.call == call)
+            .unwrap_or_else(|| panic!("no contact with {call} in the log"));
+        rec.ota
+            .their_ref
+            .clone()
+            .map(|r| (rec.ota.their_program.clone().unwrap_or_default(), r))
+    }
+
+    #[test]
+    fn a_call_from_the_roster_logs_the_park_of_the_one_live_activation() {
+        let pota = [live_spot("POTA", "K1ABC", "US-0001", 60)];
+        assert_eq!(
+            work_then_log(fresh_engine(), &[("POTA", &pota)], "K1ABC"),
+            Some(("POTA".into(), "US-0001".into())),
+            "a contact started from the roster with a live activator must carry the park"
+        );
+        // CONTROL: the park comes from the feed — the same call with the activator not on it
+        // logs none, or the fix is tagging something it never looked up.
+        assert_eq!(work_then_log(fresh_engine(), &[], "K1ABC"), None);
+    }
+
+    /// THE LIVE CRASH, through the board's own body (2026-09-23, on 1.13.0 and 1.14.0): POTA's
+    /// feed carried `"activator": "KK4JAB ☕️"`, and the country lookup panicked on it, so every
+    /// Needed-board read failed and the board stopped updating while the spot was up. The row is
+    /// a US station, and the board around it reads normally.
+    #[test]
+    fn a_pota_activator_with_an_emoji_does_not_take_down_the_needed_board() {
+        use std::sync::{Arc, Mutex};
+        let now = crate::now_unix();
+        let mut feed = propagation::parse_pota_spots(
+            r#"[{"activator":"KK4JAB ☕️","reference":"US-7615","frequency":"14236.5",
+                "mode":"SSB"},
+               {"activator":"W9XYZ","reference":"US-0002","frequency":"14250","mode":"SSB"}]"#,
+        );
+        assert_eq!(feed.len(), 2, "control: both feed rows parse");
+        for sp in &mut feed {
+            sp.spot_time_unix = Some(now);
+        }
+        let ota = hunter_cache(&[("POTA", &feed)]);
+        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        let region =
+            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+        let spots: crate::SharedSpots =
+            Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::default()));
+        let engine = fresh_engine();
+        let alerts = crate::read_need_alerts(engine_lock(&engine), &live, &region, &spots, &ota)
+            .expect("the board reads");
+        let entity = |call: &str| {
+            alerts
+                .iter()
+                .find(|a| a.call.starts_with(call))
+                .unwrap_or_else(|| panic!("no {call} row in {alerts:?}"))
+                .entity
+                .clone()
+        };
+        assert_eq!(entity("KK4JAB"), "United States");
+        assert_eq!(entity("W9XYZ"), "United States", "control: its neighbour");
+    }
+
+    /// BY CONSTRUCTION, the way the roster and the Needed board are held together in the UI: for
+    /// every shape of feed, the park a roster call logs is the park the board's row names. Both
+    /// read `live_ota_spots` and `live_activations`, so the 2026-09-17 ruling — more than one live
+    /// reference tags NOTHING — reaches the roster without a second copy of it.
+    #[test]
+    fn a_roster_call_logs_exactly_the_park_the_needed_board_names() {
+        let park = [live_spot("POTA", "K1ABC", "US-0001", 60)];
+        let park_twice = [
+            live_spot("POTA", "K1ABC", "US-0001", 300),
+            live_spot("POTA", "K1ABC", "US-0001", 60),
+        ];
+        let summit_now = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 60)];
+        let summit_this_morning = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 7_200)];
+        let feeds = [
+            ("one live park", vec![("POTA", &park[..])]),
+            (
+                "the same park spotted twice",
+                vec![("POTA", &park_twice[..])],
+            ),
+            (
+                "a park and a live summit",
+                vec![("POTA", &park[..]), ("SOTA", &summit_now[..])],
+            ),
+            (
+                "a park and this morning's summit",
+                vec![("POTA", &park[..]), ("SOTA", &summit_this_morning[..])],
+            ),
+        ];
+        let mut tagged = 0;
+        for (shape, feed) in &feeds {
+            let board = board_park(&needed_board(&["K1ABC"], feed), "K1ABC", "CW");
+            let logged = work_then_log(fresh_engine(), feed, "K1ABC");
+            assert_eq!(
+                logged, board,
+                "{shape}: the roster call and the board disagree"
+            );
+            tagged += usize::from(logged.is_some());
+        }
+        // CONTROL: the loop is not comparing four Nones — three shapes tag, the ambiguous one does not.
+        assert_eq!(tagged, 3, "three of the four shapes name exactly one park");
+    }
+
+    /// More than one live reference tags nothing — and "nothing" includes not overwriting a park
+    /// the operator already picked. The board's row sends them to the POTA/SOTA board to choose
+    /// (`ambiguous_activation_note`); the double-click that then starts the QSO must not throw
+    /// that pick away, or swap in a guess.
+    #[test]
+    fn an_ambiguous_call_keeps_the_park_the_operator_picked_on_the_board() {
+        let pota = [live_spot("POTA", "K1ABC", "US-0001", 60)];
+        let sota = [live_spot("SOTA", "K1ABC", "W7A/MN-001", 60)];
+        let engine = fresh_engine();
+        engine_lock(&engine)
+            .set_hunt_target("K1ABC", "SOTA", "W7A/MN-001")
+            .unwrap();
+        assert_eq!(
+            work_then_log(engine, &[("POTA", &pota), ("SOTA", &sota)], "K1ABC"),
+            Some(("SOTA".into(), "W7A/MN-001".into())),
+            "the operator's own pick must survive a call the feed cannot resolve"
+        );
+    }
+
+    /// The engine answers some calls with a benign no-op — our own line double-clicked, a
+    /// receive-only tier — and a pend armed for one of those waits four hours (`HUNT_TTL_SECS`)
+    /// and replaces whatever hunt was pending. Only a QSO that really started is tagged.
+    #[test]
+    fn a_call_that_starts_no_qso_arms_no_hunt() {
+        // Activating and self-spotted, the operator double-clicks their own CQ line — with a hunt
+        // for somebody else still pending.
+        let mine = [live_spot("POTA", "KD9TAW", "US-0009", 60)];
+        let engine = fresh_engine();
+        engine_lock(&engine)
+            .set_hunt_target("K1ABC", "POTA", "US-0001")
+            .unwrap();
+        crate::call_station_on(
+            &engine,
+            &hunter_cache(&[("POTA", &mine)]),
+            "KD9TAW",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("our own line is a benign no-op, not an error");
+        let eng = engine_lock(&engine);
+        assert!(eng.snapshot().qso.is_none(), "control: no QSO started");
+        assert_eq!(
+            eng.hunt_target(),
+            Some(("POTA".into(), "US-0001".into(), "K1ABC".into())),
+            "a call that started nothing replaced the pending hunt"
+        );
+    }
+
+    /// The tag rides on the call and can never cost it. A reference the feed spells in a way
+    /// `set_hunt_target` will not accept, or a hunter cache poisoned by a writer that panicked,
+    /// leaves the contact untagged — the direction the 2026-09-17 ruling calls safe — and the QSO
+    /// starts all the same.
+    #[test]
+    fn the_park_tag_never_fails_or_stops_the_call() {
+        let unreadable = [live_spot("POTA", "K1ABC", "US-12", 60)];
+        let good = [live_spot("POTA", "K1ABC", "US-0001", 60)];
+        let poisoned = hunter_cache(&[("POTA", &good)]);
+        let writer = poisoned.clone();
+        std::thread::spawn(move || {
+            let _held = writer.lock().unwrap();
+            panic!("poison the hunter cache for real");
+        })
+        .join()
+        .unwrap_err();
+        assert!(
+            poisoned.is_poisoned(),
+            "precondition: the cache is poisoned"
+        );
+        for (what, cache) in [
+            (
+                "an unreadable reference",
+                hunter_cache(&[("POTA", &unreadable)]),
+            ),
+            ("a poisoned hunter cache", poisoned),
+        ] {
+            let engine = fresh_engine();
+            let snap = crate::call_station_on(&engine, &cache, "K1ABC", None, None, None, None)
+                .unwrap_or_else(|e| panic!("{what} failed the call: {e}"));
+            assert_eq!(
+                snap.qso.and_then(|q| q.dxcall).as_deref(),
+                Some("K1ABC"),
+                "{what}: the QSO did not start"
+            );
+            assert_eq!(
+                engine_lock(&engine).hunt_target(),
+                None,
+                "{what}: tagged anyway"
+            );
+        }
     }
 
     #[test]

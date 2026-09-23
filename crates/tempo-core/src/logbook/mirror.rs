@@ -26,21 +26,28 @@
 //!
 //! # ⚠️ The transition hazard, and the guard for it
 //!
-//! After this change, an edit made to `log.adi` by the operator or by another program is
-//! DISCARDED on the next mirror write, where today it would be merged. The sharpest case is a
-//! 1.13 instance and a 1.14 instance sharing one data folder: the old one writes `log.adi`, the
-//! new one overwrites it.
+//! Once the database is the log, anything written into `log.adi` by something other than this
+//! mirror is not in the database. The sharpest case is a 1.13 instance and a 1.14 instance
+//! sharing one data folder — or the same machine going back to 1.13 for a day and forward again:
+//! the old build appends its contacts to `log.adi`, and the next mirror write would replace the
+//! file with the database's picture and take those contacts with it.
 //!
-//! The guard is two halves, and neither is silent:
-//! - Every mirror write carries [`MIRROR_FIELD`] in its header, so the file SAYS it is
-//!   generated — to a person reading it and to [`is_generated`], which a caller can ask before
-//!   opening a folder that already holds a database.
-//! - The mirror notices when the file it is about to replace is not the one it last wrote, and
-//!   reports it ([`Status::foreign_write`]) instead of overwriting in silence.
+//! **So the mirror never replaces a file it cannot account for.** Three halves, none silent:
+//! - Every mirror write is SELF-DESCRIBING: its header carries [`MIRROR_FIELD`], whose value is
+//!   the byte length of everything after `<EOH>`. A file whose header says so and whose length
+//!   agrees is a picture some Nexus mirror took ([`mirror_state`] → [`MirrorState::Pristine`]),
+//!   whichever process wrote it. A 1.13 save drops the marker (it writes its own header), and a
+//!   1.13 append leaves the marker and changes the length, so both read as
+//!   [`MirrorState::Foreign`].
+//! - The writer replaces only a file that is absent, pristine, the file the store has already
+//!   taken in ([`MirrorOptions::accepted`] — the operator's own `log.adi` just converted or
+//!   imported), or the one this mirror last wrote. Anything else is LEFT WHERE IT IS, reported
+//!   ([`Status::foreign_write`]) and logged, and mirroring stops until the store has taken the
+//!   file in — the caller imports it at the next open.
+//! - The header also says, in words, that the file is generated.
 //!
-//! **First run is not a foreign write.** The check starts only once this mirror has written the
-//! file at least once; an un-marked `log.adi` that a migration has just converted is the
-//! expected state, not a conflict.
+//! A mirror that stops is a convenience lost for a while. A mirror that overwrote would be
+//! contacts lost for good, and nothing else in the app still holds them.
 
 use super::QsoRecord;
 use std::path::{Path, PathBuf};
@@ -57,30 +64,118 @@ const MAX_DELAY: Duration = Duration::from_millis(5_000);
 /// `<EOH>`, so this never has to touch the body — and the body is the 100 MB part.
 const HEADER_PROBE_BYTES: usize = 8 * 1024;
 
-/// The ADIF header field that marks a file as written by the mirror.
+/// The ADIF header field that marks a file as written by the mirror. Its VALUE is the byte
+/// length of everything after `<EOH>`, which is what lets [`mirror_state`] tell a picture the
+/// mirror took from one somebody has since appended to.
 ///
 /// An `APP_` field, which every other logger ignores by specification, so marking the file
 /// cannot change how anything else reads it.
 pub const MIRROR_FIELD: &str = "APP_NEXUS_MIRROR";
 
-/// The header the mirror writes: the ordinary one, plus a line a person can read and a field a
-/// program can test.
-pub fn mirror_header() -> String {
+/// The header the mirror writes for a body of `body_len` bytes (everything after `<EOH>`): the
+/// ordinary one, plus a line a person can read and a field a program can test.
+pub fn mirror_header(body_len: usize) -> String {
+    let len = body_len.to_string();
     format!(
         "Nexus logbook — GENERATED. This file is written from the Nexus logbook database.\n\
          Changes made here are replaced the next time Nexus saves; edit the log in Nexus.\n\
-         <ADIF_VER:5>3.1.4\n<PROGRAMID:5>Nexus\n<{}:1>1\n<EOH>\n",
-        MIRROR_FIELD
+         <ADIF_VER:5>3.1.4\n<PROGRAMID:5>Nexus\n<{MIRROR_FIELD}:{}>{len}\n<EOH>",
+        len.len()
     )
 }
 
 /// The whole mirror file for `records`.
 pub fn mirror_adif(records: &[Arc<QsoRecord>]) -> String {
-    let mut out = mirror_header();
+    let mut body = String::from("\n");
     for r in records {
-        out.push_str(&super::adif_record_own_log(r));
+        body.push_str(&super::adif_record_own_log(r));
     }
+    let mut out = mirror_header(body.len());
+    out.push_str(&body);
     out
+}
+
+/// What the file at a `log.adi` path is, as far as the mirror is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirrorState {
+    /// Nothing there.
+    Absent,
+    /// A picture a Nexus mirror took, unchanged since: the marker is in the header and the
+    /// length it records is the length the file has.
+    Pristine,
+    /// Anything else — an operator's own log, a 1.13 save (its header carries no marker), a
+    /// mirror something has appended to since (the length no longer agrees), or a file that
+    /// cannot be read. The store must take it in before anything may replace it.
+    Foreign,
+}
+
+/// Classify the file at `path`. Reads only the head of the file and its length — the body is
+/// the 100 MB part, and a length is all that an append changes.
+pub fn mirror_state(path: &Path) -> MirrorState {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return MirrorState::Absent;
+    };
+    // Not a file at all (a directory in the way): nothing a rename could destroy — the write
+    // fails, loudly, on its own.
+    if !meta.is_file() {
+        return MirrorState::Absent;
+    }
+    let Some((eoh_end, recorded)) = read_marker(path) else {
+        return MirrorState::Foreign;
+    };
+    if meta.len() == eoh_end + recorded {
+        MirrorState::Pristine
+    } else {
+        MirrorState::Foreign
+    }
+}
+
+/// The marker's value, and the offset just past `<EOH>`: `None` when the header carries no
+/// marker, or one whose value is not a length.
+fn read_marker(path: &Path) -> Option<(u64, u64)> {
+    let head = read_head(path)?;
+    let eoh = head
+        .windows(5)
+        .position(|w| w.eq_ignore_ascii_case(b"<EOH>"))?;
+    let header = &head[..eoh];
+    let needle = format!("<{MIRROR_FIELD}:").into_bytes();
+    let at = header
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(&needle))?;
+    // `<APP_NEXUS_MIRROR:N>value` — N is the length of the value, per ADIF.
+    let rest = &header[at + needle.len()..];
+    let close = rest.iter().position(|&b| b == b'>')?;
+    let n: usize = std::str::from_utf8(&rest[..close]).ok()?.parse().ok()?;
+    let value = rest.get(close + 1..close + 1 + n)?;
+    let recorded: u64 = std::str::from_utf8(value).ok()?.parse().ok()?;
+    Some((eoh as u64 + 5, recorded))
+}
+
+fn read_head(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = vec![0u8; HEADER_PROBE_BYTES];
+    let mut n = 0;
+    // `read` may return short; the header is small, so read until it is full or the file ends.
+    while n < head.len() {
+        match f.read(&mut head[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(_) => return None,
+        }
+    }
+    head.truncate(n);
+    Some(head)
+}
+
+/// A file's identity as far as the mirror can tell without reading it: length and mtime.
+pub type FileStamp = (u64, SystemTime);
+
+/// The stamp of the file at `path`, if it can be read.
+pub fn file_stamp(path: &Path) -> Option<FileStamp> {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok().map(|t| (m.len(), t)))
 }
 
 /// Whether the file at `path` was written by the mirror.
@@ -132,10 +227,13 @@ pub struct Status {
     /// The last write's failure, if it failed. A mirror is a convenience over the real log, so
     /// a failure is reported and the lane carries on rather than taking the session down.
     pub last_error: Option<String>,
-    /// ⚠️ Something other than this mirror has written `log.adi` since the mirror last did.
-    /// The operator's edit — or another Nexus instance's whole log — is about to be replaced,
-    /// and that must not happen without anyone being told.
+    /// ⚠️ `log.adi` holds something the mirror cannot account for — not a pristine mirror, not
+    /// the file the store took in, not this mirror's own last write — so it was LEFT AS IT IS
+    /// and mirroring has stopped. Set until the store takes the file in and says so
+    /// ([`MirrorWriter::accept`]).
     pub foreign_write: bool,
+    /// The file the refusal was about, so the store can take in exactly that one.
+    pub foreign_stamp: Option<FileStamp>,
 }
 
 enum Msg {
@@ -143,6 +241,31 @@ enum Msg {
     Write(Vec<Arc<QsoRecord>>),
     /// Write anything pending NOW and answer when it is on disk.
     Flush(mpsc::SyncSender<Status>),
+    /// The store has taken in the file with this stamp: it may be replaced from now on.
+    Accept(FileStamp),
+}
+
+/// How a mirror lane is set up.
+#[derive(Debug, Clone)]
+pub struct MirrorOptions {
+    /// Quiet time before a pending state is written.
+    pub debounce: Duration,
+    /// The longest a change may wait, however busy the log is.
+    pub max_delay: Duration,
+    /// The stamp of a `log.adi` the store has ALREADY TAKEN IN — the operator's own file, just
+    /// converted, or a foreign one just imported. It may be replaced even though it is not a
+    /// pristine mirror, for exactly as long as it still has this stamp.
+    pub accepted: Option<FileStamp>,
+}
+
+impl Default for MirrorOptions {
+    fn default() -> Self {
+        MirrorOptions {
+            debounce: DEBOUNCE,
+            max_delay: MAX_DELAY,
+            accepted: None,
+        }
+    }
 }
 
 /// The mirror's thread and the handle onto it.
@@ -153,20 +276,33 @@ pub struct MirrorWriter {
 }
 
 impl MirrorWriter {
-    /// Start the lane, mirroring to `path`.
+    /// Start the lane, mirroring to `path`, with nothing accepted: only an absent file, a
+    /// pristine mirror or this lane's own write may be replaced.
     pub fn start(path: PathBuf) -> MirrorWriter {
-        MirrorWriter::with_timing(path, DEBOUNCE, MAX_DELAY)
+        MirrorWriter::with_options(path, MirrorOptions::default())
     }
 
     /// The lane with its debounce named — what the tests drive, so they do not have to wait a
     /// real second to observe a real write.
     pub fn with_timing(path: PathBuf, debounce: Duration, max_delay: Duration) -> MirrorWriter {
+        MirrorWriter::with_options(
+            path,
+            MirrorOptions {
+                debounce,
+                max_delay,
+                accepted: None,
+            },
+        )
+    }
+
+    /// The lane, set up in full.
+    pub fn with_options(path: PathBuf, options: MirrorOptions) -> MirrorWriter {
         let (tx, rx) = mpsc::channel::<Msg>();
         let status = Arc::new(Mutex::new(Status::default()));
         let shared = Arc::clone(&status);
         let handle = std::thread::Builder::new()
             .name("nexus-log-mirror".into())
-            .spawn(move || run(path, rx, shared, debounce, max_delay))
+            .spawn(move || run(path, rx, shared, options))
             .ok();
         MirrorWriter {
             tx: Some(tx),
@@ -179,6 +315,14 @@ impl MirrorWriter {
     pub fn submit(&self, records: Vec<Arc<QsoRecord>>) {
         if let Some(tx) = &self.tx {
             let _ = tx.send(Msg::Write(records));
+        }
+    }
+
+    /// The store has taken in the file with `stamp` (see [`Status::foreign_stamp`]): it may be
+    /// replaced, for as long as it still has that stamp.
+    pub fn accept(&self, stamp: FileStamp) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(Msg::Accept(stamp));
         }
     }
 
@@ -215,39 +359,43 @@ impl Drop for MirrorWriter {
     }
 }
 
-/// What the lane knows about the file between writes: the identity of what IT wrote, so a file
-/// that no longer matches can be recognised as somebody else's.
-#[derive(Default)]
+/// What the lane knows about the file between writes: the file it may replace even though it
+/// is not a pristine mirror — its own last write, or the one the store took in.
 struct Written {
-    stamp: Option<(u64, SystemTime)>,
+    ours: Option<FileStamp>,
+    accepted: Option<FileStamp>,
+    /// The foreign stamp last reported, so a refusal is logged once per file and not once per
+    /// debounce.
+    reported: Option<FileStamp>,
 }
 
 impl Written {
-    /// Has something else written the file since we did? `false` until the mirror has written
-    /// once — an un-marked file at startup is the expected state, not a conflict.
-    fn foreign(&self, path: &Path) -> bool {
-        let Some((len, mtime)) = self.stamp else {
-            return false;
-        };
-        match std::fs::metadata(path) {
-            Ok(m) => m.len() != len || m.modified().map(|t| t != mtime).unwrap_or(false),
-            // Gone is not "someone edited it"; the next write puts it back.
-            Err(_) => false,
+    /// May the file at `path` be replaced? Absent, pristine, our own last write, or the file the
+    /// store took in — and nothing else.
+    fn may_replace(&self, path: &Path) -> Result<(), Option<FileStamp>> {
+        match mirror_state(path) {
+            MirrorState::Absent | MirrorState::Pristine => Ok(()),
+            MirrorState::Foreign => {
+                let now = file_stamp(path);
+                match now {
+                    Some(s) if Some(s) == self.ours || Some(s) == self.accepted => Ok(()),
+                    other => Err(other),
+                }
+            }
         }
     }
 }
 
-fn run(
-    path: PathBuf,
-    rx: mpsc::Receiver<Msg>,
-    status: Arc<Mutex<Status>>,
-    debounce: Duration,
-    max_delay: Duration,
-) {
+fn run(path: PathBuf, rx: mpsc::Receiver<Msg>, status: Arc<Mutex<Status>>, opts: MirrorOptions) {
+    let (debounce, max_delay) = (opts.debounce, opts.max_delay);
     let mut pending: Option<Vec<Arc<QsoRecord>>> = None;
     let mut first_queued: Option<Instant> = None;
     let mut last_queued = Instant::now();
-    let mut written = Written::default();
+    let mut written = Written {
+        ours: None,
+        accepted: opts.accepted,
+        reported: None,
+    };
 
     loop {
         // Nothing waiting: block until something arrives or the handle is dropped.
@@ -262,6 +410,7 @@ fn run(
                 Ok(Msg::Flush(reply)) => {
                     let _ = reply.send(snapshot(&status));
                 }
+                Ok(Msg::Accept(stamp)) => written.accepted = Some(stamp),
                 Err(_) => return, // the handle went away
             }
             continue;
@@ -278,6 +427,7 @@ fn run(
                 pending = Some(rows); // newest wins: a mirror is a picture, not a journal
                 last_queued = Instant::now();
             }
+            Ok(Msg::Accept(stamp)) => written.accepted = Some(stamp),
             Ok(Msg::Flush(reply)) => {
                 if let Some(rows) = pending.take() {
                     write_once(&path, &rows, &status, &mut written);
@@ -309,16 +459,36 @@ fn run(
 /// sequence `Logbook::save` uses, and for the same reason. This is a full rewrite of every
 /// contact ever logged, so a rename that reaches the disk before the bytes do would leave
 /// `log.adi` pointing at an unwritten tmp.
+///
+/// ⛔ **It refuses to replace a file it cannot account for** (see the module header), and the
+/// check is HERE, at the write, because the write is what would destroy the other writer's
+/// contacts. The dated backup ring is kept too, exactly as the whole-file save kept it: a
+/// snapshot of the file about to be replaced, once a day and always before a write that makes
+/// it smaller — the copy that catches a purge, or a log that lost rows somewhere upstream.
 fn write_once(
     path: &Path,
     records: &[Arc<QsoRecord>],
     status: &Arc<Mutex<Status>>,
     written: &mut Written,
 ) {
-    // ⚠️ Before replacing it: is this still the file we wrote? Checked here rather than at
-    // submit time because it is the write that destroys the other writer's work.
-    if written.foreign(path) {
-        set(status, |s| s.foreign_write = true);
+    if let Err(stamp) = written.may_replace(path) {
+        if written.reported != stamp {
+            written.reported = stamp;
+            crate::applog::error(
+                "logbook",
+                &format!(
+                    "{} was changed by something other than Nexus since Nexus last wrote it. It has \
+                     been left exactly as it is, and Nexus will take its contacts into the \
+                     logbook the next time it starts. Until then the file is not kept up to date.",
+                    path.display()
+                ),
+            );
+        }
+        set(status, |s| {
+            s.foreign_write = true;
+            s.foreign_stamp = stamp;
+        });
+        return;
     }
 
     let body = mirror_adif(records);
@@ -328,9 +498,16 @@ fn write_once(
             std::fs::create_dir_all(dir)?;
         }
         super::write_sync(&tmp, body.as_bytes())?;
-        let stamp = std::fs::metadata(&tmp)
-            .ok()
-            .and_then(|m| m.modified().ok().map(|t| (m.len(), t)));
+        let stamp = file_stamp(&tmp);
+        // The ring: best-effort, and BEFORE the rename publishes the new file, so the snapshot
+        // is of the one being replaced.
+        super::Logbook::snapshot_before_save(
+            path,
+            body.len() as u64,
+            super::now_unix(),
+            super::BACKUP_KEEP,
+            super::BACKUP_TOTAL_BYTES,
+        );
         std::fs::rename(&tmp, path)?;
         super::sync_parent_dir(path);
         Ok(stamp)
@@ -340,13 +517,13 @@ fn write_once(
         Ok(stamp) => {
             // The identity of what WE wrote, read back off the file rather than computed, so a
             // filesystem that rounds an mtime cannot make our own write look foreign.
-            written.stamp = std::fs::metadata(path)
-                .ok()
-                .and_then(|m| m.modified().ok().map(|t| (m.len(), t)))
-                .or(stamp);
+            written.ours = file_stamp(path).or(stamp);
+            written.reported = None;
             set(status, |s| {
                 s.writes += 1;
                 s.last_error = None;
+                s.foreign_write = false;
+                s.foreign_stamp = None;
             });
         }
         Err(e) => {
@@ -476,10 +653,12 @@ mod tests {
         );
     }
 
-    /// ⚠️ The transition hazard. Another program rewriting `log.adi` must not be overwritten in
-    /// silence — that is an operator's edit, or another instance's whole log, going away.
+    /// ⛔ The transition hazard. Another program rewriting `log.adi` — a 1.13 instance saving its
+    /// own log — must NOT be overwritten: those contacts are in no database, and replacing the
+    /// file would be the last copy of them going away. The mirror leaves the file exactly as it
+    /// is, says so, and stops until the store has taken the file in.
     #[test]
-    fn a_write_by_something_else_is_noticed_before_it_is_replaced() {
+    fn a_write_by_something_else_is_left_alone_and_reported() {
         let d = Dir::new("foreign");
         let w = writer(d.log());
         w.submit(rows(5));
@@ -488,33 +667,175 @@ mod tests {
             !w.status().foreign_write,
             "our own write is not a foreign one"
         );
+        assert_eq!(mirror_state(&d.log()), MirrorState::Pristine);
 
         // Something else replaces the file — a 1.13 instance saving its own log.
-        std::fs::write(d.log(), "Someone else's log\n<EOH>\n<CALL:5>W1ABC<EOR>\n").unwrap();
+        let theirs = "Someone else's log\n<EOH>\n<CALL:5>W1ABC<EOR>\n";
+        std::fs::write(d.log(), theirs).unwrap();
         assert!(!is_generated(&d.log()), "and it does not carry the marker");
 
         w.submit(rows(6));
-        w.flush(Duration::from_secs(10));
+        let s = w.flush(Duration::from_secs(10));
+        assert!(s.foreign_write, "the refusal is reported");
+        assert_eq!(
+            s.foreign_stamp,
+            file_stamp(&d.log()),
+            "naming the file it refused"
+        );
+        assert_eq!(s.writes, 1, "and the refusal is not counted as a write");
+        assert_eq!(
+            std::fs::read_to_string(d.log()).unwrap(),
+            theirs,
+            "the other writer's file is exactly as it left it"
+        );
+
+        // The store takes the file in and says so: now it may be replaced.
+        w.accept(s.foreign_stamp.expect("stamp"));
+        w.submit(rows(6));
+        let s = w.flush(Duration::from_secs(10));
         assert!(
-            w.status().foreign_write,
-            "the mirror must report that it replaced somebody else's file"
+            !s.foreign_write,
+            "the refusal clears once the file is accepted"
+        );
+        assert_eq!(s.writes, 2);
+        assert_eq!(
+            parse_adif(&std::fs::read_to_string(d.log()).unwrap()).len(),
+            6
         );
     }
 
-    /// A first run is not a conflict: a `log.adi` a migration has just read, with no marker on
-    /// it, is the expected state and must not raise the alarm.
+    /// ⛔ The quiet version of the same hazard: a 1.13 instance APPENDING to the mirror. The
+    /// marker is still in the header — only the length has moved — and the appended contact
+    /// must not be replaced away.
     #[test]
-    fn the_first_write_over_an_unmarked_log_is_not_a_foreign_write() {
+    fn a_contact_appended_to_the_mirror_by_something_else_is_not_replaced_away() {
+        let d = Dir::new("appended");
+        let w = writer(d.log());
+        w.submit(rows(3));
+        w.flush(Duration::from_secs(10));
+        assert_eq!(mirror_state(&d.log()), MirrorState::Pristine, "control");
+
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(d.log())
+            .unwrap();
+        use std::io::Write as _;
+        f.write_all(b"<CALL:5>W9NEW<BAND:3>40m<MODE:2>CW<EOR>\n")
+            .unwrap();
+        drop(f);
+        assert!(is_generated(&d.log()), "the marker is still there");
+        assert_eq!(
+            mirror_state(&d.log()),
+            MirrorState::Foreign,
+            "but the length it records no longer agrees"
+        );
+
+        w.submit(rows(4));
+        let s = w.flush(Duration::from_secs(10));
+        assert!(s.foreign_write);
+        assert!(
+            std::fs::read_to_string(d.log()).unwrap().contains("W9NEW"),
+            "the appended contact is still in the file"
+        );
+    }
+
+    /// A first run is not a conflict when the store has taken the file in: the operator's own
+    /// `log.adi`, just converted, has no marker, and the store names it as accepted.
+    #[test]
+    fn an_accepted_unmarked_log_is_replaced_and_an_unaccepted_one_is_not() {
         let d = Dir::new("firstrun");
         std::fs::write(d.log(), super::super::adif_header()).unwrap();
-        let w = writer(d.log());
+        let accepted = file_stamp(&d.log());
+        let w = MirrorWriter::with_options(
+            d.log(),
+            MirrorOptions {
+                debounce: Duration::from_millis(5),
+                max_delay: Duration::from_millis(50),
+                accepted,
+            },
+        );
         w.submit(rows(4));
         w.flush(Duration::from_secs(10));
         assert!(
             !w.status().foreign_write,
-            "the log the operator already had is not a foreign write"
+            "the log the store already took in is not a foreign write"
         );
         assert_eq!(w.status().writes, 1);
+
+        // The control: the same unmarked file, NOT accepted, is left alone.
+        let d2 = Dir::new("firstrun2");
+        std::fs::write(d2.log(), super::super::adif_header()).unwrap();
+        let w2 = writer(d2.log());
+        w2.submit(rows(4));
+        let s = w2.flush(Duration::from_secs(10));
+        assert!(
+            s.foreign_write,
+            "an unmarked log nobody took in is not replaced"
+        );
+        assert_eq!(s.writes, 0);
+    }
+
+    /// Two mirror lanes on one file — two Nexus windows on one data folder — accept each
+    /// other's output, because a pristine mirror is anybody's to replace.
+    #[test]
+    fn two_mirror_lanes_accept_each_others_pictures() {
+        let d = Dir::new("twolanes");
+        let (a, b) = (writer(d.log()), writer(d.log()));
+        a.submit(rows(3));
+        a.flush(Duration::from_secs(10));
+        b.submit(rows(5));
+        let sb = b.flush(Duration::from_secs(10));
+        assert!(!sb.foreign_write, "B replaces A's pristine picture");
+        a.submit(rows(7));
+        let sa = a.flush(Duration::from_secs(10));
+        assert!(!sa.foreign_write, "and A replaces B's");
+        assert_eq!(
+            parse_adif(&std::fs::read_to_string(d.log()).unwrap()).len(),
+            7
+        );
+    }
+
+    /// The header records the body's length and it agrees with the file — the property every
+    /// other check stands on.
+    #[test]
+    fn the_marker_records_the_bodys_length() {
+        let recs = rows(9);
+        let text = mirror_adif(&recs);
+        let d = Dir::new("marker");
+        std::fs::write(d.log(), &text).unwrap();
+        let (eoh_end, recorded) = read_marker(&d.log()).expect("a marker");
+        assert_eq!(eoh_end + recorded, text.len() as u64);
+        assert_eq!(mirror_state(&d.log()), MirrorState::Pristine);
+        // Absent is its own answer, and an ordinary log is foreign.
+        assert_eq!(mirror_state(&d.0.join("none.adi")), MirrorState::Absent);
+        std::fs::write(d.log(), super::super::adif_header()).unwrap();
+        assert_eq!(mirror_state(&d.log()), MirrorState::Foreign);
+    }
+
+    /// The dated backup ring survives the move from whole-file saves to the mirror: a write
+    /// that makes the file SMALLER — a purge, a delete, a log that lost rows upstream — takes a
+    /// snapshot of the file it replaces first.
+    #[test]
+    fn a_mirror_write_that_shrinks_the_file_snapshots_it_first() {
+        let d = Dir::new("ring");
+        let w = writer(d.log());
+        w.submit(rows(30));
+        w.flush(Duration::from_secs(10));
+        let before = std::fs::read(d.log()).unwrap();
+        w.submit(rows(2));
+        w.flush(Duration::from_secs(10));
+        let shrinks: Vec<_> = std::fs::read_dir(d.0.join("backups"))
+            .expect("the ring exists")
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().ends_with("-shrink.adi"))
+            .collect();
+        assert_eq!(shrinks.len(), 1, "one shrink snapshot: {shrinks:?}");
+        assert_eq!(
+            std::fs::read(&shrinks[0]).unwrap(),
+            before,
+            "and it is the file as it was before the shrinking write"
+        );
     }
 
     /// A burst costs one write, not one per change — the whole point of a debounced lane.

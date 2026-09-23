@@ -16,6 +16,7 @@
       {
         "title": "Nexus",
         "label": "main",
+        "url": "blank.html",
         "width": 1200,
         "height": 720,
         "minWidth": 900,

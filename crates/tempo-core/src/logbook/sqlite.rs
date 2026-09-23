@@ -73,6 +73,14 @@ pub const SCHEMA_VERSION: i64 = 1;
 /// real wait in milliseconds; this is the ceiling, not the expectation.
 const BUSY_TIMEOUT_MS: u32 = 5_000;
 
+/// The page cache of the one-time conversion's connection, in KiB — 64 MiB, against SQLite's
+/// default of 2,000 KiB. Measured: the conversion's chunks are big, their rows land at random
+/// places in the primary keys, and in 2 MB the key pages were evicted and read back over and
+/// over. 64 MiB took 14–25% off the store's time at 150,000 and 300,000 contacts; 128 and 256
+/// MiB took at most 4% more. It writes no fewer bytes — that is the chunk size's job — and it is
+/// freed when the conversion's connection closes.
+const CONVERSION_CACHE_KIB: i64 = 65_536;
+
 /// `log_meta`, applied BEFORE [`DDL`] so the version can be read first.
 ///
 /// The five watermarks survive into SQLite rather than being replaced by a bare "the table
@@ -85,8 +93,8 @@ CREATE TABLE IF NOT EXISTS log_meta (
 );
 ";
 
-/// The schema. `IF NOT EXISTS` throughout so opening an existing database is the same call as
-/// creating one.
+/// The schema's tables. `IF NOT EXISTS` throughout so opening an existing database is the same
+/// call as creating one. Their secondary indexes are [`INDEXES`].
 const DDL: &str = r#"
 -- ─── The general log ────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS qso (
@@ -250,17 +258,35 @@ CREATE TABLE IF NOT EXISTS qso_contest_adif (
   value  TEXT NOT NULL,
   PRIMARY KEY (qso_id, ord)
 );
-
-CREATE INDEX IF NOT EXISTS qso_worked   ON qso(call_norm, band_norm, mode_norm);
-CREATE INDEX IF NOT EXISTS qso_dedup    ON qso(base_call, band_norm, mode_norm, when_unix);
-CREATE INDEX IF NOT EXISTS qso_recent   ON qso(when_unix DESC);
-CREATE INDEX IF NOT EXISTS qso_confirm  ON qso(call_norm, band_norm, mode_class, utc_day);
-CREATE INDEX IF NOT EXISTS qso_entity   ON qso(entity, band_norm, mode_norm);
-CREATE INDEX IF NOT EXISTS qso_callhist ON qso(call_norm, when_unix DESC);
-CREATE INDEX IF NOT EXISTS qso_dupekey  ON qso(contest_id, dupe_key);
-CREATE INDEX IF NOT EXISTS cx_dupe      ON contest_exchange(contest_id, slot, raw);
-CREATE INDEX IF NOT EXISTS up_service   ON qso_upload(service, when_unix DESC);
 "#;
+
+/// The secondary indexes, one statement each: the store's lookup paths, and none of them a rule.
+/// Every uniqueness rule is a table's own `PRIMARY KEY`, which [`DDL`] creates with its table, so
+/// a store without these holds exactly the same log — it is only slower to search.
+///
+/// ⭐ **Apart from [`DDL`] for the one-time conversion.** Kept up row by row while a lifetime log
+/// goes in, every chunk's commit rewrote every page of all nine that it touched; built once over
+/// the finished table, each is one sorted pass. Measured at 150,000 contacts, with nothing else
+/// changed: 8.65 GB written and 21.6 s in the store, against 3.8 GB and 13.1 s with the indexes
+/// built at the end (0.5 s of that is the nine builds). [`LogDb::open`] builds them as it always
+/// has. The conversion opens with [`LogDb::open_for_conversion`], which does not, and calls
+/// [`LogDb::build_indexes`] after its last contact and before it marks itself done.
+///
+/// `IF NOT EXISTS` on every one, so building them is safe to repeat: a conversion killed half-way
+/// through them builds only the rest when it resumes. ⚠️ Do not reformat them. SQLite records
+/// each statement's text from the index name onward in `sqlite_master`, so as written a store
+/// built by this list carries the same schema, byte for byte, as one built before the split.
+const INDEXES: [&str; 9] = [
+    "CREATE INDEX IF NOT EXISTS qso_worked   ON qso(call_norm, band_norm, mode_norm)",
+    "CREATE INDEX IF NOT EXISTS qso_dedup    ON qso(base_call, band_norm, mode_norm, when_unix)",
+    "CREATE INDEX IF NOT EXISTS qso_recent   ON qso(when_unix DESC)",
+    "CREATE INDEX IF NOT EXISTS qso_confirm  ON qso(call_norm, band_norm, mode_class, utc_day)",
+    "CREATE INDEX IF NOT EXISTS qso_entity   ON qso(entity, band_norm, mode_norm)",
+    "CREATE INDEX IF NOT EXISTS qso_callhist ON qso(call_norm, when_unix DESC)",
+    "CREATE INDEX IF NOT EXISTS qso_dupekey  ON qso(contest_id, dupe_key)",
+    "CREATE INDEX IF NOT EXISTS cx_dupe      ON contest_exchange(contest_id, slot, raw)",
+    "CREATE INDEX IF NOT EXISTS up_service   ON qso_upload(service, when_unix DESC)",
+];
 
 /// Every `qso` column the store writes, **in bind order**.
 ///
@@ -367,6 +393,12 @@ pub enum Error {
         /// What it was.
         value: u64,
     },
+    /// A copy of the database ([`copy_database`]) could not be PROVED to hold what the
+    /// original holds, so it was not put in place. The original is untouched.
+    Copy {
+        /// What the proof found, in words an operator can be shown.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -386,6 +418,7 @@ impl std::fmt::Display for Error {
                     "logbook database: {what} ({value}) will not fit an INTEGER"
                 )
             }
+            Error::Copy { reason } => write!(f, "logbook database copy: {reason}"),
         }
     }
 }
@@ -555,14 +588,61 @@ pub struct LogDb {
 }
 
 impl LogDb {
-    /// Open `path`, creating and initialising it if it is not there yet.
+    /// Open `path`, creating and initialising it if it is not there yet — every table and every
+    /// index, building any index the file does not have.
     pub fn open(path: &Path) -> Result<LogDb> {
-        LogDb::init(Connection::open(path)?)
+        let db = LogDb::init(Connection::open(path)?)?;
+        db.build_indexes(&mut |_, _| {})?;
+        Ok(db)
     }
 
     /// An in-memory database, for tests and for a caller that wants the schema without a file.
     pub fn open_in_memory() -> Result<LogDb> {
-        LogDb::init(Connection::open_in_memory()?)
+        let db = LogDb::init(Connection::open_in_memory()?)?;
+        db.build_indexes(&mut |_, _| {})?;
+        Ok(db)
+    }
+
+    /// Open `path` for the ONE-TIME conversion of an existing `log.adi` ([`super::migrate`]) —
+    /// never for ordinary use. It differs from [`LogDb::open`] in three ways, all confined to
+    /// this connection and gone when it closes:
+    ///
+    /// - **No indexes.** The tables only; [`INDEXES`] says why, and the conversion builds them
+    ///   with [`LogDb::build_indexes`] once every contact is in. It also means this open never
+    ///   WRITES to a store that already has its tables — which matters to the other caller, the
+    ///   check a second window makes while the first may still be converting: an ordinary open
+    ///   there would build the missing indexes, holding the write lock for as long as that
+    ///   takes, out from under the first window's next chunk.
+    /// - **`synchronous = NORMAL`**, where the store's own setting is SQLite's default, FULL. In
+    ///   WAL mode NORMAL still cannot corrupt the database, and a crashed process loses nothing
+    ///   it committed; what it gives up is that an OS crash or a power cut can lose the LAST few
+    ///   commits. For a conversion that costs nothing: its watermark is the store's own row
+    ///   count, so a lost chunk is simply converted again, from `log.adi`, which the conversion
+    ///   never changes. FULL waits for the disk at every commit; measured, that is worth only
+    ///   2–5% on a fast disk with the conversion's few big commits, and more where a flush is
+    ///   slow. ⛔ Never `OFF`: that one can corrupt the database.
+    /// - **A bigger page cache**, [`CONVERSION_CACHE_KIB`], so the key pages a big chunk keeps
+    ///   coming back to stay in memory instead of being evicted and read back.
+    pub fn open_for_conversion(path: &Path) -> Result<LogDb> {
+        let conn = Connection::open(path)?;
+        // Before `init`, so every write this connection makes — the version stamp and the tables
+        // of a new store included — is made under them. Both are this connection's alone.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "cache_size", -CONVERSION_CACHE_KIB)?;
+        LogDb::init(conn)
+    }
+
+    /// Build every index in [`INDEXES`] the store does not have yet, telling `progress` how many
+    /// of how many are built: `(0, n)` first, then after each one. Each index is its own
+    /// transaction, and an index that is already there is left as it is — so a build cut short
+    /// by a crash is finished by calling this again.
+    pub fn build_indexes(&self, progress: &mut dyn FnMut(usize, usize)) -> Result<()> {
+        progress(0, INDEXES.len());
+        for (built, sql) in INDEXES.iter().enumerate() {
+            self.conn.execute_batch(sql)?;
+            progress(built + 1, INDEXES.len());
+        }
+        Ok(())
     }
 
     /// The pragmas, the schema, and the version check — the three things every open does.
@@ -625,6 +705,22 @@ impl LogDb {
         Ok(())
     }
 
+    /// `PRAGMA data_version` on this connection: it moves exactly when a DIFFERENT connection —
+    /// another process's writer, sharing this data folder — commits. This connection's own
+    /// commits never move it, which is what lets the writer thread tell "someone else wrote the
+    /// log" apart from its own work without any bookkeeping of its own.
+    pub fn data_version(&self) -> Result<i64> {
+        data_version(&self.conn)
+    }
+
+    /// The file this database was opened from, or `None` for an in-memory one.
+    pub fn path(&self) -> Option<std::path::PathBuf> {
+        self.conn
+            .path()
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+    }
+
     /// How many records the store holds.
     ///
     /// Written for [`super::migrate`], where it IS the resume watermark: a migration inserts
@@ -646,9 +742,12 @@ impl LogDb {
 
     /// Store many records in ONE transaction.
     ///
-    /// One transaction per batch, never one spanning a whole import: the contest writer's
-    /// `busy_timeout` has to be measured in milliseconds, so a caller with a very large import
-    /// chunks it and calls this repeatedly.
+    /// One transaction per call, so a caller with a very large import chunks it and calls this
+    /// repeatedly — and how big a chunk may be depends on who could be waiting for the write
+    /// lock meanwhile. Beside a live session a contest QSO could, and its `busy_timeout` is
+    /// measured in milliseconds: that is the writer thread's rule, and its chunks stay small.
+    /// The one-time conversion runs before any session, with nothing waiting, and commits tens
+    /// of thousands of contacts at a time (`migrate::CHUNK_ROWS` says why).
     pub fn insert_all<'a, I>(&mut self, rows: I) -> Result<()>
     where
         I: IntoIterator<Item = (&'a QsoRecord, Resolved<'a>)>,
@@ -894,6 +993,230 @@ impl LogDb {
         }
         Ok(out)
     }
+}
+
+/// The database's write lock, held the way ANOTHER process holds it while it writes — until
+/// this value is dropped. Every writer that wants the lock meanwhile waits (`busy_timeout`),
+/// which is exactly the state "a write that is taking its time" puts the log in.
+///
+/// For the tests that must show nothing waits on that state under the engine lock, and for a
+/// diagnosis that needs to reproduce it; nothing in the app takes it.
+pub struct WriteHold {
+    conn: Connection,
+}
+
+impl WriteHold {
+    /// Take the lock on the database at `path` (which must exist).
+    pub fn take(path: &Path) -> Result<WriteHold> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(WriteHold { conn })
+    }
+}
+
+impl Drop for WriteHold {
+    fn drop(&mut self) {
+        let _ = self.conn.execute_batch("ROLLBACK");
+    }
+}
+
+/// How many times [`copy_database`] takes its picture before giving up because the original
+/// kept changing under it. Each attempt is a whole copy, so this is a bound on work, not a wait.
+const COPY_ATTEMPTS: usize = 3;
+
+/// Copy the database at `src` to `dst` THROUGH SQLite, and prove the copy holds exactly what the
+/// original holds before it takes the name `dst`. Returns the copy's size in bytes.
+///
+/// ⛔ **Why not `fs::copy`.** In WAL mode a COMMITTED contact lives in `src-wal` until a
+/// checkpoint folds it into the main file, so the main file alone is not the log; and copying
+/// the main file, the `-wal` and the `-shm` one after another while another connection writes
+/// is not one consistent picture of anything. `VACUUM INTO` reads the database as ONE
+/// transaction — WAL included — and writes a fresh, self-contained file, so neither sidecar
+/// needs carrying at all.
+///
+/// **The proof.** The copy is attached and compared with the original inside one read
+/// transaction: SQLite's own `integrity_check` on the copy, the same tables, and every table's
+/// rows equal value for value IN `rowid` ORDER (the order the store hands records back in). The
+/// two pictures — the one `VACUUM INTO` took and the one the comparison reads — are the same
+/// picture only if nothing committed between them, which `PRAGMA data_version` answers: it
+/// moves exactly when ANOTHER connection commits. If it moved, the comparison proves nothing
+/// either way, so the attempt is thrown away and taken again (up to [`COPY_ATTEMPTS`]).
+///
+/// **What it never does.** It opens `src` without the create flag and without this module's
+/// schema set-up, so it cannot make a database that was not there or stamp a version onto one a
+/// newer build wrote — it copies whatever database it finds. It never writes to `src`. A copy
+/// that is not proved never takes the name `dst`: it is written beside it under a temporary
+/// name, and removed.
+pub fn copy_database(src: &Path, dst: &Path) -> Result<u64> {
+    copy_database_observed(src, dst, &mut |_| {})
+}
+
+/// [`copy_database`], with `between(attempt)` run after each picture is taken and before it is
+/// compared — the seam a test uses to commit in exactly the window the retry exists for.
+fn copy_database_observed(src: &Path, dst: &Path, between: &mut dyn FnMut(usize)) -> Result<u64> {
+    use rusqlite::OpenFlags;
+    let conn = Connection::open_with_flags(
+        src,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))?;
+    let dir = dst.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| Error::Copy {
+        reason: format!("could not create {}: {e}", dir.display()),
+    })?;
+    let mut tmp_name = dst.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(format!(".copy-{}.tmp", std::process::id()));
+    let tmp = dst.with_file_name(tmp_name);
+    let tmp_str = tmp.to_str().ok_or_else(|| Error::Copy {
+        reason: format!("{} is not a path SQLite can be given", tmp.display()),
+    })?;
+
+    let mut why = String::from("the log kept changing while it was being copied");
+    let mut proved = false;
+    for attempt in 0..COPY_ATTEMPTS {
+        remove_with_sidecars(&tmp);
+        let before = data_version(&conn)?;
+        conn.execute("VACUUM INTO ?1", [tmp_str])?;
+        between(attempt);
+        let verdict = verify_copy(&conn, tmp_str)?;
+        remove_sidecars(&tmp);
+        if data_version(&conn)? != before {
+            // Another connection committed between the picture and the comparison: the
+            // comparison is about two different logs, so it says nothing. Take it again.
+            continue;
+        }
+        match verdict {
+            Ok(()) => {
+                proved = true;
+                break;
+            }
+            Err(reason) => {
+                why = reason;
+                break;
+            }
+        }
+    }
+    if !proved {
+        remove_with_sidecars(&tmp);
+        return Err(Error::Copy { reason: why });
+    }
+
+    let placed = (|| -> std::io::Result<u64> {
+        // The bytes reach the disk BEFORE the name does — the rename is what publishes the copy.
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&tmp)?;
+        f.sync_all()?;
+        let len = f.metadata()?.len();
+        drop(f);
+        // A database that used to have this name may have left its own `-wal`/`-shm` behind.
+        // SQLite would read them as belonging to the copy, so they go first.
+        remove_sidecars(dst);
+        std::fs::rename(&tmp, dst)?;
+        super::sync_parent_dir(dst);
+        Ok(len)
+    })();
+    placed.map_err(|e| {
+        remove_with_sidecars(&tmp);
+        Error::Copy {
+            reason: format!("could not put the copy in place at {}: {e}", dst.display()),
+        }
+    })
+}
+
+/// `PRAGMA data_version` — moves exactly when a connection OTHER than `conn` commits.
+fn data_version(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("PRAGMA data_version", [], |r| r.get(0))?)
+}
+
+/// `path`'s own `-wal` and `-shm`, if any.
+fn remove_sidecars(path: &Path) {
+    for suffix in ["-wal", "-shm"] {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(suffix);
+        let _ = std::fs::remove_file(path.with_file_name(name));
+    }
+}
+
+fn remove_with_sidecars(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    remove_sidecars(path);
+}
+
+/// Attach the copy at `copy` and compare it with `conn`'s database in ONE read transaction.
+/// The outer `Result` is SQLite failing; the inner one is the verdict, with its reason.
+fn verify_copy(conn: &Connection, copy: &str) -> Result<std::result::Result<(), String>> {
+    conn.execute("ATTACH DATABASE ?1 AS nexus_copy", [copy])?;
+    let verdict = compare_attached(conn);
+    // Detached whatever the verdict, or the copy stays open and cannot be renamed on Windows.
+    let detached = conn.execute("DETACH DATABASE nexus_copy", []);
+    let verdict = verdict?;
+    detached?;
+    Ok(verdict)
+}
+
+fn compare_attached(conn: &Connection) -> Result<std::result::Result<(), String>> {
+    let tx = conn.unchecked_transaction()?;
+    let integrity: String = tx.query_row("PRAGMA nexus_copy.integrity_check", [], |r| r.get(0))?;
+    if integrity != "ok" {
+        return Ok(Err(format!(
+            "the copy failed SQLite's integrity check ({integrity})"
+        )));
+    }
+    let tables = |schema: &str| -> Result<Vec<String>> {
+        let mut stmt = tx.prepare(&format!(
+            "SELECT name FROM {schema}.sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ))?;
+        let names = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(names)
+    };
+    let (ours, theirs) = (tables("main")?, tables("nexus_copy")?);
+    if ours != theirs {
+        return Ok(Err("the copy does not hold the same tables".into()));
+    }
+    for table in &ours {
+        let quoted = table.replace('"', "\"\"");
+        let mut a = tx.prepare(&format!("SELECT * FROM main.\"{quoted}\" ORDER BY rowid"))?;
+        let mut b = tx.prepare(&format!(
+            "SELECT * FROM nexus_copy.\"{quoted}\" ORDER BY rowid"
+        ))?;
+        let width = a.column_count();
+        if b.column_count() != width {
+            return Ok(Err(format!("the copy's {table} table has other columns")));
+        }
+        let (mut ra, mut rb) = (a.query([])?, b.query([])?);
+        let mut n = 0u64;
+        loop {
+            match (ra.next()?, rb.next()?) {
+                (None, None) => break,
+                (Some(x), Some(y)) => {
+                    for i in 0..width {
+                        if x.get_ref(i)? != y.get_ref(i)? {
+                            return Ok(Err(format!("row {n} of {table} differs in the copy")));
+                        }
+                    }
+                    n += 1;
+                }
+                _ => {
+                    return Ok(Err(format!(
+                        "the copy's {table} table holds a different number of rows"
+                    )))
+                }
+            }
+        }
+    }
+    drop(tx);
+    Ok(Ok(()))
 }
 
 /// `INSERT INTO qso (…) VALUES (?1, …)`, built from [`QSO_COLUMNS`] so the placeholder count
@@ -1810,6 +2133,104 @@ mod tests {
         );
     }
 
+    /// The WHOLE PIPELINE the store now owns, on disk: an operator's `log.adi` → the real
+    /// conversion (`migrate_log`, with its file-backed store) → the load the app starts from →
+    /// the file the mirror writes. Every record comes out as the ADIF writer would have written
+    /// it from a plain load of the original file — `extra` included — in the same order and
+    /// under the same id. `meddle` runs against the store between the conversion and the load.
+    fn pipeline(n: usize, meddle: impl FnOnce(&Connection)) -> (Vec<String>, Vec<String>) {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-pipeline-{}-{:?}-{n}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("log.adi");
+        std::fs::write(&log, synthetic_log(n)).unwrap();
+        let expected: Vec<String> = Logbook::load(&log)
+            .records()
+            .iter()
+            .map(|r| super::super::adif_record_own_log(r))
+            .collect();
+        let db = super::super::migrate::database_path(&log);
+        super::super::migrate::migrate_log(&log, &db, |_| Resolved::default()).expect("converts");
+        meddle(&Connection::open(&db).unwrap());
+        let held = Logbook::from_store(LogDb::open(&db).unwrap().load_all().unwrap());
+        let mirror = super::super::mirror::mirror_adif(held.records());
+        let actual: Vec<String> = held
+            .records()
+            .iter()
+            .map(|r| super::super::adif_record_own_log(r))
+            .collect();
+        // The file the mirror writes is exactly those records after its header — so a
+        // per-record comparison below is a comparison of the FILE, not of a re-parse of it
+        // (which would measure the ADIF reader, a different thing: see the note at the call).
+        let body = &mirror[mirror.find("<EOH>").expect("a header") + 5..];
+        assert_eq!(
+            body,
+            format!("\n{}", actual.concat()),
+            "the mirror is its records"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        (expected, actual)
+    }
+
+    /// ★ PROPERTY 1, through the new owner: the file the operator had and the file the mirror
+    /// writes hold the same records, byte for byte per record, passthrough included, over a
+    /// fixture that exercises every representation (the census, asserted on the stored rows).
+    ///
+    /// ⚠️ It compares the mirror's own bytes, NOT a re-parse of them, and that is deliberate: a
+    /// re-parse would also measure the ADIF READER, which is not lossless. A POTA two-fer is
+    /// written as `MY_SIG_INFO` = the first park plus `MY_POTA_REF` = both, and the reader
+    /// prefers `MY_SIG_INFO` when both are present, so a re-read keeps one park. That is a
+    /// reader defect found by this test's first draft and reported, not fixed here; the store
+    /// itself never re-reads the mirror, so it keeps both parks across a restart.
+    #[test]
+    fn the_log_survives_conversion_load_and_mirror_byte_for_byte() {
+        let n = 20_000;
+        let (expected, actual) = pipeline(n, |conn| census(conn, n));
+        assert_eq!(actual.len(), n, "every record came back out");
+        if let Some(at) = expected.iter().zip(&actual).position(|(e, a)| e != a) {
+            panic!(
+                "record {at} differs after conversion, load and mirror\nexpected: {:?}\nactual:   {:?}",
+                expected[at], actual[at]
+            );
+        }
+    }
+
+    /// Its positive control: one passthrough row dropped from the store between the conversion
+    /// and the load must break the same comparison, by exactly that one tag.
+    #[test]
+    fn positive_control_the_pipeline_catches_one_dropped_passthrough_row() {
+        let mut dropped = String::new();
+        let (expected, actual) = pipeline(300, |conn| {
+            let (qso_id, name, value): (String, String, String) = conn
+                .query_row(
+                    "SELECT qso_id, name, value FROM qso_extra ORDER BY qso_id, name LIMIT 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .expect("a passthrough row to drop");
+            assert_eq!(
+                conn.execute(
+                    "DELETE FROM qso_extra WHERE qso_id = ?1 AND name = ?2",
+                    params![&qso_id, &name],
+                )
+                .unwrap(),
+                1
+            );
+            dropped = format!("<{}:{}>{}", name, value.len(), value);
+        });
+        assert_ne!(expected, actual, "a dropped passthrough row MUST be caught");
+        let count = |v: &[String]| v.iter().map(|r| r.matches(&dropped).count()).sum::<usize>();
+        assert_eq!(
+            count(&expected),
+            count(&actual) + 1,
+            "exactly {dropped}, once"
+        );
+    }
+
     /// The same property over the nasty end of the value space, where a SQL round trip breaks
     /// if it breaks at all: empty strings that are not NULL, the separators the exchange
     /// carrier escapes, multi-line text, and non-ASCII.
@@ -2139,6 +2560,14 @@ mod tests {
                 .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
                 .unwrap();
             assert_eq!(busy, i64::from(BUSY_TIMEOUT_MS));
+            let sync: i64 = db
+                .conn
+                .query_row("PRAGMA synchronous", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                sync, 2,
+                "FULL: a contact is on the disk when the commit that logged it returns"
+            );
             assert_eq!(db.meta("schema_version").unwrap(), Some(SCHEMA_VERSION));
         }
         // Reopening an existing file is the same call, and it keeps the stamp.
@@ -2158,6 +2587,53 @@ mod tests {
             other => panic!("expected a version refusal, got {:?}", other.map(|_| ())),
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// ⛔ **The conversion's durability trade is its own connection's, and nobody else's.** It
+    /// runs `synchronous = NORMAL` — safe in WAL mode, never `OFF` — while every ordinary
+    /// connection, the writer thread's among them, keeps the store's own FULL: alongside the
+    /// conversion, and after it.
+    #[test]
+    fn only_the_conversions_own_connection_relaxes_synchronous() {
+        let dir = std::env::temp_dir().join(format!("nexus-logdb-sync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.sqlite3");
+        let _ = std::fs::remove_file(&path);
+        let pragma = |db: &LogDb, name: &str| -> String {
+            db.conn
+                .query_row(&format!("PRAGMA {name}"), [], |r| {
+                    r.get::<_, rusqlite::types::Value>(0)
+                })
+                .map(|v| format!("{v:?}"))
+                .unwrap()
+        };
+
+        let conversion = LogDb::open_for_conversion(&path).unwrap();
+        assert_eq!(pragma(&conversion, "synchronous"), "Integer(1)", "NORMAL");
+        assert_eq!(
+            pragma(&conversion, "journal_mode"),
+            "Text(\"wal\")",
+            "NORMAL is safe only in WAL mode"
+        );
+        assert_eq!(
+            pragma(&conversion, "cache_size"),
+            format!("Integer({})", -CONVERSION_CACHE_KIB)
+        );
+        let ordinary = LogDb::open(&path).unwrap();
+        assert_eq!(
+            pragma(&ordinary, "synchronous"),
+            "Integer(2)",
+            "an ordinary connection alongside the conversion keeps FULL"
+        );
+        assert_eq!(pragma(&ordinary, "cache_size"), "Integer(-2000)");
+        drop(conversion);
+        drop(ordinary);
+        assert_eq!(
+            pragma(&LogDb::open(&path).unwrap(), "synchronous"),
+            "Integer(2)",
+            "and so does every ordinary connection after it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Deleting a QSO takes its children with it — the point of `foreign_keys = ON`.
@@ -2495,5 +2971,280 @@ mod tests {
             Some(3),
             "the block must not be discarded as empty"
         );
+    }
+
+    // ── copy_database ────────────────────────────────────────────────────────
+
+    /// A directory of the test's own, gone with the value. Named for the test AND the thread,
+    /// because this module's tests run in parallel inside one process.
+    struct CopyDir(std::path::PathBuf);
+    impl CopyDir {
+        fn new(tag: &str) -> CopyDir {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let p = std::env::temp_dir().join(format!(
+                "nexus-dbcopy-{tag}-{}-{:?}-{nanos}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&p).unwrap();
+            CopyDir(p)
+        }
+    }
+    impl Drop for CopyDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// `n` contacts, each with an id, a `COMMENT` naming its index, and a foreign tag — so
+    /// every child table the copy must carry has rows in it.
+    fn copy_rows(n: usize, base: u64) -> Vec<QsoRecord> {
+        (0..n)
+            .map(|i| {
+                let mut r = parse_adif(&format!(
+                    "<CALL:6>K{:01}COPY<QSO_DATE:8>20260901<TIME_ON:6>{:02}{:02}00<BAND:3>20m\
+                     <MODE:3>FT8<COMMENT:7>row{:04}<APP_OTHER_LOGGER:3>xyz\
+                     <APP_TEMPO_UL_QRZ:19>accepted|1700000500<EOR>",
+                    i % 10,
+                    i / 60 % 24,
+                    i % 60,
+                    i
+                ))
+                .remove(0);
+                r.id = Some(RecordId::Provisional {
+                    hash: base + i as u64,
+                    ordinal: 0,
+                });
+                r
+            })
+            .collect()
+    }
+
+    /// A store whose connection is KEPT OPEN: its committed rows sit in the `-wal` file.
+    fn live_store(path: &Path, rows: &[QsoRecord]) -> LogDb {
+        let mut db = LogDb::open(path).unwrap();
+        db.insert_all(rows.iter().map(|r| (r, Resolved::default())))
+            .unwrap();
+        db
+    }
+
+    fn wal_of(path: &Path) -> std::path::PathBuf {
+        let mut name = path.file_name().unwrap().to_os_string();
+        name.push("-wal");
+        path.with_file_name(name)
+    }
+
+    /// ★ The whole point: a copy of a LIVE store carries every committed contact, including the
+    /// ones that exist only in its `-wal` — and the copy is a single self-contained file, so no
+    /// sidecar has to travel with it.
+    #[test]
+    fn a_copy_of_a_live_store_carries_what_only_the_wal_holds() {
+        let d = CopyDir::new("live");
+        let (src, dst) = (
+            d.0.join("log.sqlite3"),
+            d.0.join("moved").join("log.sqlite3"),
+        );
+        let rows = copy_rows(64, 1_000);
+        let live = live_store(&src, &rows);
+        assert!(
+            std::fs::metadata(wal_of(&src))
+                .map(|m| m.len())
+                .unwrap_or(0)
+                > 0,
+            "premise: the contacts are in the WAL, not yet in the main file"
+        );
+
+        let bytes = copy_database(&src, &dst).expect("copied");
+        assert!(bytes > 0);
+        assert!(
+            !wal_of(&dst).exists(),
+            "the copy is one self-contained file: no WAL travels with it"
+        );
+        let copied = LogDb::open(&dst).unwrap().load_all().unwrap();
+        assert_eq!(copied, rows, "every contact, in order, with its children");
+        assert_eq!(
+            live.load_all().unwrap(),
+            rows,
+            "and the original store was not touched"
+        );
+    }
+
+    /// ⛔ A commit landing BETWEEN the picture and the comparison makes the comparison meaningless
+    /// — it compares two different logs — so that attempt must be thrown away and the copy taken
+    /// again. The seam commits a row in exactly that window on the first attempt only.
+    ///
+    /// Control: the row committed in the window is IN the copy that was kept, which it can only
+    /// be if the first picture (taken before it) was discarded and a second one taken after.
+    #[test]
+    fn a_commit_during_the_copy_discards_the_picture_and_takes_another() {
+        let d = CopyDir::new("race");
+        let (src, dst) = (d.0.join("log.sqlite3"), d.0.join("to").join("log.sqlite3"));
+        let rows = copy_rows(20, 2_000);
+        let mut other = live_store(&src, &rows);
+        let late = copy_rows(1, 9_000).remove(0);
+        let mut attempts = Vec::new();
+        copy_database_observed(&src, &dst, &mut |attempt| {
+            attempts.push(attempt);
+            if attempt == 0 {
+                other.insert(&late, Resolved::default()).unwrap();
+            }
+        })
+        .expect("the second picture is proved");
+        assert_eq!(attempts, vec![0, 1], "the first picture was thrown away");
+        let copied = LogDb::open(&dst).unwrap().load_all().unwrap();
+        assert_eq!(
+            copied.len(),
+            21,
+            "the copy kept is the one taken AFTER the commit"
+        );
+        assert_eq!(copied.last(), Some(&late));
+    }
+
+    /// A log that never stops changing is refused rather than copied from a picture nobody
+    /// proved — and refusing leaves nothing at the destination.
+    #[test]
+    fn a_log_that_keeps_changing_is_refused_and_leaves_nothing_behind() {
+        let d = CopyDir::new("churn");
+        let (src, dst) = (d.0.join("log.sqlite3"), d.0.join("to").join("log.sqlite3"));
+        let mut other = live_store(&src, &copy_rows(5, 3_000));
+        let mut next = 10_000;
+        let err = copy_database_observed(&src, &dst, &mut |_| {
+            next += 1;
+            other
+                .insert(&copy_rows(1, next).remove(0), Resolved::default())
+                .unwrap();
+        })
+        .expect_err("never proved");
+        assert!(
+            matches!(&err, Error::Copy { reason } if reason.contains("kept changing")),
+            "{err}"
+        );
+        assert!(!dst.exists(), "an unproved copy never takes the name");
+        let leftovers: Vec<_> = std::fs::read_dir(dst.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no temporary left behind: {leftovers:?}"
+        );
+    }
+
+    /// The comparison is not a formality: a copy that differs from the original by one value in
+    /// one row, or by one row, is caught. Driven through `verify_copy` directly, against a copy
+    /// that is then deliberately damaged — the positive controls for the proof itself.
+    #[test]
+    fn the_proof_catches_a_changed_value_and_a_missing_row() {
+        let d = CopyDir::new("proof");
+        let src = d.0.join("log.sqlite3");
+        let _live = live_store(&src, &copy_rows(12, 4_000));
+        let conn = Connection::open(&src).unwrap();
+        let copy = d.0.join("copy.sqlite3");
+        let copy_str = copy.to_str().unwrap();
+
+        conn.execute("VACUUM INTO ?1", [copy_str]).unwrap();
+        assert_eq!(
+            verify_copy(&conn, copy_str).unwrap(),
+            Ok(()),
+            "control: an untouched copy is proved"
+        );
+
+        // One value in one child row.
+        Connection::open(&copy)
+            .unwrap()
+            .execute(
+                "UPDATE qso_extra SET value = 'zzz' WHERE rowid = (SELECT max(rowid) FROM qso_extra)",
+                [],
+            )
+            .unwrap();
+        let verdict = verify_copy(&conn, copy_str).unwrap();
+        assert!(
+            matches!(&verdict, Err(why) if why.contains("qso_extra")),
+            "a changed value is caught: {verdict:?}"
+        );
+
+        // One whole row.
+        let _ = std::fs::remove_file(&copy);
+        conn.execute("VACUUM INTO ?1", [copy_str]).unwrap();
+        Connection::open(&copy)
+            .unwrap()
+            .execute(
+                "DELETE FROM qso WHERE rowid = (SELECT max(rowid) FROM qso)",
+                [],
+            )
+            .unwrap();
+        let verdict = verify_copy(&conn, copy_str).unwrap();
+        assert!(
+            matches!(&verdict, Err(why) if why.contains("different number of rows")),
+            "a missing row is caught: {verdict:?}"
+        );
+    }
+
+    /// ⛔ A database that used to have the destination's name may have left its own `-wal`
+    /// behind. SQLite pairs a WAL with a database by NAME, so a stale one would be replayed
+    /// into the copy the first time it is opened. Built for real: a store is written at the
+    /// destination, its WAL saved while it holds frames, and restored after the store closed.
+    ///
+    /// Control: the stale WAL really is live ammunition — opened beside its own database it
+    /// brings that store's rows back.
+    #[test]
+    fn a_stale_wal_at_the_destination_is_not_replayed_into_the_copy() {
+        let d = CopyDir::new("stale");
+        let src = d.0.join("src").join("log.sqlite3");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        let dst = d.0.join("dst").join("log.sqlite3");
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+
+        // The old store at the destination, and a snapshot of its main file + live WAL.
+        let old_rows = copy_rows(30, 5_000);
+        let old = live_store(&dst, &old_rows);
+        let saved_main = std::fs::read(&dst).unwrap();
+        let saved_wal = std::fs::read(wal_of(&dst)).unwrap();
+        assert!(
+            !saved_wal.is_empty(),
+            "premise: the old store's rows are in its WAL"
+        );
+        drop(old);
+
+        // Control: the saved pair, put back, IS the old store — the WAL is live ammunition.
+        std::fs::write(&dst, &saved_main).unwrap();
+        std::fs::write(wal_of(&dst), &saved_wal).unwrap();
+        assert_eq!(
+            LogDb::open(&dst).unwrap().row_count().unwrap(),
+            30,
+            "control: the stale WAL replays the old store's rows"
+        );
+        // Put the stale pair back once more, then copy a DIFFERENT store over it.
+        std::fs::write(&dst, &saved_main).unwrap();
+        std::fs::write(wal_of(&dst), &saved_wal).unwrap();
+
+        let new_rows = copy_rows(7, 6_000);
+        let _src = live_store(&src, &new_rows);
+        copy_database(&src, &dst).expect("copied over the old store");
+        assert_eq!(
+            LogDb::open(&dst).unwrap().load_all().unwrap(),
+            new_rows,
+            "the copy is the new store, with nothing of the old one replayed into it"
+        );
+    }
+
+    /// A copy never creates a database that was not there, and never stamps a version onto one
+    /// it did not write: the source is opened without either.
+    #[test]
+    fn copying_a_missing_database_is_an_error_and_creates_nothing() {
+        let d = CopyDir::new("missing");
+        let (src, dst) = (
+            d.0.join("absent.sqlite3"),
+            d.0.join("to").join("log.sqlite3"),
+        );
+        assert!(copy_database(&src, &dst).is_err());
+        assert!(
+            !src.exists(),
+            "the source was not created by asking to copy it"
+        );
+        assert!(!dst.exists());
     }
 }

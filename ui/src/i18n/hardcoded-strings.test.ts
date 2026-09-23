@@ -113,12 +113,18 @@ const MIGRATED = [
   // around them moves. It also carried nine of the tree's hand-rolled plurals, which is what
   // proves the `{{count}}` path on real shipped counts rather than on a fixture.
   'components/Logbook.tsx',
+  // The words for a LoTW upload that skipped contacts, which the Logbook and the Awards
+  // upload buttons share — born migrated.
+  'features/lotwSkips.ts',
   // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
   'components/QsoDetail.tsx',
   'components/LogEntry.tsx',
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
   'components/StationList.tsx',
+  // The WATCH tile (2026-09-23) — born migrated: its word and tooltip are catalog keys, shared
+  // by the Stations list above, the Call Roster and Spots.
+  'components/WatchTile.tsx',
   // Batch 3 (2026-08-18) — awards, journey, stats and the needed board. Two things this
   // batch proves that the first two did not: the AWARD NAMES are invariant tokens exactly as
   // callsigns are (DXCC, WAZ, VUCC, IOTA name programmes an operator applies to — a

@@ -669,6 +669,24 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
   }, [snap?.uploadTick, snap?.uploadNote, snap?.uploadOk])
 
+  // The logbook database could not be opened at launch, so this session keeps the log in
+  // log.adi. Said ONCE a session, sticky until the operator dismisses it, and never in the way
+  // (a toast, not a dialog); the ref, not the snapshot, is what stops every poll re-raising it.
+  // Not on the Remote: the remedy lives in the station's own Settings, which the Remote hides.
+  const logStoreNoticeShown = useRef(false)
+  useEffect(() => {
+    const problem = snap?.logStoreProblem
+    if (!problem || remote || logStoreNoticeShown.current) return
+    logStoreNoticeShown.current = true
+    pushToast(
+      problem.networkFolder
+        ? t('shell.logStore.network')
+        : t('shell.logStore.failed', { reason: problem.reason }),
+      'error',
+      0,
+    )
+  }, [snap?.logStoreProblem, remote])
+
 
   // Per-(band,mode) last-alert time so a band coming alive toasts once, not every
   // poll (defence in depth — the backend tracker already flags `isNew` once).
@@ -1389,6 +1407,11 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // Driven off the engine's loggedTick so EVERY log path fires it, including a
   // backend auto-log the frontend never initiated (#210) — the old approach
   // intercepted only the frontend's own log actions and so missed the auto-log.
+  //
+  // The needs refresh rides the same tick for the same reason (#350): only the Log button
+  // and the confirm popup asked for one, so a contact the sequencer logged after RR73 kept
+  // its pre-QSO need tags — and "Needed only" / "Hide worked" kept the station just worked —
+  // until the 30 s poll came round.
   const [dxClearTick, setDxClearTick] = useState(0)
   const prevLoggedTick = useRef<number | null>(null)
   useEffect(() => {
@@ -1401,8 +1424,9 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     if (tick !== prevLoggedTick.current) {
       prevLoggedTick.current = tick
       if (settings?.clearDxAfterLog) setDxClearTick((t) => t + 1)
+      refreshNeeds()
     }
-  }, [snap?.loggedTick, settings?.clearDxAfterLog])
+  }, [snap?.loggedTick, settings?.clearDxAfterLog, refreshNeeds])
 
   // The station refused the answer (its `expectedKey` is not the head's any more) or the call
   // failed: RE-READ rather than leave the operator looking at a hold that has moved on. Nothing
@@ -2240,8 +2264,12 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
   // screens that leave the operating mode unchanged.
   // Where a Settings deep link asked the panel to land. Cleared on the way OUT of Settings so a
   // later plain visit (the rail gear) opens on Station as it always has, rather than returning to
-  // wherever the last pointer sent the operator.
-  const [settingsTarget, setSettingsTarget] = useState<string | undefined>(undefined)
+  // wherever the last pointer sent the operator. `seq` counts the requests, so asking again for
+  // the place Settings already holds still moves the panel: the operator may have changed tab
+  // since, and the Getting started guide opens over Settings itself.
+  const [settingsTarget, setSettingsTarget] = useState<{ where: string; seq: number } | undefined>(
+    undefined,
+  )
 
   const handleView = useCallback(
     (next: View) => {
@@ -2268,7 +2296,7 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
    */
   const openSettingsAt = useCallback(
     (where: string) => {
-      setSettingsTarget(where)
+      setSettingsTarget((prev) => ({ where, seq: (prev?.seq ?? 0) + 1 }))
       setView('settings')
     },
     [],
@@ -2912,7 +2940,8 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
             fieldDay={snap.fieldDay}
             key={`sp-wiz${wizardGen}`}
             onSaved={handleSettingsSaved}
-            target={settingsTarget}
+            target={settingsTarget?.where}
+            targetSeq={settingsTarget?.seq}
             radio={snap.radio}
             activeRadioId={snap.activeRadioId}
             onProveTx={handleProveTx}
@@ -3546,7 +3575,14 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
         />
       )}
 
-      {showGuide && <GettingStartedGuide onClose={() => setShowGuide(false)} />}
+      {showGuide && (
+        <GettingStartedGuide
+          onClose={() => setShowGuide(false)}
+          // Not on the Remote page: Settings there does not render Integrations & Feeds, the
+          // section the guide's WSJT-X note links to, so the link would open onto nothing.
+          onOpenSettings={remote ? undefined : openSettingsAt}
+        />
+      )}
 
       {snap.pendingLog && (
         // KEYED ON THE HOLD, on every transport (operator ruling 2026-09-19: completed contacts

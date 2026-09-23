@@ -1,0 +1,1816 @@
+//! The logbook's store, as the app holds it — SPEC-1 v3's **C9**, the switchover.
+//!
+//! The SQLite database beside `log.adi` becomes the DURABLE OWNER of the operator's log. The
+//! whole log still lives in memory, exactly as before, inside [`crate::station::StationCore`]
+//! behind the engine lock; what changes is how a change reaches the disk. It used to be a
+//! whole-file rewrite of `log.adi` — tens of megabytes, under the lock the radio loop needs
+//! every 20 ms — for every stamp, mark and edit. Now:
+//!
+//! 1. the change is made in memory (unchanged code, unchanged rules);
+//! 2. the rows it touched are handed to the writer thread
+//!    ([`tempo_core::logbook::writer::LogWriter`]) — a channel send, **no I/O**;
+//! 3. the log as it now stands is handed to the mirror lane, which rewrites `log.adi` from it,
+//!    debounced, on its own thread — **no I/O**;
+//! 4. an operator command, having released every lock, waits for its own change to commit
+//!    ([`Durability::wait`]). The FT auto-log never waits.
+//!
+//! # What this module owns
+//!
+//! - [`open`]: conversion of an existing `log.adi` (C5), the load from the store, the check that
+//!   `log.adi` holds nothing the store lacks, and the two threads. All of it BEFORE the engine
+//!   lock is taken, and all of it answers with a reason when it cannot — the caller then runs
+//!   the session on `log.adi` exactly as 1.13 did, which is the one outcome that can never lose
+//!   a contact.
+//! - [`LogStore`]: the handles, the tickets a command is collecting, and this process's own
+//!   changes still on their way to disk — which is what lets a reload after ANOTHER process's
+//!   write keep them (see [`LogStore::reload`]).
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use tempo_core::logbook::mirror::{self, FileStamp, MirrorOptions, MirrorState, MirrorWriter};
+use tempo_core::logbook::sqlite::{self, LogDb, Resolved};
+use tempo_core::logbook::writer::{self, Change, LogWriter, Ticket, Touched};
+use tempo_core::logbook::{migrate, Logbook, QsoRecord};
+
+/// cty.dat's answer for a record — the entity NAME and CQ zone the store writes beside it.
+/// Injected by the shell, which owns the table; tempo-app does not depend on `propagation`.
+pub type StoreResolve = Arc<dyn Fn(&QsoRecord) -> Resolved<'static> + Send + Sync>;
+
+/// How long an operator command waits for its change to reach the disk before it says so.
+pub const DURABLE_WAIT: Duration = Duration::from_secs(60);
+
+/// The store, open and owning the log.
+pub struct LogStore {
+    writer: Arc<LogWriter>,
+    mirror: MirrorWriter,
+    log_path: PathBuf,
+    db_path: PathBuf,
+    resolve: StoreResolve,
+    /// This process's changes the writer has not finished with, and the rows each touched.
+    inflight: Vec<(Ticket, Touched)>,
+    /// The writer's count of ANOTHER process's commits when memory last matched the store.
+    synced_foreign: u64,
+    /// Tickets being collected for a command that will wait on them (see
+    /// [`crate::engine::Engine::with_log_tickets`]).
+    collector: Option<Vec<Ticket>>,
+}
+
+impl std::fmt::Debug for LogStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LogStore")
+            .field("db_path", &self.db_path)
+            .field("log_path", &self.log_path)
+            .field("inflight", &self.inflight.len())
+            .finish()
+    }
+}
+
+/// What [`open`] hands the station: the store, the records to hold, and — when `log.adi`
+/// held something the store did not account for — that file, to be taken in.
+pub struct Opened {
+    pub(crate) store: LogStore,
+    pub(crate) records: Vec<QsoRecord>,
+    pub(crate) foreign: Option<ForeignLog>,
+    /// What the conversion did.
+    pub outcome: migrate::Outcome,
+}
+
+/// A `log.adi` written by something other than this store's mirror — a 1.13 instance, the
+/// operator, a restore — read at open so its contacts can be taken in before anything may
+/// replace the file.
+pub(crate) struct ForeignLog {
+    pub(crate) text: String,
+    pub(crate) stamp: Option<FileStamp>,
+}
+
+/// Why the store could not be made the log's owner. The caller runs the session on `log.adi`
+/// instead and says so; nothing here has changed the operator's file.
+#[derive(Debug)]
+pub enum OpenError {
+    /// The data folder is on network storage, where a database can be corrupted by the way
+    /// file locking works across a network. `log.adi` degrades gracefully there; SQLite's worst
+    /// case is a database that will not open.
+    NetworkFolder(String),
+    /// Converting `log.adi` did not finish (see [`migrate::Error`]). The pre-conversion copy
+    /// is in place if one could be taken, and the conversion resumes at the next start.
+    Conversion(migrate::Error),
+    /// The store would not open, or could not be read.
+    Store(sqlite::Error),
+    /// `log.adi` could not be read to check it against the store.
+    Unreadable(std::io::Error),
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenError::NetworkFolder(why) => write!(
+                f,
+                "the data folder is on {why}, so the logbook stays in log.adi for this session"
+            ),
+            OpenError::Conversion(e) => write!(f, "the logbook was not converted: {e}"),
+            OpenError::Store(e) => write!(f, "the logbook database could not be opened: {e}"),
+            OpenError::Unreadable(e) => write!(f, "log.adi could not be read: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for OpenError {}
+
+/// Open the store for the log at `log_path`, converting the log first if it has never been.
+///
+/// `network` is the shell's verdict on the data folder (`data_folder_location`): certain network
+/// storage refuses the store for this session. The mirror runs on its shipped timings.
+pub fn open(
+    log_path: &Path,
+    resolve: StoreResolve,
+    network: Option<String>,
+) -> Result<Opened, OpenError> {
+    open_with(log_path, resolve, network, MirrorOptions::default())
+}
+
+/// [`open`], telling `progress` how far a first launch's conversion of `log.adi` has got — what
+/// the start-up screen shows while it works (see [`migrate::migrate_log_reporting`]).
+pub fn open_reporting(
+    log_path: &Path,
+    resolve: StoreResolve,
+    network: Option<String>,
+    progress: &mut dyn FnMut(migrate::Progress),
+) -> Result<Opened, OpenError> {
+    open_reporting_with(
+        log_path,
+        resolve,
+        network,
+        MirrorOptions::default(),
+        progress,
+    )
+}
+
+/// [`open`], with the mirror's timings named — what a test uses so it does not wait a real
+/// second for a real write. `mirror.accepted` is decided here and overwritten.
+pub fn open_with(
+    log_path: &Path,
+    resolve: StoreResolve,
+    network: Option<String>,
+    mirror_options: MirrorOptions,
+) -> Result<Opened, OpenError> {
+    open_reporting_with(log_path, resolve, network, mirror_options, &mut |_| {})
+}
+
+/// [`open_with`] and [`open_reporting`] in one: the mirror's timings, and the conversion's
+/// progress.
+fn open_reporting_with(
+    log_path: &Path,
+    resolve: StoreResolve,
+    network: Option<String>,
+    mut mirror_options: MirrorOptions,
+    progress: &mut dyn FnMut(migrate::Progress),
+) -> Result<Opened, OpenError> {
+    if let Some(why) = network {
+        return Err(OpenError::NetworkFolder(why));
+    }
+    let db_path = migrate::database_path(log_path);
+    let outcome = migrate::migrate_log_reporting(log_path, &db_path, |r| resolve(r), progress)
+        .map_err(OpenError::Conversion)?;
+    let db = LogDb::open(&db_path).map_err(OpenError::Store)?;
+    let records = db.load_all().map_err(OpenError::Store)?;
+
+    // Does `log.adi` hold anything the store does not? A pristine mirror (some Nexus mirror's
+    // own picture, unchanged since) cannot, and neither can the file this very open just
+    // converted. Anything else — an operator's log from before the store existed, a 1.13
+    // instance's appends, a restore — is read now and taken in before the mirror may touch it.
+    let converted_now = matches!(outcome, migrate::Outcome::Converted { .. });
+    let foreign = match mirror::mirror_state(log_path) {
+        MirrorState::Absent | MirrorState::Pristine => None,
+        MirrorState::Foreign if converted_now => None,
+        MirrorState::Foreign => {
+            let stamp = mirror::file_stamp(log_path);
+            let bytes = std::fs::read(log_path).map_err(OpenError::Unreadable)?;
+            Some(ForeignLog {
+                text: String::from_utf8_lossy(&bytes).into_owned(),
+                stamp,
+            })
+        }
+    };
+    // What the mirror may replace though it is not a pristine picture: the file just converted,
+    // or the one about to be taken in — for exactly as long as it keeps this stamp.
+    mirror_options.accepted = match mirror::mirror_state(log_path) {
+        MirrorState::Foreign => mirror::file_stamp(log_path),
+        _ => None,
+    };
+    // The copies beside the log are swept as every launch has always swept them — `stat`-cheap
+    // unless one has changed — now that the launch no longer loads `log.adi` itself.
+    Logbook::sweep_safety_copies(log_path);
+
+    let writer = Arc::new(LogWriter::start(db));
+    let synced_foreign = writer.foreign_commits();
+    let mirror = MirrorWriter::with_options(log_path.to_path_buf(), mirror_options);
+    Ok(Opened {
+        store: LogStore {
+            writer,
+            mirror,
+            log_path: log_path.to_path_buf(),
+            db_path,
+            resolve,
+            inflight: Vec::new(),
+            synced_foreign,
+            collector: None,
+        },
+        records,
+        foreign,
+        outcome,
+    })
+}
+
+impl LogStore {
+    /// The writer, for a command that waits on tickets after releasing every lock.
+    pub fn writer(&self) -> Arc<LogWriter> {
+        Arc::clone(&self.writer)
+    }
+
+    /// The database's path.
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    /// The `log.adi` this store mirrors to.
+    pub fn log_path(&self) -> &Path {
+        &self.log_path
+    }
+
+    /// The mirror's state, for a caller that surfaces a refusal.
+    pub fn mirror_status(&self) -> mirror::Status {
+        self.mirror.status()
+    }
+
+    /// cty.dat's answer as the store writes it.
+    pub(crate) fn resolved(&self) -> impl Fn(&QsoRecord) -> (Option<String>, Option<u8>) + '_ {
+        |r| {
+            let x = (self.resolve)(r);
+            (x.entity.map(str::to_string), x.cq_zone)
+        }
+    }
+
+    /// Hand one change to the writer, and the log as it now stands to the mirror. Never touches
+    /// the disk. A change that writes nothing is not sent, and has no ticket.
+    pub(crate) fn submit(&mut self, change: Change, log: &Logbook) -> Option<Ticket> {
+        if change.is_empty() {
+            return None;
+        }
+        let touched = Touched::of(&change);
+        let ticket = self.writer.submit(change);
+        self.inflight.retain(|(t, _)| !t.is_resolved());
+        self.inflight.push((ticket.clone(), touched));
+        if let Some(c) = &mut self.collector {
+            c.push(ticket.clone());
+        }
+        self.mirror.submit(log.records().to_vec());
+        Some(ticket)
+    }
+
+    /// Start collecting the tickets of the changes that follow.
+    pub(crate) fn begin_collecting(&mut self) {
+        self.collector = Some(Vec::new());
+    }
+
+    /// Stop collecting, and hand back what was collected.
+    pub(crate) fn take_collected(&mut self) -> Vec<Ticket> {
+        self.collector.take().unwrap_or_default()
+    }
+
+    /// Whether ANOTHER process has committed to the store since memory last matched it. An
+    /// atomic read — no I/O — so it is safe to ask under any lock.
+    pub(crate) fn foreign_changed(&self) -> bool {
+        self.writer.foreign_commits() != self.synced_foreign
+    }
+
+    /// The log after another process's commits: every row as the store holds it now, with this
+    /// process's own changes still in flight laid over it. `in_place` keeps every row where
+    /// memory has it ([`writer::merge_reloaded_in_place`]) — for a change about to be made BY
+    /// POSITION — and a row another process deleted is then kept and reported; otherwise the
+    /// log becomes the store's, in the store's order ([`writer::merge_reloaded`]). Reads the
+    /// store on a connection of its own.
+    ///
+    /// ⚠️ This READS the database, and the caller holds the engine lock. It runs only when
+    /// another process has written — two radio windows sharing one data folder — at exactly
+    /// the points the old two-instance recovery re-read the whole of `log.adi` under the same
+    /// lock, so it costs nothing a shared log did not already cost. A stalled WRITE does not
+    /// stall it: in WAL mode a reader never waits for a writer.
+    pub(crate) fn reload(
+        &mut self,
+        held: &[Arc<QsoRecord>],
+        in_place: bool,
+    ) -> Result<(Vec<Arc<QsoRecord>>, bool), String> {
+        // Read the count BEFORE the load: a commit that lands during it is counted after, and
+        // costs another reload rather than being missed.
+        let seen = self.writer.foreign_commits();
+        self.inflight.retain(|(t, _)| !t.is_resolved());
+        let pending: Vec<Touched> = self.inflight.iter().map(|(_, t)| t.clone()).collect();
+        let stored = LogDb::open(&self.db_path)
+            .and_then(|db| db.load_all())
+            .map_err(|e| e.to_string())?;
+        self.synced_foreign = seen;
+        Ok(if in_place {
+            writer::merge_reloaded_in_place(stored, held, &pending)
+        } else {
+            (writer::merge_reloaded(stored, held, &pending), false)
+        })
+    }
+
+    /// The store has taken in the `log.adi` with `stamp`: the mirror may replace it now.
+    pub(crate) fn accept_log_file(&self, stamp: FileStamp) {
+        self.mirror.accept(stamp);
+    }
+
+    /// Hand the log as it stands to the mirror, changing nothing in the store — for a `log.adi`
+    /// that is not the store's own picture yet (the file a conversion read, one just taken in),
+    /// so the next launch finds a mirror and has nothing to read or take in.
+    pub(crate) fn refresh_mirror(&self, log: &Logbook) {
+        self.mirror.submit(log.records().to_vec());
+    }
+
+    /// Write everything submitted so far, and the mirror, waiting up to `deadline` for each.
+    /// The exit path.
+    pub fn flush(&self, deadline: Duration) -> Result<(), String> {
+        let logged = self
+            .writer
+            .flush(deadline)
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+        let mirrored = self.mirror.flush(deadline);
+        logged?;
+        match mirrored.last_error {
+            Some(e) if mirrored.pending => Err(format!("log.adi was not brought up to date: {e}")),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// What an operator command waits on after it has released every lock: the writer, and the
+/// tickets of the changes it made. Empty when the log has no store (the 1.13 path writes
+/// `log.adi` inline and has nothing to wait for).
+#[derive(Debug, Default)]
+pub struct Durability {
+    writer: Option<Arc<LogWriter>>,
+    tickets: Vec<Ticket>,
+}
+
+impl Durability {
+    pub(crate) fn new(writer: Option<Arc<LogWriter>>, tickets: Vec<Ticket>) -> Durability {
+        Durability { writer, tickets }
+    }
+
+    /// Whether there is anything to wait for.
+    pub fn is_empty(&self) -> bool {
+        self.tickets.is_empty()
+    }
+
+    /// How many changes this covers.
+    pub fn len(&self) -> usize {
+        self.tickets.len()
+    }
+
+    /// Wait until every change is on disk, or say why not. ⚠️ Never call it holding a lock —
+    /// and from an async command, only inside `spawn_blocking`: a wait of up to a minute must
+    /// not pin a runtime worker the rest of the app needs.
+    pub fn wait(&self, deadline: Duration) -> Result<(), String> {
+        let Some(writer) = &self.writer else {
+            return Ok(());
+        };
+        let start = std::time::Instant::now();
+        for t in &self.tickets {
+            let left = deadline.saturating_sub(start.elapsed());
+            writer.wait_durable(t, left).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Each change as a receipt the Remote service redeems the same way it redeems an append
+    /// to `log.adi` ([`tempo_core::logbook::LogAppendReceipt::sync`]).
+    pub fn into_receipts(self) -> Vec<tempo_core::logbook::LogAppendReceipt> {
+        let Some(writer) = self.writer else {
+            return Vec::new();
+        };
+        self.tickets
+            .into_iter()
+            .map(|t| {
+                tempo_core::logbook::LogAppendReceipt::durable(Arc::clone(&writer), t, DURABLE_WAIT)
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::Engine;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+    use std::time::Instant;
+    use tempo_core::logbook::{adif_header, adif_record_own_log, sqlite::WriteHold, QslVia};
+
+    /// A data folder of the test's own, gone with the value.
+    pub(crate) struct Dir(pub(crate) PathBuf);
+    impl Dir {
+        pub(crate) fn new(tag: &str) -> Dir {
+            static N: AtomicU64 = AtomicU64::new(0);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let p = std::env::temp_dir().join(format!(
+                "nexus-logstore-{tag}-{}-{}-{nanos}",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&p).unwrap();
+            Dir(p)
+        }
+        pub(crate) fn log(&self) -> PathBuf {
+            self.0.join("log.adi")
+        }
+        pub(crate) fn db(&self) -> PathBuf {
+            self.0.join("log.sqlite3")
+        }
+    }
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A pre-store `log.adi` of `n` contacts, none carrying an id.
+    pub(crate) fn legacy_log(n: usize) -> String {
+        let mut s = adif_header();
+        for i in 0..n {
+            let call = format!("K{i}ABC");
+            s.push_str(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260101\
+                 <TIME_ON:6>{:02}{:02}{:02}<APP_OTHERLOG_X:3>abc<EOR>\n",
+                call.len(),
+                i / 3600 % 24,
+                i / 60 % 60,
+                i % 60,
+            ));
+        }
+        s
+    }
+
+    pub(crate) fn no_resolve() -> StoreResolve {
+        Arc::new(|_| Resolved::default())
+    }
+
+    /// Mirror timings a test can wait out.
+    pub(crate) fn fast() -> MirrorOptions {
+        MirrorOptions {
+            debounce: Duration::from_millis(5),
+            max_delay: Duration::from_millis(50),
+            accepted: None,
+        }
+    }
+
+    pub(crate) fn open_fast(d: &Dir) -> Opened {
+        open_with(&d.log(), no_resolve(), None, fast()).expect("the store opens")
+    }
+
+    pub(crate) fn engine_on_store(d: &Dir) -> Engine {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.attach_log_store(open_fast(d));
+        e
+    }
+
+    pub(crate) fn qso(call: &str, when: u64) -> QsoRecord {
+        let mut r = tempo_core::logbook::Logbook::new();
+        r.import_adif(&format!(
+            "<CALL:{}>{call}<BAND:3>40m<MODE:2>CW<FREQ:5>7.030<QSO_DATE:8>20260910<TIME_ON:6>120000<EOR>",
+            call.len()
+        ));
+        let mut rec = QsoRecord::clone(&r.records()[0]);
+        rec.id = None;
+        rec.when_unix = when;
+        rec
+    }
+
+    /// The rows as the store holds them, read through a connection of the test's own.
+    pub(crate) fn stored(d: &Dir) -> Vec<QsoRecord> {
+        LogDb::open(&d.db()).unwrap().load_all().unwrap()
+    }
+
+    /// Two logs are the same log: the same ids, in the same order, each row the same contact
+    /// as the ADIF writer puts it on disk.
+    pub(crate) fn same_log<A, B>(a: &[A], b: &[B], what: &str)
+    where
+        A: std::borrow::Borrow<QsoRecord>,
+        B: std::borrow::Borrow<QsoRecord>,
+    {
+        let ids = |x: &[A]| x.iter().map(|r| r.borrow().id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(a),
+            b.iter().map(|r| r.borrow().id).collect::<Vec<_>>(),
+            "{what}: the same rows in the same order"
+        );
+        for (x, y) in a.iter().zip(b) {
+            assert_eq!(
+                adif_record_own_log(x.borrow()),
+                adif_record_own_log(y.borrow()),
+                "{what}: a row differs"
+            );
+        }
+    }
+
+    /// [`same_log`] for the logs of two DIFFERENT engines: each mints its own ids under its own
+    /// nonce, so a row the two logged separately is the same contact under a different id. A
+    /// minted id is compared by its sequence (the order it was handed out in) and left out of
+    /// the text; a provisional id — a function of the file both read — must match exactly.
+    pub(crate) fn same_log_across<A, B>(a: &[A], b: &[B], what: &str)
+    where
+        A: std::borrow::Borrow<QsoRecord>,
+        B: std::borrow::Borrow<QsoRecord>,
+    {
+        use tempo_core::logbook::RecordId;
+        let shape = |r: &QsoRecord| match r.id {
+            Some(RecordId::Minted { seq, .. }) => format!("minted #{seq}"),
+            other => format!("{other:?}"),
+        };
+        let text = |r: &QsoRecord| {
+            let t = adif_record_own_log(r);
+            match r.id {
+                Some(id @ RecordId::Minted { .. }) => {
+                    let id = id.to_string();
+                    t.replacen(&format!("<APP_NEXUS_ID:{}>{id}", id.len()), "", 1)
+                }
+                _ => t,
+            }
+        };
+        assert_eq!(
+            a.iter().map(|r| shape(r.borrow())).collect::<Vec<_>>(),
+            b.iter().map(|r| shape(r.borrow())).collect::<Vec<_>>(),
+            "{what}: the same rows in the same order"
+        );
+        for (x, y) in a.iter().zip(b) {
+            assert_eq!(text(x.borrow()), text(y.borrow()), "{what}: a row differs");
+        }
+    }
+
+    pub(crate) fn flush(e: &Engine) {
+        e.flush_log_store(Duration::from_secs(60)).expect("written");
+    }
+
+    // ── the owner ───────────────────────────────────────────────────────────
+
+    /// ★ The switchover. An operator's existing `log.adi` is converted, the log the app holds
+    /// is the store's — the same contacts, with the same ids, a load of the file would give —
+    /// and from the conversion on `log.adi` is the store's MIRROR: every contact, and then every
+    /// change, marked as generated. The file the operator had is kept beside it, byte for byte.
+    #[test]
+    fn the_store_owns_the_log_and_log_adi_becomes_its_mirror() {
+        let d = Dir::new("owner");
+        std::fs::write(d.log(), legacy_log(300)).unwrap();
+        let original = std::fs::read(d.log()).unwrap();
+        let expected = tempo_core::logbook::Logbook::load(&d.log());
+
+        let mut e = engine_on_store(&d);
+        assert!(e.log_store_open());
+        same_log(e.log_records(), expected.records(), "held after the open");
+        same_log(&stored(&d), expected.records(), "stored after the open");
+        // The conversion hands the log to the mirror lane, which writes after its debounce, so
+        // `log.adi` is the operator's original only until that write lands. Reading it straight
+        // after the open raced the lane — green on a quick machine, red on a loaded CI runner.
+        // Settle the lane, then hold the file to what the conversion makes it.
+        flush(&e);
+        assert_eq!(
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "log.adi is the store's mirror from the conversion on"
+        );
+        same_log(
+            tempo_core::logbook::Logbook::load(&d.log()).records(),
+            expected.records(),
+            "the mirror carries exactly the converted contacts",
+        );
+        assert_eq!(
+            std::fs::read(d.0.join("log.adi.pre-sqlite")).unwrap(),
+            original,
+            "and the permanent copy of it is beside it"
+        );
+
+        e.log_qso(qso("W9NEW", 1_788_000_000));
+        flush(&e);
+        let mirror = std::fs::read_to_string(d.log()).unwrap();
+        assert!(
+            tempo_core::logbook::mirror::is_generated(&d.log()),
+            "marked"
+        );
+        assert_eq!(
+            tempo_core::logbook::mirror::mirror_state(&d.log()),
+            tempo_core::logbook::mirror::MirrorState::Pristine
+        );
+        let back = tempo_core::logbook::Logbook::load(&d.log());
+        same_log(back.records(), e.log_records(), "the mirror is the log");
+        assert!(mirror.contains("W9NEW"));
+        same_log(&stored(&d), e.log_records(), "and so is the store");
+    }
+
+    // ── launch writes nothing ───────────────────────────────────────────────
+
+    /// Every file a launch could touch, as bytes — and the backup ring's listing.
+    fn disk_picture(d: &Dir) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        for name in [
+            "log.adi",
+            "log.sqlite3",
+            "log.adi.bak",
+            "log.adi.pre-sqlite",
+        ] {
+            if let Ok(b) = std::fs::read(d.0.join(name)) {
+                out.push((name.to_string(), b));
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(d.0.join("backups")) {
+            for e in rd.flatten() {
+                out.push((
+                    format!("backups/{}", e.file_name().to_string_lossy()),
+                    std::fs::read(e.path()).unwrap_or_default(),
+                ));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// ★ PROPERTY 7 — LAUNCH WRITES NOTHING. A log whose rows the country backfill can fill,
+    /// opened for the SECOND time (the ordinary launch): the fill happens — every view reads it
+    /// — and not one byte of the store, of `log.adi`, of the safety copies or of the ring
+    /// changes.
+    ///
+    /// The positive control is the 1.13 path: the same log, the same backfill, through
+    /// `set_log_path`, rewrites `log.adi` — so this picture of the disk CAN see a launch write,
+    /// and the store's launch really made none.
+    #[test]
+    fn launch_writes_nothing_even_when_the_backfills_fill_rows() {
+        let d = Dir::new("launch");
+        std::fs::write(d.log(), legacy_log(50)).unwrap();
+        // The first launch converts (the one write a launch is allowed, once ever).
+        {
+            let e = engine_on_store(&d);
+            flush(&e);
+        }
+        let before = disk_picture(&d);
+        {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.set_dxcc_resolver(|call| Some(format!("Entity of {call}")));
+            e.attach_log_store(open_fast(&d));
+            assert!(
+                e.log_records().iter().all(|r| r
+                    .country
+                    .as_deref()
+                    .is_some_and(|c| c.starts_with("Entity of"))),
+                "premise: the backfill filled every row, in memory"
+            );
+            flush(&e);
+        }
+        assert_eq!(disk_picture(&d), before, "the launch wrote nothing at all");
+
+        // The control: the 1.13 path, the same log, the same backfill.
+        let legacy = Dir::new("launch-legacy");
+        std::fs::write(legacy.log(), legacy_log(50)).unwrap();
+        let _ = tempo_core::logbook::Logbook::load(&legacy.log()); // anchor + sweep marker
+        let before = std::fs::read(legacy.log()).unwrap();
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(|call| Some(format!("Entity of {call}")));
+        e.set_log_path(legacy.log());
+        assert_ne!(
+            std::fs::read(legacy.log()).unwrap(),
+            before,
+            "control: the 1.13 launch DOES rewrite log.adi when the backfill fills"
+        );
+    }
+
+    /// ⛔ PROPERTY 7, the launch after the conversion. Left as the file it was converted from,
+    /// `log.adi` is not the store's own picture, so every launch until the first change would
+    /// read it and take it in — and taking in is an import. A log holding one contact twice,
+    /// one copy confirmed, has the confirmation merged onto the first copy: that launch writes,
+    /// the store and `log.adi` both, with the operator having done nothing.
+    ///
+    /// So the conversion leaves `log.adi` as the store's mirror, and the next launch finds
+    /// nothing to read.
+    #[test]
+    fn the_launch_after_the_conversion_writes_nothing() {
+        let d = Dir::new("after-convert");
+        let row = "<CALL:5>K1DUP<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260101<TIME_ON:6>120000";
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{row}<EOR>\n{row}<LOTW_QSL_RCVD:1>Y<EOR>\n",
+                adif_header()
+            ),
+        )
+        .unwrap();
+        flush(&engine_on_store(&d)); // the conversion
+        let before = disk_picture(&d);
+        flush(&engine_on_store(&d));
+        assert!(
+            disk_picture(&d) == before,
+            "the launch after the conversion wrote to the disk"
+        );
+        assert_eq!(
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "log.adi is the store's mirror from the conversion on"
+        );
+        assert!(
+            std::fs::read_to_string(d.0.join("log.adi.pre-sqlite"))
+                .unwrap()
+                .contains("<LOTW_QSL_RCVD:1>Y"),
+            "the file as it was converted is kept beside it"
+        );
+    }
+
+    /// A `log.adi` taken in that held nothing new — a restored copy of contacts the store
+    /// already has — is replaced by the store's mirror, so the next launch does not read and
+    /// take it in again.
+    #[test]
+    fn a_log_adi_taken_in_is_replaced_by_the_mirror_even_when_it_held_nothing_new() {
+        let d = Dir::new("take-in-nothing");
+        std::fs::write(d.log(), legacy_log(8)).unwrap();
+        flush(&engine_on_store(&d)); // the conversion
+        std::fs::write(d.log(), legacy_log(5)).unwrap(); // a restored, older copy
+        assert_eq!(mirror::mirror_state(&d.log()), MirrorState::Foreign);
+        let e = engine_on_store(&d);
+        flush(&e);
+        assert_eq!(e.log_records().len(), 8, "nothing new, nothing lost");
+        assert_eq!(
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "the mirror replaced the file once its contacts were in"
+        );
+    }
+
+    // ── parity with the ADIF path ───────────────────────────────────────────
+
+    /// ★ PROPERTY 3 — THE OLD PATH IS THE ORACLE. The same operations, in the same order,
+    /// through an engine whose log is `log.adi` (the 1.13 path) and one whose log is the store.
+    /// After every step the two logs are the same log; at the end the store on disk is too,
+    /// and so is the mirror against the 1.13 file.
+    ///
+    /// The operations are every one the app makes to the log through the engine: logging,
+    /// the edit, both QSL marks, the satellite tag, a delete, an import, the three report
+    /// merges, the park import, the LoTW echo, all four connector stamps, and the purge.
+    /// A report restating the contacts `legacy_log` wrote at `rows` (K<i>ABC, 00:00:i), exactly
+    /// as it wrote them, with `tag` added — and `new` calls it never logged.
+    fn report(rows: &[usize], new: &[&str], tag: &str) -> String {
+        let mut t = adif_header();
+        for i in rows {
+            let c = format!("K{i}ABC");
+            t.push_str(&format!(
+                "<CALL:{}>{c}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260101<TIME_ON:6>0000{i:02}{tag}<EOR>\n",
+                c.len(),
+            ));
+        }
+        for c in new {
+            t.push_str(&format!(
+                "<CALL:{}>{c}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>120000{tag}<EOR>\n",
+                c.len(),
+            ));
+        }
+        t
+    }
+
+    #[test]
+    fn the_store_path_answers_exactly_as_the_adif_path() {
+        let (a, b) = (Dir::new("parity-adif"), Dir::new("parity-store"));
+        let start = legacy_log(40);
+        std::fs::write(a.log(), &start).unwrap();
+        std::fs::write(b.log(), &start).unwrap();
+        let mut old = Engine::new("K2DEF", "FN31", 0);
+        old.set_log_path(a.log());
+        let mut new = engine_on_store(&b);
+        same_log(new.log_records(), old.log_records(), "at the start");
+
+        type Step = (&'static str, Box<dyn Fn(&mut Engine)>);
+        let steps: Vec<Step> = vec![
+            ("log", Box::new(|e| e.log_qso(qso("W1NEW", 1_788_000_000)))),
+            (
+                "log 2",
+                Box::new(|e| e.log_qso(qso("W2NEW", 1_788_000_600))),
+            ),
+            (
+                "edit",
+                Box::new(|e| {
+                    let mut r = QsoRecord::clone(&e.log_records()[3]);
+                    r.name = Some("Edited".into());
+                    assert!(e.update_qso(3, r));
+                }),
+            ),
+            (
+                "call fix",
+                Box::new(|e| {
+                    let mut r = QsoRecord::clone(&e.log_records()[4]);
+                    r.call = "K4FIX".into();
+                    assert!(e.update_qso(4, r));
+                }),
+            ),
+            (
+                "qsl sent",
+                Box::new(|e| assert!(e.mark_qsl_sent(5, Some(QslVia::Bureau)))),
+            ),
+            (
+                "qsl withdrawn",
+                Box::new(|e| assert!(e.mark_qsl_sent(5, None))),
+            ),
+            ("card", Box::new(|e| assert!(e.mark_qsl_card(6, true)))),
+            (
+                "sat",
+                Box::new(|e| assert!(e.set_sat_tag(7, Some("AO-91")))),
+            ),
+            ("delete", Box::new(|e| assert!(e.delete_qso(8)))),
+            (
+                "import",
+                Box::new(|e| {
+                    e.import_adif(&report(&[11], &["K9ZZZ"], "<QSL_RCVD:1>Y"));
+                }),
+            ),
+            (
+                "lotw report",
+                Box::new(|e| {
+                    e.merge_lotw_report(&report(&[12, 13], &[], "<LOTW_QSL_RCVD:1>Y"));
+                }),
+            ),
+            (
+                "eqsl report",
+                Box::new(|e| {
+                    e.merge_eqsl_report(&report(&[15], &[], "<EQSL_QSL_RCVD:1>Y"));
+                }),
+            ),
+            (
+                "qrz report",
+                Box::new(|e| {
+                    e.merge_qrz_report(&report(&[16], &["N0NEW"], "<APP_QRZLOG_STATUS:1>C"));
+                }),
+            ),
+            (
+                "parks",
+                Box::new(|e| {
+                    e.import_pota_log(&report(&[17], &[], "<SIG:4>POTA<SIG_INFO:7>US-0001"));
+                }),
+            ),
+            (
+                "own echo",
+                Box::new(|e| {
+                    e.merge_lotw_own_echo(&report(&[18], &[], ""), 1_788_000_000);
+                }),
+            ),
+            (
+                "qrz stamp",
+                Box::new(|e| {
+                    let r = QsoRecord::clone(&e.log_records()[0]);
+                    e.stamp_qrz_upload(
+                        &r,
+                        tempo_core::logbook::UploadOutcome::Accepted,
+                        1_788_000_000,
+                        None,
+                    );
+                }),
+            ),
+            (
+                "clublog stamp",
+                Box::new(|e| {
+                    let r = QsoRecord::clone(&e.log_records()[1]);
+                    e.stamp_clublog_upload(
+                        &r,
+                        tempo_core::logbook::UploadOutcome::Duplicate,
+                        1_788_000_000,
+                        None,
+                    );
+                }),
+            ),
+            (
+                "eqsl stamp",
+                Box::new(|e| {
+                    let r = QsoRecord::clone(&e.log_records()[2]);
+                    e.stamp_eqsl_upload(
+                        &r,
+                        tempo_core::logbook::UploadOutcome::Rejected,
+                        1_788_000_000,
+                        None,
+                    );
+                }),
+            ),
+            (
+                "lotw stamp",
+                Box::new(|e| {
+                    e.stamp_lotw_upload(
+                        &[9, 10],
+                        tempo_core::logbook::UploadOutcome::Pending,
+                        1_788_000_000,
+                        None,
+                    );
+                }),
+            ),
+            (
+                "mark all uploaded",
+                Box::new(|e| {
+                    e.mark_lotw_uploaded_all();
+                }),
+            ),
+        ];
+        for (what, step) in &steps {
+            step(&mut old);
+            step(&mut new);
+            same_log_across(new.log_records(), old.log_records(), what);
+        }
+        // Every step DID something — the census that keeps the comparisons above from passing
+        // over a log nothing happened to.
+        let held = new.log_records();
+        let any = |f: &dyn Fn(&QsoRecord) -> bool| held.iter().any(|r| f(r));
+        for (what, hit) in [
+            ("logged", any(&|r| r.call == "W2NEW")),
+            ("edited", any(&|r| r.name.as_deref() == Some("Edited"))),
+            ("call fixed", any(&|r| r.call == "K4FIX")),
+            ("qsl withdrawn", any(&|r| r.qsl_sent.cleared_unix.is_some())),
+            ("card", any(&|r| r.qsl_rcvd.card)),
+            ("sat", any(&|r| r.sat_name.as_deref() == Some("AO-91"))),
+            ("imported", any(&|r| r.call == "K9ZZZ")),
+            (
+                "import upgraded",
+                any(&|r| r.call == "K11ABC" && r.qsl_rcvd.card),
+            ),
+            ("lotw", any(&|r| r.qsl_rcvd.lotw)),
+            ("eqsl", any(&|r| r.qsl_rcvd.eqsl)),
+            ("qrz", any(&|r| r.qsl_rcvd.qrz)),
+            ("qrz added", any(&|r| r.call == "N0NEW")),
+            (
+                "park",
+                any(&|r| r.ota.their_ref.as_deref() == Some("US-0001")),
+            ),
+            ("qrz stamp", any(&|r| r.upload.qrz.is_some())),
+            ("clublog stamp", any(&|r| r.upload.clublog.is_some())),
+            ("eqsl stamp", any(&|r| r.upload.eqsl.is_some())),
+            ("lotw stamp", any(&|r| r.upload.lotw.is_some())),
+        ] {
+            assert!(
+                hit,
+                "the step '{what}' left no trace — the comparison above proved nothing"
+            );
+        }
+        assert!(
+            any(&|r| r.call == "K18ABC"
+                && r.upload.lotw.as_ref().is_some_and(|u| {
+                    u.outcome == tempo_core::logbook::UploadOutcome::Accepted
+                        && u.when_unix == 1_788_000_000
+                        && u.detail.is_none()
+                })),
+            "the own echo promoted its row (and the later mark-all left it alone)"
+        );
+        flush(&new);
+        same_log(
+            &stored(&b),
+            new.log_records(),
+            "the store on disk is the store's memory",
+        );
+        same_log_across(&stored(&b), old.log_records(), "the store on disk");
+        same_log_across(
+            tempo_core::logbook::Logbook::load(&b.log()).records(),
+            tempo_core::logbook::Logbook::load(&a.log()).records(),
+            "the mirror against the 1.13 file",
+        );
+
+        // And the purge.
+        old.clear_logbook();
+        new.clear_logbook();
+        flush(&new);
+        assert!(new.log_records().is_empty() && stored(&b).is_empty());
+        assert!(tempo_core::logbook::Logbook::load(&b.log()).is_empty());
+    }
+
+    // ── durability ──────────────────────────────────────────────────────────
+
+    /// A command waits for exactly its own change: the tickets it collected, and not the whole
+    /// queue. After the wait a connection of the test's own sees the change.
+    #[test]
+    fn a_command_waits_for_its_own_change_and_then_it_is_on_disk() {
+        let d = Dir::new("durable");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        let mut e = engine_on_store(&d);
+        let (ok, durability) = e.with_log_tickets(|e| e.mark_qsl_card(3, true));
+        assert!(ok);
+        assert_eq!(durability.len(), 1, "one change, one ticket");
+        durability.wait(DURABLE_WAIT).expect("durable");
+        let id = e.log_records()[3].id;
+        let row = stored(&d).into_iter().find(|r| r.id == id).expect("stored");
+        assert!(
+            row.qsl_rcvd.card,
+            "the mark is on disk when the wait returns"
+        );
+
+        // Nothing changed, nothing to wait for.
+        let (_, none) = e.with_log_tickets(|e| e.mark_qsl_card(999, true));
+        assert!(none.is_empty());
+    }
+
+    // ── property 5: no I/O under the engine lock ────────────────────────────
+
+    /// ★ PROPERTY 5. With the store's write lock held elsewhere — a write that is taking its
+    /// time — every log command still returns at once under the engine lock, another thread
+    /// can `try_lock` the engine the whole time, and only the off-lock wait feels the stall.
+    ///
+    /// The positive control is the timed-out wait: it proves the writer really was stalled, so
+    /// the prompt returns above are not a writer that simply finished first.
+    #[test]
+    fn nothing_under_the_engine_lock_waits_for_a_stalled_write() {
+        let d = Dir::new("stall");
+        std::fs::write(d.log(), legacy_log(20)).unwrap();
+        let engine = Arc::new(Mutex::new(engine_on_store(&d)));
+
+        let hold = WriteHold::take(&d.db()).expect("hold the write lock");
+        let started = Instant::now();
+        let durability = {
+            let mut e = engine.lock().unwrap();
+            let (_, a) = e.with_log_tickets(|e| e.log_qso(qso("W1STALL", 1_788_000_000)));
+            let (_, b) = e.with_log_tickets(|e| e.mark_qsl_card(2, true));
+            let (_, c) = e.with_log_tickets(|e| e.delete_qso(5));
+            assert_eq!((a.len(), b.len(), c.len()), (1, 1, 1));
+            vec![a, b, c]
+        };
+        let under_lock = started.elapsed();
+        assert!(
+            under_lock < Duration::from_millis(500),
+            "three changes under the engine lock took {under_lock:?} with the writer stalled"
+        );
+
+        // Another thread takes the engine lock while the write is still stalled.
+        let other = Arc::clone(&engine);
+        let took = std::thread::spawn(move || other.try_lock().is_ok())
+            .join()
+            .unwrap();
+        assert!(took, "try_lock succeeds during the stalled write");
+
+        // The control: the write really is stalled.
+        assert!(
+            durability[0].wait(Duration::from_millis(300)).is_err(),
+            "control: the change cannot be on disk while the lock is held elsewhere"
+        );
+
+        drop(hold);
+        for w in &durability {
+            w.wait(DURABLE_WAIT)
+                .expect("durable once the lock is released");
+        }
+        let e = engine.lock().unwrap();
+        same_log(&stored(&d), e.log_records(), "after the stall");
+    }
+
+    /// The datagram WSJT-X sends when it logs a contact (UDP type 12, LoggedAdif), as it
+    /// sends it: its own header, lower-case tags, no COUNTRY.
+    const WSJTX_LOGGED_ADIF: &str = "\n<adif_ver:5>3.1.0\n<programid:6>WSJT-X\n<EOH>\n\
+        <call:5>W1ABC <gridsquare:4>FN42 <mode:3>FT8 <rst_sent:3>-10 <rst_rcvd:3>-12 \
+        <qso_date:8>20260923 <time_on:6>120015 <qso_date_off:8>20260923 <time_off:6>120115 \
+        <band:3>20m <freq:9>14.075512 <station_callsign:5>K2DEF <my_gridsquare:4>FN31 <EOR>";
+
+    /// ★ PROPERTY 5, the radio loop's own write. In companion mode the radio loop imports
+    /// WSJT-X's LoggedAdif datagram inside a tick, under the engine lock. With the store's
+    /// write lock held elsewhere the import still returns at once — the contact is in the log
+    /// and the tick moves on — and the contact reaches the disk when the write clears. The loop
+    /// never waits for it (it collects no ticket; the test collects one only to know when).
+    ///
+    /// The positive control is the timed-out wait: the writer really was stalled, so the
+    /// prompt return is not a write that simply finished first.
+    #[test]
+    fn the_radio_loops_companion_import_touches_no_disk_under_the_lock() {
+        let d = Dir::new("companion");
+        std::fs::write(d.log(), legacy_log(20)).unwrap();
+        let mut e = engine_on_store(&d);
+
+        let hold = WriteHold::take(&d.db()).expect("hold the write lock");
+        let started = Instant::now();
+        let ((added, ..), durable) = e.with_log_tickets(|e| e.import_adif(WSJTX_LOGGED_ADIF));
+        let under_lock = started.elapsed();
+        assert_eq!(added, 1, "the contact WSJT-X logged is in the log");
+        assert!(
+            under_lock < Duration::from_millis(500),
+            "the import under the engine lock took {under_lock:?} with the writer stalled"
+        );
+        assert!(
+            durable.wait(Duration::from_millis(300)).is_err(),
+            "control: the contact cannot be on disk while the write lock is held elsewhere"
+        );
+
+        drop(hold);
+        durable
+            .wait(DURABLE_WAIT)
+            .expect("durable once the lock is released");
+        same_log(&stored(&d), e.log_records(), "after the stall");
+        assert!(
+            stored(&d).iter().any(|r| r.call == "W1ABC"),
+            "the store has the contact"
+        );
+    }
+
+    // ── two windows, one store ──────────────────────────────────────────────
+
+    /// Poll `f` until it says yes or ten seconds pass. The other window's commit is seen by
+    /// this one's writer within its poll interval, not instantly.
+    fn eventually(mut f: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        f()
+    }
+
+    fn find(e: &Engine, call: &str) -> Option<QsoRecord> {
+        e.log_records()
+            .iter()
+            .find(|r| r.call == call)
+            .map(|r| QsoRecord::clone(r))
+    }
+
+    /// ★ Two radio windows on ONE data folder — the shipped two-instance mode, now on one store.
+    ///
+    /// - A contact one window logs reaches the other on its freshness poll, with no restart.
+    /// - A stamp made in one window survives the other window's change to the same row: the
+    ///   second window re-reads before it changes anything, as the 1.13 path re-read `log.adi`.
+    /// - An edit made in one window arrives in the other AS AN EDIT, and a delete as a delete —
+    ///   the two gaps a shared `log.adi` had to leave open (a duplicate, a resurrection),
+    ///   closed, because rows are matched by id.
+    #[test]
+    fn two_windows_share_one_store() {
+        let d = Dir::new("two");
+        std::fs::write(d.log(), legacy_log(12)).unwrap();
+        let mut a = engine_on_store(&d);
+        let mut b = engine_on_store(&d);
+        same_log(
+            a.log_records(),
+            b.log_records(),
+            "both open on the same log",
+        );
+
+        // A logs; B sees it.
+        a.log_qso(qso("W1AAA", 1_788_000_000));
+        flush(&a);
+        assert!(
+            eventually(|| {
+                b.sync_shared_log_if_changed();
+                find(&b, "W1AAA").is_some()
+            }),
+            "B picks up A's contact on its freshness poll"
+        );
+
+        // A stamps a row; B then marks a card on THE SAME row. B must not write its stale copy
+        // of the row over A's stamp.
+        let target = QsoRecord::clone(&a.log_records()[2]);
+        assert!(a.stamp_qrz_upload(
+            &target,
+            tempo_core::logbook::UploadOutcome::Accepted,
+            1_788_000_100,
+            None
+        ));
+        flush(&a);
+        let at = b
+            .log_records()
+            .iter()
+            .position(|r| r.id == target.id)
+            .unwrap();
+        // Wait until B's writer has SEEN A's stamp commit — without B polling — so the change
+        // below is the case under test: a foreign commit B has not yet folded in.
+        assert!(eventually(|| b.log_store_foreign_pending()));
+        assert!(b.mark_qsl_card(at, true));
+        flush(&b);
+        let row = stored(&d)
+            .into_iter()
+            .find(|r| r.id == target.id)
+            .expect("stored");
+        assert!(row.qsl_rcvd.card, "B's mark is stored");
+        assert!(
+            row.upload.qrz.is_some(),
+            "and A's stamp survived B's change to the same row"
+        );
+
+        // A edits a row's CALL; B sees an edit, not a new contact beside the old one.
+        let at = a
+            .log_records()
+            .iter()
+            .position(|r| r.call == "K5ABC")
+            .unwrap();
+        let mut edited = QsoRecord::clone(&a.log_records()[at]);
+        edited.call = "K5ABD".into();
+        assert!(a.update_qso(at, edited));
+        // A deletes a row; B must not bring it back.
+        let gone = a
+            .log_records()
+            .iter()
+            .position(|r| r.call == "K7ABC")
+            .unwrap();
+        assert!(a.delete_qso(gone));
+        flush(&a);
+        assert!(eventually(|| {
+            b.sync_shared_log_if_changed();
+            find(&b, "K5ABD").is_some()
+        }));
+        assert!(find(&b, "K5ABC").is_none(), "an edit, not a duplicate");
+        assert!(find(&b, "K7ABC").is_none(), "a delete, not a resurrection");
+
+        // And B's own next change does not resurrect or duplicate anything either.
+        b.log_qso(qso("W2BBB", 1_788_000_900));
+        flush(&b);
+        assert!(eventually(|| {
+            a.sync_shared_log_if_changed();
+            find(&a, "W2BBB").is_some()
+        }));
+        same_log(a.log_records(), b.log_records(), "the two windows agree");
+        same_log(&stored(&d), a.log_records(), "and so does the store");
+    }
+
+    /// ⛔ A POSITION HELD ACROSS ANOTHER WINDOW'S DELETE STILL NAMES ITS CONTACT. The Logbook
+    /// and the Remote find a row, then change it by position, in one hold of the engine lock —
+    /// and the change first folds in whatever another window committed. A fold-in that removed
+    /// the other window's deleted row would shift every row after it, and the change would land
+    /// on a different contact. So the fold-in a change makes moves nothing; the deleted row
+    /// lingers until the next freshness poll, which may move rows because nobody holds a
+    /// position across it.
+    #[test]
+    fn a_position_held_across_another_windows_delete_still_names_its_contact() {
+        let d = Dir::new("positions");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        let mut a = engine_on_store(&d);
+        let mut b = engine_on_store(&d);
+        let target = QsoRecord::clone(&b.log_records()[5]);
+
+        assert!(a.delete_qso(1), "A deletes a row ABOVE B's target");
+        flush(&a);
+        assert!(eventually(|| b.log_store_foreign_pending()));
+
+        // B changes the row it holds position 5 for — without polling first.
+        assert!(b.mark_qsl_card(5, true));
+        assert_eq!(
+            b.log_records()[5].id,
+            target.id,
+            "position 5 is still B's contact"
+        );
+        flush(&b);
+        let marked: Vec<_> = stored(&d)
+            .into_iter()
+            .filter(|r| r.qsl_rcvd.card)
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(
+            marked,
+            vec![target.id],
+            "the card went on the contact B meant, and only it"
+        );
+
+        // The poll, which holds no position, finishes the fold-in: A's delete arrives.
+        assert!(b.sync_shared_log_if_changed());
+        assert_eq!(b.log_records().len(), 9, "the deleted row is gone from B");
+        assert!(
+            b.log_records().iter().all(|r| r.call != "K1ABC"),
+            "and it is the row A deleted"
+        );
+        // And A, polling in turn, has B's card: the two windows agree.
+        assert!(eventually(|| {
+            a.sync_shared_log_if_changed();
+            a.log_records().iter().any(|r| r.qsl_rcvd.card)
+        }));
+        same_log(b.log_records(), a.log_records(), "the two windows agree");
+    }
+
+    /// ⛔ ANOTHER WINDOW'S COMMIT DOES NOT UNDO THIS ONE'S LAUNCH FILL. A launch fills countries
+    /// in memory and writes nothing, so the store holds those rows unfilled — and a re-read
+    /// takes the store's copy of every row this window has no change in flight for. With
+    /// nothing more, the other window's next contact would cost this one every country its
+    /// launch filled in, until a restart: awards and the needed board reading blanks.
+    ///
+    /// Both re-reads: the freshness poll's, which may move rows, and the in-place one a change
+    /// makes first.
+    #[test]
+    fn another_windows_commit_keeps_this_ones_launch_fill() {
+        let d = Dir::new("refill");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        flush(&engine_on_store(&d)); // the conversion
+        let mut a = Engine::new("K2DEF", "FN31", 0);
+        a.set_dxcc_resolver(|call| Some(format!("Entity of {call}")));
+        a.attach_log_store(open_fast(&d));
+        let unfilled = |e: &Engine| {
+            e.log_records()
+                .iter()
+                .filter(|r| r.country.is_none())
+                .map(|r| r.call.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            unfilled(&a).is_empty(),
+            "premise: the launch filled every row"
+        );
+        assert!(
+            stored(&d).iter().all(|r| r.country.is_none()),
+            "premise: in memory only"
+        );
+
+        let mut b = engine_on_store(&d);
+        b.log_qso(qso("W1AAA", 1_788_000_000));
+        flush(&b);
+        assert!(eventually(|| {
+            a.sync_shared_log_if_changed();
+            find(&a, "W1AAA").is_some()
+        }));
+        assert_eq!(
+            unfilled(&a),
+            Vec::<String>::new(),
+            "after the freshness poll's re-read, every row carries its country — the new one too"
+        );
+
+        b.log_qso(qso("W2BBB", 1_788_000_100));
+        flush(&b);
+        assert!(eventually(|| a.log_store_foreign_pending()));
+        assert!(
+            a.mark_qsl_card(0, true),
+            "a change, which re-reads in place"
+        );
+        assert!(find(&a, "W2BBB").is_some(), "premise: the change re-read");
+        assert_eq!(
+            unfilled(&a),
+            Vec::<String>::new(),
+            "after a change's in-place re-read, likewise"
+        );
+    }
+
+    /// ⛔ A LoTW STAMP DOES NOT BRING BACK A CONTACT ANOTHER WINDOW DELETED WHILE TQSL RAN.
+    /// The stamp finds its contacts by id, so it holds no position and its re-read may move
+    /// rows: the contact the other window deleted is gone before the stamp looks for it. The
+    /// in-place re-read a change by position makes would keep it, stamp it, and so write it
+    /// back into the store.
+    #[test]
+    fn a_lotw_stamp_does_not_bring_back_a_contact_another_window_deleted() {
+        use tempo_core::logbook::UploadOutcome;
+        let d = Dir::new("lotw-two");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let mut a = engine_on_store(&d);
+        let mut b = engine_on_store(&d);
+        let signed = a.lotw_signed(&[0, 1, 2, 3, 4]);
+        assert_eq!(signed.len(), 5, "premise: A hands TQSL five contacts");
+
+        let deleted = b.log_records()[2].id;
+        assert!(b.delete_qso(2), "B deletes one while A's TQSL runs");
+        flush(&b);
+        assert!(eventually(|| a.log_store_foreign_pending()));
+        let done = a.stamp_lotw_batch(&signed, UploadOutcome::Pending, 1_788_000_000, None);
+        flush(&a);
+        let rows = stored(&d);
+        assert!(
+            rows.iter().all(|r| r.id != deleted),
+            "the deleted contact stays deleted"
+        );
+        assert!(
+            rows.iter().all(|r| r.upload.lotw.is_some()),
+            "and every other contact carries the stamp"
+        );
+        same_log(a.log_records(), &rows, "A holds what the store holds");
+        assert_eq!(
+            (done.stamped, done.changed, done.gone),
+            (4, 0, 1),
+            "four stamped; the deleted contact is counted gone"
+        );
+    }
+
+    // ── a log.adi the store does not account for ────────────────────────────
+
+    /// ★ The transition hazard, at the door. The store was converted; then a 1.13 build (the
+    /// operator went back for a day) appended a contact to `log.adi`. The next open finds the
+    /// file is not the store's own picture, takes the contact in, and only then lets the mirror
+    /// replace the file — so the contact is in the store AND in the new `log.adi`.
+    ///
+    /// Control: the same open on a PRISTINE mirror takes nothing in.
+    #[test]
+    fn a_contact_another_build_appended_to_log_adi_is_taken_in_at_the_next_start() {
+        let d = Dir::new("foreign-open");
+        std::fs::write(d.log(), legacy_log(8)).unwrap();
+        {
+            let mut e = engine_on_store(&d);
+            e.log_qso(qso("W1OLD", 1_788_000_000)); // so the mirror writes a pristine picture
+            flush(&e);
+        }
+        assert_eq!(
+            tempo_core::logbook::mirror::mirror_state(&d.log()),
+            tempo_core::logbook::mirror::MirrorState::Pristine
+        );
+        // Control: a pristine file takes nothing in.
+        {
+            let opened = open_fast(&d);
+            assert!(opened.foreign.is_none(), "control: nothing to take in");
+        }
+
+        // A 1.13 build appends its own contact to the file.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(d.log())
+            .unwrap();
+        use std::io::Write as _;
+        f.write_all(
+            b"<CALL:6>W9FROM<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20260915<TIME_ON:6>010203<EOR>\n",
+        )
+        .unwrap();
+        drop(f);
+
+        let mut e = engine_on_store(&d);
+        assert!(
+            find(&e, "W9FROM").is_some(),
+            "the appended contact is in the log"
+        );
+        e.log_qso(qso("W2NOW", 1_788_001_000));
+        flush(&e);
+        assert!(
+            stored(&d).iter().any(|r| r.call == "W9FROM"),
+            "and in the store"
+        );
+        let mirror = std::fs::read_to_string(d.log()).unwrap();
+        assert!(
+            mirror.contains("W9FROM") && mirror.contains("W2NOW"),
+            "and the mirror that replaced the file still carries it"
+        );
+    }
+
+    /// The same hazard mid-session: something appends to `log.adi` while the store owns it.
+    /// The mirror refuses to replace the file (the contact would go), the freshness poll takes
+    /// the file in, and the mirror resumes with the contact in it.
+    #[test]
+    fn a_log_adi_written_mid_session_is_taken_in_and_the_mirror_resumes() {
+        let d = Dir::new("foreign-live");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let mut e = engine_on_store(&d);
+        e.log_qso(qso("W1ONE", 1_788_000_000));
+        flush(&e);
+
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(d.log())
+            .unwrap();
+        use std::io::Write as _;
+        f.write_all(
+            b"<CALL:6>W9LIVE<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20260915<TIME_ON:6>010203<EOR>\n",
+        )
+        .unwrap();
+        drop(f);
+
+        e.log_qso(qso("W1TWO", 1_788_000_700));
+        flush(&e);
+        let status = e.log_mirror_status().unwrap();
+        assert!(status.foreign_write, "the mirror refused the file");
+        assert!(
+            std::fs::read_to_string(d.log()).unwrap().contains("W9LIVE"),
+            "and left the appended contact where it was"
+        );
+
+        assert!(e.sync_shared_log_if_changed(), "the poll takes the file in");
+        assert!(find(&e, "W9LIVE").is_some());
+        e.log_qso(qso("W1THREE", 1_788_001_400));
+        flush(&e);
+        let mirror = std::fs::read_to_string(d.log()).unwrap();
+        assert!(
+            ["W9LIVE", "W1TWO", "W1THREE"]
+                .iter()
+                .all(|c| mirror.contains(c)),
+            "the mirror resumed, with everything in it"
+        );
+        assert!(!e.log_mirror_status().unwrap().foreign_write);
+        assert!(stored(&d).iter().any(|r| r.call == "W9LIVE"));
+    }
+
+    // ── the failure matrix (property 2) ─────────────────────────────────────
+
+    /// Every path below must leave the operator's `log.adi` exactly as it was.
+    fn untouched(d: &Dir, before: &[u8], why: &str) {
+        assert_eq!(
+            std::fs::read(d.log()).expect("log.adi still exists"),
+            before,
+            "{why}: log.adi must be neither deleted nor changed"
+        );
+    }
+
+    /// A data folder on network storage: the store is refused for the session, nothing is
+    /// converted or created, and the 1.13 path opens the log unharmed.
+    #[test]
+    fn a_network_folder_keeps_the_log_in_log_adi() {
+        let d = Dir::new("network");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+        let err = open_with(
+            &d.log(),
+            no_resolve(),
+            Some("a network drive (nfs4)".into()),
+            fast(),
+        )
+        .err()
+        .expect("refused");
+        assert!(matches!(err, OpenError::NetworkFolder(_)), "{err}");
+        assert!(err.to_string().contains("nfs4"), "{err}");
+        assert!(!d.db().exists(), "no database was created on the share");
+        assert!(
+            !d.0.join("log.adi.pre-sqlite").exists(),
+            "nothing was converted"
+        );
+        untouched(&d, &before, "network");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_log_path(d.log());
+        assert_eq!(e.log_records().len(), 6, "the fallback opens the whole log");
+    }
+
+    /// A read-only data folder: the conversion is refused before a database exists (the safety
+    /// copy could not be written), and the operator's file is untouched.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_folder_refuses_the_conversion_and_touches_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = Dir::new("readonly");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+        let mut perms = std::fs::metadata(&d.0).unwrap().permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(&d.0, perms).unwrap();
+        let result = open_with(&d.log(), no_resolve(), None, fast());
+        let mut perms = std::fs::metadata(&d.0).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&d.0, perms).unwrap();
+        let err = result.err().expect("refused");
+        assert!(
+            matches!(err, OpenError::Conversion(migrate::Error::Copy { .. })),
+            "refused at the safety copy: {err}"
+        );
+        assert!(!d.db().exists(), "no half-made database");
+        untouched(&d, &before, "read-only");
+    }
+
+    /// A database from a NEWER build at the destination — the operator went back a version. It
+    /// is refused and left exactly as it is; `log.adi` is untouched.
+    #[test]
+    fn a_database_from_a_newer_build_is_refused_and_left_alone() {
+        let d = Dir::new("newer");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+        LogDb::open(&d.db())
+            .unwrap()
+            .set_meta("schema_version", 99)
+            .unwrap();
+        let db_before = std::fs::read(d.db()).unwrap();
+        let err = open_with(&d.log(), no_resolve(), None, fast())
+            .err()
+            .expect("refused");
+        assert!(
+            matches!(
+                err,
+                OpenError::Conversion(migrate::Error::Db(sqlite::Error::SchemaVersion { .. }))
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read(d.db()).unwrap(),
+            db_before,
+            "the newer store is untouched"
+        );
+        untouched(&d, &before, "newer store");
+    }
+
+    /// ★ THE SCREEN SAYS SO. A refused store reaches the snapshot the UI renders from, as the
+    /// diagnostic log words it and with whether the data folder is the cause — the one refusal
+    /// the operator fixes in Settings. A store in use reaches it as nothing, so there is nothing
+    /// to show.
+    #[test]
+    fn a_refused_store_reaches_the_snapshot_with_its_reason() {
+        let seen = |err: &OpenError| {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.note_log_store_problem(err);
+            e.snapshot().log_store_problem
+        };
+
+        let share = Dir::new("snap-network");
+        std::fs::write(share.log(), legacy_log(3)).unwrap();
+        let err = open_with(
+            &share.log(),
+            no_resolve(),
+            Some("a network drive (nfs4)".into()),
+            fast(),
+        )
+        .err()
+        .expect("refused");
+        assert_eq!(
+            seen(&err),
+            Some(crate::dto::LogStoreProblem {
+                network_folder: true,
+                reason: err.to_string(),
+            }),
+            "a network folder, and the reason the diagnostic log gives"
+        );
+
+        let newer = Dir::new("snap-newer");
+        std::fs::write(newer.log(), legacy_log(3)).unwrap();
+        LogDb::open(&newer.db())
+            .unwrap()
+            .set_meta("schema_version", 99)
+            .unwrap();
+        let err = open_with(&newer.log(), no_resolve(), None, fast())
+            .err()
+            .expect("refused");
+        let problem = seen(&err).expect("the reason reaches the snapshot");
+        assert!(
+            !problem.network_folder,
+            "a newer build's database is not the folder's fault"
+        );
+        assert!(problem.reason.contains("schema version 99"), "{problem:?}");
+
+        let fine = Dir::new("snap-fine");
+        std::fs::write(fine.log(), legacy_log(3)).unwrap();
+        let e = engine_on_store(&fine);
+        assert_eq!(
+            e.snapshot().log_store_problem,
+            None,
+            "a store in use says nothing"
+        );
+        flush(&e);
+    }
+
+    /// A database already at the destination that holds a DIFFERENT log (a folder copied from
+    /// another machine): it is the store, and the `log.adi` beside it — which it does not
+    /// account for — is taken into it, so neither log loses a contact.
+    #[test]
+    fn a_store_already_at_the_destination_takes_the_log_beside_it_in() {
+        let other = Dir::new("other-machine");
+        std::fs::write(other.log(), legacy_log(3)).unwrap();
+        drop(open_fast(&other)); // converts the OTHER log into its store
+        let d = Dir::new("pre-existing");
+        std::fs::copy(other.db(), d.db()).unwrap();
+        let mut ours = adif_header();
+        ours.push_str(
+            "<CALL:5>G4OUR<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260101<TIME_ON:6>101010<EOR>\n",
+        );
+        std::fs::write(d.log(), &ours).unwrap();
+
+        let e = engine_on_store(&d);
+        let calls: Vec<&str> = e.log_records().iter().map(|r| r.call.as_str()).collect();
+        assert!(
+            calls.contains(&"G4OUR"),
+            "this folder's contact is in: {calls:?}"
+        );
+        assert!(
+            calls.contains(&"K0ABC"),
+            "and so are the store's: {calls:?}"
+        );
+        // `log.adi` stays as it was only until the mirror lane's first write, which the take-in
+        // queues — asserting it unchanged before that write raced the lane. Settle it: the file
+        // is then the store's mirror, and it carries this folder's contact and the store's.
+        flush(&e);
+        assert!(stored(&d).iter().any(|r| r.call == "G4OUR"));
+        assert_eq!(
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "pre-existing store: log.adi is the store's mirror once the take-in lands"
+        );
+        let mirrored = tempo_core::logbook::Logbook::load(&d.log());
+        let mirrored: Vec<&str> = mirrored.records().iter().map(|r| r.call.as_str()).collect();
+        assert!(
+            mirrored.contains(&"G4OUR") && mirrored.contains(&"K0ABC"),
+            "pre-existing store: the mirror carries both logs: {mirrored:?}"
+        );
+    }
+
+    /// A conversion a crash cut short resumes at the next open and completes — nothing
+    /// duplicated, nothing dropped — and the operator's file is untouched throughout.
+    #[test]
+    fn a_conversion_cut_short_completes_at_the_next_open() {
+        let d = Dir::new("resume");
+        std::fs::write(d.log(), legacy_log(700)).unwrap();
+        let before = std::fs::read(d.log()).unwrap();
+        let source = tempo_core::logbook::Logbook::load(&d.log());
+        {
+            // What a crash leaves: the copy taken, the source length recorded, two chunks in,
+            // and no "done".
+            migrate::take_pre_sqlite_copy(&d.log(), &before).unwrap();
+            let mut db = LogDb::open(&d.db()).unwrap();
+            db.set_meta("migration_source_len", before.len() as i64)
+                .unwrap();
+            db.insert_all(
+                source.records()[..512]
+                    .iter()
+                    .map(|r| (&**r, Resolved::default())),
+            )
+            .unwrap();
+        }
+        let opened = open_fast(&d);
+        assert_eq!(
+            opened.outcome,
+            migrate::Outcome::Converted {
+                written: 188,
+                resumed_at: 512,
+                total: 700
+            }
+        );
+        // The conversion itself — resumed or not — never writes the operator's file.
+        untouched(&d, &before, "resume");
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.attach_log_store(opened);
+        same_log(e.log_records(), source.records(), "every contact, once");
+        // Attached, the log goes to the mirror lane, which writes after its debounce: asserting
+        // `log.adi` unchanged HERE raced the lane. Settle it, then hold the file to what the
+        // completed conversion makes it, with the operator's own copy kept beside it.
+        flush(&e);
+        assert_eq!(
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "resume: log.adi is the store's mirror once the conversion completes"
+        );
+        assert_eq!(
+            std::fs::read(d.0.join("log.adi.pre-sqlite")).unwrap(),
+            before,
+            "resume: the operator's file is kept beside it, byte for byte"
+        );
+    }
+
+    /// The start-up screen hears a first launch's conversion through the store's open: not
+    /// counted yet, then counted up to every contact. A launch whose store is already converted
+    /// hears nothing — the screen has nothing to show it.
+    #[test]
+    fn a_launch_passes_the_conversions_progress_through() {
+        let d = Dir::new("progress");
+        std::fs::write(d.log(), legacy_log(40)).unwrap();
+        let mut seen = Vec::new();
+        let opened =
+            open_reporting_with(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
+                .expect("the store opens");
+        assert_eq!(
+            opened.outcome,
+            migrate::Outcome::Converted {
+                written: 40,
+                resumed_at: 0,
+                total: 40
+            }
+        );
+        assert_eq!(
+            seen.first(),
+            Some(&migrate::Progress { done: 0, total: 0 }),
+            "{seen:?}"
+        );
+        assert_eq!(
+            seen.last(),
+            Some(&migrate::Progress {
+                done: 40,
+                total: 40
+            }),
+            "{seen:?}"
+        );
+        drop(opened);
+
+        seen.clear();
+        let again =
+            open_reporting_with(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
+                .expect("the store opens again");
+        assert_eq!(again.outcome, migrate::Outcome::AlreadyDone);
+        assert!(seen.is_empty(), "{seen:?}");
+    }
+
+    // ── the FT duplicate guard (hard gate) ──────────────────────────────────
+
+    /// ⛔ THE GUARD ANSWERS FROM MEMORY AND NEVER FROM THE STORE. With the store's writer held
+    /// back (its write lock taken elsewhere), a contact is logged: memory has it, the store does
+    /// not — shown by reading the store through a connection of the test's own (the control).
+    /// Logged again, it is refused as a duplicate at once. A guard that consulted the store
+    /// would have found nothing there and logged it twice; one that waited for the store would
+    /// not have answered while the lock was held.
+    #[test]
+    fn the_duplicate_guard_answers_from_memory_while_the_store_lags() {
+        let d = Dir::new("dedup-guard");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let mut e = engine_on_store(&d);
+        let hold = WriteHold::take(&d.db()).expect("hold the write lock");
+        let rec = qso("W1DUP", 1_788_000_000);
+        assert!(!matches!(
+            e.log_qso_for_sync(rec.clone()),
+            crate::engine::LogWriteOutcome::Duplicate
+        ));
+        assert!(
+            stored(&d).iter().all(|r| r.call != "W1DUP"),
+            "control: the store does NOT hold the contact yet"
+        );
+        let started = Instant::now();
+        let again = e.log_qso_for_sync(rec);
+        assert!(
+            matches!(again, crate::engine::LogWriteOutcome::Duplicate),
+            "refused from memory, though the store has never seen the first"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "and at once"
+        );
+        assert_eq!(
+            e.log_records().iter().filter(|r| r.call == "W1DUP").count(),
+            1
+        );
+        drop(hold);
+        flush(&e);
+        assert_eq!(
+            stored(&d).iter().filter(|r| r.call == "W1DUP").count(),
+            1,
+            "once the store catches up it holds the contact once"
+        );
+    }
+}

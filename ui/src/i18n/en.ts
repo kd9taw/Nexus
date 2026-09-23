@@ -783,8 +783,13 @@ export const EN = {
     '<b>Double-click</b> a station calling CQ. The sequencer runs the whole exchange and logs it. The same log feeds the Phone and CW cockpits, so a familiar call shows their name and your history there too.',
 
   'gettingStarted.wsjtx.label': 'Coming from WSJT-X? The short path',
+  // ⚠️ JTAlert and GridTracker only hear Nexus once the WSJT-X UDP API switch is on, and it
+  // ships OFF — so the sentence names it (#353). `WSJT-X UDP API` is the switch's own label,
+  // which Settings shows as that literal in every language: copy it exactly. The path before
+  // `<a>` is the labels THIS language's Settings shows (the Settings view, the tab, the section
+  // legend), and the `<a>` span becomes a link that opens that section.
   'gettingStarted.wsjtx.body':
-    'Your muscle memory transfers — double-click semantics, <code>Esc</code> / <code>F4</code> / <code>F6</code> / <code>Alt+1–6</code>, Band Activity bottom-pinned, early decodes at 11.8\u00a0s, Fake-It split, Hound auto-move. So do your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working — Nexus speaks the full WSJT-X UDP protocol and they see it as a WSJT-X.',
+    'Your muscle memory transfers — double-click semantics, <code>Esc</code> / <code>F4</code> / <code>F6</code> / <code>Alt+1–6</code>, Band Activity bottom-pinned, early decodes at 11.8\u00a0s, Fake-It split, Hound auto-move. So do your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working once you turn on <b>WSJT-X UDP API</b> (off by default) in Settings ▸ Logging & Connectors ▸ <a>Integrations & Feeds</a>. Its address already matches WSJT-X’s default, so nothing else needs setting, and they see Nexus as a WSJT-X.',
   // A whole extra sentence, not a tail glued onto the one above — a translator may place it
   // wherever their language wants it.
   'gettingStarted.wsjtx.mac':
@@ -1015,6 +1020,24 @@ export const EN = {
     'LoTW rejected your certificate/Station Location: {{detail}}',
   'logbook.lotw.upload.failed': 'LoTW upload failed',
   'logbook.lotw.upload.failedDetail': 'LoTW upload failed: {{detail}}',
+  // Contacts that changed while TQSL was signing an upload are not marked with its result (the
+  // connection log carries the same counts). THREE STATEMENTS, each with its own count — see
+  // the import note — shown from the Logbook's upload and the Awards upload buttons alike. The
+  // first always shows, with the total; each of the other two only when its count is not zero,
+  // and each keeps its own leading separator.
+  'logbook.lotw.skipped.changed': {
+    one: '{{count}} QSO changed while TQSL was signing this upload, so Nexus did not mark it as uploaded.',
+    other:
+      '{{count}} QSOs changed while TQSL was signing this upload, so Nexus did not mark them as uploaded.',
+  },
+  'logbook.lotw.skipped.edited': {
+    one: ' {{count}} was edited and is offered again with the next upload.',
+    other: ' {{count}} were edited and are offered again with the next upload.',
+  },
+  'logbook.lotw.skipped.deleted': {
+    one: ' {{count}} was deleted from the log.',
+    other: ' {{count}} were deleted from the log.',
+  },
 
   // ⚠️ `{{formatted}}` is a QSO COUNT the call site has already grouped for display
   // ("1,234"). It is a count of contacts, not a technical quantity — no dial, no report, no
@@ -2793,6 +2816,11 @@ export const EN = {
   'watchlist.add.cqOnly.label': 'CQ only',
   'watchlist.add.cqOnly.title': 'Only alert on a CQ call',
   'watchlist.add.submit': 'Add',
+  // The WATCH tile on the Call Roster, the Stations list and Spots — one word on all three,
+  // echoing this list's own name. `{{what}}` is the entry that matched: the operator's label
+  // for it, else the call, prefix, entity or grid as typed.
+  'watchlist.tile.label': 'WATCH',
+  'watchlist.tile.title': 'On your watch list: {{what}}',
 
   // ── The two display filters (hide calls / hide countries) ───────────────────────────
   // Both say the same thing about themselves and say it differently, which is why they do
@@ -3838,7 +3866,7 @@ export const EN = {
   'sat.leg.downlink': '↓ Downlink',
   'sat.leg.uplink': '↑ Uplink',
   'sat.doppler.txMode.title':
-    "The TX (split) VFO's sideband — this bird's uplink runs {{mode}} while the downlink does not, and the radio's TX leg is set to match. Commanded by the engine with the Doppler tuning; shown here so a swapped sideband is never a surprise.",
+    "The mode the TX (split) VFO is set to for this pass: {{mode}}. That VFO keeps a mode of its own, apart from the receive dial, so it is set with the Doppler tuning instead of keeping whatever the last pass left there. It can differ from the downlink's — on an inverting transponder the sideband swaps.",
   // The inverting mark and its lesson — one chip and one tooltip, rendered by the Doppler
   // head, the readiness rail and every transponder card.
   'sat.inverting.label': 'INVERTING',
@@ -4085,6 +4113,9 @@ export const EN = {
   'sat.transponder.none.aria': 'Work no transponder — leave the dial to me',
   'sat.transponder.none.label': 'None — leave the dial to me',
   'sat.transponder.card.aria': 'Work {{description}}',
+  // The downlink's symbol rate beside its mode on a card ("AFSK · 1200 bd"). The number is an
+  // invariant token and `bd` is read off the catalog the way MHz is: the same in every language.
+  'sat.transponder.baud': '{{baud}} bd',
   'sat.transponder.auto': 'picked for you — change it here if this is not the one',
   'sat.transponder.showAll': 'show all {{count}} ▾',
   'sat.transponder.showAll.title': 'Show every workable transmitter SatNOGS lists for this bird',
@@ -4092,16 +4123,21 @@ export const EN = {
   'sat.transponder.showDead': 'show {{count}} inactive',
   'sat.transponder.showDead.title':
     'Transmitters SatNOGS reports dead/re-entered — shown for the record, never workable',
-  // The TX-sideband note. `{{tx}}`, `{{up}}` and `{{down}}` are the record's own mode names.
+  // The TX-mode note. `{{up}}` and `{{down}}` are the record's own mode names; `{{tx}}` is the
+  // mode the engine commands.
   'sat.transponder.txMode.commanded':
-    'TX sideband: the uplink (split) VFO is set to <b>{{tx}}</b> — the downlink stays {{down}} while Doppler runs this pass.',
+    'TX mode: the uplink (split) VFO is set to <b>{{tx}}</b> — the downlink stays {{down}} while Doppler runs this pass.',
   'sat.transponder.txMode.notCommanded':
-    'This bird lists {{up}} up / {{down}} down (SatNOGS) — the TX sideband is not being commanded for this pass ({{why}}).',
+    'This bird lists {{up}} up / {{down}} down (SatNOGS) — the TX mode is not being commanded for this pass ({{why}}).',
   'sat.transponder.txMode.why.dopplerOff': 'Doppler correction is off',
   'sat.transponder.txMode.why.notDriving': 'Doppler is not driving the uplink on this radio',
   'sat.transponder.txMode.why.shared': 'the legs share a sideband, or the mode is yours',
   'sat.transponder.txMode.forecast':
     'TX sideband: this bird runs {{up}} up / {{down}} down (SatNOGS). Once your uplink mapping is confirmed for the radio in use, the TX (split) VFO is set to match while a tracked pass runs.',
+  // A CW uplink over an FM downlink (KOSEN-1). It must not promise CW to a soundcard CW keyer:
+  // that station's TX VFO gets the data mode its keyed tone needs.
+  'sat.transponder.txMode.forecastCw':
+    "TX mode: this bird runs {{up}} up / {{down}} down (SatNOGS). Once your uplink mapping is confirmed for the radio in use, a tracked pass sets the TX (split) VFO to CW when you work it from Phone or with the radio's own CW keyer; a soundcard CW keyer gets the data mode its keyed tone needs.",
   'sat.transponder.state.dopplerOff':
     'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.',
   'sat.transponder.state.uplinkOnly.driving':
@@ -7801,11 +7837,13 @@ export const EN = {
   'operate.roster.col.age': 'Age',
 
   'operate.roster.empty': 'No stations heard yet — decoded stations appear here as they arrive.',
-  // The row, read aloud — four optional clauses, each interpolated whole with its own
-  // separator. `{{need}}` is a need TAG (NewMode, Confirm…), a token like a band name.
-  'operate.roster.row.aria': '{{call}}{{grid}}{{need}}{{worked}}{{working}}',
+  // The row, read aloud — five optional clauses, each interpolated whole with its own
+  // separator. `{{need}}` is a need TAG (NewMode, Confirm…), a token like a band name; the
+  // watch clause's `{{what}}` is the watch-list entry that matched, as on the WATCH tile.
+  'operate.roster.row.aria': '{{call}}{{grid}}{{need}}{{watch}}{{worked}}{{working}}',
   'operate.roster.row.aria.grid': ', grid {{grid}}',
   'operate.roster.row.aria.need': ', needed {{need}}',
+  'operate.roster.row.aria.watch': ', on your watch list: {{what}}',
   'operate.roster.row.aria.worked': ', worked',
   'operate.roster.row.aria.working': ', working now',
   'operate.roster.row.work.title': 'Double-click to work {{call}}',
@@ -9106,6 +9144,16 @@ export const EN = {
   'shell.toast.logged': 'Logged QSO',
   'shell.toast.nothingToLog':
     'Nothing to log — the QSO already closed or no report was exchanged',
+  // The logbook database could not be opened at launch, so this session keeps the log in
+  // log.adi. Shown once per session until dismissed. Two whole messages, one per remedy: a
+  // network data folder is fixed in Settings, anything else is read in the diagnostic log.
+  // `{{reason}}` is the station's diagnostic wording, passed through untranslated. The Settings
+  // paths name the tab and section as this language labels them ("Diagnostic log" is labelled
+  // in English in every language today).
+  'shell.logStore.network':
+    'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ Config ▸ Data & log folder.',
+  'shell.logStore.failed':
+    'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Diagnostic log.',
   'shell.message.failed': 'Message could not be sent',
   'shell.bandFeed.failed': 'Could not open the band feed',
   'shell.resend.failed': 'Could not re-send to {{peer}}',

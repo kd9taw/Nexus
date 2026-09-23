@@ -133,6 +133,77 @@ fn the_licence_judges_the_requested_transmit_frequency() {
     assert_eq!(attempt(&mut g, split), Ok(()));
 }
 
+/// A General in Phone on 40 m at 7.290 with the cockpit's mode pick `pick` (`None` = AUTO), idle
+/// and freshly read, so the only thing a split or XIT request can be refused on is the licence.
+fn general_phone_on_40m(pick: Option<&str>) -> Station {
+    let mut s = Station::new(OperatingMode::Phone);
+    s.engine.settings.license_class = LicenseClass::General;
+    s.engine.set_frequency(7.290, "40m", "LSB");
+    s.engine.request_sideband_override(pick);
+    s.engine.take_immediate_retune();
+    s.sample(7_290_000, pick.unwrap_or("LSB"));
+    assert_eq!(
+        s.engine.sideband_override().as_deref(),
+        pick,
+        "precondition"
+    );
+    s
+}
+
+fn split_to_7299(e: &mut Engine, c: u64, p: &Permit) -> Result<(), Reason> {
+    e.queue_remote_split(None, Some(7.299), c, p)
+}
+fn xit_to_7299(e: &mut Engine, c: u64, p: &Permit) -> Result<(), Reason> {
+    e.queue_remote_xit(0, 9_000, c, p)
+}
+
+/// A Remote split must be judged in the Phone mode the rig is actually in, exactly as the
+/// station's key-time gate judges it — or the browser is handed a transmit frequency the
+/// station then refuses to key. 7.299 is inside the band on LSB (AUTO below 10 MHz) and across
+/// the 7.300 band edge on USB.
+#[test]
+fn a_remote_split_is_judged_in_the_picked_phone_mode() {
+    let mut auto = general_phone_on_40m(None);
+    assert_eq!(
+        attempt(&mut auto, split_to_7299),
+        Ok(()),
+        "control: 7.299 LSB is inside a General's 40 m phone segment"
+    );
+    let mut usb = general_phone_on_40m(Some("USB"));
+    assert_eq!(
+        attempt(&mut usb, split_to_7299),
+        Err(Reason::OutsidePrivileges),
+        "7.299 USB transmits across the 7.300 band edge"
+    );
+    assert_eq!(
+        usb.engine.split_tx_mhz(),
+        None,
+        "a refusal requests nothing"
+    );
+}
+
+/// The same for XIT: +9 kHz from 7.290 puts the transmitter on 7.299.
+#[test]
+fn a_remote_xit_is_judged_in_the_picked_phone_mode() {
+    let mut auto = general_phone_on_40m(None);
+    assert_eq!(
+        attempt(&mut auto, xit_to_7299),
+        Ok(()),
+        "control: 7.299 LSB is inside a General's 40 m phone segment"
+    );
+    let mut usb = general_phone_on_40m(Some("USB"));
+    assert_eq!(
+        attempt(&mut usb, xit_to_7299),
+        Err(Reason::OutsidePrivileges),
+        "7.299 USB transmits across the 7.300 band edge"
+    );
+    assert_eq!(
+        usb.engine.take_xit_apply(),
+        None,
+        "a refusal requests nothing"
+    );
+}
+
 #[test]
 fn values_the_page_did_not_display_or_cannot_reach_are_refused() {
     let mut s = Station::new(OperatingMode::Digital);
@@ -176,4 +247,20 @@ fn values_the_page_did_not_display_or_cannot_reach_are_refused() {
         Err(Reason::StationBusy)
     );
     assert_eq!(e.take_vfo_apply(), None);
+}
+
+/// A radio with no XIT refuses a browser's XIT as unsupported, and nothing is queued. The
+/// IC-9700 has none (Icom A7508-3EX-4 lists RIT and no ΔTX); the same request on an IC-7610 is
+/// admitted, which is what makes this a capability refusal rather than a station that refuses.
+#[test]
+fn a_radio_with_no_xit_refuses_a_browser_xit_and_queues_nothing() {
+    for (model, want, queued) in [
+        (3081, Err(Reason::UnsupportedAction), None), // IC-9700
+        (3078, Ok(()), Some(20)),                     // IC-7610
+    ] {
+        let mut s = Station::new(OperatingMode::Digital);
+        s.engine.settings.rig_model = model;
+        assert_eq!(attempt(&mut s, xit), want, "model {model}");
+        assert_eq!(s.engine.take_xit_apply(), queued, "model {model}");
+    }
 }

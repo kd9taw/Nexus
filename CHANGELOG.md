@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A station on your watch list now stands out on the Call Roster, the Stations list and Spots.**
+  The watch list (Settings ▸ Spots & Alerts) sounded one loud alert when a station you asked for
+  was decoded, and after that nothing on the screen said which row it was. Every station the list
+  names, by call or prefix, by DXCC entity or by grid square, now carries a **WATCH** tile. It is
+  the same lime tile on all three lists, and hovering it names the entry that matched. A watched
+  station counts as a need: **Needed only** keeps it, **Hide worked** keeps it even after you have
+  worked it (on the roster and on Spots), and the Stations list's **Needed** counts it too. There
+  is nothing to set up. It reads the list you already keep and follows it as you edit it. In a
+  Remote browser it reads that browser's own watch list, the one its alerts already use.
+
 - **The Satellites section can now work out when you and another station can both see the same
   bird.** Nexus could always tell you when a satellite rises over your own QTH, which is half of
   what a satellite QSO needs: the other operator has to be able to see it at the same moment, and
@@ -28,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window at all, it says so and tells you how far apart you are — for a low-orbiting bird, two
   stations much more than about 3300 km apart simply cannot see it together, and that is an
   answer rather than a failure.
+
+- **The Satellites transponder list now shows a downlink's data rate beside its mode.** A packet
+  or telemetry downlink reads `AFSK · 1200 bd` or `GMSK · 9600 bd` instead of the mode alone, so
+  you can tell a 1200-baud bird your TNC copies from a 9600-baud one before the pass starts. The
+  rate is the one the SatNOGS database lists for that transmitter; where it lists none — most
+  voice, CW and SSTV entries — nothing is added, rather than a guessed rate or a zero.
 
 - **PSK now has editable F-key macros, the way RTTY does.** The PSK dock's four macro keys were
   fixed in place: the messages could not be changed, there was no way to add one of your own, and
@@ -115,6 +131,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you stop it. (#304)
 ### Changed
 
+- **Your logbook now lives in a database, and `log.adi` is kept as an up-to-date copy of it.**
+  Every change to the log used to rewrite the whole of `log.adi` — every stamp, every
+  confirmation, every edit — and on a big log that rewrite was long enough to make the radio and
+  the screen hesitate each time a contact was saved or an upload was marked. The log is now kept
+  in `log.sqlite3` beside `log.adi`, where a change writes only the contacts it touched. The first
+  time this version starts it converts your log — a lifetime log can take several seconds, once,
+  and the start-up screen says so while it works, in your language — and keeps the file exactly as
+  it was, as `log.adi.pre-sqlite`. Starting Nexus again while it converts does not open a second
+  copy; on Windows it says Nexus is already moving the logbook and will open by itself.
+  `log.adi` stays where it always was and keeps up with every change, a moment later, so other
+  loggers, backup scripts and sync tools that read it still see every contact. Starting Nexus no
+  longer rewrites the log at all, and quitting waits for the last change to reach the disk. A
+  data folder on a network drive keeps the log in `log.adi` alone, as before, and so does a start
+  where the database cannot be opened. Either way Nexus says so once on screen, with the reason
+  and what to do.
+  Two radio windows on one data folder now see each other's corrections and deletions as they
+  are: a contact corrected in one window is corrected in the other, not logged a second time
+  beside the old one, and a contact deleted in one stays deleted instead of coming back when the
+  other window next saves.
+  Two things behave differently, and both are the safe side of a change. If something other
+  than Nexus writes to `log.adi` — an older Nexus on the same folder, a restored backup — Nexus
+  takes that file's contacts in the way the Logbook's Import does: new contacts are added and
+  confirmations come across, but a contact changed or removed only in that file is not changed or
+  removed in your log. And if Nexus stops in the middle of importing a large file, the contacts
+  it had already taken in are kept; importing the file again adds the rest without duplicating
+  any.
 - **IC-7610 on native CI-V: the S-meter, the receive controls (AF, RF gain, squelch, NB, NR,
   notch, AGC, attenuator, preamp) and the CTCSS tone now always act on the Main receiver**, even
   with the Sub band selected on the radio (the frequency and mode still follow the selected band).
@@ -137,6 +179,170 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have renamed, which is why it only ever warns.
 
 ### Fixed
+
+- **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
+  1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
+  lookup that turns a callsign into a country. The Needed board and the need chips beside the
+  decodes stopped updating for as long as that spot was up, and a browser on Nexus Remote lost its
+  connection each time it read the Needed list. Nexus now reads a callsign only up to its first
+  character outside the plain keyboard set (an emoji, an accented or full-width letter), so that
+  activator counts as the station it is. Nothing that arrives from outside (a spot, a
+  cluster line, an imported log) can crash the lookup any more. Four other places had the same
+  weak spot and are fixed with it: a DXpedition date read from NG3K's list, a contest exchange
+  in an imported log, the APRS iGate's check of a packet's sender, and the line-tidying the
+  diagnostic log does before it writes.
+
+- **A slow space-weather, POTA/SOTA or callbook server can no longer hold up the rest of Nexus.**
+  Eight requests made their wait on one of the few threads that answer the screen: the Kp
+  forecast, the NOAA scales and alerts, the aurora oval, the MUF map, the POTA and SOTA spot
+  lists, a callbook lookup and the QRZ Logbook connection test. Each held its thread for as long
+  as the server took, up to its time limit, and with several going at once on a slow connection
+  everything else could queue behind them. They now wait off to the side, the way logbook uploads
+  always have.
+
+- **A park reference next to a WWFF area or a SOTA summit no longer disappears when you import a
+  log.** Several loggers write a combined activation as a WWFF or SOTA reference plus a `POTA_REF`.
+  Importing that record into Nexus kept the WWFF or SOTA reference and silently dropped the POTA one,
+  and a SOTA record lost any POTA tags it carried. They now stay with the contact and are written
+  back out with it.
+
+- **Getting started now tells a WSJT-X operator which switch keeps JTAlert and GridTracker
+  working.** Its "Coming from WSJT-X?" note said both keep working, and they do, but only once
+  **WSJT-X UDP API** in Settings ▸ Logging & Connectors ▸ Integrations & Feeds is on, and it
+  ships off. A GridTracker2 user went looking for an ADIF file instead. The note now names the
+  switch, says it is off by default and that its address already matches WSJT-X's, and links
+  straight to that section. The manual's pages that made the same promise say so too. (#353)
+
+- **Spanish and French no longer show `\u00a0` in the middle of a label.** Twelve strings in
+  each language printed the code for a non-breaking space instead of the space itself: the Flex
+  pan and rig scope buttons on the CW and Phone cockpits, five lines of Getting started, two
+  Settings hints and a line of the setup wizard. They show the space now, and a check stops a
+  translation from bringing the code back.
+
+- **An IC-9700 is no longer offered XIT.** The radio has no XIT: Icom's CI-V reference for it
+  lists RIT and no transmit offset. Nexus drew the XIT buttons anyway. Over Nexus's own CI-V
+  connection an XIT change went out as Icom's transmit-offset commands, whose offset register on
+  the 9700 is the RIT offset, and over Hamlib the radio refused it. In both cases Nexus went on
+  showing an XIT offset the radio never applied, on the transmit line and in the frequency it
+  checks against your licence privileges. On an IC-9700 the XIT buttons and the transmit line's
+  XIT figure are gone, and an XIT change aimed at one is refused, including from a browser. RIT
+  is unchanged, and so is XIT on every other radio.
+
+- **The transmit lock now judges the sideband you picked in Phone.** Picking USB, LSB or AM in
+  the Phone cockpit, or recalling a saved memory in its own sideband, changed what the radio
+  sent, but the licence check went on judging the sideband the band normally uses. So a General
+  could pick USB at 7.299 and transmit across the top of 40 m, or LSB at 14.226 and go below the
+  bottom of the 20 m General phone segment, and nothing locked. Both now read 🔒 TX locked, like
+  any other frequency outside your privileges, and a Remote split or XIT that would land there is
+  refused the same way. Nothing that was locked before is unlocked, and with the mode on AUTO
+  nothing changes.
+
+- **A station in the Stations list no longer runs under its own SNR badge.** At the 1024×768
+  floor the list is about 250 px wide, which left the callsign room for three or four letters,
+  so every call ran under the SNR number and the chips carried on over the Work button. A long
+  country, grid and distance line could do the same even on a wide screen. Chips that do not
+  fit beside the call now start a second row, the SNR badge moves under the call when the list
+  is that narrow, and the second line trims itself with "…" as it was always meant to. On a
+  full band the cards are the same height as before; on a quiet band they are now that same
+  compact height.
+
+- **The Linux AppImage no longer prints `Failed to load module "canberra-gtk-module"` when it
+  starts.** The 1.14.0 AppImage stopped looking in your system's own GTK folders, so the add-ons
+  your desktop asks every GTK program to load — the event-sound module, and on some desktops the
+  helpers for its theme and window decorations — could not be found, and GTK said so in the
+  terminal once or twice at every start. It looks there again, after its own bundled copies, the
+  way 1.13 did. Nothing else about the AppImage changes, and the .deb was never affected.
+
+- **A transponder card in the Satellites section now shows the downlink's mode, not just the
+  uplink's.** On a card whose uplink lists a mode of its own — RS-44's linear transponder, many FM
+  repeaters, the packet digipeaters — the ↑ side showed its mode and the ↓ side showed none, so
+  RS-44 read `↑ 145.935–145.995 LSB` and never said the USB you listen on. It now reads
+  `↓ 435.610–435.670 USB` as well. The line under the list that says which sideband the transmit
+  (split) VFO takes had the same fault and never appeared at all; it now shows once you pick RS-44
+  or another inverting transponder.
+
+- **Working KOSEN-1 no longer puts its uplink in FM.** Its transponder takes CW on 21.125–21.150
+  MHz and sends it down as AFSK on 435.525 MHz, and Nexus set the transmit (split) VFO from the
+  downlink — so the uplink went to FM, on a part of 15 m where FM is not allowed, from every
+  section. The transmit VFO now takes CW when you work it from Phone or from CW on the radio's own
+  keyer (reverse CW if you have that set), and the data mode a keyed tone needs if you use the
+  soundcard CW keyer, the same as on every other band. Digital is unchanged for now: what an FT
+  mode should do on a CW-only uplink is its own decision. The note under the transponder list says
+  which mode the transmit VFO takes, and the mode shown beside the uplink in the Doppler readout no
+  longer claims the uplink always runs a different mode from the downlink. KOSEN-1 is the only
+  satellite listed this way today.
+
+- **FT8 and the other data modes now go up an inverting transponder on the right sideband.** On
+  a bird like RS-44 or AO-7's mode B, the transponder turns the passband over, so the uplink has
+  to go up on the opposite sideband. Nexus already did that for voice — USB down, LSB up — but
+  left a data mode's uplink on the downlink's side, and an FT8 over sent up that way comes back
+  down with its tones reversed, where nothing can decode it. The uplink now takes the mirrored
+  data mode (DATA-L up for DATA-U down, and the other way round). Only the transmit VFO's
+  sideband changes: FT timing, sequencing and audio are exactly as before, and a non-inverting
+  bird is untouched.
+
+- **QO-100's narrowband transponder is now worked in SSB, not FM.** The satellite database
+  labels every narrowband segment on QO-100 as FM up and FM down, the "SSB only" segments
+  included, and Nexus believed it: picking one put both legs in FM, routed the pick by your FM
+  rules and set up the FM repeater plumbing — on a transponder whose band plan allows no FM at
+  all. Anything between 10489.500 and 10490.000 MHz down is now treated as the linear
+  transponder it is, so Phone gets USB on both legs, CW gets CW, and Digital gets DATA-U. Nothing
+  else about the pick changes, and every other satellite is worked exactly as before.
+
+- **The filter no longer stays at 6 kHz when you switch from phone or CW into a digital mode.**
+  A Flex over SmartSDR CAT answers "done" to the 3 kHz data filter Nexus asks for and then keeps
+  its own 6 kHz SSB filter. Nexus already read the filter back and put the right one in — but
+  only on the retunes it drives itself, not on the one gesture that shows the fault: clicking a
+  digital section yourself from phone or CW. That click now checks the filter the same way, sets
+  it again if the radio ignored it, and, when the radio still will not take it, says on the CAT
+  line which filter you are on and which one the mode needs — instead of confirming the mode and
+  saying nothing about a passband twice as wide as FT8 wants. Moving the dial inside a band still
+  leaves your filter exactly where you put it. (#349)
+
+- **A park activator you work from the Call Roster or Band Activity is now logged with their
+  park.** Nexus tags a contact with the activator's park — the reference your hunter credit
+  comes from — when you start it from the HUNT button, the map or the Needed board. A
+  double-click in the Call Roster, Band Activity or the station list, which is how most
+  FT8 contacts start, never did: those contacts went into the log with no park at all, no
+  hunter credit, and the station stayed on the Needed board as a new park after you had worked
+  it. Starting the contact from any of those now tags the park, whenever the POTA/SOTA spots
+  show the station at exactly one activation right now. When they show more than one — a
+  summit that is also a park, spotted to both programmes — nothing is tagged, the same rule the
+  Needed board follows, and a park you picked yourself on the POTA/SOTA board is left as you
+  picked it. The call itself goes out exactly as before. (#351)
+
+- **"Needed only" and "Hide worked" no longer keep the station you just worked.** A contact
+  starts out unconfirmed, so the moment you log one the station can pick up a LoTW chip — a
+  confirmation still to come — and that chip counted as a need, so both Call Roster filters, and
+  the Needed chip on the Classic station list, went on showing the station you had just worked.
+  A confirmation and nothing else no longer keeps a station on those lists once you have worked
+  it on the band you are on: another contact with them cannot confirm anything the first one
+  will not. The LoTW chip still shows with the filters off, and a station you worked on another
+  band, or one that still has something real to offer — a new state, a park you have not worked
+  in this activation — stays on the list as before. The needs also refresh the moment Nexus logs
+  a contact on its own after RR73 or 73; until now that waited for the next 30-second update.
+  (#350)
+
+- **Moving your data folder now takes the logbook's safety copies with it.** "Copy my log and data
+  there" in Settings carried `log.adi` and nothing else that belongs to it: the untouched copy of
+  your log as Nexus first opened it (`log.adi.bak`), the dated copies in the `backups` folder, and
+  the copy kept from before the logbook database, all stayed behind in the folder Nexus stops
+  reading. They now move with the log, checked byte for byte like everything else. The logbook
+  database moves too, and it is copied through the database itself rather than file by file: a
+  contact you have just logged can still be in the database's working file, and a plain file copy
+  of a database that is open can miss it. The copy is checked row for row against the original
+  before the new folder is used, and if anything does not match, nothing is changed.
+
+- **Deleting a contact while an upload to LoTW is running no longer marks the wrong contacts as
+  uploaded.** TQSL takes a while to sign and send a batch, and the log stays open while it works.
+  Nexus then recorded the result on contacts by where they sat in the log, so deleting one in that
+  time shifted every contact after it: a contact that was never sent could be marked uploaded, and
+  a contact marked uploaded is never offered to LoTW again, while one that was sent stayed
+  unmarked. The result now goes on exactly the contacts that were sent, found by their identity
+  rather than their place in the log. A contact you correct while TQSL is working is left unmarked
+  too, because LoTW has the version from before your correction; it is offered again with your
+  next upload. The connection log says when either happens, and an upload you start also shows the
+  counts in a toast.
 
 - **The SSTV screen now says where the switch is that keeps your radio in the data mode.** On an
   IC-7300 or IC-7100 the rig drops back to plain USB between pictures, taking its data-mode

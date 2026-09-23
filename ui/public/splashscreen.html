@@ -26,9 +26,196 @@
         user-select: none;
         -webkit-user-drag: none;
       }
+      /* What the launch is doing, on the one launch where the operator has to wait for it: the
+         first after the logbook database arrived, converting their log. It sits over the image's
+         own "initializing" line and hides it. Hidden on every other launch, which looks exactly as
+         it always has. The window is a fixed 960x540, so fixed sizes are safe here. */
+      #status {
+        position: absolute;
+        top: 63%;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 64%;
+        box-sizing: border-box;
+        padding: 10px 18px 12px;
+        border-radius: 8px;
+        background: rgba(14, 21, 31, 0.92);
+        color: #e6eef8;
+        font:
+          15px/1.35 system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+        text-align: center;
+      }
+      #status[hidden] {
+        display: none;
+      }
+      #status .title {
+        font-size: 17px;
+        font-weight: 600;
+      }
+      #status .detail,
+      #status .count {
+        color: #aebfd3;
+      }
+      #status .detail:empty,
+      #status .count:empty {
+        display: none;
+      }
+      #status .count {
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+      #status .bar {
+        position: relative;
+        height: 6px;
+        margin: 10px 0 6px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.14);
+        overflow: hidden;
+      }
+      #status .fill {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 0;
+        border-radius: 3px;
+        background: #f5a623;
+      }
+      /* The conversion has not said how far it has got: a sweep, not a number. */
+      #status .bar.indeterminate .fill {
+        width: 30%;
+        animation: sweep 1.4s ease-in-out infinite;
+      }
+      @keyframes sweep {
+        from {
+          left: -30%;
+        }
+        to {
+          left: 100%;
+        }
+      }
     </style>
   </head>
   <body>
     <img src="/splash.png" alt="Nexus" draggable="false" />
+    <div id="status" role="status" aria-live="polite" hidden>
+      <div class="title"></div>
+      <div class="detail"></div>
+      <div class="bar"><div class="fill"></div></div>
+      <div class="count"></div>
+    </div>
+    <!-- The words, in every language the app ships. This page loads before the app and its
+         translation runtime (ui/src/i18n), and pulling that runtime in would load every catalog
+         into a page whose whole job is to appear at once — so the few strings it needs live here.
+         ui/src/i18n/splash.test.ts holds them to the app's catalogs: the same languages, every
+         string in each, the same placeholders. -->
+    <script type="application/json" id="splash-strings">
+      {
+        "en": {
+          "title": "Moving your logbook into its new database",
+          "once": "This happens once. Nexus opens by itself when it is done.",
+          "count": "{{done}} of {{total}} contacts",
+          "finishing": "Finishing up…",
+          "opening": "Opening Nexus…"
+        },
+        "de": {
+          "title": "Dein Logbuch zieht in seine neue Datenbank um",
+          "once": "Das passiert nur einmal. Nexus öffnet sich von selbst, wenn es fertig ist.",
+          "count": "{{done}} von {{total}} Kontakten",
+          "finishing": "Wird abgeschlossen…",
+          "opening": "Nexus wird geöffnet…"
+        },
+        "es": {
+          "title": "Moviendo tu libro de guardia a su nueva base de datos",
+          "once": "Esto solo ocurre una vez. Nexus se abrirá solo cuando termine.",
+          "count": "{{done}} de {{total}} contactos",
+          "finishing": "Terminando…",
+          "opening": "Abriendo Nexus…"
+        },
+        "fr": {
+          "title": "Transfert de votre journal vers sa nouvelle base de données",
+          "once": "Cela n'arrive qu'une fois. Nexus s'ouvrira de lui-même une fois terminé.",
+          "count": "{{done}} contacts sur {{total}}",
+          "finishing": "Finalisation…",
+          "opening": "Ouverture de Nexus…"
+        },
+        "ja": {
+          "title": "ログブックを新しいデータベースに移行しています",
+          "once": "この処理は一度だけです。完了するとNexusが自動的に開きます。",
+          "count": "{{done}} / {{total}} 件の交信",
+          "finishing": "仕上げています…",
+          "opening": "Nexusを開いています…"
+        }
+      }
+    </script>
+    <script>
+      // `nexusSplash.show(note)` is how the launch (src-tauri `finish_launch`) tells this page
+      // what it is doing. A note is `{ state: 'converting', done, total }` — `total` 0 while the
+      // conversion has not counted the log yet — or `{ state: 'opening' }` once it is over. The
+      // launch sends the newest note again every quarter second, so one that arrives before this
+      // script has loaded is not lost.
+      ;(() => {
+        const STRINGS = JSON.parse(document.getElementById('splash-strings').textContent)
+
+        // The operator's language, chosen the way the app chooses it (`initLocale`,
+        // ui/src/i18n/index.ts): the language they picked, else the system's, else English. This
+        // page shares the app's origin, so it reads the same stored choice.
+        const locale = () => {
+          let stored = null
+          try {
+            stored = localStorage.getItem('nexus.locale')
+          } catch {
+            stored = null
+          }
+          if (stored && STRINGS[stored]) return stored
+          const os = navigator.language || ''
+          if (STRINGS[os]) return os
+          const lang = os.split('-')[0]
+          return STRINGS[lang] ? lang : 'en'
+        }
+
+        // Counts go in as `String(n)`: never grouped and never a decimal comma, the same
+        // invariant-number rule `t()` follows (ui/src/i18n/index.ts).
+        const say = (lang, key, params = {}) =>
+          (STRINGS[lang][key] || STRINGS.en[key]).replace(/\{\{(\w+)\}\}/g, (_, k) => String(params[k]))
+
+        const box = document.getElementById('status')
+        const part = (name) => box.querySelector('.' + name)
+
+        window.nexusSplash = {
+          show(note) {
+            if (!note) return
+            const lang = locale()
+            document.documentElement.lang = lang
+            const bar = part('bar')
+            const fill = part('fill')
+            if (note.state === 'converting') {
+              const known = note.total > 0
+              part('title').textContent = say(lang, 'title')
+              part('detail').textContent = say(lang, 'once')
+              bar.classList.toggle('indeterminate', !known)
+              fill.style.width = known ? ((100 * Math.min(note.done, note.total)) / note.total).toFixed(1) + '%' : ''
+              part('count').textContent = !known
+                ? ''
+                : note.done < note.total
+                  ? say(lang, 'count', { done: note.done, total: note.total })
+                  : say(lang, 'finishing')
+            } else if (note.state === 'opening') {
+              part('title').textContent = say(lang, 'opening')
+              part('detail').textContent = ''
+              bar.classList.remove('indeterminate')
+              fill.style.width = '100%'
+              part('count').textContent = ''
+            } else {
+              return
+            }
+            box.hidden = false
+          },
+        }
+      })()
+    </script>
   </body>
 </html>

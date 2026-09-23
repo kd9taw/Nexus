@@ -258,18 +258,22 @@ export function TuningStrip({
           +
         </button>
       </span>
-      <span className={`tuning-clar${xit !== 0 ? ' on' : ''}`}>
-        <button type="button" disabled={!vfoXitAllowed || !catOk} onClick={() => apply(setXit(0))} title={t('cockpit.tuning.xit.title')}>
-          {XIT}
-        </button>
-        <button type="button" disabled={!vfoXitAllowed || !catOk} onClick={() => apply(setXit(xit - 10))} aria-label={t('cockpit.tuning.xit.down.aria')}>
-          −
-        </button>
-        <span className="tuning-clar-val mono">{fmtOffset(xit)}</span>
-        <button type="button" disabled={!vfoXitAllowed || !catOk} onClick={() => apply(setXit(xit + 10))} aria-label={t('cockpit.tuning.xit.up.aria')}>
-          +
-        </button>
-      </span>
+      {/* Not drawn at all on a radio with no XIT (the IC-9700), which the engine states on the
+          snapshot. Absent on an older station means offered, as it always was. */}
+      {!snap.radio.xitUnsupported && (
+        <span className={`tuning-clar${xit !== 0 ? ' on' : ''}`}>
+          <button type="button" disabled={!vfoXitAllowed || !catOk} onClick={() => apply(setXit(0))} title={t('cockpit.tuning.xit.title')}>
+            {XIT}
+          </button>
+          <button type="button" disabled={!vfoXitAllowed || !catOk} onClick={() => apply(setXit(xit - 10))} aria-label={t('cockpit.tuning.xit.down.aria')}>
+            −
+          </button>
+          <span className="tuning-clar-val mono">{fmtOffset(xit)}</span>
+          <button type="button" disabled={!vfoXitAllowed || !catOk} onClick={() => apply(setXit(xit + 10))} aria-label={t('cockpit.tuning.xit.up.aria')}>
+            +
+          </button>
+        </span>
+      )}
     </div>
   )
 }

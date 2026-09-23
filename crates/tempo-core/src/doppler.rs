@@ -276,6 +276,22 @@ pub fn mode_is_fm(mode: &str) -> bool {
         .any(|tok| FM_MODE_TOKENS.iter().any(|m| tok.eq_ignore_ascii_case(m)))
 }
 
+/// Does this satellite mode string name **CW** — a keyed carrier, the rig's own CW mode?
+///
+/// Asked of the UPLINK leg, to find the one transponder shape the downlink class cannot
+/// describe: a CW uplink over an FM-class downlink. KOSEN-1's onboard SDR takes CW on
+/// 21.125–21.150 MHz and relays AFSK on 435.525 MHz, so the mode the TX VFO needs is not the
+/// downlink's (FM) or its mirror. A declared CW DOWNLINK is untouched by this: it stays in the
+/// linear class and is worked in USB, for the reasons [`downlink_class`] gives.
+///
+/// Per TOKEN, like [`mode_is_fm`], so a compound name reads the same way. `CW` is the only CW
+/// name in the SatNOGS mode vocabulary (60 names on 2026-09-23); a substring test would also
+/// claim a name like `MCW`, a keyed tone on an FM carrier, which is a different emission.
+pub fn mode_is_cw(mode: &str) -> bool {
+    mode.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| tok.eq_ignore_ascii_case("CW"))
+}
+
 /// What the RADIO must be put in to work a transponder, from the downlink mode
 /// the satellite database declares — a CLOSED set of three, never a SatNOGS
 /// mode name passed through.
@@ -337,9 +353,10 @@ impl DownlinkClass {
 ///   rig's CW-pitch/CW-R setting — per rig, per menu. Steering a dial we cannot
 ///   interpret, at up to ~100 Hz/s, would silently walk the operator off the
 ///   station they are working;
-/// - [`uplink_mode_for`] can only mirror USB↔LSB. Commanded `CW`, an INVERTING
-///   transponder's sideband swap is lost — the correct uplink frequency in the
-///   wrong sideband, which is silence at the far end;
+/// - [`uplink_mode_for`] can only mirror a sideband-named mode (USB↔LSB and
+///   their DATA forms). Commanded `CW`, an INVERTING transponder's sideband
+///   swap is lost — the correct uplink frequency in the wrong sideband, which
+///   is silence at the far end;
 /// - the rig's own CW filter memory narrows the passband, which is the opposite
 ///   of what hunting a whole transponder wants.
 ///
@@ -401,9 +418,46 @@ pub fn uplink_tone_hz(uplink_centre_hz: u64) -> Option<f32> {
     })
 }
 
+/// Downlink ranges a published BAND PLAN reserves for linear operation (SSB, CW and
+/// narrow data), as `(low_hz, high_hz)`, both ends inclusive.
+///
+/// ⚠️ CURATED, AND DELIBERATELY SHORT, like [`uplink_tone_hz`]: a transponder's mode
+/// class normally comes from the satellite database, and an entry here exists only
+/// where that database is wrong about a whole transponder and the band plan says so.
+///
+/// - QO-100 (Es'hail-2) NARROWBAND, 10489.500–10490.000 MHz down (2400.000–2400.500 up,
+///   NON-inverting, since the 2020 extension). The AMSAT-DL band plan allows no FM on
+///   it, yet SatNOGS tags every live narrowband segment FM up and FM down — the
+///   digimode, "SSB Only" and mixed-mode rows, and a receive-only beacon row too — so
+///   Nexus put both legs in FM, routed the pick by the operator's FM rule and forced
+///   the FM plumbing, on a transponder where FM is not allowed.
+const LINEAR_BAND_PLAN_DOWNLINKS: [(u64, u64); 1] = [(10_489_500_000, 10_490_000_000)];
+
+/// Does a published band plan make a downlink at `downlink_hz` LINEAR, whatever mode the
+/// satellite database tags it with? See [`LINEAR_BAND_PLAN_DOWNLINKS`].
+pub fn band_plan_linear_downlink(downlink_hz: u64) -> bool {
+    LINEAR_BAND_PLAN_DOWNLINKS
+        .iter()
+        .any(|&(lo, hi)| (lo..=hi).contains(&downlink_hz))
+}
+
 /// The sideband pair for a transponder, given the downlink mode the satellite
 /// database reports. An inverting transponder swaps the uplink sideband — the
 /// single most-missed detail in satellite operating.
+///
+/// ⭐ THE SIDEBAND-NAMED DATA SUBMODES MIRROR TOO (operator sign-off, 2026-09-23):
+/// `PKTUSB` ↔ `PKTLSB`, exactly as the voice pair does. A soundcard mode's tones sit
+/// in the passband the way a voice does, and an inverting transponder turns the
+/// passband upside down: FT8 sent up in PKTUSB comes down with its tone order
+/// reversed, and nothing decodes it. Sent up in PKTLSB it comes down the right way
+/// round, at the audio offset it went up at. Those two words are every sideband-named
+/// data form the engine commands (`Settings::rig_mode_on_sideband`, the SSTV arm,
+/// and `plain_ssb_if_configured`, which turns them back into plain USB/LSB for a
+/// mic-jack interface — already covered by the voice pair).
+///
+/// Everything else has no side to mirror and passes through: FM and `PKTFM`, `AM`,
+/// `RTTY` (the rig's FSK mode, not a sideband), and `CW`/`CWR` (normal and reverse
+/// RELATIVE to the rig, not an absolute side — see `Settings::rig_mode_on_sideband`).
 pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     let m = downlink_mode.trim().to_ascii_uppercase();
     if !invert {
@@ -412,7 +466,9 @@ pub fn uplink_mode_for(downlink_mode: &str, invert: bool) -> String {
     match m.as_str() {
         "USB" => "LSB".to_string(),
         "LSB" => "USB".to_string(),
-        // CW/FM/data modes have no sideband to mirror.
+        "PKTUSB" => "PKTLSB".to_string(),
+        "PKTLSB" => "PKTUSB".to_string(),
+        // CW, FM and the rest name no sideband to mirror (see above).
         _ => m,
     }
 }
@@ -752,6 +808,67 @@ mod tests {
         assert_eq!(uplink_mode_for("CW", true), "CW");
         assert_eq!(uplink_mode_for("FM", true), "FM");
         assert_eq!(uplink_mode_for(" usb ", true), "LSB", "case/space tolerant");
+    }
+
+    #[test]
+    fn data_submodes_mirror_on_an_inverting_bird_like_the_voice_pair() {
+        // FT8 up an inverting transponder in PKTUSB comes down tone-reversed and
+        // undecodable; in PKTLSB it comes down the right way round.
+        assert_eq!(uplink_mode_for("PKTUSB", true), "PKTLSB");
+        assert_eq!(uplink_mode_for("PKTLSB", true), "PKTUSB");
+        assert_eq!(
+            uplink_mode_for(" pktusb ", true),
+            "PKTLSB",
+            "case/space tolerant"
+        );
+        // A non-inverting bird is the same side both ways, data or voice.
+        assert_eq!(uplink_mode_for("PKTUSB", false), "PKTUSB");
+        assert_eq!(uplink_mode_for("PKTLSB", false), "PKTLSB");
+        // Only the sideband-named words mirror: these name no side.
+        for m in ["PKTFM", "FM", "AM", "RTTY", "CW", "CWR"] {
+            assert_eq!(uplink_mode_for(m, true), m, "{m} has no sideband to mirror");
+        }
+    }
+
+    #[test]
+    fn the_band_plan_makes_qo100_narrowband_linear_edge_to_edge() {
+        // QO-100's narrowband transponder, 10489.500–10490.000 MHz down, both edges inside.
+        for hz in [10_489_500_000, 10_489_750_000, 10_490_000_000] {
+            assert!(band_plan_linear_downlink(hz), "{hz} is QO-100 narrowband");
+        }
+        // One hertz outside either edge, QO-100's wideband (DATV) transponder, and the FM
+        // birds the FM map exists for are not.
+        for hz in [
+            10_489_499_999,
+            10_490_000_001,
+            10_491_500_000,
+            436_795_000,
+            145_800_000,
+            435_525_000,
+            0,
+        ] {
+            assert!(!band_plan_linear_downlink(hz), "{hz} is not in the table");
+        }
+    }
+
+    #[test]
+    fn cw_is_read_per_token_like_the_fm_map() {
+        // The uplink_mode SatNOGS lists for KOSEN-1, AO-7 "Lin CW" and QO-100's
+        // "CW Only" segment — the one CW name in its vocabulary.
+        assert!(mode_is_cw("CW"));
+        assert!(mode_is_cw(" cw "), "case/space tolerant");
+        for m in [
+            "",
+            "USB",
+            "LSB",
+            "FM",
+            "AFSK",
+            "BPSK",
+            "FSK AX.25 G3RUH",
+            "MCW",
+        ] {
+            assert!(!mode_is_cw(m), "{m:?} is not CW");
+        }
     }
 
     #[test]
