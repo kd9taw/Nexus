@@ -166,12 +166,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
-  1.14 an activator spotted as `KK4JAB ☕️`, a real spot on the POTA feed, crashed the lookup that
-  turns a callsign into a country. The Needed board and the need chips beside the decodes stopped
-  updating for as long as that spot was up, and a browser on Nexus Remote lost its connection
-  each time it read the Needed list. Nexus now reads a callsign only up to its first character
-  outside the plain keyboard set (an emoji, an accented or full-width letter), so that activator
-  counts as the United States station it is. Nothing that arrives from outside (a spot, a
+  1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
+  lookup that turns a callsign into a country. The Needed board and the need chips beside the
+  decodes stopped updating for as long as that spot was up, and a browser on Nexus Remote lost its
+  connection each time it read the Needed list. Nexus now reads a callsign only up to its first
+  character outside the plain keyboard set (an emoji, an accented or full-width letter), so that
+  activator counts as the station it is. Nothing that arrives from outside (a spot, a
   cluster line, an imported log) can crash the lookup any more. Four other places had the same
   weak spot and are fixed with it: a DXpedition date read from NG3K's list, a contest exchange
   in an imported log, the APRS iGate's check of a packet's sender, and the line-tidying the
