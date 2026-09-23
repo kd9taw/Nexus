@@ -2487,7 +2487,7 @@ pub struct Engine {
     /// DESIRED state: it is `Some` for the entire round-trip gap before anything has reached the
     /// radio. This one is set at exactly one site — the radio loop's success branch, where both
     /// `set_split` and `set_split_freq` returned Ok on a rig we hold control of
-    /// (`Engine::rig_split_applied`) — and is revoked by any contradiction.
+    /// (`Engine::rig_split_applied_on`) — and is revoked by any contradiction.
     ///
     /// ⚠️ AND IT IS NEVER SET FROM A READ. A rig's own report of split cannot grant permission:
     /// 124 of Hamlib's 320 backends do not implement `get_split_vfo` and return a zero-filled
@@ -2498,6 +2498,16 @@ pub struct Engine {
     /// user changes split on rig". A gate that believed those reads would manufacture the very
     /// out-of-band transmission it exists to prevent. Reads may only REVOKE.
     tx_split_confirmed_hz: Option<u64>,
+    /// WHICH RECEIVER the acknowledged split above rides: Main (its VFO B) for every terrestrial
+    /// split, the Sub for a satellite cross-band pair the native CI-V daemon wrote into the Sub
+    /// band. The radio loop knows which VFO it sent and says so in the same call that grants
+    /// the confirmation ([`Engine::rig_split_applied_on`]), so the two are written together at
+    /// that one site.
+    ///
+    /// ⚠️ MEANINGFUL ONLY WHILE `tx_split_confirmed_hz` IS `Some`. The revocations clear that
+    /// field alone and leave this one stale on purpose — nothing may read it without the
+    /// confirmation beside it ([`Engine::tx_source`] does not). The gate never reads it at all.
+    tx_split_confirmed_rx: crate::dualrx::ReceiverId,
     /// What the RIG last said about its own split, and when (unix secs): `(on, tx_hz, at)`.
     ///
     /// Written only from a capability-verified NATIVE read (`SplitDetect::Native`) — never from
@@ -4620,6 +4630,7 @@ impl Engine {
             sat_mode_released: false,
             split_tx_mhz: None,
             tx_split_confirmed_hz: None,
+            tx_split_confirmed_rx: crate::dualrx::ReceiverId::Main,
             observed_split: None,
             split_dirty: false,
             pending_voice_mem: None,
@@ -14203,17 +14214,55 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// [`Self::rig_split_applied_on`] for a split on MAIN — its VFO B, which is every terrestrial
+    /// split and every satellite pair not riding the Sub band.
     pub fn rig_split_applied(&mut self, tx_hz: u64) {
+        self.rig_split_applied_on(tx_hz, crate::dualrx::ReceiverId::Main);
+    }
+
+    /// The radio loop's report that the rig ACKNOWLEDGED a split TX dial of `tx_hz`, written to
+    /// receiver `rx` — the Sub when the split rode the Sub band (`sat_split_tx_vfo` answered
+    /// `"Sub"`), Main otherwise.
+    ///
+    /// `rx` changes nothing the gate decides: [`Self::tx_allowed`] judges `tx_hz` exactly as it
+    /// always has. It is recorded so the receiver model can say WHICH receiver transmits (D1,
+    /// [`Self::tx_source`]) and where the Sub is tuned.
+    pub fn rig_split_applied_on(&mut self, tx_hz: u64, rx: crate::dualrx::ReceiverId) {
         // THE ONE PLACE PERMISSION IS GRANTED. The caller has already proved both writes
         // succeeded on a rig we hold control of; that acknowledgement is what the privilege
         // gate judges from here until something contradicts it.
         self.tx_split_confirmed_hz = Some(tx_hz);
+        self.tx_split_confirmed_rx = rx;
         if let Some(b) = self.sat_binding.as_mut() {
             if b.pending_uplink_mhz
                 .is_some_and(|m| (m * 1e6).round() as u64 == tx_hz)
             {
                 b.uplink_mhz = b.pending_uplink_mhz.take();
             }
+        }
+    }
+
+    /// D1 — WHICH RECEIVER TRANSMITS: Main, unless an acknowledged split rides the Sub band.
+    ///
+    /// The ruling (2026-09-22) is that the transmit gate judges the TX SOURCE, "Main normally,
+    /// the uplink on a satellite cross-band pair". The one path in this engine that puts a
+    /// transmission on the Sub is that pair as the native CI-V daemon drives it
+    /// ([`Self::sat_split_tx_vfo`] answering `"Sub"`): satellite mode transmits out of the Sub
+    /// band (IC-9700 Basic Manual pp. 3-2, 7-1), and the radio loop reports that it wrote the
+    /// uplink there. Everything else is Main: simplex, a split on VFO B, and a split the rig
+    /// reports that nothing here wrote (a report carries no receiver to name).
+    ///
+    /// ⚠️ This names the band the RIG transmits from, not a receiver Nexus offers. An IC-905 on
+    /// a pass transmits out of its Sub band although the capability table has no vendor
+    /// statement of a second receiver for it.
+    ///
+    /// ⛔ NOTHING GATES ON THIS YET. [`Self::tx_allowed`] judges exactly what it judged before
+    /// the receiver model existed; the model computes D1's verdict beside it, and switching the
+    /// gate over is a separate step with its own approval.
+    pub fn tx_source(&self) -> crate::dualrx::ReceiverId {
+        match self.tx_split_confirmed_hz {
+            Some(_) => self.tx_split_confirmed_rx,
+            None => crate::dualrx::ReceiverId::Main,
         }
     }
 

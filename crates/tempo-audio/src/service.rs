@@ -7679,8 +7679,16 @@ impl RadioLoop {
                                         // it back) — report it DONE for the
                                         // binding rail. Gated on a real control
                                         // channel like the dial acknowledgment.
+                                        // It names the receiver it wrote, for the
+                                        // engine's receiver model (D1's source);
+                                        // the gate judges `tx_hz` either way.
                                         if rig.has_control() {
-                                            engine_lock(engine).rig_split_applied(tx_hz);
+                                            let rx = if self.split_on_sub {
+                                                tempo_app::dualrx::ReceiverId::Sub
+                                            } else {
+                                                tempo_app::dualrx::ReceiverId::Main
+                                            };
+                                            engine_lock(engine).rig_split_applied_on(tx_hz, rx);
                                         }
                                         format!("split ON — TX {tx_mhz:.4} MHz ({vfo_name})")
                                     } else {
@@ -25602,6 +25610,13 @@ mod tests {
             Some(145_965_000),
             "uplink confirmed by the rig's ack"
         );
+        // …and the engine was told WHICH receiver carries it: satellite mode transmits out of
+        // the Sub band, so the Sub is the transmit source (D1).
+        assert_eq!(
+            eng.tx_source(),
+            tempo_app::dualrx::ReceiverId::Sub,
+            "the loop names the receiver the uplink was written to"
+        );
     }
 
     /// Every rigctld line this scene put on the wire, with the split verbs
@@ -25802,6 +25817,16 @@ mod tests {
         assert!(r.split, "0F 01 — the shipped A/B split");
         assert!(!r.satmode, "no satellite mode on a terrestrial split");
         assert_eq!(r.unselected_hz, 14_235_000, "the TX dial rides 25 01");
+        // The split was ACKNOWLEDGED (the gate now judges the TX dial, not the RX dial) — the
+        // control that makes the next assertion mean something — and it is Main's VFO B.
+        let eng = engine.lock().unwrap();
+        let judged = eng.snapshot().radio.tx_emission_mhz.unwrap_or(0.0);
+        assert!((judged - 14.235).abs() < 1e-9, "judged {judged}");
+        assert_eq!(
+            eng.tx_source(),
+            tempo_app::dualrx::ReceiverId::Main,
+            "a VFO B split is Main's"
+        );
     }
 
     #[test]

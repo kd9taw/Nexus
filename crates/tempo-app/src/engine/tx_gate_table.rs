@@ -21,6 +21,7 @@
 //! are the three places a second receiver could plausibly leak into the answer.
 
 use super::*;
+use crate::dualrx::ReceiverId;
 use crate::settings::SatVfoMap;
 use tempo_core::doppler::{DownlinkClass, Transponder};
 
@@ -96,13 +97,19 @@ fn queued_uplink_hz(e: &Engine) -> u64 {
 
 /// What the radio loop does with a queued satellite split when `cat` is serving, reduced to
 /// the engine calls it makes: ask which VFO the split rides, then either report the rig's
-/// acknowledgement or report the refusal. Returns the VFO the split rode, if it was sent.
+/// acknowledgement — naming the receiver it wrote, as the loop does — or report the refusal.
+/// Returns the VFO the split rode, if it was sent.
 fn loop_applies_sat_split(e: &mut Engine, cat: SatCatBackend) -> Option<&'static str> {
     let up = queued_uplink_hz(e);
     e.rig_dial_applied(e.settings.dial_hz());
     match e.sat_split_tx_vfo(up, cat) {
         Ok(vfo) => {
-            e.rig_split_applied(up);
+            let rx = if vfo == "Sub" {
+                ReceiverId::Sub
+            } else {
+                ReceiverId::Main
+            };
+            e.rig_split_applied_on(up, rx);
             Some(vfo)
         }
         Err(_) => {
@@ -423,4 +430,106 @@ fn the_gate_table_is_not_uniform() {
     assert!(rows
         .iter()
         .any(|r| r.phone_seg.is_some_and(|(lo, _)| close(lo, 14.225))));
+}
+
+// ── D1's input: which receiver transmits ─────────────────────────────────────────────────
+
+/// ⛔ THE RECEIVER A SPLIT RIDES NEVER REACHES THE GATE.
+///
+/// The radio loop names the receiver in the very call that grants a split confirmation, so the
+/// grant site now writes one more field. Every row holding a confirmed split is rebuilt with
+/// that record flipped (Main ↔ Sub) and must decide identically — while the flip must visibly
+/// move [`Engine::tx_source`], or this would be a mutation that changed nothing.
+#[test]
+fn the_receiver_a_split_rides_never_reaches_the_gate() {
+    let mut flipped = Vec::new();
+    for row in rows() {
+        let e = (row.build)();
+        let Some(hz) = e.tx_split_confirmed_hz else {
+            continue;
+        };
+        let mut twin = (row.build)();
+        let other = match twin.tx_split_confirmed_rx {
+            ReceiverId::Main => ReceiverId::Sub,
+            ReceiverId::Sub => ReceiverId::Main,
+        };
+        twin.rig_split_applied_on(hz, other);
+        assert_ne!(
+            twin.tx_source(),
+            e.tx_source(),
+            "{}: the flip must move the transmit source",
+            row.name
+        );
+        assert_eq!(decisions(&twin), decisions(&e), "{}", row.name);
+        flipped.push(e.tx_source());
+    }
+    assert!(
+        flipped.contains(&ReceiverId::Main) && flipped.contains(&ReceiverId::Sub),
+        "the table must carry confirmed splits on both receivers: {flipped:?}"
+    );
+}
+
+/// D1 — THE TRANSMIT SOURCE: Main, except while an acknowledged split rides the Sub band.
+#[test]
+fn the_transmit_source_is_main_until_an_acknowledged_split_rides_the_sub() {
+    // Simplex on a two-receiver radio: Main transmits.
+    let e = station(3078, "general", "phone", 14.250, "20m", "USB");
+    assert_eq!(e.tx_source(), ReceiverId::Main, "simplex");
+
+    // A pile-up split rides Main's VFO B.
+    let mut e = station(1040, "general", "cw", 14.020, "20m", "USB");
+    e.rig_split_applied(14_025_000);
+    assert_eq!(e.tx_source(), ReceiverId::Main, "a VFO B split is Main's");
+
+    // A rig-reported split names no receiver, and nothing here wrote it: Main.
+    let mut e = station(3081, "general", "digital", 144.174, "2m", "USB");
+    e.settings.split_detect_enabled = true;
+    e.observe_rig_split(true, Some(144_180_000));
+    assert_eq!(e.tx_source(), ReceiverId::Main, "a split the rig reported");
+
+    // RS-44 on the native daemon: satellite mode transmits out of the Sub band.
+    let mut e = sat_pass(3081, "general", "phone", RS44);
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("Sub")
+    );
+    assert_eq!(e.tx_source(), ReceiverId::Sub, "the uplink rides the Sub");
+
+    // A later split on VFO B is Main's: the record is rewritten with every grant, never left
+    // over from the one before.
+    e.rig_split_applied(145_965_000);
+    assert_eq!(
+        e.tx_source(),
+        ReceiverId::Main,
+        "rewritten by the next grant"
+    );
+
+    // A QSY voids the confirmation, and with it the Sub as the source.
+    let mut e = sat_pass(3081, "general", "phone", RS44);
+    loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv);
+    assert_eq!(e.tx_source(), ReceiverId::Sub);
+    e.set_frequency(435.700, "70cm", "USB");
+    assert_eq!(e.tx_source(), ReceiverId::Main, "the radio moved");
+
+    // Same rig, a V/V bird: Main and Sub cannot share 2 m, so the pass rides VFO B on Main.
+    let mut e = sat_pass(3081, "general", "phone", VV_BIRD);
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("VFOB")
+    );
+    assert_eq!(e.tx_source(), ReceiverId::Main, "V/V rides VFO B");
+
+    // Served by Hamlib the Sub split is refused and nothing is confirmed: Main.
+    let mut e = sat_pass(3081, "general", "phone", RS44);
+    assert_eq!(loop_applies_sat_split(&mut e, SatCatBackend::Hamlib), None);
+    assert_eq!(e.tx_source(), ReceiverId::Main, "a refused Sub split");
+
+    // ⚠️ THE RIG DECIDES WHERE IT TRANSMITS, NOT THE CAPABILITY TABLE: an IC-905 on a pass
+    // transmits out of its Sub band although no manual has been read for a second receiver.
+    let mut e = sat_pass(3090, "general", "phone", RS44);
+    assert_eq!(
+        loop_applies_sat_split(&mut e, SatCatBackend::NativeCiv),
+        Some("Sub")
+    );
+    assert_eq!(e.tx_source(), ReceiverId::Sub, "IC-905 uplink");
 }
