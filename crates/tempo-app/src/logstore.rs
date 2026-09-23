@@ -294,6 +294,13 @@ impl LogStore {
         self.mirror.accept(stamp);
     }
 
+    /// Hand the log as it stands to the mirror, changing nothing in the store — for a `log.adi`
+    /// that is not the store's own picture yet (the file a conversion read, one just taken in),
+    /// so the next launch finds a mirror and has nothing to read or take in.
+    pub(crate) fn refresh_mirror(&self, log: &Logbook) {
+        self.mirror.submit(log.records().to_vec());
+    }
+
     /// Write everything submitted so far, and the mirror, waiting up to `deadline` for each.
     /// The exit path.
     pub fn flush(&self, deadline: Duration) -> Result<(), String> {
@@ -637,6 +644,66 @@ mod tests {
             std::fs::read(legacy.log()).unwrap(),
             before,
             "control: the 1.13 launch DOES rewrite log.adi when the backfill fills"
+        );
+    }
+
+    /// ⛔ PROPERTY 7, the launch after the conversion. Left as the file it was converted from,
+    /// `log.adi` is not the store's own picture, so every launch until the first change would
+    /// read it and take it in — and taking in is an import. A log holding one contact twice,
+    /// one copy confirmed, has the confirmation merged onto the first copy: that launch writes,
+    /// the store and `log.adi` both, with the operator having done nothing.
+    ///
+    /// So the conversion leaves `log.adi` as the store's mirror, and the next launch finds
+    /// nothing to read.
+    #[test]
+    fn the_launch_after_the_conversion_writes_nothing() {
+        let d = Dir::new("after-convert");
+        let row = "<CALL:5>K1DUP<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260101<TIME_ON:6>120000";
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{row}<EOR>\n{row}<LOTW_QSL_RCVD:1>Y<EOR>\n",
+                adif_header()
+            ),
+        )
+        .unwrap();
+        flush(&engine_on_store(&d)); // the conversion
+        let before = disk_picture(&d);
+        flush(&engine_on_store(&d));
+        assert!(
+            disk_picture(&d) == before,
+            "the launch after the conversion wrote to the disk"
+        );
+        assert_eq!(
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "log.adi is the store's mirror from the conversion on"
+        );
+        assert!(
+            std::fs::read_to_string(d.0.join("log.adi.pre-sqlite"))
+                .unwrap()
+                .contains("<LOTW_QSL_RCVD:1>Y"),
+            "the file as it was converted is kept beside it"
+        );
+    }
+
+    /// A `log.adi` taken in that held nothing new — a restored copy of contacts the store
+    /// already has — is replaced by the store's mirror, so the next launch does not read and
+    /// take it in again.
+    #[test]
+    fn a_log_adi_taken_in_is_replaced_by_the_mirror_even_when_it_held_nothing_new() {
+        let d = Dir::new("take-in-nothing");
+        std::fs::write(d.log(), legacy_log(8)).unwrap();
+        flush(&engine_on_store(&d)); // the conversion
+        std::fs::write(d.log(), legacy_log(5)).unwrap(); // a restored, older copy
+        assert_eq!(mirror::mirror_state(&d.log()), MirrorState::Foreign);
+        let e = engine_on_store(&d);
+        flush(&e);
+        assert_eq!(e.log_records().len(), 8, "nothing new, nothing lost");
+        assert_eq!(
+            mirror::mirror_state(&d.log()),
+            MirrorState::Pristine,
+            "the mirror replaced the file once its contacts were in"
         );
     }
 

@@ -413,7 +413,7 @@ impl StationCore {
             store,
             records,
             foreign,
-            ..
+            outcome,
         } = opened;
         self.logbook = Logbook::from_store(records);
         self.log_path = Some(store.log_path().to_path_buf());
@@ -425,6 +425,17 @@ impl StationCore {
         self.fill_state();
         if let Some(f) = foreign {
             self.take_in_log_file(&f.text, f.stamp);
+        }
+        // The conversion's last step, once: `log.adi` is still the file it read, which is not
+        // the store's picture, and left so every launch until the first change would read it
+        // and take it in again — an import, which can write (see `take_in_log_file`).
+        if matches!(
+            outcome,
+            tempo_core::logbook::migrate::Outcome::Converted { .. }
+        ) {
+            if let Some(store) = &self.store {
+                store.refresh_mirror(&self.logbook);
+            }
         }
         self.refresh_worked_index();
     }
@@ -464,6 +475,9 @@ impl StationCore {
         }
         if let (Some(store), Some(stamp)) = (&self.store, stamp) {
             store.accept_log_file(stamp);
+            // Its contacts are in: the mirror replaces it now, whether or not it held anything
+            // new, so it is not read and taken in again at every launch.
+            store.refresh_mirror(&self.logbook);
         }
     }
 
