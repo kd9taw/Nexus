@@ -73,9 +73,8 @@ use std::path::{Path, PathBuf};
 /// session starts, and a second window waits on the conversion lock, not on the store.
 const CHUNK_ROWS: usize = 65_536;
 
-/// Contacts between two [`Progress::Convert`] reports inside one chunk. A chunk is one
-/// transaction and now a big one, so reports at commits alone would move a progress bar in a
-/// few large jumps.
+/// Contacts between two [`Progress`] reports inside one chunk. A chunk is one transaction and now
+/// a big one, so reports at commits alone would move a progress bar in a few large jumps.
 const PROGRESS_EVERY: usize = 4_096;
 
 /// `log_meta` key: the byte length of the source this conversion is reading. Written before the
@@ -170,45 +169,6 @@ impl From<sqlite::Error> for Error {
 /// This module's result.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// How far a conversion has got, for a caller that shows it. A first launch on a lifetime log is
-/// the one long wait an operator sees, and a count that moves is the difference between a wait
-/// and what looks like a hang.
-///
-/// Reported in this order: [`Progress::Copy`] once; [`Progress::Convert`] as the contacts go in —
-/// every few thousand, and whenever a chunk commits; then [`Progress::Index`] as each index is
-/// built. [`Progress::Attach`] is not reported from here — it belongs to the caller that reads the
-/// finished store back (`tempo_app::logstore::open_with_progress`). A store that is already
-/// converted reports nothing at all from here, and neither does a second window waiting for the
-/// first one's conversion.
-///
-/// The callback is called on the converting thread, some of the time inside a transaction: a
-/// slow callback slows the conversion and nothing else, since nothing else writes to the store
-/// while it converts. Keep it quick — hand the value to the thread that draws it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Progress {
-    /// Reading `log.adi`, keeping it as `log.adi.pre-sqlite`, and reading the contacts out of it.
-    /// No count yet: until the file is read there is nothing to count.
-    Copy,
-    /// `done` of the log's `total` contacts are written to the store. They commit in chunks, so a
-    /// crash goes back to the last chunk that committed — never further. A resumed conversion
-    /// starts at what an earlier attempt committed, not at zero.
-    Convert {
-        /// Contacts written so far.
-        done: usize,
-        /// Contacts the log holds.
-        total: usize,
-    },
-    /// `done` of the store's `total` indexes are built. Every contact is in by now.
-    Index {
-        /// Indexes built so far.
-        done: usize,
-        /// Indexes the store has.
-        total: usize,
-    },
-    /// The converted store is being read back for the session.
-    Attach,
-}
-
 /// Where the logbook database for `log_path` lives: beside it, named for the log's own stem —
 /// `log.adi` → `log.sqlite3`. The ONE place the name is decided; every caller that needs it
 /// (the conversion, the store, the data-folder copy) asks here, so the name cannot drift between
@@ -272,32 +232,22 @@ pub fn migrate_log<R>(log_path: &Path, db_path: &Path, resolve: R) -> Result<Out
 where
     R: Fn(&QsoRecord) -> Resolved<'static>,
 {
-    migrate_log_with_progress(log_path, db_path, resolve, &mut |_| {})
+    migrate_log_reporting(log_path, db_path, resolve, &mut |_| {})
 }
 
-/// [`migrate_log`], telling `progress` how far it has got (see [`Progress`]).
-pub fn migrate_log_with_progress<R>(
-    log_path: &Path,
-    db_path: &Path,
-    resolve: R,
-    progress: &mut dyn FnMut(Progress),
-) -> Result<Outcome>
-where
-    R: Fn(&QsoRecord) -> Resolved<'static>,
-{
-    migrate_in_chunks(log_path, db_path, resolve, progress, CHUNK_ROWS)
-}
-
-/// [`migrate_log_with_progress`] with the transaction size named. Only the tests name another:
-/// the properties they check — whole chunks, a resume from the row count — hold for any size,
-/// but a fixture has to SPAN several chunks to show them, and at [`CHUNK_ROWS`] that would be a
-/// fixture of hundreds of thousands of contacts.
+/// [`migrate_log_reporting`] with two things only the tests change. The transaction size: the
+/// properties they check — whole chunks, a resume from the row count — hold for any size, but a
+/// fixture has to SPAN several chunks to show them, and at [`CHUNK_ROWS`] that would be a fixture
+/// of hundreds of thousands of contacts. And `index_built`, told `(built, of)` after each index
+/// ([`LogDb::build_indexes`]) — the one step [`Progress`] does not count, and the one a test has
+/// to be able to stop a conversion in the middle of.
 fn migrate_in_chunks<R>(
     log_path: &Path,
     db_path: &Path,
     resolve: R,
     progress: &mut dyn FnMut(Progress),
     chunk_rows: usize,
+    index_built: &mut dyn FnMut(usize, usize),
 ) -> Result<Outcome>
 where
     R: Fn(&QsoRecord) -> Resolved<'static>,
@@ -307,7 +257,7 @@ where
     // launch to learn that there is nothing to do is the launch cost the operator ruled out.
     // Only a store that EXISTS is asked: opening one that does not would create it, and the
     // copy below has to be taken before the store is created.
-    if db_path.is_file() && is_converted(db_path)? {
+    if db_path.is_file() && marked_converted(db_path)? {
         return Ok(Outcome::AlreadyDone);
     }
     // ⛔ ONE conversion at a time per store. Two Nexus windows share one data folder, and the
@@ -315,10 +265,17 @@ where
     // half-converted store's row count as a resume point and convert alongside it. It waits
     // here instead, then finds the store converted and does nothing.
     let lock = ConversionLock::take(db_path);
-    if db_path.is_file() && is_converted(db_path)? {
+    if db_path.is_file() && marked_converted(db_path)? {
         return Ok(Outcome::AlreadyDone);
     }
-    let out = convert(log_path, db_path, resolve, progress, chunk_rows)?;
+    let out = convert(
+        log_path,
+        db_path,
+        resolve,
+        progress,
+        chunk_rows,
+        index_built,
+    )?;
     // Converted: nobody will need the lock file again — a later caller answers from the store
     // on the fast path above and never reaches it. Kept after a FAILURE, because a caller
     // already waiting on it will try again and a newcomer must wait on the same file.
@@ -326,14 +283,70 @@ where
     Ok(out)
 }
 
-/// Whether the store at `db_path` is marked converted. The store must exist.
-///
-/// Asked through [`LogDb::open_for_conversion`], which writes nothing to a store that has its
-/// tables. An ordinary open would build the indexes a conversion still in progress has not built
-/// yet — taking the write lock out from under that conversion, which is exactly the store a
-/// second window asks about while the first one converts.
-pub fn is_converted(db_path: &Path) -> Result<bool> {
+/// [`is_converted`], asked the way the conversion asks it: through
+/// [`LogDb::open_for_conversion`], which writes nothing to a store that has its tables. An
+/// ordinary open builds any missing index, and the store this is asked of may be one another
+/// window is converting right now, its indexes not built yet — building them would take the
+/// write lock out from under that conversion's next chunk.
+fn marked_converted(db_path: &Path) -> Result<bool> {
     Ok(LogDb::open_for_conversion(db_path)?.meta(DONE)? == Some(1))
+}
+
+/// Whether the store at `db_path` is marked converted. The store must exist.
+pub fn is_converted(db_path: &Path) -> Result<bool> {
+    Ok(LogDb::open(db_path)?.meta(DONE)? == Some(1))
+}
+
+/// How far a conversion has got, for a screen that shows it: `done` of `total` records are in the
+/// store. `total` is 0 until the log has been read and counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// Records in the store so far, counting any an interrupted attempt had already written.
+    pub done: usize,
+    /// Records in the log; 0 while that is not known yet.
+    pub total: usize,
+}
+
+/// [`migrate_log`], telling `progress` how far it has got: `total` 0 while `log.adi` is read, copied
+/// and counted; then `done` from where an earlier attempt got to, every [`PROGRESS_EVERY`]
+/// contacts and at each commit; and `done == total` from the last contact on, while the indexes
+/// are built. A store already converted reports nothing, and neither does a second window waiting
+/// on the first one's conversion.
+///
+/// The callback runs on the converting thread, some of the time inside a transaction: a slow one
+/// slows the conversion and nothing else, since nothing else writes to the store while it
+/// converts. Keep it quick — hand the value to the thread that draws it.
+pub fn migrate_log_reporting<R>(
+    log_path: &Path,
+    db_path: &Path,
+    resolve: R,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<Outcome>
+where
+    R: Fn(&QsoRecord) -> Resolved<'static>,
+{
+    migrate_in_chunks(
+        log_path,
+        db_path,
+        resolve,
+        progress,
+        CHUNK_ROWS,
+        &mut |_, _| {},
+    )
+}
+
+/// Whether a conversion into `db_path` is running right now: some process holds its lock.
+///
+/// Asked without waiting, and without creating the lock file. A launch asks it before it does
+/// anything of its own, so a second double-click while the first launch converts stands down
+/// instead of queueing invisibly behind the conversion and then opening a second copy of Nexus.
+/// A lock file nobody holds is a conversion that was interrupted, not one that is running; and a
+/// lock that cannot be asked about reads as "no", as [`ConversionLock`] itself treats one.
+pub fn conversion_in_progress(db_path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(ConversionLock::path_for(db_path)) else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
 }
 
 /// The advisory lock that keeps two processes from converting one log into one store at once.
@@ -383,11 +396,12 @@ fn convert<R>(
     resolve: R,
     progress: &mut dyn FnMut(Progress),
     chunk_rows: usize,
+    index_built: &mut dyn FnMut(usize, usize),
 ) -> Result<Outcome>
 where
     R: Fn(&QsoRecord) -> Resolved<'static>,
 {
-    progress(Progress::Copy);
+    progress(Progress { done: 0, total: 0 });
     // The bytes, scrubbed of upload stamps exactly as the anchor's are. The copy is taken from
     // the CLEAN bytes on purpose: a pre-1.11 log can carry a service's echoed API key, and a
     // new file is not a place to write one. The scrub touches only `APP_TEMPO_UL_*` tails, so
@@ -463,13 +477,13 @@ where
     };
 
     let mut done = resumed_at;
-    progress(Progress::Convert { done, total });
+    progress(Progress { done, total });
     for chunk in log.records()[resumed_at..].chunks(chunk_rows) {
         let start = done;
         // Reported as the rows go in, not only when the chunk commits: see `PROGRESS_EVERY`.
         let rows = chunk.iter().enumerate().map(|(i, r)| {
             if i > 0 && (start + i) % PROGRESS_EVERY == 0 {
-                progress(Progress::Convert {
+                progress(Progress {
                     done: start + i,
                     total,
                 });
@@ -478,13 +492,13 @@ where
         });
         db.insert_all(rows)?;
         done += chunk.len();
-        progress(Progress::Convert { done, total });
+        progress(Progress { done, total });
     }
 
     // The indexes, over the finished table: one sorted pass each instead of nine kept up row by
     // row. BEFORE the conversion is marked done, so a crash while they are built leaves a store
     // that is not done — and the resume, finding every row in, builds the ones still missing.
-    db.build_indexes(&mut |done, total| progress(Progress::Index { done, total }))?;
+    db.build_indexes(index_built)?;
 
     // LAST, so an interrupted run is never read as a finished one.
     db.set_meta(DONE, 1)?;
@@ -1030,6 +1044,7 @@ mod tests {
             unresolved,
             &mut |_| {},
             TEST_CHUNK_ROWS,
+            &mut |_, _| {},
         );
     }
 
@@ -1096,8 +1111,8 @@ mod tests {
     /// then write no contact twice, build only what is missing (building one that exists would
     /// fail the whole resume), and finish with the same schema an ordinary store has.
     ///
-    /// The kill is real and lands where it is aimed: the child stops itself inside its progress
-    /// callback once half the indexes are built — between two index builds, the store open, the
+    /// The kill is real and lands where it is aimed: the child stops itself in the conversion's
+    /// index hook once half the indexes are built — between two index builds, the store open, the
     /// write-ahead log unflushed — and this process kills it there.
     #[test]
     fn a_conversion_killed_while_it_builds_the_indexes_resumes_and_builds_the_rest() {
@@ -1203,12 +1218,12 @@ mod tests {
         );
     }
 
-    /// ⛔ **Asking whether a store is converted writes nothing to it.** A second window asks
+    /// ⛔ **The conversion's own "already converted?" writes nothing.** A second window asks it
     /// while the first may still be converting, and that store has no indexes yet: an ordinary
     /// open would build them — holding the write lock for as long as that takes, out from under
     /// the first window's next chunk, whose wait is bounded by `busy_timeout`.
     #[test]
-    fn asking_whether_a_store_is_converted_writes_nothing_to_it() {
+    fn the_conversions_own_check_writes_nothing_to_a_store_in_progress() {
         let d = Dir::new("askonly");
         std::fs::write(d.log(), legacy_log(300)).unwrap();
         let source = Logbook::load(&d.log());
@@ -1224,7 +1239,7 @@ mod tests {
         let before = schema(&d.db());
         assert!(index_names(&d.db()).is_empty(), "premise: no index yet");
 
-        assert!(!is_converted(&d.db()).unwrap(), "it is not converted");
+        assert!(!marked_converted(&d.db()).unwrap(), "it is not converted");
         assert_eq!(schema(&d.db()), before, "and asking built nothing");
 
         // Control: an ordinary open, on the same store, does build them — so the check above
@@ -1237,23 +1252,25 @@ mod tests {
         );
     }
 
-    /// What a conversion reports is the contract a launch screen is built on: the copy; then the
-    /// contacts, from where an earlier attempt got to, never going back and never more than
-    /// [`PROGRESS_EVERY`] apart — inside a big chunk as well as across small ones — up to the
-    /// last; then each index. Nothing else, and from a store already converted, nothing at all.
+    /// What a conversion reports is the contract the start-up screen is built on: `total` 0 while
+    /// the log is read and counted; then the contacts, from where an earlier attempt got to,
+    /// never going back and never more than [`PROGRESS_EVERY`] apart — inside one big chunk as
+    /// well as across small ones — up to every contact; then nothing more while the indexes are
+    /// built (the screen shows `done == total` as finishing up). From a store already converted,
+    /// nothing at all.
     #[test]
     fn a_conversion_reports_how_far_it_has_got() {
-        let indexes = ordinary_schema()
-            .iter()
-            .filter(|(kind, _, sql)| kind == "index" && sql.is_some())
-            .count();
         let check = |seen: &[Progress], from: usize, total: usize, what: &str| {
-            assert_eq!(seen.first(), Some(&Progress::Copy), "{what}: {seen:?}");
+            assert_eq!(
+                seen.first(),
+                Some(&Progress { done: 0, total: 0 }),
+                "{what}: not counted yet: {seen:?}"
+            );
             let counts: Vec<usize> = seen[1..]
                 .iter()
-                .map_while(|p| match *p {
-                    Progress::Convert { done, total: t } if t == total => Some(done),
-                    _ => None,
+                .map(|p| {
+                    assert_eq!(p.total, total, "{what}: counted once, for good: {seen:?}");
+                    p.done
                 })
                 .collect();
             assert_eq!(
@@ -1268,14 +1285,6 @@ mod tests {
                     "{what}: moves forward, never more than {PROGRESS_EVERY} at a time: {counts:?}"
                 );
             }
-            let rest: Vec<Progress> = seen[1 + counts.len()..].to_vec();
-            let built: Vec<Progress> = (0..=indexes)
-                .map(|done| Progress::Index {
-                    done,
-                    total: indexes,
-                })
-                .collect();
-            assert_eq!(rest, built, "{what}: then each index, and nothing else");
         };
 
         // The shipped chunk size, with a log inside one chunk: the count still moves as the
@@ -1285,11 +1294,11 @@ mod tests {
         let d = Dir::new("progress");
         std::fs::write(d.log(), legacy_log(ONE_CHUNK)).unwrap();
         let mut seen = Vec::new();
-        migrate_log_with_progress(&d.log(), &d.db(), unresolved, &mut |p| seen.push(p))
+        migrate_log_reporting(&d.log(), &d.db(), unresolved, &mut |p| seen.push(p))
             .expect("converts");
         check(&seen, 0, ONE_CHUNK, "one big chunk");
         assert!(
-            seen.contains(&Progress::Convert {
+            seen.contains(&Progress {
                 done: PROGRESS_EVERY,
                 total: ONE_CHUNK
             }),
@@ -1297,7 +1306,7 @@ mod tests {
         );
 
         seen.clear();
-        let again = migrate_log_with_progress(&d.log(), &d.db(), unresolved, &mut |p| seen.push(p))
+        let again = migrate_log_reporting(&d.log(), &d.db(), unresolved, &mut |p| seen.push(p))
             .expect("opens");
         assert_eq!(again, Outcome::AlreadyDone);
         assert!(
@@ -1328,6 +1337,7 @@ mod tests {
             unresolved,
             &mut |p| seen.push(p),
             TEST_CHUNK_ROWS,
+            &mut |_, _| {},
         )
         .expect("resumes");
         check(&seen, TEST_CHUNK_ROWS, MANY, "a resume in small chunks");
@@ -1343,17 +1353,17 @@ mod tests {
         };
         let d = PathBuf::from(dir);
         let marker = d.join("stopped-while-indexing");
-        let _ = migrate_log_with_progress(
+        let _ = migrate_in_chunks(
             &d.join("log.adi"),
             &d.join("log.sqlite3"),
             unresolved,
-            &mut |p| {
-                if let Progress::Index { done, total } = p {
-                    if done > 0 && done * 2 >= total {
-                        let _ = std::fs::write(&marker, format!("{done} of {total}"));
-                        loop {
-                            std::thread::sleep(std::time::Duration::from_secs(1));
-                        }
+            &mut |_| {},
+            CHUNK_ROWS,
+            &mut |built, of| {
+                if built > 0 && built * 2 >= of {
+                    let _ = std::fs::write(&marker, format!("{built} of {of}"));
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
                     }
                 }
             },
@@ -1392,8 +1402,15 @@ mod tests {
         );
 
         // The first instance converts, then lets go.
-        let first = convert(&d.log(), &d.db(), unresolved, &mut |_| {}, CHUNK_ROWS)
-            .expect("the first converts");
+        let first = convert(
+            &d.log(),
+            &d.db(),
+            unresolved,
+            &mut |_| {},
+            CHUNK_ROWS,
+            &mut |_, _| {},
+        )
+        .expect("the first converts");
         assert!(matches!(first, Outcome::Converted { total: 600, .. }));
         lock.finished();
 
@@ -1404,6 +1421,54 @@ mod tests {
         assert!(
             !ConversionLock::path_for(&d.db()).exists(),
             "the lock file is gone once the conversion is done"
+        );
+    }
+
+    /// ⛔ **A launch can see another window's conversion without joining its queue.** The answer
+    /// comes from the lock a conversion really holds — not from the lock FILE, which an
+    /// interrupted conversion leaves behind — and asking must neither wait nor create the file.
+    #[test]
+    fn a_conversion_in_progress_is_seen_from_its_lock_and_only_while_it_is_held() {
+        let d = Dir::new("inprogress");
+        let file = ConversionLock::path_for(&d.db());
+        assert!(
+            !conversion_in_progress(&d.db()),
+            "no lock file: nothing is converting"
+        );
+        assert!(!file.exists(), "and asking did not create one");
+
+        let lock = ConversionLock::take(&d.db());
+        assert!(
+            lock.file.is_some(),
+            "premise: this filesystem takes the lock"
+        );
+        // Asked from another thread with a deadline, so a check that WAITS on the lock fails
+        // here instead of hanging the suite.
+        let db = d.db();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(conversion_in_progress(&db));
+        });
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(true),
+            "held: a conversion is running, and asking did not wait for it"
+        );
+
+        drop(lock); // what a crash or a kill leaves: the file, and nobody holding it
+        assert!(
+            file.exists(),
+            "premise: an interrupted conversion leaves its file"
+        );
+        assert!(
+            !conversion_in_progress(&d.db()),
+            "a lock file nobody holds is an interrupted conversion, not a running one"
+        );
+
+        ConversionLock::take(&d.db()).finished();
+        assert!(
+            !conversion_in_progress(&d.db()),
+            "finished: nothing is converting"
         );
     }
 

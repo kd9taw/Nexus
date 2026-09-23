@@ -130,16 +130,15 @@ pub fn open(
     open_with(log_path, resolve, network, MirrorOptions::default())
 }
 
-/// [`open`], telling `progress` how far it has got: a first launch's conversion as it goes
-/// ([`migrate::Progress`]), then [`migrate::Progress::Attach`] while the store is read back —
-/// which every launch reports, converted or not. For a launch that shows the operator the wait.
-pub fn open_with_progress(
+/// [`open`], telling `progress` how far a first launch's conversion of `log.adi` has got — what
+/// the start-up screen shows while it works (see [`migrate::migrate_log_reporting`]).
+pub fn open_reporting(
     log_path: &Path,
     resolve: StoreResolve,
     network: Option<String>,
     progress: &mut dyn FnMut(migrate::Progress),
 ) -> Result<Opened, OpenError> {
-    open_reporting(
+    open_reporting_with(
         log_path,
         resolve,
         network,
@@ -156,11 +155,12 @@ pub fn open_with(
     network: Option<String>,
     mirror_options: MirrorOptions,
 ) -> Result<Opened, OpenError> {
-    open_reporting(log_path, resolve, network, mirror_options, &mut |_| {})
+    open_reporting_with(log_path, resolve, network, mirror_options, &mut |_| {})
 }
 
-/// Every open's body; `progress` hears the conversion's steps, then the read-back.
-fn open_reporting(
+/// [`open_with`] and [`open_reporting`] in one: the mirror's timings, and the conversion's
+/// progress.
+fn open_reporting_with(
     log_path: &Path,
     resolve: StoreResolve,
     network: Option<String>,
@@ -171,9 +171,8 @@ fn open_reporting(
         return Err(OpenError::NetworkFolder(why));
     }
     let db_path = migrate::database_path(log_path);
-    let outcome = migrate::migrate_log_with_progress(log_path, &db_path, |r| resolve(r), progress)
+    let outcome = migrate::migrate_log_reporting(log_path, &db_path, |r| resolve(r), progress)
         .map_err(OpenError::Conversion)?;
-    progress(migrate::Progress::Attach);
     let db = LogDb::open(&db_path).map_err(OpenError::Store)?;
     let records = db.load_all().map_err(OpenError::Store)?;
 
@@ -1669,15 +1668,17 @@ mod tests {
         );
     }
 
-    /// A launch reports the read-back LAST, once, after the conversion's own steps; a launch
-    /// whose store is already converted reports the read-back alone. What a launch screen shows.
+    /// The start-up screen hears a first launch's conversion through the store's open: not
+    /// counted yet, then counted up to every contact. A launch whose store is already converted
+    /// hears nothing — the screen has nothing to show it.
     #[test]
-    fn a_launch_reports_the_read_back_after_the_conversion() {
+    fn a_launch_passes_the_conversions_progress_through() {
         let d = Dir::new("progress");
         std::fs::write(d.log(), legacy_log(40)).unwrap();
         let mut seen = Vec::new();
-        let opened = open_reporting(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
-            .expect("the store opens");
+        let opened =
+            open_reporting_with(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
+                .expect("the store opens");
         assert_eq!(
             opened.outcome,
             migrate::Outcome::Converted {
@@ -1686,34 +1687,27 @@ mod tests {
                 total: 40
             }
         );
-        assert_eq!(seen.first(), Some(&migrate::Progress::Copy), "{seen:?}");
-        assert!(
-            seen.contains(&migrate::Progress::Convert {
+        assert_eq!(
+            seen.first(),
+            Some(&migrate::Progress { done: 0, total: 0 }),
+            "{seen:?}"
+        );
+        assert_eq!(
+            seen.last(),
+            Some(&migrate::Progress {
                 done: 40,
                 total: 40
             }),
             "{seen:?}"
         );
-        assert!(
-            seen.iter()
-                .any(|p| matches!(p, migrate::Progress::Index { .. })),
-            "{seen:?}"
-        );
-        assert_eq!(seen.last(), Some(&migrate::Progress::Attach), "{seen:?}");
-        assert_eq!(
-            seen.iter()
-                .filter(|p| **p == migrate::Progress::Attach)
-                .count(),
-            1,
-            "{seen:?}"
-        );
         drop(opened);
 
         seen.clear();
-        let again = open_reporting(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
-            .expect("the store opens again");
+        let again =
+            open_reporting_with(&d.log(), no_resolve(), None, fast(), &mut |p| seen.push(p))
+                .expect("the store opens again");
         assert_eq!(again.outcome, migrate::Outcome::AlreadyDone);
-        assert_eq!(seen, [migrate::Progress::Attach]);
+        assert!(seen.is_empty(), "{seen:?}");
     }
 
     // ── the FT duplicate guard (hard gate) ──────────────────────────────────
