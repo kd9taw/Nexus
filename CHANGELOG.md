@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A station on your watch list now stands out on the Call Roster, the Stations list and Spots.**
+  The watch list (Settings ▸ Spots & Alerts) sounded one loud alert when a station you asked for
+  was decoded, and after that nothing on the screen said which row it was. Every station the list
+  names, by call or prefix, by DXCC entity or by grid square, now carries a **WATCH** tile. It is
+  the same lime tile on all three lists, and hovering it names the entry that matched. A watched
+  station counts as a need: **Needed only** keeps it, **Hide worked** keeps it even after you have
+  worked it (on the roster and on Spots), and the Stations list's **Needed** counts it too. There
+  is nothing to set up. It reads the list you already keep and follows it as you edit it. In a
+  Remote browser it reads that browser's own watch list, the one its alerts already use.
+
 - **The Satellites section can now work out when you and another station can both see the same
   bird.** Nexus could always tell you when a satellite rises over your own QTH, which is half of
   what a satellite QSO needs: the other operator has to be able to see it at the same moment, and
@@ -201,6 +211,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any other frequency outside your privileges, and a Remote split or XIT that would land there is
   refused the same way. Nothing that was locked before is unlocked, and with the mode on AUTO
   nothing changes.
+
+- **A station in the Stations list no longer runs under its own SNR badge.** At the 1024×768
+  floor the list is about 250 px wide, which left the callsign room for three or four letters,
+  so every call ran under the SNR number and the chips carried on over the Work button. A long
+  country, grid and distance line could do the same even on a wide screen. Chips that do not
+  fit beside the call now start a second row, the SNR badge moves under the call when the list
+  is that narrow, and the second line trims itself with "…" as it was always meant to. On a
+  full band the cards are the same height as before; on a quiet band they are now that same
+  compact height.
 
 - **The Linux AppImage no longer prints `Failed to load module "canberra-gtk-module"` when it
   starts.** The 1.14.0 AppImage stopped looking in your system's own GTK folders, so the add-ons

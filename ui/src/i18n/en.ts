@@ -2816,6 +2816,11 @@ export const EN = {
   'watchlist.add.cqOnly.label': 'CQ only',
   'watchlist.add.cqOnly.title': 'Only alert on a CQ call',
   'watchlist.add.submit': 'Add',
+  // The WATCH tile on the Call Roster, the Stations list and Spots — one word on all three,
+  // echoing this list's own name. `{{what}}` is the entry that matched: the operator's label
+  // for it, else the call, prefix, entity or grid as typed.
+  'watchlist.tile.label': 'WATCH',
+  'watchlist.tile.title': 'On your watch list: {{what}}',
 
   // ── The two display filters (hide calls / hide countries) ───────────────────────────
   // Both say the same thing about themselves and say it differently, which is why they do
@@ -7832,11 +7837,13 @@ export const EN = {
   'operate.roster.col.age': 'Age',
 
   'operate.roster.empty': 'No stations heard yet — decoded stations appear here as they arrive.',
-  // The row, read aloud — four optional clauses, each interpolated whole with its own
-  // separator. `{{need}}` is a need TAG (NewMode, Confirm…), a token like a band name.
-  'operate.roster.row.aria': '{{call}}{{grid}}{{need}}{{worked}}{{working}}',
+  // The row, read aloud — five optional clauses, each interpolated whole with its own
+  // separator. `{{need}}` is a need TAG (NewMode, Confirm…), a token like a band name; the
+  // watch clause's `{{what}}` is the watch-list entry that matched, as on the WATCH tile.
+  'operate.roster.row.aria': '{{call}}{{grid}}{{need}}{{watch}}{{worked}}{{working}}',
   'operate.roster.row.aria.grid': ', grid {{grid}}',
   'operate.roster.row.aria.need': ', needed {{need}}',
+  'operate.roster.row.aria.watch': ', on your watch list: {{what}}',
   'operate.roster.row.aria.worked': ', worked',
   'operate.roster.row.aria.working': ', working now',
   'operate.roster.row.work.title': 'Double-click to work {{call}}',

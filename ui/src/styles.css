@@ -5266,8 +5266,15 @@ select optgroup {
   background: var(--bg-elev);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
-  padding: var(--space-1);
+  /* 3px, not the 4px token, vertically: 1 + 3 + the Work button's 36 + 3 + 1 makes a plain
+     card's natural height exactly its 44px min-height, which is what a busy band showed. */
+  padding: 3px var(--space-1);
   min-height: var(--touch);
+  /* Never squeezed below what it holds. `.station-scroll` is a flex column that scrolls, and
+     the min-height above replaces a flex item's content-based minimum, so a full list pressed
+     every card to 44px. Two lines of text survived that by eating the padding; the rows line 1
+     wraps into would spill over the next card. */
+  flex-shrink: 0;
   transition: var(--transition);
   color: var(--text);
 }
@@ -5289,14 +5296,24 @@ select optgroup {
   flex: 1;
   min-width: 0;
   display: flex;
+  /* The SNR badge drops to a row of its own, right-aligned under the call column, when that
+     column would otherwise fall below its floor (`.station-main`). Measured in the real
+     cockpit at the 1024×768 floor, the Classic Stations list is 252.9px wide and left the call
+     column 37.5px: every call ran under the badge. From about a 300px list up it never wraps. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-1) 10px;
   text-align: left;
   background: transparent;
   border: none;
   color: inherit;
-  padding: 6px;
+  /* 1px vertically: the card stretches this button to the Work button's height anyway, so the
+     old 6px only ever mattered once rows wrap, and there it would add 10px per card. */
+  padding: 1px 6px;
   border-radius: var(--radius-sm);
+}
+.station-open > .snr-badge {
+  margin-left: auto;
 }
 .station-work {
   flex: 0 0 auto;
@@ -5419,6 +5436,10 @@ select optgroup {
   --need-pota: #4ade80; /* green — live POTA activator */
   --need-sota: #a78bfa; /* purple — live SOTA activator */
   --need-wanted: #fbbf24; /* amber — on your wanted watch list */
+  /* lime — on your watch list (Settings ▸ Spots & Alerts): the WATCH tile on the Call Roster,
+     the Stations list and Spots. The one hue on those rows nothing else uses — the nearest
+     need, rarity or row-state colour is ΔE2000 ≥ 15 away here and ≥ 10 in the light ink. */
+  --need-watch: #a3e635;
   /* Needed-board submode hues (RTTY/FT4 get their own so an RTTY opportunity
      reads apart from an FT8 one). Declared rather than left to a var() fallback:
      a fallback is a DARK value that fires in both themes, which is the whole of
@@ -5448,6 +5469,7 @@ select optgroup {
   --need-pota: #15803d;
   --need-sota: #6d28d9;
   --need-wanted: #9a5b00; /* amber — on your wanted watch list */
+  --need-watch: #3f6212; /* lime — on your watch list (the WATCH tile) */
   --need-mode-rtty: #8a5200;
   --need-mode-ft4: #0f7038;
   --need-ink: #ffffff;
@@ -5494,6 +5516,9 @@ select optgroup {
 }
 .need-wanted {
   --need-color: var(--need-wanted);
+}
+.need-watch {
+  --need-color: var(--need-watch);
 }
 /* A subtle left accent on the card so needed stations stand out in the list. */
 .station-card.needed {
@@ -5621,19 +5646,45 @@ select optgroup {
 }
 
 .station-main {
-  flex: 1;
+  /* The call column's floor: a six-character call with room beside it. Written to yield, per
+     the layout contract, to what the row can give beside the presence dot (10px) and its gap
+     (10px), so on the narrowest rail the dot never takes a row of its own. */
+  flex: 1 1 min(6.5em, 100% - 20px);
   min-width: 0;
 }
 .station-line1 {
   display: flex;
+  /* Chips that do not fit beside the call start a new row. They used to run on under the SNR
+     badge and the Work button: 441px past the column at the floor, 259px at 1920. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1) var(--space-2);
+}
+/* A chip wider than the whole line (only on the narrowest rails) clips inside itself rather
+   than overrunning it. While it fits it never shrinks: wrapping gives it a row first. */
+.station-line1 > .need-chip,
+.station-line1 > .rarity-chip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The line's gap already spaces the pill; its own flow margin pushed it 4px past the call
+   column at the floor, where it measured 74.6px in a 75.2px column. */
+.station-line1 > .rarity-chip {
+  margin-left: 0;
 }
 .station-call {
   font-weight: 700;
   font-size: 14px;
+  /* A call wider than the whole column (a long special-event call on a narrow rail) breaks
+     onto a second line rather than running under the badge. */
+  overflow-wrap: anywhere;
 }
 .station-line2 {
+  /* A block, so the ellipsis below applies: on the inline <span> it was dead, and the country
+     · grid · distance line ran under the SNR badge and both buttons (240px at the floor). */
+  display: block;
   font-size: 11px;
   color: var(--text-faint);
   white-space: nowrap;
@@ -15443,6 +15494,19 @@ button.cq-skiptx1.on {
   color: var(--text-faint);
   background: color-mix(in srgb, var(--text-faint) 18%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-faint) 35%, transparent);
+}
+/* The WATCH tile leads the same cell, ahead of that badge, and keeps the badge's gap. The cell is
+   ONE line that clips (`overflow: hidden`, for the comment's ellipsis), about 16 px tall, and the
+   need-chip pill inline is 18 px: measured in Chrome, it lost its bottom 2 px, border and all.
+   One em tall with the 1 px padding the roster's other pills use, it is 14.5 px, and top-aligned
+   its top IS the line's top in any font, so it sits wholly inside and the row keeps its height. */
+.np-why > .need-watch {
+  display: inline-block;
+  margin-right: 6px;
+  padding-top: 1px;
+  padding-bottom: 1px;
+  line-height: 1;
+  vertical-align: top;
 }
 /* How far back Hide worked reaches — a chip-sized picker beside it in the filter bar. The
    `select` base rule owns the arrow (background-image / padding-right, both !important), so

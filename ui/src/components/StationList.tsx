@@ -12,6 +12,7 @@ import { matchAnyTerm } from '../searchQuery'
 import { t, type MessageKey } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useStationControl } from '../stationAccess'
+import { useWatchMatch } from '../watchlist'
 
 type Presence = Station['presence'] | 'offline'
 
@@ -108,6 +109,9 @@ export function StationList({
   // waiting to happen. Esc clears it, which is also the way out for anyone who typed into
   // it by accident and cannot see why the band went quiet.
   const [query, setQuery] = useState('')
+  // The operator's watch list, live — the same matcher the Call Roster and Spots ask, so a
+  // watched station wears the same WATCH tile here and counts toward "Needed".
+  const watchOf = useWatchMatch()
 
   // The full set of need tags per call — union of every alert's tags, deduped, falling
   // back to the single top tier when the alerts map isn't provided. This is what lets
@@ -170,17 +174,21 @@ export function StationList({
     // pills are gated (otherwise the filter and the pills disagree on the same row).
     // And a LoTW confirmation alone on a station already worked on this band is the one
     // the first contact is waiting on — the Call Roster's Needed only drops it too (#350).
+    // A station on the watch list counts whatever else it has, as it does there.
     else if (filter === 'needed')
       list = list.filter((s) => {
         const tags = needAll(s.call, needByCall.get(s.call.toUpperCase()) ?? null)
-        return tags.length > 0 && !confirmOnlyOnWorkedBand(tags, s.workedBand)
+        return (
+          (tags.length > 0 && !confirmOnlyOnWorkedBand(tags, s.workedBand)) ||
+          watchOf({ call: s.call, entity: s.country, grid: s.grid }) != null
+        )
       })
     // sort: presence (active first), then strongest SNR
     const order: Record<string, number> = { active: 0, idle: 1, stale: 2 }
     return [...list].sort(
       (a, b) => order[a.presence] - order[b.presence] || b.snr - a.snr,
     )
-  }, [stations, filter, query, needByCall, needAlertsByCall, band, feedMode, currentSlot, dropAfterCycles])
+  }, [stations, filter, query, needByCall, needAlertsByCall, band, feedMode, currentSlot, dropAfterCycles, watchOf])
 
   return (
     <aside className="station-list panel">
@@ -306,6 +314,7 @@ export function StationList({
             unread={unreadByPeer[s.call] ?? 0}
             need={needByCall.get(s.call.toUpperCase()) ?? null}
             needAll={needAll(s.call, needByCall.get(s.call.toUpperCase()) ?? null)}
+            watch={watchOf({ call: s.call, entity: s.country, grid: s.grid })}
             onSelect={onSelect}
             onCall={onCall}
           />

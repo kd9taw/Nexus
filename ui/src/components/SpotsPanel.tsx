@@ -18,6 +18,8 @@ import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs
 import { CONTINENT_CODES } from '../features/dxccGeo'
 import { compileTerm, searchTerms } from '../searchQuery'
 import { t } from '../i18n'
+import { useWatchMatch } from '../watchlist'
+import { WatchTile } from './WatchTile'
 
 type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 
@@ -132,6 +134,9 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
   const control = useStationControl()
   // Entity centres — the only geometry the firehose carries (a spot has no grid).
   const centroids = useEntityCentroids()
+  // The operator's watch list, live — the matcher the Call Roster and the Stations list ask, so
+  // a watched station wears the same WATCH tile on this board.
+  const watchOf = useWatchMatch()
   // ONE flat mode filter: the SPECIFIC modes present (CW/Phone/FT8/FT4/RTTY/Digital…), each a
   // show/hide toggle. Stores the HIDDEN set (empty = all shown) so a mode that first appears
   // mid-session shows by default instead of being silently hidden.
@@ -266,11 +271,14 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
         for (const t of terms) if (!t(hay)) return false
       }
       // Worked LAST, and the rescue rides with it: a station you still need on THIS band and
-      // mode stays whatever the log says, which is what makes hiding by callsign safe.
+      // mode stays whatever the log says, which is what makes hiding by callsign safe. So does
+      // a station on your watch list — it counts as a need, worked or not (maintainer,
+      // 2026-09-23), as it does under the Call Roster's Hide worked.
       if (
         hideWorked &&
         workedWithin(s, workedWindow) &&
-        !neededHere(needsByCall.get(s.call.toUpperCase()), s.band, s.submode ?? s.mode)
+        !neededHere(needsByCall.get(s.call.toUpperCase()), s.band, s.submode ?? s.mode) &&
+        !watchOf({ call: s.call, entity: s.entity, grid: s.grid })
       ) {
         worked++
         return false
@@ -308,7 +316,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
       return c * dir
     })
     return { rows: filtered, workedHidden: worked }
-  }, [spots, hiddenModes, bands, states, spotterConts, spotterEntities, sort, query, licensedOnly, localOnly, hideWorked, workedWindow, needsByCall])
+  }, [spots, hiddenModes, bands, states, spotterConts, spotterEntities, sort, query, licensedOnly, localOnly, hideWorked, workedWindow, needsByCall, watchOf])
 
   // How many rows the locality filter is holding back RIGHT NOW — the honest half of a filter
   // that is on by default. Counted against everything else the operator has chosen, so it says
@@ -582,6 +590,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
               s.workedAgoSecs != null && workedWithin(s, workedWindow)
                 ? workedAgeLabel(s.workedAgoSecs)
                 : null
+            const watch = watchOf({ call: s.call, entity: s.entity, grid: s.grid })
             return (
               <div
                 key={`${s.call}|${s.freqMhz}|${s.spotter}`}
@@ -648,6 +657,9 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                 </span>
                 <span className="sp-spotter">{s.spotter}</span>
                 <span className="np-why">
+                  {/* The WATCH tile leads the cell, ahead of the worked badge: the comment
+                      ellipsizes, and first is the one place the tile cannot be cut. */}
+                  {watch && <WatchTile entry={watch} />}
                   {/* What Hide worked would drop, said on the row itself — so turning the chip
                       off answers "which of these have I worked, and when" without a tooltip.
                       In the widest column, because the age is the part worth reading. */}
@@ -659,7 +671,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, ca
                       {t('spots.row.worked', { age: workedAge })}
                     </span>
                   )}
-                  {s.comment || (workedAge ? '' : '—')}
+                  {s.comment || (workedAge || watch ? '' : '—')}
                 </span>
               </div>
             )

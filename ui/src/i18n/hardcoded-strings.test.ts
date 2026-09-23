@@ -122,6 +122,9 @@ const MIGRATED = [
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
   'components/StationList.tsx',
+  // The WATCH tile (2026-09-23) — born migrated: its word and tooltip are catalog keys, shared
+  // by the Stations list above, the Call Roster and Spots.
+  'components/WatchTile.tsx',
   // Batch 3 (2026-08-18) — awards, journey, stats and the needed board. Two things this
   // batch proves that the first two did not: the AWARD NAMES are invariant tokens exactly as
   // callsigns are (DXCC, WAZ, VUCC, IOTA name programmes an operator applies to — a

@@ -35,6 +35,8 @@ import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../ope
 import { hasOverridingNeed, isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { CountryHiddenChip } from './CountryExclude'
 import { RarityChip } from './RarityChip'
+import { WatchTile } from './WatchTile'
+import { useWatchMatch, watchLabel } from '../watchlist'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useStationControl, useStationCapability } from '../stationAccess'
 import { useLogChange } from '../remote-web/operations'
@@ -194,6 +196,9 @@ export function OperateRoster({
   // so the two panes can never show different bands.
   const countries = useCountryExclude()
   const hideCalls = useHideCalls()
+  // The operator's watch list (Settings ▸ Spots & Alerts), live: a row it names wears the WATCH
+  // tile and counts as a need under the filters below.
+  const watchOf = useWatchMatch()
   // Entity centroids, so Brg stops reading "—" for a station heard only in traffic
   // that carried no grid — which was most of the column on a busy band.
   const centroids = useEntityCentroids()
@@ -235,13 +240,17 @@ export function OperateRoster({
       }
       if (need && needAll.length === 0) needAll = [need]
       const ll = s.grid ? gridToLatLon(s.grid) : null
+      const watch = watchOf({ call: s.call, entity: s.country, grid: s.grid })
       return {
         s,
         need,
         needAll,
+        watch,
         // What Needed only and Hide worked count as a need: everything except a confirmation
-        // the first contact on this band is already waiting on (#350).
-        stillNeeded: need != null && !confirmOnlyOnWorkedBand(needAll, s.workedBand),
+        // the first contact on this band is already waiting on (#350) — and a station on the
+        // watch list, which counts the way a new park does, worked or not (maintainer,
+        // 2026-09-23: "always show it").
+        stillNeeded: (need != null && !confirmOnlyOnWorkedBand(needAll, s.workedBand)) || watch != null,
         needRank: chaseRank(alerts, need),
         distKm: me && ll ? haversineKm(me, ll) : Infinity,
         // Sorts on the SAME number the Brg cell prints, centroid fallback included.
@@ -277,7 +286,8 @@ export function OperateRoster({
     // by a rule of this pane's own. `worked` is "this callsign is anywhere in the logbook" —
     // ever, not per band and emphatically not per park (dto.rs) — which is why it could never
     // have answered this on its own. A bare LoTW confirmation on a station already worked on
-    // this band is NOT one (#350): that was the station just worked, back on the list.
+    // this band is NOT one (#350): that was the station just worked, back on the list. A
+    // watched station IS one, even just worked — the operator asked to see it.
     if (hideWorked) f = f.filter((x) => !x.s.worked || x.stillNeeded)
     // Hide blocked (opt-in; default they render dimmed). The station being WORKED or
     // selected always stays — hiding your live QSO partner mid-exchange is the same
@@ -358,6 +368,7 @@ export function OperateRoster({
     hideWorked,
     filters.hideBlocked,
     hideCalls.entries,
+    watchOf,
     ignoredCalls,
     workingCall,
     countries.hidden,
@@ -494,7 +505,7 @@ export function OperateRoster({
         {rows.length === 0 ? (
           <div className="or-empty">{t('operate.roster.empty')}</div>
         ) : (
-          rows.map(({ s, need, needAll, age }, i) => {
+          rows.map(({ s, need, needAll, age, watch }, i) => {
             const chip = need ? NEED_CHIP[need] : null
             const ignoredRow = isIgnored(ignoredCalls ?? EMPTY_IGNORES, s.call)
             const rp = roving.rowProps(i)
@@ -503,12 +514,15 @@ export function OperateRoster({
                 key={s.call}
                 role="row"
                 aria-selected={s.call === selectedCall}
-                // Four optional clauses, each interpolated WHOLE with its own separator —
+                // Five optional clauses, each interpolated WHOLE with its own separator —
                 // never a sentence glued from fragments. `{{need}}` is a need TAG, a token.
+                // The watch clause is the WATCH tile's words: this label replaces the row's
+                // content for a screen reader, so the tile's own tooltip is never read.
                 aria-label={t('operate.roster.row.aria', {
                   call: s.call,
                   grid: s.grid ? t('operate.roster.row.aria.grid', { grid: s.grid }) : '',
                   need: need ? t('operate.roster.row.aria.need', { need }) : '',
+                  watch: watch ? t('operate.roster.row.aria.watch', { what: watchLabel(watch) }) : '',
                   worked: s.worked ? t('operate.roster.row.aria.worked') : '',
                   working: s.call === workingCall ? t('operate.roster.row.aria.working') : '',
                 })}
@@ -600,6 +614,9 @@ export function OperateRoster({
                      this title surfaces every need on hover so a clipped chip isn't silently lost. */
                   title={needAll.map((t) => NEED_CHIP[t]?.label).filter(Boolean).join(' · ') || undefined}
                 >
+                  {/* The WATCH tile leads: this cell clips what does not fit, and the tile is
+                      the one the operator asked for by name. */}
+                  {watch && <WatchTile entry={watch} />}
                   {needAll.map((t) => {
                     const c = NEED_CHIP[t]
                     return (
