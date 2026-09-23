@@ -1125,6 +1125,66 @@ mod tests {
         same_log(b.log_records(), a.log_records(), "the two windows agree");
     }
 
+    /// ⛔ ANOTHER WINDOW'S COMMIT DOES NOT UNDO THIS ONE'S LAUNCH FILL. A launch fills countries
+    /// in memory and writes nothing, so the store holds those rows unfilled — and a re-read
+    /// takes the store's copy of every row this window has no change in flight for. With
+    /// nothing more, the other window's next contact would cost this one every country its
+    /// launch filled in, until a restart: awards and the needed board reading blanks.
+    ///
+    /// Both re-reads: the freshness poll's, which may move rows, and the in-place one a change
+    /// makes first.
+    #[test]
+    fn another_windows_commit_keeps_this_ones_launch_fill() {
+        let d = Dir::new("refill");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        flush(&engine_on_store(&d)); // the conversion
+        let mut a = Engine::new("K2DEF", "FN31", 0);
+        a.set_dxcc_resolver(|call| Some(format!("Entity of {call}")));
+        a.attach_log_store(open_fast(&d));
+        let unfilled = |e: &Engine| {
+            e.log_records()
+                .iter()
+                .filter(|r| r.country.is_none())
+                .map(|r| r.call.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            unfilled(&a).is_empty(),
+            "premise: the launch filled every row"
+        );
+        assert!(
+            stored(&d).iter().all(|r| r.country.is_none()),
+            "premise: in memory only"
+        );
+
+        let mut b = engine_on_store(&d);
+        b.log_qso(qso("W1AAA", 1_788_000_000));
+        flush(&b);
+        assert!(eventually(|| {
+            a.sync_shared_log_if_changed();
+            find(&a, "W1AAA").is_some()
+        }));
+        assert_eq!(
+            unfilled(&a),
+            Vec::<String>::new(),
+            "after the freshness poll's re-read, every row carries its country — the new one too"
+        );
+
+        b.log_qso(qso("W2BBB", 1_788_000_100));
+        flush(&b);
+        assert!(eventually(|| a.log_store_foreign_pending()));
+        assert!(
+            a.mark_qsl_card(0, true),
+            "a change, which re-reads in place"
+        );
+        assert!(find(&a, "W2BBB").is_some(), "premise: the change re-read");
+        assert_eq!(
+            unfilled(&a),
+            Vec::<String>::new(),
+            "after a change's in-place re-read, likewise"
+        );
+    }
+
     // ── a log.adi the store does not account for ────────────────────────────
 
     /// ★ The transition hazard, at the door. The store was converted; then a 1.13 build (the

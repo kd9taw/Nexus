@@ -1259,6 +1259,11 @@ impl StationCore {
             Ok((rows, lingering)) => {
                 self.store_lingering = lingering;
                 self.logbook.replace_rows(rows);
+                // The store holds what was WRITTEN, and a launch's fills never are (see
+                // `attach_store`): the re-read just put the unfilled stored copy of every such
+                // row in place of the filled one. Fill again — in memory, as the launch did.
+                self.fill_country();
+                self.fill_state();
                 true
             }
             Err(e) => {
