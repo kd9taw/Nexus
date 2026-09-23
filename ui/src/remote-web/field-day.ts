@@ -93,10 +93,16 @@ function status(v: unknown): void {
     // rebuilding a key it cannot (a row's SENT exchange only reaches here as rendered `mex`).
     // `dupe` marks a row the ruleset asked us to LOG rather than refuse, scored zero. Absent
     // on every ordinary row (skipped when false) and on any build older than the field.
-    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd','dkey','dupe'])
+    // `sat` is the BIRD the row was worked through, empty on an ordinary terrestrial contact.
+    // A current station always sends it (the Rust field has `serde(default)` but no
+    // `skip_serializing_if`, so it goes on the wire as ""); a station older than the field never
+    // does. Optional for that second reason alone -- this list's whole job is that a payload
+    // written by an older station still validates.
+    const q = object(raw,['call','class','section','band','mode','submode','whenUnix'],['mex','rcvd','dkey','dupe','sat'])
     if (![q.call,q.class,q.section,q.band,q.submode].every(text) || !['CW','PH','DIG'].includes(String(q.mode)) || !integer(q.whenUnix) ||
       (q.dkey !== undefined && !texts(q.dkey,DUPE_KEY_MAX)) ||
       (q.dupe !== undefined && typeof q.dupe !== 'boolean') ||
+      (q.sat !== undefined && !text(q.sat)) ||
       (q.rcvd !== undefined && !texts(q.rcvd,8))) throw new Error('invalidFieldDay')
   }
   if (f.club !== undefined && f.club !== null) {

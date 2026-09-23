@@ -13329,6 +13329,11 @@ mod tests {
             when_unix,
             mex: mex.into(),
             rcvd: Vec::new(),
+            // Terrestrial: 20m DIG, worked off the dial, not through a bird. Empty IS the
+            // "no satellite" value -- `field_day_display` builds this field with
+            // `.unwrap_or_default()` for exactly that case, so the fixture says the same
+            // thing the producer does rather than inventing a second spelling for it.
+            sat: String::new(),
             // Neither is read by anything this helper feeds: these rows drive the WSJT-X
             // datagram and N1MM XML emitter tests, which assert on the wire bytes, and
             // `tempo-audio` reads `dkey`/`dupe` nowhere. Left empty and false rather than
