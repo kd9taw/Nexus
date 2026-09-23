@@ -32633,6 +32633,61 @@ mod tests {
         assert_eq!(rig("N0CALL"), None);
     }
 
+    /// THE FIELD REPORT (2026-09-22, FTDX10 on macOS): the logbook's RIG column read "CP2105
+    /// Dual USB to UART Bridge Controller" — the USB bridge chip — on EVERY contact, while
+    /// Settings showed the right radio.
+    ///
+    /// The chip's name got into `rig_model_name` from Auto-test's bridge-chip branch, which named
+    /// its probe candidate after the PORT rather than the model it was probing (fixed in
+    /// `tempo_audio::port_prober::candidates_from`). The model NUMBER was correct throughout,
+    /// which is both why Settings looked fine and why the stored name can be repaired from it.
+    ///
+    /// This is the far end of that path — the stamp — and it holds the whole outcome: what the
+    /// reporter sees, what the startup heal changes, and what it deliberately must not.
+    #[test]
+    fn the_startup_heal_stops_a_usb_product_string_being_stamped_as_the_rig() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        // The reporter's stored config: right model number, chip's name.
+        e.settings.rig_model = 1042; // Yaesu FTDX10
+        e.settings.rig_model_name = "CP2105 Dual USB to UART Bridge Controller".into();
+        e.settings.ensure_radio_profiles();
+
+        // Reproduce the symptom first: the chip is stamped as the rig that made the contact.
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        assert_eq!(
+            e.get_log()[0].my_rig.as_deref(),
+            Some("CP2105 Dual USB to UART Bridge Controller"),
+            "the reported symptom, reproduced"
+        );
+
+        // What an upgrading operator gets at startup, with the catalog the shell injects.
+        let repaired = e
+            .settings
+            .heal_rig_model_names(|m| (m == 1042).then_some("Yaesu FTDX10"));
+        assert!(!repaired.is_empty(), "the poisoned profile is repaired");
+
+        let next = e.qso_record("K9AAA".into(), None, None);
+        e.log_qso(next);
+        let log = e.get_log();
+        let rig = |call: &str| {
+            log.iter()
+                .find(|r| r.call == call)
+                .and_then(|r| r.my_rig.clone())
+        };
+        assert_eq!(
+            rig("K9AAA").as_deref(),
+            Some("Yaesu FTDX10"),
+            "every contact logged after the heal carries the real rig"
+        );
+        assert_eq!(
+            rig("W9XYZ").as_deref(),
+            Some("CP2105 Dual USB to UART Bridge Controller"),
+            "a contact ALREADY in the log keeps what it was stamped with — MY_RIG is operator-\
+             editable, and rewriting stored QSOs is their call, never a silent migration"
+        );
+    }
+
     /// #239: a record that carries its own grid hands HRD that one, once — not the record's plus
     /// a second, conflicting copy from the live setting (the STATION_CALLSIGN guard's twin).
     #[test]

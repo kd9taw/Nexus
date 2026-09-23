@@ -10678,9 +10678,18 @@ async fn probe_cat_ports(
                         h.port_name, h.baud, mhz, h.model_name
                     )
                 } else {
+                    // `model_name` is the MODEL's catalog name or nothing — a model Hamlib
+                    // supports but the catalog does not name leaves it blank rather than
+                    // mislabel the radio (it is persisted as `rig_model_name` and stamps
+                    // MY_RIG). Say the number in that case instead of opening with a space.
+                    let named = if h.model_name.is_empty() {
+                        format!("Model {}", h.model)
+                    } else {
+                        h.model_name.clone()
+                    };
                     format!(
                         "{} on {} @ {} baud — reads {:.3} MHz",
-                        h.model_name, h.port_name, h.baud, mhz
+                        named, h.port_name, h.baud, mhz
                     )
                 };
                 CatProbeResult {
@@ -23457,6 +23466,40 @@ pub fn run() {
         settings.routing_rules = base.routing_rules;
         settings.default_radio = base.default_radio;
         settings.ensure_routing_targets();
+    }
+
+    // SELF-HEAL: a stored `rig_model_name` the catalog can prove is not its model's name.
+    //
+    // Auto-test's bridge-chip branch used to name its probe candidate from the port's USB
+    // PRODUCT STRING instead of from the model it was actually probing, and it marks that
+    // candidate TRUSTED — so both Settings' Auto-test and the setup wizard persisted the bridge
+    // chip's name as the radio's model name. `rig_model_name` is what stamps ADIF MY_RIG, which
+    // is how "CP2105 Dual USB to UART Bridge Controller" reached the RIG column of every contact
+    // an FTDX10 owner logged (field report 2026-09-22). The model NUMBER was right throughout —
+    // that is why their Settings went on showing the correct radio, and why nothing looked wrong
+    // until the log was read. The writer is fixed in `port_prober::candidates_from`.
+    //
+    // Fixing the writer alone would leave the stored name wrong forever: the operator has no
+    // reason to re-pick a model their own Settings displays correctly, so every future contact
+    // would keep the chip name. Repaired here because this is where the two meet — `tempo-app` is
+    // deliberately decoupled from `tempo-audio`, so `Settings` itself cannot reach the catalog.
+    //
+    // The rule, what it will and will not touch, and why it is narrow: `Settings::
+    // heal_rig_model_names`. This crate supplies the catalog it cannot reach from there.
+    // In-memory only: it is idempotent and runs every launch, and the corrected value persists
+    // with the operator's next settings save rather than rewriting settings.json behind them.
+    #[cfg(feature = "radio")]
+    {
+        let repaired = settings.heal_rig_model_names(tempo_audio::rigmodels::rig_model_name);
+        if !repaired.is_empty() {
+            tempo_core::applog::info(
+                "startup",
+                &format!(
+                    "corrected rig model name(s) that did not match the model number — {}",
+                    repaired.join("; ")
+                ),
+            );
+        }
     }
 
     // A radio profile keyed "r<id>" PINS its active radio, so this window always drives the radio
