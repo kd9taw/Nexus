@@ -271,9 +271,13 @@ fn gate_check_parts(t: &Tnc2) -> Result<(), GateReject> {
     let bogus = BOGUS_SOURCES
         .iter()
         .any(|b| src_base.eq_ignore_ascii_case(b))
-        || BOGUS_SOURCE_PREFIXES
-            .iter()
-            .any(|p| src_base.len() >= p.len() && src_base[..p.len()].eq_ignore_ascii_case(p));
+        // `get`: the header is only known to be UTF-8, so a prefix's length can end inside a
+        // character of the source.
+        || BOGUS_SOURCE_PREFIXES.iter().any(|p| {
+            src_base
+                .get(..p.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(p))
+        });
     if bogus {
         return Err(GateReject::BogusSource(src.to_string()));
     }
@@ -595,6 +599,21 @@ mod tests {
                 String::from_utf8_lossy(line)
             );
         }
+    }
+
+    /// The source is compared with the bogus-source prefixes by their length in BYTES, and
+    /// `Tnc2::split` checks a header only for valid UTF-8. A source with a multi-byte character
+    /// across that length split the character and panicked the gate.
+    #[test]
+    fn a_non_ascii_source_is_gated_without_panicking() {
+        assert_eq!(gate_check("é☕>APRS,WIDE1-1:>hi".as_bytes()), Ok(()));
+        assert!(
+            matches!(
+                gate_check("WIDE☕>APRS,WIDE1-1:>hi".as_bytes()),
+                Err(GateReject::BogusSource(_))
+            ),
+            "control: the prefix still matches ahead of a multi-byte character"
+        );
     }
 
     #[test]

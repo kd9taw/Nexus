@@ -34467,6 +34467,44 @@ mod tests {
         assert_eq!(work_then_log(fresh_engine(), &[], "K1ABC"), None);
     }
 
+    /// THE LIVE CRASH, through the board's own body (2026-09-23, on 1.13.0 and 1.14.0): POTA's
+    /// feed carried `"activator": "KK4JAB ☕️"`, and the country lookup panicked on it, so every
+    /// Needed-board read failed and the board stopped updating while the spot was up. The row is
+    /// a US station, and the board around it reads normally.
+    #[test]
+    fn a_pota_activator_with_an_emoji_does_not_take_down_the_needed_board() {
+        use std::sync::{Arc, Mutex};
+        let now = crate::now_unix();
+        let mut feed = propagation::parse_pota_spots(
+            r#"[{"activator":"KK4JAB ☕️","reference":"US-7615","frequency":"14236.5",
+                "mode":"SSB"},
+               {"activator":"W9XYZ","reference":"US-0002","frequency":"14250","mode":"SSB"}]"#,
+        );
+        assert_eq!(feed.len(), 2, "control: both feed rows parse");
+        for sp in &mut feed {
+            sp.spot_time_unix = Some(now);
+        }
+        let ota = hunter_cache(&[("POTA", &feed)]);
+        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        let region =
+            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+        let spots: crate::SharedSpots =
+            Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::default()));
+        let engine = fresh_engine();
+        let alerts = crate::read_need_alerts(engine_lock(&engine), &live, &region, &spots, &ota)
+            .expect("the board reads");
+        let entity = |call: &str| {
+            alerts
+                .iter()
+                .find(|a| a.call.starts_with(call))
+                .unwrap_or_else(|| panic!("no {call} row in {alerts:?}"))
+                .entity
+                .clone()
+        };
+        assert_eq!(entity("KK4JAB"), "United States");
+        assert_eq!(entity("W9XYZ"), "United States", "control: its neighbour");
+    }
+
     /// BY CONSTRUCTION, the way the roster and the Needed board are held together in the UI: for
     /// every shape of feed, the park a roster call logs is the park the board's row names. Both
     /// read `live_ota_spots` and `live_activations`, so the 2026-09-17 ruling — more than one live

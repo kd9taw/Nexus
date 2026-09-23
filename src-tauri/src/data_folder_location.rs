@@ -250,10 +250,12 @@ fn sync_component(target: &Path) -> Option<String> {
         if SYNC_EXACT.iter().any(|s| s.eq_ignore_ascii_case(name)) {
             return Some(name.to_string());
         }
-        if let Some(root) = SYNC_PREFIXES
-            .iter()
-            .find(|s| name.len() >= s.len() && name[..s.len()].eq_ignore_ascii_case(s))
-        {
+        // `get`: the component is the operator's own folder or account name, and a prefix's
+        // length in bytes can end inside one of its characters (`田中太郎`).
+        if let Some(root) = SYNC_PREFIXES.iter().find(|s| {
+            name.get(..s.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(s))
+        }) {
             let _ = root;
             return Some(name.to_string());
         }
@@ -395,6 +397,32 @@ none /mnt/c 9p rw,relatime 0 0
         // POSITIVE CONTROL: an ordinary folder is neither.
         let plain = FolderLocation::of(Path::new("/home/op/Documents/nexus"), Some(MOUNTS));
         assert_eq!(plain, FolderLocation::default());
+    }
+
+    /// ⚠️ This runs at EVERY START over the data folder's path, and on Windows that path sits
+    /// under the account name. Each component was compared against `OneDrive` by the prefix's
+    /// length in BYTES, so a name with a multi-byte character across byte 8 — a kanji or Hangul
+    /// account name, or `Jean-Frédéric` — split the character and panicked before the logbook
+    /// opened.
+    #[test]
+    fn a_non_ascii_account_name_does_not_stop_the_check() {
+        for user in ["田中太郎", "김철수입니다", "Jean-Frédéric"] {
+            let home = format!(r"C:\Users\{user}\AppData\Roaming\tempo");
+            assert_eq!(
+                FolderLocation::of(Path::new(&home), None),
+                FolderLocation::default(),
+                "{user}"
+            );
+            // CONTROL: a real OneDrive under the same account is still named.
+            let synced = format!(r"C:\Users\{user}\OneDrive\nexus");
+            assert_eq!(
+                FolderLocation::of(Path::new(&synced), None)
+                    .sync_suspected
+                    .as_deref(),
+                Some("OneDrive"),
+                "{user}"
+            );
+        }
     }
 
     #[test]

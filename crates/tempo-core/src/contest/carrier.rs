@@ -158,18 +158,20 @@ fn unesc(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
-            match &s[i..i + 3] {
-                "%25" => {
+            // `get`, not a range slice: a `%` this codec did not write can have a multi-byte
+            // character right after it, and three bytes on would land inside it.
+            match s.get(i..i + 3) {
+                Some("%25") => {
                     out.push('%');
                     i += 3;
                     continue;
                 }
-                "%3B" | "%3b" => {
+                Some("%3B" | "%3b") => {
                     out.push(';');
                     i += 3;
                     continue;
                 }
-                "%3A" | "%3a" => {
+                Some("%3A" | "%3a") => {
                     out.push(':');
                     i += 3;
                     continue;
@@ -224,6 +226,24 @@ mod tests {
             "the value's separators are escaped, not emitted: {text}"
         );
         assert_eq!(decode(&text, spec), v);
+    }
+
+    /// A `%` this codec did not write — an imported or hand-edited ADIF — with a multi-byte
+    /// character after it stays as it is. Reading the three bytes after it as one escape split
+    /// that character and panicked while the log was read.
+    #[test]
+    fn a_stray_percent_before_a_multi_byte_character_is_kept() {
+        assert_eq!(unesc("100%☕"), "100%☕");
+        assert_eq!(unesc("%a☕"), "%a☕");
+        assert_eq!(
+            unesc("%25%3B%3a"),
+            "%;:",
+            "control: the escapes still decode"
+        );
+        assert_eq!(
+            decode_pairs("NAME::100%☕"),
+            [("NAME".to_string(), "100%☕".to_string())]
+        );
     }
 
     #[test]

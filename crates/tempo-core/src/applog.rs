@@ -492,10 +492,13 @@ fn trim_build_paths(text: &str) -> String {
         // Repeatedly, because one line can carry two paths (a panic renders location + payload).
         while let Some(i) = out.find(root) {
             // Walk back to the start of this path token so the whole absolute prefix goes, not
-            // just the part before `/crates/`.
+            // just the part before `/crates/`. The token starts AFTER the whole delimiter, which
+            // can be more than one byte (a no-break space) — never at a fixed `+ 1`.
             let start = out[..i]
-                .rfind(|c: char| c.is_whitespace() || c == '(' || c == '\'' || c == '"')
-                .map(|p| p + 1)
+                .char_indices()
+                .rev()
+                .find(|&(_, c)| c.is_whitespace() || c == '(' || c == '\'' || c == '"')
+                .map(|(p, c)| p + c.len_utf8())
                 .unwrap_or(0);
             out.replace_range(start..=i, "");
         }
@@ -731,6 +734,22 @@ mod tests {
         // own settings path is diagnostic and is not ours to guess at.
         let keep = r"settings loaded from C:\Users\op\AppData\Roaming\tempo\settings.json";
         assert_eq!(trim_build_paths(keep), keep);
+    }
+
+    /// Every line written goes through this, the panic hook's included, so it must never be
+    /// what panics. A path's start is found by walking back to the whitespace before it, and
+    /// that whitespace can be more than one byte (a no-break space, an ideographic space).
+    /// Starting one BYTE past it split the character, and `replace_range` panicked.
+    #[test]
+    fn a_multi_byte_space_before_a_build_path_is_kept_whole() {
+        for sep in ["\u{a0}", "\u{3000}", "\u{2003}"] {
+            let line = format!("fetch failed:{sep}/home/u/work/proj/crates/x/src/f.rs:1");
+            assert_eq!(
+                trim_build_paths(&line),
+                format!("fetch failed:{sep}crates/x/src/f.rs:1"),
+                "{sep:?}"
+            );
+        }
     }
     use super::*;
 
