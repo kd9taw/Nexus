@@ -1627,6 +1627,17 @@ const fmtLeg = (lowHz: number | null, highHz: number | null) => {
  * same fallback. */
 const downMode = (tx: SatTransmitter) => tx.downlinkMode ?? tx.mode
 
+/** The record lists the sideband swap the engine itself commands. `uplink_mode_for` (tempo-core
+ * doppler.rs) swaps USB and LSB on an INVERTING transponder and passes every other mode through,
+ * so only an inverting bird whose uplink is the opposite sideband of its downlink gets the uplink
+ * its record lists. The TX-sideband note forecasts exactly that, so it renders for no other
+ * record: KOSEN-1 lists CW up over AFSK down, and the engine would set FM there, never CW. */
+const isSidebandSwap = (tx: SatTransmitter) => {
+  const down = downMode(tx)?.trim().toUpperCase()
+  const up = tx.uplinkMode?.trim().toUpperCase()
+  return tx.invert && ((down === 'USB' && up === 'LSB') || (down === 'LSB' && up === 'USB'))
+}
+
 /** SatNOGS `type` in operator words, for the chooser cards. Unknown = no chip
  * — never guess a kind. */
 const kindWord = (k: string | null) =>
@@ -2818,19 +2829,14 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
     snap?.link.tier,
     snap?.radio.operatingMode,
   )
-  // The RECORD's per-leg sidebands differing (SatNOGS data) — used only to
-  // decide whether the chooser's TX-sideband note renders at all, and for the
+  // The RECORD listing an inverting LSB/USB pair (`isSidebandSwap`) — used only
+  // to decide whether the chooser's TX-sideband note renders at all, and for the
   // pre-arm FORECAST wording. What the engine actually commands is the DTO's
   // `txMode` (its own answer), never re-derived from the record: the two
   // disagree exactly where it matters (CW/data downlinks, a downlink-only
   // mapping, an operator take-back), and the display must not claim a
   // command the radio never gets.
-  const txSwapMode =
-    heldT?.uplinkMode != null &&
-    downMode(heldT) != null &&
-    heldT.uplinkMode !== downMode(heldT)
-      ? heldT.uplinkMode
-      : null
+  const txSwapMode = heldT != null && isSidebandSwap(heldT) ? heldT.uplinkMode : null
 
   const armTrack = (name: string, aosUnix: number) => {
     if(!stationControl)return

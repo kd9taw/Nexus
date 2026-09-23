@@ -250,6 +250,35 @@ describe('the downlink mode, as SatNOGS actually sends it', () => {
     fireEvent.click(await screen.findByLabelText('Work Mode V/U - Transponder'))
     expect((await screen.findByTestId('sat-tp-txmode')).textContent).toMatch(/LSB up \/ USB down/)
   })
+
+  // The note forecasts "the TX (split) VFO is set to match" the uplink the record lists. The
+  // engine commands uplink_mode_for(downlink rig mode, invert): only an INVERTING bird swaps, and
+  // only between USB and LSB. Anywhere else the record's uplink is not what the engine would set.
+  const onboardSdr = {
+    description: 'Mode HF/U - Onboard SDR',
+    kind: 'Transponder',
+    mode: 'AFSK',
+    uplinkMode: 'CW',
+    uplinkLowHz: 21_125_000,
+    uplinkHighHz: 21_150_000,
+    downlinkLowHz: 435_525_000,
+  }
+  it.each([
+    // KOSEN-1 exactly as listed: the engine would put FM on the TX VFO, never CW.
+    ['KOSEN-1: CW up over an AFSK downlink', { ...onboardSdr, invert: false }],
+    // The same legs on an inverting bird: FM has no sideband to swap, so still FM.
+    ['the same legs on an inverting bird', { ...onboardSdr, invert: true }],
+    // A non-inverting bird keeps the downlink's sideband: USB, not the LSB listed.
+    ['a non-inverting LSB/USB pair', { ...transponder, description: 'Mode V/U - Transponder', invert: false }],
+  ])('says nothing about the TX sideband for %s', async (_, over) => {
+    show(asSent(over))
+    render(<SatellitesView focusSat="RS-44" />)
+    fireEvent.click(await screen.findByLabelText(`Work ${over.description}`))
+    // The pick has landed (this line and the note render from the same hold), so an absent note
+    // is a decision, not a render that has not happened yet.
+    await screen.findByText(/Doppler tunes this transponder while auto-track/)
+    expect(screen.queryByTestId('sat-tp-txmode')).toBeNull()
+  })
 })
 
 describe('what the row tells the operator', () => {
