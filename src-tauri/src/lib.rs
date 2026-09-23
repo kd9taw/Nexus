@@ -1920,7 +1920,11 @@ struct DataCopyReport {
 /// Copy the data files from `from` to `to` and VERIFY each one byte for byte. Never deletes or
 /// modifies anything under `from`. Any failure — copy or verify — returns Err, and the caller
 /// must then leave the pointer alone: a half-copied folder must not become the live one.
-fn copy_data_dir_verified(from: &Path, to: &Path) -> Result<DataCopyReport, String> {
+fn copy_data_dir_verified(
+    from: &Path,
+    to: &Path,
+    live: Option<&tempo_core::logbook::writer::LogWriter>,
+) -> Result<DataCopyReport, String> {
     let mut report = DataCopyReport::default();
     for rel in data_dir_entries(from) {
         let src = from.join(&rel);
@@ -1947,18 +1951,31 @@ fn copy_data_dir_verified(from: &Path, to: &Path) -> Result<DataCopyReport, Stri
         // Proved inside the copy itself (SQLite's integrity check, then every row compared with
         // the original in one read transaction) — a byte compare is exactly what cannot work
         // here, because the copy is not the same bytes: it is the same DATABASE.
-        let bytes = tempo_core::logbook::sqlite::copy_database(&from.join(&rel), &to.join(&rel))
-            .map_err(|e| {
-                format!(
-                    "Could not copy the logbook database {} — nothing was changed: {e}",
-                    rel.display()
-                )
-            })?;
+        //
+        // `live` is the writer of the database open in THIS process — the one in `from` — and
+        // the copy then runs on it: after every change submitted before the move, with none
+        // written while it runs. A copy taken beside it holds only what is already committed.
+        let (src, dst) = (from.join(&rel), to.join(&rel));
+        let copied = match live {
+            Some(writer) => writer.copy_database(&dst, LIVE_DATABASE_COPY_WAIT),
+            None => {
+                tempo_core::logbook::sqlite::copy_database(&src, &dst).map_err(|e| e.to_string())
+            }
+        };
+        let bytes = copied.map_err(|e| {
+            format!(
+                "Could not copy the logbook database {} — nothing was changed: {e}",
+                rel.display()
+            )
+        })?;
         report.files += 1;
         report.bytes += bytes;
     }
     Ok(report)
 }
+
+/// How long a data-folder move waits for the open database's writer to copy it.
+const LIVE_DATABASE_COPY_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The policy behind `set_data_folder`, with every path handed in so a test can drive it.
 /// Returns the verified copy report (if one was asked for). The pointer is written LAST.
@@ -1969,6 +1986,7 @@ fn apply_data_folder(
     copy: bool,
     install_dir: Option<&Path>,
     mounts: Option<&str>,
+    live: Option<&tempo_core::logbook::writer::LogWriter>,
 ) -> Result<DataCopyReport, String> {
     let resolved = validate_data_dir_target(target, install_dir, mounts)?;
     let same = resolved
@@ -1984,7 +2002,7 @@ fn apply_data_folder(
         );
     }
     let report = if copy && !same {
-        copy_data_dir_verified(current, &resolved)?
+        copy_data_dir_verified(current, &resolved, live)?
     } else {
         DataCopyReport::default()
     };
@@ -2056,7 +2074,11 @@ fn get_data_folder() -> DataFolderInfo {
 /// Choose the data folder (#289). `copy` carries the log and data across, verified, first.
 /// Takes effect at the next launch — see `shared_data_dir`.
 #[tauri::command(async)]
-fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
+fn set_data_folder(
+    state: State<'_, SharedEngine>,
+    path: String,
+    copy: bool,
+) -> Result<DataCopyReport, String> {
     if std::env::var_os("NEXUS_DATA_DIR")
         .filter(|s| !s.is_empty())
         .is_some()
@@ -2071,6 +2093,9 @@ fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
     let install = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    // The database in this folder is open in this process: its copy goes through its writer.
+    // Taken under the engine lock, used after it is released.
+    let live = engine_lock(&state).log_store_writer();
     apply_data_folder(
         &base,
         &shared_data_dir(),
@@ -2078,6 +2103,7 @@ fn set_data_folder(path: String, copy: bool) -> Result<DataCopyReport, String> {
         copy,
         install.as_deref(),
         data_folder_location::mount_table().as_deref(),
+        live.as_deref(),
     )
 }
 
@@ -2414,6 +2440,282 @@ mod lotw_batch_tests {
 }
 
 #[cfg(test)]
+mod logbook_startup_tests {
+    use super::durable_command_tests::engine_on_store;
+    use super::*;
+    use std::time::{Duration, Instant};
+    use tempo_core::logbook::migrate::database_path;
+    use tempo_core::logbook::sqlite::{LogDb, WriteHold};
+
+    /// A folder of the test's own — created only when `contacts` is `Some`, holding a 1.13
+    /// `log.adi` of that many contacts.
+    fn folder(tag: &str, contacts: Option<usize>) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("nexus-startup-{tag}-{nanos}"));
+        if let Some(n) = contacts {
+            std::fs::create_dir_all(&dir).expect("scratch");
+            let mut adif = tempo_core::logbook::adif_header();
+            for i in 0..n {
+                let call = format!("K{i}LCH");
+                adif.push_str(&format!(
+                    "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260901<TIME_ON:6>1300{:02}<EOR>\n",
+                    call.len(),
+                    i % 60
+                ));
+            }
+            std::fs::write(dir.join("log.adi"), adif).expect("log");
+        }
+        dir
+    }
+
+    /// Every file under `dir`, with its bytes.
+    fn picture(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else {
+                    out.push((p.clone(), std::fs::read(&p).unwrap_or_default()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, &mut out);
+        out.sort();
+        out
+    }
+
+    /// The shipped launch, as `run()` makes it: the database opened outside the engine lock,
+    /// then — the resolvers set — adopted. `places` is whether this launch's country table can
+    /// place the log's calls: a newer cty.dat places calls an older one could not.
+    fn launch(log: &Path, network: Option<String>, places: bool) -> Engine {
+        let opened = open_logbook_store(log, network);
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(move |call| places.then(|| format!("Entity of {call}")));
+        adopt_logbook(&mut e, log, opened);
+        e
+    }
+
+    /// ★ PROPERTY 7 AT THE SHIPPED LAUNCH. The first launch converts the operator's `log.adi`
+    /// and hands the log to the database; the launches after write nothing — though their
+    /// country table, newer than the first launch's, fills every row in memory. (On the 1.13
+    /// path that fill rewrote the whole log at launch.)
+    ///
+    /// One file is allowed to move once: `log.adi.scrubbed`, the credential sweep's manifest of
+    /// the safety copies it has checked. The first launch's mirror write took a ring snapshot,
+    /// and the next launch sweeps that new copy and records it, as every launch after a save
+    /// that made a copy always has. A launch with nothing new to sweep writes nothing at all.
+    #[test]
+    fn the_launch_opens_the_store_and_the_next_launch_writes_nothing() {
+        let dir = folder("launch", Some(25));
+        let log = dir.join("log.adi");
+        {
+            let e = launch(&log, None, false);
+            assert!(
+                e.log_store_open(),
+                "the database owns the log: {:?}",
+                e.log_store_problem()
+            );
+            assert_eq!(e.log_records().len(), 25);
+            e.flush_log_store(Duration::from_secs(60)).expect("written");
+        }
+        assert!(database_path(&log).is_file(), "converted");
+        let again = || {
+            let e = launch(&log, None, true);
+            assert!(e.log_store_open());
+            assert!(
+                e.log_records().iter().all(|r| r.country.is_some()),
+                "premise: the backfill filled every row, in memory"
+            );
+            e.flush_log_store(Duration::from_secs(60)).expect("written");
+        };
+        let log_data = |p: Vec<(PathBuf, Vec<u8>)>| {
+            p.into_iter()
+                .filter(|(p, _)| !p.ends_with("log.adi.scrubbed"))
+                .collect::<Vec<_>>()
+        };
+        let before = picture(&dir);
+        again();
+        let settled = picture(&dir);
+        assert!(
+            log_data(settled.clone()) == log_data(before),
+            "the second launch wrote nothing but the sweep's manifest"
+        );
+        again();
+        assert!(
+            picture(&dir) == settled,
+            "a launch with nothing new to sweep writes nothing at all"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A data folder on network storage keeps the log in `log.adi` for the session — the 1.13
+    /// path, whole — says why, and no database is made there.
+    #[test]
+    fn a_network_folder_runs_the_session_on_log_adi_and_says_why() {
+        let dir = folder("network", Some(5));
+        let log = dir.join("log.adi");
+        let e = launch(&log, Some("an NFS share".into()), true);
+        assert!(!e.log_store_open());
+        assert_eq!(e.log_records().len(), 5, "the log is read from log.adi");
+        assert!(
+            e.log_store_problem().is_some_and(|p| p.contains("NFS")),
+            "and the reason is kept: {:?}",
+            e.log_store_problem()
+        );
+        assert!(!database_path(&log).exists(), "no database on a share");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh install has no data folder at all: the first launch starts on the database, and
+    /// writes no `log.adi` before there is a contact to put in it.
+    #[test]
+    fn a_fresh_install_starts_on_the_store() {
+        let dir = folder("fresh", None);
+        let log = dir.join("log.adi");
+        let e = launch(&log, None, true);
+        assert!(
+            e.log_store_open(),
+            "a fresh install starts on the database: {:?}",
+            e.log_store_problem()
+        );
+        assert!(!log.exists(), "and makes no log.adi before a contact");
+        drop(e);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Quitting carries every change still on its way to disk before the process goes, and a
+    /// disk that will not take it costs the exit a bounded wait, never a hang.
+    #[test]
+    fn quitting_writes_what_is_on_its_way_and_never_hangs() {
+        let (dir, engine) = engine_on_store("quit", 10);
+        let db = database_path(&dir.join("log.adi"));
+        let id = engine_lock(&engine).log_records()[3].id;
+        let marked = || {
+            LogDb::open(&db)
+                .and_then(|d| d.load_all())
+                .expect("read")
+                .into_iter()
+                .find(|r| r.id == id)
+                .is_some_and(|r| r.qsl_rcvd.card)
+        };
+        let hold = WriteHold::take(&db).expect("stall the store");
+        assert!(
+            engine_lock(&engine).mark_qsl_card(3, true),
+            "not waited for"
+        );
+
+        let started = Instant::now();
+        flush_logbook(&engine, Duration::from_millis(300));
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "a stalled disk costs the exit its cap: {:?}",
+            started.elapsed()
+        );
+
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(hold);
+        });
+        flush_logbook(&engine, Duration::from_secs(60));
+        assert!(marked(), "on disk when the exit's flush returns");
+        release.join().expect("released");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ Moving the data folder while the database is open copies it THROUGH ITS WRITER: after
+    /// every change submitted before the move, and with none written while the copy runs.
+    ///
+    /// The control is a copy taken beside the writer: it holds only what is committed, so a
+    /// change still on its way to disk is missing from it — and the new folder would open
+    /// without it.
+    #[test]
+    fn moving_the_data_folder_carries_a_change_still_on_its_way_to_disk() {
+        let (dir, engine) = engine_on_store("move-live", 10);
+        let db = database_path(&dir.join("log.adi"));
+        let writer = engine_lock(&engine)
+            .log_store_writer()
+            .expect("the store is open");
+        let marked = |to: &Path, row: usize| {
+            let id = engine_lock(&engine).log_records()[row].id;
+            LogDb::open(&database_path(&to.join("log.adi")))
+                .and_then(|d| d.load_all())
+                .expect("the copy opens")
+                .into_iter()
+                .find(|r| r.id == id)
+                .is_some_and(|r| r.qsl_rcvd.card)
+        };
+
+        // The control: beside the writer, while a change waits on a stalled disk.
+        let hold = WriteHold::take(&db).expect("stall the store");
+        assert!(engine_lock(&engine).mark_qsl_card(3, true));
+        let beside = dir.with_extension("beside");
+        copy_data_dir_verified(&dir, &beside, None).expect("copied");
+        drop(hold);
+        assert!(
+            !marked(&beside, 3),
+            "control: a copy beside the writer misses the change on its way"
+        );
+
+        // Through the writer: another change, the same stall, released while the copy waits.
+        let hold = WriteHold::take(&db).expect("stall the store");
+        assert!(engine_lock(&engine).mark_qsl_card(4, true));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(hold);
+        });
+        let moved = dir.with_extension("moved");
+        copy_data_dir_verified(&dir, &moved, Some(&writer)).expect("copied");
+        release.join().expect("released");
+        assert!(marked(&moved, 4), "the change on its way is in the copy");
+        assert!(marked(&moved, 3), "and so is everything before it");
+        for d in [&dir, &beside, &moved] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    /// The body of the top-level function `sig` in this file.
+    fn body_of<'a>(src: &'a str, sig: &str) -> &'a str {
+        let start = src
+            .find(&format!("\n{sig}"))
+            .unwrap_or_else(|| panic!("{sig} is defined"));
+        let rest = &src[start + 1..];
+        &rest[..rest.find("\n}\n").expect("the end of the function")]
+    }
+
+    /// The three places the shipped app reaches the store are wired to it: the launch opens it
+    /// (and falls back to `log.adi` only through `adopt_logbook`), every exit path flushes it,
+    /// and a data-folder move copies it through its writer. Source-scanned, because what is
+    /// under test is which function `run()` and the commands call, and no type sees that.
+    #[test]
+    fn the_launch_every_exit_and_the_folder_move_reach_the_store() {
+        let src = include_str!("lib.rs");
+        let run = body_of(src, "pub fn run() {");
+        assert!(
+            run.contains("open_logbook_store(\n        &logbook_path(),")
+                && run.contains("adopt_logbook(&mut eng, &logbook_path(), logbook_store);"),
+            "the launch opens the store and hands it to the engine"
+        );
+        assert!(
+            !run.contains("set_log_path("),
+            "the launch never opens log.adi directly"
+        );
+        assert!(
+            body_of(src, "fn persist_journals(").contains("flush_logbook("),
+            "the journals every exit path writes include the log"
+        );
+        assert!(
+            body_of(src, "fn set_data_folder(").contains("log_store_writer()"),
+            "a folder move copies the open store through its writer"
+        );
+    }
+}
+
+#[cfg(test)]
 mod data_folder_tests {
     use super::*;
 
@@ -2479,7 +2781,8 @@ mod data_folder_tests {
             .map(|rel| (rel.clone(), std::fs::read(current.join(rel)).expect("read")))
             .collect();
 
-        let report = apply_data_folder(&base, &current, &target, true, None, None).expect("copy");
+        let report =
+            apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy");
         assert_eq!(report.files, 3, "log, table and the mailbox file");
         assert!(report.bytes > 0);
         for (rel, body) in &before {
@@ -2577,7 +2880,7 @@ mod data_folder_tests {
             "control: the main file on its own holds none of the {N} contacts"
         );
 
-        apply_data_folder(&base, &current, &target, true, None, None).expect("copy");
+        apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy");
 
         let moved = LogDb::open(&target.join(db_name))
             .and_then(|db| db.load_all())
@@ -2621,7 +2924,7 @@ mod data_folder_tests {
             b"<CALL:5>W1AW <EOR>\n<CALL:5>K1ABC <EOR>\n",
         );
 
-        apply_data_folder(&base, &current, &target, true, None, None).expect("copy");
+        apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy");
 
         for rel in [
             "log.adi",
@@ -2649,8 +2952,8 @@ mod data_folder_tests {
         // `log.adi` is a DIRECTORY in the target: the copy of the one irreplaceable file fails.
         std::fs::create_dir_all(target.join("log.adi")).expect("blocker");
 
-        let err =
-            apply_data_folder(&base, &current, &target, true, None, None).expect_err("must refuse");
+        let err = apply_data_folder(&base, &current, &target, true, None, None, None)
+            .expect_err("must refuse");
         assert!(err.contains("log.adi"), "the failure names the file: {err}");
         assert_eq!(
             read_data_dir_pointer_in(&base).as_deref(),
@@ -2670,19 +2973,19 @@ mod data_folder_tests {
         let (base, current, target) = (root.join("base"), root.join("old"), root.join("new"));
         station(&current);
 
-        let err =
-            apply_data_folder(&base, &current, &target, false, None, None).expect_err("refused");
+        let err = apply_data_folder(&base, &current, &target, false, None, None, None)
+            .expect_err("refused");
         assert!(
             err.contains("empty logbook"),
             "says what would happen: {err}"
         );
         assert_eq!(read_data_dir_pointer_in(&base), None, "nothing was chosen");
         // The same folder WITH the copy is accepted…
-        apply_data_folder(&base, &current, &target, true, None, None).expect("copy accepted");
+        apply_data_folder(&base, &current, &target, true, None, None, None).expect("copy accepted");
         // …and a folder that already holds a log needs no copy (the second machine on a synced log).
         let synced = root.join("synced");
         write(&synced.join("log.adi"), b"<CALL:5>K1ABC <EOR>\n");
-        apply_data_folder(&base, &current, &synced, false, None, None)
+        apply_data_folder(&base, &current, &synced, false, None, None, None)
             .expect("adopting a log is fine");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2695,7 +2998,7 @@ mod data_folder_tests {
         let install = root.join("Program Files/Nexus");
         std::fs::create_dir_all(&install).expect("install dir");
         for target in [install.join("data"), install.join("../Nexus/data")] {
-            let err = apply_data_folder(&base, &current, &target, true, Some(&install), None)
+            let err = apply_data_folder(&base, &current, &target, true, Some(&install), None, None)
                 .expect_err("inside the program folder");
             assert!(err.contains("program folder"), "{err}");
         }
@@ -2707,6 +3010,7 @@ mod data_folder_tests {
             &root.join("documents/nexus"),
             true,
             Some(&install),
+            None,
             None,
         )
         .expect("outside is fine");
@@ -2735,6 +3039,7 @@ mod data_folder_tests {
             true,
             None,
             Some(&mounts_placing(&root, "nfs4")),
+            None,
         )
         .expect_err("a database must not be put on a network filesystem");
         assert!(err.contains("nfs4"), "states the technical reason: {err}");
@@ -2758,6 +3063,7 @@ mod data_folder_tests {
             true,
             None,
             Some(&mounts_placing(&root, "ext4")),
+            None,
         )
         .expect("the same folder on a local filesystem is fine");
         assert_eq!(
@@ -2785,6 +3091,7 @@ mod data_folder_tests {
             true,
             None,
             Some(&mounts_placing(&root, "ext4")),
+            None,
         )
         .expect("a suspected sync folder warns, it does not refuse");
         assert!(
@@ -3110,6 +3417,99 @@ fn logbook_path() -> PathBuf {
 /// The logbook's file name in the data folder. One constant, because the data-folder move asks
 /// the logbook for its files by this name and must name the same file the app opens.
 const LOG_FILE_NAME: &str = "log.adi";
+
+/// Open the logbook database for `log` — converting `log.adi` into it the first time — ready
+/// for [`adopt_logbook`]. All of the launch's logbook I/O is here, and it runs BEFORE the engine
+/// lock is taken: a first launch's conversion of a lifetime log takes seconds.
+///
+/// `network` is the data folder's verdict (`data_folder_location`): a database is never opened
+/// on certain network storage. Every refusal leaves the operator's file as it was (see
+/// `tempo_app::logstore::open`).
+fn open_logbook_store(
+    log: &Path,
+    network: Option<String>,
+) -> Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError> {
+    // The folder, as the 1.13 write path makes it on the first contact: a fresh install has
+    // none yet, and the database cannot be created without it.
+    if let Some(dir) = log.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let resolve: tempo_app::logstore::StoreResolve = Arc::new(|r| {
+        propagation::dxcc::resolve(&r.call).map_or_else(Default::default, |i| {
+            tempo_core::logbook::sqlite::Resolved {
+                entity: Some(i.entity),
+                cq_zone: Some(i.cq_zone),
+            }
+        })
+    });
+    tempo_app::logstore::open(log, resolve, network)
+}
+
+/// Hand this session's log to the engine: the database, when [`open_logbook_store`] opened it —
+/// `log.adi` is from then on its mirror — or, when it could not, `log.adi` itself, run exactly
+/// as 1.13 ran it, with the reason kept and written to the diagnostic log.
+///
+/// Called once, at launch, after the country and state resolvers are set: their fills then
+/// happen in memory, and the launch writes nothing (see `StationCore::attach_store`).
+fn adopt_logbook(
+    eng: &mut Engine,
+    log: &Path,
+    opened: Result<tempo_app::logstore::Opened, tempo_app::logstore::OpenError>,
+) {
+    match opened {
+        Ok(opened) => {
+            let what = match opened.outcome {
+                tempo_core::logbook::migrate::Outcome::Empty => "a new logbook".to_string(),
+                tempo_core::logbook::migrate::Outcome::AlreadyDone => "opened".to_string(),
+                tempo_core::logbook::migrate::Outcome::Converted {
+                    total, resumed_at, ..
+                } => format!(
+                    "{total} contacts converted from log.adi{}",
+                    if resumed_at > 0 {
+                        format!(", resuming after {resumed_at}")
+                    } else {
+                        String::new()
+                    }
+                ),
+            };
+            tempo_core::applog::info("logbook", &format!("the logbook database: {what}"));
+            eng.attach_log_store(opened);
+        }
+        Err(e) => {
+            let why = e.to_string();
+            let line = format!("{why}. This session keeps the log in log.adi, as 1.13 did.");
+            match e {
+                tempo_app::logstore::OpenError::NetworkFolder(_) => {
+                    tempo_core::applog::warn("logbook", &line)
+                }
+                _ => tempo_core::applog::error("logbook", &line),
+            }
+            eng.set_log_path(log.to_path_buf());
+            eng.note_log_store_problem(why);
+        }
+    }
+}
+
+/// How long an exit waits for the logbook to reach the disk before it gives up and says so.
+const LOG_FLUSH_ON_EXIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Carry every change the logbook holds to disk before the process goes — the database's
+/// writer, then the `log.adi` mirror — waiting at most `cap`, and saying so in the diagnostic
+/// log when the disk would not take it in time.
+///
+/// Under the engine lock, deliberately: this is the last word on the log, and holding the lock
+/// is what keeps a change from landing after the flush and dying with the process. It runs
+/// once the radio loop has unkeyed and stopped (quit), or behind the install gate that refuses
+/// while anything is on the air (update), so nothing time-critical waits on it.
+fn flush_logbook(engine: &SharedEngine, cap: std::time::Duration) {
+    let flushed = engine_lock(engine).flush_log_store(cap);
+    if let Err(e) = flushed {
+        tempo_core::applog::error(
+            "logbook",
+            &format!("the logbook was not all on disk when Nexus exited: {e}"),
+        );
+    }
+}
 
 /// The LEGACY (pre-club-sync) Field Day journal location — kept only so the
 /// one-time rename in `run()` can find an existing file and carry it into the
@@ -23940,14 +24340,19 @@ fn capture_all_window_geometry(app_handle: &tauri::AppHandle) {
     }
 }
 
-/// Write out everything the engine is holding in memory: the conversations, the Field Day log,
-/// and any propagation opening still in progress (a 6m Es evening isn't lost because the app
-/// closed mid-opening).
+/// Write out everything the engine is holding in memory: the logbook's changes still on their
+/// way to disk ([`flush_logbook`], first — it is the one thing here that cannot be rebuilt), the
+/// conversations, the Field Day log, and any propagation opening still in progress (a 6m Es
+/// evening isn't lost because the app closed mid-opening).
 ///
 /// Split out of [`quit_cleanup`] so the Windows self-update path can reach it — see
 /// [`prepare_update_install`]. Every call is a plain overwrite of the same files, so running it
 /// twice costs a second write and changes nothing.
 fn persist_journals(app_handle: &tauri::AppHandle) {
+    flush_logbook(
+        app_handle.state::<SharedEngine>().inner(),
+        LOG_FLUSH_ON_EXIT,
+    );
     persist_conversations(app_handle.state::<SharedEngine>().inner());
     persist_field_day_log(app_handle.state::<SharedEngine>().inner());
     if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
@@ -24696,6 +25101,17 @@ pub fn run() {
     // Point the logbook at its ADIF file and load prior contacts (so worked-
     // before highlighting and the log view reflect previous sessions), and
     // restore the persisted signal source.
+    //
+    // The logbook database first, outside the lock (see `open_logbook_store`); the engine
+    // adopts it below, once the resolvers are set.
+    let logbook_store = open_logbook_store(
+        &logbook_path(),
+        data_folder_location::FolderLocation::of(
+            &shared_data_dir(),
+            data_folder_location::mount_table().as_deref(),
+        )
+        .network,
+    );
     {
         let mut eng = engine_lock(&engine);
         // Wire the DXCC entity resolver (cty.dat lives in the propagation crate)
@@ -24815,7 +25231,7 @@ pub fn run() {
                 .and_then(|m| m.get(&call.to_uppercase()).copied())
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
-        eng.set_log_path(logbook_path());
+        adopt_logbook(&mut eng, &logbook_path(), logbook_store);
         // Club-sync position identity: generated once (8 hex), persisted, and
         // never edited — QSO ids are (posid, seq), so a changed id would
         // re-push every contact as new.

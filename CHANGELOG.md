@@ -115,6 +115,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you stop it. (#304)
 ### Changed
 
+- **Your logbook now lives in a database, and `log.adi` is kept as an up-to-date copy of it.**
+  Every change to the log used to rewrite the whole of `log.adi` — every stamp, every
+  confirmation, every edit — and on a big log that rewrite was long enough to make the radio and
+  the screen hesitate each time a contact was saved or an upload was marked. The log is now kept
+  in `log.sqlite3` beside `log.adi`, where a change writes only the contacts it touched. The first
+  time this version starts it converts your log — a lifetime log can take several seconds, once,
+  before the window appears — and keeps the file exactly as it was, as `log.adi.pre-sqlite`.
+  `log.adi` stays where it always was and keeps up with every change, a moment later, so other
+  loggers, backup scripts and sync tools that read it still see every contact. Starting Nexus no
+  longer rewrites the log at all, and quitting waits for the last change to reach the disk. A
+  data folder on a network drive keeps the log in `log.adi` alone, as before.
+  Two radio windows on one data folder now see each other's corrections and deletions as they
+  are: a contact corrected in one window is corrected in the other, not logged a second time
+  beside the old one, and a contact deleted in one stays deleted instead of coming back when the
+  other window next saves.
+  Two things behave differently, and both are the safe side of a change. If something other
+  than Nexus writes to `log.adi` — an older Nexus on the same folder, a restored backup — Nexus
+  takes that file's contacts in the way the Logbook's Import does: new contacts are added and
+  confirmations come across, but a contact changed or removed only in that file is not changed or
+  removed in your log. And if Nexus stops in the middle of importing a large file, the contacts
+  it had already taken in are kept; importing the file again adds the rest without duplicating
+  any.
 - **Nexus now refuses to put your data and log folder on a network drive, and tells you why.**
   Settings ▸ Config ▸ Data & log folder used to accept a NAS or a mapped network drive, and the
   manual suggested exactly that for a multi-PC shack. That was survivable while the logbook was a
