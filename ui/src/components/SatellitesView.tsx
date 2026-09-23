@@ -41,6 +41,7 @@ import type {
   SatPassEarn,
   SatSked,
   SatTrackStatus,
+  SatTransmitter,
   SatVfoMap,
   SatView,
   Settings,
@@ -1619,6 +1620,24 @@ const fmtLeg = (lowHz: number | null, highHz: number | null) => {
   return highHz != null && highHz > lowHz ? `${low}–${(highHz / 1e6).toFixed(3)}` : low
 }
 
+/** The DOWNLINK's mode. SatNOGS sends no per-leg downlink field: its `mode` IS the downlink's
+ * mode and `uplink_mode` its only per-leg one, so `downlinkMode` is null on every record it
+ * sends. Read alone, it left the ↓ leg blank on every card with an uplink mode and kept the
+ * TX-sideband note from ever rendering. The backend's `Transmitter::downlink_class` makes this
+ * same fallback. */
+const downMode = (tx: SatTransmitter) => tx.downlinkMode ?? tx.mode
+
+/** The record lists the sideband swap the engine itself commands. `uplink_mode_for` (tempo-core
+ * doppler.rs) swaps USB and LSB on an INVERTING transponder and passes every other mode through,
+ * so only an inverting bird whose uplink is the opposite sideband of its downlink gets the uplink
+ * its record lists. The TX-sideband note forecasts exactly that, so it renders for no other
+ * record: KOSEN-1 lists CW up over AFSK down, and the engine would set FM there, never CW. */
+const isSidebandSwap = (tx: SatTransmitter) => {
+  const down = downMode(tx)?.trim().toUpperCase()
+  const up = tx.uplinkMode?.trim().toUpperCase()
+  return tx.invert && ((down === 'USB' && up === 'LSB') || (down === 'LSB' && up === 'USB'))
+}
+
 /** SatNOGS `type` in operator words, for the chooser cards. Unknown = no chip
  * — never guess a kind. */
 const kindWord = (k: string | null) =>
@@ -2820,19 +2839,14 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
     snap?.link.tier,
     snap?.radio.operatingMode,
   )
-  // The RECORD's per-leg sidebands differing (SatNOGS data) — used only to
-  // decide whether the chooser's TX-sideband note renders at all, and for the
+  // The RECORD listing an inverting LSB/USB pair (`isSidebandSwap`) — used only
+  // to decide whether the chooser's TX-sideband note renders at all, and for the
   // pre-arm FORECAST wording. What the engine actually commands is the DTO's
   // `txMode` (its own answer), never re-derived from the record: the two
   // disagree exactly where it matters (CW/data downlinks, a downlink-only
   // mapping, an operator take-back), and the display must not claim a
   // command the radio never gets.
-  const txSwapMode =
-    heldT?.uplinkMode != null &&
-    heldT.downlinkMode != null &&
-    heldT.uplinkMode !== heldT.downlinkMode
-      ? heldT.uplinkMode
-      : null
+  const txSwapMode = heldT != null && isSidebandSwap(heldT) ? heldT.uplinkMode : null
 
   const armTrack = (name: string, aosUnix: number) => {
     if(!stationControl)return
@@ -4031,10 +4045,10 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                             <span className="sat-tp-legs">
                               <span className="sat-tp-leg">
                                 ↓ <b>{fmtLeg(tx.downlinkLowHz, tx.downlinkHighHz)}</b>
-                                {/* A per-leg card has no mode chip, so the rate rides this leg. */}
+                                {/* A single-mode card's chip carries its mode and rate; a per-leg card prints the downlink's here. */}
                                 {(tx.downlinkMode != null || tx.uplinkMode != null) &&
-                                  withBaud(tx.downlinkMode, tx.baud) &&
-                                  ` ${withBaud(tx.downlinkMode, tx.baud)}`}
+                                  withBaud(downMode(tx), tx.baud) &&
+                                  ` ${withBaud(downMode(tx), tx.baud)}`}
                               </span>
                               <span className="sat-tp-leg">
                                 ↑ <b>{fmtLeg(tx.uplinkLowHz, tx.uplinkHighHz)}</b>
@@ -4112,7 +4126,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                             tags={{ b: <b /> }}
                             vals={{
                               tx: detailTrack.txMode,
-                              down: heldT.downlinkMode ?? '',
+                              down: downMode(heldT) ?? '',
                             }}
                           />
                         ) : (
@@ -4122,7 +4136,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                           // row under "correcting the downlink".
                           t('sat.transponder.txMode.notCommanded', {
                             up: txSwapMode,
-                            down: heldT.downlinkMode ?? '',
+                            down: downMode(heldT) ?? '',
                             why: !dopplerOn
                               ? t('sat.transponder.txMode.why.dopplerOff')
                               : !detailTrack.dopplerUplink
@@ -4133,7 +4147,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                       ) : (
                         t('sat.transponder.txMode.forecast', {
                           up: txSwapMode,
-                          down: heldT.downlinkMode ?? '',
+                          down: downMode(heldT) ?? '',
                         })
                       )}
                     </div>

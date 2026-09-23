@@ -148,6 +148,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal once or twice at every start. It looks there again, after its own bundled copies, the
   way 1.13 did. Nothing else about the AppImage changes, and the .deb was never affected.
 
+- **A transponder card in the Satellites section now shows the downlink's mode, not just the
+  uplink's.** On a card whose uplink lists a mode of its own — RS-44's linear transponder, many FM
+  repeaters, the packet digipeaters — the ↑ side showed its mode and the ↓ side showed none, so
+  RS-44 read `↑ 145.935–145.995 LSB` and never said the USB you listen on. It now reads
+  `↓ 435.610–435.670 USB` as well. The line under the list that says which sideband the transmit
+  (split) VFO takes had the same fault and never appeared at all; it now shows once you pick RS-44
+  or another inverting transponder.
+
 - **The filter no longer stays at 6 kHz when you switch from phone or CW into a digital mode.**
   A Flex over SmartSDR CAT answers "done" to the 3 kHz data filter Nexus asks for and then keeps
   its own 6 kHz SSB filter. Nexus already read the filter back and put the right one in — but

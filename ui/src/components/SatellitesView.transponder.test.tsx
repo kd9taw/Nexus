@@ -179,6 +179,108 @@ describe('a bird with no transmitters on screen (#269)', () => {
   })
 })
 
+describe('the downlink mode, as SatNOGS actually sends it', () => {
+  // RS-44's transponder and beacon exactly as the live catalog sent them on 2026-09-23. SatNOGS
+  // has no per-leg DOWNLINK field: its `mode` IS the downlink's mode and `uplink_mode` the only
+  // per-leg one, so `downlinkMode` arrives null on every record — unlike the fixture above.
+  type Tx = SatDetail['transmitters'][number]
+  const asSent = (over: Partial<Tx>): Tx => ({
+    description: '',
+    alive: true,
+    mode: null,
+    uplinkLowHz: null,
+    downlinkLowHz: null,
+    invert: false,
+    uplinkHighHz: null,
+    downlinkHighHz: null,
+    uplinkMode: null,
+    downlinkMode: null,
+    kind: null,
+    ...over,
+  })
+  const transponder = asSent({
+    description: 'Mode V/U - Transponder',
+    kind: 'Transponder',
+    mode: 'USB',
+    uplinkMode: 'LSB',
+    invert: true,
+    uplinkLowHz: 145_935_000,
+    uplinkHighHz: 145_995_000,
+    downlinkLowHz: 435_610_000,
+    downlinkHighHz: 435_670_000,
+  })
+  const beacon = asSent({
+    description: 'Mode U - Beacon',
+    kind: 'Transmitter',
+    mode: 'CW',
+    downlinkLowHz: 435_605_000,
+  })
+  const card = async (description: string) => {
+    const el = (await screen.findByText(description)).closest('.sat-tp-card')
+    const text = (sel: string) => Array.from(el?.querySelectorAll(sel) ?? []).map((e) => e.textContent)
+    return { legs: text('.sat-tp-leg'), chips: text('.sat-tp-kind') }
+  }
+  const show = (...transmitters: Tx[]) =>
+    api.getSatDetail.mockImplementation(() => Promise.resolve({ ...detail(), transmitters }))
+
+  it('puts the downlink mode on the ↓ leg of a card whose uplink has its own', async () => {
+    // The ↓ side read the empty per-leg field and printed nothing, so an inverting transponder
+    // never said it wants USB down — the half of the pair the receiver is tuned to.
+    show(transponder)
+    render(<SatellitesView focusSat="RS-44" />)
+    expect(await card('Mode V/U - Transponder')).toEqual({
+      legs: ['↓ 435.610–435.670 USB', '↑ 145.935–145.995 LSB'],
+      chips: ['linear'],
+    })
+  })
+
+  it('keeps a single-mode card showing its mode once, in the chip', async () => {
+    show(beacon)
+    render(<SatellitesView focusSat="RS-44" />)
+    expect(await card('Mode U - Beacon')).toEqual({
+      legs: ['↓ 435.605', '↑ —'],
+      chips: ['beacon', 'CW'],
+    })
+  })
+
+  it('says which sideband the TX VFO takes once the inverting transponder is picked', async () => {
+    // The TX-sideband note keyed on the same empty field, so it never appeared for a real bird.
+    show(transponder)
+    render(<SatellitesView focusSat="RS-44" />)
+    fireEvent.click(await screen.findByLabelText('Work Mode V/U - Transponder'))
+    expect((await screen.findByTestId('sat-tp-txmode')).textContent).toMatch(/LSB up \/ USB down/)
+  })
+
+  // The note forecasts "the TX (split) VFO is set to match" the uplink the record lists. The
+  // engine commands uplink_mode_for(downlink rig mode, invert): only an INVERTING bird swaps, and
+  // only between USB and LSB. Anywhere else the record's uplink is not what the engine would set.
+  const onboardSdr = {
+    description: 'Mode HF/U - Onboard SDR',
+    kind: 'Transponder',
+    mode: 'AFSK',
+    uplinkMode: 'CW',
+    uplinkLowHz: 21_125_000,
+    uplinkHighHz: 21_150_000,
+    downlinkLowHz: 435_525_000,
+  }
+  it.each([
+    // KOSEN-1 exactly as listed: the engine would put FM on the TX VFO, never CW.
+    ['KOSEN-1: CW up over an AFSK downlink', { ...onboardSdr, invert: false }],
+    // The same legs on an inverting bird: FM has no sideband to swap, so still FM.
+    ['the same legs on an inverting bird', { ...onboardSdr, invert: true }],
+    // A non-inverting bird keeps the downlink's sideband: USB, not the LSB listed.
+    ['a non-inverting LSB/USB pair', { ...transponder, description: 'Mode V/U - Transponder', invert: false }],
+  ])('says nothing about the TX sideband for %s', async (_, over) => {
+    show(asSent(over))
+    render(<SatellitesView focusSat="RS-44" />)
+    fireEvent.click(await screen.findByLabelText(`Work ${over.description}`))
+    // The pick has landed (this line and the note render from the same hold), so an absent note
+    // is a decision, not a render that has not happened yet.
+    await screen.findByText(/Doppler tunes this transponder while auto-track/)
+    expect(screen.queryByTestId('sat-tp-txmode')).toBeNull()
+  })
+})
+
 describe('what the row tells the operator', () => {
   it('marks the inverting transponder, and only that one', async () => {
     render(<SatellitesView focusSat="RS-44" />)
@@ -315,8 +417,8 @@ describe('the downlink data rate SatNOGS lists (baud)', () => {
 
   it('belongs to the downlink leg, never beside the uplink mode', async () => {
     // KOSEN-1's onboard-SDR transponder sends AFSK down at 1200 and takes CW up. A card with a
-    // per-leg mode has no mode chip, so the rate rides the ↓ leg; beside "CW" it would describe
-    // a 1200-baud CW uplink that does not exist.
+    // per-leg mode has no mode chip, so the downlink's mode and rate ride the ↓ leg together;
+    // beside "CW" the rate would describe a 1200-baud CW uplink that does not exist.
     api.getSatDetail.mockImplementation(() =>
       Promise.resolve(
         bird('KOSEN-1', 49402, [
@@ -333,7 +435,7 @@ describe('the downlink data rate SatNOGS lists (baud)', () => {
       ),
     )
     render(<SatellitesView focusSat="KOSEN-1" />)
-    expect(await legs('Mode HF/U - Onboard SDR')).toEqual(['↓ 435.525 1200 bd', '↑ 21.125–21.150 CW'])
+    expect(await legs('Mode HF/U - Onboard SDR')).toEqual(['↓ 435.525 AFSK · 1200 bd', '↑ 21.125–21.150 CW'])
     expect(await chips('Mode HF/U - Onboard SDR')).toEqual(['linear'])
   })
 })
