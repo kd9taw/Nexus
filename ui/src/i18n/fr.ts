@@ -4045,6 +4045,7 @@ export const FR: PartialCatalog = {
   "sat.track.stop.noRotor.title": "Arrêter ce suivi (aucun rotor concerné ; le VFO est rendu)",
   "sat.track.stop.rotor.title": "Arrêter le suivi automatique (le rotor s'arrête)",
   "sat.transponder.auto": "choisi pour vous — changez ici si ce n'est pas le bon",
+  "sat.transponder.baud": "{{baud}} bd",
   "sat.transponder.card.aria": "Contacter via {{description}}",
   "sat.transponder.dead": "signalé mort (SatNOGS) — non exploitable",
   "sat.transponder.head": "Transpondeur",

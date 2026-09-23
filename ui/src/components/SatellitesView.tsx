@@ -1630,6 +1630,16 @@ const kindWord = (k: string | null) =>
         ? t('sat.kind.fmRepeater')
         : null
 
+/** A downlink's mode with the symbol rate SatNOGS lists for it — "AFSK · 1200 bd" — or whichever
+ * of the two is known ('' for neither). The rate is the DOWNLINK's: SatNOGS's `baud` qualifies its
+ * `mode`, never `uplink_mode`, so a card prints it only where it prints the downlink's mode. An
+ * unknown rate (null, or absent from a station that predates the field) prints nothing, never
+ * "0 bd". */
+const withBaud = (mode: string | null, baud: number | null | undefined) =>
+  [mode, baud != null && baud > 0 ? t('sat.transponder.baud', { baud }) : null]
+    .filter(Boolean)
+    .join(' · ')
+
 /* ======================= the readiness rail (top-5 ①) =======================
  * The arming chain rendered AS a chain: five gates, always five rows, each
  * not-ready row carrying its own fix instead of prose pointing at another
@@ -4014,12 +4024,17 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Prop
                               )}
                               {tx.downlinkMode == null &&
                                 tx.uplinkMode == null &&
-                                tx.mode != null && <span className="sat-tp-kind">{tx.mode}</span>}
+                                withBaud(tx.mode, tx.baud) && (
+                                  <span className="sat-tp-kind">{withBaud(tx.mode, tx.baud)}</span>
+                                )}
                             </span>
                             <span className="sat-tp-legs">
                               <span className="sat-tp-leg">
                                 ↓ <b>{fmtLeg(tx.downlinkLowHz, tx.downlinkHighHz)}</b>
-                                {tx.downlinkMode ? ` ${tx.downlinkMode}` : ''}
+                                {/* A per-leg card has no mode chip, so the rate rides this leg. */}
+                                {(tx.downlinkMode != null || tx.uplinkMode != null) &&
+                                  withBaud(tx.downlinkMode, tx.baud) &&
+                                  ` ${withBaud(tx.downlinkMode, tx.baud)}`}
                               </span>
                               <span className="sat-tp-leg">
                                 ↑ <b>{fmtLeg(tx.uplinkLowHz, tx.uplinkHighHz)}</b>

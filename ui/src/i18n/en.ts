@@ -4085,6 +4085,9 @@ export const EN = {
   'sat.transponder.none.aria': 'Work no transponder — leave the dial to me',
   'sat.transponder.none.label': 'None — leave the dial to me',
   'sat.transponder.card.aria': 'Work {{description}}',
+  // The downlink's symbol rate beside its mode on a card ("AFSK · 1200 bd"). The number is an
+  // invariant token and `bd` is read off the catalog the way MHz is: the same in every language.
+  'sat.transponder.baud': '{{baud}} bd',
   'sat.transponder.auto': 'picked for you — change it here if this is not the one',
   'sat.transponder.showAll': 'show all {{count}} ▾',
   'sat.transponder.showAll.title': 'Show every workable transmitter SatNOGS lists for this bird',

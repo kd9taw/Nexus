@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stations much more than about 3300 km apart simply cannot see it together, and that is an
   answer rather than a failure.
 
+- **The Satellites transponder list now shows a downlink's data rate beside its mode.** A packet
+  or telemetry downlink reads `AFSK · 1200 bd` or `GMSK · 9600 bd` instead of the mode alone, so
+  you can tell a 1200-baud bird your TNC copies from a 9600-baud one before the pass starts. The
+  rate is the one the SatNOGS database lists for that transmitter; where it lists none — most
+  voice, CW and SSTV entries — nothing is added, rather than a guessed rate or a zero.
+
 - **PSK now has editable F-key macros, the way RTTY does.** The PSK dock's four macro keys were
   fixed in place: the messages could not be changed, there was no way to add one of your own, and
   the keys drawn on them — F1, F2, F3, F4 — did nothing when you actually pressed them, so the one

@@ -541,6 +541,10 @@ export interface SatTransmitter {
   /** SatNOGS `type`: "Transmitter" (beacon, downlink only), "Transponder"
    * (linear passband), "Transceiver" (FM repeater). */
   kind: string | null
+  /** The DOWNLINK's symbol rate as SatNOGS lists it — it qualifies `mode`, never
+   * `uplinkMode`. May be fractional (45.45). null = not known (the backend reads
+   * SatNOGS's 0 as not known too); absent = a station that predates the field. */
+  baud?: number | null
 }
 
 /** Which VFO carries the UPLINK during a pass (Settings.satVfoMap).
