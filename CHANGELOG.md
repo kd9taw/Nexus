@@ -173,6 +173,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A station in the Stations list no longer runs under its own SNR badge.** At the 1024×768
+  floor the list is about 250 px wide, which left the callsign room for three or four letters,
+  so every call ran under the SNR number and the chips carried on over the Work button. A long
+  country, grid and distance line could do the same even on a wide screen. Chips that do not
+  fit beside the call now start a second row, the SNR badge moves under the call when the list
+  is that narrow, and the second line trims itself with "…" as it was always meant to. On a
+  full band the cards are the same height as before; on a quiet band they are now that same
+  compact height.
+
 - **The Linux AppImage no longer prints `Failed to load module "canberra-gtk-module"` when it
   starts.** The 1.14.0 AppImage stopped looking in your system's own GTK folders, so the add-ons
   your desktop asks every GTK program to load — the event-sound module, and on some desktops the
