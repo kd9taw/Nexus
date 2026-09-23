@@ -207,7 +207,7 @@ pub struct StationCore {
     /// the tests that pin `log.adi`'s own behaviour still drive through [`Self::set_log_path`].
     pub(crate) store: Option<LogStore>,
     /// Why the store is not in use this session, when it was asked for and could not be opened.
-    pub(crate) store_problem: Option<String>,
+    pub(crate) store_problem: Option<crate::dto::LogStoreProblem>,
     /// `log_qso`'s duplicate guard, answered from the rows sharing a contact's base call —
     /// see [`tempo_core::logbook::dedup`]. Read against the in-memory log only: it has no
     /// store in scope and cannot wait on one.

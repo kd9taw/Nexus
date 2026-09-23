@@ -1015,6 +1015,24 @@ export const EN = {
     'LoTW rejected your certificate/Station Location: {{detail}}',
   'logbook.lotw.upload.failed': 'LoTW upload failed',
   'logbook.lotw.upload.failedDetail': 'LoTW upload failed: {{detail}}',
+  // Contacts that changed while TQSL was signing an upload are not marked with its result (the
+  // connection log carries the same counts). THREE STATEMENTS, each with its own count — see
+  // the import note — shown from the Logbook's upload and the Awards upload buttons alike. The
+  // first always shows, with the total; each of the other two only when its count is not zero,
+  // and each keeps its own leading separator.
+  'logbook.lotw.skipped.changed': {
+    one: '{{count}} QSO changed while TQSL was signing this upload, so Nexus did not mark it as uploaded.',
+    other:
+      '{{count}} QSOs changed while TQSL was signing this upload, so Nexus did not mark them as uploaded.',
+  },
+  'logbook.lotw.skipped.edited': {
+    one: ' {{count}} was edited and is offered again with the next upload.',
+    other: ' {{count}} were edited and are offered again with the next upload.',
+  },
+  'logbook.lotw.skipped.deleted': {
+    one: ' {{count}} was deleted from the log.',
+    other: ' {{count}} were deleted from the log.',
+  },
 
   // ⚠️ `{{formatted}}` is a QSO COUNT the call site has already grouped for display
   // ("1,234"). It is a count of contacts, not a technical quantity — no dial, no report, no
@@ -9109,6 +9127,16 @@ export const EN = {
   'shell.toast.logged': 'Logged QSO',
   'shell.toast.nothingToLog':
     'Nothing to log — the QSO already closed or no report was exchanged',
+  // The logbook database could not be opened at launch, so this session keeps the log in
+  // log.adi. Shown once per session until dismissed. Two whole messages, one per remedy: a
+  // network data folder is fixed in Settings, anything else is read in the diagnostic log.
+  // `{{reason}}` is the station's diagnostic wording, passed through untranslated. The Settings
+  // paths name the tab and section as this language labels them ("Diagnostic log" is labelled
+  // in English in every language today).
+  'shell.logStore.network':
+    'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ Config ▸ Data & log folder.',
+  'shell.logStore.failed':
+    'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Diagnostic log.',
   'shell.message.failed': 'Message could not be sent',
   'shell.bandFeed.failed': 'Could not open the band feed',
   'shell.resend.failed': 'Could not re-send to {{peer}}',

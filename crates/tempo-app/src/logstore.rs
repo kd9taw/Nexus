@@ -1543,6 +1543,64 @@ mod tests {
         untouched(&d, &before, "newer store");
     }
 
+    /// ★ THE SCREEN SAYS SO. A refused store reaches the snapshot the UI renders from, as the
+    /// diagnostic log words it and with whether the data folder is the cause — the one refusal
+    /// the operator fixes in Settings. A store in use reaches it as nothing, so there is nothing
+    /// to show.
+    #[test]
+    fn a_refused_store_reaches_the_snapshot_with_its_reason() {
+        let seen = |err: &OpenError| {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.note_log_store_problem(err);
+            e.snapshot().log_store_problem
+        };
+
+        let share = Dir::new("snap-network");
+        std::fs::write(share.log(), legacy_log(3)).unwrap();
+        let err = open_with(
+            &share.log(),
+            no_resolve(),
+            Some("a network drive (nfs4)".into()),
+            fast(),
+        )
+        .err()
+        .expect("refused");
+        assert_eq!(
+            seen(&err),
+            Some(crate::dto::LogStoreProblem {
+                network_folder: true,
+                reason: err.to_string(),
+            }),
+            "a network folder, and the reason the diagnostic log gives"
+        );
+
+        let newer = Dir::new("snap-newer");
+        std::fs::write(newer.log(), legacy_log(3)).unwrap();
+        LogDb::open(&newer.db())
+            .unwrap()
+            .set_meta("schema_version", 99)
+            .unwrap();
+        let err = open_with(&newer.log(), no_resolve(), None, fast())
+            .err()
+            .expect("refused");
+        let problem = seen(&err).expect("the reason reaches the snapshot");
+        assert!(
+            !problem.network_folder,
+            "a newer build's database is not the folder's fault"
+        );
+        assert!(problem.reason.contains("schema version 99"), "{problem:?}");
+
+        let fine = Dir::new("snap-fine");
+        std::fs::write(fine.log(), legacy_log(3)).unwrap();
+        let e = engine_on_store(&fine);
+        assert_eq!(
+            e.snapshot().log_store_problem,
+            None,
+            "a store in use says nothing"
+        );
+        flush(&e);
+    }
+
     /// A database already at the destination that holds a DIFFERENT log (a folder copied from
     /// another machine): it is the store, and the `log.adi` beside it — which it does not
     /// account for — is taken into it, so neither log loses a contact.

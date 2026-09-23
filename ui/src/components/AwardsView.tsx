@@ -18,6 +18,8 @@ import {
 } from '../api'
 import { t } from '../i18n'
 import { loadSharedLog } from '../features/logStore'
+import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
+import { pushToast } from '../toast'
 import { StateBlock } from './StateBlock'
 
 /** The programmes' own names. Award names are invariant tokens — DXCC is DXCC in every
@@ -338,6 +340,11 @@ export function AwardsView({
     setUploadMsg(null)
     try {
       const r = await uploadLotwReport(indices)
+      // Contacts that changed while TQSL signed are not marked (features/lotwSkips). A toast, as
+      // the Logbook's upload says it — raised before the mount check, so it still reaches an
+      // operator who left this view while TQSL worked.
+      const skipped = lotwSkipNote(r)
+      if (skipped) pushToast(skipped, 'info', LOTW_SKIP_TOAST_MS)
       const fresh = await getConfirmationDiagnostics().catch(() => null)
       if (!mounted.current) return
       setUploadMsg(uploadMessage(r))

@@ -2381,6 +2381,11 @@ mod lotw_batch_tests {
         })
         .expect("the upload ran");
         assert_eq!((report.dispatched, report.outcome.as_str()), (3, "pending"));
+        assert_eq!(
+            (report.skipped_edited, report.skipped_deleted),
+            (0, 1),
+            "the report counts the contact deleted while TQSL ran, for the screen"
+        );
 
         let pending = Some(Some(UploadOutcome::Pending));
         for (held, what) in outcomes(&dir, &engine, &ids)
@@ -2412,6 +2417,11 @@ mod lotw_batch_tests {
         })
         .expect("the upload ran");
         assert_eq!((report.dispatched, report.outcome.as_str()), (4, "pending"));
+        assert_eq!(
+            (report.skipped_edited, report.skipped_deleted),
+            (1, 0),
+            "the report counts the contact edited while TQSL ran, for the screen"
+        );
 
         let pending = Some(Some(UploadOutcome::Pending));
         for (held, what) in outcomes(&dir, &engine, &ids)
@@ -2567,7 +2577,41 @@ mod logbook_startup_tests {
             "and the reason is kept: {:?}",
             e.log_store_problem()
         );
+        let shown = e.snapshot().log_store_problem;
+        assert!(
+            shown
+                .as_ref()
+                .is_some_and(|p| p.network_folder && p.reason.contains("NFS")),
+            "and the snapshot carries it to the screen, as the folder's doing: {shown:?}"
+        );
         assert!(!database_path(&log).exists(), "no database on a share");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A log the conversion cannot read one contact out of: the session runs on `log.adi`, and
+    /// the snapshot says why — a problem that is not the folder's, so the screen points at the
+    /// diagnostic log rather than at the data folder.
+    #[test]
+    fn a_store_that_will_not_open_puts_its_reason_in_the_snapshot() {
+        let dir = folder("unreadable", Some(0));
+        let log = dir.join("log.adi");
+        std::fs::write(
+            &log,
+            format!(
+                "{}\u{0}\u{1}not an adif file at all\n",
+                tempo_core::logbook::adif_header()
+            ),
+        )
+        .expect("log");
+        let e = launch(&log, None, true);
+        assert!(!e.log_store_open());
+        let shown = e.snapshot().log_store_problem;
+        assert!(
+            shown
+                .as_ref()
+                .is_some_and(|p| !p.network_folder && p.reason.contains("no readable contacts")),
+            "the snapshot says why, and it is not the folder: {shown:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2582,6 +2626,11 @@ mod logbook_startup_tests {
             e.log_store_open(),
             "a fresh install starts on the database: {:?}",
             e.log_store_problem()
+        );
+        assert_eq!(
+            e.snapshot().log_store_problem,
+            None,
+            "and the snapshot has nothing to show"
         );
         assert!(!log.exists(), "and makes no log.adi before a contact");
         drop(e);
@@ -3447,7 +3496,8 @@ fn open_logbook_store(
 
 /// Hand this session's log to the engine: the database, when [`open_logbook_store`] opened it —
 /// `log.adi` is from then on its mirror — or, when it could not, `log.adi` itself, run exactly
-/// as 1.13 ran it, with the reason kept and written to the diagnostic log.
+/// as 1.13 ran it, with the reason kept, written to the diagnostic log and carried in the
+/// snapshot, where the screen shows it once a session.
 ///
 /// Called once, at launch, after the country and state resolvers are set: their fills then
 /// happen in memory, and the launch writes nothing (see `StationCore::attach_store`).
@@ -3485,7 +3535,7 @@ fn adopt_logbook(
                 _ => tempo_core::applog::error("logbook", &line),
             }
             eng.set_log_path(log.to_path_buf());
-            eng.note_log_store_problem(why);
+            eng.note_log_store_problem(&e);
         }
     }
 }
@@ -19326,6 +19376,8 @@ fn lotw_upload_batch_with(
                 dispatched: 0,
                 outcome: "none".into(),
                 detail: None,
+                skipped_edited: 0,
+                skipped_deleted: 0,
             });
         }
         let adif = eng.lotw_upload_adif(&batch);
@@ -19384,6 +19436,8 @@ fn lotw_upload_batch_with(
             dispatched: batch.len(),
             outcome: "retry".into(),
             detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
+            skipped_edited: 0,
+            skipped_deleted: 0,
         }),
         Some(outcome) => {
             let (done, durable) = engine_lock(state).with_log_tickets(|eng| {
@@ -19444,6 +19498,10 @@ fn lotw_upload_batch_with(
                 dispatched: batch.len(),
                 outcome: outcome.code().to_string(),
                 detail,
+                // The same counts as the connection-log line above, for the screen: an upload
+                // count that does not clear otherwise reads as an upload that failed.
+                skipped_edited: done.changed,
+                skipped_deleted: done.gone,
             })
         }
     }
@@ -21307,6 +21365,8 @@ fn eqsl_push_qso_impl(
             dispatched: 1,
             outcome: "retry".into(),
             detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
+            skipped_edited: 0,
+            skipped_deleted: 0,
         }),
         Some(outcome) => {
             let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
@@ -21322,6 +21382,8 @@ fn eqsl_push_qso_impl(
                 dispatched: 1,
                 outcome: outcome.code().to_string(),
                 detail: None,
+                skipped_edited: 0,
+                skipped_deleted: 0,
             })
         }
     }

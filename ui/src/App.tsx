@@ -669,6 +669,24 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
     }
   }, [snap?.uploadTick, snap?.uploadNote, snap?.uploadOk])
 
+  // The logbook database could not be opened at launch, so this session keeps the log in
+  // log.adi. Said ONCE a session, sticky until the operator dismisses it, and never in the way
+  // (a toast, not a dialog); the ref, not the snapshot, is what stops every poll re-raising it.
+  // Not on the Remote: the remedy lives in the station's own Settings, which the Remote hides.
+  const logStoreNoticeShown = useRef(false)
+  useEffect(() => {
+    const problem = snap?.logStoreProblem
+    if (!problem || remote || logStoreNoticeShown.current) return
+    logStoreNoticeShown.current = true
+    pushToast(
+      problem.networkFolder
+        ? t('shell.logStore.network')
+        : t('shell.logStore.failed', { reason: problem.reason }),
+      'error',
+      0,
+    )
+  }, [snap?.logStoreProblem, remote])
+
 
   // Per-(band,mode) last-alert time so a band coming alive toasts once, not every
   // poll (defence in depth — the backend tracker already flags `isNew` once).

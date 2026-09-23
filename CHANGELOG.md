@@ -131,7 +131,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `log.adi` stays where it always was and keeps up with every change, a moment later, so other
   loggers, backup scripts and sync tools that read it still see every contact. Starting Nexus no
   longer rewrites the log at all, and quitting waits for the last change to reach the disk. A
-  data folder on a network drive keeps the log in `log.adi` alone, as before.
+  data folder on a network drive keeps the log in `log.adi` alone, as before, and so does a start
+  where the database cannot be opened. Either way Nexus says so once on screen, with the reason
+  and what to do.
   Two radio windows on one data folder now see each other's corrections and deletions as they
   are: a contact corrected in one window is corrected in the other, not logged a second time
   beside the old one, and a contact deleted in one stays deleted instead of coming back when the
@@ -236,7 +238,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unmarked. The result now goes on exactly the contacts that were sent, found by their identity
   rather than their place in the log. A contact you correct while TQSL is working is left unmarked
   too, because LoTW has the version from before your correction; it is offered again with your
-  next upload. The connection log says when either happens.
+  next upload. The connection log says when either happens, and an upload you start also shows the
+  counts in a toast.
 
 - **The SSTV screen now says where the switch is that keeps your radio in the data mode.** On an
   IC-7300 or IC-7100 the rig drops back to plain USB between pictures, taking its data-mode
