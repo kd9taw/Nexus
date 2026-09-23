@@ -135,6 +135,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Linux AppImage no longer prints `Failed to load module "canberra-gtk-module"` when it
+  starts.** The 1.14.0 AppImage stopped looking in your system's own GTK folders, so the add-ons
+  your desktop asks every GTK program to load — the event-sound module, and on some desktops the
+  helpers for its theme and window decorations — could not be found, and GTK said so in the
+  terminal once or twice at every start. It looks there again, after its own bundled copies, the
+  way 1.13 did. Nothing else about the AppImage changes, and the .deb was never affected.
+
 - **The filter no longer stays at 6 kHz when you switch from phone or CW into a digital mode.**
   A Flex over SmartSDR CAT answers "done" to the 3 kHz data filter Nexus asks for and then keeps
   its own 6 kHz SSB filter. Nexus already read the filter back and put the right one in — but

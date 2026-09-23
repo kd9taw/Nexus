@@ -316,6 +316,30 @@ jobs:
           [ -e "$appdir/squashfs-root/usr/lib/libwebkit2gtk-4.1.so.0" ] \
             || { echo "AppDir looks wrong: libwebkit2gtk is missing too — the check is broken, not the bundle"; exit 1; }
           echo "AppImage: libwayland-client.so.0 absent, webkit present — ok"
+          # THE HOST'S GTK 3 MODULES MUST STAY REACHABLE. GTK looks for the modules a desktop asks
+          # for (event sounds, theme and window-decoration helpers) only in GTK_PATH, and the GTK
+          # plugin's hook points that inside the AppImage alone — 1.14.0 shipped it and printed
+          # `Failed to load module "canberra-gtk-module"` at every start. build-linux.sh appends the
+          # host's directories after the bundled one. Asserted on the SHIPPED hook, evaluated the way
+          # AppRun sources it rather than grepped, because the fork's wording and upstream's differ.
+          gtk_hook="$appdir/squashfs-root/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+          [ -s "$gtk_hook" ] || { echo "the AppImage has no GTK hook — the check is broken, or the GTK plugin never ran"; exit 1; }
+          # shellcheck disable=SC1090  # the hook is generated at bundle time, so there is no fixed path
+          gtk_path=$( set +euo pipefail; export APPDIR=/APPDIR; unset GTK_PATH; . "$gtk_hook" >/dev/null 2>&1; printf '%s' "${GTK_PATH:-}" )
+          # Positive control: the hook really was evaluated, and the bundled directory still comes first.
+          case ":$gtk_path:" in
+            :/APPDIR/*) ;;
+            *) echo "GTK_PATH from the shipped hook is '$gtk_path', not the AppImage's own directory first — the check or the hook is broken"; exit 1 ;;
+          esac
+          for d in /usr/lib64/gtk-3.0 /usr/lib/x86_64-linux-gnu/gtk-3.0; do
+            case ":$gtk_path:" in
+              *":$d:"*) ;;
+              *) echo "the AppImage's GTK_PATH ($gtk_path) does not reach $d, so the host's GTK modules cannot load."
+                 echo "scripts/build-linux.sh appends them after the bundled directory — that step did not run."
+                 exit 1 ;;
+            esac
+          done
+          echo "AppImage: GTK_PATH=$gtk_path — bundled first, then the host's — ok"
           # OPENSSL MUST BE BUNDLED, WITH ITS LICENCE. The binary links libssl.so.3 and
           # libcrypto.so.3 for HRDLog.net uploads (native-tls), so an AppImage without them does
           # not start at all on a host with no OpenSSL 3. linuxdeploy copies them because they are
