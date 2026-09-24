@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
+import { useState } from 'react'
 import { SetupWizard } from './SetupWizard'
 import * as api from '../api'
 import { memoriesStore, emptyBank, addMemory } from '../features/memories'
@@ -420,5 +421,35 @@ describe('SetupWizard FlexRadio discovery', () => {
     // …and the rest of the one-click apply still lands, so this is an addition, not a swap.
     expect(draft.rigModel).toBe(2036)
     expect(draft.rigConn).toBe('network')
+  })
+})
+
+// CLOSED, THE KEYBOARD GOES BACK TO WHERE THE WIZARD WAS OPENED FROM (focusReturn.ts): Settings'
+// "Re-run the setup wizard". It was left on the page itself.
+describe('the wizard gives the keyboard back when it closes', () => {
+  it('to the control that opened it', async () => {
+    function Host() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Re-run the setup wizard
+          </button>
+          {open && (
+            <SetupWizard settings={null} onApply={vi.fn()} onTestCat={vi.fn(() => Promise.resolve({} as never))} onSkip={() => setOpen(false)} />
+          )}
+        </>
+      )
+    }
+    cleanup() // this file unmounts by hand (see above)
+    render(<Host />)
+    const opener = screen.getByRole('button', { name: 'Re-run the setup wizard' })
+    act(() => opener.focus())
+    fireEvent.click(opener)
+    await screen.findByRole('dialog')
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(opener))
+    cleanup()
   })
 })

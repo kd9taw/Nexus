@@ -18,6 +18,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { Logbook } from './Logbook'
 import { ConfirmHost } from '../confirm'
 import { t } from '../i18n'
+import { setLogSource } from '../features/logSource'
+import { createAskingLogSource } from '../features/askingLogSource'
+import { answerFrom } from '../features/logAnswers'
 import type { LoggedQso } from '../types'
 
 const engine = vi.hoisted(() => ({ log: [] as unknown[], revision: 1 }))
@@ -171,5 +174,75 @@ describe('a new sort, search or filter goes back to the top of the list', () => 
     rerender(view(2))
     await waitFor(() => expect(document.querySelector('.log-rows')?.getAttribute('style')).toContain(`${301 * ROW_PX}px`))
     expect(scroller().scrollTop, 'still at the top').toBe(LIST_TOP)
+  })
+})
+
+// A NEW LIST STAYS OFF SCREEN UNTIL ITS FIRST PAGE IS HERE. A source that answers one question at a
+// time (C17a's) had the list EMPTY between a new sort, search or filter and that answer: a blank frame
+// or more, the "no contacts match" line with it — and, in a browser, the scroll pulled back up to the
+// globe band, the search box dropping down the screen under the operator's typing. Now the list on
+// screen stays until the new one can be drawn, as a newer order of one list already did (the swap).
+// The whole-log source answers in the same render, so there nothing waits and nothing changes.
+describe('a new sort, search or filter keeps the list on screen until its first page is here', () => {
+  /** An asking source; the first page of every query but the first is held until released. */
+  function askingWithHeldFirstPages() {
+    const rows = log(300)
+    const out: (() => void)[] = []
+    let first: string | null = null
+    setLogSource(
+      createAskingLogSource(async (q) => {
+        if (q.kind === 'page' && q.offset === 0) {
+          const key = JSON.stringify(q.query)
+          first ??= key
+          if (key !== first) await new Promise<void>((resolve) => out.push(resolve))
+        }
+        return answerFrom(rows, q, 1)
+      }),
+    )
+    return { release: () => act(async () => { for (const r of out.splice(0)) r() }), held: () => out.length }
+  }
+  const calls = () =>
+    [...document.querySelectorAll('.log-rows .logbook-row:not(.placeholder)')].map((r) => r.querySelector('.qrz-link-call')?.textContent)
+
+  for (const [name, change] of [
+    ['SORT', () => fireEvent.click(screen.getByRole('columnheader', { name: t('logbook.column.call') }))],
+    ['SEARCH', () => fireEvent.change(document.querySelector('.log-search') as HTMLInputElement, { target: { value: 'K1' } })],
+    ['FILTER', () => fireEvent.click(screen.getByRole('button', { name: t('logbook.filter.needsConfirmation.label') }))],
+  ] as const) {
+    it(`FIX: a new ${name} on an asking source — the old list until the new one is here, then its top`, async () => {
+      const source = askingWithHeldFirstPages()
+      render(view(1))
+      await waitFor(() => expect(drawn(150) ?? drawn(0)).not.toBeNull())
+      scrollTo(DEEP)
+      await waitFor(() => expect(drawn(150)?.classList.contains('placeholder')).toBe(false))
+      const before = calls()
+      change()
+      await waitFor(() => expect(source.held(), 'the new list’s first page asked for').toBeGreaterThan(0))
+      expect(document.querySelector('.log-rows'), 'the list, while the new one is on its way').not.toBeNull()
+      expect(calls(), 'the rows on screen, while the new list is on its way').toEqual(before)
+      expect(document.querySelector('.log-scroll > .empty'), 'no "no match" line meanwhile').toBeNull()
+      expect(scroller().scrollTop, 'the view, meanwhile').toBe(DEEP)
+
+      await source.release()
+      await waitFor(() => expect(scroller().scrollTop, 'the new list, at its top').toBe(LIST_TOP))
+      act(() => {
+        scroller().dispatchEvent(new Event('scroll')) // as a browser reports the list's own scroll
+      })
+      await waitFor(() => expect(drawn(0)?.classList.contains('placeholder')).toBe(false))
+      expect(calls()).not.toEqual(before)
+    })
+  }
+
+  it('the whole-log source: the list is never taken off screen by a new search (as always)', async () => {
+    await openDeep()
+    const removed: string[] = []
+    const watch = new MutationObserver((ms) => {
+      for (const m of ms) for (const n of m.removedNodes) if ((n as Element).classList?.contains('log-rows')) removed.push('log-rows')
+    })
+    watch.observe(scroller(), { childList: true })
+    fireEvent.change(document.querySelector('.log-search') as HTMLInputElement, { target: { value: 'K1' } })
+    await waitFor(() => expect(scroller().scrollTop).toBe(LIST_TOP))
+    watch.disconnect()
+    expect(removed).toEqual([])
   })
 })

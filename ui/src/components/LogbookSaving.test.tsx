@@ -257,3 +257,29 @@ describe('the logbook-saving dialog', () => {
     expect(dialog()).toBeNull()
   })
 })
+
+// CLOSED WITHOUT A QUIT, THE KEYBOARD GOES BACK TO WHERE IT WAS (focusReturn.ts) — and the return
+// adds nothing that could hold a quit: one synchronous focus inside the close Radix schedules
+// anyway, no timer of its own, nothing left running once the dialog is gone.
+describe('closing gives the keyboard back, and leaves nothing running', () => {
+  it('back to the control the operator was on, with no timer left behind', async () => {
+    const { unmount } = render(<button type="button">Log it</button>)
+    const where = screen.getByRole('button', { name: 'Log it' })
+    act(() => where.focus())
+    await mount()
+    emit(LOGBOOK_SAVE_FAILED, { pending: 1, refused: 0, reason: null, radioLive: false })
+    expect(dialog()).not.toBeNull()
+    expect(document.activeElement, 'the question has the keyboard').not.toBe(where)
+    emit(LOGBOOK_SAVE_DONE, { saved: true })
+    expect(dialog()).toBeNull()
+    act(() => {
+      // Radix's own close, which gives the keyboard back (0 ms; so is jsdom's selectionchange for
+      // the focus). A millisecond, not "every pending timer": a timer left waiting — a watch —
+      // must still be pending below, not run away here.
+      vi.advanceTimersByTime(1)
+    })
+    expect(document.activeElement).toBe(where)
+    expect(vi.getTimerCount(), 'no timer outlives the dialog').toBe(0)
+    unmount()
+  })
+})

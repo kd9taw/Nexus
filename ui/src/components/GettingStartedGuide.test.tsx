@@ -16,8 +16,11 @@
 // themes — reads styles.css from disk and so lives in `styles-getting-started.
 // test.ts`, with the other node-environment sheet guards.
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { GettingStartedGuide } from './GettingStartedGuide'
+import { Menu } from './ui/Menu'
+import { Dialog } from './ui/Dialog'
 import { EN } from '../i18n'
 import { DE } from '../i18n/de'
 import { ES } from '../i18n/es'
@@ -176,5 +179,85 @@ describe('Coming from WSJT-X: the switch JTAlert and GridTracker need', () => {
       if (!body.includes(path)) problems.push(`${lang}: no "${path}" in "${body}"`)
     }
     expect(problems).toEqual([])
+  })
+})
+
+// CLOSED, THE KEYBOARD GOES BACK TO WHERE THE GUIDE WAS OPENED FROM (focusReturn.ts). The guide is
+// opened by code, and Radix returns the keyboard to a Radix trigger only: it was left on the page.
+describe('the guide gives the keyboard back when it closes', () => {
+  // The Help menu's popper measures itself with a ResizeObserver, which jsdom lacks.
+  beforeAll(() => {
+    globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
+  })
+  function Host({ fromMenu = false }: { fromMenu?: boolean }) {
+    const [open, setOpen] = useState(false)
+    return (
+      <>
+        {fromMenu ? (
+          <Menu trigger={<button type="button">Help</button>} items={[{ label: 'Getting started', onSelect: () => setOpen(true) }]} />
+        ) : (
+          <button type="button" onClick={() => setOpen(true)}>
+            Getting started
+          </button>
+        )}
+        {open && <GettingStartedGuide onClose={() => setOpen(false)} />}
+      </>
+    )
+  }
+
+  it('to the control that opened it', async () => {
+    render(<Host />)
+    const opener = screen.getByRole('button', { name: 'Getting started' })
+    act(() => opener.focus())
+    fireEvent.click(opener)
+    await screen.findByRole('dialog')
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(opener))
+  })
+
+  it('opened from the Help menu: to the menu’s own button — the item went with the menu', async () => {
+    render(<Host fromMenu />)
+    const help = screen.getByRole('button', { name: 'Help' })
+    act(() => help.focus())
+    fireEvent.keyDown(help, { key: 'Enter' })
+    const item = await screen.findByRole('menuitem', { name: 'Getting started' })
+    act(() => item.focus())
+    fireEvent.keyDown(item, { key: 'Enter' })
+    await screen.findByRole('dialog')
+    expect(screen.queryByRole('menuitem'), 'the menu has closed').toBeNull()
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(help))
+  })
+
+  it('opened as the setup wizard closes — its control went with the wizard: the view itself, never the page', async () => {
+    // The wizard's last step opens the guide as the wizard goes (App: onApply, then onOpenGuide),
+    // so the control that opened it, and everything around that control, is gone when it closes.
+    function App() {
+      const [wizard, setWizard] = useState(true)
+      const [guide, setGuide] = useState(false)
+      return (
+        <>
+          <main aria-label="The view">
+            <p>Operate</p>
+          </main>
+          <Dialog open={wizard} onOpenChange={() => {}} title="Setup">
+            <button type="button" onClick={() => { setWizard(false); setGuide(true) }}>
+              Finish and show me around
+            </button>
+          </Dialog>
+          {guide && <GettingStartedGuide onClose={() => setGuide(false)} />}
+        </>
+      )
+    }
+    render(<App />)
+    const finish = await screen.findByRole('button', { name: 'Finish and show me around' })
+    act(() => finish.focus())
+    fireEvent.click(finish)
+    await waitFor(() => expect(finish.isConnected).toBe(false))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('main', { name: 'The view' })))
   })
 })
