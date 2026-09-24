@@ -855,8 +855,8 @@ pub mod writer;
 pub use edit::{OtaEdit, QsoEdit};
 pub use id::{Minter, RecordId};
 pub use op::{Effects, LogOp, UploadService};
-pub use records::OpClass;
 use records::Records;
+pub use records::{OpClass, Watermarks};
 
 impl Logbook {
     pub fn new() -> Self {
@@ -886,7 +886,7 @@ impl Logbook {
     /// be cached against it and can never outlive the records it describes. It stays below
     /// 2^53, so it survives a round trip through a JS number (see `logbook::records`).
     pub fn revision(&self) -> u64 {
-        self.records.revision()
+        self.records.marks().revision
     }
     /// Whether every change since this log stood at `revision` was an append ([`Self::add`],
     /// or an import that only added rows): the records it held then are, unchanged and in the
@@ -894,7 +894,7 @@ impl Logbook {
     /// stamp is a rewrite and answers false from then on, as does a revision this log never
     /// held after its last rewrite.
     pub fn appended_only_since(&self, revision: u64) -> bool {
-        self.records.appended_only_since(revision)
+        self.records.marks().appended_only_since(revision)
     }
     /// Mutable access to the records under the [`OpClass`] the caller vouches for — the
     /// narrower the class, the more derived state survives the write. Write a record through
@@ -908,19 +908,24 @@ impl Logbook {
     /// affect it.
     ///
     /// [`Self::content_rev`] is the one [`Self::appended_only_since`] reads; it is exposed in
-    /// its own right so the five can be stored together ([`sqlite::Watermarks`]), which is
-    /// what lets a watermark be durable alongside the rows it describes.
+    /// its own right so the five can be stored together ([`Self::marks`]), which is what lets a
+    /// watermark be durable alongside the rows it describes.
     pub fn content_rev(&self) -> u64 {
-        self.records.content_rev()
+        self.records.marks().content_rev
     }
     pub fn index_rev(&self) -> u64 {
-        self.records.index_rev()
+        self.records.marks().index_rev
     }
     pub fn key_rev(&self) -> u64 {
-        self.records.key_rev()
+        self.records.marks().key_rev
     }
     pub fn shape_rev(&self) -> u64 {
-        self.records.shape_rev()
+        self.records.marks().shape_rev
+    }
+    /// All five watermarks as they stand, together — what the store writes beside the rows
+    /// ([`sqlite::LogDb::apply`]), and what the station keeps as the log's (SPEC-2 v3 C19).
+    pub fn marks(&self) -> Watermarks {
+        self.records.marks()
     }
     pub fn len(&self) -> usize {
         self.records.len()
@@ -940,6 +945,18 @@ impl Logbook {
     /// [`RecordId`]); 0 until the profile has one.
     pub fn set_posid(&mut self, posid: u32) {
         self.minter.set_posid(posid);
+    }
+
+    /// Hand the minter of this log's ids to the owner that mints them from now on: the station,
+    /// which keeps minting when the in-memory log is gone (SPEC-2 v3 C19). The log keeps a copy
+    /// under a nonce of its own, as a copied log's is, for the rows it still adds itself (an
+    /// import, a merge), so the two never hand out one id.
+    ///
+    /// The minter handed over is the one the load drew, clear of every nonce the rows it read
+    /// already carry.
+    pub fn hand_over_minter(&mut self) -> Minter {
+        let own = self.minter.clone();
+        std::mem::replace(&mut self.minter, own)
     }
 
     /// Replace the human-entered fields of the record at `index` (a correction —
