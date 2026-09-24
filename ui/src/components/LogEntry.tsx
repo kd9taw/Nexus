@@ -840,7 +840,7 @@ export function LogEntry({
 
   // `mode` is this cockpit's LOG mode; the scope flag mirrors the engine's worked-band sets
   // so the Dupe badge and the B4 chips can never disagree about what a dupe is. Until the
-  // window has an answer the card shows the empty log's, as it did while the log loaded.
+  // window has an answer the card shows the empty log's history (none), and no need badge (below).
   const histQuestion = {
     kind: 'callHistory',
     call: logCall,
@@ -873,10 +873,14 @@ export function LogEntry({
     }
   }, [logCall, remoteMode])
   const entityForBadge = logEntity ?? logCountry
-  // Is the entity new, and which of its band/mode slots are worked — one question.
+  // Is the entity new, and which of its band/mode slots are worked — one question. NO NEED BADGE
+  // UNTIL ITS ANSWER IS HERE: the empty log's answer stands in until then, and it calls every entity
+  // new — "New DXCC!" over a worked one while the log loaded (C17D). Its slots are empty, so the
+  // band and mode badges are already off.
   const entityQuestion = { kind: 'entity', entity: entityForBadge } as const
-  const entityAnswer = useLogAnswer(readsLog ? entityQuestion : null, snap.logTick) ?? emptyAnswer(entityQuestion)
-  const newEntity = entityAnswer.newEntity
+  const entityAnswered = useLogAnswer(readsLog ? entityQuestion : null, snap.logTick)
+  const entityAnswer = entityAnswered ?? emptyAnswer(entityQuestion)
+  const newEntity = entityAnswered !== undefined && entityAnswer.newEntity
 
   // THE COUNTRY FILE'S ZONE, as a HINT in a contest that receives a CQ zone — the slot the
   // DTO tags with ADIF's `CQZ`. It is the placeholder of that box and never its value: a

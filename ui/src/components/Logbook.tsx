@@ -4,12 +4,12 @@
 // prints — callsign, band, mode, frequency, RST, park reference, QSL letters. Those are wire
 // formats, identical in every language. See the invariant-token rule in `i18n/index.ts`.
 
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmDialog } from '../confirm'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { LoggedActivation, LoggedQso } from '../types'
+import type { LogExport, LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
@@ -17,6 +17,7 @@ import { emptyAnswer, rowKeyAt, type LogLocate, type LogPage, type LogQuestion }
 import { defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
 import { logSource, useLogAnswer, useLogAnswers, useLogPages } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
+import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
 
@@ -866,7 +867,8 @@ export function Logbook({
   // A remote change reports its own outcome. An unknown one is held by RemoteLogCheck until checked.
   const remoteChange = (change: LogChange) => (operations ? sendLogChange(operations, change) : Promise.resolve(null))
 
-  const onDelete = async (q: LoggedQso, key: string) => {
+  /** Ask, then delete: whether the contact was deleted. */
+  const onDelete = async (q: LoggedQso, key: string): Promise<boolean> => {
     if (
       !(await confirmDialog({
         title: t('logbook.delete.heading', { call: q.call, band: q.band }),
@@ -875,7 +877,7 @@ export function Logbook({
         danger: true,
       }))
     )
-      return
+      return false
     if (remoteLog) {
       const at = performance.now()
       const outcome = await remoteChange({ kind: 'delete', target: await logTarget(q) })
@@ -883,15 +885,18 @@ export function Logbook({
         pushToast(t('logbook.delete.done', { call: q.call }), 'success')
         if (editingKey === key) cancelForm()
         remoteLog.refresh(at)
+        return true
       }
-      return
+      return false
     }
     const snap = await withErrorToast(() => deleteQso(q), t('logbook.delete.failed'))
     if (snap) {
       pushToast(t('logbook.delete.done', { call: q.call }), 'success')
       if (editingKey === key) cancelForm()
       load()
+      return true
     }
+    return false
   }
 
   const closePurge = () => {
@@ -958,8 +963,8 @@ export function Logbook({
       held.current.delete(oldest)
     }
   }
-  const recall = (orderRev: number, offset: number) => {
-    const k = pageKey(queryKey, orderRev, offset)
+  const recall = (orderRev: number, offset: number, qk = queryKey) => {
+    const k = pageKey(qk, orderRev, offset)
     const page = held.current.get(k)
     if (page) {
       held.current.delete(k)
@@ -971,9 +976,19 @@ export function Logbook({
   const [shown, setShown] = useState<{ queryKey: string; orderRev: number } | null>(null)
   const latestRev = latestFirst && logQueryKey(latestFirst.query) === queryKey ? latestFirst.orderRev : null
   const onScreen = shown?.queryKey === queryKey ? shown.orderRev : null
-  const showingRev = onScreen ?? latestRev
+  // A NEW LIST IS SHOWN ONCE ITS FIRST PAGE IS HERE. Until then the list on screen stays — the old
+  // sort or search, for the moment the new one takes to answer — where it used to be taken away: a
+  // source that answers one question at a time (C17a's) left the list EMPTY for a frame or more,
+  // "no contacts match" with it, and in a browser the scroll then fell back to the top of the pane,
+  // the globe band in view and the search box pulled down the screen under the operator's typing.
+  // A newer order of one list already waited this way (the swap, below). The whole-log source
+  // answers in the same render, so there nothing ever waits.
+  const kept = control && onScreen === null && latestRev === null ? shown : null
+  /** The query of the list ON SCREEN: the new one, or — while its first page is on its way — the old. */
+  const listKey = kept ? kept.queryKey : queryKey
+  const showingRev = kept ? kept.orderRev : (onScreen ?? latestRev)
   const pendingRev = onScreen !== null && latestRev !== null && latestRev > onScreen ? latestRev : null
-  const listTotal = control ? (showingRev === null ? 0 : (recall(showingRev, 0)?.total ?? 0)) : remoteOrder.length
+  const listTotal = control ? (showingRev === null ? 0 : (recall(showingRev, 0, listKey)?.total ?? 0)) : remoteOrder.length
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
@@ -1035,10 +1050,22 @@ export function Logbook({
   // (`openAt`: its place in the order on screen), and a swap moves the height with it (in the
   // placing effect below, before the view is placed).
   const openAt = useRef<{ queryKey: string; at: Map<string, number> }>({ queryKey, at: new Map() })
-  if (openAt.current.queryKey !== queryKey) openAt.current = { queryKey, at: new Map() }
+  if (openAt.current.queryKey !== listKey) openAt.current = { queryKey: listKey, at: new Map() }
   /** The open rows' heights to move, taken as a swap is decided and applied in the render that
    *  shows the new order (when the list is its new length), before that render is placed. */
   const heightMoves = useRef<{ closed: number; moves: { key: string; from: number; to: number | null; size: number }[] } | null>(null)
+  // …and A NEW LIST IS MEASURED AFRESH (the same bug, when the list is replaced rather than moved):
+  // a new sort or search, or — in a Remote browser — the page the station sends coming back, which
+  // is how a contact logged at the station arrives there. The heights kept by place were measured
+  // for the old list. A row drawn in both stays mounted and is not measured again; a row mounting at
+  // a place the old list measured takes that place's height until the browser reports its own, a
+  // frame later. So while a row was open, its height stayed at its old place, over another row, and
+  // the open row was drawn into a closed row's height. The first time a new list is drawn while a
+  // row is open, the old list's heights are dropped and the rows drawn are measured, in the placing
+  // effect below, before the paint. `drawnList` names the list on screen: the query's (once its
+  // first page is here), or the Remote page's rows.
+  const drawnList = control ? (showingRev === null ? null : listKey) : observedLog.length ? observedLog : null
+  const heightsFor = useRef<string | LoggedQso[] | null>(null)
 
   const virtualRows = rowVirtualizer.getVirtualItems()
   const held0 = anchor.current
@@ -1077,7 +1104,9 @@ export function Logbook({
     for (let o = Math.floor(Math.max(0, first) / LOG_PAGE) * LOG_PAGE; o <= last; o += LOG_PAGE) out.push(o)
     return out
   }
-  const visibleOffsets = control ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))] : []
+  // The pages the view shows — of the list on screen's own query only: while an old list is kept
+  // (above), the new query is asked for its first page and nothing else.
+  const visibleOffsets = control && !kept ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))] : []
   const pendingTotal = pendingRev === null ? 0 : (recall(pendingRev, 0)?.total ?? 0)
   const targetOffsets =
     target === undefined || pendingTotal === 0
@@ -1110,7 +1139,7 @@ export function Logbook({
     }
     if (showingRev === null) return undefined
     const offset = Math.floor(i / LOG_PAGE) * LOG_PAGE
-    const page = recall(showingRev, offset)
+    const page = recall(showingRev, offset, listKey)
     if (!page) return undefined
     const k = i - offset
     return k < page.rows.length ? { q: page.rows[k], key: page.keys[k] } : undefined
@@ -1133,10 +1162,180 @@ export function Logbook({
     return size
   }
 
+  // THE KEYBOARD GRID (v2 §6). The list is ONE Tab stop — a row, held by id so the operator's place
+  // survives a newer order — and grid-local keys move it (no global shortcuts): ↑/↓ a row, PgUp/PgDn
+  // a visible page, Home/End the first/last contact; Enter edits the contact, Delete asks the
+  // existing delete question, Esc closes the form (the question closes itself). A key on a row's own
+  // control (its QSL menu, its buttons) stays that control's. The row the keys land on is scrolled
+  // in whole, under the pinned search box and headers, and focused once it is drawn; a row whose
+  // page has not landed is a placeholder, which holds the focus until it does.
+  const keysId = useId()
+  const [focusKey, setFocusKey] = useState<string | null>(null)
+  const [focusTo, setFocusTo] = useState<number | null>(null)
+  /** The row whose Enter opened the form (the keyboard goes back to it when it closes), and
+   *  whether the keyboard is still to go INTO the form. */
+  const formFromGrid = useRef<string | null>(null)
+  const formWanted = useRef(false)
+  /** A contact deleted from the keys: the focus waits for the row that takes its place. */
+  const focusAfter = useRef<string | null>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  /** The pinned search box + headers' height, as of the last commit. */
+  const stickyH = useRef(0)
+  /** Where rows start to be SEEN, in the list's coordinates, at scroll `top`: under the sticky
+   *  block, or at the list's own top while the globe band is still in view. */
+  const floorAt = (top: number) => Math.max(top + stickyH.current, rowVirtualizer.options.scrollMargin)
+  const firstSeen = virtualRows.find((v) => v.end > floorAt(rowVirtualizer.scrollOffset ?? 0) && rowAt(v.index))
+  const tabStop =
+    focusKey !== null && virtualRows.some((v) => rowAt(v.index)?.key === focusKey)
+      ? focusKey
+      : firstSeen
+        ? (rowAt(firstSeen.index)?.key ?? null)
+        : null
+  /** Put the keyboard on row `index`: seen whole, then focused once drawn (the effect below). */
+  const moveFocus = (index: number) => {
+    const el = scrollRef.current
+    const item = rowVirtualizer.measurementsCache[index]
+    if (el && item) {
+      const floor = floorAt(el.scrollTop)
+      let top = el.scrollTop
+      if (item.start < floor) top = el.scrollTop - (floor - item.start)
+      else if (item.end > el.scrollTop + el.clientHeight) top = item.end - el.clientHeight
+      if (top !== el.scrollTop) {
+        el.scrollTop = top
+        rowVirtualizer.scrollOffset = el.scrollTop // drawn there by the next render, not a frame on
+      }
+    }
+    setFocusTo(index)
+  }
+  const gridStep = (key: string, index: number): number | null => {
+    const page = Math.max(1, Math.floor(((scrollRef.current?.clientHeight ?? 0) - stickyH.current) / ROW_ESTIMATE))
+    switch (key) {
+      case 'ArrowDown':
+        return index + 1
+      case 'ArrowUp':
+        return index - 1
+      case 'PageDown':
+        return index + page
+      case 'PageUp':
+        return index - page
+      case 'Home':
+        return 0
+      case 'End':
+        return listTotal - 1
+      default:
+        return null
+    }
+  }
+  const onGridKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement
+    if (!target.classList.contains('logbook-row')) return
+    const index = Number(target.dataset.index)
+    const to = gridStep(e.key, index)
+    if (to !== null) {
+      e.preventDefault()
+      moveFocus(Math.max(0, Math.min(listTotal - 1, to)))
+      return
+    }
+    const row = rowAt(index)
+    if (e.key === 'Escape' && showForm) {
+      e.preventDefault()
+      cancelForm()
+    } else if (row && (control || canEdit) && (e.key === 'Enter' || e.key === 'Delete')) {
+      e.preventDefault()
+      if (e.key === 'Delete') {
+        // The question takes the keyboard (a dialog puts it nowhere when it closes); the answer
+        // gives it back to this place in the list: the same contact, or — once it is gone — the one
+        // that takes its place.
+        void onDelete(row.q, row.key).then((deleted) => {
+          focusAfter.current = deleted ? row.key : null
+          setFocusTo(index)
+        })
+      } else {
+        formFromGrid.current = row.key
+        formWanted.current = true
+        startEdit(row.q, row.key)
+      }
+    }
+  }
+  // The keys' row, focused once it is drawn.
+  useLayoutEffect(() => {
+    stickyH.current = scrollRef.current?.querySelector<HTMLElement>('.log-sticky')?.offsetHeight ?? 0
+    const wrap = rowsWrapRef.current
+    if (focusTo === null || !wrap) return
+    const at = Math.min(focusTo, listTotal - 1)
+    if (focusAfter.current !== null && rowAt(at)?.key === focusAfter.current) return
+    focusAfter.current = null
+    const el = ([...wrap.children] as HTMLElement[]).find((c) => c.dataset.index === String(at))
+    if (!el) return
+    // Only while the keyboard is still the grid's: on a row, or lost with a row scrolled away.
+    const active = document.activeElement
+    if (active && active !== document.body && !wrap.contains(active)) {
+      setFocusTo(null)
+      return
+    }
+    el.focus({ preventScroll: true })
+    if (!el.classList.contains('placeholder')) setFocusTo(null)
+  })
+  // Enter from the grid: the keyboard goes into the form, and back to that row when it closes.
+  useEffect(() => {
+    if (showForm && formWanted.current) {
+      formWanted.current = false
+      formRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus()
+    } else if (!showForm && formFromGrid.current !== null) {
+      const key = formFromGrid.current
+      formFromGrid.current = null
+      const at = virtualRows.find((v) => rowAt(v.index)?.key === key)
+      if (at) moveFocus(at.index)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- on the form opening and closing only
+  }, [showForm])
+
   // The swapped-in order is placed after the render that shows it, before the browser paints —
   // its open rows' heights moved first, so the list is laid out, and placed, as the rows are.
   // (Declared before the swap below: effects run in order, so the swap's own render has passed.)
   useLayoutEffect(() => {
+    // A new list drawn (`drawnList`, above). While a row is open, the old list's heights are dropped
+    // and the rows drawn now measured — without scrolling: where the view goes is decided below.
+    if (drawnList !== null && heightsFor.current !== drawnList) {
+      const replaced = heightsFor.current !== null
+      heightsFor.current = drawnList
+      if (replaced && openComments.size > 0) {
+        const adjust = rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange
+        rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+        try {
+          rowVirtualizer.measure()
+          rowVirtualizer.getVirtualItems() // the table at the estimate, then each drawn row's own height
+          for (const el of rowsWrapRef.current?.children ?? []) {
+            const index = (el as HTMLElement).dataset.index
+            if (index !== undefined) rowVirtualizer.resizeItem(Number(index), (el as HTMLElement).offsetHeight)
+          }
+        } finally {
+          rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjust
+        }
+        rowVirtualizer.getVirtualItems()
+      }
+      // BACK TO THE TOP on a new sort, search or filter (v2 §6): the rows the operator was looking
+      // at are not where they were, or not in this list at all. The new list's first row goes to the
+      // top of the list, under the search box and the headers, which stay put — the globe band above
+      // them is not brought back, or the box being typed in would jump. A view that has not scrolled
+      // into the list is there already. (A newer order of the SAME list is not a new list: the swap
+      // keeps the rows under the operator where they are, R5.) A Remote browser's new page is left
+      // as it was: it empties while it loads.
+      const el = scrollRef.current
+      const rows = rowsWrapRef.current
+      const sticky = el?.querySelector<HTMLElement>('.log-sticky')
+      if (replaced && control && el && rows && sticky) {
+        const top = Math.max(0, rows.offsetTop - sticky.offsetHeight)
+        if (el.scrollTop > top) {
+          el.scrollTop = top
+          // …and drawn there by the render that follows, not when the scroll is reported: so the rows
+          // noted under the operator are the new list's first rows, and a newer order arriving now
+          // keeps the view at the top (R5's rule for a view at the top).
+          rowVirtualizer.scrollOffset = el.scrollTop
+          justPlaced.current = true
+        }
+      }
+    }
     const moving = heightMoves.current
     heightMoves.current = null
     if (moving) {
@@ -1620,12 +1819,14 @@ export function Logbook({
             disabled={logSize === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('adif', exportFrom, exportTo)
+                const exported = await exportGeneralLog('adif', exportFrom, exportTo)
+                const text = exported.text
                 // Count what the file actually holds — with a date range the log length lies.
                 const n = (text.match(/<eor>/gi) ?? []).length
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.adi`, text)
                 pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                sayExportLacks([exported])
               }, t('logbook.export.failed'))
             }
             title={
@@ -1684,15 +1885,17 @@ export function Logbook({
                   withErrorToast(async () => {
                     const a = activations.find((x) => activationKeyOf(x) === activationKey)
                     if (!a) return
-                    const text = await exportLogForActivation(
+                    const exported = await exportLogForActivation(
                       a.reference,
                       a.dayStartUnix,
                       a.callsign ?? null,
                     )
+                    const text = exported.text
                     // Count what the file actually holds, as the ranged export does.
                     const n = (text.match(/<eor>/gi) ?? []).length
                     const path = await saveTextToDownloads(activationFilename(a), text)
                     pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                    sayExportLacks([exported])
                   }, t('logbook.export.failed'))
                 }
                 title={t('logbook.export.activation.buttonTitle')}
@@ -1714,16 +1917,20 @@ export function Logbook({
                 withErrorToast(async () => {
                   const stamp = new Date().toISOString().slice(0, 10)
                   const saved: string[] = []
+                  const exported: LogExport[] = []
                   for (const op of operators) {
-                    const text = await exportLogForOperator(op)
+                    const file = await exportLogForOperator(op)
+                    exported.push(file)
                     const safe = op.replace(/[^A-Za-z0-9]+/g, '-')
-                    saved.push(await saveTextToDownloads(`nexus-log-${stamp}-${safe}.adi`, text))
+                    saved.push(await saveTextToDownloads(`nexus-log-${stamp}-${safe}.adi`, file.text))
                   }
                   // The combined file as well, always: it is the only one that carries contacts
                   // logged with no operator set, and it is what the station itself uploads.
                   const all = await exportGeneralLog('adif')
-                  saved.push(await saveTextToDownloads(`nexus-log-${stamp}.adi`, all))
+                  exported.push(all)
+                  saved.push(await saveTextToDownloads(`nexus-log-${stamp}.adi`, all.text))
                   pushToast(t('logbook.export.perOperator.done', { count: saved.length }), 'success')
+                  sayExportLacks(exported)
                 }, t('logbook.export.failed'))
               }
               title={t('logbook.export.perOperator.title', { operators: operators.join(', ') })}
@@ -1737,12 +1944,14 @@ export function Logbook({
             disabled={logSize === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('csv', exportFrom, exportTo)
+                const exported = await exportGeneralLog('csv', exportFrom, exportTo)
+                const text = exported.text
                 // Rows minus the header — with a date range the log length lies.
                 const n = Math.max(0, text.trim().split('\n').length - 1)
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.csv`, text)
                 pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                sayExportLacks([exported])
               }, t('logbook.export.failed'))
             }
             title={
@@ -1804,7 +2013,16 @@ export function Logbook({
 
       {remoteLog && operations && <RemoteLogCheck client={operations} />}
       {(control || remoteLog) && showForm && (
-        <form className="logbook-form" onSubmit={submit}>
+        <form
+          className="logbook-form"
+          onSubmit={submit}
+          ref={formRef}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return
+            e.preventDefault()
+            cancelForm()
+          }}
+        >
           <div className="logbook-form-grid">
             <label className="logbook-field logbook-field-call">
               <span>{t('logbook.field.call.label')}</span>
@@ -2045,7 +2263,17 @@ export function Logbook({
         </form>
       )}
 
-      <div className={`log-table logbook-table${moreColumns ? ' wide' : ''}`} role="table">
+      <div
+        className={`log-table logbook-table${moreColumns ? ' wide' : ''}`}
+        role="grid"
+        aria-rowcount={listTotal + 1}
+        aria-describedby={keysId}
+      >
+        {/* The grid's keys, for a screen reader: four whole sentences, never one glued. */}
+        <p id={keysId} className="sr-only">
+          <span>{t('logbook.keys.move')}</span> <span>{t('logbook.keys.edit')}</span>{' '}
+          <span>{t('logbook.keys.delete')}</span> <span>{t('logbook.keys.close')}</span>
+        </p>
         <div className="log-scroll" ref={scrollRef}>
           {globeShown && (
             <div className="log-globe-band">
@@ -2103,7 +2331,7 @@ export function Logbook({
           </button>
         )}
       </div>
-        <div className="log-row logbook-row head" role="row">
+        <div className="log-row logbook-row head" role="row" aria-rowindex={1}>
           {th(t('logbook.column.call'), 'call')}
           {th(t('logbook.column.country'), 'country')}
           {th(t('logbook.column.band'), 'band')}
@@ -2150,6 +2378,7 @@ export function Logbook({
               ref={rowsWrapRef}
               className="log-rows"
               style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}
+              onKeyDown={onGridKey}
             >
               {virtualRows.map((vrow) => {
                 // A row whose page is still on its way: its place, kept, until the page lands.
@@ -2170,6 +2399,8 @@ export function Logbook({
                       className="log-row logbook-row placeholder"
                       role="row"
                       aria-busy="true"
+                      aria-rowindex={vrow.index + 2}
+                      tabIndex={-1}
                       key={`placeholder-${vrow.index}`}
                       data-index={vrow.index}
                       ref={rowVirtualizer.measureElement}
@@ -2206,6 +2437,9 @@ export function Logbook({
                     // row when the list moves, so an open comment or the edit mark stays on it.
                     key={key}
                     data-index={vrow.index}
+                    aria-rowindex={vrow.index + 2}
+                    tabIndex={key === tabStop ? 0 : -1}
+                    onFocus={() => setFocusKey(key)}
                     ref={rowVirtualizer.measureElement}
                     style={{
                       ...placed,

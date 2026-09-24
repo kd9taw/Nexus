@@ -66,6 +66,7 @@ import {
 import { gridToLatLon, isValidGrid } from '../grid'
 import { fmtDistanceKm, useUnits } from '../units'
 import { Dialog } from './ui/Dialog'
+import { useFocusReturn } from '../focusReturn'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -190,6 +191,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   const [nameCap, setNameCap] = useState(7)
   const [startAt, setStartAt] = useState(1)
   const [chirpDialog, setChirpDialog] = useState(false)
+  // Closed, the keyboard goes back to Export for CHIRP (focusReturn.ts).
+  const chirpReturn = useFocusReturn(chirpDialog)
   const loaded = useRef(false)
 
   useEffect(()=>{
@@ -1245,6 +1248,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         onOpenChange={setChirpDialog}
         title={t('program.chirp.title')}
         description={t('program.chirp.description')}
+        onCloseAutoFocus={chirpReturn}
       >
         {/* CHIRP's own menu path stays inside the sentence, marked but not translated apart. */}
         <ol className="rp-chirp-steps">

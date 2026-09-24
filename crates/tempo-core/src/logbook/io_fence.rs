@@ -34,8 +34,9 @@
 //! # Where the fence stands, and where it does not
 //!
 //! **Fenced:** the writer's database transactions and its database copy, and the mirror's
-//! rewrite of `log.adi` — which takes the dated ring snapshot, writes and syncs the temporary
-//! file, renames it over the log and syncs the folder ([`on_log_lane`]); a wait for a change
+//! rewrite of `log.adi` — which since C15 reads the store it pictures, and takes the dated ring
+//! snapshot, writes and syncs the temporary file, renames it over the log and syncs the folder
+//! ([`on_log_lane`]); a wait for a change
 //! to commit (`LogWriter::wait_durable`, which `LogAppendReceipt::sync` and the app's
 //! `Durability::wait` go through), an append receipt's sync, a wait for a database copy, the
 //! conversion of `log.adi`, and the store's open ([`off_engine_lock`]). And SPEC-2's read path

@@ -163,6 +163,7 @@ import { civDiagnosticLog, civDiagnosticStatus } from '../api'
 import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, revealDiagLog, revealRecordings } from '../api'
 import { getCloudlogStations, type CloudlogStation } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
+import { sayExportLacks } from '../features/exportLacks'
 import type { AssistanceEvent, ConnEvent, CredStatus, FieldDayStatus } from '../types'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
 import { SettingsStation } from './SettingsStation'
@@ -2929,9 +2930,10 @@ export function SettingsPanel({
   // not a three-day API drip.
   const onExportForWrl = async () => {
     await withErrorToast(async () => {
-      const text = await exportGeneralLog('adif')
-      const path = await saveTextToDownloads('nexus-log-for-wrl.adi', text)
+      const exported = await exportGeneralLog('adif')
+      const path = await saveTextToDownloads('nexus-log-for-wrl.adi', exported.text)
       pushToast(t('settings.confirmations.wrl.export.done', { path }), 'success', 8000)
+      sayExportLacks([exported])
     }, t('settings.confirmations.wrl.export.failed'))
   }
 

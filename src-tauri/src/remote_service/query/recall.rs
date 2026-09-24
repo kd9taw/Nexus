@@ -1,10 +1,33 @@
-//! Exact-call recall and entity context from the full in-memory station log.
+//! Exact-call recall and entity context from the whole station log, read from one picture of
+//! it off the engine lock (see `picture`).
 //! Read-only: no disk reconciliation, connector lookup, vault or transmit access.
+use super::picture::{Pick, Picture};
 use serde_json::{json, Value};
+use tempo_core::logbook::sqlite::Narrow;
 use tempo_core::logbook::QsoRecord;
 
 const ROWS: usize = 20;
 const DISTINCT: usize = 512;
+
+/// What recall reads of every contact: the call it matches on; the band, mode, frequency, time,
+/// confirmation and note it counts and lists of a match; and the stored country an unresolvable
+/// call's entity falls back to. The rows it lists are then read whole.
+const RECALL: Narrow = Narrow {
+    columns: &[
+        "call",
+        "band",
+        "mode",
+        "freq_mhz",
+        "when_unix",
+        "country",
+        "notes",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: false,
+};
 
 pub(super) struct Capture {
     rows: Vec<QsoRecord>,
@@ -96,7 +119,7 @@ struct Accumulator {
     call: String,
     entity: Option<String>,
     entity_key: String,
-    selected: Vec<(u64, usize, QsoRecord)>,
+    selected: Vec<(u64, usize, Pick)>,
     total: usize,
     confirmed: usize,
     last: u64,
@@ -131,107 +154,111 @@ impl Accumulator {
             latest_note: None,
         }
     }
-    fn append<R: std::borrow::Borrow<QsoRecord>>(
-        &mut self,
-        records: &[R],
-        offset: usize,
-    ) -> Result<(), &'static str> {
-        for (i, q) in records.iter().enumerate() {
-            let q: &QsoRecord = std::borrow::Borrow::borrow(q);
-            let index = offset + i;
-            if q.call.trim().to_uppercase() == self.call {
-                text(&q.band)?;
-                text(&q.mode)?;
-                if q.when_unix > 9_007_199_254_740_991 {
-                    return Err("applicationTooLarge");
-                }
-                self.total += 1;
-                self.confirmed += usize::from(q.confirmed);
-                self.last = self.last.max(q.when_unix);
-                if !q.band.is_empty() {
-                    distinct(&mut self.bands, q.band.clone())?;
-                }
-                if !q.mode.is_empty() {
-                    distinct(&mut self.modes, q.mode.clone())?;
-                }
-                distinct(
-                    &mut self.band_modes,
-                    (q.band.trim().to_lowercase(), q.mode.trim().to_uppercase()),
-                )?;
-                if self.selected.len() < ROWS
-                    || self.selected.last().is_some_and(|r| q.when_unix > r.0)
-                {
-                    self.selected.push((q.when_unix, index, q.clone()));
-                    self.selected
-                        .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-                    self.selected.truncate(ROWS);
-                }
-                if let Some(note) = q.notes.as_deref().filter(|s| !s.trim().is_empty()) {
-                    if self
-                        .latest_note
-                        .as_ref()
-                        .is_none_or(|(when, _)| q.when_unix > *when)
-                    {
-                        if note.len() > 65536 {
-                            return Err("applicationTooLarge");
-                        }
-                        self.latest_note = Some((q.when_unix, note.into()));
-                    }
-                }
-            }
-            if self.entity_key.is_empty() {
-                continue;
-            }
-            let resolved = propagation::dxcc::resolve(&q.call);
-            let key = resolved
-                .as_ref()
-                .map(|i| i.entity)
-                .or(q.country.as_deref())
-                .unwrap_or("");
-            if key.trim().to_uppercase() != self.entity_key {
-                continue;
-            }
+    fn append(&mut self, pick: Pick, q: &QsoRecord) -> Result<(), &'static str> {
+        let index = pick.at;
+        if q.call.trim().to_uppercase() == self.call {
             text(&q.band)?;
             text(&q.mode)?;
-            self.worked = true;
-            if let Some(b) = band(q) {
-                distinct(&mut self.entity_bands, b)?;
-            } else if !q.band.trim().is_empty() || q.freq_mhz > 0.0 {
-                self.unknown = true;
+            if q.when_unix > 9_007_199_254_740_991 {
+                return Err("applicationTooLarge");
             }
-            let m = mode(&q.mode);
-            if !m.is_empty() {
-                distinct(&mut self.entity_modes, m)?;
+            self.total += 1;
+            self.confirmed += usize::from(q.confirmed);
+            self.last = self.last.max(q.when_unix);
+            if !q.band.is_empty() {
+                distinct(&mut self.bands, q.band.clone())?;
             }
+            if !q.mode.is_empty() {
+                distinct(&mut self.modes, q.mode.clone())?;
+            }
+            distinct(
+                &mut self.band_modes,
+                (q.band.trim().to_lowercase(), q.mode.trim().to_uppercase()),
+            )?;
+            if self.selected.len() < ROWS || self.selected.last().is_some_and(|r| q.when_unix > r.0)
+            {
+                self.selected.push((q.when_unix, index, pick));
+                self.selected
+                    .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+                self.selected.truncate(ROWS);
+            }
+            if let Some(note) = q.notes.as_deref().filter(|s| !s.trim().is_empty()) {
+                if self
+                    .latest_note
+                    .as_ref()
+                    .is_none_or(|(when, _)| q.when_unix > *when)
+                {
+                    if note.len() > 65536 {
+                        return Err("applicationTooLarge");
+                    }
+                    self.latest_note = Some((q.when_unix, note.into()));
+                }
+            }
+        }
+        if self.entity_key.is_empty() {
+            return Ok(());
+        }
+        let resolved = propagation::dxcc::resolve(&q.call);
+        let key = resolved
+            .as_ref()
+            .map(|i| i.entity)
+            .or(q.country.as_deref())
+            .unwrap_or("");
+        if key.trim().to_uppercase() != self.entity_key {
+            return Ok(());
+        }
+        text(&q.band)?;
+        text(&q.mode)?;
+        self.worked = true;
+        if let Some(b) = band(q) {
+            distinct(&mut self.entity_bands, b)?;
+        } else if !q.band.trim().is_empty() || q.freq_mhz > 0.0 {
+            self.unknown = true;
+        }
+        let m = mode(&q.mode);
+        if !m.is_empty() {
+            distinct(&mut self.entity_modes, m)?;
         }
         Ok(())
     }
-    fn finish(self) -> Capture {
-        Capture {
-            rows: self.selected.into_iter().map(|(_, _, q)| q).collect(),
+    /// The capture, with the listed contacts read whole from the picture the pass read.
+    fn finish(self, log: &Picture<'_>) -> Result<Capture, &'static str> {
+        let picks: Vec<Pick> = self.selected.iter().map(|(_, _, pick)| *pick).collect();
+        Ok(Capture {
+            rows: log.whole(&picks)?,
             total: self.total,
             meta: json!({ "call": self.call, "entity": self.entity,
                 "history": { "count": self.total, "workedBefore": self.total > 0, "lastUnix": (self.total > 0).then_some(self.last),
                     "confirmedCount": self.confirmed, "bands": self.bands, "modes": self.modes },
                 "workedBandModes": self.band_modes, "latestNote": self.latest_note.map(|(_, s)| s),
                 "slots": { "workedEver": self.worked, "bandUnknown": self.unknown, "bandsWorked": self.entity_bands, "modesWorked": self.entity_modes } }),
-        }
+        })
     }
+}
+
+/// Recall of `call` over one picture of the log: every contact tested, the listed ones read
+/// whole from the same picture — within the read's budget (see `picture::within`).
+fn recall(
+    log: &Picture<'_>,
+    call: &str,
+    deadline: std::time::Instant,
+) -> Result<Capture, &'static str> {
+    let mut result = Accumulator::new(call);
+    log.each(RECALL, &mut |pick, q| {
+        super::picture::within(deadline, pick)?;
+        result.append(pick, q)
+    })?;
+    if std::time::Instant::now() >= deadline {
+        return Err("applicationBusy");
+    }
+    result.finish(log)
 }
 
 pub(super) fn read_engine(
     engine: &crate::SharedEngine,
     call: &str,
 ) -> Result<Capture, &'static str> {
-    read_chunks(engine, call, |_| {})
-}
-#[allow(deprecated)] // SPEC-2 C18: Remote from the store
-fn read_chunks(
-    engine: &crate::SharedEngine,
-    call: &str,
-    mut after_chunk: impl FnMut(usize),
-) -> Result<Capture, &'static str> {
-    use std::sync::{Arc, TryLockError};
+    use std::sync::TryLockError;
     use std::time::{Duration, Instant};
     let deadline = Instant::now() + Duration::from_secs(2);
     let lock = || loop {
@@ -244,35 +271,17 @@ fn read_chunks(
             Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
         }
     };
-    let (token, count) = {
-        let e = lock()?;
-        (e.log_read_token(), e.log_records().len())
-    };
-    let mut result = Accumulator::new(call);
-    for offset in (0..count).step_by(128) {
-        let rows = {
-            let e = lock()?;
-            if !Arc::ptr_eq(&token, &e.log_read_token()) {
-                return Err("applicationBusy");
-            }
-            e.log_records()[offset..(offset + 128).min(count)].to_vec()
-        };
-        // DXCC resolution and summary work cannot hold the engine mutex. The
-        // token check refuses even same-length edits between chunks; no mixed
-        // log may be reported as complete or used to claim a new entity.
-        result.append(&rows, offset)?;
-        after_chunk(offset);
-    }
-    if !Arc::ptr_eq(&token, &lock()?.log_read_token()) {
-        return Err("applicationBusy");
-    }
-    Ok(result.finish())
+    // The log's handles under the lock. DXCC resolution and summary work cannot hold the
+    // engine mutex, and one picture of the log means no mixed log may be reported as complete
+    // or used to claim a new entity.
+    let rows = lock()?.log_rows();
+    super::picture::read(&rows, |log| recall(log, call, deadline))
 }
 #[cfg(test)]
 fn read(records: &[QsoRecord], call: &str) -> Result<Capture, &'static str> {
-    let mut result = Accumulator::new(call);
-    result.append(records, 0)?;
-    Ok(result.finish())
+    let rows: Vec<_> = records.iter().cloned().map(std::sync::Arc::new).collect();
+    let unbounded = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+    recall(&Picture::Memory(&rows), call, unbounded)
 }
 
 #[cfg(test)]
@@ -365,8 +374,12 @@ mod tests {
         assert_eq!(rows[0]["comment"], "0");
         assert_eq!(rows[19]["comment"], "19");
     }
+    /// The pass holds no Engine lock, and an edit landing while it runs mixes into no part of
+    /// the answer — the counts or the rows read whole after the pass — nor refuses it: the answer
+    /// is the log as the read found it, and the next read has the edit.
     #[test]
-    fn chunks_release_the_engine_and_refuse_a_same_length_log_edit() {
+    fn the_read_releases_the_engine_and_an_edit_during_it_belongs_to_the_next_read() {
+        use super::super::picture::{at_seams, Seam};
         let mut e = tempo_app::engine::Engine::with_settings(Default::default());
         let adif: String = (0..270)
             .map(|i| {
@@ -381,22 +394,16 @@ mod tests {
         e.import_adif(&adif);
         assert_eq!(e.log_records().len(), 270);
         let engine = std::sync::Arc::new(std::sync::Mutex::new(e));
-        let mut chunks = 0;
-        let result = read_chunks(&engine, "W1AW", |_| {
-            assert!(
-                engine.try_lock().is_ok(),
-                "summary work has released station authority"
-            );
-            chunks += 1;
-        })
-        .unwrap()
-        .encode()
-        .unwrap();
-        assert_eq!(chunks, 3);
-        assert_eq!(result.1, 1);
-        let changed = read_chunks(&engine, "W1AW", |offset| {
-            if offset == 0 {
-                let mut e = engine.try_lock().unwrap();
+        let (hook, edits) = (engine.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
+        let counted = edits.clone();
+        let result = at_seams(
+            move |seam| {
+                if seam != Seam::Each {
+                    return;
+                }
+                let mut e = hook
+                    .try_lock()
+                    .expect("summary work has released station authority");
                 let count = e.log_records().len();
                 let index = e
                     .log_records()
@@ -407,13 +414,322 @@ mod tests {
                 changed.notes = Some("edited during recall".into());
                 assert!(e.update_qso(changed.id.unwrap(), changed));
                 assert_eq!(e.log_records().len(), count);
-            }
-        });
-        assert!(
-            matches!(changed, Err("applicationBusy")),
-            "a mixed log must never claim complete recall truth"
+                counted.set(counted.get() + 1);
+            },
+            || read_engine(&engine, "W1AW"),
+        )
+        .unwrap()
+        .encode()
+        .unwrap();
+        assert_eq!(
+            edits.get(),
+            1,
+            "premise: the edit landed while the read ran"
         );
+        assert_eq!(result.1, 1);
+        assert_eq!(
+            result.2["latestNote"],
+            Value::Null,
+            "the read's own picture: the log before the edit"
+        );
+        assert_eq!(result.0[0]["notes"], Value::Null, "and its row, read whole");
         let fresh = read_engine(&engine, "W1AW").unwrap().encode().unwrap();
         assert_eq!(fresh.2["latestNote"], "edited during recall");
+        assert_eq!(fresh.0[0]["notes"], "edited during recall");
+    }
+
+    // ── recall from the store, held to the code before C18 ───────────────────────────────
+    //
+    // SPEC-2 v3 C18: recall reads one picture of the logbook store now. The oracle is the code
+    // before C18, VERBATIM — its accumulator, which held whole records a chunk at a time, and
+    // its chunked read of the log in memory — beside the store that log mirrors.
+
+    struct OldAccumulator {
+        call: String,
+        entity: Option<String>,
+        entity_key: String,
+        selected: Vec<(u64, usize, QsoRecord)>,
+        total: usize,
+        confirmed: usize,
+        last: u64,
+        bands: Vec<String>,
+        modes: Vec<String>,
+        band_modes: Vec<(String, String)>,
+        worked: bool,
+        unknown: bool,
+        entity_bands: Vec<String>,
+        entity_modes: Vec<String>,
+        latest_note: Option<(u64, String)>,
+    }
+    impl OldAccumulator {
+        fn new(call: &str) -> Self {
+            let entity = propagation::dxcc::resolve(call).map(|i| i.entity.to_string());
+            let entity_key = entity.as_deref().unwrap_or("").trim().to_uppercase();
+            Self {
+                call: call.into(),
+                entity,
+                entity_key,
+                selected: Vec::new(),
+                total: 0,
+                confirmed: 0,
+                last: 0,
+                bands: Vec::new(),
+                modes: Vec::new(),
+                band_modes: Vec::new(),
+                worked: false,
+                unknown: false,
+                entity_bands: Vec::new(),
+                entity_modes: Vec::new(),
+                latest_note: None,
+            }
+        }
+        fn append<R: std::borrow::Borrow<QsoRecord>>(
+            &mut self,
+            records: &[R],
+            offset: usize,
+        ) -> Result<(), &'static str> {
+            for (i, q) in records.iter().enumerate() {
+                let q: &QsoRecord = std::borrow::Borrow::borrow(q);
+                let index = offset + i;
+                if q.call.trim().to_uppercase() == self.call {
+                    text(&q.band)?;
+                    text(&q.mode)?;
+                    if q.when_unix > 9_007_199_254_740_991 {
+                        return Err("applicationTooLarge");
+                    }
+                    self.total += 1;
+                    self.confirmed += usize::from(q.confirmed);
+                    self.last = self.last.max(q.when_unix);
+                    if !q.band.is_empty() {
+                        distinct(&mut self.bands, q.band.clone())?;
+                    }
+                    if !q.mode.is_empty() {
+                        distinct(&mut self.modes, q.mode.clone())?;
+                    }
+                    distinct(
+                        &mut self.band_modes,
+                        (q.band.trim().to_lowercase(), q.mode.trim().to_uppercase()),
+                    )?;
+                    if self.selected.len() < ROWS
+                        || self.selected.last().is_some_and(|r| q.when_unix > r.0)
+                    {
+                        self.selected.push((q.when_unix, index, q.clone()));
+                        self.selected
+                            .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+                        self.selected.truncate(ROWS);
+                    }
+                    if let Some(note) = q.notes.as_deref().filter(|s| !s.trim().is_empty()) {
+                        if self
+                            .latest_note
+                            .as_ref()
+                            .is_none_or(|(when, _)| q.when_unix > *when)
+                        {
+                            if note.len() > 65536 {
+                                return Err("applicationTooLarge");
+                            }
+                            self.latest_note = Some((q.when_unix, note.into()));
+                        }
+                    }
+                }
+                if self.entity_key.is_empty() {
+                    continue;
+                }
+                let resolved = propagation::dxcc::resolve(&q.call);
+                let key = resolved
+                    .as_ref()
+                    .map(|i| i.entity)
+                    .or(q.country.as_deref())
+                    .unwrap_or("");
+                if key.trim().to_uppercase() != self.entity_key {
+                    continue;
+                }
+                text(&q.band)?;
+                text(&q.mode)?;
+                self.worked = true;
+                if let Some(b) = band(q) {
+                    distinct(&mut self.entity_bands, b)?;
+                } else if !q.band.trim().is_empty() || q.freq_mhz > 0.0 {
+                    self.unknown = true;
+                }
+                let m = mode(&q.mode);
+                if !m.is_empty() {
+                    distinct(&mut self.entity_modes, m)?;
+                }
+            }
+            Ok(())
+        }
+        fn finish(self) -> Capture {
+            Capture {
+                rows: self.selected.into_iter().map(|(_, _, q)| q).collect(),
+                total: self.total,
+                meta: json!({ "call": self.call, "entity": self.entity,
+                    "history": { "count": self.total, "workedBefore": self.total > 0, "lastUnix": (self.total > 0).then_some(self.last),
+                        "confirmedCount": self.confirmed, "bands": self.bands, "modes": self.modes },
+                    "workedBandModes": self.band_modes, "latestNote": self.latest_note.map(|(_, s)| s),
+                    "slots": { "workedEver": self.worked, "bandUnknown": self.unknown, "bandsWorked": self.entity_bands, "modesWorked": self.entity_modes } }),
+            }
+        }
+    }
+
+    fn old_read_chunks(
+        engine: &crate::SharedEngine,
+        call: &str,
+        mut after_chunk: impl FnMut(usize),
+    ) -> Result<Capture, &'static str> {
+        use std::sync::{Arc, TryLockError};
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let lock = || loop {
+            if Instant::now() >= deadline {
+                return Err("applicationBusy");
+            }
+            match tempo_app::engine::engine_try_lock(engine) {
+                Ok(e) => return Ok(e),
+                Err(TryLockError::Poisoned(_)) => return Err("applicationUnavailable"),
+                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(1)),
+            }
+        };
+        let (token, count) = {
+            let e = lock()?;
+            (e.log_read_token(), e.log_records().len())
+        };
+        let mut result = OldAccumulator::new(call);
+        for offset in (0..count).step_by(128) {
+            let rows = {
+                let e = lock()?;
+                if !Arc::ptr_eq(&token, &e.log_read_token()) {
+                    return Err("applicationBusy");
+                }
+                e.log_records()[offset..(offset + 128).min(count)].to_vec()
+            };
+            // DXCC resolution and summary work cannot hold the engine mutex. The
+            // token check refuses even same-length edits between chunks; no mixed
+            // log may be reported as complete or used to claim a new entity.
+            result.append(&rows, offset)?;
+            after_chunk(offset);
+        }
+        if !Arc::ptr_eq(&token, &lock()?.log_read_token()) {
+            return Err("applicationBusy");
+        }
+        Ok(result.finish())
+    }
+
+    use super::super::log_tests::{launch, memory, settle, synthetic_log, Dir, Gen};
+
+    /// What a browser may recall (`[A-Z0-9/]{3,32}`): calls worked often and once, portable
+    /// and compound spellings, calls a Unicode upper-case folds INTO (`K1ſAB` → `K1SAB`,
+    /// `K1ıAB` → `K1IAB`) — which the store's ASCII-only `call_norm` would miss — a call of an
+    /// entity with many others in the log, one no table resolves, and one never logged.
+    const RECALLS: &[&str] = &[
+        "W1AW",
+        "K1ABC",
+        "K1ABC/P",
+        "VP2E/K1ABC",
+        "DL1ABC",
+        "JA1AA",
+        "K1SAB",
+        "K1IAB",
+        "Q0ZZZ",
+        "DL9ZZZ",
+        "ZZ9ZZZ",
+    ];
+
+    fn bytes(capture: Result<Capture, &'static str>) -> String {
+        match capture.and_then(Capture::encode) {
+            Ok((rows, total, meta)) => {
+                json!({ "rows": rows, "total": total, "meta": meta }).to_string()
+            }
+            Err(e) => format!("refused: {e}"),
+        }
+    }
+
+    fn assert_recall_is_the_old_recall(e: &crate::SharedEngine, calls: &[&str], what: &str) {
+        for &call in calls {
+            let (old, new) = (
+                bytes(old_read_chunks(e, call, |_| {})),
+                bytes(read_engine(e, call)),
+            );
+            assert!(
+                new == old,
+                "{what}: recall of {call} differs\nstore:  {new:.400}\nmemory: {old:.400}"
+            );
+        }
+    }
+
+    /// ★ PARITY: recall of every call above, over 3,000 contacts, read from the store and from
+    /// the 1.13 path, is byte for byte the recall the log in memory gave — its counts, its
+    /// twenty rows read whole, the latest note, the entity's slots.
+    #[test]
+    fn recall_read_from_the_store_is_the_recall_of_the_log_in_memory() {
+        let text = synthetic_log(3_000, 0x0C18_A2EC);
+        let d = Dir::new("recall");
+        std::fs::write(d.log(), &text).unwrap();
+        let store = launch(&d);
+        let w1aw = read_engine(&store, "W1AW").unwrap().encode().unwrap();
+        assert!(
+            w1aw.1 > 20 && w1aw.0.len() == 20,
+            "premise: more W1AW contacts than rows"
+        );
+        assert!(
+            w1aw.2["latestNote"].is_string(),
+            "premise: a note to recall"
+        );
+        let (_, sab, _) = read_engine(&store, "K1SAB").unwrap().encode().unwrap();
+        assert!(
+            sab > 0,
+            "premise: a call outside ASCII recalled by its Unicode upper case"
+        );
+        assert!(
+            w1aw.0
+                .iter()
+                .any(|r| !r["extra"].as_array().unwrap().is_empty()),
+            "premise: rows carry what only a whole record holds"
+        );
+        assert_recall_is_the_old_recall(&store, RECALLS, "the store");
+        assert_recall_is_the_old_recall(&memory(&text), RECALLS, "the 1.13 path");
+        settle(&store);
+    }
+
+    /// ★ THE PROPERTY: after every one of 24 random changes to each of eight seeded logs, recall
+    /// read from the store is the recall of the log in memory.
+    #[test]
+    fn after_every_change_recall_read_from_the_store_is_the_old_recall() {
+        for seed in 1..=8u64 {
+            let d = Dir::new(&format!("recall-prop-{seed}"));
+            std::fs::write(d.log(), synthetic_log(200, seed * 104_729)).unwrap();
+            let e = launch(&d);
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            for step in 0..24u64 {
+                super::super::log_tests::random_change(&e, &mut g, step);
+                let at = (step as usize * 3) % RECALLS.len();
+                let calls: Vec<&str> = RECALLS.iter().cycle().skip(at).take(3).copied().collect();
+                assert_recall_is_the_old_recall(&e, &calls, &format!("seed {seed}, step {step}"));
+            }
+            settle(&e);
+        }
+    }
+
+    /// ★ THE BUDGET IS KEPT: a read of the log still has the two seconds the chunked read had,
+    /// from before it takes the Engine lock. One whose pass would start past them — held up
+    /// here at the start of its pass — is refused as busy, the answer the chunked read gave one
+    /// that ran long, not answered late. The control: the same read, on time, answers.
+    #[test]
+    fn a_read_past_its_budget_is_refused_as_busy() {
+        use super::super::picture::{at_seams, Seam};
+        let engine =
+            super::super::log_tests::memory(&super::super::log_tests::synthetic_log(300, 0xB0D6));
+        let late = at_seams(
+            |seam| {
+                if seam == Seam::Each {
+                    std::thread::sleep(std::time::Duration::from_millis(2_050));
+                }
+            },
+            || read_engine(&engine, "W1AW"),
+        );
+        assert!(matches!(late, Err("applicationBusy")));
+        assert!(
+            read_engine(&engine, "W1AW").is_ok(),
+            "control: on time, it answers"
+        );
     }
 }

@@ -7,7 +7,8 @@
 // labels reads as "unknown" while meaning "not recorded". And the fields it exists for are
 // the ones the 17-column table cannot reach.
 import { describe, it, expect, afterEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { act, render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { QsoDetail } from './QsoDetail'
 import type { LoggedQso } from '../types'
 
@@ -101,3 +102,54 @@ describe('the QSO detail view', () => {
   })
 })
 
+
+// CLOSED, THE KEYBOARD GOES BACK TO WHERE THE VIEW WAS OPENED FROM (focusReturn.ts) — the Logbook
+// row (Logbook.keyboard.test.tsx). It was left on the page itself.
+describe('the detail view gives the keyboard back when it closes', () => {
+  function Rows({ rows }: { rows: string[] }) {
+    const [left, setLeft] = useState(rows)
+    const [open, setOpen] = useState<string | null>(null)
+    return (
+      <>
+        <ul aria-label="Contacts">
+          {left.map((call) => (
+            <li key={call}>
+              <button type="button" className="row-view" onClick={() => setOpen(call)}>
+                {call}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <button type="button" onClick={() => setLeft((l) => l.filter((c) => c !== open))}>
+          remove the open one
+        </button>
+        <QsoDetail qso={open ? qso({ call: open }) : null} onClose={() => setOpen(null)} />
+      </>
+    )
+  }
+
+  it('to the control that opened it', async () => {
+    render(<Rows rows={['DL1ABC', 'G4XYZ']} />)
+    const opener = screen.getByRole('button', { name: 'DL1ABC' })
+    act(() => opener.focus())
+    fireEvent.click(opener)
+    await screen.findByRole('dialog')
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(opener))
+  })
+
+  it('its control gone meanwhile (the list moved on): the same control on the next item — never the page', async () => {
+    render(<Rows rows={['DL1ABC', 'G4XYZ']} />)
+    const opener = screen.getByRole('button', { name: 'DL1ABC' })
+    act(() => opener.focus())
+    fireEvent.click(opener)
+    await screen.findByRole('dialog')
+    // The row goes while the view is open (a Remote browser's delete, another window's).
+    act(() => screen.getByRole('button', { name: 'remove the open one', hidden: true }).click())
+    await waitFor(() => expect(opener.isConnected).toBe(false))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'G4XYZ' })))
+  })
+})

@@ -91,11 +91,18 @@ const CONVERSION_CACHE_KIB: i64 = 65_536;
 /// many, inside the same read transaction, and comes back in one log order.
 const ROWS_PER_STATEMENT: usize = 512;
 
-/// Which records [`LogDb::decode`] reads: every one, or those at these rowids (sorted).
+/// How many whole records one step of a streamed read ([`LogDb::each_record`]) decodes and holds
+/// at once — what bounds the memory a pass over the whole log costs, whatever the log's size: a
+/// few thousand contacts of a few KB each, never the hundreds of megabytes of a lifetime log.
+pub const RECORD_CHUNK: usize = 4_096;
+
+/// Which records [`LogDb::decode`] reads: every one, those at these rowids (sorted), or those
+/// whose rowid is above `after` and at most `last`.
 #[derive(Debug, Clone, Copy)]
 enum Rows<'a> {
     All,
     At(&'a [i64]),
+    Span { after: i64, last: i64 },
 }
 
 /// What a narrow read ([`LogDb::each_narrow`]) fills of each record — SPEC-2 v3's **C14**.
@@ -1047,28 +1054,62 @@ impl LogDb {
         })
     }
 
+    /// Hand `each` every record the store holds, WHOLE, in log order — each exactly as
+    /// [`Self::load_all`] hands it back, through the same decoder — `chunk` records at a time,
+    /// inside ONE read transaction ([`Self::in_one_snapshot`]). SPEC-2 v3 §4.5: what the exports
+    /// and the `log.adi` mirror read.
+    ///
+    /// A pass holds one chunk of the log, never the whole of it, and sees one picture of the
+    /// store whatever commits meanwhile. A chunk is a run of rowids, and its children are read
+    /// by that same run — a range of the rowid's own index for every table, not a list of the
+    /// run's rowids. `each` answering [`ControlFlow::Break`] ends the pass there.
+    pub fn each_record(
+        &self,
+        chunk: usize,
+        each: &mut dyn FnMut(QsoRecord) -> ControlFlow<()>,
+    ) -> Result<()> {
+        self.each_record_observed(chunk, each, &mut || {})
+    }
+
+    /// [`Self::each_record`], with `between` run after each chunk is handed out — the seam a test
+    /// uses to commit in the middle of a pass.
+    fn each_record_observed(
+        &self,
+        chunk: usize,
+        each: &mut dyn FnMut(QsoRecord) -> ControlFlow<()>,
+        between: &mut dyn FnMut(),
+    ) -> Result<()> {
+        let chunk = i64::try_from(chunk.max(1)).unwrap_or(i64::MAX);
+        self.in_one_snapshot(|db| {
+            // The rowid that ends the next run of `chunk` rows. No row's rowid is `i64::MIN`
+            // (SQLite hands out rowids from 1, and a copy keeps them positive).
+            let mut next = db.conn.prepare(
+                "SELECT max(rowid) FROM \
+                 (SELECT rowid FROM qso WHERE rowid > ?1 ORDER BY rowid LIMIT ?2)",
+            )?;
+            let mut after = i64::MIN;
+            loop {
+                let last: Option<i64> = next.query_row(params![after, chunk], |r| r.get(0))?;
+                let Some(last) = last else {
+                    return Ok(());
+                };
+                for rec in db.decode(Rows::Span { after, last }, &mut || {})? {
+                    if each(rec).is_break() {
+                        return Ok(());
+                    }
+                }
+                between();
+                after = last;
+            }
+        })
+    }
+
     /// THE decoder: the records `rows` names, in log order, each assembled from its `qso` row
     /// and its four child tables. [`Self::load_all`] and [`Self::rows_by_ids`] both come
     /// here, so a record cannot read back one way through one and another way through the
     /// other. Run inside a read transaction by its callers; `between` is the load's test seam.
     fn decode(&self, rows: Rows<'_>, between: &mut dyn FnMut()) -> Result<Vec<QsoRecord>> {
-        // The rows a child table's sweep is limited to: none, or the ones at `rows`' rowids.
-        // The rowids are integers this module read out of the store itself, written as
-        // literals — there is no text in them to escape.
-        let (of_rows, of_children) = match rows {
-            Rows::All => (String::new(), String::new()),
-            Rows::At(rowids) => {
-                let list = rowids
-                    .iter()
-                    .map(i64::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",");
-                (
-                    format!("WHERE rowid IN ({list})"),
-                    format!("WHERE qso_id IN (SELECT id FROM qso WHERE rowid IN ({list}))"),
-                )
-            }
-        };
+        let (of_rows, of_children) = decode_filters(rows);
         // The children come back in three sweeps rather than three queries per record: a
         // lifetime log is hundreds of thousands of rows, and 3N statement executions to
         // rebuild what 3 can is the shape of the problem this whole programme is removing.
@@ -1847,6 +1888,37 @@ fn bind_qso(id: &str, r: &QsoRecord, resolved: Resolved<'_>) -> Vec<rusqlite::ty
 /// One `qso` row back, **in [`QSO_COLUMNS`] order**. Read [`bind_qso`] beside it.
 ///
 /// `extra`, `upload` and the exchange are filled by the caller from their own sweeps.
+/// The `WHERE` clauses [`LogDb::decode`] reads `rows` with: the `qso` table's, and the one its
+/// four child tables share. Empty for every row.
+///
+/// The rowids are integers this module read out of the store itself, written as literals —
+/// there is no text in them to escape.
+fn decode_filters(rows: Rows<'_>) -> (String, String) {
+    match rows {
+        Rows::All => (String::new(), String::new()),
+        Rows::At(rowids) => {
+            let list = rowids
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            (
+                format!("WHERE rowid IN ({list})"),
+                format!("WHERE qso_id IN (SELECT id FROM qso WHERE rowid IN ({list}))"),
+            )
+        }
+        // A range of the rowid's own B-tree, parent and children alike: one statement per table,
+        // whatever the span's size, rather than a list of every rowid in it.
+        Rows::Span { after, last } => {
+            let span = format!("rowid > {after} AND rowid <= {last}");
+            (
+                format!("WHERE {span}"),
+                format!("WHERE qso_id IN (SELECT id FROM qso WHERE {span})"),
+            )
+        }
+    }
+}
+
 fn record_from_row(row: &rusqlite::Row<'_>) -> Result<QsoRecord> {
     let id: String = row.get(0)?;
     let text = |i: usize| -> Result<Option<String>> { Ok(row.get(i)?) };
@@ -4219,5 +4291,180 @@ mod tests {
             !all.contains("qso_recent") && !all.contains("qso_callhist"),
             "control: {all}"
         );
+    }
+
+    // ── a streamed read of whole records ─────────────────────────────────────
+
+    /// Every record a streamed read hands out, in the order it hands them.
+    fn streamed(db: &LogDb, chunk: usize) -> Vec<QsoRecord> {
+        let mut out = Vec::new();
+        db.each_record(chunk, &mut |r| {
+            out.push(r);
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        out
+    }
+
+    /// ★ A STREAMED READ IS `load_all`, WHATEVER THE CHUNK — every record whole (contest blocks
+    /// and their exchange, foreign tags, all four upload stamps), in log order, over a store
+    /// with holes in its rowids (every seventh row deleted, and a run of forty), for chunks from
+    /// one row to more than the log holds. An empty store hands out nothing.
+    #[test]
+    fn a_streamed_read_is_load_all_whatever_the_chunk() {
+        let (mut db, all) = narrow_fixture(3_000);
+        let gone: Vec<RecordId> = all
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 7 == 3 || (1_000..1_040).contains(i))
+            .filter_map(|(_, r)| r.id)
+            .collect();
+        db.apply(Batch {
+            remove: &gone,
+            ..Batch::default()
+        })
+        .unwrap();
+        let held = db.load_all().unwrap();
+        assert_eq!(held.len(), all.len() - gone.len(), "premise: the holes");
+        assert!(
+            held.iter().any(|r| r.contest.is_some())
+                && held.iter().any(|r| !r.extra.is_empty())
+                && held.iter().any(|r| r.upload.clublog.is_some()),
+            "premise: the rows carry every child table"
+        );
+        for chunk in [
+            1,
+            2,
+            7,
+            500,
+            RECORD_CHUNK,
+            held.len(),
+            held.len() + 1,
+            usize::MAX,
+        ] {
+            assert!(streamed(&db, chunk) == held, "chunk {chunk}");
+        }
+        let empty = LogDb::open_in_memory().unwrap();
+        assert!(streamed(&empty, 7).is_empty());
+    }
+
+    /// A streamed read stops where it is told, and hands out nothing after.
+    #[test]
+    fn a_streamed_read_stops_where_it_is_told() {
+        let (db, all) = narrow_fixture(100);
+        for stop_after in [1, 6, 7, 8, 50] {
+            let mut seen = Vec::new();
+            db.each_record(7, &mut |r| {
+                seen.push(r);
+                if seen.len() == stop_after {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })
+            .unwrap();
+            assert_eq!(seen, all[..stop_after], "stop after {stop_after}");
+        }
+    }
+
+    /// ★ One pass, one picture: another connection deletes a row the pass has not reached and
+    /// adds one after the last, between two chunks, and the pass still hands out exactly the
+    /// rows that were there when it began. The control is a pass begun after the commit.
+    #[test]
+    fn a_streamed_read_is_one_picture_whatever_commits_during_it() {
+        let d = CopyDir::new("stream-picture");
+        let path = d.0.join("log.sqlite3");
+        let before = copy_rows(9, 21_000);
+        let mut writer = live_store(&path, &before);
+        let late = copy_rows(1, 22_000);
+        let reader = LogDb::open(&path).unwrap();
+        let mut seen = Vec::new();
+        let mut committed = false;
+        reader
+            .each_record_observed(
+                2,
+                &mut |r| {
+                    seen.push(r.id);
+                    ControlFlow::Continue(())
+                },
+                &mut || {
+                    if !committed {
+                        committed = true;
+                        writer
+                            .apply(Batch {
+                                remove: &[before[7].id.unwrap()],
+                                ..Batch::default()
+                            })
+                            .unwrap();
+                        writer
+                            .insert_all(late.iter().map(|r| (r, Resolved::default())))
+                            .unwrap();
+                    }
+                },
+            )
+            .unwrap();
+        assert!(
+            committed,
+            "premise: the other connection committed mid-pass"
+        );
+        let ids = |rs: &[QsoRecord]| rs.iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(seen, ids(&before), "one pass, one picture");
+        let after = streamed(&reader, 2);
+        assert_eq!(after.len(), before.len(), "control: one gone, one added");
+        assert!(
+            !ids(&after).contains(&before[7].id) && ids(&after).contains(&late[0].id),
+            "control: a pass begun after the commit sees it"
+        );
+    }
+
+    /// A chunk's rows and their children are read by a range of the rowid's own index — never a
+    /// scan of a table, whatever the log's size. The control is the whole-log read, which scans
+    /// the parent table as it should.
+    #[test]
+    fn a_chunk_is_read_by_a_range_of_the_rowid() {
+        let (db, _) = narrow_fixture(50);
+        let plan = |sql: String| -> String {
+            let mut stmt = db
+                .conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            let details: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(3))
+                .unwrap()
+                .map(|d| d.unwrap())
+                .collect();
+            details.join(" | ")
+        };
+        let (of_rows, of_children) = decode_filters(Rows::Span {
+            after: 10,
+            last: 20,
+        });
+        let parent = plan(format!("SELECT id FROM qso {of_rows} ORDER BY rowid"));
+        assert!(
+            parent.contains("USING INTEGER PRIMARY KEY") && !parent.contains("SCAN qso"),
+            "{parent}"
+        );
+        for child in [
+            "qso_extra",
+            "qso_upload",
+            "contest_exchange",
+            "qso_contest_adif",
+        ] {
+            let p = plan(format!(
+                "SELECT qso_id FROM {child} {of_children} ORDER BY qso_id"
+            ));
+            assert!(
+                p.contains(&format!("SEARCH {child} USING"))
+                    && !p.contains(&format!("SCAN {child}")),
+                "{child}: {p}"
+            );
+            assert!(
+                p.contains("USING INTEGER PRIMARY KEY") && !p.contains("SCAN qso"),
+                "{child}'s rows are found by the range: {p}"
+            );
+        }
+        let (whole, _) = decode_filters(Rows::All);
+        let control = plan(format!("SELECT id FROM qso {whole} ORDER BY rowid"));
+        assert!(control.contains("SCAN qso"), "control: {control}");
     }
 }

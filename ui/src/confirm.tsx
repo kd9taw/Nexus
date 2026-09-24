@@ -32,6 +32,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { Dialog } from './components/ui/Dialog'
+import { focusedControl, giveBack, planReturn, type FocusReturn } from './focusReturn'
 
 export interface ConfirmOptions {
   /** The question, as a title. Say what will happen, not "Are you sure?". */
@@ -47,6 +48,8 @@ export interface ConfirmOptions {
 
 interface Request extends ConfirmOptions {
   resolve: (ok: boolean) => void
+  /** The control the question was asked from (focused when `confirmDialog` was called). */
+  opener: HTMLElement | null
 }
 
 let present: ((r: Request) => void) | null = null
@@ -58,8 +61,12 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
     console.error('confirmDialog: no <ConfirmHost/> mounted — refusing the action')
     return Promise.resolve(false)
   }
-  return new Promise<boolean>((resolve) => present?.({ ...opts, resolve }))
+  // The control the question is asked from: the keyboard goes back to it when the question closes
+  // — and, should a yes remove it, to the one that takes its place (focusReturn.ts).
+  const opener = focusedControl()
+  return new Promise<boolean>((resolve) => present?.({ ...opts, resolve, opener }))
 }
+
 
 /** Mount ONCE, near the app root. */
 export function ConfirmHost() {
@@ -69,6 +76,8 @@ export function ConfirmHost() {
   // React is free to call twice (StrictMode), and `close` reading `req` would answer whichever
   // request that closure captured rather than the one on screen.
   const pending = useRef<Request | null>(null)
+  /** Planned by `close`, carried out once the dialog has let go of the keyboard. */
+  const returning = useRef<FocusReturn | null>(null)
 
   useEffect(() => {
     present = (next) => {
@@ -77,9 +86,11 @@ export function ConfirmHost() {
       // lifetime of the window. Answered NO: the operator never saw it, and an unseen
       // destructive question is a refusal. Reachable from the fire-and-forget call sites in
       // RadioProgView, which do not await one another.
-      pending.current?.resolve(false)
-      pending.current = next
-      setReq(next)
+      // …and the keyboard goes back to where the FIRST was asked: the operator never left it.
+      const first = pending.current
+      first?.resolve(false)
+      pending.current = first ? { ...next, opener: first.opener } : next
+      setReq(pending.current)
     }
     return () => {
       present = null
@@ -87,6 +98,9 @@ export function ConfirmHost() {
   }, [])
 
   const close = (ok: boolean) => {
+    const opener = pending.current?.opener
+    // Planned now, while the page is as the question found it — before the answer is acted on.
+    returning.current = opener ? planReturn(opener, ok) : null
     pending.current?.resolve(ok)
     pending.current = null
     setReq(null)
@@ -101,6 +115,13 @@ export function ConfirmHost() {
       }}
       title={req?.title ?? ''}
       description={req?.body}
+      onCloseAutoFocus={(e) => {
+        // Radix would focus a trigger this dialog does not have — which is to say, nothing.
+        e.preventDefault()
+        const plan = returning.current
+        returning.current = null
+        if (plan) giveBack(plan)
+      }}
     >
       <div className="confirm-actions">
         <button type="button" className="settings-refresh" onClick={() => close(false)} autoFocus>

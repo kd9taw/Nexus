@@ -505,17 +505,28 @@ fn the_lotw_verbs_by_id_touch_exactly_the_contacts_they_name() {
         [id(0), id(1), id(2), id(5)],
         "the default batch: not the confirmed one, not the one with no time of day"
     );
-    assert_eq!(
-        e.lotw_signable(&[
+    // A batch by hand, as the upload reads it (C15): the contacts named, from the log's rows,
+    // and only those with a time of day.
+    let by_hand: Vec<RecordId> = crate::station::rows_named(
+        &e.log_rows(),
+        &[
             id(5),
             id(4),
             id(3),
             RecordId::Provisional {
                 hash: 99,
-                ordinal: 0
+                ordinal: 0,
             },
-            id(0)
-        ]),
+            id(0),
+        ],
+    )
+    .expect("the log reads")
+    .into_iter()
+    .filter(|r| r.time_known)
+    .filter_map(|r| r.id)
+    .collect();
+    assert_eq!(
+        by_hand,
         [id(5), id(3), id(0)],
         "a batch by hand: in its own order, only what is held with a time of day"
     );

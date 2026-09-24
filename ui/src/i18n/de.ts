@@ -1860,6 +1860,9 @@ export const DE: PartialCatalog = {
   "logbook.export.perOperator.label": "Pro Operator exportieren",
   "logbook.export.perOperator.title": "Je eine ADIF-Datei pro Operator ({{operators}}) plus das Gesamtlog",
   "logbook.export.perOperator.done": "{{count}} Dateien exportiert → Downloads",
+  // Machine translation, not yet reviewed by a speaker (SPEC-2 C15, 2026-09-24).
+  "logbook.export.lacks.saving": { "one": "{{count}} kürzliche Änderung fehlt im Export: Nexus speichert sie noch im Logbuch.", "other": "{{count}} kürzliche Änderungen fehlen im Export: Nexus speichert sie noch im Logbuch." },
+  "logbook.export.lacks.held": { "one": "{{count}} Änderung, die das Logbuch abgelehnt hat, fehlt im Export. Nexus behält sie für diese Sitzung im Speicher und fragt beim Beenden danach.", "other": "{{count}} Änderungen, die das Logbuch abgelehnt hat, fehlen im Export. Nexus behält sie für diese Sitzung im Speicher und fragt beim Beenden danach." },
   "logbook.export.activation.label": "Aktivierung",
   "logbook.export.activation.title": "Einen Park-Tag wählen und als die Datei exportieren, die POTA erwartet — ein Park, ein UTC-Tag, ein Rufzeichen",
   "logbook.export.activation.none": "keine",
@@ -1982,6 +1985,11 @@ export const DE: PartialCatalog = {
   "logbook.empty": "Noch keine QSOs geloggt.",
   "logbook.emptySearch": "Keine QSOs passen zu „{{query}}“.",
   "logbook.rows.loading": "Wird geladen…",
+  // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
+  "logbook.keys.move": "↑ und ↓ wechseln zwischen den Kontakten, PgUp und PgDn blättern seitenweise, Home und End springen zum ersten und zum letzten.",
+  "logbook.keys.edit": "Enter bearbeitet den Kontakt.",
+  "logbook.keys.delete": "Delete fragt, ob der Kontakt gelöscht werden soll.",
+  "logbook.keys.close": "Esc schließt das Bearbeitungsformular oder die Rückfrage.",
   "logbook.row.park.worked": "{{program}} {{ref}} (gearbeitet)",
   "logbook.row.park.mine": "Eigene Aktivierung: {{program}} {{ref}}",
   "logbook.row.qsl.lotw": "Über LoTW bestätigt (diplomtauglich)",

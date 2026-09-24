@@ -126,7 +126,7 @@ type PropCache = Arc<
 struct PropContext {
     call: String,
     grid: String,
-    log: Arc<()>,
+    log: u64,
 }
 
 /// A whole-log result, kept with the log watermark it was built from and `K`, whatever else it
@@ -208,12 +208,12 @@ fn note_log_tally() {
     LOG_TALLIES.with(|c| c.set(c.get() + 1));
 }
 
-/// The log's read identity, for the context a propagation board is labelled with
-/// ([`PropContext`]): Remote compares it with the identity its own reads take, and a board
-/// built from an older log is not relabelled as this one's. A handle, not a read of the log.
-#[allow(deprecated)] // SPEC-2 C18: Remote's log identity, retired with its read tokens
-fn prop_log_identity(eng: &Engine) -> Arc<()> {
-    eng.log_read_token()
+/// The log's identity, for the context a propagation board is labelled with ([`PropContext`]):
+/// its revision, which moves on every change to the log, as the read token it replaces did.
+/// Remote compares it with the revision its own reads take, and a board built from an older log
+/// is not relabelled as this one's. A watermark, not a read of the log.
+fn prop_log_identity(eng: &Engine) -> u64 {
+    eng.log_revision()
 }
 
 #[cfg(test)]
@@ -2952,51 +2952,49 @@ mod lotw_batch_tests {
         assert!(LotwPick::chosen(None, Some(vec!["row 0".into()])).is_err());
     }
 
-    /// LoTW matches on time, so a contact with no known time of day is never signed — by the
-    /// default batch, or by one chosen by hand, whichever way it is chosen: by id or by position.
+    /// A contact with no known time of day is never signed — LoTW matches on time, so it could
+    /// never confirm — whether the batch is the default one, read from the store (SPEC-2 v3
+    /// C15), or chosen by hand, by id or by position. The file TQSL is handed holds every other
+    /// contact, and the report counts them. Once they are sent, nothing is owed: the timeless
+    /// contact is not a reason to start TQSL.
     #[test]
-    fn a_contact_with_no_time_of_day_is_never_signed() {
+    fn a_contact_with_no_known_time_is_never_signed() {
         let (dir, engine, ids) = station("lotw-timeless", 3);
-        // An import that gives a date and no time of day.
-        let timeless = {
-            let mut eng = engine_lock(&engine);
-            eng.import_adif("<CALL:8>K9NOTIME<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260902<EOR>\n");
-            let t = eng.log_records().last().expect("imported").as_ref().clone();
-            assert!(
-                t.call == "K9NOTIME" && !t.time_known,
-                "premise: no time of day"
-            );
-            t.id.expect("an id")
+        let _ = engine_lock(&engine)
+            .import_adif("<CALL:5>N0TIM<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260915<EOR>\n");
+        let (at, timeless) = {
+            let eng = engine_lock(&engine);
+            let at = eng
+                .log_records()
+                .iter()
+                .position(|r| r.call == "N0TIM")
+                .expect("imported");
+            let r = &eng.log_records()[at];
+            assert!(!r.time_known, "premise: a contact with no known time");
+            (at, r.id.expect("an id"))
         };
-        let signed = |pick: LotwPick| {
-            let mut batch = String::new();
-            let report = lotw_upload_batch_with(&engine, pick, false, |_, args| {
-                batch = std::fs::read_to_string(args.last().expect("the batch file"))
-                    .expect("TQSL can read it");
+        for (what, pick, sent) in [
+            ("the default batch", LotwPick::Unsent, 3),
+            ("by id", LotwPick::Ids(vec![ids[0], timeless, ids[2]]), 2),
+            ("by position", LotwPick::Positions(vec![0, at, 1]), 2),
+        ] {
+            let mut file = String::new();
+            let report = lotw_upload_batch_with(&engine, pick, true, |_, args| {
+                file = std::fs::read_to_string(args.last().expect("the batch file"))
+                    .expect("the batch file reads");
                 Ok((0, String::new()))
             })
             .expect("the upload ran");
-            (report.dispatched, batch.contains("K9NOTIME"))
-        };
-        let everything = LotwPick::Ids(vec![ids[0], timeless, ids[2]]);
-        assert_eq!(signed(everything), (2, false), "by id");
-        assert_eq!(
-            signed(LotwPick::Positions(vec![0, 3, 2])),
-            (2, false),
-            "by position"
+            assert_eq!(report.dispatched, sent, "{what}");
+            assert_eq!(file.matches("<EOR>").count(), sent, "{what}: {file}");
+            assert!(!file.contains("N0TIM"), "{what}: never signed: {file}");
+        }
+        let rows = engine_lock(&engine).log_rows();
+        assert!(
+            !tempo_app::station::lotw_owed(&rows).expect("the store reads"),
+            "only the timeless contact is unsent, and it is owed nothing"
         );
-        // Positive control: the batch file does carry what it signs.
-        let (_, has_k0) = {
-            let mut batch = String::new();
-            lotw_upload_batch_with(&engine, LotwPick::Ids(vec![ids[0]]), false, |_, args| {
-                batch = std::fs::read_to_string(args.last().expect("the batch file"))
-                    .expect("TQSL can read it");
-                Ok((0, String::new()))
-            })
-            .expect("the upload ran");
-            ((), batch.contains("K0DUR"))
-        };
-        assert!(has_k0, "control: a signed contact is in the batch file");
+        assert!(engine_lock(&engine).lotw_unsent_ids().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -12243,13 +12241,17 @@ fn export_log(state: State<'_, SharedEngine>, format: String) -> Result<String, 
 /// that side, so no dates at all is the whole log, byte-identical to before. A
 /// malformed date is an ERROR, never silently ignored: dropping a bound would ship a
 /// full log the operator believes is filtered.
-#[tauri::command(async)]
-fn export_general_log(
+///
+/// Read from the logbook store with the engine lock released, on the blocking pool
+/// (`tempo_app::logexport`, SPEC-2 v3 C15). A file the database had not caught up with is
+/// still written, and says how many recent changes it lacks.
+#[tauri::command]
+async fn export_general_log(
     state: State<'_, SharedEngine>,
     format: String,
     from: Option<String>,
     to: Option<String>,
-) -> Result<String, String> {
+) -> Result<tempo_app::dto::LogExportDto, String> {
     let parse = |d: Option<String>| -> Result<Option<(u64, u64)>, String> {
         match d.as_deref().map(str::trim) {
             None | Some("") => Ok(None),
@@ -12261,8 +12263,11 @@ fn export_general_log(
     // A day bound is (start, end) of that UTC day: `from` uses the day's start, `to` its end.
     let from_unix = parse(from)?.map(|b| b.0);
     let to_unix = parse(to)?.map(|b| b.1);
-    let eng = engine_lock(&state);
-    Ok(eng.export_logbook(&format, from_unix, to_unix))
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::export_logbook(&source, &format, from_unix, to_unix).map(Into::into)
+    })
+    .await
 }
 
 /// Fields stripped from a settings backup (#28 item 4), by their serialised (camelCase) names.
@@ -12448,33 +12453,42 @@ fn import_settings_bundle(
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
-/// the UI uses to decide whether a per-operator export is worth offering at all.
-#[tauri::command(async)]
-fn log_operators(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.log_operators())
+/// the UI uses to decide whether a per-operator export is worth offering at all. From the store,
+/// off the engine lock (SPEC-2 v3 C15).
+#[tauri::command]
+async fn log_operators(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    log_folds::off_the_runtime(move || tempo_app::logexport::operators(&source)).await
 }
 
 /// ADIF for ONE operator's contacts (#25) — POTA and Field Day both require each operator to
-/// submit their own log.
-#[tauri::command(async)]
-fn export_log_for_operator(
+/// submit their own log. From the store, off the engine lock (SPEC-2 v3 C15).
+#[tauri::command]
+async fn export_log_for_operator(
     state: State<'_, SharedEngine>,
     operator: String,
-) -> Result<String, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.export_logbook_for_operator(&operator))
+) -> Result<tempo_app::dto::LogExportDto, String> {
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::export_for_operator(&source, &operator).map(Into::into)
+    })
+    .await
 }
 
 /// Distinct activations present in the log — your park × UTC day × the callsign you signed,
 /// newest first. Empty for a station that has never activated, which is what the Logbook uses to
-/// decide whether to offer the per-activation export at all.
-#[tauri::command(async)]
-fn log_activations(
+/// decide whether to offer the per-activation export at all. From the store, off the engine lock
+/// (SPEC-2 v3 C15).
+#[tauri::command]
+async fn log_activations(
     state: State<'_, SharedEngine>,
 ) -> Result<Vec<tempo_app::dto::LoggedActivationDto>, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.log_activations().into_iter().map(Into::into).collect())
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::activations(&source)
+            .map(|found| found.into_iter().map(Into::into).collect())
+    })
+    .await
 }
 
 /// ADIF for ONE activation — the park, the UTC day and the callsign of a single submission.
@@ -12484,15 +12498,26 @@ fn log_activations(
 /// range the operator left set from a previous export would silently produce a SHORT log — the
 /// same class of failure as the per-operator export above, which is unranged for the same
 /// reason. The UI enforces the same rule at the button.
-#[tauri::command(async)]
-fn export_log_for_activation(
+///
+/// From the store, off the engine lock (SPEC-2 v3 C15).
+#[tauri::command]
+async fn export_log_for_activation(
     state: State<'_, SharedEngine>,
     reference: String,
     day_start_unix: u64,
     callsign: Option<String>,
-) -> Result<String, String> {
-    let eng = engine_lock(&state);
-    Ok(eng.export_logbook_for_activation(&reference, day_start_unix, callsign.as_deref()))
+) -> Result<tempo_app::dto::LogExportDto, String> {
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::export_for_activation(
+            &source,
+            &reference,
+            day_start_unix,
+            callsign.as_deref(),
+        )
+        .map(Into::into)
+    })
+    .await
 }
 
 /// Write export text to a file in the operator's Downloads folder and return the FULL saved path.
@@ -20420,8 +20445,8 @@ async fn upload_lotw_report_impl(
 /// The contacts an upload to LoTW signs.
 #[derive(Debug, PartialEq)]
 enum LotwPick {
-    /// Every contact not yet sent ([`Engine::lotw_unsent_ids`]): the Logbook's button and the
-    /// automatic batch.
+    /// Every contact owed to LoTW, read from the store ([`tempo_app::station::lotw_unsent`]):
+    /// the Logbook's button and the automatic batch.
     Unsent,
     /// The contacts these ids name (SPEC-2 v2 §3).
     Ids(Vec<tempo_core::logbook::RecordId>),
@@ -20470,10 +20495,10 @@ fn lotw_upload_batch_with(
     wait: bool,
     tqsl: impl FnOnce(&str, &[String]) -> Result<(i32, String), String>,
 ) -> Result<UploadReportDto, String> {
-    // Brief lock: read config + build the batch + ADIF, then release before spawn.
-    // Held across the TQSL spawn it would freeze the whole UI for as long as ARRL takes
-    // to answer, which is tens of seconds on a big batch.
-    let (batch, signed, adif, location, tqsl_path) = {
+    // Brief lock: read config and what the batch is, then release it — before the batch is read
+    // from the store, and before TQSL is spawned. Held across the spawn it would freeze the
+    // whole UI for as long as ARRL takes to answer, which is tens of seconds on a big batch.
+    let (chosen, rows, location, tqsl_path, (adif_location, call, grid)) = {
         let eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
@@ -20486,33 +20511,52 @@ fn lotw_upload_batch_with(
                     .into(),
             );
         }
-        // A batch chosen by hand (the Awards per-bucket buttons) bypasses the default batch's
-        // time_known exclusion — filter HERE, at the one choke point every batch passes: LoTW
-        // matches on time, so a record with no known time of day can never confirm and must
-        // not be signed.
-        let batch = match pick {
-            LotwPick::Unsent => eng.lotw_unsent_ids(),
-            LotwPick::Ids(ids) => eng.lotw_signable(&ids),
-            LotwPick::Positions(at) => eng.lotw_signable(&eng.ids_at_positions(&at)),
+        // A batch chosen by hand names its contacts: by id, or — the Awards view's per-bucket
+        // buttons, until they send the report's ids — by position in the log as it stands, turned
+        // into ids here, in the same hold of the lock as the positions. The contacts themselves
+        // are read from the store once the lock is released, as the default batch's are.
+        let chosen = match pick {
+            LotwPick::Unsent => None,
+            LotwPick::Ids(ids) => Some(ids),
+            LotwPick::Positions(at) => Some(eng.ids_at_positions(&at)),
         };
-        if batch.is_empty() {
-            return Ok(UploadReportDto {
-                dispatched: 0,
-                outcome: "none".into(),
-                detail: None,
-                skipped_edited: 0,
-                skipped_deleted: 0,
-            });
-        }
-        let adif = eng.lotw_upload_adif(&batch);
-        // Each contact as it was signed, taken with the file: the stamp below lands only on a
-        // contact still as TQSL signed it once TQSL is done.
-        let signed = eng.lotw_signed(&batch);
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
         let location = (!use_adif_location).then_some(location);
-        (batch, signed, adif, location, tqsl_path)
+        let station = (
+            use_adif_location,
+            eng.settings().mycall.clone(),
+            eng.settings().mygrid.clone(),
+        );
+        (chosen, eng.log_rows(), location, tqsl_path, station)
     };
+    // The contacts the batch signs, whole: the chosen ones, or every one owed to LoTW, read from
+    // the store (SPEC-2 v3 C15). A batch chosen by hand bypasses the default batch's time_known
+    // exclusion — filter HERE, at the one choke point every batch passes: LoTW matches on time,
+    // so a record with no known time of day can never confirm and must not be signed.
+    let batch: Vec<tempo_core::logbook::QsoRecord> = match chosen {
+        Some(ids) => tempo_app::station::rows_named(&rows, &ids)?,
+        None => tempo_app::station::lotw_unsent(&rows)?,
+    }
+    .into_iter()
+    .filter(|r| r.time_known)
+    .collect();
+    if batch.is_empty() {
+        return Ok(UploadReportDto {
+            dispatched: 0,
+            outcome: "none".into(),
+            detail: None,
+            skipped_edited: 0,
+            skipped_deleted: 0,
+        });
+    }
+    let adif = tempo_app::station::lotw_batch_adif(&batch, adif_location, &call, &grid);
+    // The contacts by id, taken with the file: the stamp below finds them by id once TQSL is
+    // done, and only where each is still the contact that was signed.
+    let signed: Vec<tempo_app::station::LotwSigned> = batch
+        .iter()
+        .filter_map(tempo_app::station::LotwSigned::of)
+        .collect();
 
     // Write the batch ADIF to a temp file for TQSL to sign. Use a UNIQUE,
     // unpredictable name (not the old fixed `nexus_lotw_upload.adi` a co-tenant
@@ -27062,9 +27106,19 @@ fn start_on_the_logbook(
             }
             // Nothing to send: return WITHOUT spawning TQSL and without touching the
             // cursor, so an idle station stays due and uploads promptly once it works
-            // someone — rather than sitting out the rest of the interval.
-            if engine_lock(&auto_engine).lotw_unsent_ids().is_empty() {
-                continue;
+            // someone — rather than sitting out the rest of the interval. Asked of the store,
+            // with the engine lock released (SPEC-2 v3 C15).
+            let rows = engine_lock(&auto_engine).log_rows();
+            match tempo_app::station::lotw_owed(&rows) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    tempo_core::applog::warn(
+                        "LoTW",
+                        &format!("the automatic LoTW upload could not read the logbook: {e}"),
+                    );
+                    continue;
+                }
             }
             // THE CURSOR POLICY, and it deliberately differs from the QRZ worker this is
             // modelled on. QRZ leaves its high-water alone on failure because it is a

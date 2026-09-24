@@ -807,3 +807,336 @@ pub fn station_path(binding: &super::vault::Binding, action: &str) -> String {
 pub fn empty() -> Value {
     json!({})
 }
+
+#[cfg(test)]
+mod server_message_schema {
+    //! ★ WHAT A STATION ACCEPTS FROM THE RELAY. A station of 1.13 or older turns Remote off, and
+    //! remembers it, on any relay message it cannot parse (`ServerMessage` refuses unknown
+    //! fields), so the shape of `ServerMessage` is a contract with every station in the field
+    //! that its remote operator cannot repair. This reads that shape out of the parser itself —
+    //! each message's keys, which of them it requires, what it does with a key it does not know,
+    //! which collections a query may name — and holds it to a snapshot. A change to the snapshot
+    //! is a decision about the oldest stations, taken on purpose, never a side effect.
+    use super::ServerMessage;
+    use serde_json::{json, Value};
+
+    const ID: &str = "10000000-0000-4000-8000-000000000001";
+
+    /// One message of every kind the relay sends a station.
+    fn seeds() -> Vec<Value> {
+        vec![
+            json!({"type":"operationDisconnect","sessionId":ID}),
+            json!({"type":"operationRequest","sessionId":ID,"deviceId":ID,"operationVersion":null,
+                "request":{"type":"state","requestId":ID}}),
+            json!({"type":"applicationQuery","requestId":ID,"collection":"log","cursor":null,
+                "search":"","unconfirmed":false,"after":null}),
+            json!({"type":"applicationWatch","watchId":ID,"topics":["get_snapshot"],"requestId":null}),
+            json!({"type":"applicationCredit","watchId":ID,"previousRequestId":ID,"requestId":ID}),
+            json!({"type":"applicationRead","requestId":ID,"command":"get_snapshot","revision":null}),
+            json!({"type":"watch","enabled":true,"requestId":ID}),
+            json!({"type":"audioListen","sessionId":ID,"deviceId":ID,"listening":true,"leaseId":ID}),
+        ]
+    }
+
+    /// Every collection name a query has ever carried, and two it must not: the paged log a
+    /// newer page may ask a newer station for (SPEC-2 v3 C18b), and a name that is no collection.
+    const COLLECTIONS: &[&str] = &[
+        "decodes",
+        "needs",
+        "spots",
+        "log",
+        "entities",
+        "health",
+        "recall",
+        "awards",
+        "statistics",
+        "dxpeditions",
+        "memories",
+        "ota",
+        "fieldDay",
+        "js8Context",
+        "sstvImage",
+        "aprs",
+        "settings",
+        "programming",
+        "connect",
+        "path",
+        "satellites",
+        "satellite",
+        "parks",
+        "confirmations",
+        "pounce",
+        "rotator",
+        "logPage",
+        "notACollection",
+    ];
+
+    fn accepts(v: &Value) -> bool {
+        serde_json::from_value::<ServerMessage>(v.clone()).is_ok()
+    }
+
+    /// The shape, one sorted line per fact.
+    fn shape() -> String {
+        let mut out = Vec::new();
+        for seed in seeds() {
+            let kind = seed["type"].as_str().unwrap().to_string();
+            assert!(accepts(&seed), "{kind}: the seed itself parses");
+            for key in seed.as_object().unwrap().keys().filter(|k| *k != "type") {
+                let mut without = seed.clone();
+                without.as_object_mut().unwrap().remove(key);
+                let said = if accepts(&without) {
+                    "optional"
+                } else {
+                    "required"
+                };
+                out.push(format!("{kind}.{key}: {said}"));
+            }
+            let mut extra = seed.clone();
+            extra["notAKey"] = json!(1);
+            let said = if accepts(&extra) {
+                "accepted"
+            } else {
+                "refused"
+            };
+            out.push(format!("{kind}.<unknown key>: {said}"));
+        }
+        for name in COLLECTIONS {
+            let mut query = seeds()[2].clone();
+            query["collection"] = json!(name);
+            let said = if accepts(&query) {
+                "accepted"
+            } else {
+                "refused"
+            };
+            out.push(format!("applicationQuery.collection {name}: {said}"));
+        }
+        let said = if accepts(&json!({"type":"notAMessage"})) {
+            "accepted"
+        } else {
+            "refused"
+        };
+        out.push(format!("<unknown type>: {said}"));
+        out.sort();
+        out.join("\n")
+    }
+
+    /// The declarations as they stood when they were pinned (SPEC-2 v3 C18a, which changed none).
+    const DECLARATIONS: &[&str] = &[
+        "#[serde(tag = \"type\", rename_all = \"camelCase\", deny_unknown_fields)]",
+        "enum ServerMessage {",
+        "OperationDisconnect {",
+        "#[serde(rename = \"sessionId\")]",
+        "session_id: String,",
+        "},",
+        "OperationRequest {",
+        "#[serde(rename = \"sessionId\")]",
+        "session_id: String,",
+        "#[serde(rename = \"deviceId\")]",
+        "device_id: String,",
+        "#[serde(rename = \"operationVersion\")]",
+        "operation_version: Option<u8>,",
+        "request: Box<super::operations::Request>,",
+        "},",
+        "ApplicationQuery {",
+        "#[serde(flatten)]",
+        "request: super::query::Request,",
+        "},",
+        "ApplicationWatch {",
+        "#[serde(rename = \"watchId\")]",
+        "watch_id: String,",
+        "topics: Vec<super::application::Command>,",
+        "#[serde(rename = \"requestId\")]",
+        "request_id: Option<String>,",
+        "},",
+        "ApplicationCredit {",
+        "#[serde(rename = \"watchId\")]",
+        "watch_id: String,",
+        "#[serde(rename = \"previousRequestId\")]",
+        "previous_request_id: String,",
+        "#[serde(rename = \"requestId\")]",
+        "request_id: String,",
+        "},",
+        "ApplicationRead {",
+        "#[serde(rename = \"requestId\")]",
+        "request_id: String,",
+        "command: super::application::Command,",
+        "revision: Option<u64>,",
+        "},",
+        "Watch {",
+        "enabled: bool,",
+        "#[serde(rename = \"requestId\")]",
+        "request_id: Option<String>,",
+        "},",
+        "AudioListen {",
+        "#[serde(rename = \"sessionId\")]",
+        "session_id: String,",
+        "#[serde(rename = \"deviceId\")]",
+        "device_id: String,",
+        "listening: bool,",
+        "#[serde(rename = \"leaseId\")]",
+        "lease_id: String,",
+        "},",
+        "}",
+        "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]",
+        "pub struct Request {",
+        "pub request_id: String,",
+        "pub collection: Collection,",
+        "pub cursor: Option<String>,",
+        "pub search: String,",
+        "pub unconfirmed: bool,",
+        "pub after: Option<u64>,",
+        "}",
+        "#[serde(rename_all = \"camelCase\")]",
+        "pub enum Collection {",
+        "Decodes,",
+        "Needs,",
+        "Spots,",
+        "Log,",
+        "Entities,",
+        "Health,",
+        "Recall,",
+        "Awards,",
+        "Statistics,",
+        "Dxpeditions,",
+        "Memories,",
+        "Ota,",
+        "FieldDay,",
+        "Js8Context,",
+        "SstvImage,",
+        "Aprs,",
+        "Settings,",
+        "Programming,",
+        "Connect,",
+        "Path,",
+        "Satellites,",
+        "Satellite,",
+        "Parks,",
+        "Confirmations,",
+        "Pounce,",
+        "Rotator,",
+        "}",
+    ];
+
+    /// The shape as it stood when the snapshot was taken (SPEC-2 v3 C18a, which changed nothing
+    /// a relay sends).
+    const SNAPSHOT: &[&str] = &[
+        "<unknown type>: refused",
+        "applicationCredit.<unknown key>: refused",
+        "applicationCredit.previousRequestId: required",
+        "applicationCredit.requestId: required",
+        "applicationCredit.watchId: required",
+        "applicationQuery.<unknown key>: refused",
+        "applicationQuery.after: optional",
+        "applicationQuery.collection aprs: accepted",
+        "applicationQuery.collection awards: accepted",
+        "applicationQuery.collection confirmations: accepted",
+        "applicationQuery.collection connect: accepted",
+        "applicationQuery.collection decodes: accepted",
+        "applicationQuery.collection dxpeditions: accepted",
+        "applicationQuery.collection entities: accepted",
+        "applicationQuery.collection fieldDay: accepted",
+        "applicationQuery.collection health: accepted",
+        "applicationQuery.collection js8Context: accepted",
+        "applicationQuery.collection log: accepted",
+        "applicationQuery.collection logPage: refused",
+        "applicationQuery.collection memories: accepted",
+        "applicationQuery.collection needs: accepted",
+        "applicationQuery.collection notACollection: refused",
+        "applicationQuery.collection ota: accepted",
+        "applicationQuery.collection parks: accepted",
+        "applicationQuery.collection path: accepted",
+        "applicationQuery.collection pounce: accepted",
+        "applicationQuery.collection programming: accepted",
+        "applicationQuery.collection recall: accepted",
+        "applicationQuery.collection rotator: accepted",
+        "applicationQuery.collection satellite: accepted",
+        "applicationQuery.collection satellites: accepted",
+        "applicationQuery.collection settings: accepted",
+        "applicationQuery.collection spots: accepted",
+        "applicationQuery.collection sstvImage: accepted",
+        "applicationQuery.collection statistics: accepted",
+        "applicationQuery.collection: required",
+        "applicationQuery.cursor: optional",
+        "applicationQuery.requestId: required",
+        "applicationQuery.search: required",
+        "applicationQuery.unconfirmed: required",
+        "applicationRead.<unknown key>: refused",
+        "applicationRead.command: required",
+        "applicationRead.requestId: required",
+        "applicationRead.revision: optional",
+        "applicationWatch.<unknown key>: refused",
+        "applicationWatch.requestId: optional",
+        "applicationWatch.topics: required",
+        "applicationWatch.watchId: required",
+        "audioListen.<unknown key>: refused",
+        "audioListen.deviceId: required",
+        "audioListen.leaseId: required",
+        "audioListen.listening: required",
+        "audioListen.sessionId: required",
+        "operationDisconnect.<unknown key>: refused",
+        "operationDisconnect.sessionId: required",
+        "operationRequest.<unknown key>: refused",
+        "operationRequest.deviceId: required",
+        "operationRequest.operationVersion: optional",
+        "operationRequest.request: required",
+        "operationRequest.sessionId: required",
+        "watch.<unknown key>: refused",
+        "watch.enabled: required",
+        "watch.requestId: optional",
+    ];
+
+    /// A declaration as the compiler reads it: from `header` to its closing brace, each line
+    /// trimmed, with comments and blank lines left out — every attribute and field kept.
+    fn declaration(source: &str, header: &str) -> Vec<String> {
+        let start = source.find(header).expect("the declaration is in its file");
+        let mut depth = 0;
+        let mut out = Vec::new();
+        for line in source[start..].lines().map(str::trim) {
+            if line.is_empty() || line.starts_with("//") {
+                continue;
+            }
+            depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+            out.push(line.to_string());
+            if depth == 0 && out.len() > 1 {
+                break;
+            }
+        }
+        out
+    }
+
+    /// ★ The declarations the relay's messages are parsed by — `ServerMessage`, and the query
+    /// request and collection names it flattens in — line for line as they stood when this was
+    /// pinned. The probe above reads what a declaration MEANS; this sees a change the probe
+    /// cannot, such as a new optional field.
+    #[test]
+    fn the_declarations_a_relay_message_is_parsed_by_are_the_snapshot() {
+        let transport = include_str!("transport.rs");
+        let query = include_str!("query.rs");
+        let now = [
+            declaration(transport, "#[serde(tag = \"type\", rename_all = \"camelCase\", deny_unknown_fields)]\nenum ServerMessage {"),
+            declaration(query, "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]\npub struct Request {"),
+            declaration(query, "#[serde(rename_all = \"camelCase\")]\npub enum Collection {"),
+        ]
+        .concat();
+        assert!(
+            now.len() > 80,
+            "premise: the three declarations were found whole"
+        );
+        assert!(
+            now == DECLARATIONS,
+            "a declaration a relay message is parsed by changed; the oldest stations turn Remote \
+             off on a message they cannot parse. It reads now:\n{}",
+            now.join("\n")
+        );
+    }
+
+    #[test]
+    fn what_a_station_accepts_from_the_relay_is_the_snapshot() {
+        let shape = shape();
+        assert!(
+            shape == SNAPSHOT.join("\n"),
+            "the relay → station shape changed; the oldest stations turn Remote off on a message \
+             they cannot parse. The shape now:\n{shape}"
+        );
+    }
+}

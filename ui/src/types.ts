@@ -2042,6 +2042,20 @@ export interface LoggedActivation {
   qsos: number
 }
 
+/** A Logbook export (mirror of the Rust LogExportDto): the file, and the recent changes it lacks
+ *  because the logbook database did not hold them yet. The file is written either way — what the
+ *  database holds — and the screen says what it lacks. */
+export interface LogExport {
+  /** The file. */
+  text: string
+  /** Changes still being saved: on their way to the database, or sent again until it takes
+   *  them. */
+  saving: number
+  /** Changes the database refused for what they are: kept in memory for the session, and asked
+   *  about when Nexus quits. */
+  held: number
+}
+
 /** Per-source upload status (mirror of the Rust UploadStatusDto). */
 export interface UploadStatus {
   /** "pending" | "accepted" | "duplicate" | "rejected" | "authfail". */
