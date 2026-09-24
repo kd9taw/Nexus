@@ -820,6 +820,11 @@ export const JA: PartialCatalog = {
   "logbook.empty": "記録された交信はまだありません。",
   "logbook.emptySearch": "「{{query}}」に一致する交信はありません。",
   "logbook.rows.loading": "読み込み中…",
+  // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
+  "logbook.keys.move": "↑と↓で交信を移動し、PgUpとPgDnで1ページずつ、HomeとEndで最初と最後に移動します。",
+  "logbook.keys.edit": "Enterで交信を編集します。",
+  "logbook.keys.delete": "Deleteで交信を削除するか確認します。",
+  "logbook.keys.close": "Escで編集フォームまたは確認を閉じます。",
   "logbook.row.park.worked": "{{program}} {{ref}}（相手局）",
   "logbook.row.park.mine": "自局のアクティベーション: {{program}} {{ref}}",
   "logbook.row.qsl.lotw": "LoTWコンファーム済み（アワード有効）",

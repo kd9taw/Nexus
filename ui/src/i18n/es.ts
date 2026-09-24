@@ -1924,6 +1924,11 @@ export const ES: PartialCatalog = {
   "logbook.empty": "Aún no hay contactos anotados.",
   "logbook.emptySearch": "Ningún contacto coincide con “{{query}}”.",
   "logbook.rows.loading": "Cargando…",
+  // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
+  "logbook.keys.move": "↑ y ↓ pasan de un contacto a otro, PgUp y PgDn avanzan de página en página, Home y End van al primero y al último.",
+  "logbook.keys.edit": "Enter edita el contacto.",
+  "logbook.keys.delete": "Delete pregunta si borrar el contacto.",
+  "logbook.keys.close": "Esc cierra el formulario de edición o la pregunta.",
   "logbook.export.rangeInvalid": "Pon el rango en fechas UTC ({{date}}), o deja los campos vacíos para todo el log.",
   "logbook.export.adif.label": "Exportar ADIF",
   "logbook.export.adif.title": "Guarda todo el log como archivo ADIF en tu carpeta de Descargas",

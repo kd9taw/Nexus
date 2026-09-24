@@ -20607,12 +20607,13 @@ button.sat-chip:disabled {
   gap: 6px;
 }
 
-/* Keyboard focus for the roving-tabindex operating lists (a11y): a clear ring
-   on the focused decode / roster / needed row so a sighted keyboard user (and
-   low-vision) can see where they are. Screen-reader users hear the aria-label. */
+/* Keyboard focus for the roving-tabindex lists (a11y): a clear ring on the focused
+   decode / roster / needed / Logbook row so a sighted keyboard user (and low-vision)
+   can see where they are. Screen-reader users hear the row. */
 .decode-row:focus-visible,
 .or-row:focus-visible,
-.np-row:focus-visible {
+.np-row:focus-visible,
+.logbook-row:focus-visible {
   outline: 2px solid var(--focus-ring, var(--accent));
   outline-offset: -2px;
 }

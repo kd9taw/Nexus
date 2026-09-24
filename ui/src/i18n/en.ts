@@ -1223,6 +1223,12 @@ export const EN = {
   'logbook.emptySearch': 'No contacts match “{{query}}”.',
   // A row of the list whose page is still on its way from the log (SPEC-2 C17b).
   'logbook.rows.loading': 'Loading…',
+  // The keyboard grid's keys (v2 §6), read to a screen reader as the grid's description: four
+  // WHOLE sentences, never one glued. Key names are tokens, as `memories.add.hint` has them.
+  'logbook.keys.move': '↑ and ↓ move between contacts, PgUp and PgDn a page at a time, Home and End to the first and the last.',
+  'logbook.keys.edit': 'Enter edits the contact.',
+  'logbook.keys.delete': 'Delete asks whether to delete the contact.',
+  'logbook.keys.close': 'Esc closes the edit form or the question.',
 
   // A row. `{{program}}` (POTA/SOTA/WWFF) and `{{ref}}` are references, `{{call}}` a callsign.
   'logbook.row.park.worked': '{{program}} {{ref}} (worked)',
