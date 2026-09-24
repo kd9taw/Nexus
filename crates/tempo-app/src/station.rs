@@ -63,6 +63,40 @@ pub struct LotwStamped {
     pub gone: usize,
 }
 
+/// What the confirmation diagnostics read ([`StationCore::diagnostics_inputs`]), held apart
+/// from the engine so the diagnosis — a pass over the whole log with a DXCC lookup per contact —
+/// runs with the engine lock released.
+#[derive(Debug, Clone)]
+pub struct DiagnosticsInputs {
+    records: Vec<Arc<QsoRecord>>,
+    recents: Vec<tempo_core::reconcile::ReconcileSummary>,
+}
+
+impl DiagnosticsInputs {
+    /// How many contacts the log held.
+    pub fn log_len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// The diagnosis, exactly as [`StationCore::confirmation_diagnostics`] has always made it.
+    pub fn diagnose(
+        &self,
+        now: i64,
+        resolve: impl Fn(&str) -> Option<String>,
+    ) -> tempo_core::diagnostics::DiagnosticsReport {
+        tempo_core::logbook::io_fence::whole_log_off_engine_lock("the confirmation diagnostics");
+        let entities: Vec<Option<String>> = self.records.iter().map(|r| resolve(&r.call)).collect();
+        let recents: Vec<&tempo_core::reconcile::ReconcileSummary> = self.recents.iter().collect();
+        tempo_core::diagnostics::diagnose(
+            &self.records,
+            &entities,
+            &recents,
+            now,
+            &tempo_core::diagnostics::DiagCfg::default(),
+        )
+    }
+}
+
 /// A LoTW batch's measure of "the contact that was signed": the row as the upload serialises
 /// it — [`tempo_core::logbook::adif_record`], the outbound form, so a private note the upload
 /// withholds is no part of it — hashed, WITHOUT its connector stamps: another connector on
@@ -1915,30 +1949,35 @@ impl StationCore {
     /// maps a callsign to its DXCC entity name (for R4d's US-family gate) — the
     /// command layer passes `propagation::dxcc::resolve`, keeping the entity table
     /// out of tempo-app. Reads the last LoTW + eQSL reconcile orphans (this session).
+    ///
+    /// A pass over the whole log with a DXCC lookup per contact (780 ms at 500,000), so a
+    /// caller holding the engine lock takes [`Self::diagnostics_inputs`] instead and runs
+    /// [`DiagnosticsInputs::diagnose`] after releasing it. This is the two in one breath.
     pub fn confirmation_diagnostics(
         &self,
         now: i64,
         resolve: impl Fn(&str) -> Option<String>,
     ) -> tempo_core::diagnostics::DiagnosticsReport {
-        let records = self.logbook.records();
-        let entities: Vec<Option<String>> = records.iter().map(|r| resolve(&r.call)).collect();
-        let mut recents: Vec<&tempo_core::reconcile::ReconcileSummary> = Vec::new();
-        if let Some(s) = &self.last_lotw_reconcile {
-            recents.push(s);
+        self.diagnostics_inputs().diagnose(now, resolve)
+    }
+
+    /// What the confirmation diagnostics read, taken as copies: the log's rows (pointers,
+    /// never a record) and the latest LoTW, eQSL and QRZ reconcile summaries. Cheap enough for
+    /// the engine lock; the diagnosis itself runs after it is released.
+    pub fn diagnostics_inputs(&self) -> DiagnosticsInputs {
+        DiagnosticsInputs {
+            records: self.logbook.records().to_vec(),
+            // In this order — LoTW, eQSL, QRZ — as the diagnosis has always been handed them.
+            recents: [
+                &self.last_lotw_reconcile,
+                &self.last_eqsl_reconcile,
+                &self.last_qrz_reconcile,
+            ]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect(),
         }
-        if let Some(s) = &self.last_eqsl_reconcile {
-            recents.push(s);
-        }
-        if let Some(s) = &self.last_qrz_reconcile {
-            recents.push(s);
-        }
-        tempo_core::diagnostics::diagnose(
-            records,
-            &entities,
-            &recents,
-            now,
-            &tempo_core::diagnostics::DiagCfg::default(),
-        )
     }
 
     /// Log indices (oldest-first) of QSOs not yet sent to LoTW: award-unconfirmed
@@ -2605,5 +2644,138 @@ mod grid_tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    //! The confirmation diagnosis runs with the engine lock released (SPEC-2 v3's C12): the
+    //! engine hands out what it reads ([`StationCore::diagnostics_inputs`]) and the diagnosis
+    //! runs on that ([`DiagnosticsInputs::diagnose`]). The report must be the one the old body
+    //! made, reproduced below verbatim as the oracle.
+    use super::*;
+    use tempo_core::diagnostics::DiagnosticsReport;
+    use tempo_core::reconcile::{OrphanConfirmation, ReconcileSummary};
+
+    /// Award-confirmed, never uploaded, one to be told about three ways, eQSL-only, one
+    /// uploaded an hour before `NOW` (lag, not yet a failure) and one uploaded long before it
+    /// (waiting on the partner).
+    const LOG: &str = "\
+        <CALL:5>JA1AA<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260101<TIME_ON:6>010000<LOTW_QSL_RCVD:1>Y<EOR>\n\
+        <CALL:5>DL1AB<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20260102<TIME_ON:6>020000<EOR>\n\
+        <CALL:5>W1ABC<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260104<TIME_ON:6>030000<STATE:2>MA<EOR>\n\
+        <CALL:6>PY2ABC<BAND:3>10m<MODE:3>FT8<QSO_DATE:8>20260106<TIME_ON:6>050000<EQSL_QSL_RCVD:1>Y<EOR>\n\
+        <CALL:5>K5XYZ<BAND:3>40m<MODE:3>FT8<QSO_DATE:8>20260109<TIME_ON:6>230000<LOTW_QSL_SENT:1>Y<EOR>\n\
+        <CALL:5>G4ABC<BAND:3>17m<MODE:4>RTTY<QSO_DATE:8>20251201<TIME_ON:6>070000<LOTW_QSL_SENT:1>Y<EOR>\n";
+
+    /// 2026-01-10 00:00 UTC.
+    const NOW: i64 = 1_768_003_200;
+
+    /// A stand-in for the DXCC table, which tempo-app cannot name.
+    fn entity(call: &str) -> Option<String> {
+        let name = match call.as_bytes().first()? {
+            b'W' | b'K' => "United States",
+            b'J' => "Japan",
+            b'D' => "Germany",
+            b'P' => "Brazil",
+            _ => return None,
+        };
+        Some(name.to_string())
+    }
+
+    /// A confirmation of the W1ABC contact that names the wrong band.
+    fn orphan(band: &str) -> ReconcileSummary {
+        ReconcileSummary {
+            orphans: vec![OrphanConfirmation {
+                call: "W1ABC".into(),
+                band: band.into(),
+                mode: "Phone".into(),
+                when_unix: 1_767_495_600,
+                reason: String::new(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// `StationCore::confirmation_diagnostics` as it was before C12, verbatim.
+    fn old_diagnosis(
+        sc: &StationCore,
+        now: i64,
+        resolve: impl Fn(&str) -> Option<String>,
+    ) -> DiagnosticsReport {
+        let records = sc.logbook.records();
+        let entities: Vec<Option<String>> = records.iter().map(|r| resolve(&r.call)).collect();
+        let mut recents: Vec<&tempo_core::reconcile::ReconcileSummary> = Vec::new();
+        if let Some(s) = &sc.last_lotw_reconcile {
+            recents.push(s);
+        }
+        if let Some(s) = &sc.last_eqsl_reconcile {
+            recents.push(s);
+        }
+        if let Some(s) = &sc.last_qrz_reconcile {
+            recents.push(s);
+        }
+        tempo_core::diagnostics::diagnose(
+            records,
+            &entities,
+            &recents,
+            now,
+            &tempo_core::diagnostics::DiagCfg::default(),
+        )
+    }
+
+    /// ★ The diagnosis made from the handed-out inputs is the old one: the same rows in the
+    /// same order, the same entity per row, the same clock, and the three services' reconcile
+    /// summaries in the same order. The three disagree on purpose — each names a different
+    /// wrong band for one contact, and the diagnosis keeps the first it is handed — so a
+    /// reordering changes the report.
+    #[test]
+    fn the_diagnosis_off_the_lock_is_the_one_the_old_body_made() {
+        let mut sc = StationCore::new();
+        sc.import_adif(LOG);
+        assert_eq!(sc.logbook.len(), 6, "premise: every contact imported");
+        sc.last_lotw_reconcile = Some(orphan("15m"));
+        sc.last_eqsl_reconcile = Some(orphan("17m"));
+        sc.last_qrz_reconcile = Some(orphan("12m"));
+
+        let old = old_diagnosis(&sc, NOW, entity);
+        let old_text = format!("{old:?}");
+        assert!(
+            old_text.contains("expected: \"15m\""),
+            "premise: the first summary's claim is the one kept"
+        );
+        assert!(
+            old.pending_lag > 0 && old.waiting_on_partner > 0,
+            "premise: the clock reaches the report, both ways"
+        );
+        assert!(
+            !old.one_away.is_empty(),
+            "premise: the entity lookup reaches the report: {old_text}"
+        );
+        assert!(
+            old.diagnoses.len() > 1,
+            "premise: several rows are diagnosed"
+        );
+
+        let inputs = sc.diagnostics_inputs();
+        assert_eq!(inputs.log_len(), 6);
+        assert_eq!(format!("{:?}", inputs.diagnose(NOW, entity)), old_text);
+        assert_eq!(
+            format!("{:?}", sc.confirmation_diagnostics(NOW, entity)),
+            old_text,
+            "the two-in-one-breath form is the same diagnosis"
+        );
+    }
+
+    /// ★ POSITIVE CONTROL: the diagnosis run while the engine lock is held is refused.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(
+        expected = "io_fence: the confirmation diagnostics is a pass over the whole log"
+    )]
+    fn the_diagnosis_under_the_engine_lock_is_refused() {
+        let engine = std::sync::Mutex::new(crate::engine::Engine::new("KD9TAW", "EN52", 0));
+        let eng = crate::engine::engine_lock(&engine);
+        let _ = eng.confirmation_diagnostics(NOW, entity);
     }
 }

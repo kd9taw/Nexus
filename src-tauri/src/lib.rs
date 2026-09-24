@@ -151,11 +151,17 @@ impl<K: PartialEq, V> Tally<K, V> {
     }
 }
 
+/// The kept needs model: ONE for every reader of it — a propagation refetch, the Needed board
+/// (native and Remote), a satellite pass's needs, the pounce detector — so an unchanged log is
+/// folded once, not once per poll per reader. Shared as an `Arc` with the two that are not
+/// Tauri commands (Remote's reader and the pounce thread).
+type NeedsKept = Arc<Tally<(), propagation::LogNeeds>>;
+
 /// The kept whole-log tallies. Managed state, so every window's polls share one of each.
 #[derive(Default)]
 struct LogTallies {
-    /// The needs model a propagation refetch hands the live feeds.
-    needs: Tally<(), propagation::LogNeeds>,
+    /// The needs model — see [`NeedsKept`].
+    needs: NeedsKept,
     /// The award summary, per operator call.
     awards: Tally<String, propagation::AwardSummary>,
     /// The Journey model, per the settings it reads.
@@ -179,47 +185,300 @@ fn note_log_tally() {
 }
 
 /// The award-needs model of the whole log, rebuilt only when the log's revision moves, with
-/// the log's read identity taken under the same lock (see [`PropContext`]). The scoring fields
-/// are copied under the lock and folded after it is released.
+/// the log's read identity taken under the same lock (see [`PropContext`]). Under the lock only
+/// the kept model or a copy of the log's pointers is taken ([`needs_capture`]); the fold runs
+/// after it is released ([`needs_finish`]).
 fn needs_kept(
     engine: &Mutex<Engine>,
     tallies: &LogTallies,
 ) -> (Arc<propagation::LogNeeds>, Arc<()>) {
     let eng = engine_lock(engine);
-    let (revision, log) = (eng.log_revision(), eng.log_read_token());
-    if let Some(kept) = tallies.needs.get(revision, &()) {
-        return (kept, log);
-    }
-    let contacts: Vec<_> = eng
-        .log_records()
-        .iter()
-        .map(|q| {
-            (
-                q.call.clone(),
-                q.band.clone(),
-                q.mode.clone(),
-                q.grid.clone(),
-                q.state.clone(),
-                q.award_confirmed,
-                qso_is_sat(q.prop_mode.as_deref()),
-            )
-        })
-        .collect();
+    let log = eng.log_read_token();
+    let capture = needs_capture(&eng, &tallies.needs);
     drop(eng);
+    (needs_finish(capture, &tallies.needs), log)
+}
+
+/// What the needs model is built from, taken under the engine lock: the kept model when the log
+/// has not moved since it was folded, or else the log's rows — a copy of pointers, never of a
+/// record — to fold once the lock is released ([`needs_finish`]).
+enum NeedsCapture {
+    Kept(Arc<propagation::LogNeeds>),
+    Fold {
+        revision: u64,
+        records: Vec<Arc<tempo_core::logbook::QsoRecord>>,
+    },
+}
+
+/// The needs model's half that runs UNDER the engine lock: a revision read and, only when the
+/// model must be folded again, a pointer copy of the log (1 ms at 150,000 contacts, where the
+/// per-row copy it replaces was 31 ms and a full clone 165 ms).
+fn needs_capture(eng: &Engine, kept: &Tally<(), propagation::LogNeeds>) -> NeedsCapture {
+    let revision = eng.log_revision();
+    match kept.get(revision, &()) {
+        Some(needs) => NeedsCapture::Kept(needs),
+        None => NeedsCapture::Fold {
+            revision,
+            records: eng.log_snapshot().records,
+        },
+    }
+}
+
+/// The needs model's half that runs with the engine lock RELEASED: the fold, when the capture
+/// needs one, kept for the next reader. The fold is the one it always was — every record, in
+/// log order, into `LogNeeds::add_qso` — so the model is the same model.
+fn needs_finish(
+    capture: NeedsCapture,
+    kept: &Tally<(), propagation::LogNeeds>,
+) -> Arc<propagation::LogNeeds> {
+    let (revision, records) = match capture {
+        NeedsCapture::Kept(needs) => return needs,
+        NeedsCapture::Fold { revision, records } => (revision, records),
+    };
+    tempo_core::logbook::io_fence::whole_log_off_engine_lock("the needs model's fold");
     let mut needs = propagation::LogNeeds::new();
-    for (call, band, mode, grid, state, confirmed, satellite) in contacts {
+    for q in &records {
         // A "needs confirmation" must be award-grade (LoTW/paper), not eQSL.
         needs.add_qso(
-            &call,
-            &band,
-            &mode,
-            grid.as_deref(),
-            state.as_deref(),
-            confirmed,
-            satellite,
+            &q.call,
+            &q.band,
+            &q.mode,
+            q.grid.as_deref(),
+            q.state.as_deref(),
+            q.award_confirmed,
+            qso_is_sat(q.prop_mode.as_deref()),
         );
     }
-    (tallies.needs.put(revision, (), needs), log)
+    kept.put(revision, (), needs)
+}
+
+#[cfg(test)]
+mod whole_log_reader_tests {
+    //! SPEC-2 v3's C12: the whole-log readers a poll or a timer runs take the log's pointers
+    //! under the engine lock and do their pass after releasing it. Each is held here to the
+    //! answer the old code gave — reproduced below, verbatim, as the oracle — and each pass
+    //! asserts, in a debug build, that no Engine guard is held while it runs
+    //! (`io_fence::whole_log_off_engine_lock`).
+    use super::*;
+    use propagation::model::{Band, ModeClass};
+    use propagation::OperatorNeeds;
+
+    /// A log with something for every question: several bands, modes and states, a satellite
+    /// contact, award-grade and eQSL-only confirmations, a station worked three times with its
+    /// grid moving (twice in the same second), a contact with no grid.
+    const LOG: &str = "\
+        <CALL:5>JA1AA<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260101<TIME_ON:6>010000<GRIDSQUARE:4>PM95<LOTW_QSL_RCVD:1>Y<EOR>\n\
+        <CALL:5>DL1AB<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20260102<TIME_ON:6>020000<GRIDSQUARE:6>JO31AB<EOR>\n\
+        <CALL:5>W1ABC<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260103<TIME_ON:6>030000<STATE:2>MA<GRIDSQUARE:4>FN42<QSL_RCVD:1>Y<EOR>\n\
+        <CALL:5>W1ABC<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260104<TIME_ON:6>030000<STATE:2>MA<GRIDSQUARE:4>FN43<EOR>\n\
+        <CALL:5>K5XYZ<BAND:2>2m<MODE:2>FM<QSO_DATE:8>20260105<TIME_ON:6>040000<GRIDSQUARE:4>EM12<PROP_MODE:3>SAT<SAT_NAME:5>SO-50<EOR>\n\
+        <CALL:6>PY2ABC<BAND:3>10m<MODE:3>FT8<QSO_DATE:8>20260106<TIME_ON:6>050000<GRIDSQUARE:4>GG66<EQSL_QSL_RCVD:1>Y<EOR>\n\
+        <CALL:5>VE3AB<BAND:3>80m<MODE:3>SSB<QSO_DATE:8>20260107<TIME_ON:6>060000<STATE:2>ON<EOR>\n\
+        <CALL:5>G4ABC<BAND:3>17m<MODE:4>RTTY<QSO_DATE:8>20260108<TIME_ON:6>070000<GRIDSQUARE:4>IO91<LOTW_QSL_RCVD:1>Y<EOR>\n\
+        <CALL:5>w1abc<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260104<TIME_ON:6>030000<GRIDSQUARE:4>FN44<EOR>\n";
+
+    fn engine_with_log() -> SharedEngine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.import_adif(LOG);
+        assert_eq!(e.get_log().len(), 9, "premise: every contact imported");
+        Arc::new(Mutex::new(e))
+    }
+
+    /// The needs fold as every reader made it before C12, verbatim: a clone of the log, folded.
+    fn needs_the_old_way(engine: &SharedEngine) -> propagation::LogNeeds {
+        let mut needs = propagation::LogNeeds::new();
+        let log = engine_lock(engine).get_log();
+        for q in log {
+            needs.add_qso(
+                &q.call,
+                &q.band,
+                &q.mode,
+                q.grid.as_deref(),
+                q.state.as_deref(),
+                q.award_confirmed,
+                qso_is_sat(q.prop_mode.as_deref()),
+            );
+        }
+        needs
+    }
+
+    /// Everything a reader can observe of a needs model, as one comparable value: every set it
+    /// exposes, sorted, and its verdict for every worked entity (and two it never worked) on
+    /// every band in every mode class — which is what reads its private worked/confirmed sets.
+    fn observed(n: &propagation::LogNeeds) -> String {
+        fn sorted<T: std::fmt::Debug>(items: impl Iterator<Item = T>) -> String {
+            let mut v: Vec<String> = items.map(|x| format!("{x:?}")).collect();
+            v.sort();
+            v.join(",")
+        }
+        let mut out = vec![
+            sorted(n.worked_entity_names().iter()),
+            sorted(n.worked_grids_sat().iter()),
+            sorted(n.confirmed_grids_sat().iter()),
+            sorted(n.worked_zones().iter()),
+            sorted(n.worked_grids().iter()),
+            sorted(n.worked_states().iter()),
+            sorted(n.confirmed_zones().iter()),
+            sorted(n.confirmed_grids().iter()),
+            sorted(n.confirmed_states().iter()),
+        ];
+        let mut entities: Vec<String> = n.worked_entity_names().iter().cloned().collect();
+        entities.extend(["Japan".to_string(), "Nowhere".to_string()]);
+        entities.sort();
+        for e in &entities {
+            for b in Band::ALL {
+                for m in [ModeClass::Cw, ModeClass::Phone, ModeClass::Digital] {
+                    out.push(format!("{e}/{b:?}/{m:?}={:?}", n.need(e, b, m)));
+                }
+            }
+        }
+        out.join("\n")
+    }
+
+    /// ★ The needs model is the model the old fold made, whoever asks — the propagation
+    /// refetch, the Needed board, a satellite pass — and an unchanged log is folded ONCE for all
+    /// of them; a logged contact folds it once more.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn every_reader_shares_one_needs_model_and_it_is_the_old_fold() {
+        let engine = engine_with_log();
+        let tallies = LogTallies::default();
+        let oracle = observed(&needs_the_old_way(&engine));
+        assert!(
+            oracle.contains("Satisfied") && oracle.contains("Atno"),
+            "premise: the fixture exercises more than one verdict"
+        );
+        LOG_TALLIES.with(|c| c.set(0));
+
+        let (refetch, _) = needs_kept(&engine, &tallies);
+        assert_eq!(
+            observed(&refetch),
+            oracle,
+            "the propagation refetch's model"
+        );
+        let spots: SharedSpots = Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::new(8)));
+        let ota: SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let live: SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        let region = SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+        read_need_alerts(
+            engine_lock(&engine),
+            &tallies.needs,
+            &live,
+            &region,
+            &spots,
+            &ota,
+        )
+        .expect("the board reads");
+        let captured = needs_capture(&engine_lock(&engine), &tallies.needs);
+        let satellite = needs_finish(captured, &tallies.needs);
+        assert!(
+            Arc::ptr_eq(&refetch, &satellite),
+            "the board and a satellite pass read the same kept model"
+        );
+        assert_eq!(
+            LOG_TALLIES.with(|c| c.get()),
+            1,
+            "one fold for every reader"
+        );
+
+        engine_lock(&engine).import_adif(
+            "<CALL:5>ZL1AB<BAND:3>15m<MODE:2>CW<QSO_DATE:8>20260109<TIME_ON:6>080000<EOR>\n",
+        );
+        let (after, _) = needs_kept(&engine, &tallies);
+        assert_eq!(
+            observed(&after),
+            observed(&needs_the_old_way(&engine)),
+            "a logged contact: the new model is the new old fold"
+        );
+        assert_ne!(observed(&after), oracle, "control: the contact counts");
+        assert_eq!(LOG_TALLIES.with(|c| c.get()), 2, "folded once more");
+    }
+
+    /// ★ POSITIVE CONTROL: the needs fold run with the engine lock still held is refused — so
+    /// the assertion every test above passed through is live.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "io_fence: the needs model's fold is a pass over the whole log")]
+    fn the_needs_fold_under_the_engine_lock_is_refused() {
+        let engine = engine_with_log();
+        let tallies = LogTallies::default();
+        let eng = engine_lock(&engine);
+        let captured = needs_capture(&eng, &tallies.needs);
+        let _ = needs_finish(captured, &tallies.needs);
+    }
+
+    /// The log statistics are the ones the old command computed from a clone of the log.
+    #[test]
+    fn the_log_statistics_are_the_old_ones() {
+        let engine = engine_with_log();
+        let old = {
+            let eng = engine_lock(&engine);
+            let my_call = eng.settings().mycall.clone();
+            let calls: Vec<String> = eng.get_log().into_iter().map(|q| q.call).collect();
+            propagation::compute_log_stats(&calls, &my_call)
+        };
+        assert!(old.total > 0, "premise: there is something to count");
+        assert_eq!(log_stats(&engine), old);
+    }
+
+    /// The sked's grid for a callsign is the one the old loop over a clone of the log found:
+    /// the newest contact carrying a grid, case aside, the later of two in one second.
+    #[test]
+    fn the_skeds_grid_lookup_is_the_old_one() {
+        let engine = engine_with_log();
+        let old = |peer: &str| {
+            let mut best: Option<(u64, String)> = None;
+            let log = engine_lock(&engine).get_log();
+            for q in log {
+                if q.call.eq_ignore_ascii_case(peer) {
+                    if let Some(g) = q
+                        .grid
+                        .as_deref()
+                        .filter(|g| propagation::geo::is_logged_grid(g))
+                    {
+                        if best.as_ref().is_none_or(|(w, _)| q.when_unix >= *w) {
+                            best = Some((q.when_unix, g.trim().to_uppercase()));
+                        }
+                    }
+                }
+            }
+            best.map(|(_, g)| g)
+        };
+        let records = engine_lock(&engine).log_snapshot().records;
+        for peer in ["W1ABC", "w1abc", "DL1AB", "VE3AB", "N0NE"] {
+            assert_eq!(newest_logged_grid(&records, peer), old(peer), "{peer}");
+        }
+        assert_eq!(
+            newest_logged_grid(&records, "W1ABC").as_deref(),
+            Some("FN44"),
+            "premise: the tie is exercised"
+        );
+    }
+
+    /// The confirmation diagnostics command runs its diagnosis with the lock released (the
+    /// fence would stop this test otherwise) and answers what the engine's own diagnosis does;
+    /// the diagnosis itself is held to the old body in tempo-app.
+    #[test]
+    fn the_confirmation_diagnostics_run_off_the_lock() {
+        let engine = engine_with_log();
+        let report = confirmation_diagnostics(&engine);
+        // The engine's own diagnosis, called as the command used to call it — on a raw lock,
+        // which test code may take and the fence does not count.
+        let direct = engine
+            .lock()
+            .unwrap()
+            .confirmation_diagnostics(now_unix(), |call| {
+                propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+            });
+        assert!(
+            !direct.one_away.is_empty(),
+            "premise: the entity lookup reaches the report"
+        );
+        assert_eq!(
+            serde_json::to_value(DiagnosticsReportDto::from(report)).unwrap(),
+            serde_json::to_value(DiagnosticsReportDto::from(direct)).unwrap()
+        );
+    }
 }
 
 /// TTL cache for the OVATION aurora oval (distinct payload type from PropCache, so
@@ -8857,29 +9116,21 @@ async fn get_sat_schedule(
 #[tauri::command]
 async fn get_sat_pass_needs(
     state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
     names: Vec<String>,
     hours: u32,
 ) -> Result<Vec<SatPassDto>, String> {
     const STALE_DAYS: f64 = 30.0;
     let hours = hours.clamp(1, 72);
+    let kept = tallies.needs.clone();
     let (mygrid, needs) = {
         let mut eng = engine_lock(&state);
         // Two-instance freshness: fold the other radio's fresh QSOs in before
         // computing needs (mtime-gated stat — cheap when unchanged).
         eng.sync_shared_log_if_changed();
-        let mut needs = propagation::LogNeeds::new();
-        for q in eng.get_log() {
-            needs.add_qso(
-                &q.call,
-                &q.band,
-                &q.mode,
-                q.grid.as_deref(),
-                q.state.as_deref(),
-                q.award_confirmed,
-                qso_is_sat(q.prop_mode.as_deref()),
-            );
-        }
-        (eng.settings().mygrid.clone(), needs)
+        // The needs model every reader shares ([`NeedsKept`]); folded, when it must be, on the
+        // blocking task below, with the engine lock released.
+        (eng.settings().mygrid.clone(), needs_capture(&eng, &kept))
     };
     let Some(obs) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(Vec::new());
@@ -8893,6 +9144,7 @@ async fn get_sat_pass_needs(
     let now = now_unix();
     let out = tauri::async_runtime::spawn_blocking(move || {
         use propagation::sat;
+        let needs = needs_finish(needs, &kept);
         let sat_needs = propagation::SatNeeds {
             worked_sat_grids: needs.worked_grids_sat(),
             worked_entities: needs.worked_entity_names(),
@@ -8969,6 +9221,32 @@ fn satellite_needs_passes(
     passes
 }
 
+/// The square `peer` last gave: the newest logged contact with that callsign (exact, case
+/// aside) that carries a grid a VUCC square can be read from — an operator moves, and the last
+/// square they gave is the current one. Of two contacts in the same second the later in the log
+/// wins, as it always has. A pass over the whole log, so never under the engine lock.
+fn newest_logged_grid(
+    records: &[Arc<tempo_core::logbook::QsoRecord>],
+    peer: &str,
+) -> Option<String> {
+    tempo_core::logbook::io_fence::whole_log_off_engine_lock("the sked's grid lookup");
+    let mut best: Option<(u64, String)> = None;
+    for q in records {
+        if q.call.eq_ignore_ascii_case(peer) {
+            if let Some(g) = q
+                .grid
+                .as_deref()
+                .filter(|g| propagation::geo::is_logged_grid(g))
+            {
+                if best.as_ref().is_none_or(|(w, _)| q.when_unix >= *w) {
+                    best = Some((q.when_unix, g.trim().to_uppercase()));
+                }
+            }
+        }
+    }
+    best.map(|(_, g)| g)
+}
+
 /// SKED WITH ANOTHER STATION — the two-observer answer the satellite stack has
 /// never given: when is one of the operator's birds above the horizon for BOTH
 /// of us at once, high enough at each end to actually work? The geometry, the
@@ -8999,40 +9277,29 @@ async fn get_sat_sked(
     if peer.is_empty() {
         return Err("Enter the other station's grid square or callsign".into());
     }
-    let (mygrid, their_grid) = {
+    let (mygrid, logged) = {
         let mut eng = engine_lock(&state);
         let mygrid = eng.settings().mygrid.clone();
-        let their_grid = if propagation::geo::is_logged_grid(&peer) {
-            peer.clone()
+        let logged = if propagation::geo::is_logged_grid(&peer) {
+            None
         } else {
-            // A callsign: the log is the one place this app already knows where
-            // another station is. Newest QSO carrying a grid wins — an operator
-            // moves, and the last square they gave is the current one.
+            // A callsign: the log is the one place this app already knows where another
+            // station is — read after the lock is released, from a copy of the log's pointers.
             eng.sync_shared_log_if_changed();
-            let mut best: Option<(u64, String)> = None;
-            for q in eng.get_log() {
-                if q.call.eq_ignore_ascii_case(&peer) {
-                    if let Some(g) = q
-                        .grid
-                        .as_deref()
-                        .filter(|g| propagation::geo::is_logged_grid(g))
-                    {
-                        if best.as_ref().is_none_or(|(w, _)| q.when_unix >= *w) {
-                            best = Some((q.when_unix, g.trim().to_uppercase()));
-                        }
-                    }
-                }
-            }
-            match best {
-                Some((_, g)) => g,
-                None => {
-                    return Err(format!(
-                        "No grid on file for {peer} — enter their square instead"
-                    ))
-                }
-            }
+            Some(eng.log_snapshot().records)
         };
-        (mygrid, their_grid)
+        (mygrid, logged)
+    };
+    let their_grid = match logged {
+        None => peer.clone(),
+        Some(records) => match newest_logged_grid(&records, &peer) {
+            Some(g) => g,
+            None => {
+                return Err(format!(
+                    "No grid on file for {peer} — enter their square instead"
+                ))
+            }
+        },
     };
 
     let Some(here) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
@@ -16574,10 +16841,20 @@ fn awards_for_records<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
 /// confirmations) is computed frontend-side from `get_log`. Pure/offline.
 #[tauri::command(async)]
 fn get_log_stats(state: State<'_, SharedEngine>) -> Result<propagation::LogStats, String> {
-    let eng = engine_lock(&state);
-    let my_call = eng.settings().mycall.clone();
-    let calls: Vec<String> = eng.get_log().into_iter().map(|q| q.call).collect();
-    Ok(propagation::compute_log_stats(&calls, &my_call))
+    Ok(log_stats(&state))
+}
+
+/// `get_log_stats`' answer. Under the engine lock only the operator's call and a copy of the
+/// log's pointers are taken (where a clone of every record used to be, 165 ms at 150,000
+/// contacts); the calls are read and folded after it is released.
+fn log_stats(engine: &Mutex<Engine>) -> propagation::LogStats {
+    let (my_call, records) = {
+        let eng = engine_lock(engine);
+        (eng.settings().mycall.clone(), eng.log_snapshot().records)
+    };
+    tempo_core::logbook::io_fence::whole_log_off_engine_lock("the log statistics");
+    let calls: Vec<&str> = records.iter().map(|q| q.call.as_str()).collect();
+    propagation::compute_log_stats(&calls, &my_call)
 }
 
 /// The Journey snapshot — the in-app, beginner-first achievement layer (auto-detected
@@ -16679,11 +16956,20 @@ fn journey_qso(r: &tempo_core::logbook::QsoRecord) -> propagation::JourneyQso {
 fn get_confirmation_diagnostics(
     state: State<'_, SharedEngine>,
 ) -> Result<DiagnosticsReportDto, String> {
-    let eng = engine_lock(&state);
-    let report = eng.confirmation_diagnostics(now_unix(), |call| {
+    Ok(confirmation_diagnostics(&state).into())
+}
+
+/// `get_confirmation_diagnostics`' report. Under the engine lock only what the diagnosis reads
+/// is copied (the log's pointers and the latest reconcile summaries); the diagnosis — a DXCC
+/// lookup per contact, 180 ms at 150,000 — runs after the lock is released.
+fn confirmation_diagnostics(engine: &Mutex<Engine>) -> tempo_core::diagnostics::DiagnosticsReport {
+    let (inputs, now) = {
+        let eng = engine_lock(engine);
+        (eng.confirmation_diagnostics_inputs(), now_unix())
+    };
+    inputs.diagnose(now, |call| {
         propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-    });
-    Ok(report.into())
+    })
 }
 
 /// One raw cluster/RBN spot for the Spots panel (the SpotCollector-style firehose view).
@@ -17147,12 +17433,14 @@ fn cluster_spot_heards(
 #[tauri::command]
 async fn get_need_alerts(
     state: State<'_, SharedEngine>,
+    tallies: State<'_, LogTallies>,
     live_paths: State<'_, SharedLivePaths>,
     region_paths: State<'_, SharedRegionPaths>,
     spots: State<'_, SharedSpots>,
     ota_cache: State<'_, SharedOtaSpots>,
 ) -> Result<Vec<propagation::NeedAlert>, String> {
-    let (live_paths, region_paths, spots, ota_cache) = (
+    let (needs, live_paths, region_paths, spots, ota_cache) = (
+        tallies.needs.clone(),
         live_paths.inner().clone(),
         SharedRegionPaths(region_paths.0.clone()),
         spots.inner().clone(),
@@ -17164,7 +17452,7 @@ async fn get_need_alerts(
         // radio would flag a DXCC/state/grid as needed that the other one already worked.
         // Mtime-gated, so this is a cheap `stat` whenever the file is unchanged.
         eng.sync_shared_log_if_changed();
-        read_need_alerts(eng, &live_paths, &region_paths, &spots, &ota_cache)
+        read_need_alerts(eng, &needs, &live_paths, &region_paths, &spots, &ota_cache)
     })
     .await?
 }
@@ -17301,28 +17589,16 @@ fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
 // native command's shared-log reconciliation or any logbook write/recovery path.
 fn read_need_alerts(
     eng: tempo_app::engine::EngineGuard<'_>,
+    needs_kept: &Tally<(), propagation::LogNeeds>,
     live_paths: &SharedLivePaths,
     region_paths: &SharedRegionPaths,
     spots: &SharedSpots,
     ota_cache: &SharedOtaSpots,
 ) -> Result<Vec<propagation::NeedAlert>, String> {
-    // Copy only the scoring fields while locked. DXCC resolution, indexing and
-    // ranking then run outside the engine lock for both native and Remote readers.
-    let contacts: Vec<_> = eng
-        .log_records()
-        .iter()
-        .map(|q| {
-            (
-                q.call.clone(),
-                q.band.clone(),
-                q.mode.clone(),
-                q.grid.clone(),
-                q.state.clone(),
-                q.award_confirmed,
-                qso_is_sat(q.prop_mode.as_deref()),
-            )
-        })
-        .collect();
+    // The needs model every reader shares ([`NeedsKept`]): while locked, only the kept model or
+    // a copy of the log's pointers ([`needs_capture`]). The fold, DXCC resolution, indexing and
+    // ranking run outside the engine lock for both native and Remote readers.
+    let needs = needs_capture(&eng, needs_kept);
     // The hunter side of the log, indexed by ACTIVATION — which park/summit reference has
     // already been worked, from which activator, today. Built under the same lock as `contacts`
     // above, by the builder the POTA/SOTA board uses too (`hunted_activations`).
@@ -17339,18 +17615,7 @@ fn read_need_alerts(
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
     let license_class = eng.settings().license_class;
     drop(eng); // nothing below needs the engine — don't hold the hot lock
-    let mut needs = propagation::LogNeeds::new();
-    for (call, band, mode, grid, state, confirmed, satellite) in contacts {
-        needs.add_qso(
-            &call,
-            &band,
-            &mode,
-            grid.as_deref(),
-            state.as_deref(),
-            confirmed,
-            satellite,
-        );
-    }
+    let needs = needs_finish(needs, needs_kept);
     let band = snap.radio.band.clone();
     // Your own radio's decodes on the CURRENT band (you are the receiver). These come
     // from the digital modem, so the truthful mode label is the active TIER (FT8/FT4/
@@ -17454,7 +17719,7 @@ fn read_need_alerts(
             h.us_state = fcc_state_for_call(&h.call).map(str::to_string);
         }
     }
-    let mut alerts = propagation::rank_needs(&heard, &needs, &needs.slots());
+    let mut alerts = propagation::rank_needs(&heard, &*needs, &needs.slots());
     // The Confirm (worked-but-unconfirmed / LoTW opportunity) tier is opt-out. This is
     // the ONE seam both surfaces share — the Needed board and the decode/roster chips
     // are all views over this list — and it runs BEFORE the DXped/POTA/SOTA appends so
@@ -17594,7 +17859,7 @@ fn read_need_alerts(
                 hunted.needed(r, &tempo_core::message::base_call(&sp.activator), now)
             });
             let Some(mut alert) =
-                propagation::activation_alert(sp, &needs, &needs.slots(), reference_needed)
+                propagation::activation_alert(sp, &*needs, &needs.slots(), reference_needed)
             else {
                 continue;
             };
@@ -17661,7 +17926,7 @@ fn read_need_alerts(
                 true,
                 None,
                 &wcfg,
-                &needs,
+                &*needs,
                 &needs.slots(),
             ) {
                 // wanted_alert doesn't know the spot metadata — carry it over.
@@ -27333,6 +27598,7 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
     handle.manage(remote_service_for(
         &d,
         handle.state::<remote_monitor::Publisher>().inner().clone(),
+        handle.state::<LogTallies>().needs.clone(),
     ));
     // Pounce detector. Emits `pounce` to every window when a rare one appears — the
     // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
@@ -27347,12 +27613,13 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         let claimed = d.pounce_rx.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(rx) = claimed {
             let eng = handle.state::<SharedEngine>().inner().clone();
+            let needs = handle.state::<LogTallies>().needs.clone();
             let emit_handle = handle.clone();
             let recent = d.pounces.clone();
             std::thread::Builder::new()
                 .name("nexus-pounce".into())
                 .spawn(move || {
-                    pouncer::run(eng, rx, recent, move |p| {
+                    pouncer::run(eng, needs, rx, recent, move |p| {
                         let _ = emit_handle.emit("pounce", &p);
                     });
                 })
@@ -28129,6 +28396,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
 fn remote_service_for(
     d: &BuildDeps,
     publisher: remote_monitor::Publisher,
+    needs: NeedsKept,
 ) -> remote_service::Service {
     remote_service::Service::new(
         d.engine.clone(),
@@ -28136,6 +28404,7 @@ fn remote_service_for(
         d.spectrum_feed.clone(),
         d.meter_feed.clone(),
         Some(remote_service::query::Sources {
+            needs,
             spots: d.spots.clone(),
             live_paths: d.live_paths.clone(),
             region_paths: d.region_paths.clone(),
@@ -35770,7 +36039,15 @@ mod tests {
         let region =
             crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
         let engine: SharedEngine = Arc::new(Mutex::new(engine));
-        crate::read_need_alerts(engine_lock(&engine), &live, &region, &spots, &ota).unwrap()
+        crate::read_need_alerts(
+            engine_lock(&engine),
+            &Default::default(),
+            &live,
+            &region,
+            &spots,
+            &ota,
+        )
+        .unwrap()
     }
 
     /// Today's 0000Z on the real clock the board reads — a log timestamp that is always "today"
@@ -36030,8 +36307,15 @@ mod tests {
         let spots: crate::SharedSpots =
             Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::default()));
         let engine = fresh_engine();
-        let alerts = crate::read_need_alerts(engine_lock(&engine), &live, &region, &spots, &ota)
-            .expect("the board reads");
+        let alerts = crate::read_need_alerts(
+            engine_lock(&engine),
+            &Default::default(),
+            &live,
+            &region,
+            &spots,
+            &ota,
+        )
+        .expect("the board reads");
         let entity = |call: &str| {
             alerts
                 .iter()
@@ -36311,8 +36595,15 @@ mod tests {
         let engine: SharedEngine = Arc::new(Mutex::new(tempo_app::engine::Engine::new(
             "KD9TAW", "EN52", 0,
         )));
-        let alerts =
-            crate::read_need_alerts(engine_lock(&engine), &live, &region, &spots, &ota).unwrap();
+        let alerts = crate::read_need_alerts(
+            engine_lock(&engine),
+            &Default::default(),
+            &live,
+            &region,
+            &spots,
+            &ota,
+        )
+        .unwrap();
         let park_of = |call: &str, mode: &str| {
             alerts
                 .iter()

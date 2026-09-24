@@ -19,20 +19,13 @@ const TEXT_BYTES: usize = 1024;
 
 pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'static str> {
     let deadline = Instant::now() + Duration::from_secs(2);
-    let (report, log_count) = loop {
+    let (inputs, now) = loop {
         match tempo_app::engine::engine_try_lock(engine) {
             Ok(e) => {
-                let count = e.log_records().len();
-                if count > LOG_ROWS {
-                    return Err("applicationTooLarge");
-                }
-                // The desktop's get_confirmation_diagnostics holds the engine for this
-                // same call. The publisher reuses a capture for ten seconds, so browser
-                // refreshes cannot hold it more often than that.
-                let report = e.confirmation_diagnostics(crate::now_unix(), |call| {
-                    propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-                });
-                break (report, count);
+                // Under the lock only what the diagnosis reads is copied (the log's pointers
+                // and the latest reconcile summaries); the diagnosis runs after it is released,
+                // as the desktop's get_confirmation_diagnostics runs it.
+                break (e.confirmation_diagnostics_inputs(), crate::now_unix());
             }
             Err(TryLockError::Poisoned(_)) => return Err("applicationUnavailable"),
             Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
@@ -41,6 +34,13 @@ pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'stati
             Err(TryLockError::WouldBlock) => return Err("applicationBusy"),
         }
     };
+    let log_count = inputs.log_len();
+    if log_count > LOG_ROWS {
+        return Err("applicationTooLarge");
+    }
+    let report = inputs.diagnose(now, |call| {
+        propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+    });
     project(DiagnosticsReportDto::from(report), log_count)
 }
 

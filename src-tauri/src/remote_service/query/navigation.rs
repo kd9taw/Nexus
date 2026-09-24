@@ -824,6 +824,7 @@ mod tests {
             log: engine.log_read_token(),
         };
         let sources = Sources {
+            needs: Default::default(),
             spots: Default::default(),
             live_paths: Default::default(),
             region_paths: crate::SharedRegionPaths(Default::default()),

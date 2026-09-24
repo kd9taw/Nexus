@@ -147,6 +147,9 @@ pub(super) fn snapshot_id() -> Result<String, &'static str> {
 }
 #[derive(Clone)]
 pub struct Sources {
+    /// The needs model the desktop's readers share ([`crate::NeedsKept`]), so a browser's
+    /// Needed list folds the log no more often than the desktop's does.
+    pub needs: crate::NeedsKept,
     pub spots: crate::SharedSpots,
     pub live_paths: crate::SharedLivePaths,
     pub region_paths: crate::SharedRegionPaths,
@@ -552,11 +555,14 @@ impl Publisher {
                     .snapshot(request.after))
             }
             Collection::Log => {
-                let eng =
-                    tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
-                let (rows, total) =
-                    log_window(eng.log_records(), &request.search, request.unconfirmed);
-                drop(eng);
+                // A copy of the log's pointers under the lock; the scan (every row, and with a
+                // search five lowercased fields each) runs after it is released.
+                let records = tempo_app::engine::engine_try_lock(engine)
+                    .map_err(|_| "applicationBusy")?
+                    .log_snapshot()
+                    .records;
+                tempo_core::logbook::io_fence::whole_log_off_engine_lock("Remote's log window");
+                let (rows, total) = log_window(&records, &request.search, request.unconfirmed);
                 let rows = rows
                     .into_iter()
                     .map(|r| {
@@ -605,6 +611,7 @@ impl Publisher {
                     tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
                 let rows = crate::read_need_alerts(
                     eng,
+                    &sources.needs,
                     &sources.live_paths,
                     &sources.region_paths,
                     &sources.spots,

@@ -86,7 +86,13 @@ mod tests {
         }
         drop(tx);
         let mut fired = Vec::new();
-        run(engine.clone(), rx, recent.clone(), |p| fired.push(p));
+        run(
+            engine.clone(),
+            Default::default(),
+            rx,
+            recent.clone(),
+            |p| fired.push(p),
+        );
         assert_eq!(
             fired.len(),
             2,
@@ -114,9 +120,13 @@ mod tests {
             spotted_unix: crate::now_unix(),
         });
         drop(tx);
-        run(engine.clone(), rx, recent.clone(), |_| {
-            panic!("Pounce is off: the desktop raises nothing")
-        });
+        run(
+            engine.clone(),
+            Default::default(),
+            rx,
+            recent.clone(),
+            |_| panic!("Pounce is off: the desktop raises nothing"),
+        );
         assert_eq!(
             read(&recent, &engine).unwrap(),
             (Vec::new(), 0, json!({ "threshold": "off" }))

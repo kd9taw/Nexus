@@ -198,6 +198,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extra for a 150,000-contact log, and twice that at 500,000. It is now released as the log
   loads.
 
+- **With a big logbook, the radio no longer waits while Nexus reads the whole log.** The Needed
+  board, a satellite pass's needs, a sked looked up by callsign, the log statistics, the
+  confirmation diagnostics on Awards, the pounce alert's refresh, and a Remote browser's Log and
+  Confirmations each went through every contact while holding the lock the radio needs every
+  20 ms: up to a sixth of a second at 150,000 contacts, and most of a second for the diagnostics
+  at 500,000. Each now takes a list of the contacts, which costs about a millisecond, lets go,
+  and does its work after. The Needed board, a satellite pass and the pounce alert also share one
+  picture of what is worked and needed instead of each rebuilding it on every refresh.
+
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
   1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
   lookup that turns a callsign into a country. The Needed board and the need chips beside the

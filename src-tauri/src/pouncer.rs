@@ -11,10 +11,11 @@
 //! [[feedback-root-cause-not-bandaids]]): the callback's only job is a non-blocking handoff.
 //!
 //! THE COST MODEL. `LogNeeds` is derived from every logged QSO — at 11k contacts that is far too
-//! expensive per spot. It is rebuilt on a slow cadence and cached; each arriving spot is then
-//! scored against the cached snapshot, which is cheap. A needs snapshot that is a few tens of
-//! seconds stale can at worst produce one late alert for a station just worked — and the gate's
-//! own cooldown already covers that.
+//! expensive per spot. It is re-read on a slow cadence from the model every other reader shares
+//! (`crate::NeedsKept`: folded again only when the log has moved, with the engine lock released),
+//! and each arriving spot is scored against that snapshot, which is cheap. A needs snapshot that
+//! is a few tens of seconds stale can at worst produce one late alert for a station just worked —
+//! and the gate's own cooldown already covers that.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, SyncSender};
@@ -87,24 +88,25 @@ pub fn channel() -> (PounceTx, Receiver<SpotHint>) {
     (PounceTx(tx), rx)
 }
 
-/// Rebuild the operator's worked sets from the logbook. Expensive — call on the slow cadence.
-fn snapshot_needs(engine: &Arc<Mutex<Engine>>) -> Option<(propagation::LogNeeds, Vec<String>)> {
-    let mut eng = tempo_app::engine::engine_lock_result(engine).ok()?;
-    eng.sync_shared_log_if_changed();
-    let mut needs = propagation::LogNeeds::new();
-    for q in eng.get_log() {
-        needs.add_qso(
-            &q.call,
-            &q.band,
-            &q.mode,
-            q.grid.as_deref(),
-            q.state.as_deref(),
-            q.award_confirmed,
-            crate::qso_is_sat(q.prop_mode.as_deref()),
-        );
-    }
-    let wanted = eng.settings().wanted_calls.clone();
-    Some((needs, wanted))
+/// The operator's worked sets — the needs model every reader shares ([`crate::NeedsKept`]),
+/// folded again only when the log has moved — and the watch list. Call on the slow cadence.
+///
+/// Under the engine lock only the freshness check, the kept model or a copy of the log's
+/// pointers, and the watch list; a fold, when one is needed, runs after the lock is released.
+/// It used to clone every record and fold them all under the lock, every minute a spot came in.
+fn snapshot_needs(
+    engine: &Arc<Mutex<Engine>>,
+    kept: &crate::NeedsKept,
+) -> Option<(Arc<propagation::LogNeeds>, Vec<String>)> {
+    let (capture, wanted) = {
+        let mut eng = tempo_app::engine::engine_lock_result(engine).ok()?;
+        eng.sync_shared_log_if_changed();
+        (
+            crate::needs_capture(&eng, kept),
+            eng.settings().wanted_calls.clone(),
+        )
+    };
+    Some((crate::needs_finish(capture, kept), wanted))
 }
 
 /// Read the operator's configured threshold (cheap; the setting can change mid-session).
@@ -120,12 +122,13 @@ fn threshold_of(engine: &Arc<Mutex<Engine>>) -> PounceThreshold {
 /// browser reads exactly what the desktop was told. Blocks; spawn it.
 pub fn run(
     engine: Arc<Mutex<Engine>>,
+    needs_kept: crate::NeedsKept,
     rx: Receiver<SpotHint>,
     recent: SharedRecent,
     mut on_fire: impl FnMut(Pounce),
 ) {
     let mut gate = PounceGate::new();
-    let mut needs: Option<(propagation::LogNeeds, Vec<String>)> = None;
+    let mut needs: Option<(Arc<propagation::LogNeeds>, Vec<String>)> = None;
     let mut needs_at: i64 = 0;
     let mut last_prune: i64 = 0;
 
@@ -137,7 +140,7 @@ pub fn run(
         }
         // Refresh the worked sets on the slow cadence, never per spot.
         if needs.is_none() || now.saturating_sub(needs_at) > NEEDS_REFRESH_SECS {
-            if let Some(n) = snapshot_needs(&engine) {
+            if let Some(n) = snapshot_needs(&engine, &needs_kept) {
                 needs = Some(n);
                 needs_at = now;
                 // The log changed under us; a station that was uninteresting may now be news
@@ -153,7 +156,7 @@ pub fn run(
         else {
             continue; // off-band frequency — not workable, not news
         };
-        let alerts = propagation::rank_needs(std::slice::from_ref(&heard), n, &n.slots());
+        let alerts = propagation::rank_needs(std::slice::from_ref(&heard), &**n, &n.slots());
         let Some(alert) = alerts.into_iter().next() else {
             continue;
         };
@@ -242,5 +245,28 @@ mod tests {
         }
         // Reaching here at all is the assertion: `offer` never blocked despite the queue being
         // long past full.
+    }
+
+    /// The pounce thread reads the needs model the other readers share: the one the Needed
+    /// board and a propagation refetch read, folded once for all of them while the log stands
+    /// still. It used to clone and fold the whole log for itself, under the engine lock.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn the_pounce_thread_reads_the_needs_model_every_reader_shares() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        engine.lock().unwrap().import_adif(
+            "<CALL:5>JA1AA<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260101<TIME_ON:6>010000<EOR>\n",
+        );
+        let tallies = crate::LogTallies::default();
+        crate::LOG_TALLIES.with(|c| c.set(0));
+        let (pounce, _) = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
+        let (board, _) = crate::needs_kept(&engine, &tallies);
+        let (again, _) = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
+        assert!(
+            Arc::ptr_eq(&pounce, &board) && Arc::ptr_eq(&board, &again),
+            "one model for every reader"
+        );
+        assert_eq!(crate::LOG_TALLIES.with(|c| c.get()), 1, "folded once");
+        assert_eq!(pounce.worked_entities(), 1, "premise: the contact is in it");
     }
 }

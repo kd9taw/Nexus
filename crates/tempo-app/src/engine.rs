@@ -20999,8 +20999,10 @@ contact yourself."
         // whole seed so it can't race an in-flight decode (may briefly wait if one
         // is running; seeding is a one-shot startup task).
         let _g = source_lock(&self.source);
-        // Newest first; cap the work — each encode is one FFI round-trip.
-        for rec in self.station.get_log().into_iter().rev() {
+        // Newest first; cap the work — each encode is one FFI round-trip. The rows are read
+        // where they are: this used to clone every record in the log (165 ms and 184 MiB at
+        // 150,000 contacts) to look at the newest few hundred calls.
+        for rec in self.station.logbook.records().iter().rev() {
             let call = rec.call.trim().to_uppercase();
             if !is_compound(&call) || !seen.insert(call.clone()) {
                 continue;
@@ -22785,6 +22787,12 @@ contact yourself."
         resolve: impl Fn(&str) -> Option<String>,
     ) -> tempo_core::diagnostics::DiagnosticsReport {
         self.station.confirmation_diagnostics(now, resolve)
+    }
+
+    /// See [`StationCore::diagnostics_inputs`]: what the diagnosis reads, taken under this lock
+    /// and diagnosed after it is released.
+    pub fn confirmation_diagnostics_inputs(&self) -> crate::station::DiagnosticsInputs {
+        self.station.diagnostics_inputs()
     }
 
     /// See [`StationCore::lotw_unsent_indices`].
