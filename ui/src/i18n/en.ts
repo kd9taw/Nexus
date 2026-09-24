@@ -1221,6 +1221,8 @@ export const EN = {
   'logbook.field.qslCard.label': 'Card received',
   'logbook.empty': 'No logged contacts yet.',
   'logbook.emptySearch': 'No contacts match “{{query}}”.',
+  // A row of the list whose page is still on its way from the log (SPEC-2 C17b).
+  'logbook.rows.loading': 'Loading…',
 
   // A row. `{{program}}` (POTA/SOTA/WWFF) and `{{ref}}` are references, `{{call}}` a callsign.
   'logbook.row.park.worked': '{{program}} {{ref}} (worked)',

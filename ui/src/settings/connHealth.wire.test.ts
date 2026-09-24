@@ -18,10 +18,11 @@ const lib = readFileSync(
   'utf8',
 )
 
-/** Every `id: "…".into()` literal inside `get_credentials_status`, in row order. */
+/** Every `id: "…".into()` literal inside `credentials_status` (the body the `get_credentials_status`
+ * command runs off the UI thread), in row order. */
 function rustIds(): string[] {
-  const m = lib.match(/fn get_credentials_status[\s\S]*?\n\}/)
-  if (!m) throw new Error('get_credentials_status not found in lib.rs')
+  const m = lib.match(/fn credentials_status\([\s\S]*?\n\}/)
+  if (!m) throw new Error('credentials_status not found in lib.rs')
   return [...m[0].matchAll(/\bid:\s*"([^"]+)"\.into\(\)/g)].map((x) => x[1])
 }
 

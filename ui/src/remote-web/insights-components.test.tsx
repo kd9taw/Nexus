@@ -46,15 +46,16 @@ it('preserves the native award and statistics read paths', async () => {
   const view = render(<AwardsJourney showGamification={false} />)
   await waitFor(() => expect(getAwards).toHaveBeenCalledOnce())
   expect(getConfirmationDiagnostics).toHaveBeenCalledOnce()
-  // Both read the log through the window's shared copy (features/logStore): the first read is
-  // the whole log, and the second view's is only what is new since that copy.
-  await waitFor(() => expect(getLogDelta).toHaveBeenCalledOnce())
-  expect(getLogDelta).toHaveBeenCalledWith(0, 0)
+  // Neither view holds the log (SPEC-2 v3 C17b): Awards asks `LogSource` only for the rows a
+  // diagnosis names — there is no diagnosis here, so it reads nothing — and Statistics asks for
+  // its roll-up, which the whole-log adapter answers from the window's copy: its first read.
+  await new Promise((r) => setTimeout(r, 30))
+  expect(getLogDelta).not.toHaveBeenCalled()
   view.unmount()
   render(<StatsView />)
   await waitFor(() => expect(getLogStats).toHaveBeenCalledOnce())
-  await waitFor(() => expect(getLogDelta).toHaveBeenCalledTimes(2))
-  expect(getLogDelta).toHaveBeenLastCalledWith(1, 0)
+  await waitFor(() => expect(getLogDelta).toHaveBeenCalledOnce())
+  expect(getLogDelta).toHaveBeenCalledWith(0, 0)
   expect(getLog).not.toHaveBeenCalled()
 })
 

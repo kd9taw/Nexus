@@ -148,6 +148,12 @@ pub struct Change {
     /// The log's watermarks after the change, written in the same transaction as its last
     /// chunk.
     pub marks: Watermarks,
+    /// `log_meta` keys this change sets, in the same transaction as its last chunk — a fact
+    /// about the rows the change writes that must never be on disk without them (the fill job's
+    /// `fill_ver`, SPEC-2 v3 D2-A). A change carrying only these still writes, so it is not
+    /// [`Self::is_empty`]. ⚠️ A re-send from memory ([`Self::resend`]) does not carry them: the
+    /// job that set them runs again, and finds its rows already written.
+    pub meta: Vec<(&'static str, i64)>,
 }
 
 impl Change {
@@ -217,6 +223,7 @@ impl Change {
             },
             upsert,
             marks: Watermarks::of(log),
+            meta: Vec::new(),
         }
     }
 
@@ -400,6 +407,7 @@ impl Change {
                     remove: Vec::new(),
                     upsert: log.records().iter().map(row).collect(),
                     marks: Watermarks::of(log),
+                    meta: Vec::new(),
                 },
                 Touched::Rows(ids) => {
                     let mut change = Change {
@@ -426,7 +434,7 @@ impl Change {
     /// Whether this change writes anything at all. An empty change still moves the
     /// watermarks, so it is only skipped by a caller that knows nothing changed.
     pub fn is_empty(&self) -> bool {
-        !self.clear && self.remove.is_empty() && self.upsert.is_empty()
+        !self.clear && self.remove.is_empty() && self.upsert.is_empty() && self.meta.is_empty()
     }
 }
 
@@ -1041,6 +1049,7 @@ struct Job {
     remove: Vec<RecordId>,
     upsert: Vec<RowWrite>,
     marks: Watermarks,
+    meta: Vec<(&'static str, i64)>,
     slot: Arc<Slot>,
     /// Every row this job writes or drops — what decides whether another job may overtake
     /// it. Built once, here, rather than per comparison: a bulk job is compared against on
@@ -1065,6 +1074,7 @@ impl Job {
             remove: c.remove,
             upsert: c.upsert,
             marks: c.marks,
+            meta: c.meta,
             slot,
             touched,
             cursor: Cursor::default(),
@@ -1085,7 +1095,7 @@ struct Chunk<'a> {
 /// Removals go first and upserts follow, so a change that deletes a row and re-adds its id
 /// cannot have the two in the wrong order. The watermarks ride the LAST chunk only: a
 /// watermark that ran ahead of the rows would be a cache key that lies, where one that lags
-/// only costs a rebuild.
+/// only costs a rebuild. The change's `log_meta` keys ride with them, for the same reason.
 fn plan(job: &Job) -> Chunk<'_> {
     let from = job.cursor.removed;
     let removed = (from + CHUNK_ROWS).min(job.remove.len());
@@ -1103,6 +1113,7 @@ fn plan(job: &Job) -> Chunk<'_> {
             remove: &job.remove[from..removed],
             upsert: &job.upsert[up_from..upserted],
             marks: finishes.then_some(job.marks),
+            meta: if finishes { &job.meta } else { &[] },
         },
         removed,
         upserted,
@@ -2371,6 +2382,7 @@ mod tests {
             remove: &c.remove,
             upsert: &c.upsert,
             marks: Some(c.marks),
+            meta: &c.meta,
         })
         .expect("the store accepts the change");
     }
@@ -2740,5 +2752,66 @@ mod tests {
         for (i, r) in held.iter().enumerate() {
             assert_eq!(merged[i].id, r.id, "row {i} did not move");
         }
+    }
+
+    /// The `log_meta` value `k` as a second connection reads it.
+    fn meta_of(conn: &Connection, k: &str) -> Option<i64> {
+        conn.query_row("SELECT v FROM log_meta WHERE k = ?1", [k], |r| r.get(0))
+            .ok()
+    }
+
+    /// ★ A CHANGE'S `log_meta` KEYS LAND WITH ITS LAST CHUNK (SPEC-2 v3 D2-A: `fill_ver` must
+    /// never be on disk without the fills it names). A bulk change of several chunks carries its
+    /// key to disk only when its last chunk commits — a chunk short of that shows the rows so far
+    /// and no key; a change of nothing but a key is written; and a change the store refuses
+    /// writes none of its keys.
+    #[test]
+    fn a_changes_meta_keys_land_with_its_last_chunk_and_never_without_it() {
+        let scratch = Scratch::new();
+        // The last chunk is refused (a row with no id), so the rows before it are on disk and the
+        // key must not be: the chunks that committed are the evidence the key was withheld.
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        let mut batch: Vec<Arc<QsoRecord>> = (0..(CHUNK_ROWS as u64 * 2))
+            .map(|n| rec("W1AW", n))
+            .collect();
+        let mut orphan = (*rec("K5XYZ", 99_999)).clone();
+        orphan.id = None;
+        batch.push(Arc::new(orphan));
+        let refused = w.submit(Change {
+            meta: vec![("fill_ver", 7)],
+            ..change(1, batch).in_bulk()
+        });
+        assert!(w.wait_durable(&refused, Duration::from_secs(60)).is_err());
+        let conn = stored(&scratch.db());
+        assert_eq!(
+            rows(&conn),
+            (CHUNK_ROWS * 2) as i64,
+            "premise: the chunks before the refused one committed"
+        );
+        assert_eq!(meta_of(&conn, "fill_ver"), None, "and the key did not");
+
+        // The same change whole: the key is on disk with it.
+        let whole: Vec<Arc<QsoRecord>> = (0..(CHUNK_ROWS as u64 * 2 + 1))
+            .map(|n| rec("W1AW", 10_000 + n))
+            .collect();
+        let ok = w.submit(Change {
+            meta: vec![("fill_ver", 8)],
+            ..change(2, whole).in_bulk()
+        });
+        w.wait_durable(&ok, Duration::from_secs(60))
+            .expect("stored");
+        assert_eq!(meta_of(&stored(&scratch.db()), "fill_ver"), Some(8));
+
+        // A change of nothing but a key is a change: it is not empty, and it is written.
+        let key_only = Change {
+            meta: vec![("fill_ver", 9)],
+            ..change(3, Vec::new())
+        };
+        assert!(!key_only.is_empty(), "a key alone still writes");
+        let t = w.submit(key_only);
+        w.wait_durable(&t, Duration::from_secs(60)).expect("stored");
+        assert_eq!(meta_of(&stored(&scratch.db()), "fill_ver"), Some(9));
+        // Control: a change of nothing at all is empty, as it always was.
+        assert!(change(4, Vec::new()).is_empty());
     }
 }
