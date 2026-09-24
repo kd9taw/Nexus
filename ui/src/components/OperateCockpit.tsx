@@ -1793,7 +1793,8 @@ function OperateRecall({
   // The card's answers follow `logTick` (#282): the sequencer logs in the background with the
   // SAME station still on the card, and a card that read the log only on a call change left
   // "New DXCC!" standing over a contact that was already in the log until the operator clicked
-  // someone else. Until the window has an answer the card shows the empty log's.
+  // someone else. Until the window has an answer the card shows the empty log's history (none),
+  // and no need badge (below).
   const histQuestion = {
     kind: 'callHistory',
     call: cu,
@@ -1806,10 +1807,13 @@ function OperateRecall({
   // the right thing to stand in with while that request is in flight, and the badges do not
   // flicker through "new one" on the way to the truth.
   const entityForBadge = entity ?? station?.country ?? book?.country ?? null
-  // `null` and '' are one answer to both old functions: no entity, nothing new, no slots.
+  // `null` and '' are one answer to both old functions: no entity, nothing new, no slots. NO NEED
+  // BADGE UNTIL ITS ANSWER IS HERE: the empty log's answer stands in until then, and it calls every
+  // entity new — "New DXCC!" over a worked one while the log loaded (C17D).
   const entityQuestion = { kind: 'entity', entity: entityForBadge ?? '' } as const
-  const entityAnswer = useLogAnswer(entityQuestion, snap.logTick) ?? emptyAnswer(entityQuestion)
-  const newEntity = entityAnswer.newEntity
+  const entityAnswered = useLogAnswer(entityQuestion, snap.logTick)
+  const entityAnswer = entityAnswered ?? emptyAnswer(entityQuestion)
+  const newEntity = entityAnswered !== undefined && entityAnswer.newEntity
   const slots = entityAnswer.slots
   const liveBand = bandKey({ band: snap.radio.band, freqMhz: snap.radio.dialMhz })
   const newBandSlot =

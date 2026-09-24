@@ -19,8 +19,12 @@
 // three-column grid and Roster's rail), and one of the two silently missing the card is
 // exactly the drift OperateCockpit.structure.test.tsx exists to catch elsewhere.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, waitFor, within } from '@testing-library/react'
+import { act, render, cleanup, waitFor, within } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
+import { t } from '../i18n'
+import { setLogSource } from '../features/logSource'
+import { createAskingLogSource } from '../features/askingLogSource'
+import { answerFrom } from '../features/logAnswers'
 import { RecallPanel } from './RecallPanel'
 import { distanceLabel, bearingLabel } from '../grid'
 import type { AppSnapshot, LoggedQso, QrzLookup } from '../types'
@@ -517,5 +521,45 @@ describe('the contest-dupe tooltip names a band only when the ruleset does', () 
     expect(document.querySelector('.recall-badge.contest-dupe'), 'no contest-dupe badge').not.toBeNull()
     expect(dupeTitle(), 'a per-band ruleset stopped naming the band').toContain('20m')
     expect(dupeTitle()).not.toContain('regardless of band')
+  })
+})
+
+// NO BADGE UNTIL THE CALL'S ANSWER ARRIVES (operator, 2026-09-24: "All as recommended"). Until the
+// window has the log's answer for this call, the card fell back to the EMPTY log's answer — and in an
+// empty log every entity is new, so "New DXCC!" stood over a station whose country is in the log,
+// for as long as the log took to load (and, once the engine answers each call, on every call). The
+// card now shows no need badge until the answer lands; then exactly the badge it always showed.
+describe('no need badge until the call’s answer arrives', () => {
+  const need = () => document.querySelector('.recall-card .recall-badge.need')?.textContent ?? null
+  const TODAYS = `★ ${t('recall.need.band')}` // what this log says for W1ABC on 20 m (above)
+
+  it('the whole-log list: nothing while the log loads, then exactly today’s badge', async () => {
+    let release = () => {}
+    getLog.mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve(priorQsos))))
+    renderCockpit('W1ABC')
+    await waitFor(() => expect(document.querySelector('.recall-card')?.textContent).toContain('Alice Example'))
+    expect(need(), 'a need badge before the log answered').toBeNull()
+
+    await act(async () => release())
+    await waitFor(() => expect(need(), 'the answer, landed').toBe(TODAYS))
+  })
+
+  it('an asking source: nothing while this call’s answer is out, then exactly today’s badge', async () => {
+    const out: (() => void)[] = []
+    setLogSource(
+      createAskingLogSource(async (q) => {
+        await new Promise<void>((resolve) => out.push(resolve))
+        return answerFrom(priorQsos, q, 1)
+      }),
+    )
+    renderCockpit('W1ABC')
+    await waitFor(() => expect(document.querySelector('.recall-card')?.textContent).toContain('Alice Example'))
+    await waitFor(() => expect(out.length, 'the card asked').toBeGreaterThan(0))
+    expect(need(), 'a need badge before the answer').toBeNull()
+
+    await act(async () => {
+      for (const answer of out.splice(0)) answer()
+    })
+    await waitFor(() => expect(need(), 'the answer, landed').toBe(TODAYS))
   })
 })
