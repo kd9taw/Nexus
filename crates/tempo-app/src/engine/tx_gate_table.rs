@@ -304,6 +304,9 @@ fn rows() -> Vec<Row> {
             emission_mhz: 145.965,
             phone_seg: Some((420.0, 450.0)),
         },
+        // `true` when pinned. `2a9f28b4` (the Digital licence gate) now judges the data carrier
+        // on the side the uplink VFO is commanded, PKTLSB here since `2d4300ad`: 1500 Hz below
+        // 144.101 is 2 m's CW-only segment.
         Row {
             name: "IC-9700 constructed edge bird (up 144.101, inverting) digital, General",
             build: || {
@@ -314,7 +317,7 @@ fn rows() -> Vec<Row> {
                 );
                 e
             },
-            tx_allowed: true,
+            tx_allowed: false,
             emission_mhz: 144.101,
             phone_seg: Some((420.0, 450.0)),
         },
@@ -582,14 +585,13 @@ struct D1Answer {
 ///
 /// Read it as: switching the gate to D1 moves the band strip's phone shade on every cross-band
 /// pass (Main's 70 cm segment becomes the uplink's 2 m one), never moves the judged frequency,
-/// and changes a licence answer in two states. Both are on the constructed edge bird and in the
-/// Digital section, where the gate judges the data offset on the DIAL's sideband and D1 on the
-/// uplink's:
-/// - the uplink's sideband unknown (the mode taken back mid-pass): D1 judges both halves;
-/// - ⚠️ the uplink's KNOWN sideband, since `2d4300ad` mirrors the data submode on an inverting
-///   transponder (PKTUSB ↔ PKTLSB): the uplink goes up in PKTLSB, so its data carrier sits one
-///   offset BELOW the 144.101 dial, inside the 2 m CW-only segment. That row read `true` when
-///   the table was pinned, because the uplink was then commanded PKTUSB, the downlink's word.
+/// and changes a licence answer in exactly one state — the uplink's sideband unknown (the mode
+/// taken back mid-pass, so Nexus commands none) and a sideband-sensitive emission within an
+/// offset of a segment edge: D1 judges both sides of the carrier, the gate the dial's word.
+///
+/// The edge bird with its sideband KNOWN refuses on both sides since `2a9f28b4`. Its data uplink
+/// is commanded PKTLSB (`2d4300ad`), and the gate now judges the data carrier on the side that
+/// word names, as D1 does, so the two agree there and it is listed for its shade alone.
 const D1_DIFFERS: &[D1Answer] = &[
     D1Answer {
         row: "IC-9700 RS-44 phone, native CI-V: uplink rides Sub, General",
@@ -604,7 +606,7 @@ const D1_DIFFERS: &[D1Answer] = &[
         phone_seg: Some((144.1, 148.0)),
     },
     // `true` until `2d4300ad` was merged: the uplink is now commanded PKTLSB, so D1 judges the
-    // data carrier 1.5 kHz below 144.101. The gate still allows this row (the table above).
+    // data carrier 1.5 kHz below 144.101. The gate refuses it too since `2a9f28b4`.
     D1Answer {
         row: "IC-9700 constructed edge bird (up 144.101, inverting) digital, General",
         tx_allowed: false,
