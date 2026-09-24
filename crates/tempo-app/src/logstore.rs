@@ -3348,6 +3348,74 @@ mod tests {
         );
     }
 
+    /// ★ THE DIAGNOSIS NAMES THE CONTACTS IT READ — in the gap where another window has deleted a
+    /// row this window still shows (C17a; what the Awards view uploads by, once it uploads by id).
+    /// Since C14 the confirmation diagnostics read the store, so their positions are the store's;
+    /// this window's log in memory keeps the deleted row until its next re-read, so a position
+    /// looked up there names the contact after it. The report's ids are those of the rows the
+    /// diagnosis read — the contacts it is about — never the deleted one; and its positions,
+    /// looked up here, name other contacts: the control that the gap is real.
+    #[test]
+    fn the_diagnosis_names_its_contacts_while_this_window_still_shows_a_deleted_row() {
+        let d = Dir::new("diag-gap");
+        std::fs::write(d.log(), legacy_log(8)).unwrap();
+        let a = engine_on_store(&d);
+        let mut b = engine_on_store(&d);
+        let gone = id_at(&b, 2);
+        assert!(b.delete_qso(gone));
+        flush(&b);
+        // A has seen B's commit and has not re-read: it still shows the deleted contact.
+        assert!(eventually(|| a.log_store_foreign_pending()));
+        assert!(
+            a.log_records().iter().any(|r| r.id == Some(gone)),
+            "premise: this window still shows the deleted contact"
+        );
+
+        let report = a
+            .confirmation_diagnostics_inputs()
+            .diagnose_named(1_800_000_000, |_| None)
+            .expect("the store reads");
+        let rows = stored(&d);
+        let id_of = |i: usize| rows.get(i).and_then(|r| r.id).map(|id| id.to_string());
+        let bucket = report
+            .buckets
+            .iter()
+            .find(|b| b.qso_indices.len() > 2)
+            .expect("premise: a bucket of contacts past the deleted one's place");
+        let ids = bucket
+            .qso_ids
+            .clone()
+            .expect("the desktop's report names its contacts");
+        assert_eq!(
+            ids,
+            bucket
+                .qso_indices
+                .iter()
+                .map(|&i| id_of(i))
+                .collect::<Vec<_>>(),
+            "each id is the contact the diagnosis read at that position"
+        );
+        assert!(
+            !ids.contains(&Some(gone.to_string())),
+            "and never the deleted one"
+        );
+        assert!(!report.diagnoses.is_empty(), "premise: contacts diagnosed");
+        for diag in &report.diagnoses {
+            let r = &rows[diag.index];
+            assert_eq!(diag.id, r.id.map(|id| id.to_string()), "row {}", diag.index);
+            assert_eq!(diag.call.as_deref(), Some(r.call.as_str()));
+        }
+        // The control: the same positions, looked up in this window's log in memory, name other
+        // contacts — the deleted one among them — which an upload by position would sign.
+        let by_position: Vec<Option<String>> = a
+            .ids_at_positions(&bucket.qso_indices)
+            .into_iter()
+            .map(|id| Some(id.to_string()))
+            .collect();
+        assert_ne!(by_position, ids, "the gap is real");
+        assert!(by_position.contains(&Some(gone.to_string())));
+    }
+
     // ── a log.adi the store does not account for ────────────────────────────
 
     /// ★ The transition hazard, at the door. The store was converted; then a 1.13 build (the
