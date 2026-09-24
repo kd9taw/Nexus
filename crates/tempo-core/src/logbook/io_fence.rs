@@ -43,6 +43,13 @@
 //! store to hold every change made before a read (`LogWriter::wait_committed`), which the app's
 //! `StoreReads` runs in that order.
 //!
+//! **The same rule for passes over the whole log in memory** ([`whole_log_off_engine_lock`],
+//! also C12): the needs fold, the log statistics, the sked's grid lookup, the confirmation
+//! diagnosis and Remote's log window each take the log's pointers under the lock and make their
+//! pass after releasing it. The passes still made under the lock (the snapshot's worked sets and
+//! the other hot readers, the Needed board's scan for today's hunted parks) are C13's and C14's
+//! to move.
+//!
 //! **Not fenced, each for a reason recorded where it happens** — every one of these runs under
 //! the Engine lock today, so a fence there would stop a debug build rather than prove anything:
 //!
