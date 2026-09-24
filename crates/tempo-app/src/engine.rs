@@ -9677,32 +9677,29 @@ impl Engine {
     /// pending-QSO journal). Written the MOMENT the queue changes — queue/release/
     /// ACK/archive — so a crash or power cut can't silently drop a held message the
     /// operator watched enter "waiting to send". An empty queue removes the file.
+    ///
+    /// The write is made on the journals' own thread ([`tempo_core::journal`]), in the order
+    /// the queue changed: this is called from TX planning and decode handling, under the lock
+    /// the radio loop needs every tick, and the fsync is the disk's to finish.
     pub fn persist_pending_msgs(&self) {
         let Some(path) = &self.station.pending_msgs_path else {
             return;
         };
         let items = self.app.export_pending();
         if items.is_empty() {
-            let _ = std::fs::remove_file(path);
+            self.station.journals.remove(path);
             return;
         }
         let dto: Vec<PendingMsgJournal> = items.iter().map(PendingMsgJournal::from).collect();
         let Ok(text) = serde_json::to_string(&dto) else {
             return;
         };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let tmp = path.with_extension("json.tmp");
-        let res = std::fs::File::create(&tmp)
-            .and_then(|mut f| {
-                std::io::Write::write_all(&mut f, text.as_bytes())?;
-                f.sync_all()
-            })
-            .and_then(|()| std::fs::rename(&tmp, path));
-        if let Err(e) = res {
-            eprintln!("tempo: failed to journal pending messages: {e}");
-        }
+        self.station.journals.replace(
+            path,
+            path.with_extension("json.tmp"),
+            text.into_bytes(),
+            "tempo: failed to journal pending messages",
+        );
     }
 
     /// Restore the journaled queue at startup. Call AFTER `set_pending_msgs_path`
@@ -9846,24 +9843,30 @@ impl Engine {
     /// on generators; same rationale as `Settings::save`).
     /// Best-effort: a write hiccup must never take down a logging path. No-op
     /// with no path set, outside FD mode, or on an empty log.
+    ///
+    /// The bytes are made here, under the lock, and written on the journals' own thread
+    /// ([`tempo_core::journal`]), in order: the FT Field Day sequencer calls this from inside
+    /// the radio loop's slot, and the fsync is the disk's to finish. The journal is the only
+    /// copy of a contest contact on disk, so an OPERATOR's contest logging still waits for it
+    /// before it answers — after the lock is released ([`Self::journal_mark`]).
     pub fn persist_fd_log(&self) {
         let (Some(path), Some(text)) = (&self.station.fd_log_path, self.field_day_log_adif())
         else {
             return;
         };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let tmp = path.with_extension("adi.tmp");
-        let res = std::fs::File::create(&tmp)
-            .and_then(|mut f| {
-                std::io::Write::write_all(&mut f, text.as_bytes())?;
-                f.sync_all() // data on disk BEFORE the rename publishes it
-            })
-            .and_then(|()| std::fs::rename(&tmp, path));
-        if let Err(e) = res {
-            eprintln!("tempo: field day log save failed: {e}");
-        }
+        self.station.journals.replace(
+            path,
+            path.with_extension("adi.tmp"),
+            text.into_bytes(),
+            "tempo: field day log save failed",
+        );
+    }
+
+    /// Every journal write handed over so far, to wait for once the engine lock is released —
+    /// what an operator's contest-logging command waits on before it answers, and the exit
+    /// path before the process goes.
+    pub fn journal_mark(&self) -> tempo_core::journal::JournalMark {
+        self.station.journals.mark()
     }
 
     /// Manually log a Field Day contact from the CW/Phone cockpits (the
@@ -11722,6 +11725,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // previous event's journal and self-expire.
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             if let Some(path) = &self.station.fd_log_path {
+                // The flush at the top of this call handed the journal to its thread; read it
+                // back once it is on disk. The wait is the one the write used to make here.
+                self.station.journals.settle();
                 station.log.merge_adif(
                     &std::fs::read_to_string(path).unwrap_or_default(),
                     now_unix_secs().saturating_sub(4 * 86_400),
@@ -37744,6 +37750,155 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A Field Day engine journaling to `dir`, and a FIFO at `tmp` — the temporary file of a
+    /// journal write. Opening a FIFO for writing blocks until something opens it for reading:
+    /// that is a disk that will not take the write, in the one syscall every journal write
+    /// makes first. Exactly ONE write may be sent at it (a second would wait forever).
+    #[cfg(unix)]
+    fn fd_engine_with_a_stalled_file(tag: &str, tmp: &str) -> (std::path::PathBuf, Engine) {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-journal-stall-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.join(tmp))
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "premise: a FIFO to stall the write on");
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s);
+        e.set_fd_log_path(dir.join("fieldday.adi"));
+        e.set_pending_msgs_path(dir.join("pending_msgs.json"));
+        (dir, e)
+    }
+
+    /// Read the FIFO at `fifo` to its end on a thread of its own, after `after` — which lets
+    /// the one write stalled on it through (it then fails at its fsync, as a write to a FIFO
+    /// does, and is reported like any failed journal write). The answer comes back on the
+    /// channel, so a test that finds no writer there fails instead of hanging.
+    #[cfg(unix)]
+    fn release_after(
+        fifo: std::path::PathBuf,
+        after: Duration,
+    ) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            std::thread::sleep(after);
+            let mut reader = std::fs::File::open(&fifo).expect("open the FIFO for reading");
+            let mut got = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut reader, &mut got);
+            let _ = tx.send(got);
+        });
+        rx
+    }
+
+    /// ★ THE RADIO LOOP DOES NOT WAIT ON THE FIELD DAY JOURNAL'S DISK. The FT Field Day
+    /// sequencer journals every contact from inside the radio loop's slot, under the engine
+    /// lock, through `persist_fd_log` — the call every Field Day path makes. With the journal's
+    /// disk stalled, a contact logged under the lock returns at once, and the lock is free for
+    /// the next tick while the write is still waiting on the disk.
+    ///
+    /// The control is the stall itself: nothing is on disk until the FIFO is read.
+    #[cfg(unix)]
+    #[test]
+    fn a_field_day_contact_under_the_lock_does_not_wait_for_a_stalled_journal() {
+        use std::sync::{Arc, Mutex};
+        let (dir, mut e) = fd_engine_with_a_stalled_file("fd", "fieldday.adi.tmp");
+        e.set_mode("fieldday-run").unwrap();
+        let journal = dir.join("fieldday.adi");
+        let engine = Arc::new(Mutex::new(e));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let logger = {
+            let engine = Arc::clone(&engine);
+            std::thread::spawn(move || {
+                let mut e = engine_lock(&engine);
+                let t = Instant::now();
+                let logged = e.fd_log_manual("K1ABC", "2A", "EMA", "CW");
+                let _ = tx.send((logged, t.elapsed()));
+            })
+        };
+        let answered = rx.recv_timeout(Duration::from_secs(2));
+        let (lock_free, on_disk) = if answered.is_ok() {
+            logger.join().expect("joined");
+            (engine_try_lock(&engine).is_ok(), journal.exists())
+        } else {
+            (false, false)
+        };
+        // Let the stalled write through whatever happened, so a red cannot hang the suite.
+        let drained = release_after(dir.join("fieldday.adi.tmp"), Duration::ZERO)
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a journal write was waiting on the FIFO");
+        let (logged, took) = answered.expect(
+            "the contact must come back under the lock while the journal's disk is stalled — \
+             it waited for the journal",
+        );
+        assert!(logged.expect("in Field Day mode"), "logged");
+        assert!(
+            took < Duration::from_millis(500),
+            "returned at once: {took:?}"
+        );
+        assert!(
+            lock_free,
+            "the lock is free while the journal write waits on the disk"
+        );
+        assert!(!on_disk, "control: the journal really was stalled");
+        assert!(
+            String::from_utf8_lossy(&drained).contains("K1ABC"),
+            "and the stalled write was the contact's journal"
+        );
+        let written = engine_lock(&engine).journal_mark();
+        written.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE RUN↔S&P REBUILD READS BACK THE JOURNAL IT HAS JUST WRITTEN. `set_mode` flushes the
+    /// live contest log to the journal and then builds the new station FROM that journal, so a
+    /// write still on its way would be a contact lost from the log. Here the journal thread is
+    /// held up behind a stalled write of the message queue's journal, so the Field Day write is
+    /// queued behind it when the toggle comes: the rebuild must wait for it, and it does.
+    ///
+    /// The control is the wait: the toggle took as long as the stall, so the write really was
+    /// still on its way when the rebuild went to read it.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_sp_toggle_waits_for_the_journal_it_rebuilds_from() {
+        let (dir, mut e) = fd_engine_with_a_stalled_file("toggle", "pending_msgs.json.tmp");
+        e.set_mode("fieldday-sp").unwrap();
+        e.send_message("W1ABC", "hi"); // the queue's journal write: held on the FIFO
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap()); // queued behind it
+        let released = release_after(
+            dir.join("pending_msgs.json.tmp"),
+            Duration::from_millis(300),
+        );
+        let t = Instant::now();
+        e.set_mode("fieldday-run").unwrap(); // flush, then rebuild from the journal
+        let waited = t.elapsed();
+        released
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the queue's write was waiting on the FIFO");
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("in Field Day mode");
+        };
+        assert_eq!(
+            station.log.qsos().len(),
+            1,
+            "the rebuilt station has the contact the journal was just given"
+        );
+        assert!(
+            waited >= Duration::from_millis(250),
+            "control: the write was still on its way when the rebuild read, and it waited: \
+             {waited:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// M18: a full-log ADIF rewrite from a stale in-memory copy must not silently

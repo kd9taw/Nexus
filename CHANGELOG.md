@@ -194,6 +194,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Logging a Field Day contact no longer makes the radio wait for the disk.** Every Field Day
+  contact rewrites the contest journal, and that write used to finish on the disk before the
+  radio could go on — including when the FT sequencer logged a contact itself, in the middle of
+  its timing. On a slow disk (an SD card, a busy USB drive) that was a pause the decoder and the
+  waterfall felt. The journal is now written on a thread of its own a moment later, in the same
+  order and with the same contents; a contact you log by hand is still on the disk before the
+  logging window confirms it, and quitting waits for the last write. The queue of held Tempo
+  messages is written the same way.
+
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
   1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
   lookup that turns a callsign into a country. The Needed board and the need chips beside the

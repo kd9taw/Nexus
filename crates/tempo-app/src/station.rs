@@ -239,6 +239,10 @@ pub struct StationCore {
     /// Journal path for the store-and-forward outbound queue (pending_msgs.json) —
     /// written on every queue mutation so held Tempo messages survive a restart.
     pub(crate) pending_msgs_path: Option<PathBuf>,
+    /// The thread the two journals above are written on — the Field Day log's and the
+    /// message queue's — so the radio loop never waits on their fsync (see
+    /// [`tempo_core::journal`]). No thread until the first write.
+    pub(crate) journals: tempo_core::journal::JournalWriter,
     /// Callsign → DXCC entity resolver, injected by the command layer (which owns
     /// the cty.dat table) so tempo-app stays DXCC-free. `None` in headless tests
     /// (new-DXCC highlighting simply stays off). See [`Self::set_dxcc_resolver`].
@@ -352,6 +356,7 @@ impl StationCore {
             fd_log_path: None,
             pending_qso_path: None,
             pending_msgs_path: None,
+            journals: Default::default(),
             dxcc_resolve: None,
             state_resolve: None,
             grid_rarity_resolve: None,

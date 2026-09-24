@@ -2157,6 +2157,160 @@ async fn pick_data_folder(app: tauri::AppHandle) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// The journals' own thread, from the shell's side: the exit path waits for it, and an
+/// operator's contest-logging command answers only once its contact is on disk — waiting with
+/// the engine lock released.
+#[cfg(all(test, unix))]
+mod journal_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A Field Day engine whose journal thread is held up: the message queue's journal write is
+    /// stalled on a FIFO (opening it for writing blocks until something reads it), and every
+    /// journal write after it — the Field Day contact `body` logs — is queued behind it.
+    fn held_up(tag: &str) -> (PathBuf, SharedEngine) {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-journal-shell-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.join("pending_msgs.json.tmp"))
+            .status()
+            .expect("mkfifo runs");
+        assert!(
+            made.success(),
+            "premise: a FIFO to stall the queue's write on"
+        );
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s);
+        e.set_fd_log_path(dir.join("fieldday.adi"));
+        e.set_pending_msgs_path(dir.join("pending_msgs.json"));
+        e.set_mode("fieldday-sp").unwrap();
+        e.send_message("W1ABC", "hi"); // the stalled write: exactly one at the FIFO
+        (dir, std::sync::Arc::new(std::sync::Mutex::new(e)))
+    }
+
+    /// Let the stalled write through: read the FIFO to its end (the write then fails at its
+    /// fsync, as one to a FIFO does, and is reported like any failed journal write).
+    fn release(dir: &Path) {
+        let fifo = dir.join("pending_msgs.json.tmp");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = std::fs::File::open(&fifo).expect("open the FIFO");
+            let _ = std::io::Read::read_to_end(&mut reader, &mut Vec::new());
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("a journal write was waiting on the FIFO");
+    }
+
+    fn journal_holds(dir: &Path, call: &str) -> bool {
+        std::fs::read_to_string(dir.join("fieldday.adi")).is_ok_and(|t| t.contains(call))
+    }
+
+    /// ★ THE EXIT PATH WAITS FOR EVERY JOURNAL WRITE. `persist_journals` hands the Field Day
+    /// log's last flush to the journals' thread and then waits for it and everything before
+    /// it — so nothing handed over is lost to the process going. And it waits with the engine
+    /// lock released.
+    #[test]
+    fn the_exit_path_waits_for_every_journal_write_it_hands_over() {
+        let (dir, engine) = held_up("exit");
+        assert!(engine_lock(&engine)
+            .fd_log_manual("K1ABC", "2A", "EMA", "CW")
+            .unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let engine = std::sync::Arc::clone(&engine);
+            std::thread::spawn(move || {
+                persist_field_day_log(&engine);
+                settle_journals(&engine);
+                let _ = tx.send(());
+            });
+        }
+        // Observe first and assert after the release: a red must not leave the journal thread
+        // stalled, or the engine's drop would wait for it forever.
+        let waited = rx.recv_timeout(Duration::from_millis(300)).is_err();
+        let on_its_way = !journal_holds(&dir, "K1ABC");
+        let lock_free = engine_try_lock(&engine).is_ok();
+        release(&dir);
+        let finished = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        assert!(
+            waited,
+            "the exit path waits while a journal write is still on its way"
+        );
+        assert!(on_its_way, "control: it really is on its way");
+        assert!(lock_free, "and it waits with the engine lock released");
+        assert!(finished, "the exit path finishes once the writes land");
+        assert!(
+            journal_holds(&dir, "K1ABC"),
+            "the contact is on disk when it does"
+        );
+        let src = include_str!("lib.rs");
+        let persist = &src[src.find("\nfn persist_journals(").expect("defined")..];
+        let persist = &persist[..persist.find("\n}\n").expect("its end")];
+        let flush = persist
+            .find("persist_field_day_log(")
+            .expect("the last flush");
+        let settle = persist.find("settle_journals(").expect("the wait");
+        assert!(
+            flush < settle,
+            "the wait comes after the last flush is handed over"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ AN OPERATOR'S CONTEST CONTACT IS ON DISK WHEN THE COMMAND ANSWERS, as it was when the
+    /// journal was written under the lock — but the wait is now made with the lock released,
+    /// on the blocking pool. The contact is in the contest log at once; the answer waits for
+    /// the journal.
+    #[test]
+    fn an_operator_contest_contact_answers_once_its_journal_is_on_disk() {
+        let (dir, engine) = held_up("command");
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let answer = rt.spawn(journaled_command(std::sync::Arc::clone(&engine), |eng| {
+            eng.fd_log_manual("K1ABC", "2A", "EMA", "CW")
+        }));
+        std::thread::sleep(Duration::from_millis(300));
+        // Observe first and assert after the release (see the exit-path test).
+        let answered_early = answer.is_finished();
+        let lock_free = engine_try_lock(&engine).is_ok();
+        let logged_meanwhile = engine_lock(&engine)
+            .snapshot()
+            .field_day
+            .is_some_and(|fd| fd.qso_count == 1);
+        release(&dir);
+        let logged = rt.block_on(answer);
+        assert!(
+            !answered_early,
+            "no answer while the contact's journal is still on its way"
+        );
+        assert!(lock_free, "and the wait holds no lock");
+        assert!(
+            logged_meanwhile,
+            "the contact is in the contest log already"
+        );
+        let logged = logged.expect("the task ran");
+        assert_eq!(logged, Ok(true), "logged, and answered");
+        assert!(
+            journal_holds(&dir, "K1ABC"),
+            "on disk when the command answered"
+        );
+        drop(rt);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[cfg(test)]
 mod durable_command_tests {
     use super::*;
@@ -4720,6 +4874,40 @@ fn persist_field_day_log(engine: &SharedEngine) {
     engine_lock_result(engine)
         .map(|e| e.persist_fd_log())
         .unwrap_or_else(|e| e.into_inner().persist_fd_log());
+}
+
+/// Wait until the journals' own thread (`tempo_core::journal`) has written everything handed
+/// to it — the Field Day log's last flush and the message queue — before the process goes.
+/// Unbounded, as the synchronous writes it replaces were. The mark is taken under the engine
+/// lock and waited on after it is released.
+fn settle_journals(engine: &SharedEngine) {
+    let written = engine_lock(engine).journal_mark();
+    written.wait();
+}
+
+/// Run an operator's contest-logging command so it answers only once the contest journal holds
+/// the contact — as it did when the journal was written under the engine lock. The journal is a
+/// contest contact's only copy on disk until it is merged into the logbook.
+///
+/// `body` runs under the engine lock; the wait comes after the lock is released, on the
+/// BLOCKING pool, so neither the radio loop nor a runtime worker waits on the disk (#335).
+async fn journaled_command<T: Send + 'static>(
+    engine: SharedEngine,
+    body: impl FnOnce(&mut Engine) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    // `tokio::task::spawn_blocking`, as `durable_command` does, so a test can run it on a
+    // runtime of its own; in the app both are the same runtime.
+    tokio::task::spawn_blocking(move || {
+        let (out, written) = {
+            let mut eng = engine_lock(&engine);
+            let out = body(&mut eng);
+            (out, eng.journal_mark())
+        };
+        written.wait();
+        out
+    })
+    .await
+    .map_err(|e| format!("contest log task failed: {e}"))?
 }
 
 /// Directory for phone voice-keyer recordings: `<settings dir>/voice` (12 kHz mono WAVs).
@@ -22957,9 +23145,10 @@ fn set_hunt_target(
 /// `mode` = the scoring class "CW" | "PH" | "DIG"; `submode` names the mode that
 /// was actually on the air behind a "DIG" class (RTTY, PSK31…) so the export
 /// emits it instead of the FT tier `current_submode` happens to hold. Err when
-/// FD mode is off; Ok(false) = band+mode dupe.
-#[tauri::command(async)]
-fn fd_log_manual(
+/// FD mode is off; Ok(false) = band+mode dupe. Answers once the contact is in the
+/// journal on disk ([`journaled_command`]).
+#[tauri::command]
+async fn fd_log_manual(
     state: State<'_, SharedEngine>,
     call: String,
     class: String,
@@ -22967,15 +23156,17 @@ fn fd_log_manual(
     mode: String,
     submode: Option<String>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    let logged = match submode.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(sub) => eng.fd_log_manual_submode(&call, &class, &section, &mode, sub)?,
-        None => eng.fd_log_manual(&call, &class, &section, &mode)?,
-    };
-    if !logged {
-        return Err(format!("{call} is a dupe on this band/mode"));
-    }
-    Ok(eng.snapshot())
+    journaled_command(Arc::clone(&state), move |eng| {
+        let logged = match submode.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(sub) => eng.fd_log_manual_submode(&call, &class, &section, &mode, sub)?,
+            None => eng.fd_log_manual(&call, &class, &section, &mode)?,
+        };
+        if !logged {
+            return Err(format!("{call} is a dupe on this band/mode"));
+        }
+        Ok(eng.snapshot())
+    })
+    .await
 }
 
 /// ⭐ **Log a contest contact whose received exchange is a FIELD VECTOR.**
@@ -22985,21 +23176,24 @@ fn fd_log_manual(
 /// it collected without a per-contest mapping anywhere in the UI.
 ///
 /// [`fd_log_manual`] stays for the two positional Field Day slots the FT sequencer and
-/// the club host hand off the air.
-#[tauri::command(async)]
-fn contest_log_manual(
+/// the club host hand off the air. Answers once the contact is in the journal on disk
+/// ([`journaled_command`]).
+#[tauri::command]
+async fn contest_log_manual(
     state: State<'_, SharedEngine>,
     call: String,
     fields: Vec<(String, String)>,
     mode: String,
     submode: Option<String>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    if !eng.contest_log_manual(&call, &fields, &mode, sub)? {
-        return Err(format!("{call} is a dupe on this band/mode"));
-    }
-    Ok(eng.snapshot())
+    journaled_command(Arc::clone(&state), move |eng| {
+        let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if !eng.contest_log_manual(&call, &fields, &mode, sub)? {
+            return Err(format!("{call} is a dupe on this band/mode"));
+        }
+        Ok(eng.snapshot())
+    })
+    .await
 }
 
 /// ⭐ **Log a contest contact worked THROUGH A BIRD** — the Satellites section's strip.
@@ -23013,21 +23207,24 @@ fn contest_log_manual(
 /// A separate command rather than a flag on the one above because the CALLER is what
 /// knows this: the strip in the Satellites section says a contact was worked through
 /// the bird, and no amount of engine state can infer that from a contact typed into the
-/// Phone cockpit while a transponder happens to still be held.
-#[tauri::command(async)]
-fn contest_log_satellite(
+/// Phone cockpit while a transponder happens to still be held. Answers once the contact is
+/// in the journal on disk ([`journaled_command`]).
+#[tauri::command]
+async fn contest_log_satellite(
     state: State<'_, SharedEngine>,
     call: String,
     fields: Vec<(String, String)>,
     mode: String,
     submode: Option<String>,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    if !eng.contest_log_satellite(&call, &fields, &mode, sub)? {
-        return Err(format!("{call} is a dupe on this band/mode"));
-    }
-    Ok(eng.snapshot())
+    journaled_command(Arc::clone(&state), move |eng| {
+        let sub = submode.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if !eng.contest_log_satellite(&call, &fields, &mode, sub)? {
+            return Err(format!("{call} is a dupe on this band/mode"));
+        }
+        Ok(eng.snapshot())
+    })
+    .await
 }
 
 /// ⭐ **The operator committed a callsign on the contest entry line.**
@@ -25045,6 +25242,7 @@ fn persist_journals(app_handle: &tauri::AppHandle) {
     );
     persist_conversations(app_handle.state::<SharedEngine>().inner());
     persist_field_day_log(app_handle.state::<SharedEngine>().inner());
+    settle_journals(app_handle.state::<SharedEngine>().inner());
     if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
         record_opening_episodes(tr.close_all(now_unix()));
     }
@@ -32276,7 +32474,8 @@ mod tests {
     /// Each command body and each `async fn` in `src` that waits for a logbook change to reach
     /// the disk on the thread it runs on, as `name: wait` — a `wait_durable(…)`, a change's
     /// `.wait(…DURABLE_WAIT)`, a `copy_database(…)` (the store copied whole, through its writer
-    /// or beside it), or a function here that makes one (followed to any depth). A wait
+    /// or beside it), a `journal_mark(…)` (the journals' writes, taken to be waited for), or a
+    /// function here that makes one (followed to any depth). A wait
     /// inside `spawn_blocking(…)` or a spawned thread's closure is off that thread and does not
     /// count. The shape is the HTTP scan's above; what it looks for is the logbook's wait.
     fn durable_waits_where_a_command_runs(src: &str) -> Vec<String> {
@@ -32356,6 +32555,10 @@ mod tests {
             // change before it, and either way it reads and writes the whole store.
             if body.match_indices("copy_database(").any(|(at, _)| here(at)) {
                 found.push("copy_database".to_string());
+            }
+            // A journal mark is taken to be waited on: the journals' writes (`journal_mark`).
+            if body.match_indices("journal_mark(").any(|(at, _)| here(at)) {
+                found.push("journal_mark".to_string());
             }
             for helper in helpers {
                 let called = body.match_indices(&format!("{helper}(")).any(|(at, _)| {
@@ -32467,6 +32670,11 @@ mod tests {
             "fn copies_on_a_worker(dst: String) -> Result<u64, String> {",
             "    move_folder(None, Path::new(&dst))",
             "}",
+            "#[tauri::command(async)]",
+            "fn journals_on_a_worker(state: State<'_, SharedEngine>) {",
+            "    let written = engine_lock(&state).journal_mark();",
+            "    written.wait();",
+            "}",
         ]
         .join("\n");
         assert_eq!(
@@ -32474,7 +32682,8 @@ mod tests {
             [
                 "waits_on_a_worker: wait(DURABLE_WAIT)",
                 "two_helpers_deep: stamp_then",
-                "copies_on_a_worker: move_folder"
+                "copies_on_a_worker: move_folder",
+                "journals_on_a_worker: journal_mark"
             ]
         );
     }
