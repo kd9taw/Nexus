@@ -357,6 +357,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cabrillo file you submit always had the right frequency and is unchanged. Contacts already
   in your log keep the frequency they were given.
 
+- **The transmit lock now checks CW sent through the soundcard keyer where its tone goes.** The
+  soundcard keyer sends a tone a pitch away from the dial, above it on 20 m and below it on 40 m,
+  but the lock only checked the dial. So near a band or segment edge the tone could go out past
+  the edge with nothing locked: at 14.3496 a 600 Hz tone goes out at 14.3502, past the top of
+  20 m. Up an inverting transponder the tone goes out on the opposite side of the uplink too. The
+  lock now also checks the tone, on the side the transmit VFO is set to, and reads 🔒 TX locked
+  if it is outside your privileges. CW keyed by the radio itself goes out on the dial and is
+  checked exactly as before. Nothing that was locked before is unlocked.
+
+- **XIT is no longer offered on the other radios that have none.** Besides the IC-9700 (above),
+  56 radios Nexus lists have no XIT that Hamlib can set: 22 more Icoms (the IC-703, the IC-706
+  family, the IC-718, IC-725, IC-726, IC-728, IC-729, IC-735, IC-746 and IC-746PRO, the IC-756
+  series, and the IC-910, IC-7000, IC-7100, IC-7200, IC-7410 and IC-9100),
+  the Yaesu FT-817, FT-818, FT-857, FT-897, FT-100, FT-450, FT-890, FT-847 and FT-736R, the
+  Kenwood TS-790, TS-140S, TM-D710 and TM-V71, the Xiegu X108G, X5105, X6100, X6200 and G90, four
+  Ten-Tecs, two Alincos, and control through FLRig, TRX-Manager, PowerSDR, Thetis, SDR Console,
+  Malachite, the QRP Labs QMX and Hamlib's SmartSDR backend. Nexus showed the XIT buttons on them
+  anyway and kept the offset you set. The transmit line showed it and the transmit lock checked
+  it, but the radio transmitted without it. So near a band edge the lock could refuse a
+  transmission your radio would have made legally, or allow one it should not have. On these
+  radios the XIT buttons are gone, a Remote XIT request is refused, and the lock checks the
+  frequency the radio really transmits on. That can lift a lock that was only there because of
+  an offset the radio never used, and it can lock where that offset hid a frequency outside your
+  privileges. Every other radio keeps XIT as it was.
+
 - **QO-100's narrowband transponder is now worked in SSB, not FM.** The satellite database
   labels every narrowband segment on QO-100 as FM up and FM down, the "SSB only" segments
   included, and Nexus believed it: picking one put both legs in FM, routed the pick by your FM

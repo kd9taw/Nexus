@@ -888,6 +888,64 @@ mod tests {
     }
 
     #[test]
+    fn the_no_xit_rigs_are_the_catalog_models_hamlib_cannot_set_xit_on() {
+        // `tempo_app::settings::NO_XIT_RIGS` is not a judgement made here: it is Hamlib's own
+        // `Can set XIT:` line, read out of the bundled 4.7.1 by `scripts/gen-hamlib-xit.mjs` for
+        // every catalog model. This holds the list to that fixture both ways, so a radio cannot be
+        // added or dropped by hand, and holds the fixture to the catalog, so a model added to the
+        // picker without regenerating it fails here.
+        use std::collections::BTreeSet;
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/hamlib_xit.json"))
+                .expect("the fixture parses");
+        assert!(
+            fixture["hamlib"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("Hamlib 4.7.1 ")),
+            "the fixture comes from the bundled Hamlib 4.7.1: {}",
+            fixture["hamlib"]
+        );
+        let models = |key: &str| -> BTreeSet<u32> {
+            fixture[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("the fixture's {key}"))
+                .iter()
+                .map(|v| v.as_u64().expect("a model number") as u32)
+                .collect()
+        };
+        let rigs = fixture["rigs"].as_array().expect("the fixture's rigs");
+        let model_of = |r: &serde_json::Value| r["model"].as_u64().expect("a model") as u32;
+        let dumped: BTreeSet<u32> = rigs.iter().map(model_of).collect();
+        let catalog: BTreeSet<u32> = all_rig_models().iter().map(|(m, _)| *m).collect();
+        let accounted: BTreeSet<u32> = dumped
+            .iter()
+            .chain(&models("missing"))
+            .chain(&models("needsDaemon"))
+            .copied()
+            .collect();
+        assert_eq!(
+            accounted, catalog,
+            "the fixture must cover the catalog — run `node scripts/gen-hamlib-xit.mjs`"
+        );
+        let no_xit: BTreeSet<u32> = rigs
+            .iter()
+            .filter(|r| r["setXit"] == serde_json::Value::Bool(false))
+            .map(model_of)
+            .collect();
+        let listed: BTreeSet<u32> = tempo_app::settings::NO_XIT_RIGS.iter().copied().collect();
+        assert_eq!(
+            listed, no_xit,
+            "NO_XIT_RIGS must be exactly the catalog models Hamlib 4.7.1 cannot set XIT on"
+        );
+        assert!(
+            no_xit.len() > 1 && dumped.len() > no_xit.len(),
+            "control: the fixture holds both answers ({} of {})",
+            no_xit.len(),
+            dumped.len()
+        );
+    }
+
+    #[test]
     fn slow_serial_rig_flags_xiegu_and_vintage_kenwood_only() {
         // Xiegu family (slow CI-V backend) → the long deadline.
         for m in [3088u32, 3087, 3091, 3089, 3076] {
