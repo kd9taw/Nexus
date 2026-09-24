@@ -142,10 +142,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copy; on Windows it says Nexus is already moving the logbook and will open by itself.
   `log.adi` stays where it always was and keeps up with every change, a moment later, so other
   loggers, backup scripts and sync tools that read it still see every contact. Starting Nexus no
-  longer rewrites the log at all, and quitting waits for the last change to reach the disk. A
-  data folder on a network drive keeps the log in `log.adi` alone, as before, and so does a start
-  where the database cannot be opened. Either way Nexus says so once on screen, with the reason
-  and what to do.
+  longer rewrites the log. The country and US state Nexus shows for a contact that arrived
+  without them are now saved into the log, in the background once the window is up — on the
+  first start of each new version and the first start after a new country or callsign file
+  arrives — so the database and `log.adi` hold exactly what you see. Quitting waits for the last
+  change to reach the disk. A data folder on a network drive keeps the log in `log.adi` alone, as
+  before, and so does a start where the database cannot be opened. Either way Nexus says so once
+  on screen, with the reason and what to do.
   Two radio windows on one data folder now see each other's corrections and deletions as they
   are: a contact corrected in one window is corrected in the other, not logged a second time
   beside the old one, and a contact deleted in one stays deleted instead of coming back when the
@@ -217,6 +220,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this credited?", the Push to QRZ, ClubLog or eQSL button looked the contact up in the copy of
   the log Awards took when it opened, so a contact logged since then answered "Could not find
   that QSO in the log". It now sends the contact the diagnosis names.
+
+- **A paper QSL card you mark as received now counts toward your awards straight away.** Ticking
+  the card in the Logbook recorded the card but not the confirmation that Awards, the Needed
+  board and the Journey count, so the new confirmation only appeared after Nexus was restarted.
+  It now counts the moment you tick it, and unticking a card ticked by mistake takes the credit
+  back just as quickly.
+
+- **A contact you import now carries its US state from the moment it is imported.** Nexus works
+  out the state from the callsign for a US contact that arrives without one. For an import, a QRZ
+  download or a Field Day merge that used to happen only after the next restart. It now happens
+  as the contact arrives, as it always did for a contact you log yourself.
+
+- **With a big logbook, an upload being marked no longer makes Awards, the Needed board, the
+  Journey and the statistics start over.** Each of them went through every contact again after
+  every upload to QRZ, ClubLog, eQSL or LoTW was marked on a contact, although an upload changes
+  none of them. They now read the logbook database, and only when a contact, a confirmation or
+  an edit could change what they show.
 
 - **Logging a Field Day contact no longer makes the radio wait for the disk.** Every Field Day
   contact rewrites the contest journal, and that write used to finish on the disk before the
