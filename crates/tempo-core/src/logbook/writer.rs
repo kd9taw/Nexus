@@ -722,8 +722,9 @@ pub struct Status {
     ///
     /// Not "the highest revision committed": an interactive write can be on disk while an
     /// earlier bulk one is still being chunked, and this watermark does not claim otherwise.
-    /// A single change's own durability is its [`Ticket`]. Monotone, and permanently capped
-    /// by the first change the store ever lost.
+    /// A single change's own durability is its [`Ticket`]. Monotone, and capped by the first
+    /// change the store lost and has not taken since: sent again under its own revision
+    /// ([`Change::resend`]) and landed, a lost change no longer holds it back.
     pub durable_rev: u64,
     /// Changes submitted and not yet resolved.
     pub pending: usize,
@@ -940,9 +941,10 @@ impl LogWriter {
     ///
     /// It waits on the durability watermark ([`Status::durable_rev`]), not on one ticket: a
     /// change can commit ahead of an earlier bulk one it shares no row with, and a read wants
-    /// ALL of them. A change the store lost caps the watermark for good, so a wait past it ends
-    /// as soon as nothing still in flight could move it — [`WaitError::Failed`] with the
-    /// reason, rather than a timeout nobody can do anything about.
+    /// ALL of them. A change the store lost caps the watermark until its rows are sent again
+    /// and land ([`Change::resend`]), so a wait past it ends as soon as nothing still in flight
+    /// could move it — [`WaitError::Failed`] with the reason, rather than a timeout nobody can
+    /// do anything about.
     ///
     /// ⚠️ **Never call it while holding a lock**, as [`Self::wait_durable`].
     pub fn wait_committed(
@@ -1197,9 +1199,11 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
     // watermark.
     let mut unresolved: BTreeSet<u64> = BTreeSet::new();
     let mut highest_ok: u64 = 0;
-    // The first revision the store lost. The watermark never passes it, because everything
-    // after it describes a store that is missing a change.
-    let mut lost: Option<u64> = None;
+    // The revisions the store lost and has not taken since. The watermark never passes the
+    // first of them, because everything after it describes a store that is missing a change.
+    // A change sent again under a lost revision (`Change::resend`: the rows as memory holds them
+    // then) repairs that loss when it lands, and the watermark moves on past it.
+    let mut lost: BTreeSet<u64> = BTreeSet::new();
     let mut closed = false;
 
     loop {
@@ -1272,7 +1276,8 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                     .expect("the job pick() chose is in the queue");
                 unresolved.remove(&job.rev);
                 highest_ok = highest_ok.max(job.rev);
-                settle(shared, &unresolved, highest_ok, lost, None);
+                lost.remove(&job.rev);
+                settle(shared, &unresolved, highest_ok, lost.first().copied(), None);
                 resolve(&job.slot, Ok(()));
             }
             Err(refusal) => {
@@ -1280,7 +1285,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                     .remove(i)
                     .expect("the job pick() chose is in the queue");
                 unresolved.remove(&job.rev);
-                lost = Some(lost.map_or(job.rev, |first| first.min(job.rev)));
+                lost.insert(job.rev);
                 applog::error(
                     "logdb",
                     &format!(
@@ -1292,7 +1297,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                     shared,
                     &unresolved,
                     highest_ok,
-                    lost,
+                    lost.first().copied(),
                     Some(refusal.reason.clone()),
                 );
                 resolve(&job.slot, Err(refusal));
@@ -2079,6 +2084,68 @@ mod tests {
         // A later question about an earlier revision is already answered.
         w.wait_committed(50, Duration::ZERO)
             .expect("everything up to 50 is committed");
+    }
+
+    /// ★ A LOST CHANGE SENT AGAIN LIFTS THE WATERMARK ONCE IT LANDS. The store loses revisions
+    /// 102 and 104 and takes 103 and 105: the watermark stops at 101, and a read that must see
+    /// 105 hears the loss — those changes truly are not saved. Their rows are sent again under
+    /// the revisions they first went out with, which is what the log's owner does
+    /// (`Change::resend`), one at a time: the watermark rises to just below the loss still
+    /// standing, then past everything, and a read of the store is current again.
+    #[test]
+    fn a_lost_change_sent_again_lifts_the_watermark_once_it_lands() {
+        let scratch = Scratch::new();
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        let ok = |rev: u64, call: &str, n: u64| {
+            let t = w.submit(change(rev, vec![rec(call, n)]));
+            w.wait_durable(&t, Duration::from_secs(60))
+                .expect("it lands");
+        };
+        let lose = |rev: u64, call: &str, n: u64| {
+            // A row with no id cannot be addressed again, so the store refuses it.
+            let mut orphan = (*rec(call, n)).clone();
+            orphan.id = None;
+            let t = w.submit(change(rev, vec![Arc::new(orphan)]));
+            assert!(
+                w.wait_durable(&t, Duration::from_secs(60)).is_err(),
+                "premise: {rev} is lost"
+            );
+        };
+        ok(101, "W1AW", 101);
+        lose(102, "K5XYZ", 500);
+        ok(103, "DL1ABC", 501);
+        lose(104, "JA1ZZZ", 502);
+        ok(105, "VK2AA", 503);
+        assert_eq!(w.status().durable_rev, 101, "capped below the first loss");
+        assert!(
+            matches!(
+                w.wait_committed(105, Duration::ZERO),
+                Err(WaitError::Failed(_))
+            ),
+            "a read that must see 105 hears the loss: those changes are not saved"
+        );
+
+        ok(102, "K5XYZ", 500);
+        assert_eq!(
+            w.status().durable_rev,
+            103,
+            "102 landed: the watermark rises to just below the loss still standing"
+        );
+        assert!(
+            matches!(
+                w.wait_committed(105, Duration::ZERO),
+                Err(WaitError::Failed(_))
+            ),
+            "104 is still not saved"
+        );
+        w.wait_committed(103, Duration::ZERO)
+            .expect("everything up to 103 is in the store");
+
+        ok(104, "JA1ZZZ", 502);
+        assert_eq!(w.status().durable_rev, 105, "every change is in the store");
+        w.wait_committed(105, Duration::ZERO)
+            .expect("so a read of it is current again");
+        assert_eq!(rows(&stored(&scratch.db())), 5);
     }
 
     /// A wait past a change the store LOST ends as soon as nothing in flight could still

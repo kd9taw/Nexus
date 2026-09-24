@@ -3339,9 +3339,9 @@ mod tests {
     /// engine keeps it: the snapshot says so, the quit counts it as a change that sending again
     /// can save, and sending it again lands it once the database is free.
     ///
-    /// And an export (SPEC-2 v3 C15) follows the change, not the writer's watermark: refused
-    /// while the change is held, made once the re-send has landed it — though the read's own
-    /// freshness, capped for good by the drop, calls every read after it stale.
+    /// And a read of the store follows it too: stale while the change is held — it truly is not
+    /// saved — and current again once the re-send has landed it, so the folds keep their answers
+    /// again rather than reading the whole log at every ask for the rest of the session.
     #[test]
     fn the_database_s_busy_refusal_is_sent_again_and_the_snapshot_says_so() {
         let d = Dir::new("resend-busy");
@@ -3371,10 +3371,30 @@ mod tests {
         )
         .expect_err("no export while the change is held");
         assert!(held.contains("locked"), "and it says why: {held}");
+        let read = |e: &Engine| {
+            e.log_rows()
+                .each_record(Duration::from_millis(100), &mut |_| {
+                    std::ops::ControlFlow::Continue(())
+                })
+                .expect("the store reads")
+        };
+        assert!(
+            matches!(read(&e), Freshness::Stale(_)),
+            "a read while the change is held is stale: it truly is not saved"
+        );
+        assert!(
+            !e.log_unsaved().is_empty(),
+            "a quit waits for it (what the close's logbook_waiting asks)"
+        );
 
         drop(hold);
         assert_eq!(e.log_resend_all(), 1, "sent again, from memory");
         assert!(e.log_unsaved().wait(DURABLE_WAIT).saved(), "and it lands");
+        flush(&e);
+        assert!(
+            e.log_unsaved().is_empty(),
+            "and a quit has nothing left to wait for, log.adi included"
+        );
         let text = crate::logexport::export_waiting(
             &crate::logexport::Source::of(&e),
             adif(),
@@ -3382,15 +3402,10 @@ mod tests {
         )
         .expect("an export once the re-send has landed the change");
         assert!(text.contains("<QSL_RCVD:1>Y"), "and it carries the change");
-        let fresh = e
-            .log_rows()
-            .each_record(Duration::from_millis(100), &mut |_| {
-                std::ops::ControlFlow::Continue(())
-            })
-            .expect("the store reads");
-        assert!(
-            matches!(fresh, Freshness::Stale(_)),
-            "control: the read's own freshness is stale for good after the drop: {fresh:?}"
+        assert_eq!(
+            read(&e),
+            Freshness::Current,
+            "a read once the re-send has landed the change is current again"
         );
         let id = e.log_records()[3].id;
         assert!(
