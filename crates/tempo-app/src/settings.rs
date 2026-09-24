@@ -333,11 +333,32 @@ pub fn swr_scale_verified(
 /// and through Nexus's own CI-V daemon it went into `21 00`: the offset register ΔTX shares on
 /// the radios that have it, and on this one the RIT offset alone.
 ///
+/// ⭐ AND EVERY OTHER CATALOG RADIO HAMLIB SAYS HAS NONE. The list is Hamlib 4.7.1's own
+/// `Can set XIT: N`, read for every model the picker offers by `scripts/gen-hamlib-xit.mjs`
+/// from the bundled build into `tempo-audio/tests/fixtures/hamlib_xit.json`, and
+/// `rigmodels.rs`'s `the_no_xit_rigs_are_the_catalog_models_hamlib_cannot_set_xit_on` holds
+/// this list to that file both ways: regenerate after a Hamlib bump, never edit by hand. On
+/// these radios Hamlib refuses the offset (`Z`, RPRT -11), so an XIT the station offered was a
+/// phantom: kept as the belief, drawn on the transmit line and added to the frequency the
+/// licence gate judges, while the radio transmitted without it. The FLRig and TRX-Manager
+/// bridges are here for the same reason: Hamlib cannot set XIT through either.
+///
 /// A DENY-list on purpose: a model that is not listed keeps XIT exactly as it always had it.
 /// Mirror of `tempo_audio::civ::commands::has_delta_tx` for the native CI-V models, pinned
 /// against it by that crate's `the_no_xit_rigs_are_the_civ_models_without_delta_tx` — the crate
 /// arrow points the other way, so this cannot call it.
-pub const NO_XIT_RIGS: [u32; 1] = [3081];
+pub const NO_XIT_RIGS: [u32; 57] = [
+    4, 5, // the FLRig and TRX-Manager bridges
+    1001, 1010, 1015, 1020, 1021, 1022, 1023, 1027, 1041, 1043, 1046, // Yaesu
+    2007, 2025, 2034, 2035, // Kenwood
+    2048, 2049, 2054, 2056, 2057, // PowerSDR, Malachite, Thetis, SDR Console, the QMX
+    3009, 3010, 3011, 3013, 3014, 3015, 3016, 3017, 3019, 3023, 3026, 3027, 3044, 3046, 3047, 3055,
+    3057, 3060, 3061, 3067, 3068, 3070, 3081, // Icom
+    3076, 3087, 3088, 3089, 3091, // Xiegu
+    16002, 16007, 16009, 16013, // Ten-Tec
+    17001, 17002, // Alinco
+    23005, // FlexRadio SmartSDR, Hamlib's native backend
+];
 
 /// Does this radio have XIT? `false` only for a model in [`NO_XIT_RIGS`].
 pub fn rig_has_xit(rig_model: u32) -> bool {

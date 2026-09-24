@@ -1,0 +1,822 @@
+{
+  "hamlib": "Hamlib 4.7.1 2026-04-15T20:20:01Z SHA=d042479a9 64-bit",
+  "catalog": 117,
+  "rigs": [
+    {
+      "model": 1,
+      "name": "Hamlib Dummy",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 4,
+      "name": "FLRig FLRig",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 5,
+      "name": "TRXManager TRXManager 5.7.630+",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1001,
+      "name": "Yaesu FT-847",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1004,
+      "name": "Yaesu FT-1000MP MARK-V",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1010,
+      "name": "Yaesu FT-736R",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1014,
+      "name": "Yaesu FT-920",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 1015,
+      "name": "Yaesu FT-890",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1016,
+      "name": "Yaesu FT-990",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 1020,
+      "name": "Yaesu FT-817",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1021,
+      "name": "Yaesu FT-100",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1022,
+      "name": "Yaesu FT-857",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1023,
+      "name": "Yaesu FT-897",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1024,
+      "name": "Yaesu FT-1000MP",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1027,
+      "name": "Yaesu FT-450",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": true
+    },
+    {
+      "model": 1028,
+      "name": "Yaesu FT-950",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1029,
+      "name": "Yaesu FT-2000",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1030,
+      "name": "Yaesu FTDX-9000",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1032,
+      "name": "Yaesu FTDX-5000",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1034,
+      "name": "Yaesu FTDX-1200",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 1035,
+      "name": "Yaesu FT-991",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1036,
+      "name": "Yaesu FT-891",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 1037,
+      "name": "Yaesu FTDX-3000",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1040,
+      "name": "Yaesu FTDX-101D",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1041,
+      "name": "Yaesu FT-818",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1042,
+      "name": "Yaesu FTDX-10",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1043,
+      "name": "Yaesu FT-897D",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 1044,
+      "name": "Yaesu FTDX-101MP",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1046,
+      "name": "Yaesu FT-450D",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": true
+    },
+    {
+      "model": 1049,
+      "name": "Yaesu FT-710",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 1051,
+      "name": "Yaesu FTX-1",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2001,
+      "name": "Kenwood TS-50S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2002,
+      "name": "Kenwood TS-440S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2003,
+      "name": "Kenwood TS-450S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2004,
+      "name": "Kenwood TS-570D",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2005,
+      "name": "Kenwood TS-690S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2007,
+      "name": "Kenwood TS-790",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 2009,
+      "name": "Kenwood TS-850",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2010,
+      "name": "Kenwood TS-870S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2011,
+      "name": "Kenwood TS-940S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2013,
+      "name": "Kenwood TS-950SDX",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2014,
+      "name": "Kenwood TS-2000",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2016,
+      "name": "Kenwood TS-570S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2021,
+      "name": "Elecraft K2",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2025,
+      "name": "Kenwood TS-140S",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 2028,
+      "name": "Kenwood TS-480",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2029,
+      "name": "Elecraft K3",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2031,
+      "name": "Kenwood TS-590S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2034,
+      "name": "Kenwood TM-D710(G)",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 2035,
+      "name": "Kenwood TM-V71(A)",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 2036,
+      "name": "FlexRadio 6xxx",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2037,
+      "name": "Kenwood TS-590SG",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2039,
+      "name": "Kenwood TS-990S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2040,
+      "name": "OpenHPSDR PiHPSDR",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 2041,
+      "name": "Kenwood TS-890S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2043,
+      "name": "Elecraft K3S",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2044,
+      "name": "Elecraft KX2",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2045,
+      "name": "Elecraft KX3",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2047,
+      "name": "Elecraft K4",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2048,
+      "name": "FlexRadio/Apache PowerSDR",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": true
+    },
+    {
+      "model": 2049,
+      "name": "Malachite DSP",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 2050,
+      "name": "Lab599 TX-500",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2051,
+      "name": "SDRPlay SDRUno",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2052,
+      "name": "QRPLabs QCX/QDX",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2053,
+      "name": "BG2FX FX4/C/CR/L",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2054,
+      "name": "TAPR Thetis",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": true
+    },
+    {
+      "model": 2055,
+      "name": "DL2MAN (tr)uSDX",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 2056,
+      "name": "SDR Radio SDRConsole",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": true
+    },
+    {
+      "model": 2057,
+      "name": "QRPLabs QMX",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3009,
+      "name": "Icom IC-706",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3010,
+      "name": "Icom IC-706MkII",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3011,
+      "name": "Icom IC-706MkIIG",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3013,
+      "name": "Icom IC-718",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3014,
+      "name": "Icom IC-725",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3015,
+      "name": "Icom IC-726",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3016,
+      "name": "Icom IC-728",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3017,
+      "name": "Icom IC-729",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3019,
+      "name": "Icom IC-735",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3023,
+      "name": "Icom IC-746",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3026,
+      "name": "Icom IC-756",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3027,
+      "name": "Icom IC-756PRO",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3044,
+      "name": "Icom IC-910",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3046,
+      "name": "Icom IC-746PRO",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3047,
+      "name": "Icom IC-756PROII",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3055,
+      "name": "Icom IC-703",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3056,
+      "name": "Icom IC-7800",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 3057,
+      "name": "Icom IC-756PROIII",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3060,
+      "name": "Icom IC-7000",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3061,
+      "name": "Icom IC-7200",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3062,
+      "name": "Icom IC-7700",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 3063,
+      "name": "Icom IC-7600",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 3067,
+      "name": "Icom IC-7410",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3068,
+      "name": "Icom IC-9100",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3070,
+      "name": "Icom IC-7100",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3073,
+      "name": "Icom IC-7300",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 3076,
+      "name": "Xiegu X108G",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3078,
+      "name": "Icom IC-7610",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 3081,
+      "name": "Icom IC-9700",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3085,
+      "name": "Icom IC-705",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 3087,
+      "name": "Xiegu X6100",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3088,
+      "name": "Xiegu G90",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3089,
+      "name": "Xiegu X5105",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3090,
+      "name": "Icom IC-905",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 3091,
+      "name": "Xiegu X6200",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 3092,
+      "name": "Icom IC-7760",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 3094,
+      "name": "Icom IC-7300MK2",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": true
+    },
+    {
+      "model": 16001,
+      "name": "Ten-Tec TT-550",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 16002,
+      "name": "Ten-Tec TT-538 Jupiter",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 16007,
+      "name": "Ten-Tec TT-516 Argonaut V",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 16008,
+      "name": "Ten-Tec TT-565/566 Orion I/II",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 16009,
+      "name": "Ten-Tec TT-585 Paragon",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 16011,
+      "name": "Ten-Tec TT-588 Omni VII",
+      "setXit": true,
+      "getXit": true,
+      "xitFunc": false
+    },
+    {
+      "model": 16013,
+      "name": "Ten-Tec TT-599 Eagle",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 17001,
+      "name": "Alinco DX-77",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 17002,
+      "name": "Alinco DX-SR8",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    },
+    {
+      "model": 23005,
+      "name": "FlexRadio SmartSDR Slice A",
+      "setXit": false,
+      "getXit": false,
+      "xitFunc": false
+    }
+  ],
+  "missing": [],
+  "needsDaemon": [
+    2
+  ]
+}
