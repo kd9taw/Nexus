@@ -120,7 +120,7 @@ type PropCache = Arc<
 struct PropContext {
     call: String,
     grid: String,
-    log: Arc<()>,
+    log: u64,
 }
 
 /// A whole-log result, kept with the log watermark it was built from and `K`, whatever else it
@@ -202,12 +202,12 @@ fn note_log_tally() {
     LOG_TALLIES.with(|c| c.set(c.get() + 1));
 }
 
-/// The log's read identity, for the context a propagation board is labelled with
-/// ([`PropContext`]): Remote compares it with the identity its own reads take, and a board
-/// built from an older log is not relabelled as this one's. A handle, not a read of the log.
-#[allow(deprecated)] // SPEC-2 C18: Remote's log identity, retired with its read tokens
-fn prop_log_identity(eng: &Engine) -> Arc<()> {
-    eng.log_read_token()
+/// The log's identity, for the context a propagation board is labelled with ([`PropContext`]):
+/// its revision, which moves on every change to the log, as the read token it replaces did.
+/// Remote compares it with the revision its own reads take, and a board built from an older log
+/// is not relabelled as this one's. A watermark, not a read of the log.
+fn prop_log_identity(eng: &Engine) -> u64 {
+    eng.log_revision()
 }
 
 #[cfg(test)]

@@ -4,7 +4,6 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::sync::Arc;
 
 const MAX_BYTES: usize = 192 * 1024;
 const MAX_ENTRIES: usize = 256;
@@ -90,7 +89,6 @@ pub(super) fn read_engine(
     let ssn = *crate::LAST_SSN.try_lock().map_err(|_| "applicationBusy")?;
     read_cached(engine, cache, &crate::DXPED_WINDOWS, ssn)
 }
-#[allow(deprecated)] // SPEC-2 C18: Remote from the store
 fn read_cached(
     engine: &crate::SharedEngine,
     cache: &crate::PropCache,
@@ -109,7 +107,7 @@ fn read_cached(
         (
             s.mycall.clone(),
             s.mygrid.clone(),
-            eng.log_read_token(),
+            eng.log_revision(),
             s.prop_engine.clone(),
             s.station_power_w,
             s.ant_tx_gain_dbi + s.ant_rx_gain_dbi,
@@ -121,7 +119,7 @@ fn read_cached(
         let (at, snap, context) = guard.as_ref().ok_or("applicationUnavailable")?;
         if call != context.call
             || grid != context.grid
-            || !Arc::ptr_eq(&log, &context.log)
+            || log != context.log
             || !crate::is_real_call(&call)
             || !["live", "partial", "cached"].contains(&snap.source.as_str())
             || snap.as_of <= 0
@@ -193,7 +191,7 @@ fn read_cached(
     if crate::unassisted()
         || s.mycall != call
         || s.mygrid != grid
-        || !Arc::ptr_eq(&log, &eng.log_read_token())
+        || log != eng.log_revision()
         || s.prop_engine != model
         || s.station_power_w != power
         || s.ant_tx_gain_dbi + s.ant_rx_gain_dbi != gain
@@ -207,7 +205,7 @@ fn read_cached(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     fn fixture() -> (
         crate::SharedEngine,
@@ -223,7 +221,7 @@ mod tests {
         let context = crate::PropContext {
             call: "W1AW".into(),
             grid: "FN31".into(),
-            log: e.log_read_token(),
+            log: e.log_revision(),
         };
         let mut snapshot = propagation::offline(crate::now_unix(), "W1AW", "FN31");
         snapshot.source = "live".into();
@@ -274,10 +272,10 @@ mod tests {
         let e = engine.lock().unwrap();
         assert_eq!(before.radio.tx_enabled, e.snapshot().radio.tx_enabled);
         assert!(e.log_records().is_empty());
-        assert!(Arc::ptr_eq(
-            &e.log_read_token(),
-            &cache.lock().unwrap().as_ref().unwrap().2.log
-        ));
+        assert_eq!(
+            e.log_revision(),
+            cache.lock().unwrap().as_ref().unwrap().2.log
+        );
         assert_eq!(e.settings().mycall, "W1AW");
         assert_eq!(e.settings().mygrid, "FN31");
         assert!(
@@ -435,5 +433,46 @@ mod tests {
             read_cached(&engine, &cache, &forecasts, Some(110.4)).unwrap()["windows"].is_null()
         );
         drop(held);
+    }
+    /// ★ THE IDENTITY: a board is the log's for as long as the log does not change at all. An
+    /// upload stamp — which moves no index a fold reads — still refuses a board built before
+    /// it, until the desktop builds the board again: exactly what the log's read token, which
+    /// this identity replaces, did on every change. The board's identity is taken as the
+    /// desktop takes it when it builds one (`prop_log_identity`).
+    #[test]
+    fn a_board_built_before_any_change_to_the_log_is_refused_a_stamp_included() {
+        let (engine, cache, forecasts) = fixture();
+        let rebuild = || {
+            let log = crate::prop_log_identity(&tempo_app::engine::engine_lock(&engine));
+            cache.lock().unwrap().as_mut().unwrap().2.log = log;
+        };
+        engine.lock().unwrap().import_adif(
+            "<CALL:5>JA1AA<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20260909<TIME_ON:6>120000<EOR>",
+        );
+        rebuild();
+        assert!(
+            read_cached(&engine, &cache, &forecasts, None).is_ok(),
+            "premise"
+        );
+        {
+            let mut e = engine.lock().unwrap();
+            let pushed = e.log_records()[0].as_ref().clone();
+            assert!(e.stamp_qrz_upload(
+                &pushed,
+                tempo_core::logbook::UploadOutcome::Accepted,
+                2_000_000_000,
+                None
+            ));
+        }
+        assert_eq!(
+            read_cached(&engine, &cache, &forecasts, None),
+            Err("applicationUnavailable"),
+            "a stamp refuses the board built before it"
+        );
+        rebuild();
+        assert!(
+            read_cached(&engine, &cache, &forecasts, None).is_ok(),
+            "rebuilt, it serves"
+        );
     }
 }

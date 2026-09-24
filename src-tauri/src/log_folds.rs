@@ -243,7 +243,7 @@ pub(crate) fn needs_finish(
 pub(crate) fn needs_kept(
     engine: &Mutex<Engine>,
     tallies: &LogTallies,
-) -> Result<(Arc<propagation::LogNeeds>, Arc<()>), String> {
+) -> Result<(Arc<propagation::LogNeeds>, u64), String> {
     let eng = engine_lock(engine);
     let log = crate::prop_log_identity(&eng);
     let capture = needs_capture(&eng, &tallies.needs);
