@@ -1059,6 +1059,13 @@ impl RigBackend for CivBackend {
         self.set_level_on(ReceiverId::Main, name, value)
     }
 
+    /// A level for a NAMED receiver (`L Sub AF 0.50`) — the door the cockpit's Sub controls come
+    /// in by. The work is the same per-receiver verb the plain `set_level` above routes Main
+    /// through; on a radio this build offers no Sub for it refuses, sending nothing.
+    fn set_receiver_level(&self, rx: ReceiverId, name: &str, value: &str) -> Option<bool> {
+        CivBackend::set_level_on(self, rx, name, value)
+    }
+
     fn func(&self, token: &str) -> Option<bool> {
         self.func_on(ReceiverId::Main, token)
     }
@@ -1260,6 +1267,9 @@ pub struct CivDaemon {
     /// Shared with the broker backend: set true while Nexus is transmitting so the disconnect
     /// fail-safe unkey doesn't fire on Nexus's own Rig reconnect (the CI-V PTT-flicker fix).
     tx_intent: Arc<AtomicBool>,
+    /// Can a command sent through this daemon name the SUB receiver — see
+    /// [`Self::names_receivers`].
+    names_receivers: bool,
 }
 
 impl CivDaemon {
@@ -1329,6 +1339,7 @@ impl CivDaemon {
             tcp_stop,
             tcp_thread: Some(tcp_thread),
             tx_intent,
+            names_receivers: RxAddressing::for_model(model) != RxAddressing::Single,
         })
     }
 
@@ -1369,6 +1380,16 @@ impl CivDaemon {
     /// False once the serial engine died (port unplugged / denied).
     pub fn is_alive(&self) -> bool {
         self.engine.is_alive()
+    }
+
+    /// Can a command sent through this daemon NAME THE SUB (`L Sub …`) — i.e. is this a radio
+    /// the capability table offers a Sub for, which the daemon then addresses per receiver
+    /// (band-directed on an IC-7610, a held selection on an IC-9700). The radio loop reports it
+    /// to the engine, which offers the cockpit's Sub controls only where it is true: a control
+    /// that cannot reach its receiver is worse than one that is not drawn. Fixed for the
+    /// daemon's life — it is the model's addressing, not a reading.
+    pub fn names_receivers(&self) -> bool {
+        self.names_receivers
     }
 
     /// Newest completed scope sweep (latest-wins; `None` until the next arrives).
@@ -3377,6 +3398,83 @@ mod tests {
             !regs.lock().unwrap().sel_sub,
             "…because it put the selection back first"
         );
+    }
+
+    /// ⭐ THE PROTOCOL DOOR: `L Sub <level> <value>` through the daemon's own dispatcher reaches
+    /// the Sub and only the Sub. This is the path the cockpit's Sub controls ride (Nexus's own
+    /// `Rig` client speaks it), so it is pinned end to end here: text in, bytes on the wire,
+    /// which band's register moved.
+    #[test]
+    fn a_sub_level_by_protocol_lands_on_the_sub_and_nowhere_else() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let send = |b: &CivBackend, line: &str| match handle_command(line, b) {
+            Handled::Reply(r) => r,
+            Handled::Close => panic!("{line}: closed"),
+        };
+        // IC-7610: `29 01` names the Sub on the wire; nothing is selected.
+        let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
+        plant_two_receivers(&regs);
+        assert_eq!(send(&b, "L Sub RF 0.500"), "RPRT 0\n");
+        assert_eq!(send(&b, "L Sub AF 0.250"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.sub_levels.get(&0x02), Some(&127), "the Sub's RF moved");
+            assert_eq!(r.sub_levels.get(&0x01), Some(&63), "the Sub's AF moved");
+            assert_eq!(r.levels.get(&0x02), Some(&180), "Main's RF did not");
+            assert_eq!(r.levels.get(&0x01), Some(&200), "Main's AF did not");
+            assert!(!r.log.iter().any(|(c, _)| *c == 0x07), "no select at all");
+            assert!(!r.sel_sub);
+        }
+        // IC-9700: no band-directed form — the Sub is selected for the write and handed back.
+        let (_e, b, regs) = backend_on(0xA2, Some(IcomModel::Ic9700));
+        plant_two_receivers(&regs);
+        assert_eq!(send(&b, "L Sub RF 0.500"), "RPRT 0\n");
+        {
+            let r = regs.lock().unwrap();
+            assert_eq!(r.sub_levels.get(&0x02), Some(&127), "the Sub's RF moved");
+            assert_eq!(r.levels.get(&0x02), Some(&180), "Main's RF did not");
+            assert!(!r.sel_sub, "the selection was handed back to Main");
+        }
+        assert!(
+            last_acted_on_sub(&regs, 0x14, Some(0x02)),
+            "the RF write acted on Sub"
+        );
+        // CONTROL: the unqualified verb on the same radio is Main's, as it always was.
+        assert_eq!(send(&b, "L RF 0.250"), "RPRT 0\n");
+        assert_eq!(
+            regs.lock().unwrap().levels.get(&0x02),
+            Some(&63),
+            "Main's RF"
+        );
+        assert_eq!(
+            regs.lock().unwrap().sub_levels.get(&0x02),
+            Some(&127),
+            "Sub untouched"
+        );
+
+        // One receiver: there is no Sub to name. Refused, and nothing reaches the radio.
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        let n = regs.lock().unwrap().log.len();
+        assert_eq!(send(&b, "L Sub AF 0.500"), "RPRT -1\n");
+        assert_eq!(regs.lock().unwrap().log.len(), n, "IC-7300: nothing sent");
+    }
+
+    /// The daemon says whether it can name the Sub, from the model's addressing — true exactly
+    /// where the capability table offers one and the daemon serves the radio.
+    #[test]
+    fn the_daemon_says_whether_it_can_name_the_sub() {
+        for (addr, model, names) in [
+            (0x98u8, IcomModel::Ic7610, true),
+            (0xA2, IcomModel::Ic9700, true),
+            (0x94, IcomModel::Ic7300, false),
+        ] {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = probe.local_addr().unwrap().port();
+            drop(probe);
+            let (radio, _push) = FakeRadio::new(addr);
+            let d = CivDaemon::start_with_io(Box::new(radio), addr, port, 1, Some(model)).unwrap();
+            assert_eq!(d.names_receivers(), names, "{model:?}");
+        }
     }
 
     /// The transmitter's levels are the RADIO's: a Sub has none of its own to report or to

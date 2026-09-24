@@ -40,17 +40,19 @@
 //! or PRESENT without an offer (a shared front end, category 2, which v1 does not offer, D2).
 //!
 //! ## What the Sub holds, in this build
-//! Only what the engine knows, which is one fact: on a satellite cross-band pair the native CI-V
-//! daemon writes the uplink into the Sub band and reads it back, and the radio loop says so
-//! ([`Engine::rig_split_applied_on`]). While that acknowledged split stands, the Sub's dial is
-//! the uplink and its sideband the one Nexus commands for it. Everything else is `None`: a Sub
-//! the radio has and this build cannot read is present and silent (the configured-but-silent
-//! state of `amp: Option<AmpStatusDto>`), never a zero and never a guess.
+//! Only what the engine knows, which is two facts. On a satellite cross-band pair the native
+//! CI-V daemon writes the uplink into the Sub band and reads it back, and the radio loop says so
+//! ([`Engine::rig_split_applied_on`]): while that acknowledged split stands, the Sub's dial is
+//! the uplink and its sideband the one Nexus commands for it. And the RF, AF and squelch levels
+//! the radio ACCEPTED from Nexus for the Sub (`engine::sub_controls`) — values Nexus set, not
+//! readings. Everything else is `None`: a Sub the radio has and this build cannot read is
+//! present and silent (the configured-but-silent state of `amp: Option<AmpStatusDto>`), never a
+//! zero and never a guess.
 //!
-//! Nothing polls the Sub over CAT yet. The broker's per-receiver verbs (`CivBackend::*_on`) can
-//! address it, but only from inside the daemon; and on an IC-9700, which has no band-directed
-//! command, every Sub read is a select-Sub / read / select-Main round trip, so a poll at the
-//! loop's meter rate would flip the operator's selection several times a second.
+//! Nothing polls the Sub over CAT yet. The broker's per-receiver verbs (`CivBackend::*_on`)
+//! address it, and the Sub's level WRITES reach them through `L Sub …`; but on an IC-9700, which
+//! has no band-directed command, every Sub read is a select-Sub / read / select-Main round trip,
+//! so a poll at the loop's meter rate would flip the operator's selection several times a second.
 //!
 //! ## ⚠️ "Main" is what the broker addresses as Main
 //! On an IC-9700 an operator who selects Sub at the front panel is followed by every receive
@@ -428,6 +430,12 @@ impl Engine {
             sub.band = Some(band_for_dial(up.mhz).unwrap_or("").to_string());
             sub.sideband = up.sideband.map(str::to_string);
         }
+        // The levels Nexus set on the Sub and the radio ACCEPTED — never a read-back
+        // (`engine::sub_controls`).
+        use super::sub_controls::SubLevel;
+        sub.rf_gain = self.sub_level_accepted(SubLevel::Rf);
+        sub.af_gain = self.sub_level_accepted(SubLevel::Af);
+        sub.squelch = self.sub_level_accepted(SubLevel::Sql);
         sub
     }
 

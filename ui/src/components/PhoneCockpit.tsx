@@ -54,6 +54,7 @@ import {
   type RigControl,
 } from '../features/rigControls'
 import { SMeter } from './SMeter'
+import { SubReceiverStrip, MainReceiverPlate } from './SubReceiverStrip'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
@@ -1650,6 +1651,9 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               also gives the waterfall back the ~150 px the face was spending. */}
           <SMeter radio={snap.radio} />
           <div className="ph-chain" role="group" aria-label={t('phone.chain.receiver.aria')}>
+            {/* MAIN — drawn exactly while the SUB row below is, so a radio with one receiver
+                (or a Sub Nexus cannot command) draws nothing here and is unchanged. */}
+            <MainReceiverPlate radio={snap.radio} catOk={catOk} />
             {noCatBanner('rx')}
             {/* ── IF: the passband ──────────────────────────────────────────────────
                 MOVED OUT OF THE HEADER (operator ruling, 2026-09-20). BW is an IF control
@@ -1904,6 +1908,12 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             )}
             {absentLine('rx')}
           </div>
+          {/* ⭐ THE SUB RECEIVER — a dual-receiver radio's second receiver, below Main's chain.
+              Draws NOTHING unless the snapshot offers a Sub Nexus can command, so every other
+              radio's pane is exactly what it was. On the Remote page too: its sliders go through
+              the station's `radio.subLevel` intent. A component of its own, not a widened shared
+              one — see its header. */}
+          <SubReceiverStrip radio={snap.radio} radioId={snap.activeRadioId} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} />
         </CockpitPaneFrame>
       )}
 

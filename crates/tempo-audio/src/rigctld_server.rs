@@ -79,6 +79,25 @@ pub trait RigBackend: Send + Sync {
     fn set_level(&self, _name: &str, _value: &str) -> Option<bool> {
         None
     }
+    /// Set a level on a NAMED receiver — `L Sub AF 0.50`, Hamlib's own VFO-mode spelling (the
+    /// receiver's name ahead of the level's). On a radio with two receivers this is the one
+    /// door a Sub control has into the backend; the plain `L NAME VALUE` above stays exactly
+    /// what it always was.
+    ///
+    /// The default has no Sub to name: Main by name is the plain verb, and the Sub is `None`
+    /// (`RPRT -11`), which is what a backend lacking a verb has always answered. Only the native
+    /// CI-V daemon overrides it, and only on a radio it can address both receivers of.
+    fn set_receiver_level(
+        &self,
+        rx: crate::dualrx::ReceiverId,
+        name: &str,
+        value: &str,
+    ) -> Option<bool> {
+        match rx {
+            crate::dualrx::ReceiverId::Main => self.set_level(name, value),
+            crate::dualrx::ReceiverId::Sub => None,
+        }
+    }
     /// Read a function state (`u TOKEN`) — `Some(on)` or `None` = unimplemented.
     fn func(&self, _token: &str) -> Option<bool> {
         None
@@ -363,6 +382,17 @@ fn canonical_line(line: &str) -> std::borrow::Cow<'_, str> {
 /// extended verbs Nexus's own `Rig` client sends (levels `l`/`L`, funcs
 /// `u`/`U`, morse `b`/`\stop_morse`, split `S`/`I`/`X`, RIT/XIT `J`/`Z`, FM
 /// repeater `R`/`O`/`C`), which answer `RPRT -11` unless the backend implements them.
+/// The receiver a `Main` / `Sub` token names — Hamlib's own names for the two, in any case.
+fn receiver_named(token: &str) -> Option<crate::dualrx::ReceiverId> {
+    if token.eq_ignore_ascii_case("Main") {
+        Some(crate::dualrx::ReceiverId::Main)
+    } else if token.eq_ignore_ascii_case("Sub") {
+        Some(crate::dualrx::ReceiverId::Sub)
+    } else {
+        None
+    }
+}
+
 pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
     let line = canonical_line(line.trim());
     let line: &str = &line;
@@ -449,12 +479,22 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                     None => "RPRT -11\n".into(),
                 },
                 Some("L") => {
-                    let name = p.next().unwrap_or("");
+                    // `L Sub AF 0.50` names its receiver first (Hamlib's VFO-mode spelling);
+                    // `L AF 0.50` does not, and stays exactly the verb it always was. No level
+                    // is called Main or Sub, so the two shapes cannot be confused.
+                    let first = p.next().unwrap_or("");
+                    let (rx, name) = match receiver_named(first) {
+                        Some(rx) => (Some(rx), p.next().unwrap_or("")),
+                        None => (None, first),
+                    };
                     let value = p.next().unwrap_or("");
                     if name.is_empty() || value.is_empty() {
                         rprt(false)
                     } else {
-                        rprt_ext(backend.set_level(name, value))
+                        match rx {
+                            Some(rx) => rprt_ext(backend.set_receiver_level(rx, name, value)),
+                            None => rprt_ext(backend.set_level(name, value)),
+                        }
                     }
                 }
                 Some("u") => match p.next().and_then(|t| backend.func(t)) {
@@ -1390,6 +1430,101 @@ pub(crate) mod tests {
         // RIT (negative offsets parse).
         assert_eq!(reply("J -120", &b), "RPRT 0\n");
         assert_eq!(*b.rit.lock().unwrap(), -120);
+    }
+
+    /// ⭐ A LEVEL CAN NAME ITS RECEIVER — `L Sub AF 0.50`, Hamlib's own VFO-mode spelling (the
+    /// receiver's name before the level's). It is the one door a Sub control has into a backend,
+    /// and the unqualified `L AF 0.50` is untouched: it still reaches `set_level`, byte for byte
+    /// the verb every client has always sent.
+    #[test]
+    fn a_level_can_name_its_receiver_and_the_unqualified_verb_is_unchanged() {
+        type Seen = Vec<(Option<crate::dualrx::ReceiverId>, String, String)>;
+        struct RxRig {
+            base: MockRig,
+            seen: Mutex<Seen>,
+        }
+        impl RigBackend for RxRig {
+            fn freq_hz(&self) -> u64 {
+                self.base.freq_hz()
+            }
+            fn mode(&self) -> (String, u32) {
+                self.base.mode()
+            }
+            fn ptt(&self) -> bool {
+                self.base.ptt()
+            }
+            fn set_freq(&self, hz: u64) -> bool {
+                self.base.set_freq(hz)
+            }
+            fn set_mode(&self, m: &str, p: u32) -> bool {
+                self.base.set_mode(m, p)
+            }
+            fn set_ptt(&self, on: bool) -> bool {
+                self.base.set_ptt(on)
+            }
+            fn set_level(&self, name: &str, value: &str) -> Option<bool> {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push((None, name.into(), value.into()));
+                Some(true)
+            }
+            fn set_receiver_level(
+                &self,
+                rx: crate::dualrx::ReceiverId,
+                name: &str,
+                value: &str,
+            ) -> Option<bool> {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push((Some(rx), name.into(), value.into()));
+                Some(true)
+            }
+        }
+        use crate::dualrx::ReceiverId::{Main, Sub};
+        let b = RxRig {
+            base: MockRig::default(),
+            seen: Mutex::new(Vec::new()),
+        };
+        assert_eq!(reply("L Sub AF 0.50", &b), "RPRT 0\n");
+        assert_eq!(reply("L AF 0.25", &b), "RPRT 0\n");
+        assert_eq!(reply("L Main RF 0.75", &b), "RPRT 0\n");
+        assert_eq!(
+            reply("L sub SQL 0.10", &b),
+            "RPRT 0\n",
+            "Hamlib's names, any case"
+        );
+        assert_eq!(
+            *b.seen.lock().unwrap(),
+            vec![
+                (Some(Sub), "AF".to_string(), "0.50".to_string()),
+                (None, "AF".to_string(), "0.25".to_string()),
+                (Some(Main), "RF".to_string(), "0.75".to_string()),
+                (Some(Sub), "SQL".to_string(), "0.10".to_string()),
+            ],
+            "the receiver reaches the backend with the level, and the plain verb stays plain"
+        );
+        // A receiver with no level or no value is malformed: refused, nothing relayed.
+        assert_eq!(reply("L Sub AF", &b), "RPRT -1\n");
+        assert_eq!(reply("L Sub", &b), "RPRT -1\n");
+        assert_eq!(
+            b.seen.lock().unwrap().len(),
+            4,
+            "the refusals relayed nothing"
+        );
+
+        // A backend with no Sub to name answers exactly what a missing verb always has, and
+        // Main-by-name is the unqualified verb.
+        let plain = ExtRig {
+            base: MockRig::default(),
+            morse: Mutex::new(Vec::new()),
+            voice: Mutex::new(Vec::new()),
+            rit: Mutex::new(0),
+        };
+        assert_eq!(reply("L Sub RFPOWER 0.5", &plain), "RPRT -11\n");
+        assert_eq!(reply("L Main RFPOWER 0.5", &plain), "RPRT 0\n");
+        assert_eq!(reply("L Main NOSUCH 0.5", &plain), "RPRT -1\n");
     }
 
     #[test]

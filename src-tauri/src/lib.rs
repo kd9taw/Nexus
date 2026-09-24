@@ -14928,6 +14928,28 @@ fn set_squelch(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot
     Ok(eng.snapshot())
 }
 
+/// Set a level on the SUB receiver of a dual-receiver radio — `level` is `"rf"`, `"af"` or
+/// `"sql"`, `value` a 0.0–1.0 fraction. The radio loop sends it at receive time as `L Sub …`,
+/// which only Nexus's own CI-V daemon can carry.
+///
+/// REFUSED with the reason where it could not reach the Sub — no Sub offered for this radio, a
+/// stage no vendor statement credits to the Sub, or a connection that cannot name it — so the
+/// cockpit can say so rather than leave a control that did not move. ⚠️ Never Main's setters:
+/// the Sub's AF on Main's speaker is the wrong receiver.
+#[tauri::command(async)]
+fn set_sub_level(
+    state: State<'_, SharedEngine>,
+    level: String,
+    value: f32,
+) -> Result<AppSnapshot, String> {
+    let level = tempo_app::engine::sub_controls::SubLevel::parse(&level)
+        .ok_or_else(|| format!("{level:?} is not a sub receiver control"))?;
+    let mut eng = engine_lock(&state);
+    eng.request_sub_level(level, value)
+        .map_err(|refusal| refusal.to_string())?;
+    Ok(eng.snapshot())
+}
+
 /// Set the TRANSMIT-MONITOR GAIN as a 0.0–1.0 fraction — how loud the rig plays your own
 /// audio back while you are talking. Its on/off half is the `MON` func, reached through
 /// [`set_rig_func`] as `"monitor"`.
@@ -27702,6 +27724,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_preamp_db,
             set_rf_gain,
             set_squelch,
+            set_sub_level,
             set_agc,
             set_split,
             set_rig_func,
@@ -29291,6 +29314,44 @@ mod tests {
         assert!(
             msg.contains("AO7"),
             "the refusal names what was refused: {msg}"
+        );
+    }
+
+    /// The Sub receiver's levels reach the radio only if `set_sub_level` is DEFINED, REGISTERED
+    /// and routed through the engine's ONE Sub verb — `ui/src/api.ts` invokes it, and a name
+    /// missing from `generate_handler!` fails at runtime with nothing at compile time to catch
+    /// it. And it must never borrow Main's setter: a Sub control that moved Main's AF would be
+    /// the wrong receiver on the operator's speaker.
+    #[test]
+    fn the_sub_level_command_is_registered_and_reaches_only_the_sub() {
+        let src = include_str!("lib.rs");
+        let body = src
+            .split_once("\nfn set_sub_level(")
+            .expect("the command the Phone cockpit's Sub strip invokes must exist")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(
+            body.contains("request_sub_level("),
+            "set_sub_level must go through Engine::request_sub_level"
+        );
+        for main in ["set_af_gain(", "set_rf_gain(", "set_squelch("] {
+            assert!(
+                !body.contains(main),
+                "set_sub_level calls Main's `{main}` — a Sub control would move Main"
+            );
+        }
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "set_sub_level,"),
+            "set_sub_level is not registered — the Sub strip would fail at runtime"
         );
     }
 

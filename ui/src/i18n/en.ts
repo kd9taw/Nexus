@@ -8765,6 +8765,21 @@ export const EN = {
     'No rig control on this radio — the receiver and transmitter controls need CAT. ' +
     'Settings \u25B8 Radio.',
   'phone.chain.absent': 'Not on this radio: {{plates}}',
+  // ── THE SUB RECEIVER (dual-receiver radios, 2026-09-23) ─────────────────────────────
+  'phone.sub.aria': 'Sub receiver',
+  'phone.sub.dial.unread': 'Nexus does not read the sub receiver’s frequency back from the radio.',
+  'phone.sub.rf.aria': 'Sub receiver RF gain',
+  'phone.sub.rf.title':
+    'RF gain of the sub receiver — its own front end. Set from Nexus; the radio does not report it back.',
+  'phone.sub.af.aria': 'Sub receiver AF gain',
+  'phone.sub.af.title':
+    'AF gain of the sub receiver — how loud it plays. Set from Nexus; the radio does not report it back.',
+  'phone.sub.sql.aria': 'Sub receiver squelch',
+  'phone.sub.sql.title': 'Squelch of the sub receiver. Set from Nexus; the radio does not report it back.',
+  'phone.sub.level.unknown': 'not known',
+  'phone.sub.unconfirmed': 'Not confirmed for the sub receiver: {{plates}}',
+  'phone.sub.setNotRead': 'Set from Nexus — the radio does not report the sub receiver’s levels back.',
+  'phone.sub.failed': 'Nexus could not set the sub receiver’s {{plate}}.',
   'phone.chain.receiver.aria': 'Receiver chain — what you are hearing',
   'phone.chain.transmitter.aria': 'Transmitter chain — how your voice goes out',
   // ── THE FRONT-END PADS AND THE TX MONITOR (2026-09-22) ──────────────────────────────

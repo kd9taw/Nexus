@@ -8961,6 +8961,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: 10px;
   color: var(--text-dim);
 }
+/* THE SUB RECEIVER STRIP (dual-receiver radios) — a second `.ph-chain` below Main's, in the
+   same receiver pane, drawn only when the radio has a Sub this build offers. It takes the
+   chain's wrap and gaps and sets NO size of its own: the pane is fit="content", so the wrap is
+   the height. The rule on top is the one thing that says "a different receiver starts here". */
+.ph-subrx {
+  border-top: 1px solid var(--border-soft);
+}
+/* SUB and the Sub's dial, band and sideband — the dial reads like a readout, not a label. */
+.ph-subrx-head {
+  gap: var(--space-2);
+}
+.ph-subrx-dial,
+.ph-subrx-tag {
+  font-size: var(--fs-label);
+  color: var(--text);
+}
 /* A warning ON the transmit contract — VOX, which changes what keys the rig. Warning colour
    AND a plate that reads VOX, never colour alone. */
 .ph-txc-warn {
