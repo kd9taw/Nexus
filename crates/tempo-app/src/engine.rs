@@ -2568,6 +2568,12 @@ pub struct Engine {
     /// user changes split on rig". A gate that believed those reads would manufacture the very
     /// out-of-band transmission it exists to prevent. Reads may only REVOKE.
     tx_split_confirmed_hz: Option<u64>,
+    /// The acknowledged split, when it was the SATELLITE's own uplink: the "this split IS my
+    /// uplink" identity [`Engine::sat_tx_mode_for_split`] asks, answered at the moment the rig
+    /// acknowledged it ([`Engine::rig_split_applied`]) and kept, because the next Doppler tick
+    /// moves that identity on before the radio loop has written the new uplink. Read only by
+    /// [`Engine::sat_uplink_word`], and only while it equals `tx_split_confirmed_hz`.
+    sat_uplink_acked_hz: Option<u64>,
     /// What the RIG last said about its own split, and when (unix secs): `(on, tx_hz, at)`.
     ///
     /// Written only from a capability-verified NATIVE read (`SplitDetect::Native`) — never from
@@ -4711,6 +4717,7 @@ impl Engine {
             sat_mode_released: false,
             split_tx_mhz: None,
             tx_split_confirmed_hz: None,
+            sat_uplink_acked_hz: None,
             observed_split: None,
             split_dirty: false,
             pending_voice_mem: None,
@@ -7475,10 +7482,13 @@ impl Engine {
     }
     /// Does the ACTIVE radio have XIT at all ([`crate::settings::rig_has_xit`])? The IC-9700
     /// does not, nor does any radio Hamlib reports as unable to set it
-    /// ([`crate::settings::NO_XIT_RIGS`]), so on those XIT is not offered (the snapshot's
-    /// `xit_unsupported`) and not taken ([`Self::request_xit`], `queue_remote_xit`).
+    /// ([`crate::settings::NO_XIT_RIGS`]), nor any radio reached through OmniRig, whose shim
+    /// serves the core verbs only and answers `U XIT` and `Z` with `RPRT -11` whatever the
+    /// radio ([`crate::settings::rig_conn_is_omnirig`]). On those XIT is not offered (the
+    /// snapshot's `xit_unsupported`) and not taken ([`Self::request_xit`], `queue_remote_xit`).
     pub fn xit_supported(&self) -> bool {
         crate::settings::rig_has_xit(self.settings.rig_model)
+            && !crate::settings::rig_conn_is_omnirig(&self.settings.rig_conn)
     }
     /// Request an XIT (transmit incremental tuning) offset in Hz (0 = off).
     ///
@@ -8379,8 +8389,27 @@ impl Engine {
     /// or TX is disabled (Monitor / outside privileges — the queue is then held, so a stray
     /// macro never keys unexpectedly). One word per call so the loop paces the send and Stop
     /// TX (which clears the queue) can drop the remainder before it reaches the rig.
+    ///
+    /// ⭐ AND AS CW, WHERE THE KEYER PUTS IT ([`Self::tx_allowed_as`]): the carrier at the dial,
+    /// and on the soundcard keyer the tone a pitch from it on the side the transmitting VFO is
+    /// commanded. In the CW section that is the gate above, so nothing there moves. The CW ID
+    /// after an FT 73 is keyed from the DIGITAL section, whose gate judged FT8's carrier one TX
+    /// offset from the dial, not the CW. A word only this refuses is DROPPED, not held: a parting
+    /// ID must go out after its 73 or not at all, never at some later moment when it happens to
+    /// be allowed.
     pub fn poll_cw_one(&mut self) -> Option<String> {
         if !self.tx_enabled || !self.tx_allowed() {
+            return None;
+        }
+        if !self.tx_allowed_as(crate::settings::OperatingMode::Cw) {
+            if !self.cw_queue.is_empty() {
+                tempo_core::applog::info(
+                    "tx",
+                    "CW not keyed: where it would go is outside the licence's CW privileges \
+                     (dropped)",
+                );
+                self.cw_queue.clear();
+            }
             return None;
         }
         self.cw_queue.pop_front()
@@ -14374,6 +14403,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // succeeded on a rig we hold control of; that acknowledgement is what the privilege
         // gate judges from here until something contradicts it.
         self.tx_split_confirmed_hz = Some(tx_hz);
+        // Whether it is the satellite's own uplink, recorded now: the next Doppler tick moves the
+        // identity `sat_tx_mode_for_split` checks on to an uplink the loop has not written yet,
+        // while the rig still transmits on this one ([`Self::sat_uplink_word`]).
+        self.sat_uplink_acked_hz = self
+            .sat_tune
+            .as_ref()
+            .is_some_and(|st| st.sent.sent && st.sent.uplink_hz == tx_hz)
+            .then_some(tx_hz);
         if let Some(b) = self.sat_binding.as_mut() {
             if b.pending_uplink_mhz
                 .is_some_and(|m| (m * 1e6).round() as u64 == tx_hz)
@@ -18458,12 +18495,19 @@ contact yourself."
     /// ([`Self::emission_in_use_allowed`]). Every TX path ANDs this in; the snapshot exposes it
     /// so the cockpit can show a lockout indicator. See `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
+        self.tx_allowed_as(self.settings.operating_mode)
+    }
+
+    /// [`Self::tx_allowed`] as section `om` judges the transmitter as it stands: the same
+    /// frequencies, each through `om`'s emission model. CW keyed from another section — the CW
+    /// ID after an FT 73 — is judged as CW too ([`Self::poll_cw_one`]).
+    fn tx_allowed_as(&self, om: crate::settings::OperatingMode) -> bool {
         // The rig says split and we cannot say where it transmits — refuse rather than judge
         // the dial, which under split is an unrelated number.
         if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
             return false;
         }
-        let judge = |mhz: f64| self.emission_in_use_allowed(mhz);
+        let judge = |mhz: f64| self.emission_in_use_allowed_as(om, mhz);
         // `tx_emission_mhz` already carries XIT.
         let emission = self.tx_emission_mhz();
         // ⚠️ SPLIT **AND** XIT IS THE ONE COMBINATION NO DOCUMENT HERE SETTLES. Whether a radio
@@ -18642,19 +18686,40 @@ contact yourself."
     /// out on the side its model did not judge. And in CW on the SOUNDCARD keyer
     /// ([`Self::cw_emission_allowed`]), whose tone sits a pitch from the dial the old model judged,
     /// on or off a pass; the rig's own CW keyer transmits at the dial and is judged there alone.
+    ///
+    /// ⭐ AND THROUGH THE DOPPLER TICK, in the uplink's own word as well
+    /// ([`Self::sat_uplink_word`]): for the radio-loop pass between a tick and its apply,
+    /// `tx_mode_effective` answers the dial's word while the rig still transmits in the uplink's.
+    /// ANDed, so it only refuses more.
     fn emission_in_use_allowed(&self, mhz: f64) -> bool {
-        let om = self.settings.operating_mode;
+        self.emission_in_use_allowed_as(self.settings.operating_mode, mhz)
+    }
+
+    /// [`Self::emission_in_use_allowed`] for section `om`.
+    fn emission_in_use_allowed_as(&self, om: crate::settings::OperatingMode, mhz: f64) -> bool {
         self.emission_allowed(om, mhz, &self.settings.sideband)
-            && (om != crate::settings::OperatingMode::Phone
-                || self.phone_emission_allowed(mhz, &self.tx_mode_effective()))
-            && (om != crate::settings::OperatingMode::Digital
-                || self.digital_emission_allowed(mhz, &self.tx_mode_effective()))
-            && (om != crate::settings::OperatingMode::Keyboard
-                || self.keyboard_emission_allowed(mhz, &self.tx_mode_effective()))
-            && (om != crate::settings::OperatingMode::Rtty
-                || self.rtty_emission_allowed(mhz, &self.tx_mode_effective()))
-            && (om != crate::settings::OperatingMode::Cw
-                || self.cw_emission_allowed(mhz, &self.tx_mode_effective()))
+            && self.commanded_emission_allowed(om, mhz, &self.tx_mode_effective())
+            && self
+                .sat_uplink_word()
+                .is_none_or(|word| self.commanded_emission_allowed(om, mhz, &word))
+    }
+
+    /// Section `om`'s emission from carrier `mhz` with the transmitting VFO commanded `word`:
+    /// the second model [`Self::emission_in_use_allowed`] judges, one per section.
+    fn commanded_emission_allowed(
+        &self,
+        om: crate::settings::OperatingMode,
+        mhz: f64,
+        word: &str,
+    ) -> bool {
+        use crate::settings::OperatingMode;
+        match om {
+            OperatingMode::Phone => self.phone_emission_allowed(mhz, word),
+            OperatingMode::Digital => self.digital_emission_allowed(mhz, word),
+            OperatingMode::Keyboard => self.keyboard_emission_allowed(mhz, word),
+            OperatingMode::Rtty => self.rtty_emission_allowed(mhz, word),
+            OperatingMode::Cw => self.cw_emission_allowed(mhz, word),
+        }
     }
 
     /// The mode word the TRANSMITTING VFO is commanded into — each VFO read from the one place
@@ -18667,6 +18732,26 @@ contact yourself."
         self.tx_split_confirmed_hz
             .and_then(|hz| self.sat_tx_mode_for_split(hz))
             .unwrap_or_else(|| self.rig_mode_effective())
+    }
+
+    /// The uplink's own word, [`Self::sat_tx_mode`], while the acknowledged split is the
+    /// satellite's own uplink; `None` for any other split, and with no split at all.
+    ///
+    /// ⭐ THROUGH THE DOPPLER TICK. [`Self::tx_mode_effective`] reads the uplink's word only for
+    /// the split whose frequency is the one the LAST correction sent
+    /// ([`Self::sat_tx_mode_for_split`]). Every tick sends a new uplink, and until the radio loop
+    /// has written it the rig still transmits on the one it acknowledged, in the uplink's word,
+    /// while that identity check already fails — so for that loop pass the gate fell back to the
+    /// DIAL's word, which on an inverting bird puts the carrier on the wrong side of the uplink.
+    /// This answers from the acknowledgement instead ([`Engine::sat_uplink_acked_hz`]), which a
+    /// tick does not move and a terrestrial split never sets. Away from the tick it is the word
+    /// `tx_mode_effective` already answers.
+    fn sat_uplink_word(&self) -> Option<String> {
+        let acked = self.sat_uplink_acked_hz?;
+        if self.tx_split_confirmed_hz != Some(acked) {
+            return None;
+        }
+        self.sat_tx_mode()
     }
 
     /// May the operator's class key `om`'s EMISSION with the dial at `dial` (`sideband`
@@ -52680,6 +52765,636 @@ mod digital_side_licence_tests {
         );
     }
 
+    // ── The Doppler tick ─────────────────────────────────────────────────────────────────────
+
+    /// One Doppler tick of a pass [`work_pass`] set up, as the satellite tracker drives it, and
+    /// NOT the radio loop's apply of the uplink it sends: the pass between the two, in which the
+    /// tick has moved the satellite's own uplink on and the rig still transmits on the one it
+    /// acknowledged. A LEO's range rate, at a slot boundary five seconds after the nominal tune,
+    /// so the uplink is due in every section. Returns the uplink the tick sent.
+    fn tick_without_the_apply(e: &mut Engine) -> u64 {
+        let acked = e
+            .tx_split_confirmed_hz
+            .expect("precondition: an acknowledged uplink");
+        let c = e
+            .sat_doppler_tick(7.0, 1_005_000, false)
+            .expect("precondition: the tick corrects the pass");
+        let sent = c
+            .uplink_hz
+            .expect("precondition: the tick moves the uplink");
+        assert_ne!(sent, acked, "precondition: a new uplink");
+        assert_eq!(
+            e.tx_split_confirmed_hz,
+            Some(acked),
+            "precondition: the rig still transmits on the acknowledged uplink"
+        );
+        sent
+    }
+
+    /// ⭐ THE PASS BETWEEN A DOPPLER TICK AND ITS APPLY. Each tick moves the satellite's own
+    /// uplink on, and until the radio loop has written it the rig transmits on the uplink it last
+    /// acknowledged, still commanded PKTLSB. The gate read the transmit VFO's word only for the
+    /// split that matched the tick's NEW uplink, so for that pass it fell back to the DIAL's
+    /// PKTUSB and judged FT8's carrier above 144.101, in the all-mode segment, while it went out
+    /// below, at 144.0995, where 2 m is CW-only. On the Sub band and on Main's VFO B alike.
+    #[test]
+    fn between_a_doppler_tick_and_its_apply_the_uplink_is_judged_in_its_own_word() {
+        for (bird, vfo) in [(EDGE_BIRD, "Sub"), (VV_EDGE_BIRD, "VFOB")] {
+            let mut e = ic9700_in_digital(LicenseClass::General);
+            assert_eq!(
+                work_pass(&mut e, bird, DownlinkClass::Usb),
+                vfo,
+                "precondition: the uplink rides {vfo}"
+            );
+            the_two_sides_disagree(&e);
+            assert!(
+                !e.tx_allowed(),
+                "precondition: acknowledged, the PKTLSB uplink on {vfo} is refused"
+            );
+            tick_without_the_apply(&mut e);
+            assert_eq!(
+                e.tx_mode_effective(),
+                "PKTUSB",
+                "precondition: between the two, the dial's word"
+            );
+            assert_eq!(
+                e.sat_tx_mode().as_deref(),
+                Some("PKTLSB"),
+                "precondition: the uplink's own word"
+            );
+            assert!(
+                !e.tx_allowed(),
+                "until the loop moves it, PKTLSB on {vfo} at 144.101 MHz still puts the data \
+                 carrier at 144.0995, where 2 m is CW-only"
+            );
+        }
+    }
+
+    /// The same pass in Phone: the uplink is commanded LSB under a USB dial, so for that pass the
+    /// gate judged the voice passband above 144.101 while it went out below it, across 2 m's
+    /// 144.100 phone floor.
+    #[test]
+    fn between_a_doppler_tick_and_its_apply_phone_is_judged_in_the_uplinks_word() {
+        let mut e = ic9700_in("phone", LicenseClass::General);
+        work_pass(&mut e, EDGE_BIRD, DownlinkClass::Usb);
+        assert_eq!(e.tx_mode_effective(), "LSB", "precondition: the uplink");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: acknowledged, LSB at 144.101 crosses 144.100"
+        );
+        tick_without_the_apply(&mut e);
+        assert_eq!(
+            e.tx_mode_effective(),
+            "USB",
+            "precondition: between the two, the dial's word"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "until the loop moves it, LSB on the Sub band at 144.101 MHz still crosses 144.100"
+        );
+    }
+
+    /// The guards the other way round, through the same tick. A bird that does not invert keeps
+    /// its PKTUSB uplink keyable between the tick and the apply and after it, and so does an
+    /// inverting bird whose uplink sits inside the segment (RS-44's 145.965).
+    #[test]
+    fn through_a_doppler_tick_a_legal_uplink_stays_keyable() {
+        let straight = Transponder {
+            invert: false,
+            ..EDGE_BIRD
+        };
+        let inside = Transponder {
+            uplink_centre_hz: 145_965_000,
+            ..EDGE_BIRD
+        };
+        for (name, tp, word) in [
+            ("not inverting at 144.101", straight, "PKTUSB"),
+            ("inverting at 145.965", inside, "PKTLSB"),
+        ] {
+            let mut e = ic9700_in_digital(LicenseClass::General);
+            work_pass(&mut e, tp, DownlinkClass::Usb);
+            assert_eq!(e.tx_mode_effective(), word, "precondition: {name}");
+            assert!(e.tx_allowed(), "precondition: {name} is keyable");
+            let sent = tick_without_the_apply(&mut e);
+            assert!(e.tx_allowed(), "{name}: between the tick and its apply");
+            e.rig_split_applied(sent);
+            assert_eq!(e.tx_mode_effective(), word, "precondition: {name}, applied");
+            assert!(e.tx_allowed(), "{name}: after the apply");
+        }
+    }
+
+    /// A split that is not the satellite's own uplink is not judged in the bird's word. A held
+    /// inverting transponder declares LSB for its uplink; a terrestrial pile-up split the rig
+    /// acknowledged at 14.2255 in the meantime is keyed in the dial's USB, whose passband is
+    /// inside a General's 20 m phone segment, where LSB's would cross its 14.225 floor.
+    #[test]
+    fn a_pile_up_split_while_a_bird_is_held_keeps_the_dials_word() {
+        let mut e = ic9700_in("phone", LicenseClass::General);
+        e.set_sat_transponder(Some(("TEST|linear".into(), 0, EDGE_BIRD)));
+        assert_eq!(
+            e.sat_tx_mode().as_deref(),
+            Some("LSB"),
+            "precondition: the held bird declares its uplink's word"
+        );
+        e.rig_split_applied(14_225_500);
+        assert_eq!(
+            e.tx_mode_effective(),
+            "USB",
+            "precondition: the pile-up's word"
+        );
+        assert!(
+            !e.phone_emission_allowed(14.2255, "LSB"),
+            "precondition: in the bird's LSB the split would be refused"
+        );
+        assert!(
+            e.tx_allowed(),
+            "a pile-up split is keyed in the dial's USB and judged in it"
+        );
+    }
+
+    /// One pass judged between a Doppler tick and the loop's apply of the uplink it sent.
+    struct TickVerdict {
+        /// `tx_allowed()` in that pass, the gate under test.
+        got: bool,
+        /// The section's own model at the acknowledged uplink: every verdict's first term.
+        old: bool,
+        /// The side the DIAL's word names — all that pass was judged on before.
+        dial_side: Option<bool>,
+        /// The side the transmit VFO's own word names.
+        tx_side: Option<bool>,
+        case: String,
+    }
+
+    impl TickVerdict {
+        /// The verdict that pass had before: the section's model and the dial's word.
+        fn before(&self) -> bool {
+            self.old && self.dial_side.unwrap_or(true)
+        }
+    }
+
+    /// Every Digital pass [`pass_verdicts`] builds, judged between a Doppler tick and its apply.
+    fn digital_tick_verdicts() -> &'static [TickVerdict] {
+        static ROWS: std::sync::OnceLock<Vec<TickVerdict>> = std::sync::OnceLock::new();
+        ROWS.get_or_init(|| {
+            let mut out = Vec::new();
+            for class in CLASSES {
+                for off_hz in OFFSETS_HZ {
+                    for (down, invert, plain, word) in PASS_SHAPES {
+                        let mut e = ic9700_in_digital(class);
+                        e.set_tx_offset(off_hz);
+                        e.settings.data_modes_plain_ssb = plain;
+                        e.settings.sync_active_from_flat();
+                        let off = f64::from(e.tx_offset_hz()) / 1e6;
+                        for &edge in DATA_EDGES {
+                            let downlink_centre_hz = if (400.0..500.0).contains(&edge) {
+                                145_950_000
+                            } else {
+                                435_640_000
+                            };
+                            for up in dials_around(edge) {
+                                let tp = Transponder {
+                                    uplink_centre_hz: up,
+                                    downlink_centre_hz,
+                                    invert,
+                                    half_width_hz: 30_000,
+                                };
+                                work_pass(&mut e, tp, down);
+                                let dial_word = e.rig_mode_effective();
+                                tick_without_the_apply(&mut e);
+                                let tx = up as f64 / 1e6;
+                                let case = format!(
+                                    "{class:?} up {tx:.4} off {off_hz} {down:?} invert={invert} \
+                                     plain={plain} ({dial_word} down, {word} up)"
+                                );
+                                assert_eq!(
+                                    e.tx_mode_effective(),
+                                    dial_word,
+                                    "precondition, {case}: between the two, the dial's word"
+                                );
+                                assert_eq!(
+                                    e.sat_tx_mode().as_deref(),
+                                    Some(word),
+                                    "precondition, {case}: the uplink's own word"
+                                );
+                                let stored_lsb = e.settings.sideband.eq_ignore_ascii_case("LSB");
+                                let side = |w: &str| {
+                                    named_side(w).map(|lsb| side_allows(class, tx, off, lsb))
+                                };
+                                out.push(TickVerdict {
+                                    got: e.tx_allowed(),
+                                    old: side_allows(class, tx, off, stored_lsb),
+                                    dial_side: side(&dial_word),
+                                    tx_side: side(word),
+                                    case,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        })
+    }
+
+    /// Keyboard, RTTY and both CW keyers on every pass `pass_rows` builds, judged between a
+    /// Doppler tick and its apply.
+    fn soundcard_tick_verdicts() -> &'static [TickVerdict] {
+        static ROWS: std::sync::OnceLock<Vec<TickVerdict>> = std::sync::OnceLock::new();
+        ROWS.get_or_init(|| {
+            let mut out = Vec::new();
+            let variants = Soundcard::ALL
+                .iter()
+                .map(|&sc| (sc, DATA_EDGES))
+                .chain(Soundcard::CW.iter().map(|&sc| (sc, CW_EDGES)));
+            for (sc, edges) in variants {
+                for class in CLASSES {
+                    for centre in sc.centres() {
+                        for (down, invert, plain, _) in PASS_SHAPES {
+                            let (dial_word, tx_word) = sc.words(down, invert, plain);
+                            let mut e = sc.station(class);
+                            e.settings.data_modes_plain_ssb = plain;
+                            e.settings.sync_active_from_flat();
+                            for &edge in edges {
+                                let downlink_centre_hz = if (400.0..500.0).contains(&edge) {
+                                    145_950_000
+                                } else {
+                                    435_640_000
+                                };
+                                for up in dials_around(edge) {
+                                    let tp = Transponder {
+                                        uplink_centre_hz: up,
+                                        downlink_centre_hz,
+                                        invert,
+                                        half_width_hz: 30_000,
+                                    };
+                                    work_pass(&mut e, tp, down);
+                                    sc.net(&mut e, centre);
+                                    tick_without_the_apply(&mut e);
+                                    let tx = up as f64 / 1e6;
+                                    let case = format!(
+                                        "{sc:?} {class:?} up {tx:.4} centre {centre} {down:?} \
+                                         invert={invert} plain={plain} ({dial_word} down, \
+                                         {tx_word} up)"
+                                    );
+                                    assert_eq!(
+                                        e.tx_mode_effective(),
+                                        dial_word,
+                                        "precondition, {case}: between the two, the dial's word"
+                                    );
+                                    assert_eq!(
+                                        e.sat_tx_mode().as_deref(),
+                                        Some(tx_word),
+                                        "precondition, {case}: the uplink's own word"
+                                    );
+                                    out.push(TickVerdict {
+                                        got: e.tx_allowed(),
+                                        old: sc.old(&e, class, tx, dial_word),
+                                        dial_side: sc.commanded(&e, class, tx, dial_word),
+                                        tx_side: sc.commanded(&e, class, tx, tx_word),
+                                        case,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        })
+    }
+
+    /// The first `n` cases in `rows`, and how many there were.
+    fn first_tick_cases<'a>(
+        rows: impl Iterator<Item = &'a TickVerdict>,
+        n: usize,
+    ) -> (usize, Vec<&'a str>) {
+        let all: Vec<&str> = rows.map(|r| r.case.as_str()).collect();
+        (all.len(), all.into_iter().take(n).collect())
+    }
+
+    /// ⛔ THE INVARIANT THROUGH THE TICK: judging the uplink's own word between a Doppler tick and
+    /// its apply only ever refuses MORE than the dial's word did — at every data and CW edge, for
+    /// every class, offset, audio centre and pass shape, in Digital, Keyboard, RTTY and CW — with
+    /// the two controls: states where judging the uplink's word INSTEAD of the dial's would
+    /// unlock, and states the fix refuses.
+    #[test]
+    fn through_a_doppler_tick_the_gate_only_ever_refuses_more() {
+        let rows = || {
+            digital_tick_verdicts()
+                .iter()
+                .chain(soundcard_tick_verdicts().iter())
+        };
+        let (unlocked, first) = first_tick_cases(rows().filter(|r| r.got && !r.before()), 20);
+        assert_eq!(
+            unlocked, 0,
+            "allowed where the dial's word refused: {first:#?}"
+        );
+        let a_swap_would_unlock = rows()
+            .filter(|r| !r.before() && r.old && r.tx_side != Some(false))
+            .count();
+        let the_fix_refuses = rows()
+            .filter(|r| r.before() && r.tx_side == Some(false))
+            .count();
+        assert!(
+            a_swap_would_unlock > 100 && the_fix_refuses > 100,
+            "the sweep must hold both disagreements: {a_swap_would_unlock} the uplink's word \
+             alone would unlock, {the_fix_refuses} it refuses"
+        );
+    }
+
+    /// Between a Doppler tick and its apply every verdict is the dial's word, as before, AND the
+    /// uplink's own, wherever it names a side.
+    #[test]
+    fn through_a_doppler_tick_the_uplink_is_judged_in_both_words_at_every_edge() {
+        let rows = || {
+            digital_tick_verdicts()
+                .iter()
+                .chain(soundcard_tick_verdicts().iter())
+        };
+        let (wrong, first) = first_tick_cases(
+            rows().filter(|r| r.got != (r.before() && r.tx_side.unwrap_or(true))),
+            20,
+        );
+        assert_eq!(wrong, 0, "{wrong} verdicts are not both words: {first:#?}");
+        let allowed = rows().filter(|r| r.got).count();
+        let refused = rows().filter(|r| !r.got).count();
+        assert!(
+            allowed > 1_000 && refused > 1_000,
+            "the sweep must straddle the edges: {allowed} allowed, {refused} refused"
+        );
+    }
+
+    // ── The CW ID after an FT 73 ─────────────────────────────────────────────────────────────
+
+    /// An FT8 station in the Digital section at `dial` on `sideband`, TX audio offset `off_hz`,
+    /// with CW keyed through `sc`'s keyer at `pitch` — what the radio loop keys a CW ID with.
+    fn ft_station(
+        sc: Soundcard,
+        class: LicenseClass,
+        dial: f64,
+        sideband: &str,
+        off_hz: f32,
+        pitch: f32,
+    ) -> Engine {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.license_class = class;
+        e.set_operating_mode("digital", false);
+        sc.set_backend(&mut e);
+        sc.net(&mut e, pitch);
+        e.set_tx_offset(off_hz);
+        let band = crate::bandplan::band_for_dial(dial).unwrap_or("");
+        e.set_frequency(dial, band, sideband);
+        e
+    }
+
+    /// ⭐ THE CW ID AFTER AN FT 73, WHERE IT KEYS. With WSJT-X's "CW ID after 73" on, the radio
+    /// loop keys MYCALL through the CW path once the final over has played out, from the Digital
+    /// section, where the gate judged FT8's carrier one TX offset above the dial. The CW goes out
+    /// elsewhere: the soundcard keyer's tone one pitch above the dial, the rig's own keyer's
+    /// carrier at the dial. So a General at 7.0240, whose FT8 carrier (7.0255) is inside 40 m's
+    /// General segment, keyed the call at 7.0246, or at 7.0240, below the 7.025 floor; and at
+    /// 14.1496 with a 300 Hz offset (FT8 at 14.1499) the soundcard keyer's 600 Hz tone went out
+    /// at 14.1502, past a General's 14.150, while the rig's own keyer keys legally on the dial.
+    /// The same QSO inside each segment keys its ID.
+    #[test]
+    fn the_cw_id_after_an_ft_73_is_judged_where_it_keys() {
+        let general = LicenseClass::General;
+        let cases = [
+            (Soundcard::CwTone, 7.024_0, 1_500.0, Some(7.024_6)),
+            (Soundcard::CwKeyer, 7.024_0, 1_500.0, Some(7.024_0)),
+            (Soundcard::CwTone, 14.149_6, 300.0, Some(14.150_2)),
+            (Soundcard::CwKeyer, 14.149_6, 300.0, None),
+            (Soundcard::CwTone, 7.025_5, 1_500.0, None),
+            (Soundcard::CwKeyer, 7.025_5, 1_500.0, None),
+        ];
+        for (sc, dial, off_hz, refused_at) in cases {
+            if let Some(at) = refused_at {
+                assert!(
+                    !crate::privileges::tx_allowed(general, at, OperatingMode::Cw),
+                    "precondition: {at} is outside a General's CW"
+                );
+            }
+            let keys = refused_at.is_none();
+            let mut e = ft_station(sc, general, dial, "USB", off_hz, 600.0);
+            e.settings.cw_id_after_73 = true;
+            assert!(
+                e.tx_allowed(),
+                "precondition: FT8's carrier at {dial} + {off_hz} Hz"
+            );
+            // The final 73 of an S&P contact, as the sequencer drives it.
+            e.call_station("W9XYZ");
+            e.ingest_decodes_for_test(&[super::tests::dec_snr("K2DEF W9XYZ -10", -7)], 1);
+            e.ingest_decodes_for_test(&[super::tests::dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+            assert!(
+                !e.poll_tx(4).is_empty(),
+                "precondition: the closing 73 transmits"
+            );
+            assert!(e.take_pending_cw_id(), "precondition: the CW ID is armed");
+            // What the radio loop does with it once the over has played out.
+            let mycall = e.settings.mycall.clone();
+            e.send_cw(&mycall);
+            if keys {
+                assert_eq!(
+                    e.poll_cw_one().as_deref(),
+                    Some("K2DEF"),
+                    "control, {sc:?}: the ID from {dial} keys inside a General's CW"
+                );
+            } else {
+                assert_eq!(
+                    e.poll_cw_one(),
+                    None,
+                    "{sc:?}: the ID from {dial} keys at {refused_at:?}, outside a General's CW"
+                );
+                assert!(
+                    e.cw_queue.is_empty(),
+                    "{sc:?}: and it is dropped, not held to key at some later moment"
+                );
+            }
+        }
+    }
+
+    /// One CW ID, keyed from the Digital section.
+    struct CwIdVerdict {
+        /// A word came off `poll_cw_one`.
+        got: bool,
+        /// `tx_allowed()`, the Digital verdict the ID was keyed on before.
+        ft: bool,
+        /// The CW emission where the keyer puts it, from the privilege table alone: the carrier
+        /// at the dial, and for the soundcard keyer the tone a pitch from it on the side the
+        /// transmit VFO's word names.
+        cw: bool,
+        /// The carrier at the dial alone.
+        carrier: bool,
+        /// Still queued after the poll.
+        held: bool,
+        case: String,
+    }
+
+    /// CW IDs from the Digital section around every CW edge, for every class, TX offset, pitch
+    /// and sideband, on both keyers.
+    fn cw_id_verdicts() -> Vec<CwIdVerdict> {
+        let mut out = Vec::new();
+        for sc in Soundcard::CW {
+            for class in CLASSES {
+                for off_hz in OFFSETS_HZ {
+                    for pitch in sc.centres() {
+                        let allow =
+                            |f: f64| crate::privileges::tx_allowed(class, f, OperatingMode::Cw);
+                        let mut e = ft_station(sc, class, 14.074, "USB", off_hz, pitch);
+                        let p = f64::from(pitch) / 1e6;
+                        for &edge in CW_EDGES {
+                            for hz in dials_around(edge) {
+                                let dial = hz as f64 / 1e6;
+                                let band = crate::bandplan::band_for_dial(dial).unwrap_or("");
+                                for sideband in ["USB", "LSB"] {
+                                    e.set_frequency(dial, band, sideband);
+                                    let word = e.tx_mode_effective();
+                                    let case = format!(
+                                        "{sc:?} {class:?} dial {dial:.4} {sideband} ({word}) off \
+                                         {off_hz} pitch {pitch}"
+                                    );
+                                    let tone = match sc {
+                                        Soundcard::CwTone => named_side(&word).is_none_or(|lsb| {
+                                            allow(if lsb { dial - p } else { dial + p })
+                                        }),
+                                        _ => true,
+                                    };
+                                    let ft = e.tx_allowed();
+                                    e.send_cw("K2DEF");
+                                    let got = e.poll_cw_one().is_some();
+                                    let held = !e.cw_queue.is_empty();
+                                    e.cw_queue.clear();
+                                    out.push(CwIdVerdict {
+                                        got,
+                                        ft,
+                                        cw: allow(dial) && tone,
+                                        carrier: allow(dial),
+                                        held,
+                                        case,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// ⛔ THE INVARIANT FOR THE CW ID: judging where it keys only ever refuses MORE than the FT8
+    /// verdict did, at every CW edge, for every class, offset, pitch and sideband, on both
+    /// keyers — with the two controls: states where the CW emission alone would allow what FT8's
+    /// verdict refuses (what an OR would unlock), and states the fix refuses.
+    #[test]
+    fn the_cw_id_only_ever_refuses_more() {
+        let v = cw_id_verdicts();
+        let first = |rows: Vec<&CwIdVerdict>| -> (usize, Vec<String>) {
+            (
+                rows.len(),
+                rows.iter().take(20).map(|r| r.case.clone()).collect(),
+            )
+        };
+        let (unlocked, cases) = first(v.iter().filter(|r| r.got && !r.ft).collect());
+        assert_eq!(
+            unlocked, 0,
+            "keyed where the FT8 verdict refused: {cases:#?}"
+        );
+        let or_would_unlock = v.iter().filter(|r| !r.ft && r.cw).count();
+        let the_fix_refuses = v.iter().filter(|r| r.ft && !r.cw).count();
+        assert!(
+            or_would_unlock > 100 && the_fix_refuses > 100,
+            "the sweep must hold both disagreements: {or_would_unlock} an OR would unlock, \
+             {the_fix_refuses} the CW emission refuses"
+        );
+    }
+
+    /// Every CW ID keys exactly when FT8's verdict AND its own CW emission allow it, states only
+    /// the soundcard keyer's tone refuses included. One the FT8 verdict refuses is held, as any
+    /// refused CW word always was; one only its CW emission refuses is dropped, so it can never
+    /// key at a later, unrelated moment.
+    #[test]
+    fn the_cw_id_is_judged_as_ft8_and_as_cw_at_every_cw_edge() {
+        let v = cw_id_verdicts();
+        let wrong: Vec<&str> = v
+            .iter()
+            .filter(|r| r.got != (r.ft && r.cw))
+            .map(|r| r.case.as_str())
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} IDs are not both verdicts: {:#?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(20)]
+        );
+        let mishandled: Vec<&str> = v
+            .iter()
+            .filter(|r| r.ft == r.held)
+            .map(|r| r.case.as_str())
+            .collect();
+        assert!(
+            mishandled.is_empty(),
+            "{} refusals held or dropped the wrong way: {:#?}",
+            mishandled.len(),
+            &mishandled[..mishandled.len().min(20)]
+        );
+        let keyed = v.iter().filter(|r| r.got).count();
+        let by_the_tone_alone = v.iter().filter(|r| r.ft && r.carrier && !r.cw).count();
+        assert!(
+            keyed > 1_000 && v.len() - keyed > 1_000 && by_the_tone_alone > 20,
+            "the sweep must straddle the edges and reach IDs only the soundcard tone refuses: \
+             {keyed} keyed of {}, {by_the_tone_alone} refused by the tone",
+            v.len()
+        );
+    }
+
+    /// In the CW section nothing about keying moves: a word keys exactly when the CW gate allows
+    /// it, and a refused word is held as it always was — at every CW edge, class and pitch, on
+    /// both keyers.
+    #[test]
+    fn in_the_cw_section_a_word_keys_exactly_when_the_gate_allows_it() {
+        let mut wrong = Vec::new();
+        let mut keyed = 0usize;
+        for sc in Soundcard::CW {
+            for class in CLASSES {
+                for pitch in sc.centres() {
+                    let mut e = Engine::new("K2DEF", "FN31", 0);
+                    e.settings.license_class = class;
+                    e.set_operating_mode("cw", false);
+                    sc.set_backend(&mut e);
+                    sc.net(&mut e, pitch);
+                    for &edge in CW_EDGES {
+                        for hz in dials_around(edge) {
+                            let dial = hz as f64 / 1e6;
+                            let band = crate::bandplan::band_for_dial(dial).unwrap_or("");
+                            let (sideband, _) = sc.terrestrial_word(dial);
+                            e.set_frequency(dial, band, sideband);
+                            let gate = e.tx_allowed();
+                            e.send_cw("TEST");
+                            let got = e.poll_cw_one().is_some();
+                            let held = !e.cw_queue.is_empty();
+                            e.cw_queue.clear();
+                            keyed += usize::from(got);
+                            if got != gate || held == gate {
+                                wrong.push(format!(
+                                    "{sc:?} {class:?} dial {dial:.4} pitch {pitch}: gate {gate}, \
+                                     keyed {got}, held {held}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} moved: {:#?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(20)]
+        );
+        assert!(keyed > 1_000, "the sweep must key: {keyed}");
+    }
+
     // ── The log ──────────────────────────────────────────────────────────────────────────────
 
     /// A V/V pair that inverts: both legs on 2 m, so the log writes the transmit leg (`FREQ`)
@@ -52919,13 +53634,36 @@ mod phantom_xit_tests {
         e
     }
 
+    /// [`station_on`] with the radio reached through OMNIRIG, which owns the radio's identity:
+    /// Nexus's own model number may then be any, one that has XIT included, or none at all (0).
+    fn omnirig_on(model: u32, class: LicenseClass, section: &str, dial: f64) -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        e.settings.rig_model = model;
+        e.settings.rig_conn = "omnirig".to_string();
+        e.settings.sync_active_from_flat();
+        e.settings.license_class = class;
+        e.set_operating_mode(section, false);
+        e.set_frequency(dial, "20m", "USB");
+        e
+    }
+
     /// Everything one family's radios must do, collected so a red run names every model:
     /// no XIT offered, an XIT request refused, a leftover offset ignored by the transmit line and
     /// the gate — which then allows the phantom's unlock state and refuses its lock state.
     fn judged_on_the_dial(family: &str, models: &[u32]) {
+        judged_on_the_dial_by(family, models, station_on);
+    }
+
+    /// [`judged_on_the_dial`] for stations `on` builds.
+    fn judged_on_the_dial_by(
+        family: &str,
+        models: &[u32],
+        on: fn(u32, LicenseClass, &str, f64) -> Engine,
+    ) {
         let mut wrong = Vec::new();
         for &model in models {
-            let mut e = station_on(model, LicenseClass::General, "phone", 14.300);
+            let mut e = on(model, LicenseClass::General, "phone", 14.300);
             e.request_xit(2_000);
             if !e.snapshot().radio.xit_unsupported {
                 wrong.push(format!("{family} {model}: XIT is still offered"));
@@ -52950,14 +53688,14 @@ mod phantom_xit_tests {
             }
             // The UNLOCK: 14.347 USB with the phantom +2 kHz was judged 14.349, its passband past
             // the 14.350 edge; the radio transmits 14.3470–14.3498, legally.
-            let mut unlock = station_on(model, LicenseClass::General, "phone", 14.347);
+            let mut unlock = on(model, LicenseClass::General, "phone", 14.347);
             unlock.xit_hz = 2_000;
             if !unlock.tx_allowed() {
                 wrong.push(format!("{family} {model}: 14.347 USB is refused"));
             }
             // The LOCK: 14.2245 USB with a phantom +1 kHz was judged 14.2255, inside a General's
             // phone; the radio transmits from 14.2245, below the 14.225 floor.
-            let mut lock = station_on(model, LicenseClass::General, "phone", 14.224_5);
+            let mut lock = on(model, LicenseClass::General, "phone", 14.224_5);
             lock.xit_hz = 1_000;
             if lock.tx_allowed() {
                 wrong.push(format!("{family} {model}: 14.2245 USB is allowed"));
@@ -53014,6 +53752,15 @@ mod phantom_xit_tests {
         judged_on_the_dial("FlexRadio SmartSDR (Hamlib's native backend)", FLEX_NATIVE);
     }
 
+    /// ⭐ OMNIRIG. Its shim serves the core verbs only, so `U XIT` and `Z` answer `RPRT -11` for
+    /// every radio behind it: an XIT offered on an OmniRig connection was a phantom whatever
+    /// Nexus's own model number says — one with XIT, or none at all.
+    #[test]
+    fn an_omnirig_connection_is_judged_on_the_dial() {
+        let models: Vec<u32> = std::iter::once(0).chain(WITH_XIT.iter().copied()).collect();
+        judged_on_the_dial_by("OmniRig", &models, omnirig_on);
+    }
+
     /// The families are exactly `NO_XIT_RIGS`, each radio once — so the tests above cover every
     /// radio the list holds.
     #[test]
@@ -53057,9 +53804,10 @@ mod phantom_xit_tests {
     }
 
     /// ⛔ NOTHING ELSE MOVES. Across 20 m's phone and data edges, every class, three sections and
-    /// offsets either side: on a radio with no XIT the verdict with an offset held is exactly the
-    /// verdict at the dial with none — the real transmit frequency — and on a radio with XIT it is
-    /// exactly the verdict with the offset applied. So a verdict moves only on a radio with no XIT,
+    /// offsets either side: on a radio with no XIT — one per family, and an IC-7610 reached
+    /// through OmniRig — the verdict with an offset held is exactly the verdict at the dial with
+    /// none, the real transmit frequency; the IC-7610's own verdict with the offset applied is the
+    /// reference the flips are counted against. So a verdict moves only on a radio with no XIT,
     /// only where an offset was held, and only to the real transmit frequency's verdict. Both
     /// directions are counted, so the sweep is shown to reach unlocks and locks.
     #[test]
@@ -53074,10 +53822,14 @@ mod phantom_xit_tests {
         for class in classes {
             for section in ["phone", "cw", "digital"] {
                 let mut twin = station_on(3078, class, section, 14.074);
-                let mut phantoms: Vec<(u32, Engine)> = listed
+                let mut phantoms: Vec<(String, Engine)> = listed
                     .iter()
-                    .map(|&m| (m, station_on(m, class, section, 14.074)))
+                    .map(|&m| (m.to_string(), station_on(m, class, section, 14.074)))
                     .collect();
+                phantoms.push((
+                    "OmniRig 3078".to_string(),
+                    omnirig_on(3078, class, section, 14.074),
+                ));
                 for edge in [14.000_f64, 14.025, 14.150, 14.225, 14.350] {
                     for k in -8i64..=8 {
                         let dial = ((edge * 1e6).round() as i64 + k * 500) as f64 / 1e6;

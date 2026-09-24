@@ -535,6 +535,11 @@ impl Engine {
 
     /// Journal the station the MOMENT its inbox changes — write-tmp + fsync + rename, like
     /// `persist_pending_msgs`, so a crash cannot drop a stored message the operator saw land.
+    ///
+    /// The snapshot is taken here, under the lock, and written on the journals' own thread
+    /// ([`tempo_core::journal`]), in the order the station changed: this runs from the radio
+    /// loop's decode path and its once-a-second tick, and the fsync is the disk's to finish.
+    /// It lands a moment later; the exit path waits for it.
     pub(crate) fn js8_persist(&self) {
         let Some(path) = &self.js8_journal_path else {
             return;
@@ -542,19 +547,12 @@ impl Engine {
         let Ok(text) = serde_json::to_string(&self.js8_station.snapshot()) else {
             return;
         };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let tmp = path.with_extension("json.tmp");
-        let res = std::fs::File::create(&tmp)
-            .and_then(|mut f| {
-                std::io::Write::write_all(&mut f, text.as_bytes())?;
-                f.sync_all()
-            })
-            .and_then(|()| std::fs::rename(&tmp, path));
-        if let Err(e) = res {
-            eprintln!("tempo: failed to journal the JS8 station: {e}");
-        }
+        self.station.journals.replace(
+            path,
+            path.with_extension("json.tmp"),
+            text.into_bytes(),
+            "tempo: failed to journal the JS8 station",
+        );
     }
 
     // ---- operator transmit verbs (each resets the idle counter and, on success, restarts
@@ -1124,8 +1122,8 @@ mod tests {
         assert_eq!(e.js8_dedupe(vec![ft8.clone(), ft8]).len(), 2);
     }
 
-    /// A store-and-forward `MSG TO:` lands in the inbox as `Store`, the journal is written
-    /// the moment it changes, and a fresh engine restores it — the `pending_msgs.json`
+    /// A store-and-forward `MSG TO:` lands in the inbox as `Store`, the journal is handed to
+    /// its thread the moment it changes, and a fresh engine restores it — the `pending_msgs.json`
     /// contract for JS8's store. (The B4 Station inboxes store-and-forward traffic only; a
     /// direct `MSG` to me is an ACTIVITY row, as JS8Call itself does. Storing is a receive
     /// action, so it works in the receive-only build; DELIVERY, which is TX, does not.)
@@ -1163,10 +1161,12 @@ mod tests {
             st.queue.is_empty(),
             "receive-only: nothing is queued for delivery"
         );
+        e.station.journals.settle(); // written on the journals' own thread
         assert!(path.exists(), "the journal is written on InboxChanged");
         let id = st.inbox[0].id;
         e.js8_inbox_mark(id, InboxState::Read).unwrap();
         assert!(e.js8_inbox_mark(id + 1000, InboxState::Read).is_err());
+        e.station.journals.settle();
 
         let mut fresh = Engine::new("KD9TAW", "EN52", 0);
         fresh.set_js8_journal_path(path.clone());
@@ -1176,6 +1176,166 @@ mod tests {
         assert_eq!(st.inbox[0].state, InboxState::Read);
         fresh.js8_inbox_delete(id).unwrap();
         assert!(fresh.js8_state().inbox.is_empty());
+        drop((e, fresh)); // their journal writes land before the folder goes
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder of the test's own with a FIFO at `name` inside it — the temporary file a
+    /// journal write opens first. Opening a FIFO for writing blocks until something opens it
+    /// for reading: a disk that will not take the write. Exactly ONE write may be sent at it.
+    #[cfg(unix)]
+    fn stalled(tag: &str, name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-js8-stall-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.join(name))
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "premise: a FIFO to stall the write on");
+        dir
+    }
+
+    /// Read the FIFO at `fifo` to its end on a thread of its own, which lets the one write
+    /// stalled on it through (it then fails at its fsync, as a write to a FIFO does, and is
+    /// reported like any failed journal write). The bytes come back, or the wait times out.
+    #[cfg(unix)]
+    fn release(fifo: PathBuf) -> Vec<u8> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = std::fs::File::open(&fifo).expect("open the FIFO for reading");
+            let mut got = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut reader, &mut got);
+            let _ = tx.send(got);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a journal write was waiting on the FIFO")
+    }
+
+    /// The frames of a store-and-forward `MSG TO:` for K1ABC, as W1AW sends it to KD9TAW.
+    fn msg_to_frames() -> Vec<(Frame, I3)> {
+        ::js8::proto::compose::frames(
+            "W1AW",
+            Some(&CallRef::Base("KD9TAW".to_string())),
+            "MSG TO:K1ABC FRIDAY CONTACT",
+            Js8Speed::Normal,
+        )
+        .expect("composes")
+    }
+
+    /// ★ THE RADIO LOOP DOES NOT WAIT ON THE JS8 JOURNAL'S DISK. A stored message arrives
+    /// through `js8_ingest` — the radio loop's decode path, under the engine lock — and the
+    /// station journals its inbox. With the journal's disk stalled the ingest comes back at
+    /// once, and the lock is free while the write waits on the disk.
+    ///
+    /// The control is the stall itself: nothing is on disk until the FIFO is read, and the
+    /// write that was waiting there carries the message.
+    #[cfg(unix)]
+    #[test]
+    fn a_stored_message_under_the_lock_does_not_wait_for_a_stalled_js8_journal() {
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+        let dir = stalled("ingest", "js8_station.json.tmp");
+        let journal = dir.join("js8_station.json");
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_js8_journal_path(journal.clone());
+        e.js8_enter();
+        let engine = Arc::new(Mutex::new(e));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ingest = {
+            let engine = Arc::clone(&engine);
+            std::thread::spawn(move || {
+                let mut e = crate::engine::engine_lock(&engine);
+                let t = Instant::now();
+                for (i, (f, i3)) in msg_to_frames().iter().enumerate() {
+                    e.js8_ingest(&[row(f, *i3, Js8Speed::Normal, 1750.0)], 10 + i as u64);
+                }
+                let _ = tx.send((e.js8_state().inbox.len(), t.elapsed()));
+            })
+        };
+        let answered = rx.recv_timeout(Duration::from_secs(2));
+        let (lock_free, on_disk) = if answered.is_ok() {
+            ingest.join().expect("joined");
+            (
+                crate::engine::engine_try_lock(&engine).is_ok(),
+                journal.exists(),
+            )
+        } else {
+            (false, false)
+        };
+        // Let the stalled write through whatever happened, so a red cannot hang the suite.
+        let drained = release(dir.join("js8_station.json.tmp"));
+        let (stored, took) = answered.expect(
+            "the ingest must come back under the lock while the journal's disk is stalled — \
+             it waited for the journal",
+        );
+        assert_eq!(stored, 1, "the message is stored");
+        assert!(
+            took < Duration::from_millis(500),
+            "returned at once: {took:?}"
+        );
+        assert!(
+            lock_free,
+            "the lock is free while the journal write waits on the disk"
+        );
+        assert!(!on_disk, "control: the journal really was stalled");
+        assert!(
+            String::from_utf8_lossy(&drained).contains("FRIDAY CONTACT"),
+            "and the stalled write was the inbox's journal"
+        );
+        crate::engine::engine_lock(&engine)
+            .station
+            .journals
+            .settle();
+        drop(engine);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE ORDER AND THE CONTENT ARE THE STATION'S. With the journals' thread held up behind
+    /// a stalled write of the message queue's journal, three inbox changes queue behind it —
+    /// read, unread, delete — and each hands over the station's snapshot at that moment. The
+    /// journal ends as the LAST change left it, byte for byte: a write reordered past a later
+    /// one would leave the message in the file.
+    #[cfg(unix)]
+    #[test]
+    fn js8_journal_writes_land_in_the_order_the_inbox_changed() {
+        let dir = stalled("order", "pending_msgs.json.tmp");
+        let journal = dir.join("js8_station.json");
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_js8_journal_path(journal.clone());
+        e.set_pending_msgs_path(dir.join("pending_msgs.json"));
+        e.js8_enter();
+        e.send_message("W1ABC", "hi"); // the queue's journal write: held on the FIFO
+        for (i, (f, i3)) in msg_to_frames().iter().enumerate() {
+            e.js8_ingest(&[row(f, *i3, Js8Speed::Normal, 1750.0)], 10 + i as u64);
+        }
+        let id = e.js8_state().inbox[0].id;
+        e.js8_inbox_mark(id, InboxState::Read).unwrap();
+        e.js8_inbox_mark(id, InboxState::Unread).unwrap();
+        e.js8_inbox_delete(id).unwrap();
+        let last = serde_json::to_string(&e.js8_station.snapshot()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let queued = !journal.exists();
+        release(dir.join("pending_msgs.json.tmp"));
+        e.station.journals.settle();
+        assert!(
+            queued,
+            "control: the thread really was held — nothing behind the stall was written yet"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&journal).unwrap(),
+            last,
+            "the journal is the last change's snapshot, byte for byte"
+        );
+        assert!(
+            !last.contains("FRIDAY CONTACT"),
+            "premise: the last change removed the message"
+        );
+        drop(e);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
