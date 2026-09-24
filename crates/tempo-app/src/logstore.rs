@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use tempo_core::logbook::mirror::{self, FileStamp, MirrorOptions, MirrorState, MirrorWriter};
 use tempo_core::logbook::sqlite::{self, LogDb, Resolved};
-use tempo_core::logbook::writer::{self, Change, LogWriter, Ticket, Touched};
+use tempo_core::logbook::writer::{self, Change, LogWriter, Refusal, Ticket, Touched};
 use tempo_core::logbook::{migrate, Logbook, QsoRecord};
 
 /// cty.dat's answer for a record — the entity NAME and CQ zone the store writes beside it.
@@ -50,7 +50,13 @@ pub struct LogStore {
     db_path: PathBuf,
     resolve: StoreResolve,
     /// This process's changes the writer has not finished with, and the rows each touched.
-    inflight: Vec<(Ticket, Touched)>,
+    inflight: Vec<InFlight>,
+    /// This process's changes the writer GAVE UP ON: not in the store, still in memory — sent
+    /// again from memory when the refusal can pass, held for the quit when it cannot. See
+    /// [`LogStore::resend`].
+    dropped: Vec<Dropped>,
+    /// The latest refusal, in the store's words — what the screen says while any is held.
+    last_refusal: Option<String>,
     /// The writer's count of ANOTHER process's commits when memory last matched the store.
     synced_foreign: u64,
     /// Tickets being collected for a command that will wait on them (see
@@ -64,6 +70,7 @@ impl std::fmt::Debug for LogStore {
             .field("db_path", &self.db_path)
             .field("log_path", &self.log_path)
             .field("inflight", &self.inflight.len())
+            .field("dropped", &self.dropped.len())
             .finish()
     }
 }
@@ -221,6 +228,8 @@ fn open_reporting_with(
             db_path,
             resolve,
             inflight: Vec::new(),
+            dropped: Vec::new(),
+            last_refusal: None,
             synced_foreign,
             collector: None,
         },
@@ -265,15 +274,158 @@ impl LogStore {
         if change.is_empty() {
             return None;
         }
-        let touched = Touched::of(&change);
-        let ticket = self.writer.submit(change);
-        self.inflight.retain(|(t, _)| !t.is_resolved());
-        self.inflight.push((ticket.clone(), touched));
+        self.collect(Instant::now());
+        let ticket = self.send(change, log, 0);
         if let Some(c) = &mut self.collector {
             c.push(ticket.clone());
         }
-        self.mirror.submit(log.records().to_vec());
         Some(ticket)
+    }
+
+    /// Hand a change to the writer and the log to the mirror, and keep the change in flight —
+    /// `resends` times sent again already. No I/O.
+    fn send(&mut self, change: Change, log: &Logbook, resends: u32) -> Ticket {
+        let touched = Touched::of(&change);
+        let ticket = self.writer.submit(change);
+        self.inflight.push(InFlight {
+            ticket: ticket.clone(),
+            touched,
+            resends,
+        });
+        self.mirror.submit(log.records().to_vec());
+        ticket
+    }
+
+    /// Take in what the writer has finished with since the last look. A change that landed is
+    /// forgotten; one it gave up on becomes [`Dropped`] — still in memory, not in the store — with
+    /// its next automatic re-send scheduled when the refusal can pass ([`RESEND_AFTER`]). No I/O;
+    /// never waits.
+    fn collect(&mut self, now: Instant) {
+        let mut kept = Vec::with_capacity(self.inflight.len());
+        for f in std::mem::take(&mut self.inflight) {
+            if !f.ticket.is_resolved() {
+                kept.push(f);
+                continue;
+            }
+            let Some(refusal) = f.ticket.refusal() else {
+                if f.resends > 0 {
+                    tempo_core::applog::info(
+                        "logbook",
+                        "a logbook change the database had refused is saved now",
+                    );
+                }
+                continue;
+            };
+            let wait = resend_after(f.resends);
+            if refusal.retryable {
+                tempo_core::applog::warn(
+                    "logbook",
+                    &format!(
+                        "the logbook database did not take a change ({}); Nexus keeps it in \
+                         memory and sends it again in {} s",
+                        refusal.reason,
+                        wait.as_secs()
+                    ),
+                );
+            } else {
+                tempo_core::applog::error(
+                    "logbook",
+                    &format!(
+                        "the logbook database refused a change for good ({}); Nexus keeps it in \
+                         memory for this session, and quitting asks about it",
+                        refusal.reason
+                    ),
+                );
+            }
+            self.last_refusal = Some(refusal.reason.clone());
+            self.dropped.push(Dropped {
+                touched: f.touched,
+                rev: f.ticket.revision(),
+                refusal,
+                resends: f.resends,
+                due: now + wait,
+            });
+        }
+        self.inflight = kept;
+    }
+
+    /// Send again, FROM MEMORY, the changes the writer gave up on for a reason that can pass —
+    /// every one when `all` (a quit, and its Keep trying), otherwise only those whose wait is up.
+    /// How many went out. A change refused for what it is is never sent again: it would be
+    /// refused every time, and a loop is not a save. No I/O.
+    ///
+    /// ⚠️ **Why this cannot write a change twice, or out of order.** Each re-send is built here,
+    /// from `log` as it stands, and submitted here, under the owner's lock — the lock every
+    /// change is made and submitted under ([`Change::resend`]). So it carries the rows as memory
+    /// holds them NOW, including whatever an earlier change did to them; a later change to the
+    /// same rows is submitted after it, and the writer applies changes that share a row in the
+    /// order they were submitted. And it carries state, not a delta: applied twice, or after
+    /// the first attempt landed despite its error, it writes what is already there.
+    pub(crate) fn resend(&mut self, log: &Logbook, all: bool, now: Instant) -> usize {
+        self.collect(now);
+        let (go, stay): (Vec<Dropped>, Vec<Dropped>) = std::mem::take(&mut self.dropped)
+            .into_iter()
+            .partition(|d| d.refusal.retryable && (all || d.due <= now));
+        self.dropped = stay;
+        if go.is_empty() {
+            return 0;
+        }
+        let batch: Vec<(&Touched, u64)> = go.iter().map(|d| (&d.touched, d.rev)).collect();
+        let changes = Change::resend_each(&batch, log, self.resolved());
+        let mut sent = 0;
+        for (d, change) in go.into_iter().zip(changes) {
+            // A change always writes something, and so does a re-send of it: its rows are
+            // either in memory (written) or not (removed).
+            if change.is_empty() {
+                continue;
+            }
+            self.send(change, log, d.resends + 1);
+            sent += 1;
+        }
+        tempo_core::applog::info(
+            "logbook",
+            &format!("sending {sent} logbook change(s) the database refused again, from memory"),
+        );
+        sent
+    }
+
+    /// What the screen says while the database has refused a change: how many are being sent
+    /// again, how many are held for the quit, and the latest reason. `None` while every change
+    /// is in the store or on its first way there. Never waits.
+    pub(crate) fn save_trouble(&self) -> Option<crate::dto::LogSaveTrouble> {
+        let held = self.held();
+        // A re-send on its way is still a change the database has not taken.
+        let resending = self
+            .inflight
+            .iter()
+            .filter(|f| f.resends > 0 && !f.ticket.is_resolved())
+            .count();
+        let retrying = held.retryable + resending;
+        (retrying + held.refused > 0).then(|| crate::dto::LogSaveTrouble {
+            retrying: retrying as u32,
+            held: held.refused as u32,
+            reason: held
+                .retry_reason
+                .or(held.reason)
+                .or_else(|| self.last_refusal.clone())
+                .unwrap_or_default(),
+        })
+    }
+
+    /// The changes the writer gave up on, counted as a quit counts them: those that sending
+    /// again can save, and those it cannot — the ones already taken in ([`Self::collect`]) and
+    /// any refused since. Never waits.
+    fn held(&self) -> Standing {
+        let mut s = Standing::default();
+        for d in &self.dropped {
+            s.count_refusal(&d.refusal);
+        }
+        for f in &self.inflight {
+            if let Some(r) = f.ticket.refusal() {
+                s.count_refusal(&r);
+            }
+        }
+        s
     }
 
     /// Start collecting the tickets of the changes that follow.
@@ -312,8 +464,13 @@ impl LogStore {
         // Read the count BEFORE the load: a commit that lands during it is counted after, and
         // costs another reload rather than being missed.
         let seen = self.writer.foreign_commits();
-        self.inflight.retain(|(t, _)| !t.is_resolved());
-        let pending: Vec<Touched> = self.inflight.iter().map(|(_, t)| t.clone()).collect();
+        self.collect(Instant::now());
+        let pending: Vec<Touched> = self
+            .inflight
+            .iter()
+            .map(|f| f.touched.clone())
+            .chain(self.dropped.iter().map(|d| d.touched.clone()))
+            .collect();
         let stored = LogDb::open(&self.db_path)
             .and_then(|db| db.load_all())
             .map_err(|e| e.to_string())?;
@@ -343,11 +500,12 @@ impl LogStore {
         let tickets = self
             .inflight
             .iter()
-            .filter(|(t, _)| !t.is_resolved())
-            .map(|(t, _)| t.clone())
+            .filter(|f| !f.ticket.is_resolved())
+            .map(|f| f.ticket.clone())
             .collect();
         Unsaved {
             changes: Durability::new(Some(self.writer()), tickets),
+            held: self.held(),
             mirror: Some(Arc::clone(&self.mirror)),
         }
     }
@@ -432,12 +590,54 @@ impl Durability {
 ///
 /// Why tickets rather than the writer's own count ([`writer::Status::pending`]): the count goes
 /// down both when a change lands and when the writer GIVES UP on one, and a quit must tell
-/// those apart. A change still on its way may land if the operator waits; a refused one never
-/// will — its ticket says which ([`writer::WaitError::Failed`]).
+/// those apart. A change still on its way may land if the operator waits; a refused one will
+/// not by waiting — its ticket says so, and whether sending it again could
+/// ([`Ticket::refusal`]).
 #[derive(Default)]
 pub struct Unsaved {
     changes: Durability,
+    /// The changes the writer had already given up on when this was taken — in memory, not in
+    /// the store ([`LogStore::resend`] sends the ones it can again).
+    held: Standing,
     mirror: Option<Arc<MirrorWriter>>,
+}
+
+/// How long a change the database refused for a reason that can pass waits before it is sent
+/// again by itself, by how many times it has been sent again already — then once a minute for as
+/// long as the refusal lasts. Each attempt costs a channel send and, while the disk still
+/// refuses, one failed transaction.
+const RESEND_AFTER: [Duration; 4] = [
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+];
+
+fn resend_after(resends: u32) -> Duration {
+    RESEND_AFTER[(resends as usize).min(RESEND_AFTER.len() - 1)]
+}
+
+/// A change of this process's the writer has not finished with.
+struct InFlight {
+    ticket: Ticket,
+    /// The rows it writes or removes.
+    touched: Touched,
+    /// How many times these rows have been sent again after the writer gave up on them — 0 for a
+    /// change on its first way to disk.
+    resends: u32,
+}
+
+/// A change of this process's the writer gave up on ([`Refusal`]): not in the store, still in
+/// memory.
+struct Dropped {
+    /// The rows it wrote or removed — what a re-send carries, as memory holds them then.
+    touched: Touched,
+    /// The revision it first went out with, which a re-send keeps.
+    rev: u64,
+    refusal: Refusal,
+    resends: u32,
+    /// When it is next sent again by itself (a refusal that can pass).
+    due: Instant,
 }
 
 /// Where the changes a quit is waiting for stand.
@@ -445,53 +645,78 @@ pub struct Unsaved {
 pub struct Standing {
     /// Changes the writer has not finished with. Waiting may still put them on disk.
     pub pending: usize,
-    /// Changes the writer gave up on. They are not in the logbook database, and no amount of
-    /// waiting will put them there; the log in memory still has them until the process goes.
+    /// Changes the writer gave up on for a reason that can pass: not in the logbook database,
+    /// and sending them again from memory may put them there.
+    pub retryable: usize,
+    /// Changes the writer gave up on for what they are. They are not in the logbook database,
+    /// and neither waiting nor sending them again will put them there; the log in memory still
+    /// has them until the process goes.
     pub refused: usize,
-    /// The first refusal's reason, in the writer's words — for the diagnostic log and for the
-    /// operator, untranslated.
+    /// Why the first change in `refused` was refused, in the writer's words — for the
+    /// diagnostic log and for the operator, untranslated.
     pub reason: Option<String>,
+    /// Why the first change in `retryable` was refused, likewise.
+    pub retry_reason: Option<String>,
 }
 
 impl Standing {
     /// Nothing left on its way, and nothing refused.
     pub fn saved(&self) -> bool {
-        self.pending == 0 && self.refused == 0
+        self.pending == 0 && self.retryable == 0 && self.refused == 0
+    }
+
+    fn count_refusal(&mut self, r: &Refusal) {
+        let (count, reason) = if r.retryable {
+            (&mut self.retryable, &mut self.retry_reason)
+        } else {
+            (&mut self.refused, &mut self.reason)
+        };
+        *count += 1;
+        if reason.is_none() {
+            *reason = Some(r.reason.clone());
+        }
     }
 }
 
 impl Unsaved {
-    /// Nothing is on its way: no change the writer has not finished with, and no picture of the
-    /// log waiting for `log.adi`. A quit that finds this closes as it always did.
+    /// Nothing to save: no change the writer has not finished with, none it gave up on, and
+    /// no picture of the log waiting for `log.adi`. A quit that finds this closes as it always
+    /// did. Never waits.
     pub fn is_empty(&self) -> bool {
-        self.standing().pending == 0 && !self.mirror.as_ref().is_some_and(|m| m.status().pending)
+        let s = self.standing();
+        s.saved() && !self.mirror.as_ref().is_some_and(|m| m.status().pending)
     }
 
-    /// Where the changes stand now. Never waits.
+    /// Where the changes stand now. Never waits — it reads each ticket, and does not ask the
+    /// writer to wait on one, so it is safe to ask under any lock.
     pub fn standing(&self) -> Standing {
-        self.wait(Duration::ZERO)
+        let mut s = self.held.clone();
+        for t in &self.changes.tickets {
+            match t.refusal() {
+                Some(r) => s.count_refusal(&r),
+                None if !t.is_resolved() => s.pending += 1,
+                None => {}
+            }
+        }
+        s
     }
 
     /// Wait up to `for_up_to` for the writer to finish with every change, then say where they
     /// stand. ⚠️ The quit's wait: never call it holding a lock.
     pub fn wait(&self, for_up_to: Duration) -> Standing {
-        let mut s = Standing::default();
-        let Some(writer) = &self.changes.writer else {
-            return s;
-        };
-        let start = Instant::now();
-        for t in &self.changes.tickets {
-            let left = for_up_to.saturating_sub(start.elapsed());
-            match writer.wait_durable(t, left) {
-                Ok(()) => {}
-                Err(writer::WaitError::Timeout { .. }) => s.pending += 1,
-                Err(writer::WaitError::Failed(why)) => {
-                    s.refused += 1;
-                    s.reason.get_or_insert(why);
+        if let Some(writer) = &self.changes.writer {
+            let start = Instant::now();
+            for t in &self.changes.tickets {
+                let left = for_up_to.saturating_sub(start.elapsed());
+                if left.is_zero() {
+                    break;
+                }
+                if !t.is_resolved() {
+                    let _ = writer.wait_durable(t, left);
                 }
             }
         }
-        s
+        self.standing()
     }
 
     /// Bring `log.adi` up to date now, waiting up to `for_up_to`: `None` when it is written, or
@@ -1396,8 +1621,10 @@ mod tests {
             unsaved.standing(),
             Standing {
                 pending: 1,
+                retryable: 0,
                 refused: 0,
-                reason: None
+                reason: None,
+                retry_reason: None,
             },
             "one change, not yet on disk, not refused"
         );
@@ -1529,6 +1756,305 @@ mod tests {
             stored(&d).iter().any(|r| r.call == "W1GOOD"),
             "the good change is on disk"
         );
+    }
+
+    // ── a change the database refused, sent again from memory (C10b) ────────
+
+    /// The log as the store holds it, as a `Logbook` of its own — what a test submits changes
+    /// against the way the station does.
+    fn log_of(opened: &mut Opened) -> tempo_core::logbook::Logbook {
+        let mut log = tempo_core::logbook::Logbook::new();
+        for r in std::mem::take(&mut opened.records) {
+            log.add(r);
+        }
+        log
+    }
+
+    /// Make `op` in memory and hand what it did to the store, as the station does.
+    fn change(
+        store: &mut LogStore,
+        log: &mut tempo_core::logbook::Logbook,
+        op: tempo_core::logbook::LogOp,
+    ) -> Option<Ticket> {
+        let effects = log.apply(op.clone());
+        let change = Change::of(&op, &effects, log, |_| (None, None));
+        store.submit(change, log)
+    }
+
+    /// Wait (up to `secs`) until the writer has finished with `t`.
+    fn resolved(t: &Ticket, secs: u64) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            if t.is_resolved() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        t.is_resolved()
+    }
+
+    /// A change the store refuses for what it IS is held in memory and never sent again by
+    /// itself — however long it waits, and even when every change is being sent again. The
+    /// screen and the quit hear about it: how many, and why.
+    ///
+    /// The control is the same store answering "nothing held" before the refusal.
+    #[test]
+    fn a_change_refused_for_what_it_is_is_held_and_never_sent_again() {
+        let d = Dir::new("resend-lasting");
+        let mut opened = open_fast(&d);
+        let log = log_of(&mut opened);
+        let store = &mut opened.store;
+        assert_eq!(store.save_trouble(), None, "control: nothing held yet");
+
+        let mut orphan = qso("K5ORPHAN", 1_788_000_100);
+        orphan.id = None;
+        let refused = Change {
+            rev: log.revision() + 1,
+            upsert: vec![sqlite::RowWrite::new(Arc::new(orphan))],
+            ..Change::default()
+        };
+        let t = store.submit(refused, &log).expect("a ticket");
+        assert!(resolved(&t, 30), "the writer gives up on it");
+        let r = t.refusal().expect("refused");
+        assert!(!r.retryable, "a row with no id is refused every time");
+
+        let now = Instant::now();
+        store.collect(now);
+        let later = now + Duration::from_secs(24 * 3600);
+        assert_eq!(
+            store.resend(&log, false, later),
+            0,
+            "never sent again by itself"
+        );
+        assert_eq!(
+            store.resend(&log, true, later),
+            0,
+            "not even when all are sent"
+        );
+        let trouble = store.save_trouble().expect("on the screen");
+        assert_eq!((trouble.retrying, trouble.held), (0, 1));
+        assert!(trouble.reason.contains("K5ORPHAN"), "{trouble:?}");
+        let s = store.unsaved().standing();
+        assert_eq!(
+            (s.pending, s.retryable, s.refused),
+            (0, 0, 1),
+            "the quit asks about it: {s:?}"
+        );
+        assert!(!store.unsaved().is_empty(), "so a quit is held for it");
+    }
+
+    /// ★ A change the database dropped for a reason that can pass is sent again FROM MEMORY once
+    /// its wait is up — and lands carrying the rows as memory holds them THEN, a later change to
+    /// the same row included. Never out of order, never twice.
+    ///
+    /// The drop is written straight into the store's record of it: the real refusal that puts
+    /// one there — another program holding the database past the writer's retry ladder, about
+    /// 21 s — is `the_database_s_busy_refusal_is_sent_again_and_the_snapshot_says_so` below.
+    #[test]
+    fn a_dropped_change_is_sent_again_from_memory_when_its_wait_is_up() {
+        use tempo_core::logbook::LogOp;
+        let d = Dir::new("resend-due");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        let mut opened = open_fast(&d);
+        let mut log = log_of(&mut opened);
+        let store = &mut opened.store;
+        let id = log.records()[3].id.expect("an id");
+        let rows_before = stored(&d).len();
+
+        // The change the database dropped: in memory, not in the store.
+        let dropped = LogOp::MarkQslCard { id, received: true };
+        let effects = log.apply(dropped.clone());
+        let lost = Change::of(&dropped, &effects, &log, |_| (None, None));
+        let t0 = Instant::now();
+        store.dropped.push(Dropped {
+            touched: Touched::of(&lost),
+            rev: lost.rev,
+            refusal: Refusal {
+                reason: "logbook database: database is locked".into(),
+                retryable: true,
+            },
+            resends: 0,
+            due: t0 + Duration::from_secs(5),
+        });
+        // A later change to the same row, made and saved while the first waits.
+        let mut edited = QsoRecord::clone(&log.records()[3]);
+        edited.comment = Some("a later edit".into());
+        let t = change(
+            store,
+            &mut log,
+            LogOp::Edit {
+                id,
+                rec: Box::new(edited),
+            },
+        )
+        .expect("sent");
+        store
+            .writer
+            .wait_durable(&t, DURABLE_WAIT)
+            .expect("the later change lands");
+        let trouble = store.save_trouble().expect("on the screen while it waits");
+        assert_eq!((trouble.retrying, trouble.held), (1, 0));
+
+        assert_eq!(
+            store.resend(&log, false, t0),
+            0,
+            "not before its wait is up"
+        );
+        // Sent while the disk is held up again: the screen keeps saying so until it lands.
+        let hold = WriteHold::take(&d.db()).expect("stall the store");
+        assert_eq!(
+            store.resend(&log, false, t0 + Duration::from_secs(5)),
+            1,
+            "then sent"
+        );
+        let trouble = store
+            .save_trouble()
+            .expect("still on the screen while it is on its way");
+        assert_eq!((trouble.retrying, trouble.held), (1, 0));
+        drop(hold);
+        let s = store.unsaved().wait(DURABLE_WAIT);
+        assert!(s.saved(), "it lands: {s:?}");
+
+        let row = stored(&d)
+            .into_iter()
+            .find(|r| r.id == Some(id))
+            .expect("stored");
+        assert!(row.qsl_rcvd.card, "the dropped change is in the store");
+        assert_eq!(
+            row.comment.as_deref(),
+            Some("a later edit"),
+            "and the later change to the same row survives it: never out of order"
+        );
+        assert_eq!(stored(&d).len(), rows_before, "no row twice");
+        assert_eq!(store.save_trouble(), None, "the screen clears");
+        assert_eq!(
+            store.resend(&log, true, t0 + Duration::from_secs(3600)),
+            0,
+            "and nothing is sent again after it landed"
+        );
+    }
+
+    /// ★ The real refusal, end to end: another program holds the database past the writer's
+    /// retry ladder (about 21 s — this test waits it out), the writer drops the change, and the
+    /// engine keeps it: the snapshot says so, the quit counts it as a change that sending again
+    /// can save, and sending it again lands it once the database is free.
+    #[test]
+    fn the_database_s_busy_refusal_is_sent_again_and_the_snapshot_says_so() {
+        let d = Dir::new("resend-busy");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        let mut e = engine_on_store(&d);
+        flush(&e);
+        assert_eq!(e.snapshot().log_save_trouble, None, "control: no trouble");
+
+        let hold = WriteHold::take(&d.db()).expect("another program holds the database");
+        assert!(e.mark_qsl_card(3, true));
+        let dropped = eventually_for(Duration::from_secs(60), || {
+            e.log_unsaved().standing().retryable == 1
+        });
+        assert!(dropped, "the writer gives up after its retry ladder");
+        let trouble = e.snapshot().log_save_trouble.expect("the snapshot says so");
+        assert_eq!((trouble.retrying, trouble.held), (1, 0), "{trouble:?}");
+        assert!(trouble.reason.contains("locked"), "{trouble:?}");
+        assert_eq!(e.log_resend_due(), 0, "not sent again the moment it drops");
+
+        drop(hold);
+        assert_eq!(e.log_resend_all(), 1, "sent again, from memory");
+        assert!(e.log_unsaved().wait(DURABLE_WAIT).saved(), "and it lands");
+        let id = e.log_records()[3].id;
+        assert!(
+            stored(&d)
+                .into_iter()
+                .find(|r| r.id == id)
+                .is_some_and(|r| r.qsl_rcvd.card),
+            "the change is in the store"
+        );
+        assert_eq!(e.snapshot().log_save_trouble, None, "and the screen clears");
+    }
+
+    /// ⛔ A DROPPED CHANGE SURVIVES ANOTHER WINDOW'S COMMIT TO THE SAME ROW. When a second window
+    /// on the same data folder commits, this window re-reads the store and keeps its own version
+    /// of every row it has a change of its own for — the change on its way. A change the writer
+    /// dropped is no longer on its way, and it is still this window's: if the re-read took the
+    /// store's copy, memory would lose it, and the re-send (built from memory) would carry the
+    /// loss to disk. So the re-read keeps those rows too, and the re-send lands them.
+    #[test]
+    fn another_windows_commit_does_not_erase_a_change_waiting_to_be_sent_again() {
+        use tempo_core::logbook::LogOp;
+        let d = Dir::new("resend-reload");
+        std::fs::write(d.log(), legacy_log(6)).unwrap();
+        let mut a = open_fast(&d);
+        let mut b = open_fast(&d);
+        let mut log_a = log_of(&mut a);
+        let mut log_b = log_of(&mut b);
+        let id = log_a.records()[2].id.expect("an id");
+
+        // Window A's change to the row, dropped by its writer: in A's memory only.
+        let dropped = LogOp::MarkQslCard { id, received: true };
+        let effects = log_a.apply(dropped.clone());
+        let lost = Change::of(&dropped, &effects, &log_a, |_| (None, None));
+        a.store.dropped.push(Dropped {
+            touched: Touched::of(&lost),
+            rev: lost.rev,
+            refusal: Refusal {
+                reason: "logbook database: database is locked".into(),
+                retryable: true,
+            },
+            resends: 0,
+            due: Instant::now() + Duration::from_secs(3600),
+        });
+        // Window B commits its own change to the same row.
+        let mut theirs = QsoRecord::clone(&log_b.records()[2]);
+        theirs.comment = Some("from window B".into());
+        let t = change(
+            &mut b.store,
+            &mut log_b,
+            LogOp::Edit {
+                id,
+                rec: Box::new(theirs),
+            },
+        )
+        .expect("sent");
+        b.store
+            .writer
+            .wait_durable(&t, DURABLE_WAIT)
+            .expect("B's change lands");
+
+        let (merged, _) = a
+            .store
+            .reload(log_a.records(), false)
+            .expect("A re-reads the store");
+        let row = merged.iter().find(|r| r.id == Some(id)).expect("the row");
+        assert!(
+            row.qsl_rcvd.card,
+            "A keeps its own version of the row it has a dropped change for"
+        );
+
+        // And the change A kept lands when it is sent again.
+        let mut log_after = tempo_core::logbook::Logbook::new();
+        for r in merged {
+            log_after.add(QsoRecord::clone(&r));
+        }
+        assert_eq!(a.store.resend(&log_after, true, Instant::now()), 1);
+        assert!(a.store.unsaved().wait(DURABLE_WAIT).saved());
+        assert!(
+            stored(&d)
+                .into_iter()
+                .find(|r| r.id == Some(id))
+                .is_some_and(|r| r.qsl_rcvd.card),
+            "A's dropped change reaches the store"
+        );
+    }
+
+    /// Poll `f` until it says yes or `limit` passes.
+    fn eventually_for(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        f()
     }
 
     // ── two windows, one store ──────────────────────────────────────────────

@@ -28,6 +28,7 @@
     "state": "idle",
     "tier": "FT8"
   },
+  "logSaveTrouble": null,
   "logStoreProblem": null,
   "logTick": null,
   "loggedTick": null,
