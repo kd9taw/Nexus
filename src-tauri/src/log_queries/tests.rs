@@ -1436,6 +1436,29 @@ fn log_query_bench() {
     let (_, rows_at) = run(json!({"kind": "rowsAt", "indices": [0, 10, n / 3, n / 2, n - 1]}));
     let (_, log_size) = run(json!({"kind": "logSize"}));
     let (_, page_after_append) = run(page(query("time", false, ""), 0));
+    // The folds: each cold, then kept; after a LoTW upload stamp only the backlog folds again.
+    let (_, grids_cold) = run(json!({"kind": "workedGrids"}));
+    let (_, grids_warm) = run(json!({"kind": "workedGrids"}));
+    let (_, points_all) = run(json!({"kind": "gridPoints", "band": "all"}));
+    let (_, points_band) = run(json!({"kind": "gridPoints", "band": "20m"}));
+    let (_, bands_cold) = run(json!({"kind": "bandsInLog"}));
+    let (_, stats_cold) = run(json!({"kind": "statistics"}));
+    let (_, stats_warm) = run(json!({"kind": "statistics"}));
+    let (_, backlog_cold) = run(json!({"kind": "lotwBacklog"}));
+    engine_lock(&engine).stamp_lotw_upload(
+        &[id.parse().unwrap()],
+        UploadOutcome::Accepted,
+        1_790_000_000,
+        None,
+    );
+    let (_, backlog_after_stamp) = run(json!({"kind": "lotwBacklog"}));
+    let (_, grids_after_stamp) = run(json!({"kind": "workedGrids"}));
+    println!(
+        "LOG_QUERY_BENCH_FOLDS rows={n} worked_grids_cold={grids_cold:.1}ms worked_grids_warm={grids_warm:.3}ms \
+         grid_points_all={points_all:.1}ms grid_points_20m={points_band:.1}ms bands_in_log={bands_cold:.1}ms \
+         statistics_cold={stats_cold:.1}ms statistics_warm={stats_warm:.3}ms lotw_backlog_cold={backlog_cold:.1}ms \
+         lotw_backlog_after_stamp={backlog_after_stamp:.1}ms worked_grids_after_stamp={grids_after_stamp:.3}ms"
+    );
     println!(
         "LOG_QUERY_BENCH rows={n} default_order_cold={default_cold:.1}ms default_page_warm={default_warm:.1}ms \
          call_order_cold={call_cold:.1}ms call_page_warm={call_warm:.1}ms search_ssb={search_ssb:.1}ms \
