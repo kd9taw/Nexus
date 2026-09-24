@@ -289,6 +289,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and does its work after. The Needed board, a satellite pass and the pounce alert also share one
   picture of what is worked and needed instead of each rebuilding it on every refresh.
 
+- **With a big logbook, logging a contact no longer holds up the radio afterwards.** After every
+  contact, the next screen refresh rebuilt the worked-before (B4) marks from the whole log; after
+  an upload to QRZ, ClubLog or eQSL, the next contact rebuilt the NEW DXCC, NEW GRID and NEW PARK
+  marks, looking up the country of every contact again; after an edit or a delete, the next
+  contact rebuilt the duplicate check; and during a contact with a station whose grid was not yet
+  known, every refresh searched the whole log for it. Each happened while holding the lock the
+  radio needs every 20 ms — up to a third of a second at 150,000 contacts. All of these are now
+  kept up to date one contact at a time. A side effect: after a LoTW download or a POTA park
+  import, the "confirmed on this band" filter and the NEW PARK marks now change straight away,
+  where they used to wait for the next logged contact.
+
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
   1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
   lookup that turns a callsign into a country. The Needed board and the need chips beside the

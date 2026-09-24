@@ -1506,6 +1506,35 @@ mod tests {
         );
     }
 
+    /// ★ C13 × C14: the fill job's write is a change the station follows row by row, as it follows
+    /// every other — so the contact and the snapshot after it pay no pass over the log for it. A
+    /// fill is an Upgrade, and the hot index rebuilds from the whole log, under the Engine lock,
+    /// after any Upgrade it is not walked through.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn the_fill_jobs_write_costs_the_next_contact_no_pass_over_the_log() {
+        use tempo_core::logbook::hot::HOT_REBUILDS;
+        let d = Dir::new("fill-hot");
+        std::fs::write(d.log(), log_to_fill(3)).unwrap();
+        flush(&engine_on_store(&d)); // converted with no resolvers: left for the fill job
+        let e = launch_with_resolvers(&d);
+        let _ = e.lock().unwrap().snapshot();
+        HOT_REBUILDS.with(|c| c.set(0));
+        let outcome = fill(&e, 3);
+        assert!(
+            outcome.filled > 0,
+            "premise: the job filled contacts ({outcome:?})"
+        );
+        let mut eng = e.lock().unwrap();
+        eng.log_qso(qso("K7NEXT", 1_788_000_000));
+        let _ = eng.snapshot();
+        assert_eq!(
+            HOT_REBUILDS.with(|c| c.get()),
+            0,
+            "the fills were walked, not rebuilt over"
+        );
+    }
+
     /// ★ The fill job never waits and never reads under the Engine lock. With the store's write
     /// lock held elsewhere and a contact submitted, the job's read waits for that contact (P4)
     /// — and the Engine lock is free the whole time it waits. The control shows the wait was
