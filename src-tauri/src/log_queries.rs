@@ -57,7 +57,7 @@ use tempo_core::logbook::query::{
     LogStatCounter, LogStatCounts, LotwBacklog, OrderBuilder, WorkedGrids,
 };
 use tempo_core::logbook::sqlite::{self, Narrow, Order, Scope, ENTITY_COLUMNS, ORDER_COLUMNS};
-use tempo_core::logbook::{QsoRecord, RecordId};
+use tempo_core::logbook::{QsoEdit, QsoRecord, RecordId};
 
 use crate::{SharedEngine, Tally};
 
@@ -186,6 +186,9 @@ struct PageAnswer {
     offset: usize,
     rows: Vec<LoggedQso>,
     keys: Vec<String>,
+    /// Each row's edit key ([`QsoEdit::key`]): what a change to the row sends back with its id
+    /// (`RowRef`, [`crate::log_by_id`]). Computed here and never in the UI.
+    edit_keys: Vec<String>,
 }
 
 /// Where a row sits in an order (`LogLocate`).
@@ -567,6 +570,10 @@ impl LogQueries {
             }
         };
         let keys = rows.iter().map(|(h, r)| key_of(r, *h)).collect();
+        let edit_keys = rows
+            .iter()
+            .map(|(_, r)| QsoEdit::project(r).key())
+            .collect();
         json(PageAnswer {
             query: query.clone(),
             revision: c.revision,
@@ -577,6 +584,7 @@ impl LogQueries {
             offset,
             rows: rows.into_iter().map(|(_, r)| logged(r, resolve)).collect(),
             keys,
+            edit_keys,
         })
     }
 

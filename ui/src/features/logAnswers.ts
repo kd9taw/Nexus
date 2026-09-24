@@ -89,6 +89,11 @@ export interface LogPage {
   /** Each row's identity: its id. Only a row without one (a test fixture, a pre-1.14 station's
    *  row) gets `#<log position>` from the whole-log adapter — the engine's rows always carry ids. */
   keys: string[]
+  /** Each row's edit key (tempo-core's `QsoEdit::key`): with its id, the `RowRef` a change to the
+   *  row sends (`editQsoById` and the rest), refused as `changed` once the row is no longer this
+   *  version. The engine computes it and the UI never does, so the reference answer (`answerFrom`)
+   *  gives '' — a key no row has: a change sent with it is refused, never applied. */
+  editKeys: string[]
 }
 
 export interface LogLocate {
@@ -225,6 +230,7 @@ function compute(
         offset: q.offset,
         rows: slice.map((i) => log[i]),
         keys: slice.map((i) => rowKeyAt(log, i)),
+        editKeys: slice.map(() => ''),
       }
     }
     case 'locate': {

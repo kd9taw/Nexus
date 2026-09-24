@@ -271,6 +271,70 @@ fn a_page_names_its_query_its_revisions_and_its_rows() {
     }
 }
 
+/// ★ A PAGE HANDS OUT EACH ROW'S EDIT KEY (SPEC-2 v2 §1): the key a change by id is checked
+/// against (`QsoEdit::key`, never computed by the UI). The Logbook sends it back with the row's
+/// id, so the key a page gives must be the one the change accepts — on both homes of the log —
+/// and once the row has changed, the old key is refused and the next page hands out the new one.
+#[test]
+fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
+    let (records, entities) = golden_log();
+    let resolve = |call: &str| entities.get(call).cloned().flatten();
+    for (home, d) in [
+        ("store", Dir::new("edit-keys-store")),
+        ("memory", Dir::new("edit-keys-mem")),
+    ] {
+        let engine = if home == "store" {
+            on_store(&d, &records)
+        } else {
+            in_memory(&d, &records)
+        };
+        let queries = LogQueries::default();
+        let page = || {
+            ask(
+                &queries,
+                &engine,
+                json!({"kind": "page", "offset": 0, "limit": 6,
+                    "query": {"sort": "call", "asc": true, "search": "", "needsConfirmOnly": false}}),
+                &resolve,
+            )
+        };
+        let a = page();
+        let keys = a["keys"].as_array().unwrap();
+        let edit_keys = a["editKeys"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{home}: the page hands out no edit keys: {a}"));
+        assert_eq!(edit_keys.len(), keys.len(), "{home}: one edit key per row");
+        for (id, key) in keys.iter().zip(edit_keys) {
+            let id: RecordId = id.as_str().unwrap().parse().unwrap();
+            let key = key.as_str().expect("an edit key is text");
+            assert!(
+                engine_lock(&engine).fresh_log_row(id, key).is_ok(),
+                "{home}: {id}'s key from the page is refused"
+            );
+        }
+        // The row changes (a paper card arrives, in another window): its old key is refused, and
+        // the next page hands out the one that is accepted now.
+        let id: RecordId = keys[2].as_str().unwrap().parse().unwrap();
+        let before = edit_keys[2].as_str().unwrap().to_string();
+        assert!(
+            engine_lock(&engine).mark_qsl_card(id, true),
+            "premise: marked"
+        );
+        assert!(
+            engine_lock(&engine).fresh_log_row(id, &before).is_err(),
+            "{home}: the key of a row that changed since is accepted"
+        );
+        let after = page();
+        assert_eq!(
+            after["keys"][2], keys[2],
+            "{home}: the same row, in the same place"
+        );
+        let now = after["editKeys"][2].as_str().unwrap();
+        assert_ne!(now, before, "{home}: the page still hands out the old key");
+        assert!(engine_lock(&engine).fresh_log_row(id, now).is_ok());
+    }
+}
+
 // ── the revisions, and the kept orders ─────────────────────────────────────────────────────────
 
 fn snapshot_tick(engine: &SharedEngine) -> u32 {
