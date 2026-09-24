@@ -22,13 +22,13 @@ vi.mock('../api', () => {
   return {
     // Every read of the shared log store answered with the whole log.
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: engine.log })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),
-    logQso: noop(), markQslSent: noop(), purgeLog: noop(), qrzLookup: noop(),
+    logQso: noop(), markQslSentById: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
   }

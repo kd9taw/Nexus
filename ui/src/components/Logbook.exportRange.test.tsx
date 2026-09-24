@@ -34,13 +34,13 @@ vi.mock('../api', () => {
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
     exportGeneralLog: vi.fn(async () => ({ text: '<eor>\n', saving: 0, held: 0 })),
     saveTextToDownloads: vi.fn(async () => '/tmp/nexus-log.adi'),
-    deleteQso: noop(), importAdif: noop(), editQso: vi.fn(async () => ({})),
+    deleteQsoById: noop(), importAdif: noop(), editQsoById: vi.fn(async () => ({})),
     logOperators: vi.fn(async () => [] as string[]), exportLogForOperator: noop(),
     logActivations: vi.fn(async () => []), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: vi.fn(async () => ({})), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(),
+    markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }

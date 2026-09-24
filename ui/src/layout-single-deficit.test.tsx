@@ -58,13 +58,13 @@ vi.mock('./api', () => {
     getLog: vi.fn().mockResolvedValue([]),
     getSettings: vi.fn().mockResolvedValue(null),
     setSettings: fn(), exportLog: fn(), openPanelWindow: fn(),
-    deleteQso: fn(), editQso: fn(), exportGeneralLog: fn(), importAdif: fn(),
+    deleteQsoById: fn(), editQsoById: fn(), exportGeneralLog: fn(), importAdif: fn(),
     logOperators: () => Promise.resolve([]), exportLogForOperator: fn(),
     logActivations: () => Promise.resolve([]), exportLogForActivation: fn(),
-    logQso: fn(), markQslSent: fn(), purgeLog: fn(), qrzLookup: fn(),
+    logQso: fn(), markQslSentById: fn(), purgeLog: fn(), qrzLookup: fn(),
     // Empty list => no satellite picker rendered; this suite is about the manual form's
     // submit staying reachable, not about the row cluster's width.
-    lotwSatNames: () => Promise.resolve([] as string[]), setSatTag: fn(),
+    lotwSatNames: () => Promise.resolve([] as string[]), setSatTagById: fn(),
     syncLotwReport: fn(), uploadLotwReport: fn(), qrzPushQso: fn(),
     clublogPushQso: fn(), hrdlogPushQso: fn(),
     downloadLotwReport: fn(), syncQrz: fn(), importPotaAdif: fn(),

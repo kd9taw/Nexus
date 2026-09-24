@@ -24,14 +24,14 @@ vi.mock('../api', () => {
     // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
     // the whole log (a valid answer), stocked through `getLog` as before.
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: vi.fn(() => Promise.resolve({})),
-    markQslCard: vi.fn(() => Promise.resolve({})),
+    markQslSentById: vi.fn(() => Promise.resolve({})),
+    markQslCardById: vi.fn(() => Promise.resolve({})),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
   }
@@ -45,7 +45,7 @@ vi.mock('../toast', () => ({
 function sentLog() {
   return [
     {
-      call: 'K0ABC', grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
+      id: 'id-K0ABC', call: 'K0ABC', grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
       rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,
       country: 'United States', whenUnix: 1_700_000_000,
       confirmed: false, awardConfirmed: false,
@@ -92,9 +92,9 @@ describe('QSL sent — undoing a mis-click (#180)', () => {
   it('clears the sent mark when that entry is chosen', async () => {
     const { select } = await renderWithSentQsl()
     fireEvent.change(select, { target: { value: 's' } })
-    // The row on screen, never its position (a Remote delete shifts positions).
+    // The row on screen by its id, never its position (a Remote delete shifts positions).
     await waitFor(() =>
-      expect(api.markQslSent as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(sentLog()[0], null),
+      expect(api.markQslSentById as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(expect.objectContaining({ id: 'id-K0ABC' }), null),
     )
   })
 

@@ -180,16 +180,16 @@ vi.mock('./api', () => {
     // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
     // the whole log (a valid answer), stocked through `getLog` as before.
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // ⚠️ NON-EMPTY, unlike the sibling Logbook suites: the satellite menu renders only
     // when the backend hands it names, and a cluster measured without it is a cluster
     // no operator sees. The names are LoTW's own (Engine::LOTW_SAT_NAMES).
     lotwSatNames: vi.fn(async () => ['AO-91', 'ARISS', 'SO-50']),
-    setSatTag: vi.fn(async () => ({})),
+    setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),
-    logQso: noop(), markQslSent: noop(), purgeLog: noop(), qrzLookup: noop(),
+    logQso: noop(), markQslSentById: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
   }

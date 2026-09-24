@@ -12,15 +12,15 @@ vi.mock('../api', () => {
     // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
     // the whole log (a valid answer), stocked through `getLog` as before.
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: vi.fn(() => Promise.resolve({})),
-    editQso: vi.fn(() => Promise.resolve({ call: 'K1ABC', whenUnix: 1_700_000_100 })),
+    deleteQsoById: vi.fn(() => Promise.resolve({})),
+    editQsoById: vi.fn(() => Promise.resolve({ call: 'K1ABC', whenUnix: 1_700_000_100 })),
     exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(),
+    markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }

@@ -29,14 +29,14 @@ vi.mock('../api', () => {
     // The shared log store (big-log fix) reads through get_log_delta; answered with the whole
     // log from `getLog`, so this file holds with or without it.
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
-    editQso: vi.fn(() => Promise.resolve({})),
+    deleteQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    editQsoById: vi.fn(() => Promise.resolve({})),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: vi.fn(() => Promise.resolve({})), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(),
+    markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
@@ -68,7 +68,7 @@ function timeBox(form: HTMLElement): HTMLInputElement {
   return box as HTMLInputElement
 }
 const save = (form: HTMLElement) => fireEvent.click(within(form).getByRole('button', { name: /save/i }))
-const savedWhen = () => (api.editQso as ReturnType<typeof vi.fn>).mock.calls[0][1].whenUnix as number
+const savedWhen = () => (api.editQsoById as ReturnType<typeof vi.fn>).mock.calls[0][1].whenUnix as number
 
 afterEach(() => {
   cleanup()
@@ -94,7 +94,7 @@ describe('the Logbook edit form shows and takes the time as 24-hour UTC (#280)',
     const form = await openEdit(at(0, 58, 37))
     expect(timeBox(form).value).toBe('00:58:37')
     save(form)
-    await waitFor(() => expect(api.editQso).toHaveBeenCalled())
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
     expect(savedWhen()).toBe(at(0, 58, 37))
   })
 
@@ -102,7 +102,7 @@ describe('the Logbook edit form shows and takes the time as 24-hour UTC (#280)',
     const form = await openEdit(at(0, 58, 37))
     fireEvent.change(timeBox(form), { target: { value: '12:58:37' } })
     save(form)
-    await waitFor(() => expect(api.editQso).toHaveBeenCalled())
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
     expect(savedWhen()).toBe(at(12, 58, 37))
   })
 
@@ -110,7 +110,7 @@ describe('the Logbook edit form shows and takes the time as 24-hour UTC (#280)',
     const form = await openEdit(at(0, 58, 37))
     fireEvent.change(timeBox(form), { target: { value: '18:05' } })
     save(form)
-    await waitFor(() => expect(api.editQso).toHaveBeenCalled())
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
     expect(savedWhen()).toBe(at(18, 5))
   })
 
@@ -119,6 +119,6 @@ describe('the Logbook edit form shows and takes the time as 24-hour UTC (#280)',
     fireEvent.change(timeBox(form), { target: { value: '25:00' } })
     save(form)
     await waitFor(() => expect(within(form).getByRole('alert').textContent).toMatch(/HH:MM/))
-    expect(api.editQso).not.toHaveBeenCalled()
+    expect(api.editQsoById).not.toHaveBeenCalled()
   })
 })

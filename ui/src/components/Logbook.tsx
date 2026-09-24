@@ -27,8 +27,8 @@ import { SpotDialog } from './SpotDialog'
 const QsoGlobe = lazy(() => import('./QsoGlobe'))
 
 import {
-  deleteQso,
-  editQso,
+  deleteQsoById,
+  editQsoById,
   exportGeneralLog,
   exportLogForOperator,
   exportLogForActivation,
@@ -37,9 +37,9 @@ import {
   importAdif,
   logQso,
   markLotwUploaded,
-  markQslSent,
-  markQslCard,
-  setSatTag,
+  markQslSentById,
+  markQslCardById,
+  setSatTagById,
   lotwSatNames,
   purgeLog,
   qrzLookup,
@@ -50,7 +50,7 @@ import {
 import { pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
-import type { QrzCorrectResult } from '../api'
+import type { QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -424,8 +424,11 @@ export function Logbook({
   // The list moves under an open form (a Remote delete, a connector stamp), and after a delete
   // above it the same place names a different contact; the target of the edit, and the fields
   // the form did not carry, come from this row. `key` (its id) only marks the row in the list,
-  // and follows it wherever the list puts it. null = the form logs a NEW QSO.
-  const [editing, setEditing] = useState<{ key: string; row: LoggedQso } | null>(null)
+  // and follows it wherever the list puts it. `ref` is what the desktop's save sends — the id and
+  // the edit key of the version opened, so an edit made meanwhile elsewhere refuses the save
+  // rather than being overwritten (null on a Remote browser, which names the row its own way).
+  // null = the form logs a NEW QSO.
+  const [editing, setEditing] = useState<{ key: string; row: LoggedQso; ref: RowRef | null } | null>(null)
   /** The contact open in the detail view (#313 — "there's no View capability"). Read-only:
    *  the pencil beside it is still the one editing path, so there is one writer. */
   const [viewing, setViewing] = useState<LoggedQso | null>(null)
@@ -609,9 +612,9 @@ export function Logbook({
   const exportRangeBad = exportFromBad || exportToBad
 
   // Open the form pre-filled to correct an existing entry (busted call, wrong band…).
-  const startEdit = (q: LoggedQso, key: string) => {
+  const startEdit = (q: LoggedQso, key: string, ref: RowRef | null) => {
     setErr(null)
-    setEditing({ key, row: q })
+    setEditing({ key, row: q, ref })
     setDraft({
       call: q.call,
       grid: q.grid ?? '',
@@ -784,6 +787,18 @@ export function Logbook({
     }
   }
 
+  /** What a change to one contact by `RowRef` did, said when it was NOT made: the contact changed
+   *  since this view read it — in another window (a Remote browser), or by a sync filling a blank
+   *  field — or it was deleted meanwhile. Either way nothing was written, and the list is read
+   *  again so the row shows as it now is, or goes. Whether the change was made. */
+  const changeMade = (answer: RowAnswer, call: string): boolean => {
+    if (answer.kind === 'changed') pushToast(t('logbook.change.changed', { call }), 'error', 8000)
+    else if (answer.kind === 'gone') pushToast(t('logbook.change.gone', { call }), 'error', 8000)
+    else return true
+    load()
+    return false
+  }
+
   // Record an operator-declared QSL request on a contact (a card/request WAS sent,
   // via bureau/direct/electronic). This is NOT a confirmation — it stays in the
   // needs-confirmation filter until the partner actually confirms.
@@ -792,7 +807,7 @@ export function Logbook({
   // on Bureau/Direct/Electronic used to be permanent from the operator's chair: the three
   // send entries vanish and nothing put them back. Same reversal the inbound card has had
   // since #152 — a declaration the operator made by hand, they can unmake by hand.
-  const onMarkQslSent = async (q: LoggedQso, via: 'B' | 'D' | 'E' | null) => {
+  const onMarkQslSent = async (q: LoggedQso, ref: RowRef | null, via: 'B' | 'D' | 'E' | null) => {
     if (remoteLog) {
       const at = performance.now()
       const outcome = await remoteChange({ kind: 'qslSent', target: await logTarget(q), via })
@@ -802,9 +817,10 @@ export function Logbook({
       }
       return
     }
-    // The row on screen, never its position: see `deleteQso` in api.ts.
-    const row = await withErrorToast(() => markQslSent(q, via), t('logbook.qsl.markFailed'))
-    if (row) {
+    // The row on screen by its id and edit key, never its position (see `changeMade`).
+    if (!ref) return
+    const answer = await withErrorToast(() => markQslSentById(ref, via), t('logbook.qsl.markFailed'))
+    if (answer && changeMade(answer, q.call)) {
       // Two literal keys, not one interpolated one — same reason as onMarkQslCard below.
       pushToast(
         via
@@ -816,7 +832,7 @@ export function Logbook({
     }
   }
 
-  const onMarkQslCard = async (q: LoggedQso, received: boolean) => {
+  const onMarkQslCard = async (q: LoggedQso, ref: RowRef | null, received: boolean) => {
     if (remoteLog) {
       const at = performance.now()
       const outcome = await remoteChange({ kind: 'qslCard', target: await logTarget(q), received })
@@ -826,11 +842,12 @@ export function Logbook({
       }
       return
     }
-    const row = await withErrorToast(
-      () => markQslCard(q, received),
+    if (!ref) return
+    const answer = await withErrorToast(
+      () => markQslCardById(ref, received),
       t('logbook.qsl.markFailed'),
     )
-    if (row) {
+    if (answer && changeMade(answer, q.call)) {
       // Two literal keys, not one interpolated one: the i18n orphan guard scans for literal
       // `t('key')` references and a ternary inside the call is invisible to it — it flagged
       // both of these as unused catalog entries, which is exactly its job.
@@ -849,9 +866,10 @@ export function Logbook({
   // that form reads a blank field as LEAVE ALONE so a busted-call fix cannot strip a tag the
   // contact earned, so "clear it" has to be something the operator SAYS. Same shape as the
   // QSL-sent withdrawal above — an operator-declared fact, unmade only by the operator.
-  const onSetSatTag = async (q: LoggedQso, name: string | null) => {
-    const row = await withErrorToast(() => setSatTag(q, name), t('logbook.sat.failed'))
-    if (row) {
+  const onSetSatTag = async (q: LoggedQso, ref: RowRef | null, name: string | null) => {
+    if (!ref) return
+    const answer = await withErrorToast(() => setSatTagById(ref, name), t('logbook.sat.failed'))
+    if (answer && changeMade(answer, q.call)) {
       // Two literal keys, not one interpolated one — the i18n orphan guard cannot see a
       // ternary inside the call (same reason as onMarkQslCard above).
       pushToast(
@@ -868,7 +886,7 @@ export function Logbook({
   const remoteChange = (change: LogChange) => (operations ? sendLogChange(operations, change) : Promise.resolve(null))
 
   /** Ask, then delete: whether the contact was deleted. */
-  const onDelete = async (q: LoggedQso, key: string): Promise<boolean> => {
+  const onDelete = async (q: LoggedQso, key: string, ref: RowRef | null): Promise<boolean> => {
     if (
       !(await confirmDialog({
         title: t('logbook.delete.heading', { call: q.call, band: q.band }),
@@ -889,14 +907,22 @@ export function Logbook({
       }
       return false
     }
-    const snap = await withErrorToast(() => deleteQso(q), t('logbook.delete.failed'))
-    if (snap) {
-      pushToast(t('logbook.delete.done', { call: q.call }), 'success')
-      if (editingKey === key) cancelForm()
+    if (!ref) return false
+    const answer = await withErrorToast(() => deleteQsoById(ref), t('logbook.delete.failed'))
+    if (!answer) return false
+    if (answer.kind === 'changed') {
+      // Changed since it was shown: not deleted. The list shows it as it is now.
+      pushToast(t('logbook.delete.changed', { call: q.call }), 'error', 8000)
       load()
-      return true
+      return false
     }
-    return false
+    pushToast(
+      answer.kind === 'gone' ? t('logbook.delete.gone', { call: q.call }) : t('logbook.delete.done', { call: q.call }),
+      answer.kind === 'gone' ? 'info' : 'success',
+    )
+    if (editingKey === key) cancelForm()
+    load()
+    return true
   }
 
   const closePurge = () => {
@@ -1132,17 +1158,21 @@ export function Logbook({
     target !== undefined &&
     openPlacesKnown &&
     [0, ...targetOffsets].every((o) => recall(pendingRev, o) !== undefined)
-  const rowAt = (i: number): { q: LoggedQso; key: string } | undefined => {
+  /** The row drawn at `i`: the contact, its key in the list, and — on the desktop — the `RowRef` a
+   *  change to it sends: its id and the edit key of the version this page read. */
+  const rowAt = (i: number): { q: LoggedQso; key: string; ref: RowRef | null } | undefined => {
     if (!control) {
       const pos = remoteOrder[i]
-      return pos === undefined ? undefined : { q: observedLog[pos], key: rowKeyAt(observedLog, pos) }
+      return pos === undefined ? undefined : { q: observedLog[pos], key: rowKeyAt(observedLog, pos), ref: null }
     }
     if (showingRev === null) return undefined
     const offset = Math.floor(i / LOG_PAGE) * LOG_PAGE
     const page = recall(showingRev, offset, listKey)
     if (!page) return undefined
     const k = i - offset
-    return k < page.rows.length ? { q: page.rows[k], key: page.keys[k] } : undefined
+    return k < page.rows.length
+      ? { q: page.rows[k], key: page.keys[k], ref: { id: page.keys[k], editKey: page.editKeys[k] } }
+      : undefined
   }
 
   /** The height closed rows are drawn at: the one most of the rows drawn now have. */
@@ -1246,14 +1276,14 @@ export function Logbook({
         // The question takes the keyboard (a dialog puts it nowhere when it closes); the answer
         // gives it back to this place in the list: the same contact, or — once it is gone — the one
         // that takes its place.
-        void onDelete(row.q, row.key).then((deleted) => {
+        void onDelete(row.q, row.key, row.ref).then((deleted) => {
           focusAfter.current = deleted ? row.key : null
           setFocusTo(index)
         })
       } else {
         formFromGrid.current = row.key
         formWanted.current = true
-        startEdit(row.q, row.key)
+        startEdit(row.q, row.key, row.ref)
       }
     }
   }
@@ -1568,27 +1598,62 @@ export function Logbook({
       myRig: draft.myRig.trim() || null,
     }
     if (existing) {
-      let row = await withErrorToast(() => editQso(existing, record), t('logbook.form.saveFailed'))
-      if (row) {
-        // #239: QSL sent / card received from the form — only what changed, through the row
-        // menu's own commands, once the record itself has saved. Each command returns the row
-        // it wrote, and the next targets THAT: every write changes the row.
-        const origVia = existing.qslSent?.sent ? (existing.qslSent.via ?? 'SENT') : ''
-        if (draft.qslSentVia !== origVia && draft.qslSentVia !== 'SENT') {
-          const via = draft.qslSentVia ? (draft.qslSentVia as 'B' | 'D' | 'E') : null
-          const before = row
-          row = (await withErrorToast(() => markQslSent(before, via), t('logbook.qsl.markFailed'))) ?? row
-        }
-        if ((draft.qslCard === '1') !== !!existing.qslRcvd?.card) {
-          const received = draft.qslCard === '1'
-          const before = row
-          await withErrorToast(() => markQslCard(before, received), t('logbook.qsl.markFailed'))
-        }
-        pushToast(t('logbook.form.updated', { call: record.call }), 'success')
-        cancelForm()
-        setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
-        load()
+      // The contact the form opened, by its id and the edit key of that version (never a new
+      // contact: a form without one saves nothing).
+      const ref = editing?.ref
+      if (!ref) return
+      // The record's fields as the form fills them, and — in the same ONE change — the QSL-sent
+      // and paper-card marks (#239): the engine applies each only where it differs from the stored
+      // contact, as the form's own follow-up commands used to. The park's programmes come from the
+      // row opened; its IOTA, which no box shows, from the stored contact; a blank end time leaves
+      // the stored one alone.
+      const edit: QsoEdit = {
+        call: record.call,
+        grid: record.grid ?? null,
+        state: record.state ?? null,
+        band: record.band,
+        freqMhz: record.freqMhz,
+        mode: record.mode,
+        rstSent: record.rstSent ?? null,
+        rstRcvd: record.rstRcvd ?? null,
+        name: record.name ?? null,
+        qth: record.qth ?? null,
+        comment: record.comment ?? null,
+        notes: record.notes ?? null,
+        txPower: record.txPower ?? null,
+        whenUnix: record.whenUnix,
+        timeOffUnix: endUnix,
+        ota: {
+          myProgram: ota?.myProgram ?? null,
+          myRef: ota?.myRef ?? null,
+          theirProgram: ota?.theirProgram ?? null,
+          theirRef: ota?.theirRef ?? null,
+        },
+        myGrid: record.myGrid ?? null,
+        myRig: record.myRig ?? null,
+        qslSentVia: (draft.qslSentVia || null) as QsoEdit['qslSentVia'],
+        qslCard: draft.qslCard === '1',
       }
+      const answer = await withErrorToast(() => editQsoById(ref, edit), t('logbook.form.saveFailed'))
+      if (!answer) return
+      if (answer.kind === 'changed') {
+        // Changed since the form opened (another window, or a sync): nothing was saved. The form
+        // now shows the contact as it is, and a save from it goes against that version.
+        pushToast(t('logbook.change.changed', { call: existing.call }), 'error', 8000)
+        startEdit(answer.current.row, editing.key, { id: ref.id, editKey: answer.current.editKey })
+        load()
+        return
+      }
+      if (answer.kind === 'gone') {
+        pushToast(t('logbook.change.gone', { call: existing.call }), 'error', 8000)
+        cancelForm()
+        load()
+        return
+      }
+      pushToast(t('logbook.form.updated', { call: record.call }), 'success')
+      cancelForm()
+      setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
+      load()
       return
     }
     const snap = await withErrorToast(() => logQso(record), t('logbook.form.logFailed'))
@@ -2205,12 +2270,12 @@ export function Logbook({
                 </label>
               </>
             )}
-            {/* #239: QSL status where the rest of the contact is edited — the row QSL menu's two
-                commands, run after the save, only for what changed. LoTW and eQSL confirmations
-                stay the services'; only the card is the operator's to mark. Edit mode only: both
-                commands address a logged record. Shack only: a Remote edit is one change keyed by
-                the row it started from, and the two follow-ups would each need the key of the row
-                the previous write produced; the hosted row menu already offers both marks by key. */}
+            {/* #239: QSL status where the rest of the contact is edited — saved in the SAME change
+                as the fields (`editQsoById`), and only where it differs from the stored contact.
+                LoTW and eQSL confirmations stay the services'; only the card is the operator's to
+                mark. Edit mode only: both marks address a logged record. Shack only: a Remote
+                edit is one change keyed by the row it started from and carries no marks; the
+                hosted row menu already offers both marks by key. */}
             {editingKey !== null && !remoteLog && (
               <>
                 <div className="logbook-field">
@@ -2416,7 +2481,7 @@ export function Logbook({
                       </span>
                     </div>
                   )
-                const { q, key } = row
+                const { q, key, ref } = row
                 return (
                   <div
                     className={`log-row logbook-row${editingKey === key ? ' editing' : ''}`}
@@ -2707,10 +2772,10 @@ export function Logbook({
                         // is not a send at all, and for CLEARING the send (#180). Kept in the
                         // same menu because an operator handling a card thinks about one row,
                         // not two controls.
-                        if (v === 'R') void onMarkQslCard(q, true)
-                        else if (v === 'r') void onMarkQslCard(q, false)
-                        else if (v === 's') void onMarkQslSent(q, null)
-                        else if (v) void onMarkQslSent(q, v as 'B' | 'D' | 'E')
+                        if (v === 'R') void onMarkQslCard(q, ref, true)
+                        else if (v === 'r') void onMarkQslCard(q, ref, false)
+                        else if (v === 's') void onMarkQslSent(q, ref, null)
+                        else if (v) void onMarkQslSent(q, ref, v as 'B' | 'D' | 'E')
                       }}
                       title={t('logbook.row.qslSent.title', { call: q.call })}
                       aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
@@ -2763,8 +2828,8 @@ export function Logbook({
                         // '' is the PLACEHOLDER — the state the select sits in when nothing
                         // has been chosen. A non-choice must never clear a tag, so only the
                         // explicit 'clear' entry passes null.
-                        if (v === 'clear') void onSetSatTag(q, null)
-                        else if (v) void onSetSatTag(q, v)
+                        if (v === 'clear') void onSetSatTag(q, ref, null)
+                        else if (v) void onSetSatTag(q, ref, v)
                       }}
                       title={t('logbook.row.sat.title', { call: q.call })}
                       aria-label={t('logbook.row.sat.aria', { call: q.call })}
@@ -2786,7 +2851,7 @@ export function Logbook({
                   <button
                     type="button"
                     className="log-rowbtn"
-                    onClick={() => startEdit(q, key)}
+                    onClick={() => startEdit(q, key, ref)}
                     title={t('logbook.row.edit', { call: q.call })}
                     aria-label={t('logbook.row.edit', { call: q.call })}
                   >
@@ -2795,7 +2860,7 @@ export function Logbook({
                   <button
                     type="button"
                     className="log-rowbtn danger"
-                    onClick={() => onDelete(q, key)}
+                    onClick={() => onDelete(q, key, ref)}
                     title={t('logbook.row.delete', { call: q.call })}
                     aria-label={t('logbook.row.delete', { call: q.call })}
                   >

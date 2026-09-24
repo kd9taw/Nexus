@@ -26,7 +26,7 @@ vi.mock('../api', () => {
     // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
     // the whole log (a valid answer), stocked through `getLog` as before.
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: noop(), editQso: noop(), exportGeneralLog: noop(), importAdif: noop(),
+    deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     // #25 per-operator export: the Logbook asks on mount, so the mock must answer.
     // A vi.fn WITH a default implementation: the Logbook calls this on its own during render,
     // so a bare vi.fn returning undefined blows up on .then — and mockResolvedValue can still
@@ -35,9 +35,9 @@ vi.mock('../api', () => {
     // Same contract for the per-activation export: asked for on mount, so it must answer.
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),
-    logQso: noop(), markQslSent: noop(), purgeLog: noop(), qrzLookup: noop(),
+    logQso: noop(), markQslSentById: noop(), purgeLog: noop(), qrzLookup: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(),
   }
@@ -208,12 +208,12 @@ describe('POTA park on logbook edit (#60)', () => {
       logWithOta({ theirProgram: 'POTA', theirRef: 'US-1234', iota: 'NA-001' }),
     )
     // The real withErrorToast runs its callback; the module mock is a bare stub that never does,
-    // so override it here or editQso is never reached and the assertion is vacuous.
+    // so override it here or editQsoById is never reached and the assertion is vacuous.
     ;(toast.withErrorToast as ReturnType<typeof vi.fn>).mockImplementation((fn: () => unknown) =>
       fn(),
     )
-    const editQso = api.editQso as ReturnType<typeof vi.fn>
-    editQso.mockResolvedValue({})
+    const editQsoById = api.editQsoById as ReturnType<typeof vi.fn>
+    editQsoById.mockResolvedValue({ kind: 'applied' })
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
@@ -223,12 +223,13 @@ describe('POTA park on logbook edit (#60)', () => {
       expect(container.querySelector('input[title*="you worked"]')).not.toBeNull(),
     )
     fireEvent.click(container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement)
-    await waitFor(() => expect(editQso).toHaveBeenCalled())
-    const record = editQso.mock.calls[0][1]
+    await waitFor(() => expect(editQsoById).toHaveBeenCalled())
+    const edit = editQsoById.mock.calls[0][1]
     // Editing a POTA QSO that also carries an island reference must keep the iota (the guard's
     // blind spot): a park-only ota built from the four editable fields would silently drop it.
-    expect(record.ota.iota).toBe('NA-001')
-    expect(record.ota.theirRef).toBe('US-1234')
+    // The IOTA has no box, so the edit carries none and the ENGINE keeps the stored one
+    // (tempo-core `QsoEdit::record`, pinned by its park test); the park goes with its programme.
+    expect(edit.ota).toEqual({ myProgram: null, myRef: null, theirProgram: 'POTA', theirRef: 'US-1234' })
   })
 })
 
@@ -426,16 +427,16 @@ describe('the edit form carries a whole callsign', () => {
 
   it('saves the whole call back, at and past the reported boundary', async () => {
     for (const call of ['WW9WTF', 'KD9TAW/P', 'SV9/KD9TAW/P']) {
-      const editQso = api.editQso as ReturnType<typeof vi.fn>
-      editQso.mockReset()
-      editQso.mockResolvedValue({})
+      const editQsoById = api.editQsoById as ReturnType<typeof vi.fn>
+      editQsoById.mockReset()
+      editQsoById.mockResolvedValue({ kind: 'applied' })
       const container = await openEdit(call)
       expect(callInput(container).value).toBe(call)
       fireEvent.click(
         container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement,
       )
-      await waitFor(() => expect(editQso).toHaveBeenCalled())
-      expect(editQso.mock.calls[0][1].call).toBe(call)
+      await waitFor(() => expect(editQsoById).toHaveBeenCalled())
+      expect(editQsoById.mock.calls[0][1].call).toBe(call)
     }
   })
 })

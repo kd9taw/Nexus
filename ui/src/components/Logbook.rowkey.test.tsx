@@ -32,15 +32,15 @@ vi.mock('../api', () => {
     // The Logbook reads the shared log store, which asks get_log_delta. Every answer here is
     // the whole log (a valid answer), stocked through `getLog` as before.
     getLogDelta: vi.fn(async () => ({ revision: 1, full: true, rows: await getLog() })),
-    deleteQso: vi.fn(() => Promise.resolve({})),
-    editQso: vi.fn(() => Promise.resolve({ call: 'K1ABC', whenUnix: 1_700_000_100 })),
+    deleteQsoById: vi.fn(() => Promise.resolve({ kind: 'deleted' })),
+    editQsoById: vi.fn(() => Promise.resolve({ kind: 'applied' })),
     exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     // Empty list => no satellite picker rendered, so this suite's DOM is unchanged.
-    lotwSatNames: vi.fn(async () => [] as string[]), setSatTag: vi.fn(async () => ({})),
+    lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
     logQso: noop(), purgeLog: noop(), qrzLookup: noop(),
-    markQslSent: noop(), markQslCard: noop(),
+    markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
     clublogPushQso: noop(), hrdlogPushQso: noop(), wrlPushQso: noop(),
   }
@@ -51,7 +51,7 @@ vi.mock('../toast', () => ({
 }))
 
 const contact = (call: string, whenUnix: number) => ({
-  call, grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
+  id: `id-${call}`, call, grid: 'EN37', band: '20m', freqMhz: 14.074, mode: 'FT8',
   rstSent: '-10', rstRcvd: '-12', name: null, qth: null, comment: null, notes: null,
   country: 'United States', whenUnix, confirmed: false, awardConfirmed: false,
   qslRcvd: null, qslSent: null, ota: null,
@@ -77,13 +77,13 @@ afterEach(() => {
   localStorage.clear()
 })
 
-describe('the shack addresses a contact by the row it saw, never its position', () => {
+describe('the shack addresses a contact by the id of the row it saw, never its position', () => {
   it('deletes the row the operator confirmed', async () => {
     const { container, findByRole } = await renderLog(three())
     fireEvent.click(container.querySelector('button[aria-label="Delete K1ABC"]') as HTMLButtonElement)
     fireEvent.click(await findByRole('button', { name: t('logbook.delete.confirm') }))
-    await waitFor(() => expect(api.deleteQso).toHaveBeenCalled())
-    expect(api.deleteQso).toHaveBeenCalledWith(three()[1])
+    await waitFor(() => expect(api.deleteQsoById).toHaveBeenCalled())
+    expect(api.deleteQsoById).toHaveBeenCalledWith(expect.objectContaining({ id: 'id-K1ABC' }))
   })
 
   it('edits the row the form opened with, after a delete above it has shifted the list', async () => {
@@ -104,10 +104,10 @@ describe('the shack addresses a contact by the row it saw, never its position', 
     await waitFor(() => expect(container.querySelector('button[aria-label="Edit W1AW"]')).toBeNull())
 
     fireEvent.click(container.querySelector('.logbook-form button[type="submit"]') as HTMLButtonElement)
-    await waitFor(() => expect(api.editQso).toHaveBeenCalled())
-    const [target, record] = (api.editQso as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(target).toEqual(three()[1])
-    expect(record.call).toBe('K1ABC')
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
+    const [target, edit] = (api.editQsoById as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(target).toEqual(expect.objectContaining({ id: 'id-K1ABC' }))
+    expect(edit.call).toBe('K1ABC')
   })
 })
 
