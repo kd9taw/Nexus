@@ -862,6 +862,39 @@ impl LogDb {
     /// `rowid` order is arrival order, which is the same thing `log.adi`'s file order carries
     /// today — the log is not sorted by time, and an import appends.
     pub fn load_all(&self) -> Result<Vec<QsoRecord>> {
+        self.load_all_observed(&mut || {})
+    }
+
+    /// [`Self::load_all`], with `between` run after the child tables are read and before the
+    /// rows are — the seam a test uses to commit in exactly the window a torn read would open.
+    fn load_all_observed(&self, between: &mut dyn FnMut()) -> Result<Vec<QsoRecord>> {
+        self.in_one_snapshot(|db| db.read_all(between))
+    }
+
+    /// Run `f` inside ONE read transaction, so every statement it runs sees the same committed
+    /// state of the store — or, inside a transaction already open on this connection, within
+    /// that one.
+    ///
+    /// ⛔ **Without it a load of several tables is several pictures.** A statement run on its
+    /// own sees the store as it stands when THAT statement begins, so a commit landing between
+    /// the child tables and the rows returned a contact without its children: its foreign tags
+    /// and upload stamps were read before it existed. A reader that then wrote the contact back
+    /// from memory took them out of the store for good. In WAL mode a read transaction takes
+    /// its picture at its first read and keeps it until it ends, and it never blocks a writer.
+    pub(super) fn in_one_snapshot<T>(&self, f: impl FnOnce(&LogDb) -> Result<T>) -> Result<T> {
+        if !self.conn.is_autocommit() {
+            return f(self);
+        }
+        let snapshot = self.conn.unchecked_transaction()?;
+        let out = f(self);
+        // Read only: ending it by rollback writes nothing and releases the picture.
+        drop(snapshot);
+        out
+    }
+
+    /// Every record, in the order they were stored — [`Self::load_all`]'s body, which runs it in
+    /// one read transaction. `between` is its test seam.
+    fn read_all(&self, between: &mut dyn FnMut()) -> Result<Vec<QsoRecord>> {
         // The children come back in three sweeps rather than three queries per record: a
         // lifetime log is hundreds of thousands of rows, and 3N statement executions to
         // rebuild what 3 can is the shape of the problem this whole programme is removing.
@@ -869,6 +902,7 @@ impl LogDb {
         let mut upload = self.load_uploads()?;
         let mut exchange = self.load_exchange()?;
         let mut directed = self.load_contest_adif()?;
+        between();
 
         let sql = format!("SELECT {} FROM qso ORDER BY rowid", QSO_COLUMNS.join(", "));
         let mut stmt = self.conn.prepare(&sql)?;
@@ -3246,5 +3280,50 @@ mod tests {
             "the source was not created by asking to copy it"
         );
         assert!(!dst.exists());
+    }
+
+    // ── one picture of the log ───────────────────────────────────────────────
+
+    /// ⛔ A LOAD IS ONE PICTURE OF THE LOG, WHATEVER COMMITS WHILE IT READS. `load_all` reads
+    /// five tables — the passthrough, the stamps, the exchange and the directed columns, then
+    /// the rows — and read one statement at a time, each statement saw the store as it stood
+    /// when THAT statement began. A contact committed between the child tables and the rows came
+    /// back without its children: its foreign tags and its upload stamps had been read before it
+    /// existed. The re-read after another window's commit (`LogStore::reload`) loads while this
+    /// process's own writer, or the other window's, may commit, and a contact read that way and
+    /// later written back from memory takes its tags and stamps out of the store for good.
+    ///
+    /// The contact is committed through a second connection at exactly that point.
+    #[test]
+    fn a_load_is_one_picture_of_the_log_whatever_commits_during_it() {
+        let d = CopyDir::new("torn");
+        let path = d.0.join("log.sqlite3");
+        let before = copy_rows(8, 7_000);
+        // A second writer on the same file — another window's, or this process's own.
+        let mut writer = live_store(&path, &before);
+        // A contact with a foreign tag and a QRZ stamp: two child tables it must carry.
+        let late = copy_rows(1, 9_000);
+        assert!(
+            !late[0].extra.is_empty() && late[0].upload.qrz.is_some(),
+            "premise: the late contact has children to lose"
+        );
+        let reader = LogDb::open(&path).unwrap();
+        let loaded = reader
+            .load_all_observed(&mut || {
+                writer
+                    .insert_all(late.iter().map(|r| (r, Resolved::default())))
+                    .expect("the other writer commits");
+            })
+            .unwrap();
+        assert_eq!(
+            loaded, before,
+            "the load is the log as it stood when the load began — never a contact without \
+             its children"
+        );
+        // Control: the commit really landed, and a load that begins after it sees the contact,
+        // whole.
+        let after = LogDb::open(&path).unwrap().load_all().unwrap();
+        assert_eq!(after.len(), before.len() + 1, "control: the commit landed");
+        assert_eq!(after.last(), late.last(), "and the contact is whole");
     }
 }
