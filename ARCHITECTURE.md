@@ -93,10 +93,13 @@ Sub. Before that it takes the receive-display admission of the rig-scope
 settings: permission, a native source, a fresh unkeyed CAT link to the displayed
 radio and no owned transmitter. The radio loop applies the level at receive time
 and withholds it while keyed. The receipt is `stationState`: nothing reads the Sub
-back, so the page shows what the radio accepted in the next snapshot. A station
-older than the `receivers` field draws no Sub row on the page; one older than the
-action never advertises the capability, so the row's sliders stay disabled. This
-capability grants no Main level and no permission to transmit.
+back, so the page shows what the radio accepted in the next snapshot. As with the
+Main levels, a browser drag or held adjustment key keeps a draft and submits the
+released value once; a pointer cancel, blur, lost permission or radio change
+discards it for good. A station older than the `receivers` field draws no Sub row
+on the page; one older than the action never advertises the capability, so the
+row's sliders stay disabled. This capability grants no Main level and no
+permission to transmit.
 
 Radio selection has a passive native Settings projection sharing the local
 handoff's outgoing-profile banking, daemon-port separation and monitored-or-saved

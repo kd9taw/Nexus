@@ -1913,7 +1913,7 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
               radio's pane is exactly what it was. On the Remote page too: its sliders go through
               the station's `radio.subLevel` intent. A component of its own, not a widened shared
               one — see its header. */}
-          <SubReceiverStrip radio={snap.radio} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} />
+          <SubReceiverStrip radio={snap.radio} radioId={snap.activeRadioId} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} />
         </CockpitPaneFrame>
       )}
 

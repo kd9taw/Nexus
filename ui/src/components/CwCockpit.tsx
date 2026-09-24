@@ -1348,7 +1348,7 @@ export function CwCockpit({
           </div>
       )}
       </div>
-      {hasSubRow && <SubReceiverStrip radio={snap.radio} catOk={catOk} onSnap={onSnap} />}
+      {hasSubRow && <SubReceiverStrip radio={snap.radio} radioId={snap.activeRadioId} catOk={catOk} onSnap={onSnap} />}
     </CockpitPaneFrame>
   ) : null
 

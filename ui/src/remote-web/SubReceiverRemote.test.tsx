@@ -47,6 +47,7 @@ vi.mock('../components/LogEntry', () => ({ LogEntry: () => <div/> }))
 vi.mock('../components/SpotDialog', () => ({ SpotDialog: () => null }))
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn(async (run: () => Promise<unknown>) => run()) }))
 import { getSettings, cwDecode } from '../api'
+import { pushToast } from '../toast'
 
 const clients: OperationClient[] = []
 const uninstall: (() => void)[] = []
@@ -54,11 +55,14 @@ beforeAll(() => {
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
   Element.prototype.scrollIntoView = vi.fn()
 })
-afterEach(() => {
+afterEach(async () => {
   cleanup()
   uninstall.splice(0).forEach(u => u())
   clients.splice(0).forEach(c => c.disconnected())
   vi.useRealTimers()
+  // A command still out when the station goes away fails HERE, and its toast must be counted in
+  // this test — never leak into the next test's mocks.
+  await new Promise(resolve => setTimeout(resolve, 0))
   vi.clearAllMocks()
 })
 
@@ -105,15 +109,18 @@ function page(mode: 'phone' | 'cw', receivers: ReceiversStatus | undefined, capa
   frame.station.radio.id = 1; frame.station.radio.readings.cat!.connectionGeneration = 7; frame.station.amplifier = null
   const observation = { status: 'current', frame } as MonitorState
   const Component = mode === 'cw' ? CwCockpit : PhoneCockpit
-  const ui = render(<StationControlContext.Provider value={false}><StationDataContext.Provider value={true}>
+  const tree = (s: AppSnapshot = snap, available = true) => <StationControlContext.Provider value={false}><StationDataContext.Provider value={available}>
     <RemoteOperationsContext.Provider value={client}>
       <RemoteObservationContext.Provider value={observation}>
-        <Component snap={snap} theme="dark" spots={[]} onWorkSpot={() => {}} />
+        <Component snap={s} theme="dark" spots={[]} onWorkSpot={() => {}} />
       </RemoteObservationContext.Provider>
     </RemoteOperationsContext.Provider>
-  </StationDataContext.Provider></StationControlContext.Provider>)
+  </StationDataContext.Provider></StationControlContext.Provider>
+  const ui = render(tree())
   const writes = () => sent.filter(w => w.request.type === 'stationControl')
-  return { ...ui, writes }
+  // The same page again, with another snapshot (`s`) or with the station's readings gone stale.
+  const again = (s: AppSnapshot = snap, available = true) => ui.rerender(tree(s, available))
+  return { ...ui, writes, snap, again }
 }
 
 async function settle() {
@@ -137,6 +144,101 @@ describe.each(['phone', 'cw'] as const)('the Remote page, %s cockpit', mode => {
     expect(ws, 'exactly one station intent').toHaveLength(1)
     expect(ws[0].request.action).toEqual({ action: 'radio.subLevel', level: 'afGain', value: 0.4 })
     expect(ws.some(w => w.request.action.action === 'radio.level'), 'a Main level was sent').toBe(false)
+  })
+
+  // ⭐ A DRAG IS ONE INTENT. The station confirms one command at a time; a command per movement
+  // would be refused while the first confirms — an error per movement, and the released value lost.
+  it('⭐ a drag sends ONE radio.subLevel intent — the released value, on release, none while it moves', async () => {
+    const p = page(mode, DUAL, ['subReceiverLevels'])
+    await settle()
+    const af = () => screen.getByLabelText('Sub receiver AF gain') as HTMLInputElement
+    fireEvent.pointerDown(af(), { pointerId: 1 })
+    fireEvent.change(af(), { target: { value: '30' } })
+    await settle()
+    fireEvent.change(af(), { target: { value: '45' } })
+    await settle()
+    expect(p.writes(), 'a movement was sent before the release').toHaveLength(0)
+    expect(Number(af().value), 'the thumb follows the hand').toBe(45)
+    fireEvent.pointerUp(af(), { pointerId: 1 })
+    await settle()
+    expect(p.writes()).toHaveLength(1)
+    expect(p.writes()[0].request.action).toEqual({ action: 'radio.subLevel', level: 'afGain', value: 0.45 })
+    expect(pushToast, 'a drag raised an error').not.toHaveBeenCalled()
+  })
+
+  it('a held adjustment key sends once, on release — and key repeat cannot restart a canceled edit', async () => {
+    const p = page(mode, DUAL, ['subReceiverLevels'])
+    await settle()
+    const af = () => screen.getByLabelText('Sub receiver AF gain') as HTMLInputElement
+    fireEvent.keyDown(af(), { key: 'ArrowRight' })
+    fireEvent.change(af(), { target: { value: '26' } })
+    await settle()
+    // Permission lapses and returns while the key is held: the repeat is the SAME gesture.
+    p.again(p.snap, false)
+    await settle()
+    p.again()
+    await settle()
+    fireEvent.keyDown(af(), { key: 'ArrowRight', repeat: true })
+    fireEvent.change(af(), { target: { value: '27' } })
+    fireEvent.keyUp(af(), { key: 'ArrowRight' })
+    await settle()
+    expect(p.writes(), 'a canceled key edit revived through key repeat').toHaveLength(0)
+    fireEvent.keyDown(af(), { key: 'ArrowRight' })
+    fireEvent.change(af(), { target: { value: '26' } })
+    fireEvent.keyDown(af(), { key: 'ArrowRight', repeat: true })
+    fireEvent.change(af(), { target: { value: '27' } })
+    await settle()
+    expect(p.writes()).toHaveLength(0)
+    fireEvent.keyUp(af(), { key: 'ArrowRight' })
+    await settle()
+    expect(p.writes()).toHaveLength(1)
+    expect(p.writes()[0].request.action.value).toBe(0.27)
+  })
+
+  it.each(['pointer cancel', 'blur', 'permission loss', 'radio change'] as const)('a drag canceled by %s cannot revive when the context returns', async reason => {
+    const p = page(mode, DUAL, ['subReceiverLevels'])
+    await settle()
+    const af = () => screen.getByLabelText('Sub receiver AF gain') as HTMLInputElement
+    fireEvent.pointerDown(af(), { pointerId: 1 })
+    fireEvent.change(af(), { target: { value: '35' } })
+    await settle()
+    if (reason === 'pointer cancel') fireEvent.pointerCancel(af(), { pointerId: 1 })
+    else if (reason === 'blur') fireEvent.blur(af())
+    else {
+      p.again(reason === 'radio change' ? { ...p.snap, activeRadioId: 2 } : p.snap, reason !== 'permission loss')
+      await settle()
+      p.again()
+      await settle()
+    }
+    fireEvent.change(af(), { target: { value: '42' } })
+    fireEvent.pointerUp(af(), { pointerId: 1 })
+    await settle()
+    expect(p.writes(), 'a canceled drag was sent').toHaveLength(0)
+    expect(Number(af().value), 'the thumb stays on a value nobody sent').toBe(25)
+    // A fresh drag is not blocked by the canceled one.
+    fireEvent.pointerDown(af(), { pointerId: 2 })
+    fireEvent.change(af(), { target: { value: '42' } })
+    fireEvent.pointerUp(af(), { pointerId: 2 })
+    await settle()
+    expect(p.writes()).toHaveLength(1)
+    expect(p.writes()[0].request.action.value).toBe(0.42)
+  })
+
+  it('a pointer cancel ends the gesture with no release, and the next drag still sends', async () => {
+    const p = page(mode, DUAL, ['subReceiverLevels'])
+    await settle()
+    const af = () => screen.getByLabelText('Sub receiver AF gain') as HTMLInputElement
+    fireEvent.pointerDown(af(), { pointerId: 1 })
+    fireEvent.change(af(), { target: { value: '35' } })
+    fireEvent.pointerCancel(af(), { pointerId: 1 })
+    await settle()
+    expect(Number(af().value), 'a canceled drag leaves the thumb where it began').toBe(25)
+    fireEvent.pointerDown(af(), { pointerId: 2 })
+    fireEvent.change(af(), { target: { value: '40' } })
+    fireEvent.pointerUp(af(), { pointerId: 2 })
+    await settle()
+    expect(p.writes()).toHaveLength(1)
+    expect(p.writes()[0].request.action.value).toBe(0.4)
   })
 
   it('a station that does not advertise subReceiverLevels: the row is drawn, its sliders dead, nothing sent', async () => {
