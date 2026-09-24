@@ -1040,15 +1040,17 @@ export function Logbook({
    *  shows the new order (when the list is its new length), before that render is placed. */
   const heightMoves = useRef<{ closed: number; moves: { key: string; from: number; to: number | null; size: number }[] } | null>(null)
   // …and A NEW LIST IS MEASURED AFRESH (the same bug, when the list is replaced rather than moved):
-  // a new sort or search. The heights kept by place were measured for the old list. A row drawn in
-  // both stays mounted and is not measured again; a row mounting at a place the old list measured
-  // takes that place's height until the browser reports its own, a frame later. So while a row was
-  // open, its height stayed at its old place, over another row, and the open row was drawn into a
-  // closed row's height. The first time a new list is drawn while a row is open, the old list's
-  // heights are dropped and the rows drawn are measured, in the placing effect below, before the
-  // paint. `drawnList` names the list on screen: the query's, once its first page is here.
-  const drawnList = control && showingRev !== null ? queryKey : null
-  const heightsFor = useRef<string | null>(null)
+  // a new sort or search, or — in a Remote browser — the page the station sends coming back, which
+  // is how a contact logged at the station arrives there. The heights kept by place were measured
+  // for the old list. A row drawn in both stays mounted and is not measured again; a row mounting at
+  // a place the old list measured takes that place's height until the browser reports its own, a
+  // frame later. So while a row was open, its height stayed at its old place, over another row, and
+  // the open row was drawn into a closed row's height. The first time a new list is drawn while a
+  // row is open, the old list's heights are dropped and the rows drawn are measured, in the placing
+  // effect below, before the paint. `drawnList` names the list on screen: the query's (once its
+  // first page is here), or the Remote page's rows.
+  const drawnList = control ? (showingRev === null ? null : queryKey) : observedLog.length ? observedLog : null
+  const heightsFor = useRef<string | LoggedQso[] | null>(null)
 
   const virtualRows = rowVirtualizer.getVirtualItems()
   const held0 = anchor.current
