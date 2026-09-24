@@ -16,6 +16,10 @@ interface DialogProps {
    * height than the 640px default. Sizing rules on it are the sanctioned raw-unit
    * exception (see the comment inside) — they must measure the real window. */
   className?: string
+  /** Where the keyboard goes when the dialog closes. Radix gives it back to a Radix TRIGGER only,
+   *  and these dialogs are opened by code, so without this it is left on the page itself. Call
+   *  `event.preventDefault()` to take it over (ConfirmHost does). */
+  onCloseAutoFocus?: (event: Event) => void
   children: ReactNode
 }
 
@@ -26,6 +30,7 @@ export function Dialog({
   hideTitle,
   description,
   className,
+  onCloseAutoFocus,
   children,
 }: DialogProps) {
   const available = useStationData()
@@ -33,7 +38,7 @@ export function Dialog({
     <RD.Root open={open && available} onOpenChange={onOpenChange}>
       <RD.Portal>
         <RD.Overlay className="ui-dialog-overlay" />
-        <RD.Content className={className ? `ui-dialog ${className}` : 'ui-dialog'}>
+        <RD.Content className={className ? `ui-dialog ${className}` : 'ui-dialog'} onCloseAutoFocus={onCloseAutoFocus}>
           {/* The portal lands on document.body — OUTSIDE `.app`'s zoom:var(--ui-zoom) —
               so dialog content rendered at 1/zoom of the app (1.54x too large at
               auto-65; 0.57x at pinned 175, inverting the accessibility setting).

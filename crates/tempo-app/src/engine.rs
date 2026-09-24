@@ -11531,33 +11531,23 @@ impl Engine {
         });
     }
 
-    /// Build the ADIF upload payload (header + the contacts `ids` names, in that order) for
-    /// TQSL.
+    /// The ADIF upload payload (header + the contacts `ids` names, in that order) for TQSL, as
+    /// the upload builds it ([`crate::station::lotw_batch_adif`]) with this station's settings —
+    /// for a test that owns its engine. The upload itself reads its batch from the store.
+    #[cfg(test)]
     pub fn lotw_upload_adif(&self, ids: &[tempo_core::logbook::RecordId]) -> String {
-        let recs = self.station.rows_of(ids);
-        let mut out = tempo_core::logbook::adif_header();
-        // In ADIF-location mode, stamp each record with STATION_CALLSIGN + MY_GRIDSQUARE so TQSL
-        // can sign from the ADIF (no named `-l` location). Named-location mode is byte-identical
-        // to before (no MY_ fields), so existing uploads are unchanged.
-        //
-        // `call` is the FALLBACK, not the answer: `adif_record_with_station` skips its own stamp
-        // when the record carries a STATION_CALLSIGN of its own (which `adif_record` has already
-        // emitted), so a batch uploaded after the operator sets their home call back still signs
-        // each contact under the call that made it. Records written before that stamp existed
-        // carry none and sign from the live setting, exactly as they always did.
-        let adif_loc = self.settings.lotw_use_adif_location;
-        let call = self.settings.mycall.clone();
-        let grid = self.settings.mygrid.clone();
-        for r in &recs {
-            if adif_loc {
-                out.push_str(&tempo_core::logbook::adif_record_with_station(
-                    r, &call, &grid,
-                ));
-            } else {
-                out.push_str(&tempo_core::logbook::adif_record(r));
-            }
-        }
-        out
+        let batch: Vec<QsoRecord> = self
+            .station
+            .rows_of(ids)
+            .iter()
+            .map(|r| QsoRecord::clone(r))
+            .collect();
+        crate::station::lotw_batch_adif(
+            &batch,
+            self.settings.lotw_use_adif_location,
+            &self.settings.mycall,
+            &self.settings.mygrid,
+        )
     }
 
     /// Mark every QSO currently counted as un-uploaded to LoTW (the "Upload to LoTW (N)" set)
@@ -23245,22 +23235,6 @@ contact yourself."
         self.station.lotw_signed(ids)
     }
 
-    /// The contacts a LoTW batch may sign, of those `ids` names, in that order: only the ones
-    /// the log still holds with a KNOWN time of day. LoTW matches on time, so a record with no
-    /// known time can never confirm and must not be signed — the filter the default batch
-    /// ([`Self::lotw_unsent_ids`]) applies too, applied here to a batch chosen by hand.
-    pub fn lotw_signable(
-        &self,
-        ids: &[tempo_core::logbook::RecordId],
-    ) -> Vec<tempo_core::logbook::RecordId> {
-        self.station
-            .rows_of(ids)
-            .iter()
-            .filter(|r| r.time_known)
-            .filter_map(|r| r.id)
-            .collect()
-    }
-
     /// The ids of the contacts at `positions` in the log as it stands — the LEGACY input of a
     /// LoTW upload chosen by hand, which a view still addresses by position (the Awards view's
     /// diagnosis buckets). Taken in the same hold of the engine lock as the batch it becomes,
@@ -23359,27 +23333,6 @@ contact yourself."
     /// See [`StationCore::take_all_txt_pending`].
     pub fn take_all_txt_pending(&mut self) -> Vec<String> {
         self.station.take_all_txt_pending()
-    }
-
-    /// See [`StationCore::export_logbook`].
-    pub fn export_logbook(
-        &self,
-        format: &str,
-        from_unix: Option<u64>,
-        to_unix: Option<u64>,
-    ) -> String {
-        self.station.export_logbook(format, from_unix, to_unix)
-    }
-
-    /// Distinct operators in the log (#25).
-    pub fn log_operators(&self) -> Vec<String> {
-        self.station.log_operators()
-    }
-
-    /// ADIF containing only `operator`'s contacts (#25) — POTA and Field Day both require each
-    /// operator to submit their own log.
-    pub fn export_logbook_for_operator(&self, operator: &str) -> String {
-        self.station.export_logbook_for_operator(operator)
     }
 
     /// See [`StationCore::log_activations`].
@@ -34610,7 +34563,10 @@ mod tests {
             Some("W6R"),
             "the call the contact was made under must reach the record"
         );
-        let adif = e.export_logbook("adif", None, None);
+        let adif =
+            crate::logexport::export_logbook(&crate::logexport::Source::of(&e), "adif", None, None)
+                .expect("the log reads")
+                .text;
         assert!(
             adif.contains("<STATION_CALLSIGN:3>W6R"),
             "the export is the only artifact that can answer 'which call worked this?': {adif}"

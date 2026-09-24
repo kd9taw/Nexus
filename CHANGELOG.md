@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Logbook now works from the keyboard.** Tab into the list, then the arrow keys, Page Up and
+  Page Down, and Home and End move through your contacts; Enter edits the one you are on, and Delete
+  asks before deleting it. A Remote browser without the station's edit rights can move through the
+  list but not edit or delete.
+
 - **A station on your watch list now stands out on the Call Roster, the Stations list and Spots.**
   The watch list (Settings ▸ Spots & Alerts) sounded one loud alert when a station you asked for
   was decoded, and after that nothing on the screen said which row it was. Every station the list
@@ -131,6 +136,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you stop it. (#304)
 ### Changed
 
+- **Sorting, searching or filtering the Logbook now takes you back to the first contact.** The list
+  used to stay at the same scroll depth, showing whatever contacts had landed there in the new
+  order. A contact logged while you are scrolled down still leaves the rows you are looking at
+  exactly where they are.
+
 - **Your logbook now lives in a database, and `log.adi` is kept as an up-to-date copy of it.**
   Every change to the log used to rewrite the whole of `log.adi` — every stamp, every
   confirmation, every edit — and on a big log that rewrite was long enough to make the radio and
@@ -224,7 +234,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An open comment in the Logbook no longer leaves a gap, or gets covered, when the log changes.**
   With a contact's comment or note open, a contact logged or deleted above it left a blank gap
   where the open row had been, or drew the rows below over its note, until those rows were drawn
-  again. The open row now keeps its height in its new place.
+  again. Sorting or searching the list did the same. The open row now keeps its height in its new
+  place. In a Remote browser's Logbook, an open row also no longer flickers out of place for a moment
+  when the page refreshes with a new contact.
+
+- **The callsign card no longer shows "New DXCC!" for a country you have already worked while the
+  log is still loading.** On the log strip and the Operate card, the need badge now appears once the
+  log has answered for that call.
+
+- **After a question or a dialog closes, the keyboard goes back to where you were.** Answering a
+  confirmation, or closing the Getting started guide, the setup wizard, a contact's details, the
+  CHIRP how-to, the satellite question or the logbook-saving notice, left the keyboard on the page
+  itself, so the next Tab started again from the top. It now returns to the button you opened it
+  from, and after a delete to the same button on the next item.
 
 - **A paper QSL card you mark as received now counts toward your awards straight away.** Ticking
   the card in the Logbook recorded the card but not the confirmation that Awards, the Needed
@@ -236,6 +258,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out the state from the callsign for a US contact that arrives without one. For an import, a QRZ
   download or a Field Day merge that used to happen only after the next restart. It now happens
   as the contact arrives, as it always did for a contact you log yourself.
+
+- **Exporting a big logbook, or starting a LoTW upload, no longer makes the radio wait.** The
+  ADIF and CSV exports (the whole log, a date range, one operator or one activation) and the
+  lists of operators and activations to choose from went through every contact while the radio
+  waited for them, and so did the LoTW upload while it gathered the contacts to sign — a pause
+  the decoder and the waterfall felt on a log of a hundred thousand contacts. They now read the
+  logbook database while the radio carries on, and the files are the same, byte for byte. If a
+  change you made is not in the database ten seconds after you ask for an export — still on its
+  way, or refused by the disk — the file is still written with what the database holds, so an
+  export still rescues your log from a failing disk, and Nexus tells you how many recent changes
+  the file is missing and whether they are still being saved.
+
+- **Keeping `log.adi` up to date no longer needs memory the size of your log.** Every change
+  used to build the whole file in memory before writing it — about 64 MB on a log of 150,000
+  contacts, about 210 MB on 500,000, each time. `log.adi` is now written straight from the
+  logbook database a few thousand contacts at a time, byte for byte the same file.
 
 - **With a big logbook, an upload being marked no longer makes Awards, the Needed board, the
   Journey and the statistics start over.** Each of them went through every contact again after

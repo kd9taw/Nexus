@@ -2303,6 +2303,31 @@ impl From<tempo_core::logbook::LoggedActivation> for LoggedActivationDto {
     }
 }
 
+/// A Logbook export — serde mirror of `crate::logexport::Exported`: the file, and the changes
+/// made before the export was asked for that the logbook database did not hold yet, so the file
+/// lacks. The operator's ruling (SPEC-2 v3 C15) is that the file is written anyway — the rescue a
+/// failing disk needs — and the screen says how many it lacks. Both `0`: nothing to say.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogExportDto {
+    pub text: String,
+    /// Still being saved: on their way to the database, or sent again until it takes them.
+    pub saving: u32,
+    /// Refused by the database for what they are: kept in memory for the session and asked
+    /// about when Nexus quits.
+    pub held: u32,
+}
+
+impl From<crate::logexport::Exported> for LogExportDto {
+    fn from(e: crate::logexport::Exported) -> Self {
+        LogExportDto {
+            text: e.text,
+            saving: e.saving as u32,
+            held: e.held as u32,
+        }
+    }
+}
+
 impl From<tempo_core::logbook::QsoRecord> for LoggedQso {
     fn from(r: tempo_core::logbook::QsoRecord) -> Self {
         LoggedQso {
@@ -3553,6 +3578,22 @@ mod tests {
         }
         let back: Js8State = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
+    }
+
+    /// ⭐ An export's wire keys, as `LogExport` in the UI reads them: the file, and each of the
+    /// two counts under its own name — crossed, the screen would call a change the database
+    /// refused for good one that is still being saved.
+    #[test]
+    fn an_export_reaches_the_screen_with_each_count_under_its_own_name() {
+        let d = LogExportDto::from(crate::logexport::Exported {
+            text: "<EOR>".into(),
+            saving: 2,
+            held: 1,
+        });
+        assert_eq!(
+            serde_json::to_value(&d).unwrap(),
+            serde_json::json!({ "text": "<EOR>", "saving": 2, "held": 1 })
+        );
     }
 }
 

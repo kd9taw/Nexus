@@ -31,6 +31,7 @@
 // quit to report.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Dialog } from './ui/Dialog'
+import { useFocusReturn } from '../focusReturn'
 import { haltTx, logbookSaveChoice } from '../api'
 import { t } from '../i18n'
 import { useLocale } from '../i18n/useLocale'
@@ -139,6 +140,10 @@ export function LogbookSaving() {
     void logbookSaveChoice(keepTrying).catch(() => {})
   }
 
+  // Closed without a quit, the keyboard goes back to where it was (focusReturn.ts): one focus, in
+  // the close Radix already schedules — no timer and no wait of its own, so a quit is never held.
+  const returnFocus = useFocusReturn(shown !== null)
+
   const radioLive = shown?.ev.radioLive ?? false
   const stop = radioLive ? (
     <button type="button" className="settings-refresh" onClick={() => void haltTx().catch(() => {})}>
@@ -207,6 +212,7 @@ export function LogbookSaving() {
       onOpenChange={() => {}}
       title={title}
       description={description}
+      onCloseAutoFocus={returnFocus}
     >
       {more}
       {actions && <div className="confirm-actions">{actions}</div>}
