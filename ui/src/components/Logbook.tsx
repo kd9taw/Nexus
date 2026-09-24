@@ -962,8 +962,8 @@ export function Logbook({
       held.current.delete(oldest)
     }
   }
-  const recall = (orderRev: number, offset: number) => {
-    const k = pageKey(queryKey, orderRev, offset)
+  const recall = (orderRev: number, offset: number, qk = queryKey) => {
+    const k = pageKey(qk, orderRev, offset)
     const page = held.current.get(k)
     if (page) {
       held.current.delete(k)
@@ -975,9 +975,19 @@ export function Logbook({
   const [shown, setShown] = useState<{ queryKey: string; orderRev: number } | null>(null)
   const latestRev = latestFirst && logQueryKey(latestFirst.query) === queryKey ? latestFirst.orderRev : null
   const onScreen = shown?.queryKey === queryKey ? shown.orderRev : null
-  const showingRev = onScreen ?? latestRev
+  // A NEW LIST IS SHOWN ONCE ITS FIRST PAGE IS HERE. Until then the list on screen stays — the old
+  // sort or search, for the moment the new one takes to answer — where it used to be taken away: a
+  // source that answers one question at a time (C17a's) left the list EMPTY for a frame or more,
+  // "no contacts match" with it, and in a browser the scroll then fell back to the top of the pane,
+  // the globe band in view and the search box pulled down the screen under the operator's typing.
+  // A newer order of one list already waited this way (the swap, below). The whole-log source
+  // answers in the same render, so there nothing ever waits.
+  const kept = control && onScreen === null && latestRev === null ? shown : null
+  /** The query of the list ON SCREEN: the new one, or — while its first page is on its way — the old. */
+  const listKey = kept ? kept.queryKey : queryKey
+  const showingRev = kept ? kept.orderRev : (onScreen ?? latestRev)
   const pendingRev = onScreen !== null && latestRev !== null && latestRev > onScreen ? latestRev : null
-  const listTotal = control ? (showingRev === null ? 0 : (recall(showingRev, 0)?.total ?? 0)) : remoteOrder.length
+  const listTotal = control ? (showingRev === null ? 0 : (recall(showingRev, 0, listKey)?.total ?? 0)) : remoteOrder.length
 
   // 3-D globe band, gated on a real GPU (software renderers would make the whole
   // Logbook crawl — those machines just get the plain table). Probed once per mount.
@@ -1039,7 +1049,7 @@ export function Logbook({
   // (`openAt`: its place in the order on screen), and a swap moves the height with it (in the
   // placing effect below, before the view is placed).
   const openAt = useRef<{ queryKey: string; at: Map<string, number> }>({ queryKey, at: new Map() })
-  if (openAt.current.queryKey !== queryKey) openAt.current = { queryKey, at: new Map() }
+  if (openAt.current.queryKey !== listKey) openAt.current = { queryKey: listKey, at: new Map() }
   /** The open rows' heights to move, taken as a swap is decided and applied in the render that
    *  shows the new order (when the list is its new length), before that render is placed. */
   const heightMoves = useRef<{ closed: number; moves: { key: string; from: number; to: number | null; size: number }[] } | null>(null)
@@ -1053,7 +1063,7 @@ export function Logbook({
   // row is open, the old list's heights are dropped and the rows drawn are measured, in the placing
   // effect below, before the paint. `drawnList` names the list on screen: the query's (once its
   // first page is here), or the Remote page's rows.
-  const drawnList = control ? (showingRev === null ? null : queryKey) : observedLog.length ? observedLog : null
+  const drawnList = control ? (showingRev === null ? null : listKey) : observedLog.length ? observedLog : null
   const heightsFor = useRef<string | LoggedQso[] | null>(null)
 
   const virtualRows = rowVirtualizer.getVirtualItems()
@@ -1093,7 +1103,9 @@ export function Logbook({
     for (let o = Math.floor(Math.max(0, first) / LOG_PAGE) * LOG_PAGE; o <= last; o += LOG_PAGE) out.push(o)
     return out
   }
-  const visibleOffsets = control ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))] : []
+  // The pages the view shows — of the list on screen's own query only: while an old list is kept
+  // (above), the new query is asked for its first page and nothing else.
+  const visibleOffsets = control && !kept ? [...new Set(virtualRows.map((v) => Math.floor(v.index / LOG_PAGE) * LOG_PAGE))] : []
   const pendingTotal = pendingRev === null ? 0 : (recall(pendingRev, 0)?.total ?? 0)
   const targetOffsets =
     target === undefined || pendingTotal === 0
@@ -1126,7 +1138,7 @@ export function Logbook({
     }
     if (showingRev === null) return undefined
     const offset = Math.floor(i / LOG_PAGE) * LOG_PAGE
-    const page = recall(showingRev, offset)
+    const page = recall(showingRev, offset, listKey)
     if (!page) return undefined
     const k = i - offset
     return k < page.rows.length ? { q: page.rows[k], key: page.keys[k] } : undefined
