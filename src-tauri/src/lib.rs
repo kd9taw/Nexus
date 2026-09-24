@@ -12197,9 +12197,9 @@ async fn export_general_log(
     // A day bound is (start, end) of that UTC day: `from` uses the day's start, `to` its end.
     let from_unix = parse(from)?.map(|b| b.0);
     let to_unix = parse(to)?.map(|b| b.1);
-    let rows = engine_lock(&state).log_rows();
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
     log_folds::off_the_runtime(move || {
-        tempo_app::logexport::export_logbook(&rows, &format, from_unix, to_unix)
+        tempo_app::logexport::export_logbook(&source, &format, from_unix, to_unix)
     })
     .await
 }
@@ -12391,8 +12391,8 @@ fn import_settings_bundle(
 /// off the engine lock (SPEC-2 v3 C15).
 #[tauri::command]
 async fn log_operators(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
-    let rows = engine_lock(&state).log_rows();
-    log_folds::off_the_runtime(move || tempo_app::logexport::operators(&rows)).await
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    log_folds::off_the_runtime(move || tempo_app::logexport::operators(&source)).await
 }
 
 /// ADIF for ONE operator's contacts (#25) — POTA and Field Day both require each operator to
@@ -12402,9 +12402,11 @@ async fn export_log_for_operator(
     state: State<'_, SharedEngine>,
     operator: String,
 ) -> Result<String, String> {
-    let rows = engine_lock(&state).log_rows();
-    log_folds::off_the_runtime(move || tempo_app::logexport::export_for_operator(&rows, &operator))
-        .await
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
+    log_folds::off_the_runtime(move || {
+        tempo_app::logexport::export_for_operator(&source, &operator)
+    })
+    .await
 }
 
 /// Distinct activations present in the log — your park × UTC day × the callsign you signed,
@@ -12415,9 +12417,9 @@ async fn export_log_for_operator(
 async fn log_activations(
     state: State<'_, SharedEngine>,
 ) -> Result<Vec<tempo_app::dto::LoggedActivationDto>, String> {
-    let rows = engine_lock(&state).log_rows();
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
     log_folds::off_the_runtime(move || {
-        tempo_app::logexport::activations(&rows)
+        tempo_app::logexport::activations(&source)
             .map(|found| found.into_iter().map(Into::into).collect())
     })
     .await
@@ -12439,10 +12441,10 @@ async fn export_log_for_activation(
     day_start_unix: u64,
     callsign: Option<String>,
 ) -> Result<String, String> {
-    let rows = engine_lock(&state).log_rows();
+    let source = tempo_app::logexport::Source::of(&engine_lock(&state));
     log_folds::off_the_runtime(move || {
         tempo_app::logexport::export_for_activation(
-            &rows,
+            &source,
             &reference,
             day_start_unix,
             callsign.as_deref(),

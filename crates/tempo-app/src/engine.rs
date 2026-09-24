@@ -34491,8 +34491,9 @@ mod tests {
             Some("W6R"),
             "the call the contact was made under must reach the record"
         );
-        let adif = crate::logexport::export_logbook(&e.log_rows(), "adif", None, None)
-            .expect("the log reads");
+        let adif =
+            crate::logexport::export_logbook(&crate::logexport::Source::of(&e), "adif", None, None)
+                .expect("the log reads");
         assert!(
             adif.contains("<STATION_CALLSIGN:3>W6R"),
             "the export is the only artifact that can answer 'which call worked this?': {adif}"

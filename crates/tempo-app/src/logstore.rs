@@ -1915,7 +1915,10 @@ mod tests {
     /// CSV whole and bounded at contact times and a second either side, every operator in
     /// `log` in other spellings and one nobody is, every activation it lists and some it does
     /// not.
-    fn every_export(rows: &LogRows, log: &tempo_core::logbook::Logbook) -> Vec<(String, String)> {
+    fn every_export(
+        rows: &crate::logexport::Source,
+        log: &tempo_core::logbook::Logbook,
+    ) -> Vec<(String, String)> {
         use crate::logexport as x;
         let mut out = Vec::new();
         let mut bounds: Vec<Option<u64>> = vec![None];
@@ -1974,7 +1977,10 @@ mod tests {
     /// answer, whose rules are the ones every export ran before C15 (tempo-core's
     /// `export_rule_tests` holds them to the old code byte for byte).
     fn every_export_in_memory(log: &tempo_core::logbook::Logbook) -> Vec<(String, String)> {
-        every_export(&LogRows::Memory(log.records().to_vec()), log)
+        every_export(
+            &crate::logexport::Source::of_rows(LogRows::Memory(log.records().to_vec())),
+            log,
+        )
     }
 
     /// ★ EVERY EXPORT FROM THE STORE IS THE EXPORT OF THE LOG IN MEMORY, BYTE FOR BYTE — every
@@ -2007,20 +2013,20 @@ mod tests {
                 }
                 let (store, log) = {
                     let eng = e.lock().unwrap();
+                    assert!(
+                        matches!(eng.log_rows(), LogRows::Store(_)),
+                        "premise: the store's rows"
+                    );
                     let held: Vec<QsoRecord> = eng
                         .log_records()
                         .iter()
                         .map(|r| QsoRecord::clone(r))
                         .collect();
                     (
-                        eng.log_rows(),
+                        crate::logexport::Source::of(&eng),
                         tempo_core::logbook::Logbook::from_store(held),
                     )
                 };
-                assert!(
-                    matches!(store, LogRows::Store(_)),
-                    "premise: the store's rows"
-                );
                 let want = every_export_in_memory(&log);
                 let got = every_export(&store, &log);
                 assert_eq!(got.len(), want.len());
@@ -2060,20 +2066,20 @@ mod tests {
         let e = launch_with_resolvers(&d);
         flush(&e.lock().unwrap());
         let hold = WriteHold::take(&d.db()).unwrap();
-        let rows = {
+        let source = {
             let mut eng = e.lock().unwrap();
             eng.log_qso(qso("W9LATE", 1_788_100_000));
-            eng.log_rows()
+            crate::logexport::Source::of(&eng)
         };
         let kind = || tempo_core::logbook::ExportKind::Adif {
             from: None,
             to: None,
         };
-        let refused = crate::logexport::export_waiting(&rows, kind(), Duration::from_millis(300));
+        let refused = crate::logexport::export_waiting(&source, kind(), Duration::from_millis(300));
         let why = refused.expect_err("an export missing the contact is refused");
-        assert!(why.contains("not saved yet"), "{why}");
+        assert!(why.contains("not saved to its database yet"), "{why}");
         drop(hold);
-        let text = crate::logexport::export_waiting(&rows, kind(), Duration::from_secs(60))
+        let text = crate::logexport::export_waiting(&source, kind(), Duration::from_secs(60))
             .expect("control: once the store has it");
         assert!(text.contains("W9LATE"), "and the export holds it");
     }
@@ -3302,6 +3308,10 @@ mod tests {
     /// retry ladder (about 21 s — this test waits it out), the writer drops the change, and the
     /// engine keeps it: the snapshot says so, the quit counts it as a change that sending again
     /// can save, and sending it again lands it once the database is free.
+    ///
+    /// And an export (SPEC-2 v3 C15) follows the change, not the writer's watermark: refused
+    /// while the change is held, made once the re-send has landed it — though the read's own
+    /// freshness, capped for good by the drop, calls every read after it stale.
     #[test]
     fn the_database_s_busy_refusal_is_sent_again_and_the_snapshot_says_so() {
         let d = Dir::new("resend-busy");
@@ -3320,10 +3330,38 @@ mod tests {
         assert_eq!((trouble.retrying, trouble.held), (1, 0), "{trouble:?}");
         assert!(trouble.reason.contains("locked"), "{trouble:?}");
         assert_eq!(e.log_resend_due(), 0, "not sent again the moment it drops");
+        let adif = || tempo_core::logbook::ExportKind::Adif {
+            from: None,
+            to: None,
+        };
+        let held = crate::logexport::export_waiting(
+            &crate::logexport::Source::of(&e),
+            adif(),
+            Duration::from_millis(200),
+        )
+        .expect_err("no export while the change is held");
+        assert!(held.contains("locked"), "and it says why: {held}");
 
         drop(hold);
         assert_eq!(e.log_resend_all(), 1, "sent again, from memory");
         assert!(e.log_unsaved().wait(DURABLE_WAIT).saved(), "and it lands");
+        let text = crate::logexport::export_waiting(
+            &crate::logexport::Source::of(&e),
+            adif(),
+            DURABLE_WAIT,
+        )
+        .expect("an export once the re-send has landed the change");
+        assert!(text.contains("<QSL_RCVD:1>Y"), "and it carries the change");
+        let fresh = e
+            .log_rows()
+            .each_record(Duration::from_millis(100), &mut |_| {
+                std::ops::ControlFlow::Continue(())
+            })
+            .expect("the store reads");
+        assert!(
+            matches!(fresh, Freshness::Stale(_)),
+            "control: the read's own freshness is stale for good after the drop: {fresh:?}"
+        );
         let id = e.log_records()[3].id;
         assert!(
             stored(&d)
