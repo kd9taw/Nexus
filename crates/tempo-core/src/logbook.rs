@@ -714,6 +714,55 @@ pub struct UploadHealth {
     pub clublog: SourceHealth,
 }
 
+impl UploadHealth {
+    /// Fold one contact's stamps in — [`Logbook::upload_health`]'s step, taken in log order.
+    /// Its own function so a pass that reads the log a row at a time (a read of the store)
+    /// runs the same rule; of two failures at one instant the first in the log names the why.
+    pub fn add(&mut self, r: &QsoRecord) {
+        for (src, status) in [
+            (&mut self.lotw, &r.upload.lotw),
+            (&mut self.eqsl, &r.upload.eqsl),
+            (&mut self.qrz, &r.upload.qrz),
+            (&mut self.clublog, &r.upload.clublog),
+        ] {
+            // `when_unix == 0` is not a date. The ADIF reader synthesises an
+            // `Accepted` stamp for any imported record carrying `LOTW_QSL_SENT=Y`,
+            // with no time to give it — counting those would tell every operator with
+            // an imported legacy log that their last LoTW upload was 1 Jan 1970.
+            let Some(s) = status.as_ref().filter(|s| s.when_unix > 0) else {
+                continue;
+            };
+            if s.outcome.is_sent() {
+                // `Duplicate` counts as a success on purpose: the service telling us
+                // it already has the QSO proves both the credentials and the record.
+                if src.last_success_unix.is_none_or(|w| s.when_unix > w) {
+                    src.last_success_unix = Some(s.when_unix);
+                }
+            } else if src.last_failure_unix.is_none_or(|w| s.when_unix > w) {
+                src.last_failure_unix = Some(s.when_unix);
+                src.last_failure_detail = s.detail;
+            }
+        }
+    }
+}
+
+/// When a contact's LoTW upload is awaiting the echo (`Pending`), the contact's time — what
+/// [`Logbook::oldest_pending_lotw_date`] takes the least of. `None` for any other contact.
+pub fn lotw_pending_since(r: &QsoRecord) -> Option<u64> {
+    matches!(
+        r.upload.lotw.as_ref().map(|s| s.outcome),
+        Some(UploadOutcome::Pending)
+    )
+    .then_some(r.when_unix)
+}
+
+/// A contact time as the UTC `YYYY-MM-DD` an own-QSO pull is bounded by — see
+/// [`Logbook::oldest_pending_lotw_date`].
+pub fn lotw_pull_date(unix: u64) -> String {
+    let (y, m, d, ..) = datetime_utc(unix);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// Per-source outbound upload state. Absent (`None`) = never attempted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UploadState {
@@ -2258,30 +2307,7 @@ impl Logbook {
     pub fn upload_health(&self) -> UploadHealth {
         let mut h = UploadHealth::default();
         for r in &self.records {
-            for (src, status) in [
-                (&mut h.lotw, &r.upload.lotw),
-                (&mut h.eqsl, &r.upload.eqsl),
-                (&mut h.qrz, &r.upload.qrz),
-                (&mut h.clublog, &r.upload.clublog),
-            ] {
-                // `when_unix == 0` is not a date. The ADIF reader synthesises an
-                // `Accepted` stamp for any imported record carrying `LOTW_QSL_SENT=Y`,
-                // with no time to give it — counting those would tell every operator with
-                // an imported legacy log that their last LoTW upload was 1 Jan 1970.
-                let Some(s) = status.as_ref().filter(|s| s.when_unix > 0) else {
-                    continue;
-                };
-                if s.outcome.is_sent() {
-                    // `Duplicate` counts as a success on purpose: the service telling us
-                    // it already has the QSO proves both the credentials and the record.
-                    if src.last_success_unix.is_none_or(|w| s.when_unix > w) {
-                        src.last_success_unix = Some(s.when_unix);
-                    }
-                } else if src.last_failure_unix.is_none_or(|w| s.when_unix > w) {
-                    src.last_failure_unix = Some(s.when_unix);
-                    src.last_failure_detail = s.detail;
-                }
-            }
+            h.add(r);
         }
         h
     }
@@ -2293,18 +2319,9 @@ impl Logbook {
     pub fn oldest_pending_lotw_date(&self) -> Option<String> {
         self.records
             .iter()
-            .filter(|r| {
-                matches!(
-                    r.upload.lotw.as_ref().map(|s| s.outcome),
-                    Some(UploadOutcome::Pending)
-                )
-            })
-            .map(|r| r.when_unix)
+            .filter_map(|r| lotw_pending_since(r))
             .min()
-            .map(|unix| {
-                let (y, m, d, ..) = datetime_utc(unix);
-                format!("{y:04}-{m:02}-{d:02}")
-            })
+            .map(lotw_pull_date)
     }
 
     /// The whole logbook as ADIF text (header + records).
