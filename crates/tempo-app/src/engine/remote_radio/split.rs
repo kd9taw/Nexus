@@ -69,8 +69,8 @@ impl Engine {
     }
 
     /// The station's own key-time judgement of a transmit carrier — the one `tx_allowed` applies,
-    /// Phone and Digital judged in the mode the rig is actually in — so a split or XIT is refused
-    /// here exactly where the station would then refuse to key it.
+    /// Phone and the soundcard sections judged in the mode the rig is actually in — so a split
+    /// or XIT is refused here exactly where the station would then refuse to key it.
     fn remote_emission_allowed(&self, mhz: f64) -> bool {
         self.emission_in_use_allowed(mhz)
     }
@@ -127,8 +127,8 @@ impl Engine {
         permit: &Permit,
     ) -> Result<(), Reason> {
         self.remote_clarifier_ready(connection, permit, true)?;
-        // A radio with no XIT (the IC-9700) says so, rather than admitting a change the
-        // station's own verb will not make.
+        // A radio with no XIT (the IC-9700, and every radio in `settings::NO_XIT_RIGS`) says so,
+        // rather than admitting a change the station's own verb will not make.
         if !self.xit_supported() {
             return Err(Reason::UnsupportedAction);
         }

@@ -76,13 +76,17 @@ pub(crate) struct Saving {
 }
 
 /// `logbook-save-failed`: the question. `pending` changes may still land if the operator waits;
-/// `refused` ones never will; `reason` is the writer's own words, shown untranslated.
+/// `retryable` ones the database refused for a reason that can pass, and Keep trying sends them
+/// again; `refused` ones it refused for what they are, and nothing will land them. The reasons
+/// are the writer's own words, shown untranslated.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SaveFailed {
     pub pending: usize,
+    pub retryable: usize,
     pub refused: usize,
     pub reason: Option<String>,
+    pub retry_reason: Option<String>,
     pub radio_live: bool,
 }
 
@@ -99,6 +103,15 @@ pub(crate) enum Notice {
     Saving(Saving),
     Failed(SaveFailed),
     Done(SaveDone),
+}
+
+/// What the quit asks of the logbook between looks: wait a while, or send again what the
+/// database refused and can still take (Keep trying) — each answered with where the changes
+/// stand after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step {
+    Wait(Duration),
+    Resend,
 }
 
 /// The operator's answer to the question.
@@ -145,12 +158,23 @@ pub(crate) fn save_the_logbook(
     tell: &mut dyn FnMut(Notice),
     ask: &mut dyn FnMut() -> Choice,
 ) -> Outcome {
-    // Handles, taken under the lock; everything after this runs with the lock released.
-    let unsaved = engine_lock(engine).log_unsaved();
+    let mut unsaved = take_what_to_save(engine);
     if unsaved.is_empty() {
         return Outcome::NothingToSave;
     }
-    let outcome = see_it_through(&mut |d| unsaved.wait(d), patience, radio_live, tell, ask);
+    let outcome = see_it_through(
+        &mut |step| match step {
+            Step::Wait(d) => unsaved.wait(d),
+            Step::Resend => {
+                unsaved = take_what_to_save(engine);
+                unsaved.standing()
+            }
+        },
+        patience,
+        radio_live,
+        tell,
+        ask,
+    );
     if outcome == Outcome::Saved {
         // Every change is in the logbook. `log.adi` next — a copy beside it for other programs,
         // so a problem there is the diagnostic log's, never a question for the operator.
@@ -163,16 +187,29 @@ pub(crate) fn save_the_logbook(
     outcome
 }
 
-/// The wait and the question, over `standing_after` — "wait up to this long, then say where the
-/// changes stand" ([`tempo_app::logstore::Unsaved::wait`] in the app).
+/// What the quit waits on, taken under a brief Engine lock — handles only, no I/O. First, every
+/// change the database refused for a reason that can pass is sent again from memory, whatever
+/// its own wait: the operator is leaving, and this is its last chance ([`Engine::log_resend_all`]).
+/// Everything after runs with the lock released.
+///
+/// [`Engine::log_resend_all`]: tempo_app::engine::Engine::log_resend_all
+fn take_what_to_save(engine: &SharedEngine) -> tempo_app::logstore::Unsaved {
+    let mut eng = engine_lock(engine);
+    eng.log_resend_all();
+    eng.log_unsaved()
+}
+
+/// The wait and the question, over `store` — "wait up to this long", or "send the refused
+/// changes again", each answered with where the changes stand
+/// ([`tempo_app::logstore::Unsaved`] in the app).
 fn see_it_through(
-    standing_after: &mut dyn FnMut(Duration) -> Standing,
+    store: &mut dyn FnMut(Step) -> Standing,
     patience: Duration,
     radio_live: bool,
     tell: &mut dyn FnMut(Notice),
     ask: &mut dyn FnMut() -> Choice,
 ) -> Outcome {
-    let mut s = standing_after(Duration::ZERO);
+    let mut s = store(Step::Wait(Duration::ZERO));
     tempo_core::applog::info(
         "logbook",
         &format!(
@@ -185,10 +222,11 @@ fn see_it_through(
         pending: s.pending,
         radio_live,
     }));
-    let mut deadline = Instant::now() + patience;
+    let started = Instant::now();
+    let mut deadline = started + patience;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
-        s = standing_after(left.min(PROGRESS_EVERY));
+        s = store(Step::Wait(left.min(PROGRESS_EVERY)));
         if s.pending > 0 && Instant::now() < deadline {
             tell(Notice::Saving(Saving {
                 pending: s.pending,
@@ -200,14 +238,19 @@ fn see_it_through(
             return Outcome::Saved;
         }
         // The minute is up with changes still on their way, or the logbook refused one.
-        let unsaved = s.pending + s.refused;
+        let unsaved = s.pending + s.retryable + s.refused;
         tempo_core::applog::warn(
             "logbook",
             &format!(
                 "the logbook is not saved: {} change(s) still on their way after {} s, {} \
-                 refused{}; asking the operator",
+                 refused for a reason that can pass{}, {} refused for good{}; asking the operator",
                 s.pending,
-                patience.as_secs(),
+                started.elapsed().as_secs(),
+                s.retryable,
+                s.retry_reason
+                    .as_deref()
+                    .map(|r| format!(" ({r})"))
+                    .unwrap_or_default(),
                 s.refused,
                 s.reason
                     .as_deref()
@@ -217,22 +260,29 @@ fn see_it_through(
         );
         tell(Notice::Failed(SaveFailed {
             pending: s.pending,
+            retryable: s.retryable,
             refused: s.refused,
             reason: s.reason.clone(),
+            retry_reason: s.retry_reason.clone(),
             radio_live,
         }));
         match ask() {
-            Choice::KeepTrying if s.pending > 0 => {
+            Choice::KeepTrying if s.pending + s.retryable > 0 => {
                 tempo_core::applog::info("logbook", "the operator chose to keep trying");
+                // Send again what the database refused and can still take — from memory — and
+                // wait on it afresh with what is still on its way.
+                if s.retryable > 0 {
+                    s = store(Step::Resend);
+                }
                 deadline = Instant::now() + patience;
                 tell(Notice::Saving(Saving {
                     pending: s.pending,
                     radio_live,
                 }));
             }
-            // Nothing is still on its way, and a refused change cannot be waited into the
-            // logbook: the dialog does not offer this. Ask again — the quit is the only answer
-            // that ends it.
+            // Nothing is still on its way, and what the logbook refused for good cannot be
+            // saved by waiting or by sending it again: the dialog does not offer this. Ask
+            // again — the quit is the only answer that ends it.
             Choice::KeepTrying => {}
             Choice::QuitWithout => {
                 tempo_core::applog::error(
@@ -265,6 +315,16 @@ static STAGE: AtomicU8 = AtomicU8::new(IDLE);
 
 /// The operator's answer, on its way to the quit that asked — one per question.
 static ANSWER: Mutex<Option<Sender<Choice>>> = Mutex::new(None);
+
+/// A held quit has settled the logbook: saved it, or the operator chose to quit without the
+/// rest. The exit's own flush then leaves the refused changes alone rather than sending them
+/// again behind the operator's back — and making the exit wait on them after "quit without".
+static SETTLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a held quit has settled the logbook (see [`SETTLED`]).
+pub(crate) fn the_quit_settled_the_logbook() -> bool {
+    SETTLED.load(Ordering::SeqCst)
+}
 
 /// What asked the app to quit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -415,6 +475,9 @@ fn quit_then(
     let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         prepare_quit(engine, stop_the_radio, patience, tell, ask)
     }));
+    if ended.is_ok() {
+        SETTLED.store(true, Ordering::SeqCst);
+    }
     if ended.is_err() {
         tempo_core::applog::error(
             "logbook",
@@ -423,6 +486,31 @@ fn quit_then(
         );
     }
     after();
+}
+
+/// The update path's last word on the log: whatever reached the store after the visible save,
+/// waited for WITHOUT the Engine lock. Before an update the radio loop is still running and needs
+/// that lock every 20 ms, so this takes the handles under a brief lock and waits with it released
+/// — where the exit's own flush ([`crate::flush_logbook`]) waits under it, deliberately, once
+/// the radio has stopped. Nothing is sent again here: the visible save already did that, and
+/// asked. Bounded by `cap`; what is still not on disk then is written to the diagnostic log.
+pub(crate) fn flush_logbook_unlocked(engine: &SharedEngine, cap: Duration) {
+    let unsaved = engine_lock(engine).log_unsaved();
+    let s = unsaved.wait(cap);
+    if !s.saved() {
+        tempo_core::applog::error(
+            "logbook",
+            &format!(
+                "the logbook was not all on disk when the installer took over: {} change(s) \
+                 still on their way, {} refused",
+                s.pending,
+                s.retryable + s.refused
+            ),
+        );
+    }
+    if let Some(problem) = unsaved.write_mirror(cap) {
+        tempo_core::applog::warn("logbook", &problem);
+    }
 }
 
 /// Before a Windows update hands the machine to the installer: save the logbook with the
@@ -679,8 +767,15 @@ mod tests {
         let update = body_of(lib, "async fn prepare_update_install(");
         assert!(
             at(update, "quit::save_before_the_installer(&app);")
-                < at(update, "persist_journals(&app);"),
-            "the Windows update saves the logbook, shown, before the journals and the installer"
+                < at(update, "quit::flush_logbook_unlocked(")
+                && at(update, "quit::flush_logbook_unlocked(")
+                    < at(update, "persist_other_journals(&app);"),
+            "the Windows update saves the logbook, shown, then has its last word on it without \
+             the Engine lock, before the other journals and the installer"
+        );
+        assert!(
+            !update.contains("persist_journals(") && !update.contains("flush_logbook("),
+            "and never waits for the log under the Engine lock: the radio loop still runs"
         );
 
         let list = lib
@@ -714,6 +809,105 @@ mod tests {
         );
         assert!(closed, "the close still happens");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The re-sends the quit relies on, wired where they must be — source-scanned, as the
+    /// radio stop's order is above: which engine call each path makes, in what order, is what
+    /// is under test, and no type sees that.
+    ///
+    /// - the quit's first look at the logbook sends the refused changes that can land again
+    ///   BEFORE it takes what to wait for, so they are waited on, not reported as lost;
+    /// - Keep trying does the same, then waits on what it sent;
+    /// - the snapshot poll sends them again as each one's wait runs out, before the snapshot
+    ///   that reports them;
+    /// - the exit's own flush gives them one more chance when no held quit asked about them.
+    #[test]
+    fn the_quit_and_the_poll_send_refused_changes_again() {
+        let lib = include_str!("lib.rs");
+        let quit = include_str!("quit.rs");
+        let at = |hay: &str, needle: &str| {
+            hay.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is there"))
+        };
+        let take = body_of(quit, "fn take_what_to_save(");
+        assert!(
+            at(take, ".log_resend_all()") < at(take, ".log_unsaved()"),
+            "sent again, then taken to wait on"
+        );
+        let save = body_of(quit, "pub(crate) fn save_the_logbook(");
+        assert!(
+            at(save, "take_what_to_save(engine)") < at(save, "see_it_through("),
+            "the quit's first look sends them again"
+        );
+        assert!(
+            save.contains(
+                "Step::Resend => {\n                unsaved = take_what_to_save(engine);"
+            ),
+            "and Keep trying does the same"
+        );
+        let snapshot = body_of(lib, "async fn get_snapshot(");
+        assert!(
+            at(snapshot, "eng.log_resend_due();") < at(snapshot, "eng.snapshot()"),
+            "the poll sends them again as they come due, before the snapshot that reports them"
+        );
+        let flush = body_of(lib, "fn flush_logbook(");
+        assert!(
+            at(flush, "log_resend_all()") < at(flush, "flush_log_store("),
+            "the exit's flush gives them one more chance"
+        );
+        assert!(
+            flush.contains("if !quit::the_quit_settled_the_logbook() {"),
+            "…unless a held quit already settled the logbook with the operator"
+        );
+    }
+
+    /// ⛔ THE UPDATE PATH'S LAST WORD ON THE LOG DOES NOT HOLD THE ENGINE. Before a Windows
+    /// update the radio loop is still running, and it needs the Engine every 20 ms; the exit's
+    /// own flush waits for the disk UNDER that lock (the radio has stopped by then). So the update
+    /// path takes the handles under a brief lock and waits with it released.
+    ///
+    /// With a change stalled on the disk, the Engine lock stays free for the whole wait. The
+    /// control is the exit's flush: the same scene, and the lock is held the whole time.
+    #[test]
+    fn the_update_paths_last_flush_waits_without_the_engine_lock() {
+        for (control, what) in [(true, "the exit's flush"), (false, "the update's flush")] {
+            let (dir, engine) = engine_on_store("update-flush", 6);
+            let hold =
+                WriteHold::take(&database_path(&dir.join("log.adi"))).expect("stall the store");
+            assert!(engine_lock(&engine).mark_qsl_card(2, true));
+            let flushing = std::thread::spawn({
+                let engine = Arc::clone(&engine);
+                move || {
+                    if control {
+                        crate::flush_logbook(&engine, Duration::from_secs(30));
+                    } else {
+                        flush_logbook_unlocked(&engine, Duration::from_secs(30));
+                    }
+                }
+            });
+            std::thread::sleep(Duration::from_millis(300));
+            assert!(
+                !flushing.is_finished(),
+                "premise: {what} is waiting on the disk"
+            );
+            let free = (0..10).all(|_| {
+                let ok = engine_try_lock(&engine).is_ok();
+                std::thread::sleep(Duration::from_millis(20));
+                ok
+            });
+            if control {
+                assert!(!free, "control: {what} holds the Engine while it waits");
+            } else {
+                assert!(free, "{what} leaves the Engine free while it waits");
+            }
+            drop(hold);
+            flushing.join().expect("the flush");
+            assert!(
+                marked_on_disk(&dir, &engine, 2),
+                "{what} saw the change onto disk"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// The body of the top-level function whose signature starts `sig` in `src`.
@@ -934,8 +1128,10 @@ mod tests {
             said[q],
             Notice::Failed(SaveFailed {
                 pending: 1,
+                retryable: 0,
                 refused: 0,
                 reason: None,
+                retry_reason: None,
                 radio_live: false
             }),
             "one change still on its way, none refused: both choices"
@@ -971,8 +1167,10 @@ mod tests {
         assert!(
             said.contains(&Notice::Failed(SaveFailed {
                 pending: 2,
+                retryable: 0,
                 refused: 0,
                 reason: None,
+                retry_reason: None,
                 radio_live: false
             })),
             "asked, with the count: {said:?}"
@@ -982,27 +1180,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A refused change is not waited out: the question comes as soon as nothing is left on its
-    /// way, with the count and the reason, and a Keep trying (the dialog does not offer one) is
-    /// asked again rather than taken as "saved". Scripted, because a real refusal needs a store
-    /// that refuses; `tempo-app`'s `a_quit_is_told_which_changes_the_store_refused_and_why`
-    /// proves the store reports one this way.
+    /// A change the store refused FOR GOOD is not waited out: the question comes as soon as
+    /// nothing is left on its way, with the count and the reason, and a Keep trying (the dialog
+    /// does not offer one — nothing can save it) is asked again rather than taken as "saved".
+    /// Scripted, because a real refusal needs a store that refuses; `tempo-app`'s
+    /// `a_change_refused_for_what_it_is_is_held_and_never_sent_again` proves the store reports
+    /// one this way.
     #[test]
-    fn a_refused_change_is_asked_about_not_waited_out() {
+    fn a_change_refused_for_good_is_asked_about_not_waited_out() {
         let mut calls = 0;
-        let mut standing = |_: Duration| {
+        let mut resent = 0;
+        let mut store = |step: Step| {
+            if step == Step::Resend {
+                resent += 1;
+            }
             calls += 1;
             if calls == 1 {
                 Standing {
                     pending: 1,
-                    refused: 0,
-                    reason: None,
+                    ..Standing::default()
                 }
             } else {
                 Standing {
-                    pending: 0,
                     refused: 1,
-                    reason: Some("database or disk is full".into()),
+                    reason: Some("UNIQUE constraint failed".into()),
+                    ..Standing::default()
                 }
             }
         };
@@ -1010,7 +1212,7 @@ mod tests {
         let mut answers = vec![Choice::QuitWithout, Choice::KeepTrying];
         let started = Instant::now();
         let outcome = see_it_through(
-            &mut standing,
+            &mut store,
             Duration::from_secs(60),
             false,
             &mut |n| told.lock().unwrap().push((false, n)),
@@ -1021,11 +1223,17 @@ mod tests {
             "not waited out: asked as soon as nothing is left on its way"
         );
         assert_eq!(outcome, Outcome::QuitWithout { unsaved: 1 });
+        assert_eq!(
+            resent, 0,
+            "nothing is sent again: it would be refused again"
+        );
         let said = notices(&told);
         let refused = Notice::Failed(SaveFailed {
             pending: 0,
+            retryable: 0,
             refused: 1,
-            reason: Some("database or disk is full".into()),
+            reason: Some("UNIQUE constraint failed".into()),
+            retry_reason: None,
             radio_live: false,
         });
         assert_eq!(
@@ -1034,6 +1242,82 @@ mod tests {
             "asked, then asked again after a keep trying: {said:?}"
         );
         assert_eq!(said.last(), Some(&Notice::Done(SaveDone { saved: false })));
+    }
+
+    /// ★ KEEP TRYING IS REAL. A change the database refused for a reason that can pass — a full
+    /// disk, another program holding the file — is asked about at once (waiting alone will not
+    /// land it), and Keep trying SENDS IT AGAIN from memory and waits on it afresh; once the
+    /// disk takes it, the quit ends saved. Scripted, like the test above: the store's own tests
+    /// prove a re-send is built from memory and lands
+    /// (`a_dropped_change_is_sent_again_from_memory_when_its_wait_is_up`, and the real busy
+    /// refusal in `the_database_s_busy_refusal_is_sent_again_and_the_snapshot_says_so`).
+    #[test]
+    fn keep_trying_sends_a_refused_change_again_and_waits_on_it() {
+        let mut steps: Vec<Step> = Vec::new();
+        let mut store = |step: Step| {
+            steps.push(step);
+            match steps.iter().filter(|s| **s == Step::Resend).count() {
+                // Before Keep trying: the disk refused it, and refuses it still.
+                0 => Standing {
+                    retryable: 1,
+                    retry_reason: Some("database or disk is full".into()),
+                    ..Standing::default()
+                },
+                // Sent again: on its way, then landed.
+                _ if steps.last() == Some(&Step::Resend) => Standing {
+                    pending: 1,
+                    ..Standing::default()
+                },
+                _ => Standing::default(),
+            }
+        };
+        let told = heard();
+        let mut asked = 0;
+        let outcome = see_it_through(
+            &mut store,
+            Duration::from_secs(60),
+            false,
+            &mut |n| told.lock().unwrap().push((false, n)),
+            &mut || {
+                asked += 1;
+                // Keep trying — but never for ever: a quit that sends nothing again would ask
+                // on and on, and this test must fail on that, not hang.
+                if asked > 3 {
+                    Choice::QuitWithout
+                } else {
+                    Choice::KeepTrying
+                }
+            },
+        );
+        assert_eq!(outcome, Outcome::Saved, "it lands once sent again");
+        assert_eq!(asked, 1, "asked once");
+        assert_eq!(
+            steps.iter().filter(|s| **s == Step::Resend).count(),
+            1,
+            "Keep trying sent it again, once: {steps:?}"
+        );
+        let said = notices(&told);
+        let q = said
+            .iter()
+            .position(|n| matches!(n, Notice::Failed(_)))
+            .expect("the question");
+        assert_eq!(
+            said[q],
+            Notice::Failed(SaveFailed {
+                pending: 0,
+                retryable: 1,
+                refused: 0,
+                reason: None,
+                retry_reason: Some("database or disk is full".into()),
+                radio_live: false,
+            }),
+            "a change sending again can save: Keep trying is on offer"
+        );
+        assert_eq!(
+            said[q + 1],
+            saving(1),
+            "sent again: back to the saving line"
+        );
     }
 
     /// Before a Windows update the radio is left running, and every notice says so — the
@@ -1077,12 +1361,17 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SaveFailed {
                 pending: 1,
+                retryable: 3,
                 refused: 2,
                 reason: Some("why".into()),
+                retry_reason: Some("full".into()),
                 radio_live: false
             })
             .unwrap(),
-            serde_json::json!({ "pending": 1, "refused": 2, "reason": "why", "radioLive": false })
+            serde_json::json!({
+                "pending": 1, "retryable": 3, "refused": 2, "reason": "why",
+                "retryReason": "full", "radioLive": false
+            })
         );
         assert_eq!(
             serde_json::to_value(SaveDone { saved: true }).unwrap(),

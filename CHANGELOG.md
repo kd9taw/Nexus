@@ -172,6 +172,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed in your log. And if Nexus stops in the middle of importing a large file, the contacts
   it had already taken in are kept; importing the file again adds the rest without duplicating
   any.
+- **The dated backups of your logbook keep several days of copies again, however big the log.**
+  Nexus keeps dated copies of `log.adi` in the `backups/` folder beside it — one a day while the
+  log changes, and one before anything makes it smaller. That folder was capped at 64 MB, which
+  was room for nine copies of the biggest logs of its day and for only ONE copy of a
+  150,000-contact log, so the copy taken before a delete replaced yesterday's. It now holds up to
+  four copies of your log (never less than 64 MB): about 190 MB more beside a 150,000-contact
+  log. How to go back to one of them is in the install guide, under "Restoring the logbook from a
+  backup copy" — now that the logbook is a database, dropping a copy over `log.adi` is not enough
+  on its own.
 - **Closing Nexus while the logbook is still saving now says so, and asks before it drops
   anything.** If you close the window while changes are still on their way to the disk — right
   after a big import, or on a slow drive — Nexus takes the radio off the air first, as it always
@@ -180,6 +189,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has not taken them after a minute, or refuses one, Nexus asks: **Keep trying**, or **Quit
   without the last N changes**. It used to give up after ten seconds without a word. Restarting
   after an update, and installing one on Windows, save the same way first.
+- **A contact the logbook could not save is kept and sent again, and the screen says so.** If
+  the disk is full, fails a write, or another program holds the logbook for too long, Nexus keeps
+  the change in memory and sends it again (after a few seconds, then about once a minute) until
+  the logbook takes it. A message stays on screen while that is happening, with the reason, and
+  another says so when every change is saved again. A change the logbook refuses outright, which
+  sending again cannot fix, is kept for the session instead, and the quit asks about it. At the
+  quit, **Keep trying** now really sends those changes again, so freeing some disk space and
+  pressing it saves them.
 - **IC-7610 on native CI-V: the S-meter, the receive controls (AF, RF gain, squelch, NB, NR,
   notch, AGC, attenuator, preamp) and the CTCSS tone now always act on the Main receiver**, even
   with the Sub band selected on the radio (the frequency and mode still follow the selected band).
@@ -208,6 +225,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have renamed, which is why it only ever warns.
 
 ### Fixed
+
+- **Logging a Field Day contact no longer makes the radio wait for the disk.** Every Field Day
+  contact rewrites the contest journal, and that write used to finish on the disk before the
+  radio could go on — including when the FT sequencer logged a contact itself, in the middle of
+  its timing. On a slow disk (an SD card, a busy USB drive) that was a pause the decoder and the
+  waterfall felt. The journal is now written on a thread of its own a moment later, in the same
+  order and with the same contents; a contact you log by hand is still on the disk before the
+  logging window confirms it, and quitting waits for the last write. The queue of held Tempo
+  messages is written the same way.
 
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
   1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
@@ -320,6 +346,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one the transmit VFO is set to, whether the uplink rides the Sub band or VFO B, and reads
   🔒 TX locked if either is outside your privileges. Nothing that was locked before is
   unlocked, and away from a satellite pass nothing changes.
+
+- **The transmit lock now checks PSK31 and RTTY on the sideband the transmit VFO is set to.**
+  Up an inverting transponder the uplink goes out on the opposite sideband from the one you
+  listen on. So PSK31, which the lock always took to be above the dial, goes out below the
+  uplink frequency, and RTTY sent as audio tones goes out above it rather than below. As for
+  FT8, that is new in this release for most radios and was already so in 1.14.0 on a radio set
+  to **Data modes use plain SSB**, and within a couple of kHz of a band or segment edge the
+  signal could cross the edge with nothing locked. The lock now checks both sides and reads
+  🔒 TX locked if either is outside your privileges. In RTTY it also checks the side Nexus set
+  when your radio reports the other one, because Nexus can put the radio back on its own side
+  before the over. True FSK RTTY is unchanged, and nothing that was locked before is unlocked.
+
+- **Changing your licence class now cancels an FT over that is about to go out.** Nexus
+  prepares each over a moment before it keys it, and a class changed in the first-run wizard
+  or in Settings during that moment did not stop it, so the over went out under the old class.
+  It is now dropped, and the next over is checked under the new class. Picking the class you
+  already have cancels nothing.
+
+- **A same-band satellite pass through an inverting transponder now logs the frequency you
+  sent on.** When the uplink and downlink share a band, the log records both, and for FT8 and
+  the other data modes it put your uplink signal one audio offset above the uplink frequency.
+  The uplink goes out on the opposite sideband, below it, so the logged frequency was 3 kHz off
+  at the usual 1500 Hz. The received frequency and every other contact are logged as before.
+
+- **RTTY contacts, and contest contacts in phone, CW and PSK31, are logged on the frequency your
+  signal was on.** A contact the RTTY auto-sequencer logged was given the dial plus the audio
+  offset FT8 uses instead of its mark, so its frequency was off by up to a few kHz, in every
+  version since 0.12.0. And in builds made after 1.14.0, which never reached a release, a
+  contest or Field Day contact was logged by that FT8 offset in every mode: phone at 14.250
+  went in as 14.2515, and CW at 14.030 as 14.0315. Each is now logged where its signal was:
+  phone and CW on the dial, CW on the soundcard keyer on its tone, RTTY on its mark and PSK31
+  on its centre. FT8 and the other data modes keep the dial plus their offset, as before. The
+  Cabrillo file you submit always had the right frequency and is unchanged. Contacts already
+  in your log keep the frequency they were given.
+
+- **The transmit lock now checks CW sent through the soundcard keyer where its tone goes.** The
+  soundcard keyer sends a tone a pitch away from the dial, above it on 20 m and below it on 40 m,
+  but the lock only checked the dial. So near a band or segment edge the tone could go out past
+  the edge with nothing locked: at 14.3496 a 600 Hz tone goes out at 14.3502, past the top of
+  20 m. Up an inverting transponder the tone goes out on the opposite side of the uplink too. The
+  lock now also checks the tone, on the side the transmit VFO is set to, and reads 🔒 TX locked
+  if it is outside your privileges. CW keyed by the radio itself goes out on the dial and is
+  checked exactly as before. Nothing that was locked before is unlocked.
+
+- **XIT is no longer offered on the other radios that have none.** Besides the IC-9700 (above),
+  56 radios Nexus lists have no XIT that Hamlib can set: 22 more Icoms (the IC-703, the IC-706
+  family, the IC-718, IC-725, IC-726, IC-728, IC-729, IC-735, IC-746 and IC-746PRO, the IC-756
+  series, and the IC-910, IC-7000, IC-7100, IC-7200, IC-7410 and IC-9100),
+  the Yaesu FT-817, FT-818, FT-857, FT-897, FT-100, FT-450, FT-890, FT-847 and FT-736R, the
+  Kenwood TS-790, TS-140S, TM-D710 and TM-V71, the Xiegu X108G, X5105, X6100, X6200 and G90, four
+  Ten-Tecs, two Alincos, and control through FLRig, TRX-Manager, PowerSDR, Thetis, SDR Console,
+  Malachite, the QRP Labs QMX and Hamlib's SmartSDR backend. Nexus showed the XIT buttons on them
+  anyway and kept the offset you set. The transmit line showed it and the transmit lock checked
+  it, but the radio transmitted without it. So near a band edge the lock could refuse a
+  transmission your radio would have made legally, or allow one it should not have. On these
+  radios the XIT buttons are gone, a Remote XIT request is refused, and the lock checks the
+  frequency the radio really transmits on. That can lift a lock that was only there because of
+  an offset the radio never used, and it can lock where that offset hid a frequency outside your
+  privileges. Every other radio keeps XIT as it was.
 
 - **QO-100's narrowband transponder is now worked in SSB, not FM.** The satellite database
   labels every narrowband segment on QO-100 as FM up and FM down, the "SSB only" segments

@@ -12,10 +12,12 @@
 //
 //   `logbook-saving`       { pending, radioLive }  — saving; `pending` counts down as changes land.
 //                          0 means only the log.adi copy is left, and the line names no count.
-//   `logbook-save-failed`  { pending, refused, reason, radioLive } — the question. `pending`
-//                          changes may still land if the operator waits; `refused` changes the
-//                          logbook would not take, and waiting cannot save them, so Keep trying is
-//                          offered only while something is pending.
+//   `logbook-save-failed`  { pending, retryable, refused, reason, retryReason, radioLive } — the
+//                          question. `pending` changes may still land if the operator waits;
+//                          `retryable` ones the logbook refused for a reason that can pass, and
+//                          Keep trying sends them again from memory; `refused` ones it refused for
+//                          what they are, which nothing will save. So Keep trying is offered only
+//                          while something is pending or can be sent again.
 //   `logbook-save-done`    { saved } — the station has finished with the logbook; hide.
 //
 // ⛔ THE STOP LINE. This is a modal over the whole window, so while it shows, every stop control
@@ -47,12 +49,16 @@ export interface LogbookSavingEvent {
   radioLive: boolean
 }
 
-/** `logbook-save-failed`: what is left, what the logbook refused, and the station's reason
- *  (its diagnostic wording, shown untranslated). */
+/** `logbook-save-failed`: what is left, what the logbook refused, and the station's reasons
+ *  (its diagnostic wording, shown untranslated): `reason` for the changes refused for good,
+ *  `retryReason` for those Keep trying sends again. */
 export interface LogbookSaveFailedEvent {
   pending: number
+  /** Absent from a station that predates the re-send: read as 0. */
+  retryable?: number
   refused: number
   reason: string | null
+  retryReason?: string | null
   radioLive: boolean
 }
 
@@ -152,16 +158,25 @@ export function LogbookSaving() {
       shown.ev.pending > 0 ? t('quit.logbook.saving.pending', { count: shown.ev.pending }) : undefined
   } else if (shown?.kind === 'failed') {
     const { pending, refused, reason } = shown.ev
-    const refusedLine =
-      refused > 0 ? t('quit.logbook.refused.body', { count: refused, reason: reason ?? '' }) : null
-    const slowLine = pending > 0 ? t('quit.logbook.slow.body', { count: pending }) : null
-    title = refused > 0 && pending === 0 ? t('quit.logbook.refused.title') : t('quit.logbook.slow.title')
-    description = refusedLine ?? slowLine ?? undefined
-    more = refusedLine && slowLine ? <p className="ui-dialog-desc">{slowLine}</p> : null
+    const retryable = shown.ev.retryable ?? 0
+    const lines = [
+      retryable > 0
+        ? t('quit.logbook.retry.body', { count: retryable, reason: shown.ev.retryReason ?? '' })
+        : null,
+      refused > 0 ? t('quit.logbook.refused.body', { count: refused, reason: reason ?? '' }) : null,
+      pending > 0 ? t('quit.logbook.slow.body', { count: pending }) : null,
+    ].filter((line): line is string => line !== null)
+    title = pending > 0 ? t('quit.logbook.slow.title') : t('quit.logbook.refused.title')
+    description = lines[0]
+    more = lines.slice(1).map((line) => (
+      <p className="ui-dialog-desc" key={line}>
+        {line}
+      </p>
+    ))
     actions = (
       <>
         {stop}
-        {pending > 0 && (
+        {pending + retryable > 0 && (
           <button
             type="button"
             className="settings-refresh"
@@ -178,7 +193,7 @@ export function LogbookSaving() {
           disabled={shown.answered}
           onClick={() => answer(false)}
         >
-          {t('quit.logbook.quitWithout', { count: pending + refused })}
+          {t('quit.logbook.quitWithout', { count: pending + retryable + refused })}
         </button>
       </>
     )

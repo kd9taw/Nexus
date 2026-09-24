@@ -50,7 +50,7 @@ import {
   setHoldTxFreq as apiSetHoldTxFreq,
   subscribeSnapshot,
 } from './api'
-import { withErrorToast, pushToast } from './toast'
+import { withErrorToast, pushToast, dismissToast } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { useReceiverSettings } from './remote-web/useReceiverSettings'
 import { t } from './i18n'
@@ -687,6 +687,33 @@ function App({ remote }: { remote?: BrowserWorkspace } = {}) {
       0,
     )
   }, [snap?.logStoreProblem, remote])
+
+  // The logbook database refused a change (C10b). The station keeps it in memory — sending it
+  // again while the refusal can pass, holding it for the quit when it cannot — and the screen
+  // says so while it lasts (operator, 2026-09-23: "Never silently lose a contact"): one sticky
+  // toast when the trouble starts, one more if a change is refused for good, and when every
+  // change is saved again both go, with a word that it is. The ref, not the snapshot, stops each
+  // poll re-raising them. Not on the Remote, like the notice above.
+  const logSaveToasts = useRef<{ retrying?: number; held?: number }>({})
+  useEffect(() => {
+    if (remote) return
+    const trouble = snap?.logSaveTrouble
+    const shown = logSaveToasts.current
+    if (trouble) {
+      if (trouble.retrying > 0 && shown.retrying === undefined) {
+        shown.retrying = pushToast(t('shell.logSave.retrying', { reason: trouble.reason }), 'error', 0)
+      }
+      if (trouble.held > 0 && shown.held === undefined) {
+        shown.held = pushToast(t('shell.logSave.held', { reason: trouble.reason }), 'error', 0)
+      }
+      return
+    }
+    if (shown.retrying === undefined && shown.held === undefined) return
+    if (shown.retrying !== undefined) dismissToast(shown.retrying)
+    if (shown.held !== undefined) dismissToast(shown.held)
+    logSaveToasts.current = {}
+    pushToast(t('shell.logSave.saved'), 'success', 8000)
+  }, [snap?.logSaveTrouble, remote])
 
 
   // Per-(band,mode) last-alert time so a band coming alive toasts once, not every
