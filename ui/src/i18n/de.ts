@@ -1982,6 +1982,11 @@ export const DE: PartialCatalog = {
   "logbook.empty": "Noch keine QSOs geloggt.",
   "logbook.emptySearch": "Keine QSOs passen zu „{{query}}“.",
   "logbook.rows.loading": "Wird geladen…",
+  // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
+  "logbook.keys.move": "↑ und ↓ wechseln zwischen den Kontakten, PgUp und PgDn blättern seitenweise, Home und End springen zum ersten und zum letzten.",
+  "logbook.keys.edit": "Enter bearbeitet den Kontakt.",
+  "logbook.keys.delete": "Delete fragt, ob der Kontakt gelöscht werden soll.",
+  "logbook.keys.close": "Esc schließt das Bearbeitungsformular oder die Rückfrage.",
   "logbook.row.park.worked": "{{program}} {{ref}} (gearbeitet)",
   "logbook.row.park.mine": "Eigene Aktivierung: {{program}} {{ref}}",
   "logbook.row.qsl.lotw": "Über LoTW bestätigt (diplomtauglich)",

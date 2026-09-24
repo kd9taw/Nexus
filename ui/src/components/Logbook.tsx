@@ -4,7 +4,7 @@
 // prints — callsign, band, mode, frequency, RST, park reference, QSL letters. Those are wire
 // formats, identical in every language. See the invariant-token rule in `i18n/index.ts`.
 
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmDialog } from '../confirm'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -866,7 +866,8 @@ export function Logbook({
   // A remote change reports its own outcome. An unknown one is held by RemoteLogCheck until checked.
   const remoteChange = (change: LogChange) => (operations ? sendLogChange(operations, change) : Promise.resolve(null))
 
-  const onDelete = async (q: LoggedQso, key: string) => {
+  /** Ask, then delete: whether the contact was deleted. */
+  const onDelete = async (q: LoggedQso, key: string): Promise<boolean> => {
     if (
       !(await confirmDialog({
         title: t('logbook.delete.heading', { call: q.call, band: q.band }),
@@ -875,7 +876,7 @@ export function Logbook({
         danger: true,
       }))
     )
-      return
+      return false
     if (remoteLog) {
       const at = performance.now()
       const outcome = await remoteChange({ kind: 'delete', target: await logTarget(q) })
@@ -883,15 +884,18 @@ export function Logbook({
         pushToast(t('logbook.delete.done', { call: q.call }), 'success')
         if (editingKey === key) cancelForm()
         remoteLog.refresh(at)
+        return true
       }
-      return
+      return false
     }
     const snap = await withErrorToast(() => deleteQso(q), t('logbook.delete.failed'))
     if (snap) {
       pushToast(t('logbook.delete.done', { call: q.call }), 'success')
       if (editingKey === key) cancelForm()
       load()
+      return true
     }
+    return false
   }
 
   const closePurge = () => {
@@ -1039,6 +1043,18 @@ export function Logbook({
   /** The open rows' heights to move, taken as a swap is decided and applied in the render that
    *  shows the new order (when the list is its new length), before that render is placed. */
   const heightMoves = useRef<{ closed: number; moves: { key: string; from: number; to: number | null; size: number }[] } | null>(null)
+  // …and A NEW LIST IS MEASURED AFRESH (the same bug, when the list is replaced rather than moved):
+  // a new sort or search, or — in a Remote browser — the page the station sends coming back, which
+  // is how a contact logged at the station arrives there. The heights kept by place were measured
+  // for the old list. A row drawn in both stays mounted and is not measured again; a row mounting at
+  // a place the old list measured takes that place's height until the browser reports its own, a
+  // frame later. So while a row was open, its height stayed at its old place, over another row, and
+  // the open row was drawn into a closed row's height. The first time a new list is drawn while a
+  // row is open, the old list's heights are dropped and the rows drawn are measured, in the placing
+  // effect below, before the paint. `drawnList` names the list on screen: the query's (once its
+  // first page is here), or the Remote page's rows.
+  const drawnList = control ? (showingRev === null ? null : queryKey) : observedLog.length ? observedLog : null
+  const heightsFor = useRef<string | LoggedQso[] | null>(null)
 
   const virtualRows = rowVirtualizer.getVirtualItems()
   const held0 = anchor.current
@@ -1133,10 +1149,180 @@ export function Logbook({
     return size
   }
 
+  // THE KEYBOARD GRID (v2 §6). The list is ONE Tab stop — a row, held by id so the operator's place
+  // survives a newer order — and grid-local keys move it (no global shortcuts): ↑/↓ a row, PgUp/PgDn
+  // a visible page, Home/End the first/last contact; Enter edits the contact, Delete asks the
+  // existing delete question, Esc closes the form (the question closes itself). A key on a row's own
+  // control (its QSL menu, its buttons) stays that control's. The row the keys land on is scrolled
+  // in whole, under the pinned search box and headers, and focused once it is drawn; a row whose
+  // page has not landed is a placeholder, which holds the focus until it does.
+  const keysId = useId()
+  const [focusKey, setFocusKey] = useState<string | null>(null)
+  const [focusTo, setFocusTo] = useState<number | null>(null)
+  /** The row whose Enter opened the form (the keyboard goes back to it when it closes), and
+   *  whether the keyboard is still to go INTO the form. */
+  const formFromGrid = useRef<string | null>(null)
+  const formWanted = useRef(false)
+  /** A contact deleted from the keys: the focus waits for the row that takes its place. */
+  const focusAfter = useRef<string | null>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  /** The pinned search box + headers' height, as of the last commit. */
+  const stickyH = useRef(0)
+  /** Where rows start to be SEEN, in the list's coordinates, at scroll `top`: under the sticky
+   *  block, or at the list's own top while the globe band is still in view. */
+  const floorAt = (top: number) => Math.max(top + stickyH.current, rowVirtualizer.options.scrollMargin)
+  const firstSeen = virtualRows.find((v) => v.end > floorAt(rowVirtualizer.scrollOffset ?? 0) && rowAt(v.index))
+  const tabStop =
+    focusKey !== null && virtualRows.some((v) => rowAt(v.index)?.key === focusKey)
+      ? focusKey
+      : firstSeen
+        ? (rowAt(firstSeen.index)?.key ?? null)
+        : null
+  /** Put the keyboard on row `index`: seen whole, then focused once drawn (the effect below). */
+  const moveFocus = (index: number) => {
+    const el = scrollRef.current
+    const item = rowVirtualizer.measurementsCache[index]
+    if (el && item) {
+      const floor = floorAt(el.scrollTop)
+      let top = el.scrollTop
+      if (item.start < floor) top = el.scrollTop - (floor - item.start)
+      else if (item.end > el.scrollTop + el.clientHeight) top = item.end - el.clientHeight
+      if (top !== el.scrollTop) {
+        el.scrollTop = top
+        rowVirtualizer.scrollOffset = el.scrollTop // drawn there by the next render, not a frame on
+      }
+    }
+    setFocusTo(index)
+  }
+  const gridStep = (key: string, index: number): number | null => {
+    const page = Math.max(1, Math.floor(((scrollRef.current?.clientHeight ?? 0) - stickyH.current) / ROW_ESTIMATE))
+    switch (key) {
+      case 'ArrowDown':
+        return index + 1
+      case 'ArrowUp':
+        return index - 1
+      case 'PageDown':
+        return index + page
+      case 'PageUp':
+        return index - page
+      case 'Home':
+        return 0
+      case 'End':
+        return listTotal - 1
+      default:
+        return null
+    }
+  }
+  const onGridKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement
+    if (!target.classList.contains('logbook-row')) return
+    const index = Number(target.dataset.index)
+    const to = gridStep(e.key, index)
+    if (to !== null) {
+      e.preventDefault()
+      moveFocus(Math.max(0, Math.min(listTotal - 1, to)))
+      return
+    }
+    const row = rowAt(index)
+    if (e.key === 'Escape' && showForm) {
+      e.preventDefault()
+      cancelForm()
+    } else if (row && (control || canEdit) && (e.key === 'Enter' || e.key === 'Delete')) {
+      e.preventDefault()
+      if (e.key === 'Delete') {
+        // The question takes the keyboard (a dialog puts it nowhere when it closes); the answer
+        // gives it back to this place in the list: the same contact, or — once it is gone — the one
+        // that takes its place.
+        void onDelete(row.q, row.key).then((deleted) => {
+          focusAfter.current = deleted ? row.key : null
+          setFocusTo(index)
+        })
+      } else {
+        formFromGrid.current = row.key
+        formWanted.current = true
+        startEdit(row.q, row.key)
+      }
+    }
+  }
+  // The keys' row, focused once it is drawn.
+  useLayoutEffect(() => {
+    stickyH.current = scrollRef.current?.querySelector<HTMLElement>('.log-sticky')?.offsetHeight ?? 0
+    const wrap = rowsWrapRef.current
+    if (focusTo === null || !wrap) return
+    const at = Math.min(focusTo, listTotal - 1)
+    if (focusAfter.current !== null && rowAt(at)?.key === focusAfter.current) return
+    focusAfter.current = null
+    const el = ([...wrap.children] as HTMLElement[]).find((c) => c.dataset.index === String(at))
+    if (!el) return
+    // Only while the keyboard is still the grid's: on a row, or lost with a row scrolled away.
+    const active = document.activeElement
+    if (active && active !== document.body && !wrap.contains(active)) {
+      setFocusTo(null)
+      return
+    }
+    el.focus({ preventScroll: true })
+    if (!el.classList.contains('placeholder')) setFocusTo(null)
+  })
+  // Enter from the grid: the keyboard goes into the form, and back to that row when it closes.
+  useEffect(() => {
+    if (showForm && formWanted.current) {
+      formWanted.current = false
+      formRef.current?.querySelector<HTMLElement>('input, select, textarea')?.focus()
+    } else if (!showForm && formFromGrid.current !== null) {
+      const key = formFromGrid.current
+      formFromGrid.current = null
+      const at = virtualRows.find((v) => rowAt(v.index)?.key === key)
+      if (at) moveFocus(at.index)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- on the form opening and closing only
+  }, [showForm])
+
   // The swapped-in order is placed after the render that shows it, before the browser paints —
   // its open rows' heights moved first, so the list is laid out, and placed, as the rows are.
   // (Declared before the swap below: effects run in order, so the swap's own render has passed.)
   useLayoutEffect(() => {
+    // A new list drawn (`drawnList`, above). While a row is open, the old list's heights are dropped
+    // and the rows drawn now measured — without scrolling: where the view goes is decided below.
+    if (drawnList !== null && heightsFor.current !== drawnList) {
+      const replaced = heightsFor.current !== null
+      heightsFor.current = drawnList
+      if (replaced && openComments.size > 0) {
+        const adjust = rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange
+        rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+        try {
+          rowVirtualizer.measure()
+          rowVirtualizer.getVirtualItems() // the table at the estimate, then each drawn row's own height
+          for (const el of rowsWrapRef.current?.children ?? []) {
+            const index = (el as HTMLElement).dataset.index
+            if (index !== undefined) rowVirtualizer.resizeItem(Number(index), (el as HTMLElement).offsetHeight)
+          }
+        } finally {
+          rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjust
+        }
+        rowVirtualizer.getVirtualItems()
+      }
+      // BACK TO THE TOP on a new sort, search or filter (v2 §6): the rows the operator was looking
+      // at are not where they were, or not in this list at all. The new list's first row goes to the
+      // top of the list, under the search box and the headers, which stay put — the globe band above
+      // them is not brought back, or the box being typed in would jump. A view that has not scrolled
+      // into the list is there already. (A newer order of the SAME list is not a new list: the swap
+      // keeps the rows under the operator where they are, R5.) A Remote browser's new page is left
+      // as it was: it empties while it loads.
+      const el = scrollRef.current
+      const rows = rowsWrapRef.current
+      const sticky = el?.querySelector<HTMLElement>('.log-sticky')
+      if (replaced && control && el && rows && sticky) {
+        const top = Math.max(0, rows.offsetTop - sticky.offsetHeight)
+        if (el.scrollTop > top) {
+          el.scrollTop = top
+          // …and drawn there by the render that follows, not when the scroll is reported: so the rows
+          // noted under the operator are the new list's first rows, and a newer order arriving now
+          // keeps the view at the top (R5's rule for a view at the top).
+          rowVirtualizer.scrollOffset = el.scrollTop
+          justPlaced.current = true
+        }
+      }
+    }
     const moving = heightMoves.current
     heightMoves.current = null
     if (moving) {
@@ -1804,7 +1990,16 @@ export function Logbook({
 
       {remoteLog && operations && <RemoteLogCheck client={operations} />}
       {(control || remoteLog) && showForm && (
-        <form className="logbook-form" onSubmit={submit}>
+        <form
+          className="logbook-form"
+          onSubmit={submit}
+          ref={formRef}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return
+            e.preventDefault()
+            cancelForm()
+          }}
+        >
           <div className="logbook-form-grid">
             <label className="logbook-field logbook-field-call">
               <span>{t('logbook.field.call.label')}</span>
@@ -2045,7 +2240,17 @@ export function Logbook({
         </form>
       )}
 
-      <div className={`log-table logbook-table${moreColumns ? ' wide' : ''}`} role="table">
+      <div
+        className={`log-table logbook-table${moreColumns ? ' wide' : ''}`}
+        role="grid"
+        aria-rowcount={listTotal + 1}
+        aria-describedby={keysId}
+      >
+        {/* The grid's keys, for a screen reader: four whole sentences, never one glued. */}
+        <p id={keysId} className="sr-only">
+          <span>{t('logbook.keys.move')}</span> <span>{t('logbook.keys.edit')}</span>{' '}
+          <span>{t('logbook.keys.delete')}</span> <span>{t('logbook.keys.close')}</span>
+        </p>
         <div className="log-scroll" ref={scrollRef}>
           {globeShown && (
             <div className="log-globe-band">
@@ -2103,7 +2308,7 @@ export function Logbook({
           </button>
         )}
       </div>
-        <div className="log-row logbook-row head" role="row">
+        <div className="log-row logbook-row head" role="row" aria-rowindex={1}>
           {th(t('logbook.column.call'), 'call')}
           {th(t('logbook.column.country'), 'country')}
           {th(t('logbook.column.band'), 'band')}
@@ -2150,6 +2355,7 @@ export function Logbook({
               ref={rowsWrapRef}
               className="log-rows"
               style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}
+              onKeyDown={onGridKey}
             >
               {virtualRows.map((vrow) => {
                 // A row whose page is still on its way: its place, kept, until the page lands.
@@ -2170,6 +2376,8 @@ export function Logbook({
                       className="log-row logbook-row placeholder"
                       role="row"
                       aria-busy="true"
+                      aria-rowindex={vrow.index + 2}
+                      tabIndex={-1}
                       key={`placeholder-${vrow.index}`}
                       data-index={vrow.index}
                       ref={rowVirtualizer.measureElement}
@@ -2206,6 +2414,9 @@ export function Logbook({
                     // row when the list moves, so an open comment or the edit mark stays on it.
                     key={key}
                     data-index={vrow.index}
+                    aria-rowindex={vrow.index + 2}
+                    tabIndex={key === tabStop ? 0 : -1}
+                    onFocus={() => setFocusKey(key)}
                     ref={rowVirtualizer.measureElement}
                     style={{
                       ...placed,
