@@ -792,6 +792,7 @@ pub struct Logbook {
 
 pub mod dedup;
 mod edit;
+pub mod hot;
 mod id;
 pub mod io_fence;
 pub mod migrate;
