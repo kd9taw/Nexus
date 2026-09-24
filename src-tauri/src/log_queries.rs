@@ -2,6 +2,10 @@
 //! of C17b's `LogSource` (`ui/src/features/logAnswers.ts`; the window's half is
 //! `askingLogSource.ts`, which calls [`ask_log`] once per question).
 //!
+//! The statistics are answered COUNTED, in first-seen order (`LogStatCounts`), and ordered in the
+//! window (`finishLogStats`, in `askLog`): the dashboard breaks ties with `localeCompare`, in the
+//! webview's own locale, which nothing here can reproduce.
+//!
 //! A window used to hold the whole log and compute what it showed from it. It now asks for what it
 //! shows — a page of the Logbook, where a row sits in it, one call's history, an entity's slots, a
 //! roster's summary, the band map's worked calls — and holds only the answers. Every answer is the
@@ -16,6 +20,7 @@
 //! | one call's history, a roster's summary | the `qso_callhist` index for the call, then the UI's own test on each row (SPEC-2 v3 P2: SQL narrows, Rust decides) |
 //! | the band map's worked calls | the hot index's worked-before calls (C13) — under the Engine lock, no read at all |
 //! | an entity's slots | an index of every entity's slots, kept per `index_rev` and grown row by row after an append |
+//! | the squares worked, the Logbook globe's dots and bands, the statistics, the LoTW backlog | one narrow pass over the log in log order ([`LogRows`], C14's door), kept against the watermark of what each reads |
 //!
 //! A call spelled with a character outside ASCII is folded one way by the store and the hot index
 //! (ASCII only) and another by the UI (all of Unicode: `ſ` → `S`). The hot index names every such
@@ -37,6 +42,7 @@
 //!    `index_rev`, so the order survives it and only the rows are read again.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -45,12 +51,15 @@ use serde_json::Value;
 use tauri::State;
 use tempo_app::dto::LoggedQso;
 use tempo_app::engine::{engine_lock, Engine};
-use tempo_app::logstore::{Freshness, StoreReads};
-use tempo_core::logbook::query::{self, CallSummary, EntityIndex, LogQuery, OrderBuilder};
-use tempo_core::logbook::sqlite::{self, ENTITY_COLUMNS, ORDER_COLUMNS};
+use tempo_app::logstore::{Freshness, LogRows, StoreReads};
+use tempo_core::logbook::query::{
+    self, BandsInLog, CallSummary, EntityIndex, GridCount, GridCounts, LogFold, LogQuery,
+    LogStatCounter, LogStatCounts, LotwBacklog, OrderBuilder, WorkedGrids,
+};
+use tempo_core::logbook::sqlite::{self, Narrow, Order, Scope, ENTITY_COLUMNS, ORDER_COLUMNS};
 use tempo_core::logbook::{QsoRecord, RecordId};
 
-use crate::SharedEngine;
+use crate::{SharedEngine, Tally};
 
 /// Order vectors kept (SPEC-2 v2 §2: an LRU of four). One is a log-sized `Vec<u32>`.
 pub(crate) const ORDERS_KEPT: usize = 4;
@@ -58,9 +67,59 @@ pub(crate) const ORDERS_KEPT: usize = 4;
 /// How long a read waits for the writer to take the changes made before it was asked (P4).
 const READ_WAIT: Duration = Duration::from_secs(2);
 
-/// Everything the UI asks of the log (`LogQuestion`). The questions C14's folds answer —
-/// `workedGrids`, `gridPoints`, `bandsInLog`, `statistics`, `lotwBacklog` — are C17a's second
-/// part: asked now, they are refused.
+// ── what each fold reads ──────────────────────────────────────────────────────────────────────
+//
+// The four confirmation channels ride with any fold that reads `confirmed` or `award_confirmed`:
+// the decoder derives both from them, exactly as it does for a whole record.
+
+/// The squares worked (`workedGrids`).
+const GRIDS: Narrow = Narrow {
+    columns: &["grid"],
+    uploads: false,
+};
+
+/// The Logbook globe's dots (`gridPoints`).
+const GRID_POINTS: Narrow = Narrow {
+    columns: &["band", "grid", "when_unix"],
+    uploads: false,
+};
+
+/// The bands in the log (`bandsInLog`).
+const BANDS: Narrow = Narrow {
+    columns: &["band"],
+    uploads: false,
+};
+
+/// The LoTW backlog (`lotwBacklog`): award confirmation, the LoTW stamp, the time of day.
+const BACKLOG: Narrow = Narrow {
+    columns: &[
+        "time_known",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: true,
+};
+
+/// The statistics' counts (`statistics`).
+const STATISTICS: Narrow = Narrow {
+    columns: &[
+        "call",
+        "country",
+        "state",
+        "band",
+        "mode",
+        "when_unix",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: false,
+};
+
+/// Everything the UI asks of the log (`LogQuestion`).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(
     tag = "kind",
@@ -152,32 +211,20 @@ struct CallHistoryAnswer {
     modes: Vec<String>,
 }
 
-/// The log's rows for one answer, taken under the Engine lock and read after it is released:
-/// the store's handles, or — on the 1.13 path, where the store was refused — a copy of the
-/// pointers of the log in memory (SPEC-2 v3 D1 moves that path onto an in-memory database, C19).
-enum Rows {
-    Store(StoreReads),
-    Memory(Arc<Vec<Arc<QsoRecord>>>),
-}
-
-/// What an answer takes under the Engine lock.
+/// What an answer takes under the Engine lock: the log's rows ([`LogRows`], C14's one door —
+/// the store's handles, or on the 1.13 path a copy of the pointers of the log in memory) and the
+/// watermarks they are read against. It reads nothing.
 struct Capture {
-    rows: Rows,
+    rows: LogRows,
     revision: u64,
     index_rev: u64,
     content_rev: u64,
 }
 
 impl Capture {
-    /// Handles and watermarks: no read. On the 1.13 path a copy of the log's pointers.
-    #[allow(deprecated)] // SPEC-2 C19: the 1.13 path's log is the copy in memory (D1)
     fn take(eng: &Engine) -> Capture {
-        let rows = match eng.log_store_reads() {
-            Some(reads) => Rows::Store(reads),
-            None => Rows::Memory(Arc::new(eng.log_snapshot().records)),
-        };
         Capture {
-            rows,
+            rows: eng.log_rows(),
             revision: eng.log_revision(),
             index_rev: eng.log_index_rev(),
             content_rev: eng.log_content_rev(),
@@ -185,7 +232,7 @@ impl Capture {
     }
 
     fn is_store(&self) -> bool {
-        matches!(self.rows, Rows::Store(_))
+        matches!(self.rows, LogRows::Store(_))
     }
 }
 
@@ -274,8 +321,15 @@ struct Inner {
     log_order: Mutex<Option<(u64, Arc<Vec<u32>>)>>,
     entities: Mutex<Option<Arc<EntityCache>>>,
     odd: Mutex<Option<(u64, Arc<OddCalls>)>>,
+    grids: Tally<(), Vec<String>>,
+    grid_points: Tally<String, Vec<GridCount>>,
+    bands: Tally<(), Vec<String>>,
+    backlog: Tally<(), LotwBacklog>,
+    statistics: Tally<(), LogStatCounts>,
     #[cfg(test)]
     built: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    folded: std::sync::atomic::AtomicUsize,
 }
 
 /// The answers' kept state — the order vectors, the log-order vector, the entity index, the odd
@@ -342,13 +396,51 @@ impl LogQueries {
                 let index = self.entity_index(&c, cached, appended, resolve)?;
                 json(index.index.answer(entity))
             }
-            LogQuestion::WorkedGrids {}
-            | LogQuestion::GridPoints { .. }
-            | LogQuestion::BandsInLog {}
-            | LogQuestion::Statistics {}
-            | LogQuestion::LotwBacklog {} => {
-                Err("the engine does not answer this question yet (SPEC-2 C17a, part 2)".into())
-            }
+            // A grid, a band or a time moves `index_rev`; an upload stamp does not, and none of
+            // these reads one.
+            LogQuestion::WorkedGrids {} => json(&*self.fold(
+                engine,
+                &self.0.grids,
+                (),
+                Engine::log_index_rev,
+                GRIDS,
+                WorkedGrids::default(),
+            )?),
+            LogQuestion::GridPoints { band } => json(&*self.fold(
+                engine,
+                &self.0.grid_points,
+                band.clone(),
+                Engine::log_index_rev,
+                GRID_POINTS,
+                GridCounts::new(band),
+            )?),
+            LogQuestion::BandsInLog {} => json(&*self.fold(
+                engine,
+                &self.0.bands,
+                (),
+                Engine::log_index_rev,
+                BANDS,
+                BandsInLog::default(),
+            )?),
+            LogQuestion::Statistics {} => json(&*self.fold(
+                engine,
+                &self.0.statistics,
+                (),
+                Engine::log_index_rev,
+                STATISTICS,
+                LogStatCounter::new(resolve),
+            )?),
+            // The backlog reads the LoTW stamp — a Stamp moves `content_rev`, and a contact
+            // imported with its stamp is an Append, which moves `index_rev` — so it is kept
+            // against `revision`, which every change moves.
+            LogQuestion::LotwBacklog {} => json(*self.fold(
+                engine,
+                &self.0.backlog,
+                (),
+                Engine::log_revision,
+                BACKLOG,
+                LotwBacklog::default(),
+            )?),
             _ => {
                 let c = Capture::take(&engine_lock(engine));
                 match q {
@@ -421,7 +513,7 @@ impl LogQueries {
             .built
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match &c.rows {
-            Rows::Store(reads) => read(reads, |db| {
+            LogRows::Store(reads) => read(reads, |db| {
                 if query.is_default() {
                     db.rowids_newest_first()
                 } else {
@@ -430,7 +522,7 @@ impl LogQueries {
                     Ok(b.finish())
                 }
             }),
-            Rows::Memory(rows) => {
+            LogRows::Memory(rows) => {
                 off_lock("an order of the log in memory");
                 let order = query::order(
                     rows.iter().enumerate().map(|(i, r)| (i as u32, r.as_ref())),
@@ -453,7 +545,7 @@ impl LogQueries {
         let order = self.order_of(c, query)?;
         let slice: Vec<u32> = order.iter().skip(offset).take(limit).copied().collect();
         let (rows, log_size): (Vec<(u32, QsoRecord)>, u64) = match &c.rows {
-            Rows::Store(reads) => {
+            LogRows::Store(reads) => {
                 let ((found, size), _) =
                     read(reads, |db| Ok((db.rows_at(&slice)?, db.row_count()?)))?;
                 // A row another window deleted since the order was built is left out; the
@@ -465,7 +557,7 @@ impl LogQueries {
                     .collect();
                 (rows, size)
             }
-            Rows::Memory(all) => {
+            LogRows::Memory(all) => {
                 off_lock("a page of the log in memory");
                 let rows = slice
                     .iter()
@@ -495,8 +587,8 @@ impl LogQueries {
         let handle = match id.parse::<RecordId>() {
             Err(()) => None,
             Ok(id) => match &c.rows {
-                Rows::Store(reads) => read(reads, |db| db.rowid_of(&id))?.0,
-                Rows::Memory(rows) => {
+                LogRows::Store(reads) => read(reads, |db| db.rowid_of(&id))?.0,
+                LogRows::Memory(rows) => {
                     off_lock("a place in the log in memory");
                     rows.iter().position(|r| r.id == Some(id)).map(|p| p as u32)
                 }
@@ -520,14 +612,14 @@ impl LogQueries {
             return Ok(None);
         };
         let row = match &c.rows {
-            Rows::Store(reads) => {
+            LogRows::Store(reads) => {
                 read(reads, |db| match db.rowid_of(&id)? {
                     Some(rowid) => Ok(db.rows_at(&[rowid])?.pop().flatten()),
                     None => Ok(None),
                 })?
                 .0
             }
-            Rows::Memory(rows) => {
+            LogRows::Memory(rows) => {
                 off_lock("a row of the log in memory");
                 rows.iter()
                     .find(|r| r.id == Some(id))
@@ -545,7 +637,7 @@ impl LogQueries {
         resolve: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Vec<Option<LoggedQso>>, String> {
         let rows: Vec<Option<QsoRecord>> = match &c.rows {
-            Rows::Store(reads) => {
+            LogRows::Store(reads) => {
                 let log = self.log_order_of(c, reads)?;
                 let rowids: Vec<Option<u32>> = indices
                     .iter()
@@ -558,7 +650,7 @@ impl LogQueries {
                     .map(|r| r.and_then(|_| found.next().flatten()))
                     .collect()
             }
-            Rows::Memory(all) => {
+            LogRows::Memory(all) => {
                 off_lock("rows of the log in memory");
                 indices
                     .iter()
@@ -589,8 +681,8 @@ impl LogQueries {
 
     fn log_size(&self, c: &Capture) -> Result<u64, String> {
         match &c.rows {
-            Rows::Store(reads) => Ok(read(reads, |db| db.row_count())?.0),
-            Rows::Memory(rows) => Ok(rows.len() as u64),
+            LogRows::Store(reads) => Ok(read(reads, |db| db.row_count())?.0),
+            LogRows::Memory(rows) => Ok(rows.len() as u64),
         }
     }
 
@@ -675,12 +767,12 @@ impl LogQueries {
             return Ok(Vec::new());
         }
         match &c.rows {
-            Rows::Store(reads) => Ok(read(reads, |db| {
+            LogRows::Store(reads) => Ok(read(reads, |db| {
                 let rowids = db.rowids_by_call_norm(keys)?;
                 Ok(db.rows_at(&rowids)?.into_iter().flatten().collect())
             })?
             .0),
-            Rows::Memory(rows) => {
+            LogRows::Memory(rows) => {
                 off_lock("a call's rows in the log in memory");
                 let wanted: HashSet<&str> = keys.iter().map(String::as_str).collect();
                 Ok(rows
@@ -690,6 +782,45 @@ impl LogQueries {
                     .collect())
             }
         }
+    }
+
+    // ── the folds ─────────────────────────────────────────────────────────────────────────────
+
+    /// A fold question (C14's folds, for the UI's questions): kept against `mark` — the
+    /// watermark of what it reads — and `key`, or else one narrow pass over the log in log
+    /// order with the Engine lock released, kept unless the read ran out of wait.
+    fn fold<K: PartialEq, F: LogFold>(
+        &self,
+        engine: &SharedEngine,
+        kept: &Tally<K, F::Answer>,
+        key: K,
+        mark: fn(&Engine) -> u64,
+        narrow: Narrow,
+        mut fold: F,
+    ) -> Result<Arc<F::Answer>, String> {
+        let (at, rows) = {
+            let eng = engine_lock(engine);
+            let at = mark(&eng);
+            if let Some(answer) = kept.get(at, &key) {
+                return Ok(answer);
+            }
+            (at, eng.log_rows())
+        };
+        #[cfg(test)]
+        self.0
+            .folded
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let fresh = rows
+            .each(narrow, Scope::All, Order::Log, &mut |r| {
+                fold.add(r);
+                ControlFlow::Continue(())
+            })
+            .map_err(unreadable)?;
+        let answer = fold.finish();
+        Ok(match fresh {
+            Freshness::Current => kept.put(at, key, answer),
+            Freshness::Stale(_) => Arc::new(answer),
+        })
     }
 
     // ── entities ──────────────────────────────────────────────────────────────────────────────
@@ -722,7 +853,7 @@ impl LogQueries {
             index.add(e.as_deref(), r);
         };
         let (after, fresh) = match &c.rows {
-            Rows::Store(reads) => {
+            LogRows::Store(reads) => {
                 let mut last = from;
                 let ((), fresh) = read(reads, |db| {
                     db.each_narrow_after(ENTITY_COLUMNS, from, &mut |rowid, r| {
@@ -732,7 +863,7 @@ impl LogQueries {
                 })?;
                 (last, fresh)
             }
-            Rows::Memory(rows) => {
+            LogRows::Memory(rows) => {
                 off_lock("the entities of the log in memory");
                 for r in rows.iter().skip(from as usize) {
                     count(&mut index, r);

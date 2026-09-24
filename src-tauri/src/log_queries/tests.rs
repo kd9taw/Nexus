@@ -9,7 +9,9 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use tempo_app::engine::engine_try_lock;
-use tempo_core::logbook::query::reference;
+use tempo_core::logbook::query::{
+    reference, BandsInLog, GridCounts, LogStatCounter, LotwBacklog, WorkedGrids,
+};
 use tempo_core::logbook::{adif_header, adif_record_own_log, QsoEdit, UploadOutcome};
 
 // ── fixtures ────────────────────────────────────────────────────────────────────────────────────
@@ -17,15 +19,18 @@ use tempo_core::logbook::{adif_header, adif_record_own_log, QsoEdit, UploadOutco
 const GOLDEN_LOG: &str = include_str!("../../../ui/src/features/__fixtures__/log-query/log.json");
 const GOLDEN_ANSWERS: &str =
     include_str!("../../../ui/src/features/__fixtures__/log-query/answers.json");
+/// The statistics' counts over the golden log — what the engine answers, and the window finishes
+/// into the golden answer (`ui/src/features/logStats.countFinish.test.ts` pins that).
+const STATISTICS: &str =
+    include_str!("../../../ui/src/features/__fixtures__/log-query/statistics.json");
 
-/// The questions C14's folds answer, which this part does not.
-const LATER: [&str; 5] = [
-    "workedGrids",
-    "gridPoints",
-    "bandsInLog",
-    "statistics",
-    "lotwBacklog",
-];
+fn golden_statistics() -> Value {
+    let all: Vec<Value> = serde_json::from_str(STATISTICS).expect("statistics.json");
+    all.into_iter()
+        .find(|x| x["name"] == "golden")
+        .expect("the golden log's counts")["counts"]
+        .clone()
+}
 
 /// A folder of the test's own, gone with the value.
 struct Dir(PathBuf);
@@ -104,11 +109,18 @@ fn golden_answers() -> Vec<(Value, Value)> {
         .collect()
 }
 
-/// `records` written as the operator's `log.adi`.
+/// `records` written as the operator's `log.adi`. A contact at exactly 00:00:00 UTC whose time of
+/// day is known says so in ADIF by its TIME_OFF — the reader takes a bare midnight TIME_ON for a
+/// date-only import — so a row like that (the golden log's fx09) is written with one, and both
+/// homes of the log hold it as the fixture has it.
 fn write_log(d: &Dir, records: &[QsoRecord]) {
     let mut adif = adif_header();
     for r in records {
-        adif.push_str(&adif_record_own_log(r));
+        let mut r = r.clone();
+        if r.time_known && r.when_unix % 86_400 == 0 && r.time_off_unix.is_none() {
+            r.time_off_unix = Some(r.when_unix);
+        }
+        adif.push_str(&adif_record_own_log(&r));
     }
     std::fs::write(d.log(), adif).expect("log.adi");
 }
@@ -184,9 +196,10 @@ fn normalise(q: &Value, a: Value) -> Value {
 
 // ── the goldens ─────────────────────────────────────────────────────────────────────────────────
 
-/// ★ THE ENGINE ANSWERS WHAT THE UI ANSWERED. Every golden question of this part, sent as the UI
-/// sends it (the question JSON, parsed as the command parses it), is answered exactly as the
-/// golden file froze it — with the log in the store, and with it in memory on the 1.13 path.
+/// ★ THE ENGINE ANSWERS WHAT THE UI ANSWERED. Every golden question, sent as the UI sends it (the
+/// question JSON, parsed as the command parses it), is answered exactly as the golden file froze
+/// it — the statistics as the counts the window finishes into it — with the log in the store, and
+/// with it in memory on the 1.13 path.
 #[test]
 fn every_golden_answer_on_both_homes_of_the_log() {
     let (records, entities) = golden_log();
@@ -203,15 +216,11 @@ fn every_golden_answer_on_both_homes_of_the_log() {
         let queries = LogQueries::default();
         let mut answered = 0;
         for (q, a) in golden_answers() {
-            let kind = q["kind"].as_str().unwrap();
-            if LATER.contains(&kind) {
-                let parsed: LogQuestion = serde_json::from_value(q.clone()).expect("parses");
-                assert!(
-                    queries.answer(&engine, &parsed, &resolve).is_err(),
-                    "{home}: {kind} is refused until C14's folds"
-                );
-                continue;
-            }
+            let want = if q["kind"] == "statistics" {
+                golden_statistics()
+            } else {
+                a
+            };
             // A question naming a row names it by the fixture's id; the engine holds it under
             // the record id that id stands for.
             let mut asked = q.clone();
@@ -219,10 +228,10 @@ fn every_golden_answer_on_both_homes_of_the_log() {
                 asked["id"] = json!(golden_id(name).to_string());
             }
             let got = ask(&queries, &engine, asked, &resolve);
-            assert_eq!(normalise(&q, got), a, "{home}: {q}");
+            assert_eq!(normalise(&q, got), want, "{home}: {q}");
             answered += 1;
         }
-        assert_eq!(answered, 71, "{home}: every question of this part");
+        assert_eq!(answered, 78, "{home}: every question in the golden file");
     }
 }
 
@@ -378,6 +387,79 @@ fn four_orders_are_kept_and_the_oldest_goes() {
     );
     page("call");
     assert_eq!(built(), 6, "call is still kept");
+}
+
+/// ★ A FOLD IS KEPT UNTIL WHAT IT READS MOVES. The squares, the bands, the globe's dots and the
+/// statistics read nothing an upload stamp changes: a stamp leaves them kept. The LoTW backlog
+/// reads the LoTW stamp: a stamp folds it again, and the answer has the stamp. A logged contact
+/// folds every one of them again. Each answer is the reference's, every time.
+#[test]
+fn a_fold_is_kept_until_what_it_reads_moves() {
+    let (records, entities) = golden_log();
+    let resolve = |call: &str| entities.get(call).cloned().flatten();
+    let d = Dir::new("folds-kept");
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let folded = || queries.0.folded.load(Ordering::Relaxed);
+    let questions = [
+        json!({"kind": "workedGrids"}),
+        json!({"kind": "bandsInLog"}),
+        json!({"kind": "gridPoints", "band": "20m"}),
+        json!({"kind": "statistics"}),
+        json!({"kind": "lotwBacklog"}),
+    ];
+    let expected = |log: &[QsoRecord]| -> Vec<Value> {
+        let of = |call: &str| entities.get(call).cloned().flatten();
+        vec![
+            json!(reference::fold(log, WorkedGrids::default())),
+            json!(reference::fold(log, BandsInLog::default())),
+            json!(reference::fold(log, GridCounts::new("20m"))),
+            json!(reference::fold(log, LogStatCounter::new(&of))),
+            json!(reference::fold(log, LotwBacklog::default())),
+        ]
+    };
+    let asked = || -> Vec<Value> {
+        questions
+            .iter()
+            .map(|q| ask(&queries, &engine, q.clone(), &resolve))
+            .collect()
+    };
+    assert_eq!(asked(), expected(&log_of(&engine)));
+    assert_eq!(folded(), 5);
+    assert_eq!(asked(), expected(&log_of(&engine)));
+    assert_eq!(folded(), 5, "asked again: all kept");
+
+    // A LoTW upload stamp on an unsent contact: only the backlog reads it.
+    let unsent = log_of(&engine)
+        .into_iter()
+        .find(|r| !r.award_confirmed && r.upload.lotw.is_none() && r.time_known)
+        .expect("premise: an unsent contact");
+    engine_lock(&engine).stamp_lotw_upload(
+        &[unsent.id.unwrap()],
+        UploadOutcome::Accepted,
+        1_790_000_000,
+        None,
+    );
+    let after_stamp = asked();
+    assert_eq!(after_stamp, expected(&log_of(&engine)));
+    assert_eq!(folded(), 6, "the backlog alone folded again");
+    assert_ne!(
+        after_stamp[4],
+        json!(reference::fold(&records, LotwBacklog::default()))
+    );
+
+    // A logged contact moves them all.
+    {
+        let mut e = engine_lock(&engine);
+        let mut r = QsoRecord::clone(&e.logged_row(golden_id("fx01")).expect("a row"));
+        r.id = None;
+        r.call = "N0FOLD".into();
+        r.grid = Some("AA00".into());
+        r.when_unix = 1_800_000_000;
+        e.log_qso(r);
+    }
+    assert_eq!(asked(), expected(&log_of(&engine)));
+    assert_eq!(folded(), 11, "every fold folded again");
 }
 
 /// A new order asked for by several windows at once is built once: the others wait for that
@@ -561,6 +643,42 @@ fn the_engine_lock_is_free_while_an_answer_waits_for_the_writer() {
         caught_up["total"], 25,
         "the contact logged before the question is in its answer now"
     );
+}
+
+/// A fold read before the writer caught up is not kept either: the wait runs out, the answer is
+/// the store as it stands, and the next question, once the writer has caught up, folds again and
+/// has the contact.
+#[test]
+fn a_fold_read_before_the_writer_caught_up_is_not_kept() {
+    let (records, entities) = golden_log();
+    let resolve = |call: &str| entities.get(call).cloned().flatten();
+    let d = Dir::new("stall-fold");
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let db = tempo_core::logbook::migrate::database_path(&d.log());
+    let hold = tempo_core::logbook::sqlite::WriteHold::take(&db).expect("stall the store");
+    {
+        let mut e = engine_lock(&engine);
+        let mut r = QsoRecord::clone(&e.logged_row(golden_id("fx02")).expect("a row"));
+        r.id = None;
+        r.call = "N9STALL".into();
+        r.grid = Some("AA00".into());
+        r.when_unix += 60;
+        e.log_qso(r);
+    }
+    let grids = || ask(&queries, &engine, json!({"kind": "workedGrids"}), &resolve);
+    let stale = grids();
+    assert!(
+        !stale.as_array().unwrap().contains(&json!("AA00")),
+        "answered from the store as it stands"
+    );
+    drop(hold);
+    let caught_up = grids();
+    assert!(
+        caught_up.as_array().unwrap().contains(&json!("AA00")),
+        "the contact logged before the question is in its answer now"
+    );
+    assert_eq!(queries.0.folded.load(Ordering::Relaxed), 2, "folded again");
 }
 
 // ── calls the store and the UI fold differently ────────────────────────────────────────────────
@@ -881,6 +999,43 @@ fn assert_parity(seed: u64, step: &str, engine: &SharedEngine, queries: &LogQuer
         let expected = serde_json::to_value(reference::entity(&held, entity, &of)).unwrap();
         assert_eq!(got, expected, "{}", at(&format!("entity {entity:?}")));
     }
+    let of = |call: &str| test_entity(call);
+    let folds = [
+        (
+            json!({"kind": "workedGrids"}),
+            json!(reference::fold(&held, WorkedGrids::default())),
+        ),
+        (
+            json!({"kind": "bandsInLog"}),
+            json!(reference::fold(&held, BandsInLog::default())),
+        ),
+        (
+            json!({"kind": "lotwBacklog"}),
+            json!(reference::fold(&held, LotwBacklog::default())),
+        ),
+        (
+            json!({"kind": "statistics"}),
+            json!(reference::fold(&held, LogStatCounter::new(&of))),
+        ),
+    ];
+    for (q, expected) in folds {
+        assert_eq!(
+            ask(queries, engine, q.clone(), &resolve),
+            expected,
+            "{}",
+            at(&q.to_string())
+        );
+    }
+    for band in ["all", g.pick(&BANDS)] {
+        let got = ask(
+            queries,
+            engine,
+            json!({"kind": "gridPoints", "band": band}),
+            &resolve,
+        );
+        let expected = json!(reference::fold(&held, GridCounts::new(band)));
+        assert_eq!(got, expected, "{}", at(&format!("gridPoints {band:?}")));
+    }
     let indices = json!([0, held.len() / 2, held.len(), -1]);
     let rows = ask(
         queries,
@@ -1039,6 +1194,11 @@ fn a_question_is_parsed_exactly() {
         LogQuestion::LogSize {}
     );
     assert!(parse(json!({"kind": "logSize", "extra": 1})).is_err());
+    assert!(parse(json!({"kind": "statistics", "extra": 1})).is_err());
+    assert!(
+        parse(json!({"kind": "gridPoints"})).is_err(),
+        "the globe's dots need their band"
+    );
     assert!(parse(json!({"kind": "nope"})).is_err());
     assert!(parse(json!({"kind": "row"})).is_err(), "a row needs its id");
     assert!(parse(json!({"kind": "page", "offset": 0, "limit": 1,

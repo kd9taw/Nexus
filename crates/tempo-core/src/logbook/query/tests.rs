@@ -146,15 +146,58 @@ pub(crate) const GOLDEN_LOG: &str =
 pub(crate) const GOLDEN_ANSWERS: &str =
     include_str!("../../../../../ui/src/features/__fixtures__/log-query/answers.json");
 
-/// The questions C17a answers in its second part, once C14's folds are in: the golden file
-/// holds them, and the phase-1 engine does not answer them yet.
-pub(crate) const LATER: [&str; 5] = [
-    "workedGrids",
-    "gridPoints",
-    "bandsInLog",
-    "statistics",
-    "lotwBacklog",
-];
+/// The statistics' COUNTS the engine answers with (`countLogStats`), over the golden log and over
+/// a log built to tie (`ui/src/features/logStats.countFinish.test.ts`, which also pins that the
+/// golden log's counts finish to the golden answer). The window orders them; the engine counts.
+pub(crate) const STATISTICS: &str =
+    include_str!("../../../../../ui/src/features/__fixtures__/log-query/statistics.json");
+
+/// A log of the statistics fixture: its records, each call's entity, and its counts.
+pub(crate) type CountedLog = (Vec<QsoRecord>, HashMap<String, Option<String>>, Value);
+
+/// The fixture's statistics counts: the golden log's, and the tied log with its counts.
+pub(crate) fn statistics_goldens() -> (Value, Vec<CountedLog>) {
+    let all: Vec<Value> = serde_json::from_str(STATISTICS).expect("statistics.json");
+    let golden = all
+        .iter()
+        .find(|x| x["name"] == "golden")
+        .expect("the golden log's counts")["counts"]
+        .clone();
+    let logs = all
+        .iter()
+        .filter(|x| x["log"].is_array())
+        .map(|x| {
+            let mut entities = HashMap::new();
+            let log = x["log"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| {
+                    // `stNNN` read as a fixture id the loader knows (`fx1NNN`).
+                    let mut v = v.clone();
+                    let n: u64 = v["id"]
+                        .as_str()
+                        .unwrap()
+                        .trim_start_matches("st")
+                        .parse()
+                        .unwrap();
+                    v["id"] = json!(format!("fx{}", 1000 + n));
+                    let r = golden_record(&v);
+                    let entity = v["entity"].as_str().map(str::to_string);
+                    let held = entities.insert(r.call.clone(), entity.clone());
+                    assert!(
+                        held.is_none_or(|e| e == entity),
+                        "{}: one entity per call",
+                        r.call
+                    );
+                    r
+                })
+                .collect();
+            (log, entities, x["counts"].clone())
+        })
+        .collect();
+    (golden, logs)
+}
 
 /// A golden row as a record, the way the engine holds a contact: every field the fixture sets,
 /// and its id as a provisional id numbered like the fixture's (`fx07` → `~…07`).
@@ -351,38 +394,115 @@ fn reference_answer(
             json!(log.iter().find(|r| name(r) == id).map(name))
         }
         "logSize" => json!(log.len()),
+        "workedGrids" => json!(reference::fold(log, WorkedGrids::default())),
+        "gridPoints" => json!(reference::fold(
+            log,
+            GridCounts::new(q["band"].as_str().unwrap())
+        )),
+        "bandsInLog" => json!(reference::fold(log, BandsInLog::default())),
+        "lotwBacklog" => json!(reference::fold(log, LotwBacklog::default())),
+        // The COUNTS, which the window orders (`finishLogStats`) into the golden answer.
+        "statistics" => {
+            let entity = |call: &str| {
+                log.iter()
+                    .find(|r| r.call == call)
+                    .and_then(|r| entities[&r.id.expect("an id")].clone())
+            };
+            json!(reference::fold(log, LogStatCounter::new(&entity)))
+        }
         other => panic!("no reference answer for {other}"),
     }
 }
 
-/// ★ THE PORT ANSWERS WHAT THE UI ANSWERED. Every golden question C17a answers now, asked of the
-/// reference over the golden log, gets exactly the frozen answer — and the questions it does not
-/// answer yet are exactly C14's folds, so the count cannot shrink by a question dropped quietly.
+/// ★ THE PORT ANSWERS WHAT THE UI ANSWERED. Every golden question, asked of the reference over
+/// the golden log, gets exactly the frozen answer — the statistics as the counts the window
+/// finishes into it — and the count of questions cannot shrink by one dropped quietly.
 #[test]
 fn the_reference_gives_every_golden_answer() {
     let (log, entities) = golden_log();
     assert_eq!(log.len(), 24, "the fixture's 24 rows");
+    let (statistics, _) = statistics_goldens();
     let mut answered = 0;
-    let mut later = std::collections::BTreeMap::<String, usize>::new();
     for (q, a) in golden_answers() {
-        let kind = q["kind"].as_str().expect("kind").to_string();
-        if LATER.contains(&kind.as_str()) {
-            *later.entry(kind).or_default() += 1;
-            continue;
-        }
-        assert_eq!(reference_answer(&log, &entities, &q), a, "{q}");
+        let want = if q["kind"] == "statistics" {
+            statistics.clone()
+        } else {
+            a
+        };
+        assert_eq!(reference_answer(&log, &entities, &q), want, "{q}");
         answered += 1;
     }
-    assert_eq!(answered, 71, "every phase-1 question in the golden file");
+    assert_eq!(answered, 78, "every question in the golden file");
+}
+
+/// ★ The statistics are COUNTED as the UI counts them, on a log built to tie and to break a port —
+/// labels that differ only in case or accents, full Unicode case maps (`uſb` is a sideband, `ſc`
+/// a state), an empty entity that does not fall back, date-only contacts, instants no `Date`
+/// holds. The same counts `countLogStats` gives (the window finishes them).
+#[test]
+fn the_statistics_counts_are_the_uis() {
+    let (_, logs) = statistics_goldens();
+    assert!(!logs.is_empty(), "premise: the tied log is in the fixture");
+    for (log, entities, counts) in logs {
+        let entity = |call: &str| entities.get(call).cloned().flatten();
+        let got = json!(reference::fold(&log, LogStatCounter::new(&entity)));
+        assert_eq!(got, counts, "{} rows", log.len());
+    }
+}
+
+/// The WAS gate is the UI's: its three US-family entities and fifty codes, read out of
+/// `logStats.ts` itself.
+#[test]
+fn the_was_lists_are_the_uis() {
+    let ts = include_str!("../../../../../ui/src/features/logStats.ts");
+    let list = |name: &str| -> Vec<String> {
+        let from = ts.find(&format!("const {name} = new Set([")).expect(name);
+        let body = &ts[from..from + ts[from..].find("])").expect("its end")];
+        body.split('\'')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(list("US_ENTITIES"), US_ENTITIES);
+    assert_eq!(list("WAS_STATES"), WAS_STATES);
+}
+
+/// The bands in the log are its own spellings, first seen first: nothing trimmed or folded, and
+/// only the empty string left out (`if (r.band) seen.add(r.band)`).
+#[test]
+fn the_bands_in_the_log_are_its_own_spellings() {
+    let (golden, _) = golden_log();
+    let log: Vec<QsoRecord> = ["20m", "  ", "", "20M", "20m", " 40m"]
+        .iter()
+        .map(|band| {
+            let mut r = golden[0].clone();
+            r.band = band.to_string();
+            r
+        })
+        .collect();
     assert_eq!(
-        later.into_iter().collect::<Vec<_>>(),
-        [
-            ("bandsInLog".to_string(), 1),
-            ("gridPoints".to_string(), 3),
-            ("lotwBacklog".to_string(), 1),
-            ("statistics".to_string(), 1),
-            ("workedGrids".to_string(), 1),
-        ]
+        reference::fold(&log, BandsInLog::default()),
+        ["20m", "  ", "20M", " 40m"]
+    );
+}
+
+/// A square is the grid trimmed, upper-cased as JavaScript does and cut to four UTF-16 units.
+#[test]
+fn a_grid_square_is_cut_as_javascript_cuts_it() {
+    assert_eq!(grid_square(Some(" fn31pr ")).as_deref(), Some("FN31"));
+    assert_eq!(grid_square(Some("fn3")), None);
+    assert_eq!(grid_square(None), None);
+    // ß upper-cases to SS, so two of them make a four-unit square.
+    assert_eq!(grid_square(Some("ßß")).as_deref(), Some("SSSS"));
+    // A character above U+FFFF is two units: the cut through it leaves half, here U+FFFD.
+    assert_eq!(
+        grid_square(Some("FN3\u{1F600}")).as_deref(),
+        Some("FN3\u{FFFD}")
+    );
+    assert_eq!(
+        grid_square(Some("F\u{1F600}N3")).as_deref(),
+        Some("F\u{1F600}N")
     );
 }
 

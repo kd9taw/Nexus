@@ -26,6 +26,7 @@
 //! - **Sorting** is stable, with the time as the tie-break and the WHOLE comparison negated for a
 //!   descending order — so a full tie keeps log order in both directions.
 //! - **`??`** falls back on a missing value only, never on an empty string.
+//! - **`length` and `slice`** count UTF-16 code units ([`grid_square`]).
 //!
 //! # What is here, and what is not
 //!
@@ -35,11 +36,11 @@
 //! once. [`reference`] answers every question from a whole log, exactly as `answerFrom` does, and
 //! is the oracle the engine's own paths are held to.
 
-use super::QsoRecord;
+use super::{QsoRecord, UploadOutcome};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ── JavaScript's string semantics ──────────────────────────────────────────────────────────────
 
@@ -636,6 +637,386 @@ impl EntityIndex {
     }
 }
 
+// ── the folds: squares, the globe's dots and bands, the LoTW backlog, the statistics ──────────
+
+/// A question answered by one pass over the whole log in log order: the squares worked, the
+/// Logbook globe's dots and its bands, the LoTW backlog, the statistics' counts. The engine runs
+/// it over the store's rows, narrow; [`reference::fold`] over a whole log.
+pub trait LogFold {
+    type Answer;
+    /// The next row, in LOG ORDER after every row added before it.
+    fn add(&mut self, r: &QsoRecord);
+    fn finish(self) -> Self::Answer;
+}
+
+/// `s.length`: UTF-16 code units.
+fn js_len(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
+}
+
+/// `s.slice(0, n)`: the first `n` UTF-16 code units of `s`. A character above U+FFFF that the cut
+/// splits leaves JavaScript half of it — a lone surrogate, which no Rust string can hold — so it
+/// stands here as U+FFFD. Only a grid with such a character in its fourth place meets this, and
+/// neither view can place that square on a map.
+fn js_slice(s: &str, n: usize) -> String {
+    let mut out = String::new();
+    let mut units = 0;
+    for c in s.chars() {
+        let w = c.len_utf16();
+        if units + w > n {
+            if units < n {
+                out.push('\u{FFFD}');
+            }
+            break;
+        }
+        out.push(c);
+        units += w;
+    }
+    out
+}
+
+/// The 4-character square a contact's grid names, as the maps and the Logbook's globe key it
+/// (`workedGridSet`, `qsoGridCounts`): trimmed and upper-cased, cut to four UTF-16 units — `None`
+/// when shorter. Nothing checks that it IS a square; neither view did.
+pub fn grid_square(grid: Option<&str>) -> Option<String> {
+    let g = js_upper(js_trim(grid.unwrap_or("")));
+    (js_len(&g) >= 4).then(|| js_slice(&g, 4))
+}
+
+/// `workedGridSet(log)`: every square worked, first-seen order (`workedGrids`).
+#[derive(Debug, Default)]
+pub struct WorkedGrids {
+    seen: HashSet<String>,
+    squares: Vec<String>,
+}
+
+impl LogFold for WorkedGrids {
+    type Answer = Vec<String>;
+
+    fn add(&mut self, r: &QsoRecord) {
+        if let Some(g) = grid_square(r.grid.as_deref()) {
+            if self.seen.insert(g.clone()) {
+                self.squares.push(g);
+            }
+        }
+    }
+
+    fn finish(self) -> Vec<String> {
+        self.squares
+    }
+}
+
+/// One worked square on the Logbook's globe (`QsoGridCount`): its contacts, and the band of its
+/// most recent one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GridCount {
+    pub grid: String,
+    pub n: usize,
+    pub band: String,
+}
+
+/// `qsoGridCounts(log, band)` (`gridPoints`): the squares worked on `band` — compared exactly as
+/// logged; `"all"` pools every band — first-seen order. A square's band is its most recent
+/// contact's: the LAST of equal times.
+#[derive(Debug)]
+pub struct GridCounts {
+    band: String,
+    at: HashMap<String, usize>,
+    squares: Vec<(GridCount, u64)>,
+}
+
+impl GridCounts {
+    pub fn new(band: &str) -> Self {
+        Self {
+            band: band.to_string(),
+            at: HashMap::new(),
+            squares: Vec::new(),
+        }
+    }
+}
+
+impl LogFold for GridCounts {
+    type Answer = Vec<GridCount>;
+
+    fn add(&mut self, r: &QsoRecord) {
+        if self.band != "all" && r.band != self.band {
+            return;
+        }
+        let Some(grid) = grid_square(r.grid.as_deref()) else {
+            return;
+        };
+        match self.at.get(&grid) {
+            Some(&i) => {
+                let (square, when) = &mut self.squares[i];
+                square.n += 1;
+                if r.when_unix >= *when {
+                    *when = r.when_unix;
+                    square.band = r.band.clone();
+                }
+            }
+            None => {
+                self.at.insert(grid.clone(), self.squares.len());
+                let square = GridCount {
+                    grid,
+                    n: 1,
+                    band: r.band.clone(),
+                };
+                self.squares.push((square, r.when_unix));
+            }
+        }
+    }
+
+    fn finish(self) -> Vec<GridCount> {
+        self.squares.into_iter().map(|(square, _)| square).collect()
+    }
+}
+
+/// The bands in the log, exactly as logged, first-seen order (`bandsInLog`): every one that is
+/// not the empty string.
+#[derive(Debug, Default)]
+pub struct BandsInLog {
+    seen: HashSet<String>,
+    bands: Vec<String>,
+}
+
+impl LogFold for BandsInLog {
+    type Answer = Vec<String>;
+
+    fn add(&mut self, r: &QsoRecord) {
+        if !r.band.is_empty() && self.seen.insert(r.band.clone()) {
+            self.bands.push(r.band.clone());
+        }
+    }
+
+    fn finish(self) -> Vec<String> {
+        self.bands
+    }
+}
+
+/// The Logbook's LoTW backlog (`lotwBacklog`): the contacts its "Upload to LoTW" button counts —
+/// not award-confirmed, and never sent to LoTW or bounced by it — by whether the time of day is
+/// known (`unsent`) or not (`timeless`: LoTW matches on time, so it can never confirm one).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LotwBacklog {
+    pub unsent: usize,
+    pub timeless: usize,
+}
+
+impl LogFold for LotwBacklog {
+    type Answer = LotwBacklog;
+
+    fn add(&mut self, r: &QsoRecord) {
+        let eligible = !r.award_confirmed
+            && r.upload.lotw.as_ref().is_none_or(|s| {
+                matches!(s.outcome, UploadOutcome::Rejected | UploadOutcome::AuthFail)
+            });
+        if eligible && r.time_known {
+            self.unsent += 1;
+        } else if eligible {
+            self.timeless += 1;
+        }
+    }
+
+    fn finish(self) -> LotwBacklog {
+        self
+    }
+}
+
+/// A labelled count (`Tally`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelCount {
+    pub label: String,
+    pub count: usize,
+}
+
+/// How many contacts carry each confirmation channel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QslCounts {
+    pub card: usize,
+    pub lotw: usize,
+    pub eqsl: usize,
+}
+
+/// The Statistics dashboard COUNTED and not yet ordered (`LogStatCounts`): each tally in
+/// first-seen order, every entity. The window orders them (`finishLogStats`): its ties are broken
+/// by `localeCompare`, in the webview's own locale, and the top twelve entities are cut after that.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogStatCounts {
+    pub total: usize,
+    pub unique_calls: usize,
+    pub confirmed: usize,
+    pub award_confirmed: usize,
+    pub dxcc_entities: usize,
+    pub by_band: Vec<LabelCount>,
+    pub by_mode: Vec<LabelCount>,
+    pub by_year: Vec<LabelCount>,
+    pub by_state: Vec<LabelCount>,
+    pub entities: Vec<LabelCount>,
+    pub hour_utc: [usize; 24],
+    pub hour_unknown: usize,
+    pub qsl: QslCounts,
+}
+
+/// Labels counted in first-seen order, each under the label as first seen — by the label itself
+/// (`tallyBy`), or, where `fold` is set, by its upper case (`tallyByCI`).
+#[derive(Debug, Default)]
+struct Tallies {
+    fold: bool,
+    at: HashMap<String, usize>,
+    counts: Vec<LabelCount>,
+}
+
+impl Tallies {
+    fn by_upper_case() -> Self {
+        Self {
+            fold: true,
+            ..Self::default()
+        }
+    }
+
+    /// Count `label`, trimmed; a blank one is not counted.
+    fn add(&mut self, label: &str) {
+        let label = js_trim(label);
+        if label.is_empty() {
+            return;
+        }
+        let key = if self.fold {
+            js_upper(label)
+        } else {
+            label.to_string()
+        };
+        match self.at.get(&key) {
+            Some(&i) => self.counts[i].count += 1,
+            None => {
+                self.at.insert(key, self.counts.len());
+                self.counts.push(LabelCount {
+                    label: label.to_string(),
+                    count: 1,
+                });
+            }
+        }
+    }
+}
+
+/// The US-family entities WAS counts states for (`US_ENTITIES`).
+const US_ENTITIES: [&str; 3] = ["UNITED STATES", "ALASKA", "HAWAII"];
+
+/// The fifty WAS codes (`WAS_STATES`).
+const WAS_STATES: [&str; 50] = [
+    "AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "IA", "ID", "IL", "IN", "KS",
+    "KY", "LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT", "NC", "ND", "NE", "NH", "NJ", "NM",
+    "NV", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VA", "VT", "WA", "WI",
+    "WV", "WY",
+];
+
+/// `wasState(q)`: a contact's state as a WAS code, only for a US-family STORED country.
+fn was_state(r: &QsoRecord) -> Option<String> {
+    let country = js_upper(js_trim(r.country.as_deref().unwrap_or("")));
+    if !US_ENTITIES.contains(&country.as_str()) {
+        return None;
+    }
+    let code = js_upper(js_trim(r.state.as_deref()?));
+    WAS_STATES.contains(&code.as_str()).then_some(code)
+}
+
+/// `phoneModeLabel(mode)`: the sidebands fold into SSB, and nothing else folds — case included.
+fn phone_mode_label(mode: &str) -> String {
+    let m = js_trim(mode);
+    match js_upper(m).as_str() {
+        "USB" | "LSB" => "SSB".to_string(),
+        _ => m.to_string(),
+    }
+}
+
+/// `countLogStats(log)`, a row at a time (`statistics`): the dashboard's counts, with each
+/// contact's entity its call's live one (`resolve`, once per distinct call in the pass) and the
+/// stored country where it has none.
+pub struct LogStatCounter<'a> {
+    resolve: &'a dyn Fn(&str) -> Option<String>,
+    entity_of: HashMap<String, Option<String>>,
+    counts: LogStatCounts,
+    calls: HashSet<String>,
+    countries: HashSet<String>,
+    bands: Tallies,
+    modes: Tallies,
+    years: Tallies,
+    states: Tallies,
+    entities: Tallies,
+}
+
+impl<'a> LogStatCounter<'a> {
+    pub fn new(resolve: &'a dyn Fn(&str) -> Option<String>) -> Self {
+        Self {
+            resolve,
+            entity_of: HashMap::new(),
+            counts: LogStatCounts::default(),
+            calls: HashSet::new(),
+            countries: HashSet::new(),
+            bands: Tallies::default(),
+            modes: Tallies::default(),
+            years: Tallies::default(),
+            states: Tallies::default(),
+            entities: Tallies::by_upper_case(),
+        }
+    }
+}
+
+impl LogFold for LogStatCounter<'_> {
+    type Answer = LogStatCounts;
+
+    fn add(&mut self, r: &QsoRecord) {
+        let resolve = self.resolve;
+        let entity = self
+            .entity_of
+            .entry(r.call.clone())
+            .or_insert_with(|| resolve(&r.call));
+        let c = &mut self.counts;
+        c.total += 1;
+        self.calls.insert(js_upper(js_trim(&r.call)));
+        // `q.entity ?? q.country`: a missing entity only.
+        let named = js_trim(entity.as_deref().or(r.country.as_deref()).unwrap_or(""));
+        if !named.is_empty() {
+            self.countries.insert(js_upper(named));
+        }
+        self.entities.add(named);
+        c.confirmed += usize::from(r.confirmed);
+        c.award_confirmed += usize::from(r.award_confirmed);
+        c.qsl.card += usize::from(r.qsl_rcvd.card);
+        c.qsl.lotw += usize::from(r.qsl_rcvd.lotw);
+        c.qsl.eqsl += usize::from(r.qsl_rcvd.eqsl);
+        // A time with no time of day is a date-only import's, judged on the number JavaScript
+        // holds; a time past the range a `Date` holds has no hour and no year.
+        if (r.when_unix as f64) % 86_400.0 == 0.0 {
+            c.hour_unknown += 1;
+        } else if r.when_unix <= JS_DATE_MAX_SECS {
+            c.hour_utc[(r.when_unix % 86_400 / 3_600) as usize] += 1;
+        }
+        if r.when_unix <= JS_DATE_MAX_SECS {
+            let (year, _, _) = civil_from_days((r.when_unix / 86_400) as i64);
+            self.years.add(&year.to_string());
+        }
+        self.bands.add(&r.band);
+        self.modes.add(&phone_mode_label(&r.mode));
+        if let Some(state) = was_state(r) {
+            self.states.add(&state);
+        }
+    }
+
+    fn finish(self) -> LogStatCounts {
+        LogStatCounts {
+            unique_calls: self.calls.len(),
+            dxcc_entities: self.countries.len(),
+            by_band: self.bands.counts,
+            by_mode: self.modes.counts,
+            by_year: self.years.counts,
+            by_state: self.states.counts,
+            entities: self.entities.counts,
+            ..self.counts
+        }
+    }
+}
+
 /// The oracle: every question answered from a whole log in log order, exactly as
 /// `logAnswers.ts`'s `answerFrom` computes it — no index, no cache, no store. The engine's own
 /// paths are held to it; it is held to the goldens.
@@ -707,6 +1088,14 @@ pub mod reference {
     /// The order vector of the whole log, as log positions.
     pub fn order<R: Borrow<QsoRecord>>(log: &[R], query: &LogQuery) -> Vec<usize> {
         super::order(log.iter().map(|r| r.borrow()).enumerate(), query)
+    }
+
+    /// A fold ([`LogFold`]) over the whole log.
+    pub fn fold<R: Borrow<QsoRecord>, F: LogFold>(log: &[R], mut fold: F) -> F::Answer {
+        for r in log {
+            fold.add(r.borrow());
+        }
+        fold.finish()
     }
 }
 
