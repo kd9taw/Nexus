@@ -1039,6 +1039,16 @@ export function Logbook({
   /** The open rows' heights to move, taken as a swap is decided and applied in the render that
    *  shows the new order (when the list is its new length), before that render is placed. */
   const heightMoves = useRef<{ closed: number; moves: { key: string; from: number; to: number | null; size: number }[] } | null>(null)
+  // …and A NEW LIST IS MEASURED AFRESH (the same bug, when the list is replaced rather than moved):
+  // a new sort or search. The heights kept by place were measured for the old list. A row drawn in
+  // both stays mounted and is not measured again; a row mounting at a place the old list measured
+  // takes that place's height until the browser reports its own, a frame later. So while a row was
+  // open, its height stayed at its old place, over another row, and the open row was drawn into a
+  // closed row's height. The first time a new list is drawn while a row is open, the old list's
+  // heights are dropped and the rows drawn are measured, in the placing effect below, before the
+  // paint. `drawnList` names the list on screen: the query's, once its first page is here.
+  const drawnList = control && showingRev !== null ? queryKey : null
+  const heightsFor = useRef<string | null>(null)
 
   const virtualRows = rowVirtualizer.getVirtualItems()
   const held0 = anchor.current
@@ -1137,6 +1147,27 @@ export function Logbook({
   // its open rows' heights moved first, so the list is laid out, and placed, as the rows are.
   // (Declared before the swap below: effects run in order, so the swap's own render has passed.)
   useLayoutEffect(() => {
+    // A new list drawn while a row is open (`drawnList`, above): the old list's heights dropped and
+    // the rows drawn now measured, the scroll left where it is — as a new list always left it.
+    if (drawnList !== null && heightsFor.current !== drawnList) {
+      const replaced = heightsFor.current !== null
+      heightsFor.current = drawnList
+      if (replaced && openComments.size > 0) {
+        const adjust = rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange
+        rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+        try {
+          rowVirtualizer.measure()
+          rowVirtualizer.getVirtualItems() // the table at the estimate, then each drawn row's own height
+          for (const el of rowsWrapRef.current?.children ?? []) {
+            const index = (el as HTMLElement).dataset.index
+            if (index !== undefined) rowVirtualizer.resizeItem(Number(index), (el as HTMLElement).offsetHeight)
+          }
+        } finally {
+          rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjust
+        }
+        rowVirtualizer.getVirtualItems()
+      }
+    }
     const moving = heightMoves.current
     heightMoves.current = null
     if (moving) {
