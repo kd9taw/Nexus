@@ -29,7 +29,6 @@ const WHOLE_LOG_ADAPTER = ['api.ts', 'features/logStore.ts', 'features/wholeLogS
 
 /** Views not yet moved onto `LogSource`. Each C17b step removes the views it moves. */
 const STILL_READING = [
-  'DetachedPanel.tsx',
   'components/AwardsView.tsx',
   'components/Globe3D.tsx',
   'components/Js8Cockpit.tsx',
