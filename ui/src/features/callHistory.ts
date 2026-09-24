@@ -235,6 +235,41 @@ export function callHistory(
   }
 }
 
+/** What the JS8 roster's ✓ / Name / Comment columns show for one heard call. */
+export interface CallSummary {
+  count: number
+  lastUnix: number | null
+  /** The most recent contact's grid — the fallback when the station has not sent one. */
+  grid: string
+  name: string
+  comment: string
+}
+
+/** Per-call log detail for a roster: for each of `calls` worked at least once, its count, the last
+ *  contact time, and the grid, name and comment of the most recent contact ("most recent" = the
+ *  FIRST row with the greatest `whenUnix`, in log order). Calls never worked are absent.
+ *
+ *  JS8Call's own scope for this column is hasWorkedBefore(call, "") — worked ANYWHERE, any band,
+ *  any mode — so the band/mode dupe scope of the log strip does not apply (`band` is '').
+ *  Lifted verbatim from the JS8 cockpit's roster join (Js8Cockpit.tsx), which JS8Call does the
+ *  same way (mainwindow.cpp:10325-10345). */
+export function callsSummary(log: LoggedQso[], calls: readonly string[]): Record<string, CallSummary> {
+  const out: Record<string, CallSummary> = {}
+  for (const call of calls) {
+    const hist = callHistory(log, call, '')
+    if (!hist.workedBefore) continue
+    const last = hist.qsos.reduce((a, b) => (b.whenUnix > a.whenUnix ? b : a))
+    out[call] = {
+      count: hist.count,
+      lastUnix: hist.lastUnix,
+      grid: (last.grid ?? '').trim(),
+      name: (last.name ?? '').trim(),
+      comment: (last.comment ?? '').trim(),
+    }
+  }
+  return out
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /** One-line human-readable summary of prior contacts for the recall panel — the casual-first

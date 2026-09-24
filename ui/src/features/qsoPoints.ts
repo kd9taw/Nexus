@@ -14,11 +14,26 @@ export interface QsoPoint {
   band: string
 }
 
+/** One worked 4-char square before it is placed on the globe: what the log can answer on its own
+ *  (the square, its QSO count, its most-recent QSO's band), with the latitude/longitude left to the
+ *  UI. The Logbook's globe asks for these through `LogSource` (SPEC-2 v2 §4 `grid_points`). */
+export interface QsoGridCount {
+  /** The 4-char Maidenhead square, upper-cased. */
+  grid: string
+  n: number
+  band: string
+}
+
 /**
  * Reduce `qsos` to per-square points. `band` filters by band ('all' = every band pooled) —
  * grids are a PER-BAND achievement (VUCC), so a selected band shows only ITS squares.
  */
 export function qsoGridPoints(qsos: LoggedQso[], band: string): QsoPoint[] {
+  return gridCountsToPoints(qsoGridCounts(qsos, band))
+}
+
+/** The squares `qsoGridPoints` places, in first-seen order — its reduction, without the placing. */
+export function qsoGridCounts(qsos: LoggedQso[], band: string): QsoGridCount[] {
   const acc = new Map<string, { n: number; band: string; when: number }>()
   for (const q of qsos) {
     if (band !== 'all' && q.band !== band) continue
@@ -36,10 +51,17 @@ export function qsoGridPoints(qsos: LoggedQso[], band: string): QsoPoint[] {
       acc.set(key, { n: 1, band: q.band, when: q.whenUnix })
     }
   }
+  const counts: QsoGridCount[] = []
+  acc.forEach((v, grid) => counts.push({ grid, n: v.n, band: v.band }))
+  return counts
+}
+
+/** Place counted squares on the globe; a square the grid parser cannot place is skipped. */
+export function gridCountsToPoints(counts: readonly QsoGridCount[]): QsoPoint[] {
   const pts: QsoPoint[] = []
-  acc.forEach((v, gr) => {
-    const ll = gridToLatLon(gr)
-    if (ll) pts.push({ lat: ll.lat, lng: ll.lon, n: v.n, band: v.band })
-  })
+  for (const c of counts) {
+    const ll = gridToLatLon(c.grid)
+    if (ll) pts.push({ lat: ll.lat, lng: ll.lon, n: c.n, band: c.band })
+  }
   return pts
 }

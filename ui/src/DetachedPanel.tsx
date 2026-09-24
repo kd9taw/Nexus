@@ -69,7 +69,7 @@ import {
   setSidebandOverride,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
-import { useSharedLog } from './features/logStore'
+import { useLogAnswer } from './features/logSource'
 import { bandLabelForMhz } from './band'
 import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
@@ -251,14 +251,13 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   // Live snapshot (decodes, stations, radio) — same 300 ms cadence as the main window.
   useEffect(() => subscribeSnapshot(setSnap), [])
 
-  // Band-map pop-out: the worked set is this window's shared copy of the log, which follows
-  // this window's own snapshot `logTick` — one row per logged contact, not the whole log every
-  // 15 s.
-  const bandMapLog = useSharedLog(snap?.logTick, isBandMap)
-  const workedCalls = useMemo(
-    () => new Set((bandMapLog ?? []).map((q) => q.call.toUpperCase())),
-    [bandMapLog],
-  )
+  // Band-map pop-out: which of the calls ON THE MAP are in the log — asked of `LogSource`, which
+  // follows this window's own snapshot `logTick`, instead of holding the whole log to answer it.
+  // The rule is the band map's own: the call upper-cased and NOT trimmed, on both sides. The
+  // spot poll hands over a fresh array every 15 s; the question only changes with the call set.
+  const spotCalls = useMemo(() => [...new Set(allSpots.map((s) => s.call.toUpperCase()))].sort(), [allSpots])
+  const worked = useLogAnswer(isBandMap ? { kind: 'workedCalls', calls: spotCalls } : null, snap?.logTick)
+  const workedCalls = useMemo(() => new Set(worked ?? []), [worked])
 
   // Refetch the band plan when the tier changes — FT8/FT4 use different dial frequencies
   // (14.074 vs 14.080), so a detached Operate window's QSY targets must follow the mode.
