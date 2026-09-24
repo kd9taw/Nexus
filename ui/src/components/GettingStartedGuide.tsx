@@ -3,6 +3,7 @@ import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
 import { Dialog } from './ui/Dialog'
+import { useFocusReturn } from '../focusReturn'
 
 /**
  * Getting started — the four-step on-ramp, in-app.
@@ -148,6 +149,8 @@ function WizardShot({ caption, children }: { caption: string; children: React.Re
 
 export function GettingStartedGuide({ onClose, onOpenSettings }: Props) {
   const [step, setStep] = useState(0)
+  // Closed, the keyboard goes back to where the guide was opened from (focusReturn.ts).
+  const returnFocus = useFocusReturn(true)
   const rootRef = useRef<HTMLDivElement>(null)
 
   const go = (i: number) => {
@@ -174,6 +177,7 @@ export function GettingStartedGuide({ onClose, onOpenSettings }: Props) {
       title={t('gettingStarted.title')}
       hideTitle
       className="gsg-dialog"
+      onCloseAutoFocus={returnFocus}
     >
       <div className="gsg" ref={rootRef}>
         {/* Breadcrumb strip — this guide's whole chrome inside the app. */}

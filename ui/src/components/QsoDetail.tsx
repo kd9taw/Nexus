@@ -17,6 +17,7 @@
 // known about the contact.
 import type { LoggedQso } from '../types'
 import { Dialog } from './ui/Dialog'
+import { useFocusReturn } from '../focusReturn'
 import { t } from '../i18n'
 
 /** A rendered field: a label and a value that is definitely worth showing. */
@@ -40,6 +41,8 @@ export interface QsoDetailProps {
 }
 
 export function QsoDetail({ qso, onClose }: QsoDetailProps) {
+  // Closed, the keyboard goes back to the row it was opened from (focusReturn.ts).
+  const returnFocus = useFocusReturn(!!qso)
   if (!qso) return null
   const q = qso
 
@@ -129,6 +132,7 @@ export function QsoDetail({ qso, onClose }: QsoDetailProps) {
       onOpenChange={(o) => { if (!o) onClose() }}
       title={t('qso.detail.title', { call: q.call })}
       className="qso-detail-dialog"
+      onCloseAutoFocus={returnFocus}
     >
       <div className="qso-detail">
         {sections.map((s) => (

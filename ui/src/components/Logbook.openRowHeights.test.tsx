@@ -12,15 +12,24 @@
 // remounted — on today's code (d5be14ea) as on the new list. The fix moves the open rows' heights to
 // their new places when the list swaps to the new order.
 //
+// A NEW list — a new sort or search — had the same bug from the other side: its rows were drawn at
+// the heights the OLD list measured for their places. A row drawn in both kept its old place's
+// height; one mounting where the old list measured the open row took that height until the browser
+// reported its own. Real Chrome, a search while a row was open: the open row drawn over the rows
+// below it for as long as it stayed on screen (whole-log list), or a 132 px gap for a frame. The
+// fix measures a new list afresh while a row is open.
+//
 // jsdom lays nothing out, so this reads what the list itself decides: each drawn row's place (its
 // `translateY`) against the height the row really has. Rows are 43 px; a row whose note is open is
 // 120. The list learns heights the way it does in a browser — from its ResizeObserver, which this
-// test drives (a row mounting, or opening, is observed and measured).
+// test drives (a row mounting, or opening, is observed and measured). "As first drawn" is the list
+// before that report: what a browser paints in the frame the change lands in.
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import { ConfirmHost } from '../confirm'
+import { t } from '../i18n'
 import type { LoggedQso } from '../types'
 
 const engine = vi.hoisted(() => ({ log: [] as unknown[], revision: 1 }))
@@ -43,23 +52,28 @@ const ROW_PX = 43
 const OPEN_PX = 120
 
 /** The list's ResizeObservers (it keeps one on the scroller and one on the rows), driven by the
- *  test: `fire()` delivers what a browser would — a size for every element each one observes (as
- *  on mounting, or on a row growing when its note opens). */
-const observers = new Set<{ cb: (entries: { target: Element }[]) => void; els: Set<Element> }>()
+ *  test: `fire()` delivers what a browser would — an element when it is first observed (a row
+ *  mounting), and whenever its size has changed since (a row growing when its note opens). Never a
+ *  row that only moved: a browser does not report one, and the bug below lives exactly there. */
+const observers = new Set<{ cb: (entries: { target: Element }[]) => void; els: Map<Element, number | undefined> }>()
 const fire = () =>
   act(() => {
-    for (const o of observers) o.cb([...o.els].filter((el) => el.isConnected).map((target) => ({ target })))
+    for (const o of observers) {
+      const changed = [...o.els].filter(([el, last]) => el.isConnected && (el as HTMLElement).offsetHeight !== last)
+      for (const [el] of changed) o.els.set(el, (el as HTMLElement).offsetHeight)
+      if (changed.length) o.cb(changed.map(([target]) => ({ target })))
+    }
   })
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
-    private o: { cb: (entries: { target: Element }[]) => void; els: Set<Element> }
+    private o: { cb: (entries: { target: Element }[]) => void; els: Map<Element, number | undefined> }
     constructor(cb: (entries: { target: Element }[]) => void) {
-      this.o = { cb, els: new Set() }
+      this.o = { cb, els: new Map() }
       observers.add(this.o)
     }
     observe(el: Element) {
-      this.o.els.add(el)
+      this.o.els.set(el, undefined)
     }
     unobserve(el: Element) {
       this.o.els.delete(el)
@@ -87,6 +101,10 @@ afterEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
 })
+// The list's end-of-scroll report comes 150 ms after the last scroll event, from a timer the list
+// does not clear when it unmounts. Let the last test's land while this file's window still exists
+// (after it, React has no `window` to read, and the run fails on an error in no test).
+afterAll(() => new Promise((resolve) => setTimeout(resolve, 200)))
 
 /** `n` contacts, newest last in the log (so newest-first puts contact n-1 on top); `withNote` get a
  *  private note, whose 📝 opens the row. */
@@ -139,6 +157,8 @@ const indexOf = (root: HTMLElement, call: string) =>
       (r) => r.querySelector('.qrz-link-call')?.textContent === call,
     )?.dataset.index,
   )
+const searchFor = (root: HTMLElement, text: string) =>
+  fireEvent.change(root.querySelector('.log-search') as HTMLInputElement, { target: { value: text } })
 
 describe('an open row’s height goes with it when the list moves', () => {
   it('FIX: a contact logged while an open row is ON SCREEN (the list at the top)', async () => {
@@ -222,5 +242,159 @@ describe('an open row’s height goes with it when the list moves', () => {
     // The note opens but the list is never told the row grew: the one misfit is that row's.
     openNoteOf(container, 'K55ABC')
     expect(misfits(container)).toEqual([`4:-${OPEN_PX - ROW_PX}`])
+  })
+})
+
+describe('…and a NEW list (a new sort or search) is measured afresh', () => {
+  it('FIX: a SEARCH that keeps the open row, higher up the new list', async () => {
+    const rows = log(60, [55]) // K55ABC is index 4
+    engine.log = rows
+    engine.revision = 1
+    const { container } = render(view(1))
+    await waitFor(() => expect(indexOf(container, 'K55ABC')).toBe(4))
+    fire()
+    openNoteOf(container, 'K55ABC')
+    fire()
+    expect(misfits(container)).toEqual([])
+
+    // The calls ending "5ABC", newest first: K55 (the open row, now first), K45, K35, K25, K15, K5.
+    searchFor(container, '5ABC')
+    await waitFor(() => expect(indexOf(container, 'K55ABC')).toBe(0))
+    expect(misfits(container), 'the new list as first drawn').toEqual([])
+    fire() // the rows that mounted are observed, as a browser does next
+    expect(misfits(container), 'once the rows that mounted are measured').toEqual([])
+  })
+
+  it('FIX: a SEARCH that drops the open row: its height does not stay behind', async () => {
+    const rows = log(60, [55]) // K55ABC is index 4
+    engine.log = rows
+    engine.revision = 1
+    const { container } = render(view(1))
+    await waitFor(() => expect(indexOf(container, 'K55ABC')).toBe(4))
+    fire()
+    openNoteOf(container, 'K55ABC')
+    fire()
+
+    // "K4": K49…K40 then K4 — all drawn before, moving up ten places; K45 lands on index 4.
+    searchFor(container, 'K4')
+    await waitFor(() => expect(indexOf(container, 'K45ABC')).toBe(4))
+    expect(indexOf(container, 'K55ABC'), 'not in this list').toBeNaN()
+    expect(misfits(container), 'the new list as first drawn').toEqual([])
+    fire()
+    expect(misfits(container), 'once the rows that mounted are measured').toEqual([])
+  })
+
+  it('a SEARCH that leaves the open row in its place keeps it laid out (the new list re-measured)', async () => {
+    const rows = log(60, [55]) // K55ABC is index 4
+    engine.log = rows
+    engine.revision = 1
+    const { container } = render(view(1))
+    await waitFor(() => expect(indexOf(container, 'K55ABC')).toBe(4))
+    fire()
+    openNoteOf(container, 'K55ABC')
+    fire()
+
+    // "K5": K59, K58, K57, K56 and then the open row, where it was.
+    searchFor(container, 'K5')
+    await waitFor(() => expect(indexOf(container, 'K5ABC')).toBe(10))
+    expect(indexOf(container, 'K55ABC')).toBe(4)
+    expect(misfits(container), 'the new list as first drawn').toEqual([])
+    fire()
+    expect(misfits(container), 'once the rows that mounted are measured').toEqual([])
+  })
+
+  it('a new list with a row open goes back to the top, and is laid out as its rows are there and below', async () => {
+    // K200ABC (open) is index 100; the oldest contact alone has no "ABC", so the search "ABC" is a
+    // new list with every other row in its place — and one row shorter, which is how the test
+    // knows it is drawn. A new list goes back to the top (Logbook.backToTop.test.tsx); the heights
+    // are re-measured first, and must hold wherever the view then goes.
+    const rows = log(301, [200]).map((q, i) => (i === 0 ? { ...q, call: 'ZZ1ZZ' } : q))
+    engine.log = rows
+    engine.revision = 1
+    const { container } = render(view(1))
+    await waitFor(() => expect(container.querySelector('.log-rows .logbook-row')).not.toBeNull())
+    const sc = container.querySelector('.log-scroll') as HTMLElement
+    // The list's own scroll corrections go through `scrollTo`, which jsdom lacks: a browser's.
+    sc.scrollTo = ((o: ScrollToOptions) => {
+      if (o.top !== undefined) sc.scrollTop = o.top
+    }) as typeof sc.scrollTo
+    const scrollTo = (index: number) =>
+      act(() => {
+        sc.scrollTop = index * ROW_PX
+        sc.dispatchEvent(new Event('scroll'))
+      })
+    scrollTo(96)
+    await waitFor(() => expect(indexOf(container, 'K200ABC')).toBe(100))
+    fire()
+    openNoteOf(container, 'K200ABC')
+    fire()
+    scrollTo(106) // the open row above the view, still drawn
+    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="106"]')).not.toBeNull())
+    const rowsEl = container.querySelector('.log-rows') as HTMLElement
+    const height = parseFloat(rowsEl.style.height)
+
+    searchFor(container, 'ABC')
+    await waitFor(() => expect(parseFloat(rowsEl.style.height)).toBe(height - ROW_PX))
+    expect(sc.scrollTop, 'back at the top of the list').toBe(0)
+    act(() => {
+      sc.dispatchEvent(new Event('scroll')) // as a browser reports the scroll
+    })
+    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="0"]')).not.toBeNull())
+    fire()
+    expect(misfits(container), 'the top of the new list').toEqual([])
+    scrollTo(106)
+    await waitFor(() => expect(indexOf(container, 'K200ABC')).toBe(100))
+    expect(misfits(container), 'back down at the open row, as first drawn').toEqual([])
+  })
+
+  it('FIX: a new SORT that moves the open row', async () => {
+    // The five newest calls sort in the reverse order: by call, the open row (index 4) goes first
+    // and the newest contact takes its place.
+    const rows = log(60, [55]).map((q, i) => (i >= 55 ? { ...q, call: `A${i - 54}AAA` } : q))
+    engine.log = rows
+    engine.revision = 1
+    const { container } = render(view(1))
+    await waitFor(() => expect(indexOf(container, 'A1AAA')).toBe(4))
+    fire()
+    openNoteOf(container, 'A1AAA')
+    fire()
+
+    fireEvent.click(screen.getByRole('columnheader', { name: t('logbook.column.call') }))
+    await waitFor(() => expect(indexOf(container, 'A1AAA')).toBe(0))
+    expect(indexOf(container, 'A5AAA')).toBe(4)
+    expect(misfits(container), 'the new list as first drawn').toEqual([])
+    fire()
+    expect(misfits(container), 'once the rows that mounted are measured').toEqual([])
+  })
+
+  it('FIX: a new SORT while the open row is scrolled away: its old place does not keep its height', async () => {
+    const rows = log(60, [55]) // K55ABC is index 4
+    engine.log = rows
+    engine.revision = 1
+    const { container } = render(view(1))
+    await waitFor(() => expect(indexOf(container, 'K55ABC')).toBe(4))
+    fire()
+    openNoteOf(container, 'K55ABC')
+    fire()
+    const sc = container.querySelector('.log-scroll') as HTMLElement
+    const scrollTo = (index: number) =>
+      act(() => {
+        sc.scrollTop = index * ROW_PX
+        sc.dispatchEvent(new Event('scroll'))
+      })
+    // Down the list, until the open row's place is no longer drawn; then a new sort, by call — drawn
+    // down there first (it re-measures what it draws), then taken to its top (Logbook.backToTop).
+    scrollTo(40)
+    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="4"]')).toBeNull())
+    const byCall = screen.getByRole('columnheader', { name: t('logbook.column.call') })
+    fireEvent.click(byCall)
+    await waitFor(() => expect(byCall.getAttribute('aria-sort')).toBe('ascending'))
+    // At the top of the new list: index 4 is K13ABC, a closed row, mounting where the old list
+    // measured the open one.
+    scrollTo(0)
+    await waitFor(() => expect(indexOf(container, 'K13ABC')).toBe(4))
+    expect(misfits(container), 'the top of the new list as first drawn').toEqual([])
+    fire()
+    expect(misfits(container), 'once the rows that mounted are measured').toEqual([])
   })
 })

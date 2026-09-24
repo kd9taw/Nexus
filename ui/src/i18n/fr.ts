@@ -1924,6 +1924,11 @@ export const FR: PartialCatalog = {
   "logbook.empty": "Aucun contact enregistré pour l'instant.",
   "logbook.emptySearch": "Aucun contact ne correspond à “{{query}}”.",
   "logbook.rows.loading": "Chargement…",
+  // C17D keyboard grid: MACHINE TRANSLATIONS, for a native speaker to check.
+  "logbook.keys.move": "↑ et ↓ passent d’un contact à l’autre, Pg préc. et Pg suiv. d’une page à l’autre, Début et Fin vont au premier et au dernier.",
+  "logbook.keys.edit": "Entrée modifie le contact.",
+  "logbook.keys.delete": "Suppr demande s’il faut supprimer le contact.",
+  "logbook.keys.close": "Échap ferme le formulaire de modification ou la question.",
   "logbook.export.rangeInvalid": "Saisissez la plage en dates UTC ({{date}}), ou laissez les champs vides pour tout le journal.",
   "logbook.export.adif.label": "Exporter ADIF",
   "logbook.export.adif.title": "Enregistrer tout le journal en fichier ADIF dans votre dossier Téléchargements",
