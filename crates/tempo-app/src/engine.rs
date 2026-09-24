@@ -860,8 +860,80 @@ enum DecoderMutation {
 /// banner that reports the death could itself never be written. Recovery
 /// degrades a poisoned engine to "possibly-inconsistent state, loop and unkey
 /// keep running", which every one of those failure modes strictly dominates.
-pub fn engine_lock(m: &std::sync::Mutex<Engine>) -> std::sync::MutexGuard<'_, Engine> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+///
+/// It hands back an [`EngineGuard`], which is the lock held and nothing else — see there.
+pub fn engine_lock(m: &std::sync::Mutex<Engine>) -> EngineGuard<'_> {
+    EngineGuard::new(m.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// `Mutex::lock` on the [`Engine`], poison reported rather than recovered — for a caller that
+/// has always answered a poisoned engine its own way (refuse, skip, report). The same call on
+/// the same mutex; only the guard is an [`EngineGuard`].
+pub fn engine_lock_result(m: &std::sync::Mutex<Engine>) -> std::sync::LockResult<EngineGuard<'_>> {
+    m.lock()
+        .map(EngineGuard::new)
+        .map_err(|p| std::sync::PoisonError::new(EngineGuard::new(p.into_inner())))
+}
+
+/// `Mutex::try_lock` on the [`Engine`]: the guard if the lock is free now, `WouldBlock` if it
+/// is not — the Remote reads that answer "busy" rather than wait. The same call on the same
+/// mutex; only the guard is an [`EngineGuard`].
+pub fn engine_try_lock(m: &std::sync::Mutex<Engine>) -> std::sync::TryLockResult<EngineGuard<'_>> {
+    use std::sync::{PoisonError, TryLockError};
+    m.try_lock().map(EngineGuard::new).map_err(|e| match e {
+        TryLockError::Poisoned(p) => {
+            TryLockError::Poisoned(PoisonError::new(EngineGuard::new(p.into_inner())))
+        }
+        TryLockError::WouldBlock => TryLockError::WouldBlock,
+    })
+}
+
+/// The Engine lock, held — what [`engine_lock`], [`engine_lock_result`] and
+/// [`engine_try_lock`] hand back, and the only way anything outside this module holds it.
+///
+/// **It is the `MutexGuard` and nothing more.** The lock is taken by the same `Mutex::lock` /
+/// `try_lock` call as before, derefs to the [`Engine`], and is released when the guard drops —
+/// at the same point in the same scope a bare `MutexGuard` would be. What it adds is a
+/// zero-sized [`tempo_core::logbook::io_fence::EngineHeld`] riding beside the guard, which in a
+/// DEBUG build counts the Engine guards alive on this thread, so the logbook store's disk code
+/// can assert that none is ([`tempo_core::logbook::io_fence`]): the proof that the radio loop,
+/// which needs this lock every 20 ms, never waits on the disk. In a release build the count
+/// does not exist and there is nothing to drop; the size pin below holds the two types to one
+/// layout in every build.
+///
+/// A raw `Mutex::lock()` on the Engine is invisible to that count, so production code never
+/// takes one — `tests/engine_guard.rs` scans for it.
+pub struct EngineGuard<'a> {
+    guard: std::sync::MutexGuard<'a, Engine>,
+    _held: tempo_core::logbook::io_fence::EngineHeld,
+}
+
+// The guard adds no bytes: a `MutexGuard` beside a zero-sized marker.
+const _: () = assert!(
+    std::mem::size_of::<EngineGuard<'static>>()
+        == std::mem::size_of::<std::sync::MutexGuard<'static, Engine>>()
+);
+
+impl<'a> EngineGuard<'a> {
+    fn new(guard: std::sync::MutexGuard<'a, Engine>) -> EngineGuard<'a> {
+        EngineGuard {
+            guard,
+            _held: tempo_core::logbook::io_fence::EngineHeld::acquired(),
+        }
+    }
+}
+
+impl std::ops::Deref for EngineGuard<'_> {
+    type Target = Engine;
+    fn deref(&self) -> &Engine {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for EngineGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Engine {
+        &mut self.guard
+    }
 }
 
 /// The station's position id as the ids the log mints carry (`RecordId::Minted`): the

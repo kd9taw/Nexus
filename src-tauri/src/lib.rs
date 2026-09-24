@@ -61,7 +61,7 @@ use tempo_app::dto::{
     SourceKind, Spectrum, Tier, UploadReportDto, WinlinkAttachment, WinlinkMessage, WinlinkRow,
     WinlinkSession,
 };
-use tempo_app::engine::{engine_lock, Engine};
+use tempo_app::engine::{engine_lock, engine_lock_result, engine_try_lock, Engine};
 use tempo_app::settings::{Settings, VoiceMessage};
 
 /// The engine, shared between UI commands and the radio loop.
@@ -4692,8 +4692,7 @@ fn ui_state_save(state: std::collections::BTreeMap<String, String>) -> bool {
 /// flush-on-exit (so quitting within the periodic-save window doesn't lose recent
 /// chat or resurrect an archived thread). Recovers a poisoned lock.
 fn persist_conversations(engine: &SharedEngine) {
-    let convs = engine
-        .lock()
+    let convs = engine_lock_result(engine)
         .map(|e| e.export_conversations())
         .unwrap_or_else(|e| e.into_inner().export_conversations());
     if let Ok(text) = serde_json::to_string(&convs) {
@@ -4706,8 +4705,7 @@ fn persist_conversations(engine: &SharedEngine) {
 /// exit-time backstop; no-op when not in Field Day or the log is empty.
 /// Recovers a poisoned lock (mirrors `persist_conversations`).
 fn persist_field_day_log(engine: &SharedEngine) {
-    engine
-        .lock()
+    engine_lock_result(engine)
         .map(|e| e.persist_fd_log())
         .unwrap_or_else(|e| e.into_inner().persist_fd_log());
 }
@@ -4841,7 +4839,7 @@ fn write_qso_wav_in(dir: &std::path::Path, call: &str, pcm: &[i16]) -> Result<Pa
 async fn with_engine<T, F>(engine: &SharedEngine, f: F) -> Result<T, String>
 where
     T: Send + 'static,
-    F: FnOnce(std::sync::MutexGuard<'_, Engine>) -> T + Send + 'static,
+    F: FnOnce(tempo_app::engine::EngineGuard<'_>) -> T + Send + 'static,
 {
     let engine = Arc::clone(engine);
     tauri::async_runtime::spawn_blocking(move || f(engine_lock(&engine)))
@@ -7297,9 +7295,7 @@ async fn self_spot_activation(
     tauri::async_runtime::spawn_blocking(move || {
         // The Engine lock is released before anything is posted.
         let ctx = self_spot::Context::confirmed(
-            &engine
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            &engine_lock_result(&engine).unwrap_or_else(std::sync::PoisonError::into_inner),
             &reference,
             dial_hz,
         )
@@ -11036,7 +11032,7 @@ fn get_spectrum_row(
 /// The window is left unset (0-0 Hz) because no display reads it from an empty row, and a
 /// busy answer has no window to report.
 fn spectrum_fallback(engine: &SharedEngine) -> Spectrum {
-    match engine.try_lock() {
+    match engine_try_lock(engine) {
         Ok(eng) => eng.spectrum_row(),
         // Poison recovers, exactly as `engine_lock` does.
         Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().spectrum_row(),
@@ -12736,7 +12732,7 @@ fn set_unassisted_mode(
     spots: State<'_, SharedSpots>,
     on: bool,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = state.lock().map_err(|e| e.to_string())?;
+    let mut eng = engine_lock_result(&state).map_err(|e| e.to_string())?;
     eng.set_unassisted_mode(on);
     // Mirror to the atomic the socket threads read BEFORE anything else observes the change,
     // so no packet slips through between the setting and the gate.
@@ -14505,7 +14501,7 @@ fn queue_local_amp_command(which: &str, engine: &SharedEngine) -> bool {
     // Revoke before enqueueing, even when the local queue is full. Keep the
     // engine until admission so a Remote request cannot slip between the two.
     // The port owner rechecks cancellation after releasing this same mutex.
-    let native = engine.lock().unwrap();
+    let native = engine_lock_result(engine).unwrap();
     native.note_local_amplifier_command();
     tempo_audio::amppoll::queue_amp_command(cmd)
 }
@@ -15915,8 +15911,7 @@ fn call_station_on(
 /// launch (not persisted), matching WSJT-X; the UI holds its own session state to match.
 #[tauri::command(async)]
 fn set_skip_tx1(state: State<'_, SharedEngine>, enabled: bool) -> Result<(), String> {
-    state
-        .lock()
+    engine_lock_result(&state)
         .map_err(|e| e.to_string())?
         .set_skip_tx1(enabled);
     Ok(())
@@ -16853,7 +16848,7 @@ fn read_all_spots(
     // shape is kept for the chains below.
     let (class, my_call, roster_grids, last_worked) = {
         let eng = Some(if nonblocking {
-            state.try_lock().map_err(|_| "applicationBusy")?
+            engine_try_lock(state).map_err(|_| "applicationBusy")?
         } else {
             engine_lock(state)
         });
@@ -17302,7 +17297,7 @@ fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
 // Shared calculation, with an immutable engine guard. Remote never invokes the
 // native command's shared-log reconciliation or any logbook write/recovery path.
 fn read_need_alerts(
-    eng: std::sync::MutexGuard<'_, tempo_app::engine::Engine>,
+    eng: tempo_app::engine::EngineGuard<'_>,
     live_paths: &SharedLivePaths,
     region_paths: &SharedRegionPaths,
     spots: &SharedSpots,
@@ -23347,8 +23342,7 @@ fn parks_count(parks: State<'_, SharedParks>) -> Result<usize, String> {
 /// show the imported count after a restart (the set itself is reloaded from cache at startup).
 #[tauri::command(async)]
 fn hunted_parks_count(state: State<'_, SharedEngine>) -> Result<usize, String> {
-    Ok(state
-        .lock()
+    Ok(engine_lock_result(&state)
         .map_err(|e| e.to_string())?
         .hunted_parks_import_count())
 }
@@ -23405,8 +23399,7 @@ fn import_hunted_parks_csv(engine: State<'_, SharedEngine>, csv: String) -> Resu
     }
     let n = refs.len();
     let _ = std::fs::write(hunted_parks_cache_path(), &csv); // cache; failure is non-fatal
-    engine
-        .lock()
+    engine_lock_result(&engine)
         .map_err(|e| e.to_string())?
         .set_hunted_parks_import(refs);
     Ok(n)
@@ -26292,8 +26285,7 @@ fn start_on_the_logbook(
             let mut last: Option<String> = None;
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(15));
-                let convs = save_engine
-                    .lock()
+                let convs = engine_lock_result(&save_engine)
                     .map(|e| e.export_conversations())
                     .unwrap_or_else(|e| e.into_inner().export_conversations());
                 if let Ok(text) = serde_json::to_string(&convs) {
@@ -26331,7 +26323,7 @@ fn start_on_the_logbook(
             ) = {
                 // Recover a poisoned lock (conn_log pattern) — a panicked command
                 // holding the engine must not silently kill auto-upload forever.
-                let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                let mut eng = engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
                 let (q, c, e, h, w, hrd, n, cl, dxk, cl_email, cl_key) = {
                     let s = eng.settings();
                     (
@@ -26491,7 +26483,8 @@ fn start_on_the_logbook(
                 // paces the catch-up: `requeue_failed_uploads` stamps those records one
                 // spacing apart, so all but the one whose slot has come round land here.
                 if p.retry_after_unix > now_unix {
-                    let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut eng =
+                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
                     eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
                     continue;
                 }
@@ -26584,7 +26577,8 @@ fn start_on_the_logbook(
                         conn_log(service, "error", line);
                     }
                     let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
-                    let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut eng =
+                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
                     // `p.origin` CARRIED, not re-derived: a catch-up record that blips on
                     // the network must come back as a catch-up record, or the retry would
                     // re-enter the queue as if it were a live contact (#193).
@@ -26605,18 +26599,21 @@ fn start_on_the_logbook(
             // on Windows/Linux localhost but confirm on the operator's box.
             {
                 let (pending, addr) = {
-                    let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut eng =
+                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
                     (eng.take_hrd_pending(), eng.hrd_addr())
                 };
                 for rec in pending {
                     let datagram = {
-                        let eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                        let eng =
+                            engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
                         eng.hrd_datagram(&rec)
                     };
                     // connect()+send() off the lock — DNS/connect can block, and a slow
                     // resolver must never freeze the engine (the original spawn's reason).
                     let delivered = hrd_send_connected(&addr, datagram.as_bytes());
-                    let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut eng =
+                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
                     eng.note_hrd_result(rec, delivered);
                     if !delivered {
                         // Stop hammering a closed HRD this tick — the queue stays, the next
@@ -26668,8 +26665,7 @@ fn start_on_the_logbook(
             // this banner exists for — the loop died from a panic under the engine
             // guard — is exactly the case where the lock is POISONED, and the old
             // form silently skipped the write then.
-            eng_for_report
-                .lock()
+            engine_lock_result(&eng_for_report)
                 .unwrap_or_else(|e| e.into_inner())
                 .set_audio_error(Some(msg));
         });
@@ -27268,7 +27264,7 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
                 .unwrap_or_default(),
         );
         if !entries.is_empty() {
-            if let Ok(mut eng) = handle.state::<SharedEngine>().inner().lock() {
+            if let Ok(mut eng) = engine_lock_result(handle.state::<SharedEngine>().inner()) {
                 eng.load_sstv_gallery(entries);
             }
         }
@@ -32226,6 +32222,198 @@ mod tests {
         assert!(
             matches!(on_the_pool, Ok(Ok(Ok(())))),
             "the same client on the blocking pool starts cleanly"
+        );
+    }
+
+    /// Each command body and each `async fn` in `src` that waits for a logbook change to reach
+    /// the disk on the thread it runs on, as `name: wait` — a `wait_durable(…)`, a change's
+    /// `.wait(…DURABLE_WAIT)`, or a function here that makes one (followed to any depth). A wait
+    /// inside `spawn_blocking(…)` or a spawned thread's closure is off that thread and does not
+    /// count. The shape is the HTTP scan's above; what it looks for is the logbook's wait.
+    fn durable_waits_where_a_command_runs(src: &str) -> Vec<String> {
+        let lines: Vec<&str> = src.lines().collect();
+        // (name, a command or an async fn, body) for every top-level fn.
+        let mut fns: Vec<(String, bool, String)> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let line = line
+                .strip_prefix("pub(crate) ")
+                .or_else(|| line.strip_prefix("pub "))
+                .unwrap_or(line);
+            let (is_async, rest) = match (line.strip_prefix("async fn "), line.strip_prefix("fn "))
+            {
+                (Some(rest), _) => (true, rest),
+                (None, Some(rest)) => (false, rest),
+                _ => continue,
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let command = lines[..i]
+                .iter()
+                .rev()
+                .take_while(|l| l.starts_with("#[") || l.starts_with("//"))
+                .any(|l| l.starts_with("#[tauri::command"));
+            let (mut depth, mut opened, mut end) = (0i32, false, i);
+            for (j, l) in lines.iter().enumerate().skip(i) {
+                depth += l.matches('{').count() as i32 - l.matches('}').count() as i32;
+                opened |= l.contains('{');
+                end = j;
+                if opened && depth <= 0 {
+                    break;
+                }
+            }
+            fns.push((name, command || is_async, lines[i..=end].join("\n")));
+        }
+        // The text of the parenthesised group opening at `open`.
+        let group = |body: &str, open: usize| -> (usize, usize) {
+            let mut depth = 0;
+            for (k, c) in body[open..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return (open, open + k);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            (open, body.len())
+        };
+        // The waits `body` makes on its own thread.
+        let waits = |body: &str, helpers: &[String]| -> Vec<String> {
+            let mut elsewhere: Vec<(usize, usize)> = Vec::new();
+            for guard in ["spawn_blocking(", "thread::spawn(", ".spawn(move"] {
+                for (at, _) in body.match_indices(guard) {
+                    let (_, close) = group(body, at + guard.find('(').unwrap_or_default());
+                    elsewhere.push((at, close));
+                }
+            }
+            let here = |at: usize| !elsewhere.iter().any(|&(a, b)| (a..=b).contains(&at));
+            let mut found = Vec::new();
+            if body.match_indices("wait_durable(").any(|(at, _)| here(at)) {
+                found.push("wait_durable".to_string());
+            }
+            let durable = body.match_indices(".wait(").any(|(at, _)| {
+                let (open, close) = group(body, at + ".wait".len());
+                here(at) && body[open..close].contains("DURABLE_WAIT")
+            });
+            if durable {
+                found.push("wait(DURABLE_WAIT)".to_string());
+            }
+            for helper in helpers {
+                let called = body.match_indices(&format!("{helper}(")).any(|(at, _)| {
+                    here(at)
+                        && body[..at]
+                            .chars()
+                            .next_back()
+                            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+                });
+                if called {
+                    found.push(helper.clone());
+                }
+            }
+            found
+        };
+        // Every function that waits on its caller's thread, to any depth.
+        let mut helpers: Vec<String> = Vec::new();
+        loop {
+            let more: Vec<String> = fns
+                .iter()
+                .filter(|(name, _, body)| {
+                    !helpers.contains(name) && !waits(body, &helpers).is_empty()
+                })
+                .map(|(name, ..)| name.clone())
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            helpers.extend(more);
+        }
+        let mut offenders = Vec::new();
+        for (name, runs_a_command, body) in &fns {
+            if !runs_a_command {
+                continue;
+            }
+            for wait in waits(body, &helpers) {
+                // A function's own signature names it; that is not a call.
+                if wait != *name {
+                    offenders.push(format!("{name}: {wait}"));
+                }
+            }
+        }
+        offenders.dedup();
+        offenders
+    }
+
+    /// #335, the logbook's half (SPEC-1 C11). An operator's log command returns only once its
+    /// change is on disk, and that wait can last up to a minute behind a slow disk. On a runtime
+    /// worker it holds the worker the whole time — the freeze `with_engine` exists to prevent —
+    /// and on the UI thread it holds the window. So the wait runs on the blocking pool, as
+    /// `durable_command` does it, and never where the command itself runs. (The debug fence in
+    /// `tempo_core::logbook::io_fence` separately forbids the wait under the Engine lock.)
+    #[test]
+    fn no_command_waits_for_the_logbook_where_it_runs() {
+        let offenders = durable_waits_where_a_command_runs(include_str!("lib.rs"));
+        assert!(
+            offenders.is_empty(),
+            "these wait for a logbook change on the thread a command runs on — run the wait on \
+             the blocking pool, as `durable_command` does:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// The scan above is only worth having if it can fail: a wait on a worker and one reached
+    /// through two helpers from an `(async)` command are named; the same waits on the blocking
+    /// pool or a thread, and a wait that is not the logbook's, are not.
+    #[test]
+    fn the_durable_wait_scan_names_a_wait_where_a_command_runs() {
+        // Built from quoted lines so that none of them starts a line of THIS file with `fn`.
+        let src = [
+            "#[tauri::command]",
+            "async fn waits_on_a_worker(state: State<'_, SharedEngine>) -> Result<(), String> {",
+            "    let (_, durability) = engine_lock(&state).with_log_tickets(|e| e.mark(1));",
+            "    durability",
+            "        .wait(tempo_app::logstore::DURABLE_WAIT)",
+            "        .map_err(durability_failed)",
+            "}",
+            "fn stamp_and_wait(engine: &SharedEngine) -> Result<(), String> {",
+            "    let (writer, ticket) = engine_lock(engine).ticket();",
+            "    writer.wait_durable(&ticket, Duration::from_secs(60)).map_err(|e| e.to_string())",
+            "}",
+            "fn stamp_then(engine: &SharedEngine) -> Result<(), String> {",
+            "    stamp_and_wait(engine)",
+            "}",
+            "#[tauri::command(async)]",
+            "fn two_helpers_deep(state: State<'_, SharedEngine>) -> Result<(), String> {",
+            "    stamp_then(&state)",
+            "}",
+            "#[tauri::command]",
+            "async fn on_the_pool(state: State<'_, SharedEngine>) -> Result<(), String> {",
+            "    let engine = Arc::clone(&state);",
+            "    tauri::async_runtime::spawn_blocking(move || stamp_and_wait(&engine))",
+            "        .await",
+            "        .map_err(|e| e.to_string())?",
+            "}",
+            "#[tauri::command]",
+            "fn on_a_thread(state: State<'_, SharedEngine>) {",
+            "    let engine = Arc::clone(&state);",
+            "    std::thread::spawn(move || stamp_then(&engine));",
+            "}",
+            "#[tauri::command]",
+            "fn not_the_logbook(pair: State<'_, Pair>) {",
+            "    let _held = pair.ready.wait(pair.lock.lock().unwrap());",
+            "}",
+        ]
+        .join("\n");
+        assert_eq!(
+            durable_waits_where_a_command_runs(&src),
+            [
+                "waits_on_a_worker: wait(DURABLE_WAIT)",
+                "two_helpers_deep: stamp_then"
+            ]
         );
     }
 

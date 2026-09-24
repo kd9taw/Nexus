@@ -20,7 +20,7 @@ const TEXT_BYTES: usize = 1024;
 pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'static str> {
     let deadline = Instant::now() + Duration::from_secs(2);
     let (report, log_count) = loop {
-        match engine.try_lock() {
+        match tempo_app::engine::engine_try_lock(engine) {
             Ok(e) => {
                 let count = e.log_records().len();
                 if count > LOG_ROWS {

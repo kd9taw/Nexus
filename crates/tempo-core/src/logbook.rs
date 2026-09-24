@@ -793,6 +793,7 @@ pub struct Logbook {
 pub mod dedup;
 mod edit;
 mod id;
+pub mod io_fence;
 pub mod migrate;
 pub mod mirror;
 mod op;
@@ -4212,6 +4213,7 @@ impl LogAppendReceipt {
 
     /// Block until the append is on disk. ⚠️ Never call it holding a lock.
     pub fn sync(self) -> std::io::Result<()> {
+        io_fence::off_engine_lock("a wait for an append to reach the disk");
         match self.inner {
             Receipt::File { file, parent } => {
                 file.sync_all()?;

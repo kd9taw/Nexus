@@ -21,7 +21,7 @@ use std::sync::TryLockError;
 pub(super) fn read(
     engine: &crate::SharedEngine,
 ) -> Result<(Vec<Value>, usize, Value), &'static str> {
-    let addr = match engine.try_lock() {
+    let addr = match tempo_app::engine::engine_try_lock(engine) {
         Ok(e) => crate::effective_rotator_addr(e.settings()),
         Err(TryLockError::WouldBlock) => return Err("applicationBusy"),
         Err(TryLockError::Poisoned(_)) => return Err("applicationUnavailable"),

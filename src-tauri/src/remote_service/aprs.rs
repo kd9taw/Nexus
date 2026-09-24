@@ -33,7 +33,7 @@ pub(super) fn live(e: &tempo_app::engine::Engine) -> Result<Value, &'static str>
 pub(super) fn capture(
     engine: &crate::SharedEngine,
 ) -> Result<(Vec<Value>, usize, Value), &'static str> {
-    let e = engine.try_lock().map_err(|_| "applicationBusy")?;
+    let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
     if !e.aprs_display_within_budget(2 * 1024 * 1024) {
         return Err("applicationTooLarge");
     }

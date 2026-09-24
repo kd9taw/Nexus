@@ -252,6 +252,7 @@ fn migrate_in_chunks<R>(
 where
     R: Fn(&QsoRecord) -> Resolved<'static>,
 {
+    super::io_fence::off_engine_lock("converting log.adi into the logbook database");
     // The ordinary launch: a store that is already converted. Answered from the store alone,
     // BEFORE the log is read — a lifetime log is tens of megabytes, and reading it on every
     // launch to learn that there is nothing to do is the launch cost the operator ruled out.
