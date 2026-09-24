@@ -165,6 +165,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has not taken them after a minute, or refuses one, Nexus asks: **Keep trying**, or **Quit
   without the last N changes**. It used to give up after ten seconds without a word. Restarting
   after an update, and installing one on Windows, save the same way first.
+- **A contact the logbook could not save is kept and sent again, and the screen says so.** If
+  the disk is full, fails a write, or another program holds the logbook for too long, Nexus keeps
+  the change in memory and sends it again (after a few seconds, then about once a minute) until
+  the logbook takes it. A message stays on screen while that is happening, with the reason, and
+  another says so when every change is saved again. A change the logbook refuses outright, which
+  sending again cannot fix, is kept for the session instead, and the quit asks about it. At the
+  quit, **Keep trying** now really sends those changes again, so freeing some disk space and
+  pressing it saves them.
 - **Nexus now refuses to put your data and log folder on a network drive, and tells you why.**
   Settings ▸ Config ▸ Data & log folder used to accept a NAS or a mapped network drive, and the
   manual suggested exactly that for a multi-PC shack. That was survivable while the logbook was a

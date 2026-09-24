@@ -982,6 +982,8 @@ impl AppState {
             log_tick: 0,
             // Filled by the engine when the logbook database could not be opened; None here.
             log_store_problem: None,
+            // Filled by the engine while the database has refused a change; None here.
+            log_save_trouble: None,
         }
     }
 

@@ -3992,10 +3992,22 @@ const LOG_FLUSH_ON_EXIT: std::time::Duration = std::time::Duration::from_secs(10
 ///
 /// Under the engine lock, deliberately: this is the last word on the log, and holding the lock
 /// is what keeps a change from landing after the flush and dying with the process. It runs
-/// once the radio loop has unkeyed and stopped (quit), or behind the install gate that refuses
-/// while anything is on the air (update), so nothing time-critical waits on it.
+/// once the radio loop has unkeyed and stopped (the quit), so nothing time-critical waits on it
+/// — the Windows update path, where the radio still runs, has its own unlocked last word
+/// ([`quit::flush_logbook_unlocked`]). A change the database refused for a reason that can pass
+/// is sent again from memory first, inside the same cap, unless a held quit already settled
+/// the logbook with the operator.
 fn flush_logbook(engine: &SharedEngine, cap: std::time::Duration) {
-    let flushed = engine_lock(engine).flush_log_store(cap);
+    let flushed = {
+        let mut eng = engine_lock(engine);
+        // A change the database refused for a reason that can pass gets one more chance — sent
+        // again from memory, inside the same cap — unless a held quit already settled the
+        // logbook with the operator (a Cmd+Q or an OS shutdown never asked).
+        if !quit::the_quit_settled_the_logbook() {
+            eng.log_resend_all();
+        }
+        eng.flush_log_store(cap)
+    };
     if let Err(e) = flushed {
         tempo_core::applog::error(
             "logbook",
@@ -4863,6 +4875,10 @@ async fn get_snapshot(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Str
         // drop lines ride: that worker returns early when no connector is enabled, and an
         // unreviewed contact is news whether or not anything uploads it.
         let auto_logged = eng.take_unconfirmed_auto_logs();
+        // A logbook change the database refused for a reason that can pass is sent again from
+        // memory once its wait is up (`LogStore::resend`) — here, where the station looks at
+        // the log several times a second, and before the snapshot that reports it. No I/O.
+        eng.log_resend_due();
         let snap = eng.snapshot();
         drop(eng);
         flush_all_txt(&all_txt);
@@ -25034,6 +25050,13 @@ fn persist_journals(app_handle: &tauri::AppHandle) {
         app_handle.state::<SharedEngine>().inner(),
         LOG_FLUSH_ON_EXIT,
     );
+    persist_other_journals(app_handle);
+}
+
+/// Every journal [`persist_journals`] writes but the log: the conversations, the Field Day log,
+/// and any propagation opening still in progress. The Windows update path writes these after its
+/// own, unlocked, last word on the log ([`quit::flush_logbook_unlocked`]).
+fn persist_other_journals(app_handle: &tauri::AppHandle) {
     persist_conversations(app_handle.state::<SharedEngine>().inner());
     persist_field_day_log(app_handle.state::<SharedEngine>().inner());
     if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
@@ -25065,7 +25088,10 @@ fn persist_journals(app_handle: &tauri::AppHandle) {
 /// installer ends the process, so changes still on their way to disk are saved with the window
 /// up and the saving line shown, and a save that cannot finish asks Keep trying / Quit without
 /// — as a quit does, but with the radio left running, for the reason above. It resolves once
-/// the logbook is saved or the operator chose to go on, so it runs on the blocking pool.
+/// the logbook is saved or the operator chose to go on, so it runs on the blocking pool. Its
+/// last word on the log waits WITHOUT the Engine lock ([`quit::flush_logbook_unlocked`]): the
+/// radio loop still runs here and needs that lock every 20 ms, which is why this path does not
+/// use [`persist_journals`], whose flush waits under it.
 ///
 /// A no-op off Windows: there `install()` returns to its caller, the frontend calls
 /// `restart_app`, and `quit_cleanup` runs in full on the ordinary exit path. (A `cfg!` rather
@@ -25078,8 +25104,11 @@ async fn prepare_update_install(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         tempo_core::applog::info("updater", "flushing journals before the installer handoff");
         quit::save_before_the_installer(&app);
+        // The last word on the log — whatever reached it during the save — WITHOUT the Engine
+        // lock: the radio loop still runs here, and the exit's own flush waits under that lock.
+        quit::flush_logbook_unlocked(app.state::<SharedEngine>().inner(), LOG_FLUSH_ON_EXIT);
         capture_all_window_geometry(&app);
-        persist_journals(&app);
+        persist_other_journals(&app);
         tempo_core::applog::flush();
     })
     .await

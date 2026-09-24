@@ -325,6 +325,104 @@ impl Change {
         }
     }
 
+    /// A change the writer gave up on ([`Refusal`]), sent again FROM MEMORY: the rows `touched`
+    /// names as the log holds them NOW — written where the log still has them, removed where it
+    /// no longer does — or, for a purge, the whole log after a clear. `rev` is the revision the
+    /// change first went out with: it is the same change, and none other is in flight under it
+    /// (the first attempt resolved before this one could be built).
+    ///
+    /// It carries STATE, never the delta the change first made, and that is what makes sending
+    /// it again safe:
+    ///
+    /// - **Never twice.** Applied twice — or applied after the first attempt landed despite the
+    ///   error — it writes what is already there: an upsert of each row as it stands, a delete of
+    ///   an id that is gone. No row is ever duplicated; the id is the key.
+    /// - **Never out of order.** It is built and submitted under the same lock as every other
+    ///   change (the owner's), so it carries whatever an earlier change did to its rows, and a
+    ///   later change to them is submitted after it — and the writer applies changes that share
+    ///   a row in the order they were submitted. Re-sending the rows the change FIRST carried
+    ///   would be the out-of-order write: that copy can be older than a later edit already on
+    ///   disk.
+    ///
+    /// One pass over the log, as [`Change::of`] finds its rows. [`Change::resend_each`] sends
+    /// several at once, in one pass for all of them.
+    pub fn resend(
+        touched: &Touched,
+        rev: u64,
+        log: &Logbook,
+        resolve: impl Fn(&QsoRecord) -> (Option<String>, Option<u8>),
+    ) -> Change {
+        Change::resend_each(&[(touched, rev)], log, resolve)
+            .pop()
+            .expect("one change in, one out")
+    }
+
+    /// [`Change::resend`] for several changes at once, in order, finding all their rows in ONE
+    /// pass over the log — so a burst of dropped changes costs one walk of a lifetime log under
+    /// its owner's lock, not one walk each.
+    pub fn resend_each(
+        changes: &[(&Touched, u64)],
+        log: &Logbook,
+        resolve: impl Fn(&QsoRecord) -> (Option<String>, Option<u8>),
+    ) -> Vec<Change> {
+        let row = |rec: &Arc<QsoRecord>| {
+            let (entity, cq_zone) = resolve(rec);
+            RowWrite {
+                rec: Arc::clone(rec),
+                entity,
+                cq_zone,
+            }
+        };
+        let wanted: HashSet<RecordId> = changes
+            .iter()
+            .filter_map(|(touched, _)| match touched {
+                Touched::Rows(ids) => Some(ids),
+                Touched::All => None,
+            })
+            .flatten()
+            .copied()
+            .collect();
+        let mut held: HashMap<RecordId, &Arc<QsoRecord>> = HashMap::with_capacity(wanted.len());
+        if !wanted.is_empty() {
+            for r in log.records() {
+                if let Some(id) = r.id.filter(|id| wanted.contains(id)) {
+                    held.insert(id, r);
+                }
+            }
+        }
+        changes
+            .iter()
+            .map(|&(touched, rev)| match touched {
+                Touched::All => Change {
+                    rev,
+                    priority: Priority::Bulk,
+                    clear: true,
+                    remove: Vec::new(),
+                    upsert: log.records().iter().map(row).collect(),
+                    marks: Watermarks::of(log),
+                },
+                Touched::Rows(ids) => {
+                    let mut change = Change {
+                        rev,
+                        marks: Watermarks::of(log),
+                        ..Change::default()
+                    };
+                    let mut seen: HashSet<RecordId> = HashSet::with_capacity(ids.len());
+                    for id in ids {
+                        if !seen.insert(*id) {
+                            continue;
+                        }
+                        match held.get(id) {
+                            Some(rec) => change.upsert.push(row(rec)),
+                            None => change.remove.push(*id),
+                        }
+                    }
+                    change
+                }
+            })
+            .collect()
+    }
+
     /// Whether this change writes anything at all. An empty change still moves the
     /// watermarks, so it is only skipped by a caller that knows nothing changed.
     pub fn is_empty(&self) -> bool {
@@ -492,6 +590,60 @@ impl Ticket {
     pub fn is_resolved(&self) -> bool {
         lock(&self.slot.done).is_some()
     }
+
+    /// Why the writer gave up on this change, once it has: `None` while it is still queued, and
+    /// for a change that landed. Never waits, so it is safe to ask under any lock — which a
+    /// [`LogWriter::wait_durable`], even one with no time to wait, is not.
+    pub fn refusal(&self) -> Option<Refusal> {
+        lock(&self.slot.done)
+            .as_ref()
+            .and_then(|done| done.as_ref().err().cloned())
+    }
+}
+
+/// Why the writer gave up on a change — kept on its [`Ticket`].
+///
+/// The writer never retries a change it has given up on: it cannot, because the rows it holds
+/// are the rows as they were when the change was made, and a later change to the same rows may
+/// already be on disk (see the module header's ordering rule). Whoever owns the log in memory
+/// can — by sending the rows AS THEY STAND NOW ([`Change::resend`]) — and `retryable` is what
+/// says whether that is worth doing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    /// What went wrong, in the store's words.
+    pub reason: String,
+    /// Whether writing the same rows again could succeed: `true` for trouble in the
+    /// surroundings, which passes — another program holding the database past the retry
+    /// ladder, a full or failing disk, a file that cannot be written or opened for now;
+    /// `false` when the store refused the change for what it is — a constraint, a type, a row
+    /// with no id, a number that will not fit, a damaged database — which it will refuse
+    /// every time, so sending it again would only loop.
+    pub retryable: bool,
+}
+
+/// Whether a failed write could succeed if the same rows were written again later. See
+/// [`Refusal::retryable`]. Anything not named as passing is taken as lasting: a failure nobody
+/// has classified is safer asked about than retried for ever.
+fn retryable(e: &sqlite::Error) -> bool {
+    use rusqlite::ErrorCode as C;
+    matches!(
+        e,
+        sqlite::Error::Sql(rusqlite::Error::SqliteFailure(f, _))
+            if matches!(
+                f.code,
+                C::DatabaseBusy
+                    | C::DatabaseLocked
+                    | C::DiskFull
+                    | C::SystemIoFailure
+                    | C::ReadOnly
+                    | C::CannotOpen
+                    | C::PermissionDenied
+                    | C::OutOfMemory
+                    | C::FileLockingProtocolFailed
+                    | C::OperationInterrupted
+                    | C::SchemaChanged
+            )
+    )
 }
 
 /// One change's completion. Per-ticket rather than a single watermark, because an interactive
@@ -499,7 +651,7 @@ impl Ticket {
 /// "500 is on disk and 400 is not", and that is the ordinary case here, not a corner.
 #[derive(Debug)]
 struct Slot {
-    done: Mutex<Option<std::result::Result<(), String>>>,
+    done: Mutex<Option<std::result::Result<(), Refusal>>>,
     cv: Condvar,
 }
 
@@ -549,7 +701,9 @@ pub enum WriteState {
         attempt: u32,
     },
     /// A change was abandoned. **Sticky** — it does not clear because the next change landed,
-    /// since the one that was lost is still lost.
+    /// since the one that was lost is still lost to THIS writer. The log's owner may send its
+    /// rows again from memory ([`Change::resend`]); that is a new change to the writer, which
+    /// keeps reporting the first one's loss — the owner's own record says whether it landed.
     Failed,
 }
 
@@ -681,7 +835,14 @@ impl LogWriter {
                 st.last_error = Some(why.clone());
             }
             self.shared.settled.notify_all();
-            resolve(&ticket.slot, Err(why));
+            // Nothing will write this session, so sending the rows again cannot help.
+            resolve(
+                &ticket.slot,
+                Err(Refusal {
+                    reason: why,
+                    retryable: false,
+                }),
+            );
         }
         ticket
     }
@@ -715,7 +876,7 @@ impl LogWriter {
         }
         match done.as_ref() {
             Some(Ok(())) => Ok(()),
-            Some(Err(e)) => Err(WaitError::Failed(e.clone())),
+            Some(Err(refusal)) => Err(WaitError::Failed(refusal.reason.clone())),
             // Unreachable: the loop above only exits when the slot is resolved.
             None => Err(WaitError::Failed("the change was never resolved".into())),
         }
@@ -1043,7 +1204,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                 settle(shared, &unresolved, highest_ok, lost, None);
                 resolve(&job.slot, Ok(()));
             }
-            Err(why) => {
+            Err(refusal) => {
                 let job = queue
                     .remove(i)
                     .expect("the job pick() chose is in the queue");
@@ -1051,10 +1212,19 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
                 lost = Some(lost.map_or(job.rev, |first| first.min(job.rev)));
                 applog::error(
                     "logdb",
-                    &format!("a logbook change was not saved and has been dropped: {why}"),
+                    &format!(
+                        "a logbook change was not saved and has been dropped: {}",
+                        refusal.reason
+                    ),
                 );
-                settle(shared, &unresolved, highest_ok, lost, Some(why.clone()));
-                resolve(&job.slot, Err(why));
+                settle(
+                    shared,
+                    &unresolved,
+                    highest_ok,
+                    lost,
+                    Some(refusal.reason.clone()),
+                );
+                resolve(&job.slot, Err(refusal));
             }
         }
     }
@@ -1066,7 +1236,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
 /// the case it covers — the second process holding the write lock will not be talked out of
 /// it by reordering our queue — but it means a wedged neighbour is visible as latency, not
 /// just as a status.
-fn commit(db: &mut LogDb, batch: Batch<'_>, shared: &Shared) -> std::result::Result<(), String> {
+fn commit(db: &mut LogDb, batch: Batch<'_>, shared: &Shared) -> std::result::Result<(), Refusal> {
     io_fence::on_log_lane("a logbook database write");
     let mut attempt = 0usize;
     loop {
@@ -1078,7 +1248,10 @@ fn commit(db: &mut LogDb, batch: Batch<'_>, shared: &Shared) -> std::result::Res
             return Ok(());
         };
         if !transient(&e) || attempt >= RETRY_BACKOFF.len() {
-            return Err(e.to_string());
+            return Err(Refusal {
+                reason: e.to_string(),
+                retryable: retryable(&e),
+            });
         }
         attempt += 1;
         applog::warn(
@@ -1095,7 +1268,7 @@ fn commit(db: &mut LogDb, batch: Batch<'_>, shared: &Shared) -> std::result::Res
     }
 }
 
-fn resolve(slot: &Slot, outcome: std::result::Result<(), String>) {
+fn resolve(slot: &Slot, outcome: std::result::Result<(), Refusal>) {
     *lock(&slot.done) = Some(outcome);
     slot.cv.notify_all();
 }
@@ -1591,6 +1764,182 @@ mod tests {
         // sticky, because the missing contact is still missing.
         assert_eq!(w.status().durable_rev, 101);
         assert_eq!(w.status().state, WriteState::Failed);
+    }
+
+    // ── a refusal, and sending a change again (C10b) ────────────────────────
+
+    /// A refusal says whether writing the same rows again could succeed. Trouble in the
+    /// surroundings passes — another program holding the database, a full or failing disk, a
+    /// file that cannot be written for now — so the rows are worth sending again. A change the
+    /// store refused for what it IS (a constraint, a type, a row with no id, a number that will
+    /// not fit, a damaged database) is refused every time, and sending it again would only loop.
+    #[test]
+    fn a_refusal_says_whether_sending_the_rows_again_could_succeed() {
+        use rusqlite::ffi;
+        let sql = |code: i32| {
+            sqlite::Error::Sql(rusqlite::Error::SqliteFailure(ffi::Error::new(code), None))
+        };
+        for (code, what) in [
+            (ffi::SQLITE_BUSY, "another program holds the database"),
+            (ffi::SQLITE_LOCKED, "a table is locked"),
+            (ffi::SQLITE_FULL, "the disk is full"),
+            (ffi::SQLITE_IOERR, "the disk failed a read or a write"),
+            (ffi::SQLITE_READONLY, "the file cannot be written for now"),
+            (ffi::SQLITE_CANTOPEN, "the file cannot be opened for now"),
+            (ffi::SQLITE_PERM, "permission is denied for now"),
+            (ffi::SQLITE_NOMEM, "memory ran out"),
+            (ffi::SQLITE_PROTOCOL, "a locking-protocol race"),
+            (ffi::SQLITE_INTERRUPT, "the statement was interrupted"),
+            (ffi::SQLITE_SCHEMA, "the schema changed under the statement"),
+            // Extended codes classify by their primary code.
+            (ffi::SQLITE_IOERR_WRITE, "a write the disk failed"),
+            (ffi::SQLITE_BUSY_RECOVERY, "a database being recovered"),
+        ] {
+            assert!(retryable(&sql(code)), "{what} passes: send the rows again");
+        }
+        for (code, what) in [
+            (ffi::SQLITE_CONSTRAINT, "a constraint"),
+            (ffi::SQLITE_CONSTRAINT_UNIQUE, "a unique constraint"),
+            (ffi::SQLITE_MISMATCH, "a type mismatch"),
+            (ffi::SQLITE_TOOBIG, "a value too big"),
+            (ffi::SQLITE_CORRUPT, "a damaged database"),
+            (ffi::SQLITE_NOTADB, "a file that is not a database"),
+            (ffi::SQLITE_ERROR, "an SQL error, such as a missing table"),
+            (ffi::SQLITE_MISUSE, "a misused library"),
+            (ffi::SQLITE_RANGE, "a bind out of range"),
+        ] {
+            assert!(!retryable(&sql(code)), "{what} is refused every time");
+        }
+        assert!(
+            !retryable(&sqlite::Error::Unidentified {
+                call: "K5XYZ".into()
+            }),
+            "a row with no id"
+        );
+        assert!(!retryable(&sqlite::Error::OutOfRange {
+            what: "watermark",
+            value: u64::MAX
+        }));
+        assert!(!retryable(&sqlite::Error::SchemaVersion {
+            found: 99,
+            expected: 1
+        }));
+    }
+
+    /// The ticket keeps the refusal, so whoever owns the change can tell one that may land if
+    /// it is sent again from one that never will — without waiting. The wait's own answer is
+    /// unchanged: `Failed` with the store's words.
+    #[test]
+    fn a_refused_changes_ticket_says_why_and_whether_it_can_be_sent_again() {
+        let scratch = Scratch::new();
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        let good = w.submit(change(1, vec![rec("W1AW", 1)]));
+        let mut orphan = (*rec("K5XYZ", 2)).clone();
+        orphan.id = None;
+        let bad = w.submit(change(2, vec![Arc::new(orphan)]));
+        assert_eq!(w.wait_durable(&good, Duration::from_secs(60)), Ok(()));
+        assert!(
+            matches!(
+                w.wait_durable(&bad, Duration::from_secs(60)),
+                Err(WaitError::Failed(e)) if e.contains("K5XYZ")
+            ),
+            "the wait still answers Failed, in the store's words"
+        );
+        assert_eq!(good.refusal(), None, "a change that landed was not refused");
+        let r = bad.refusal().expect("the refusal is on the ticket");
+        assert!(r.reason.contains("K5XYZ"), "{r:?}");
+        assert!(!r.retryable, "a row with no id is refused every time");
+    }
+
+    /// A change sent again is built FROM MEMORY, as state: the rows it named as the log holds
+    /// them NOW — written where the log still has them, removed where it no longer does — and a
+    /// purge sends the whole log after a clear. Never the rows as they were when it was first
+    /// sent: that copy can be older than a later change to the same row.
+    #[test]
+    fn a_change_sent_again_carries_the_rows_as_memory_holds_them_now() {
+        let mut log = Logbook::new();
+        let [a, b, gone] = ["W1AW", "K2DEF", "DL1ABC"]
+            .map(|call| log.add((*rec(call, u64::from(call.len() as u32 * 7))).clone()));
+        // After the change that is sent again: b is corrected, and gone is deleted.
+        let mut corrected = (*log.records()[1]).clone();
+        corrected.comment = Some("corrected".into());
+        log.apply(LogOp::Edit {
+            id: b,
+            rec: Box::new(corrected),
+        });
+        log.apply(LogOp::Delete(gone));
+
+        let again = Change::resend(&Touched::Rows(vec![a, b, gone, b]), 41, &log, |_| {
+            (Some("Entity".into()), Some(5))
+        });
+        assert_eq!(again.rev, 41, "the change keeps its own revision");
+        assert!(!again.clear);
+        let written: Vec<_> = again.upsert.iter().map(|w| w.rec.id).collect();
+        assert_eq!(
+            written,
+            vec![Some(a), Some(b)],
+            "each row the log still has, once"
+        );
+        assert_eq!(
+            again.upsert[1].rec.comment.as_deref(),
+            Some("corrected"),
+            "as memory holds it NOW"
+        );
+        assert_eq!(
+            again.upsert[0].entity.as_deref(),
+            Some("Entity"),
+            "resolved"
+        );
+        assert_eq!(
+            again.remove,
+            vec![gone],
+            "a row the log no longer holds is removed"
+        );
+        assert_eq!(
+            again.marks,
+            Watermarks::of(&log),
+            "the log's watermarks as they stand"
+        );
+
+        let purge = Change::resend(&Touched::All, 42, &log, |_| (None, None));
+        assert!(purge.clear, "a purge sent again clears the store first");
+        assert_eq!(
+            purge.upsert.iter().map(|w| w.rec.id).collect::<Vec<_>>(),
+            log.records().iter().map(|r| r.id).collect::<Vec<_>>(),
+            "then writes the whole log as memory holds it"
+        );
+        assert_eq!(purge.priority, Priority::Bulk);
+    }
+
+    /// Sent again, and again: the store ends where memory is, never with a row twice. A change
+    /// sent again carries state, so the second copy — or the first one landing after all — only
+    /// writes what is already there.
+    #[test]
+    fn a_change_sent_twice_leaves_the_store_exactly_as_memory() {
+        let scratch = Scratch::new();
+        let w = LogWriter::start(LogDb::open(&scratch.db()).expect("open"));
+        let mut log = Logbook::new();
+        let ids: Vec<RecordId> = (1..=3)
+            .map(|n| log.add((*rec("W1AW", n)).clone()))
+            .collect();
+        let first = w.submit(Change::resend(&Touched::Rows(ids.clone()), 1, &log, |_| {
+            (None, None)
+        }));
+        let second = w.submit(Change::resend(&Touched::Rows(ids.clone()), 1, &log, |_| {
+            (None, None)
+        }));
+        w.wait_durable(&first, Duration::from_secs(60))
+            .expect("first");
+        w.wait_durable(&second, Duration::from_secs(60))
+            .expect("second");
+        let conn = stored(&scratch.db());
+        assert_eq!(rows(&conn), 3, "three rows, not six");
+        for (n, id) in ids.iter().enumerate() {
+            assert_eq!(
+                comment_of(&conn, &id.to_string()).as_deref(),
+                Some((n + 1).to_string().as_str())
+            );
+        }
     }
 
     /// `flush` is the exit path: it returns when the queue is empty, not when it feels like

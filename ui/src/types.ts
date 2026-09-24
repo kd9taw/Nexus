@@ -4197,6 +4197,10 @@ export interface AppSnapshot {
    *  opened, and the session then keeps the log in log.adi. Null while the database owns the
    *  log; absent from a station older than the database. */
   logStoreProblem?: LogStoreProblem | null
+  /** Changes to the logbook the database refused, which the station holds in memory: sent
+   *  again when the refusal can pass, held for the quit when it cannot. Null while every change
+   *  is in the database or on its way there; absent from a station older than the re-send. */
+  logSaveTrouble?: LogSaveTrouble | null
 }
 
 /** Why the logbook database could not be opened at launch (mirror of the Rust
@@ -4205,6 +4209,18 @@ export interface LogStoreProblem {
   /** The data folder is on network storage — the one cause the operator fixes in Settings. */
   networkFolder: boolean
   /** Why, as the station's diagnostic log records it (English, from the station). */
+  reason: string
+}
+
+/** Changes the logbook database refused, held in the station's memory (mirror of the Rust
+ *  LogSaveTrouble). */
+export interface LogSaveTrouble {
+  /** Being sent again: refused for a reason that can pass (another program holding the
+   *  database, a full or failing disk). */
+  retrying: number
+  /** Refused for what they are: kept until the quit, which asks about them. */
+  held: number
+  /** The latest refusal, as the station's diagnostic log records it (English). */
   reason: string
 }
 

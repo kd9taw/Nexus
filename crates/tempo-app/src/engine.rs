@@ -19889,6 +19889,11 @@ contact yourself."
         s.upload_tick = self.station.upload_tick;
         s.log_tick = self.station.log_tick();
         s.log_store_problem = self.station.store_problem.clone();
+        s.log_save_trouble = self
+            .station
+            .store
+            .as_ref()
+            .and_then(|store| store.save_trouble());
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
@@ -22513,6 +22518,28 @@ contact yourself."
         match self.station.store.as_ref() {
             Some(store) => store.flush(deadline),
             None => Ok(()),
+        }
+    }
+
+    /// Send again, from memory, the logbook changes the database refused for a reason that can
+    /// pass, each once its wait is up — the automatic retry, which the snapshot poll drives. How
+    /// many went out. No I/O: a channel send each, like any change. See
+    /// [`crate::logstore::LogStore::resend`].
+    pub fn log_resend_due(&mut self) -> usize {
+        let station = &mut self.station;
+        match station.store.as_mut() {
+            Some(store) => store.resend(&station.logbook, false, std::time::Instant::now()),
+            None => 0,
+        }
+    }
+
+    /// [`Self::log_resend_due`] for every such change now, whatever its wait — a quit, and the
+    /// quit's Keep trying.
+    pub fn log_resend_all(&mut self) -> usize {
+        let station = &mut self.station;
+        match station.store.as_mut() {
+            Some(store) => store.resend(&station.logbook, true, std::time::Instant::now()),
+            None => 0,
         }
     }
 

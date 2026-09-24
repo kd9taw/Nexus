@@ -3129,6 +3129,11 @@ pub struct AppSnapshot {
     /// database owns the log. The screen says so once per session.
     #[serde(default)]
     pub log_store_problem: Option<LogStoreProblem>,
+    /// Changes to the logbook the database has not taken: refused by it, and kept in memory —
+    /// sent again when the refusal can pass, held for the quit when it cannot. `None` while
+    /// every change is in the database or on its way there. The screen says so while it lasts.
+    #[serde(default)]
+    pub log_save_trouble: Option<LogSaveTrouble>,
 }
 
 /// Why the logbook database could not be opened at launch — see
@@ -3140,6 +3145,21 @@ pub struct LogStoreProblem {
     /// the operator fixes in Settings: a data folder on a drive inside the computer.
     pub network_folder: bool,
     /// Why, as the diagnostic log records it.
+    pub reason: String,
+}
+
+/// Changes the logbook database refused, which Nexus is holding in memory — see
+/// [`AppSnapshot::log_save_trouble`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogSaveTrouble {
+    /// Changes being sent again: refused for a reason that can pass — another program holding
+    /// the database, a full or failing disk — and sent again from memory until they land.
+    pub retrying: u32,
+    /// Changes refused for what they are, which sending again cannot fix. Kept in memory for
+    /// the session, and asked about when Nexus quits.
+    pub held: u32,
+    /// The latest refusal, as the diagnostic log records it.
     pub reason: String,
 }
 
