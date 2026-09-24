@@ -656,7 +656,7 @@ impl Authority {
         engine: &crate::SharedEngine,
     ) -> Option<String> {
         let now = Instant::now();
-        let engine = engine.lock().ok()?;
+        let engine = tempo_app::engine::engine_lock_result(engine).ok()?;
         let mut c = self.core.lock().ok()?;
         self.reconcile(&mut c, now).ok()?;
         if notice.connection != self.connection.load(Ordering::SeqCst) {
@@ -1149,7 +1149,8 @@ impl Authority {
         // Capture context and execute under the same engine lock. There is no
         // queue whose work could migrate into a later radio/profile context.
         let shared_engine = engine;
-        let mut engine = shared_engine.try_lock().map_err(|_| "stationBusy")?;
+        let mut engine =
+            tempo_app::engine::engine_try_lock(shared_engine).map_err(|_| "stationBusy")?;
         self.context(&mut c, &engine)?;
         let control = (version >= 2).then(|| {
             (

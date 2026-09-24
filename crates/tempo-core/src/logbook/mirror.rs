@@ -387,6 +387,7 @@ impl Written {
 }
 
 fn run(path: PathBuf, rx: mpsc::Receiver<Msg>, status: Arc<Mutex<Status>>, opts: MirrorOptions) {
+    super::io_fence::enter_log_lane();
     let (debounce, max_delay) = (opts.debounce, opts.max_delay);
     let mut pending: Option<Vec<Arc<QsoRecord>>> = None;
     let mut first_queued: Option<Instant> = None;
@@ -471,6 +472,9 @@ fn write_once(
     status: &Arc<Mutex<Status>>,
     written: &mut Written,
 ) {
+    // Everything below is disk: the head of `log.adi`, the ring snapshot, the temporary file,
+    // the rename and the folder sync.
+    super::io_fence::on_log_lane("the log.adi mirror's rewrite");
     if let Err(stamp) = written.may_replace(path) {
         if written.reported != stamp {
             written.reported = stamp;

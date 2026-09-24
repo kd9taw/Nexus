@@ -9154,6 +9154,34 @@ export const EN = {
     'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ Config ▸ Data & log folder.',
   'shell.logStore.failed':
     'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Diagnostic log.',
+  // Quitting while the logbook still has changes on their way to disk: Nexus keeps the main
+  // window open until they are saved (components/LogbookSaving.tsx). `{{count}}` is a number of
+  // changes; `{{reason}}` is the station's diagnostic wording, passed through untranslated. The
+  // Stop TX button appears only over a radio that is still running (before a Windows update),
+  // because this dialog covers every cockpit's own stop controls — its label is the control's
+  // name as the cockpits write it.
+  'quit.logbook.saving.title': 'Saving your logbook…',
+  'quit.logbook.saving.pending': {
+    one: '{{count}} change still to write',
+    other: '{{count}} changes still to write',
+  },
+  'quit.logbook.slow.title': 'Your logbook is still saving',
+  'quit.logbook.slow.body': {
+    one: 'Nexus has waited a minute, and {{count}} change is still not in the logbook.',
+    other: 'Nexus has waited a minute, and {{count}} changes are still not in the logbook.',
+  },
+  'quit.logbook.refused.title': 'Your logbook could not be saved',
+  'quit.logbook.refused.body': {
+    one: '{{count}} change could not be written to the logbook: {{reason}}. Waiting longer will not save it.',
+    other:
+      '{{count}} changes could not be written to the logbook: {{reason}}. Waiting longer will not save them.',
+  },
+  'quit.logbook.keepTrying': 'Keep trying',
+  'quit.logbook.quitWithout': {
+    one: 'Quit without the last change',
+    other: 'Quit without the last {{count}} changes',
+  },
+  'quit.logbook.stopTx': 'Stop TX',
   'shell.message.failed': 'Message could not be sent',
   'shell.bandFeed.failed': 'Could not open the band feed',
   'shell.resend.failed': 'Could not re-send to {{peer}}',

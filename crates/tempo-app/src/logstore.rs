@@ -27,7 +27,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tempo_core::logbook::mirror::{self, FileStamp, MirrorOptions, MirrorState, MirrorWriter};
 use tempo_core::logbook::sqlite::{self, LogDb, Resolved};
@@ -44,7 +44,8 @@ pub const DURABLE_WAIT: Duration = Duration::from_secs(60);
 /// The store, open and owning the log.
 pub struct LogStore {
     writer: Arc<LogWriter>,
-    mirror: MirrorWriter,
+    /// Shared with a quit, which writes it with the engine lock released (see [`Unsaved`]).
+    mirror: Arc<MirrorWriter>,
     log_path: PathBuf,
     db_path: PathBuf,
     resolve: StoreResolve,
@@ -167,6 +168,9 @@ fn open_reporting_with(
     mut mirror_options: MirrorOptions,
     progress: &mut dyn FnMut(migrate::Progress),
 ) -> Result<Opened, OpenError> {
+    // All of it — the conversion, the load, the read of a foreign `log.adi`, the sweep — before
+    // the engine is locked.
+    tempo_core::logbook::io_fence::off_engine_lock("opening the logbook store");
     if let Some(why) = network {
         return Err(OpenError::NetworkFolder(why));
     }
@@ -205,7 +209,10 @@ fn open_reporting_with(
 
     let writer = Arc::new(LogWriter::start(db));
     let synced_foreign = writer.foreign_commits();
-    let mirror = MirrorWriter::with_options(log_path.to_path_buf(), mirror_options);
+    let mirror = Arc::new(MirrorWriter::with_options(
+        log_path.to_path_buf(),
+        mirror_options,
+    ));
     Ok(Opened {
         store: LogStore {
             writer,
@@ -330,6 +337,21 @@ impl LogStore {
         self.mirror.submit(log.records().to_vec());
     }
 
+    /// What a quit still has to wait for (see [`Unsaved`]): this process's changes the writer
+    /// has not finished with, and the mirror. Handles only — never touches the disk.
+    pub(crate) fn unsaved(&self) -> Unsaved {
+        let tickets = self
+            .inflight
+            .iter()
+            .filter(|(t, _)| !t.is_resolved())
+            .map(|(t, _)| t.clone())
+            .collect();
+        Unsaved {
+            changes: Durability::new(Some(self.writer()), tickets),
+            mirror: Some(Arc::clone(&self.mirror)),
+        }
+    }
+
     /// Write everything submitted so far, and the mirror, waiting up to `deadline` for each.
     /// The exit path.
     pub fn flush(&self, deadline: Duration) -> Result<(), String> {
@@ -401,10 +423,98 @@ impl Durability {
     }
 }
 
+/// What a quit still has to wait for — SPEC-1's C10, the quit that says it is saving.
+///
+/// This process's changes the writer has not finished with, taken as their tickets, and the
+/// `log.adi` copy beside the logbook. Taken under the engine lock ([`LogStore::unsaved`] is
+/// pointer copies, no I/O) and waited on with EVERY lock released, from the quit's own thread.
+/// Empty on the 1.13 path, which wrote `log.adi` inline.
+///
+/// Why tickets rather than the writer's own count ([`writer::Status::pending`]): the count goes
+/// down both when a change lands and when the writer GIVES UP on one, and a quit must tell
+/// those apart. A change still on its way may land if the operator waits; a refused one never
+/// will — its ticket says which ([`writer::WaitError::Failed`]).
+#[derive(Default)]
+pub struct Unsaved {
+    changes: Durability,
+    mirror: Option<Arc<MirrorWriter>>,
+}
+
+/// Where the changes a quit is waiting for stand.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Standing {
+    /// Changes the writer has not finished with. Waiting may still put them on disk.
+    pub pending: usize,
+    /// Changes the writer gave up on. They are not in the logbook database, and no amount of
+    /// waiting will put them there; the log in memory still has them until the process goes.
+    pub refused: usize,
+    /// The first refusal's reason, in the writer's words — for the diagnostic log and for the
+    /// operator, untranslated.
+    pub reason: Option<String>,
+}
+
+impl Standing {
+    /// Nothing left on its way, and nothing refused.
+    pub fn saved(&self) -> bool {
+        self.pending == 0 && self.refused == 0
+    }
+}
+
+impl Unsaved {
+    /// Nothing is on its way: no change the writer has not finished with, and no picture of the
+    /// log waiting for `log.adi`. A quit that finds this closes as it always did.
+    pub fn is_empty(&self) -> bool {
+        self.standing().pending == 0 && !self.mirror.as_ref().is_some_and(|m| m.status().pending)
+    }
+
+    /// Where the changes stand now. Never waits.
+    pub fn standing(&self) -> Standing {
+        self.wait(Duration::ZERO)
+    }
+
+    /// Wait up to `for_up_to` for the writer to finish with every change, then say where they
+    /// stand. ⚠️ The quit's wait: never call it holding a lock.
+    pub fn wait(&self, for_up_to: Duration) -> Standing {
+        let mut s = Standing::default();
+        let Some(writer) = &self.changes.writer else {
+            return s;
+        };
+        let start = Instant::now();
+        for t in &self.changes.tickets {
+            let left = for_up_to.saturating_sub(start.elapsed());
+            match writer.wait_durable(t, left) {
+                Ok(()) => {}
+                Err(writer::WaitError::Timeout { .. }) => s.pending += 1,
+                Err(writer::WaitError::Failed(why)) => {
+                    s.refused += 1;
+                    s.reason.get_or_insert(why);
+                }
+            }
+        }
+        s
+    }
+
+    /// Bring `log.adi` up to date now, waiting up to `for_up_to`: `None` when it is written, or
+    /// had nothing to write; otherwise what is wrong, for the diagnostic log. The copy is a
+    /// convenience beside the logbook, so this is never a question for the operator.
+    pub fn write_mirror(&self, for_up_to: Duration) -> Option<String> {
+        let status = self.mirror.as_ref()?.flush(for_up_to);
+        if status.pending {
+            return Some(format!(
+                "log.adi was still being written after {:.1} s",
+                for_up_to.as_secs_f32()
+            ));
+        }
+        status
+            .last_error
+            .map(|e| format!("log.adi could not be brought up to date: {e}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::Engine;
+    use crate::engine::{engine_lock, engine_try_lock, Engine};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
     use std::time::Instant;
@@ -550,6 +660,34 @@ mod tests {
         for (x, y) in a.iter().zip(b) {
             assert_eq!(text(x.borrow()), text(y.borrow()), "{what}: a row differs");
         }
+    }
+
+    /// `new`'s rows with each QSL-sent stamp (`date_unix`, `cleared_unix`) set to the matching
+    /// row of `old`, where both carry one and they are no more than `spanned` seconds apart —
+    /// the most wall-clock time the two engines' calls have taken between them. Everything else
+    /// is left for the comparison to judge, so a stamp missing on one side, or further apart,
+    /// still fails.
+    fn with_qsl_clock_of<A, B>(new: &[A], old: &[B], spanned: u64) -> Vec<QsoRecord>
+    where
+        A: std::borrow::Borrow<QsoRecord>,
+        B: std::borrow::Borrow<QsoRecord>,
+    {
+        let near = |n: Option<u64>, o: Option<u64>| match (n, o) {
+            (Some(n), Some(o)) if n.abs_diff(o) <= spanned => Some(o),
+            _ => n,
+        };
+        new.iter()
+            .zip(old.iter().map(Some).chain(std::iter::repeat(None)))
+            .map(|(n, o)| {
+                let mut r = n.borrow().clone();
+                if let Some(o) = o.map(|o| o.borrow()) {
+                    r.qsl_sent.date_unix = near(r.qsl_sent.date_unix, o.qsl_sent.date_unix);
+                    r.qsl_sent.cleared_unix =
+                        near(r.qsl_sent.cleared_unix, o.qsl_sent.cleared_unix);
+                }
+                r
+            })
+            .collect()
     }
 
     pub(crate) fn flush(e: &Engine) {
@@ -914,10 +1052,20 @@ mod tests {
                 }),
             ),
         ];
+        // The QSL-sent mark stamps the wall clock inside the engine (`StationCore::mark_qsl_sent`),
+        // once per engine, so a second boundary between the two calls moves that stamp and
+        // nothing else — and the stamp stays on the row for every step after. The store's row
+        // takes the ADIF path's stamp when the two lie within the most seconds any pair so far
+        // spanned; every other byte, and any stamp further apart or missing on one side, still
+        // has to match exactly.
+        let mut spanned = 0;
         for (what, step) in &steps {
+            let before = crate::engine::now_unix_secs();
             step(&mut old);
             step(&mut new);
-            same_log_across(new.log_records(), old.log_records(), what);
+            spanned = spanned.max(crate::engine::now_unix_secs() - before);
+            let aligned = with_qsl_clock_of(new.log_records(), old.log_records(), spanned);
+            same_log_across(&aligned, old.log_records(), what);
         }
         // Every step DID something — the census that keeps the comparisons above from passing
         // over a log nothing happened to.
@@ -968,10 +1116,18 @@ mod tests {
             new.log_records(),
             "the store on disk is the store's memory",
         );
-        same_log_across(&stored(&b), old.log_records(), "the store on disk");
         same_log_across(
-            tempo_core::logbook::Logbook::load(&b.log()).records(),
-            tempo_core::logbook::Logbook::load(&a.log()).records(),
+            &with_qsl_clock_of(&stored(&b), old.log_records(), spanned),
+            old.log_records(),
+            "the store on disk",
+        );
+        let (mirror, file) = (
+            tempo_core::logbook::Logbook::load(&b.log()),
+            tempo_core::logbook::Logbook::load(&a.log()),
+        );
+        same_log_across(
+            &with_qsl_clock_of(mirror.records(), file.records(), spanned),
+            file.records(),
             "the mirror against the 1.13 file",
         );
 
@@ -1025,7 +1181,7 @@ mod tests {
         let hold = WriteHold::take(&d.db()).expect("hold the write lock");
         let started = Instant::now();
         let durability = {
-            let mut e = engine.lock().unwrap();
+            let mut e = engine_lock(&engine);
             let (_, a) = e.with_log_tickets(|e| e.log_qso(qso("W1STALL", 1_788_000_000)));
             let (_, b) = e.with_log_tickets(|e| e.mark_qsl_card(2, true));
             let (_, c) = e.with_log_tickets(|e| e.delete_qso(5));
@@ -1040,7 +1196,7 @@ mod tests {
 
         // Another thread takes the engine lock while the write is still stalled.
         let other = Arc::clone(&engine);
-        let took = std::thread::spawn(move || other.try_lock().is_ok())
+        let took = std::thread::spawn(move || engine_try_lock(&other).is_ok())
             .join()
             .unwrap();
         assert!(took, "try_lock succeeds during the stalled write");
@@ -1056,8 +1212,114 @@ mod tests {
             w.wait(DURABLE_WAIT)
                 .expect("durable once the lock is released");
         }
-        let e = engine.lock().unwrap();
+        let e = engine_lock(&engine);
         same_log(&stored(&d), e.log_records(), "after the stall");
+    }
+
+    // ── C11: the fence ──────────────────────────────────────────────────────
+
+    /// A store-backed engine behind the Engine mutex, as the app holds it.
+    fn shared_on_store(d: &Dir) -> Arc<Mutex<Engine>> {
+        Arc::new(Mutex::new(engine_on_store(d)))
+    }
+
+    /// ★ C11 POSITIVE CONTROL. A command that waited for its change while still holding the
+    /// Engine lock would hold the radio loop for as long as the disk takes; in a debug build the
+    /// fence stops it at the wait.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "io_fence: a wait for a logbook change to reach the disk ran while this thread \
+                    holds the Engine lock"
+    )]
+    fn a_durable_wait_under_the_engine_lock_trips_the_fence() {
+        let d = Dir::new("fence-wait");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = shared_on_store(&d);
+        let mut e = engine_lock(&engine);
+        let (_, durability) = e.with_log_tickets(|e| e.mark_qsl_card(1, true));
+        let _ = durability.wait(DURABLE_WAIT); // `e` is still held
+    }
+
+    /// The other direction: the same wait with the guard dropped first passes, and the change
+    /// is on disk.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_durable_wait_after_the_engine_lock_is_released_passes_the_fence() {
+        let d = Dir::new("fence-wait-ok");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = shared_on_store(&d);
+        let durability = {
+            let mut e = engine_lock(&engine);
+            e.with_log_tickets(|e| e.mark_qsl_card(1, true)).1
+        };
+        durability
+            .wait(DURABLE_WAIT)
+            .expect("durable, with no lock held");
+        let id = engine_lock(&engine).log_records()[1].id;
+        assert!(
+            stored(&d).iter().any(|r| r.id == id && r.qsl_rcvd.card),
+            "the mark is on disk"
+        );
+    }
+
+    /// ★ C11 POSITIVE CONTROL. Remote redeems an append's receipt after it has released the
+    /// engine; redeemed under the lock, the fence stops it.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "io_fence: a wait for an append to reach the disk ran while this thread holds \
+                    the Engine lock"
+    )]
+    fn an_append_receipt_synced_under_the_engine_lock_trips_the_fence() {
+        let d = Dir::new("fence-receipt");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = shared_on_store(&d);
+        let mut e = engine_lock(&engine);
+        let crate::engine::LogWriteOutcome::PendingSync(receipts) =
+            e.log_qso_for_sync(qso("W1FNC", 1_788_000_000))
+        else {
+            panic!("premise: the contact is appended and owes a receipt");
+        };
+        for r in receipts {
+            let _ = r.sync(); // `e` is still held
+        }
+    }
+
+    /// ★ C11 POSITIVE CONTROL. Opening the store — at launch, a conversion of a lifetime log —
+    /// belongs before the engine is locked.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(
+        expected = "io_fence: opening the logbook store ran while this thread holds the Engine lock"
+    )]
+    fn opening_the_store_under_the_engine_lock_trips_the_fence() {
+        let d = Dir::new("fence-open");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = Arc::new(Mutex::new(Engine::new("K2DEF", "FN31", 0)));
+        let _e = engine_lock(&engine);
+        let _ = open_fast(&d);
+    }
+
+    /// Why `tests/engine_guard.rs` scans for raw locks: a guard taken with `Mutex::lock()` is the
+    /// same lock, and the fence cannot see it — the very wait the first control above stops goes
+    /// through here unremarked.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_raw_engine_lock_is_invisible_to_the_fence() {
+        let d = Dir::new("fence-raw");
+        std::fs::write(d.log(), legacy_log(5)).unwrap();
+        let engine = shared_on_store(&d);
+        let mut raw = engine.lock().unwrap();
+        let (_, durability) = raw.with_log_tickets(|e| e.mark_qsl_card(1, true));
+        assert_eq!(
+            tempo_core::logbook::io_fence::engine_guards_held(),
+            0,
+            "a raw guard is not counted"
+        );
+        durability
+            .wait(DURABLE_WAIT)
+            .expect("the fence does not fire: it cannot see this lock");
     }
 
     /// The datagram WSJT-X sends when it logs a contact (UDP type 12, LoggedAdif), as it
@@ -1103,6 +1365,169 @@ mod tests {
         assert!(
             stored(&d).iter().any(|r| r.call == "W1ABC"),
             "the store has the contact"
+        );
+    }
+
+    // ── the quit (C10) ──────────────────────────────────────────────────────
+
+    /// A quit waits for what is on its way, and only that. With nothing submitted since the
+    /// last write there is nothing to wait for, which is what lets the window close as it
+    /// always did; a change held up by a stalled disk is seen, counted, waited for no longer
+    /// than the quit allows, and seen to land once the disk clears.
+    ///
+    /// The control is the stalled change itself: the check that answers "nothing" after the
+    /// write answers "one" before it, so its empty answer is not a check that cannot see.
+    #[test]
+    fn a_quit_waits_for_exactly_the_changes_on_their_way() {
+        let d = Dir::new("quit-wait");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        let mut e = engine_on_store(&d);
+        flush(&e);
+        assert!(
+            e.log_unsaved().is_empty(),
+            "nothing on its way: nothing to wait for"
+        );
+
+        let hold = WriteHold::take(&d.db()).expect("stall the store");
+        assert!(e.mark_qsl_card(3, true));
+        let unsaved = e.log_unsaved();
+        assert!(!unsaved.is_empty(), "control: a change on its way is seen");
+        assert_eq!(
+            unsaved.standing(),
+            Standing {
+                pending: 1,
+                refused: 0,
+                reason: None
+            },
+            "one change, not yet on disk, not refused"
+        );
+        let started = Instant::now();
+        assert_eq!(
+            unsaved.wait(Duration::from_millis(200)).pending,
+            1,
+            "still held up by the stalled disk"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(200),
+            "and it waited the time it was given, not less"
+        );
+
+        drop(hold);
+        let s = unsaved.wait(DURABLE_WAIT);
+        assert!(s.saved(), "it lands once the disk clears: {s:?}");
+        let id = e.log_records()[3].id;
+        assert!(
+            stored(&d)
+                .into_iter()
+                .find(|r| r.id == id)
+                .expect("stored")
+                .qsl_rcvd
+                .card,
+            "and it is on disk when the wait says so"
+        );
+        assert_eq!(unsaved.write_mirror(DURABLE_WAIT), None, "log.adi too");
+        assert!(e.log_unsaved().is_empty(), "then nothing is left");
+    }
+
+    /// `log.adi` is part of what a quit waits for. A change the database already holds is
+    /// still on its way to the ADIF copy beside it for as long as the mirror waits for the log
+    /// to go quiet (a second, on the shipped timings), and a quit that closed then would leave
+    /// the file behind the logbook for the next program that reads it.
+    #[test]
+    fn a_quit_waits_for_the_log_adi_copy_too() {
+        let d = Dir::new("quit-mirror");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        // A mirror that waits far longer than this test takes to look (the shipped wait is a
+        // second): the gap between the database and the copy is then certain, not a race a slow
+        // disk could lose.
+        let slow = MirrorOptions {
+            debounce: Duration::from_secs(30),
+            max_delay: Duration::from_secs(60),
+            accepted: None,
+        };
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.attach_log_store(open_with(&d.log(), no_resolve(), None, slow).expect("the store opens"));
+        flush(&e);
+        assert!(e.log_unsaved().is_empty(), "premise: all written");
+
+        assert!(e.mark_qsl_card(4, true));
+        let unsaved = e.log_unsaved();
+        assert!(
+            unsaved.wait(DURABLE_WAIT).saved(),
+            "the database has the change"
+        );
+        assert!(
+            !unsaved.is_empty(),
+            "but log.adi does not yet, and a quit must wait for it"
+        );
+        let id = e.log_records()[4].id;
+        let in_log_adi = || {
+            tempo_core::logbook::Logbook::load(&d.log())
+                .records()
+                .iter()
+                .find(|r| r.id == id)
+                .is_some_and(|r| r.qsl_rcvd.card)
+        };
+        assert!(!in_log_adi(), "control: the copy really is behind");
+        assert_eq!(
+            unsaved.write_mirror(DURABLE_WAIT),
+            None,
+            "written, no error"
+        );
+        assert!(
+            in_log_adi(),
+            "log.adi has the change once the quit has written it"
+        );
+        assert!(e.log_unsaved().is_empty(), "and nothing is left");
+    }
+
+    /// A change the store REFUSES is not a change still saving: waiting will never put it on
+    /// disk, and the quit has to be able to say so — how many, and why — instead of waiting out
+    /// its minute and then offering to keep waiting.
+    ///
+    /// Queued behind a change held up by a stalled disk, so the quit sees both on their way
+    /// before either resolves: the refusal happens before any write (a row with no id could
+    /// never be addressed again), and on its own it would resolve before anything could look.
+    #[test]
+    fn a_quit_is_told_which_changes_the_store_refused_and_why() {
+        let d = Dir::new("quit-refused");
+        let mut opened = open_fast(&d);
+        let mut log = tempo_core::logbook::Logbook::new();
+        log.add(qso("W1GOOD", 1_788_000_000));
+
+        let hold = WriteHold::take(&d.db()).expect("stall the store");
+        let good = Change::appended(&log, 1, |_| (None, None));
+        opened.store.submit(good, &log).expect("a ticket");
+        let mut orphan = qso("K5ORPHAN", 1_788_000_100);
+        orphan.id = None;
+        let refused = Change {
+            rev: log.revision() + 1,
+            upsert: vec![sqlite::RowWrite::new(Arc::new(orphan))],
+            ..Change::default()
+        };
+        opened.store.submit(refused, &log).expect("a ticket");
+        let unsaved = opened.store.unsaved();
+        assert_eq!(
+            unsaved.standing().pending,
+            2,
+            "both on their way while the disk is held"
+        );
+
+        drop(hold);
+        let s = unsaved.wait(DURABLE_WAIT);
+        assert_eq!(
+            (s.pending, s.refused),
+            (0, 1),
+            "one landed, one refused: {s:?}"
+        );
+        assert!(
+            s.reason.as_deref().is_some_and(|r| r.contains("K5ORPHAN")),
+            "and the reason, in the writer's words: {s:?}"
+        );
+        assert!(!s.saved(), "a refusal is not saved");
+        assert!(
+            stored(&d).iter().any(|r| r.call == "W1GOOD"),
+            "the good change is on disk"
         );
     }
 

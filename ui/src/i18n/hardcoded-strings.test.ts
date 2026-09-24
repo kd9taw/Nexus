@@ -644,6 +644,10 @@ const PARTIAL = [
   // `phone.split.*` entry reads as an orphan, because the strings moved and the scanner did not.
   'components/SplitControl.tsx',
   'components/VoiceKeyer.tsx',
+  // The quit's logbook dialog (2026-09-23, SPEC-1's C10) — born catalogued. Its Stop TX, shown
+  // only over a radio that is still running, is `quit.logbook.stopTx`: the control's name as the
+  // cockpits write it, held in the catalog because this dialog is otherwise all prose.
+  'components/LogbookSaving.tsx',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */

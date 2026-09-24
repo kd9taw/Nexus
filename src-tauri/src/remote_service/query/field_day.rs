@@ -22,7 +22,7 @@ struct Capture {
 
 pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'static str> {
     let capture = {
-        let e = engine.try_lock().map_err(|_| "applicationBusy")?;
+        let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
         let s = e.settings();
         if s.fd_operator.len() > 1024
             || s.fd_event.len() > 1024

@@ -65,6 +65,7 @@
 //! No wiring into the app (C9), no migration of an existing `log.adi` (C5), no ADIF mirror
 //! (C6). This is the mechanism and its proof.
 
+use super::io_fence;
 use super::sqlite::{self, Batch, LogDb, RowWrite, Watermarks};
 use super::{Effects, LogOp, Logbook, QsoRecord, RecordId};
 use crate::applog;
@@ -694,6 +695,7 @@ impl LogWriter {
         ticket: &Ticket,
         deadline: Duration,
     ) -> std::result::Result<(), WaitError> {
+        io_fence::off_engine_lock("a wait for a logbook change to reach the disk");
         let start = Instant::now();
         let mut done = lock(&ticket.slot.done);
         while done.is_none() {
@@ -773,6 +775,7 @@ impl LogWriter {
         dst: &std::path::Path,
         deadline: Duration,
     ) -> std::result::Result<u64, String> {
+        io_fence::off_engine_lock("a wait for the logbook database to be copied");
         let (reply, answer) = std::sync::mpsc::sync_channel(1);
         let sent = self
             .tx
@@ -951,6 +954,7 @@ fn watch_foreign(db: &LogDb, seen: &mut Option<i64>, shared: &Shared) {
 }
 
 fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
+    io_fence::enter_log_lane();
     let mut queue: VecDeque<Job> = VecDeque::new();
     // Copies wait for the queue ahead of them to empty: a copy must hold every change
     // submitted before it was asked for.
@@ -984,6 +988,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
         if queue.is_empty() {
             watch_foreign(&db, &mut seen_version, shared);
             if let Some((dst, reply)) = copies.pop_front() {
+                io_fence::on_log_lane("a logbook database copy");
                 let outcome = match db.path() {
                     Some(src) => sqlite::copy_database(&src, &dst).map_err(|e| e.to_string()),
                     None => Err("an in-memory logbook has no file to copy".into()),
@@ -1062,6 +1067,7 @@ fn pump(mut db: LogDb, rx: &Receiver<Msg>, shared: &Shared) {
 /// it by reordering our queue — but it means a wedged neighbour is visible as latency, not
 /// just as a status.
 fn commit(db: &mut LogDb, batch: Batch<'_>, shared: &Shared) -> std::result::Result<(), String> {
+    io_fence::on_log_lane("a logbook database write");
     let mut attempt = 0usize;
     loop {
         let Err(e) = db.apply(batch) else {

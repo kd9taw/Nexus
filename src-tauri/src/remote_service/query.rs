@@ -552,7 +552,8 @@ impl Publisher {
                     .snapshot(request.after))
             }
             Collection::Log => {
-                let eng = engine.try_lock().map_err(|_| "applicationBusy")?;
+                let eng =
+                    tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
                 let (rows, total) =
                     log_window(eng.log_records(), &request.search, request.unconfirmed);
                 drop(eng);
@@ -600,7 +601,8 @@ impl Publisher {
             }
             Collection::Needs => {
                 let sources = sources.ok_or("applicationUnavailable")?;
-                let eng = engine.try_lock().map_err(|_| "applicationBusy")?;
+                let eng =
+                    tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
                 let rows = crate::read_need_alerts(
                     eng,
                     &sources.live_paths,

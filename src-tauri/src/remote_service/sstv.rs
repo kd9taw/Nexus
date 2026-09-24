@@ -124,7 +124,7 @@ fn current_path(
         .get(id)
         .cloned()
         .ok_or("queryExpired")?;
-    let e = engine.try_lock().map_err(|_| "applicationBusy")?;
+    let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
     if !e.sstv_gallery().iter().any(|g| g.path == path) {
         return Err("queryExpired");
     }

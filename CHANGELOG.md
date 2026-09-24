@@ -157,6 +157,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed in your log. And if Nexus stops in the middle of importing a large file, the contacts
   it had already taken in are kept; importing the file again adds the rest without duplicating
   any.
+- **Closing Nexus while the logbook is still saving now says so, and asks before it drops
+  anything.** If you close the window while changes are still on their way to the disk — right
+  after a big import, or on a slow drive — Nexus takes the radio off the air first, as it always
+  has, then keeps the window open with **Saving your logbook…** and the number of changes still
+  to write, and closes the moment they are saved. A quick save shows nothing at all. If the disk
+  has not taken them after a minute, or refuses one, Nexus asks: **Keep trying**, or **Quit
+  without the last N changes**. It used to give up after ten seconds without a word. Restarting
+  after an update, and installing one on Windows, save the same way first.
 - **IC-7610 on native CI-V: the S-meter, the receive controls (AF, RF gain, squelch, NB, NR,
   notch, AGC, attenuator, preamp) and the CTCSS tone now always act on the Main receiver**, even
   with the Sub band selected on the radio (the frequency and mode still follow the selected band).
@@ -280,6 +288,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data mode (DATA-L up for DATA-U down, and the other way round). Only the transmit VFO's
   sideband changes: FT timing, sequencing and audio are exactly as before, and a non-inverting
   bird is untouched.
+
+- **The transmit lock now checks a data uplink on the sideband it actually goes out on.** In
+  Digital the lock works out where your signal lands, the dial plus your audio offset, and it
+  took the side from the dial. Up an inverting transponder the data uplink goes out on the
+  opposite sideband, so the signal sits below the uplink frequency, not above it. That is new
+  in this release for most radios, and was already so in 1.14.0 on a radio set to **Data modes
+  use plain SSB**. Within a couple of kHz of a band or segment edge, the uplink could cross the
+  edge with nothing locked. The lock now checks both sides, the one it always checked and the
+  one the transmit VFO is set to, whether the uplink rides the Sub band or VFO B, and reads
+  🔒 TX locked if either is outside your privileges. Nothing that was locked before is
+  unlocked, and away from a satellite pass nothing changes.
 
 - **QO-100's narrowband transponder is now worked in SSB, not FM.** The satellite database
   labels every narrowband segment on QO-100 as FM up and FM down, the "SSB only" segments

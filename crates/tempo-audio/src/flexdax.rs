@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tempo_app::engine::Engine;
+use tempo_app::engine::{engine_lock_result, Engine};
 use tempo_net::flexcat::{
     parse_create_stream_id, parse_dax_stream_status, parse_slice_status, FlexCat, FlexMsg,
     FlexRecv, SliceStatus,
@@ -428,8 +428,7 @@ impl FlexDax {
         // selection" note, while the audio silently followed the radio's `active` flag instead).
         // Read once, like the Flex IP: a later CAT-address edit takes effect on the next radio
         // re-select, which is when the worker restarts anyway.
-        let cat_slice = engine
-            .lock()
+        let cat_slice = engine_lock_result(&engine)
             .ok()
             .map(|e| e.settings().rig_addr.clone())
             .and_then(|addr| crate::rigmodels::flex_slice_for_cat_addr(&addr));

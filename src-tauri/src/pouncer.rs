@@ -89,7 +89,7 @@ pub fn channel() -> (PounceTx, Receiver<SpotHint>) {
 
 /// Rebuild the operator's worked sets from the logbook. Expensive — call on the slow cadence.
 fn snapshot_needs(engine: &Arc<Mutex<Engine>>) -> Option<(propagation::LogNeeds, Vec<String>)> {
-    let mut eng = engine.lock().ok()?;
+    let mut eng = tempo_app::engine::engine_lock_result(engine).ok()?;
     eng.sync_shared_log_if_changed();
     let mut needs = propagation::LogNeeds::new();
     for q in eng.get_log() {
@@ -109,8 +109,7 @@ fn snapshot_needs(engine: &Arc<Mutex<Engine>>) -> Option<(propagation::LogNeeds,
 
 /// Read the operator's configured threshold (cheap; the setting can change mid-session).
 fn threshold_of(engine: &Arc<Mutex<Engine>>) -> PounceThreshold {
-    engine
-        .lock()
+    tempo_app::engine::engine_lock_result(engine)
         .ok()
         .map(|e| to_scoring(e.settings().pounce_threshold))
         .unwrap_or_default()
