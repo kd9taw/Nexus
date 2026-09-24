@@ -1453,27 +1453,67 @@ mod tests {
     /// ⛔ **A launch can see another window's conversion without joining its queue.** The answer
     /// comes from the lock a conversion really holds — not from the lock FILE, which an
     /// interrupted conversion leaves behind — and asking must neither wait nor create the file.
+    ///
+    /// **Checked in a process of its own**, because in this one "nobody holds it" cannot be
+    /// arranged. The lock is `flock`, which belongs to an open file DESCRIPTION, and a process any
+    /// other test here starts (this module starts three) is handed a copy of every descriptor —
+    /// this lock's included — and holds it until it execs. A sibling starting one while the lock
+    /// was held, and still short of its exec when the lock was released, kept "a lock file nobody
+    /// holds" held for that instant: 4 runs of this binary in 24, and every time with a child
+    /// paused before its exec (`a_process_started_elsewhere_holds_the_lock_until_it_execs`). The
+    /// child below runs nothing but these steps, so nobody else can hold its lock.
     #[test]
     fn a_conversion_in_progress_is_seen_from_its_lock_and_only_while_it_is_held() {
         let d = Dir::new("inprogress");
-        let file = ConversionLock::path_for(&d.db());
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "logbook::migrate::tests::the_conversion_lock_in_a_process_of_its_own",
+            ])
+            .env(KILL_DIR, &d.0)
+            .output()
+            .expect("the child runs");
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Ran, and ran the steps: a wrong name runs no test at all and exits 0.
         assert!(
-            !conversion_in_progress(&d.db()),
+            out.status.success() && said.contains("1 passed"),
+            "the child's lock checks:\n{said}"
+        );
+    }
+
+    /// The steps of the test above, in the child process it starts.
+    #[test]
+    #[ignore = "invoked as a child process by the conversion-in-progress test"]
+    fn the_conversion_lock_in_a_process_of_its_own() {
+        let Ok(dir) = std::env::var(KILL_DIR) else {
+            return;
+        };
+        // The parent's folder, and the parent cleans it up.
+        let db = PathBuf::from(dir).join("log.sqlite3");
+        let file = ConversionLock::path_for(&db);
+        assert!(
+            !conversion_in_progress(&db),
             "no lock file: nothing is converting"
         );
         assert!(!file.exists(), "and asking did not create one");
 
-        let lock = ConversionLock::take(&d.db());
+        let lock = ConversionLock::take(&db);
         assert!(
             lock.file.is_some(),
             "premise: this filesystem takes the lock"
         );
         // Asked from another thread with a deadline, so a check that WAITS on the lock fails
         // here instead of hanging the suite.
-        let db = d.db();
+        let asker = db.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(conversion_in_progress(&db));
+            let _ = tx.send(conversion_in_progress(&asker));
         });
         assert_eq!(
             rx.recv_timeout(std::time::Duration::from_secs(5)),
@@ -1487,14 +1527,57 @@ mod tests {
             "premise: an interrupted conversion leaves its file"
         );
         assert!(
-            !conversion_in_progress(&d.db()),
+            !conversion_in_progress(&db),
             "a lock file nobody holds is an interrupted conversion, not a running one"
         );
 
-        ConversionLock::take(&d.db()).finished();
+        ConversionLock::take(&db).finished();
         assert!(
-            !conversion_in_progress(&d.db()),
+            !conversion_in_progress(&db),
             "finished: nothing is converting"
+        );
+    }
+
+    /// Why the test above runs its steps in a process of its own, on demand: a process started
+    /// on another thread while the lock is held keeps it held after this one lets go, until that
+    /// process execs. The child here stops between its fork and its exec until told to go on.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_started_elsewhere_holds_the_lock_until_it_execs() {
+        use std::io::{Read, Write};
+        use std::os::unix::process::CommandExt;
+        let d = Dir::new("forked");
+        let lock = ConversionLock::take(&d.db());
+        assert!(
+            lock.file.is_some(),
+            "premise: this filesystem takes the lock"
+        );
+        let (mut forked, here) = std::io::pipe().expect("a pipe");
+        let (go_on, mut go) = std::io::pipe().expect("a pipe");
+        let starter = std::thread::spawn(move || {
+            let mut cmd = std::process::Command::new("/bin/sh");
+            cmd.args(["-c", "exit 0"]);
+            // SAFETY: between fork and exec the child only writes and reads a pipe, and
+            // write(2) and read(2) are async-signal-safe.
+            unsafe {
+                cmd.pre_exec(move || {
+                    let _ = (&here).write(b"!");
+                    let _ = (&go_on).read(&mut [0u8; 1]);
+                    Ok(())
+                });
+            }
+            cmd.status()
+        });
+        // The child exists now, holding a copy of every descriptor this process had.
+        forked.read_exact(&mut [0u8; 1]).expect("the child forked");
+        drop(lock); // this process lets go
+        let held = conversion_in_progress(&d.db());
+        go.write_all(b"!").expect("the child goes on to exec");
+        let status = starter.join().expect("joined").expect("the child ran");
+        assert!(status.success());
+        assert!(
+            held,
+            "the child's copy of the descriptor still holds the lock until it execs"
         );
     }
 
