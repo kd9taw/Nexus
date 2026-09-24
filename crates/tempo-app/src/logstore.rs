@@ -2126,9 +2126,10 @@ mod tests {
     }
 
     /// ★ The mirror pictures a change only once the store holds it. With the store's write lock
-    /// held elsewhere, a contact is logged: the mirror, told of it, writes nothing — a picture
-    /// without the contact is not a picture of the log — and says a change is still owed. Once
-    /// the store has it, the mirror writes it by itself.
+    /// held elsewhere — for longer than the mirror waits for the store in one turn, so that turn
+    /// ends with the store still behind — a contact is logged: the mirror, told of it, writes
+    /// nothing — a picture without the contact is not a picture of the log — and says a change
+    /// is still owed. Once the store has it, the mirror writes it by itself.
     #[test]
     fn the_mirror_waits_for_the_store_to_hold_the_change() {
         let d = Dir::new("mirror-waits");
@@ -2145,7 +2146,7 @@ mod tests {
         let before = writes();
         let hold = WriteHold::take(&d.db()).unwrap();
         e.lock().unwrap().log_qso(qso("W9LATE", 1_788_100_000));
-        std::thread::sleep(Duration::from_millis(600));
+        std::thread::sleep(mirror::READY_WAIT + Duration::from_millis(600));
         let held = status();
         assert_eq!(
             held.writes, before,

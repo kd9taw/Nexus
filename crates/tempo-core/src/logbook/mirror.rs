@@ -84,7 +84,7 @@ const HEADER_PROBE_BYTES: usize = 8 * 1024;
 /// How long a write waits for the store to hold the change it was told about before it tries
 /// again later. The writer commits a change within a disk flush; this is for a bulk write the
 /// lane has caught up with.
-const READY_WAIT: Duration = Duration::from_millis(2_000);
+pub const READY_WAIT: Duration = Duration::from_millis(2_000);
 
 /// The ADIF header field that marks a file as written by the mirror. Its VALUE is the byte
 /// length of everything after `<EOH>`, which is what lets [`mirror_state`] tell a picture the
