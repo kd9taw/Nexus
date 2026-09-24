@@ -91,9 +91,10 @@ pub fn channel() -> (PounceTx, Receiver<SpotHint>) {
 /// The operator's worked sets — the needs model every reader shares ([`crate::NeedsKept`]),
 /// folded again only when the log has moved — and the watch list. Call on the slow cadence.
 ///
-/// Under the engine lock only the freshness check, the kept model or a copy of the log's
-/// pointers, and the watch list; a fold, when one is needed, runs after the lock is released.
+/// Under the engine lock only the freshness check, the kept model or the log's rows, and the
+/// watch list; a fold, when one is needed, reads the logbook store after the lock is released.
 /// It used to clone every record and fold them all under the lock, every minute a spot came in.
+/// `None` when the engine or the store cannot be read: the detector keeps the model it has.
 fn snapshot_needs(
     engine: &Arc<Mutex<Engine>>,
     kept: &crate::NeedsKept,
@@ -106,7 +107,13 @@ fn snapshot_needs(
             eng.settings().wanted_calls.clone(),
         )
     };
-    Some((crate::needs_finish(capture, kept), wanted))
+    match crate::needs_finish(capture, kept) {
+        Ok(needs) => Some((needs, wanted)),
+        Err(e) => {
+            tempo_core::applog::warn("pounce", &format!("the needs model was not refreshed: {e}"));
+            None
+        }
+    }
 }
 
 /// Read the operator's configured threshold (cheap; the setting can change mid-session).
@@ -260,7 +267,7 @@ mod tests {
         let tallies = crate::LogTallies::default();
         crate::LOG_TALLIES.with(|c| c.set(0));
         let (pounce, _) = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
-        let (board, _) = crate::needs_kept(&engine, &tallies);
+        let (board, _) = crate::needs_kept(&engine, &tallies).expect("the log reads");
         let (again, _) = snapshot_needs(&engine, &tallies.needs).expect("the engine is there");
         assert!(
             Arc::ptr_eq(&pounce, &board) && Arc::ptr_eq(&board, &again),

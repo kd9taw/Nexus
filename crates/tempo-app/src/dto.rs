@@ -2819,17 +2819,18 @@ impl From<tempo_core::diagnostics::DiagnosticsReport> for DiagnosticsReportDto {
 
 impl DiagnosticsReportDto {
     /// Name every contact the report points at by its id — and show each diagnosed contact as
-    /// its list shows it — from `rows`, the log the diagnosis ran over in log order (SPEC-2 v2
-    /// §3, C17a). A position `rows` does not hold is left unnamed.
-    pub fn name_rows<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
+    /// its list shows it — from what the diagnosis read: `rows` and their `ids`, in log order,
+    /// where its indices point (SPEC-2 v2 §3, C17a). A position they do not hold is left
+    /// unnamed.
+    pub fn name_rows(
         &mut self,
-        rows: &[R],
+        rows: &[tempo_core::diagnostics::DiagRow],
+        ids: &[Option<tempo_core::logbook::RecordId>],
     ) {
-        let at = |i: usize| rows.get(i).map(std::borrow::Borrow::borrow);
-        let id = |i: usize| at(i).and_then(|r| r.id).map(|id| id.to_string());
+        let id = |i: usize| ids.get(i).copied().flatten().map(|id| id.to_string());
         for d in &mut self.diagnoses {
-            if let Some(r) = at(d.index) {
-                d.id = r.id.map(|id| id.to_string());
+            if let Some(r) = rows.get(d.index) {
+                d.id = id(d.index);
                 d.call = Some(r.call.clone());
                 d.band = Some(r.band.clone());
                 d.mode = Some(r.mode.clone());

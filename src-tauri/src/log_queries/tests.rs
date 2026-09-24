@@ -1095,7 +1095,7 @@ fn a_javascript_index_is_an_integer_in_range() {
 #[test]
 fn the_diagnosis_names_its_contacts_by_id_and_the_remote_report_is_unchanged() {
     use tempo_app::dto::DiagnosticsReportDto;
-    use tempo_core::diagnostics::{diagnose, DiagCfg};
+    use tempo_core::diagnostics::{diagnose, DiagCfg, DiagRow};
     let (golden, _) = golden_log();
     // An unconfirmed contact, and its field-identical twin that IS award-confirmed: a
     // duplicate to review.
@@ -1135,7 +1135,9 @@ fn the_diagnosis_names_its_contacts_by_id_and_the_remote_report_is_unchanged() {
     }
 
     let mut named = unnamed;
-    named.name_rows(&rows);
+    let read: Vec<DiagRow> = rows.iter().map(DiagRow::from).collect();
+    let ids: Vec<Option<RecordId>> = rows.iter().map(|r| r.id).collect();
+    named.name_rows(&read, &ids);
     for d in &named.diagnoses {
         let r = &rows[d.index];
         assert_eq!(d.id, r.id.map(|id| id.to_string()), "row {}", d.index);

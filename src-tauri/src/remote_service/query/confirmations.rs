@@ -22,9 +22,10 @@ pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'stati
     let (inputs, now) = loop {
         match tempo_app::engine::engine_try_lock(engine) {
             Ok(e) => {
-                // Under the lock only what the diagnosis reads is copied (the log's pointers
-                // and the latest reconcile summaries); the diagnosis runs after it is released,
-                // as the desktop's get_confirmation_diagnostics runs it.
+                // Under the lock only what the diagnosis reads is taken (the log's rows — the
+                // store's handles — and the latest reconcile summaries); the diagnosis reads
+                // and runs after it is released, as the desktop's get_confirmation_diagnostics
+                // runs it.
                 break (e.confirmation_diagnostics_inputs(), crate::now_unix());
             }
             Err(TryLockError::Poisoned(_)) => return Err("applicationUnavailable"),
@@ -34,13 +35,18 @@ pub(super) fn read_engine(engine: &crate::SharedEngine) -> Result<Value, &'stati
             Err(TryLockError::WouldBlock) => return Err("applicationBusy"),
         }
     };
-    let log_count = inputs.log_len();
+    // Both read the logbook store, with the lock released: a count first, so a log past the
+    // bound is refused before one of its rows is read, then the diagnosis, with the number of
+    // contacts it diagnosed.
+    let log_count = inputs.log_len().map_err(|_| "applicationUnavailable")?;
     if log_count > LOG_ROWS {
         return Err("applicationTooLarge");
     }
-    let report = inputs.diagnose(now, |call| {
-        propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-    });
+    let (report, log_count) = inputs
+        .diagnose(now, |call| {
+            propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+        })
+        .map_err(|_| "applicationUnavailable")?;
     project(DiagnosticsReportDto::from(report), log_count)
 }
 
@@ -130,9 +136,12 @@ mod tests {
     }
     fn desktop(engine: &crate::SharedEngine) -> DiagnosticsReportDto {
         let e = engine.lock().unwrap();
-        DiagnosticsReportDto::from(e.confirmation_diagnostics(crate::now_unix(), |call| {
-            propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-        }))
+        DiagnosticsReportDto::from(
+            e.confirmation_diagnostics(crate::now_unix(), |call| {
+                propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
+            })
+            .expect("the test's log reads"),
+        )
     }
 
     #[test]

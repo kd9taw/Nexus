@@ -95,39 +95,30 @@ export function useLogAnswer<Q extends LogQuestion>(q: Q | null, logTick: number
 }
 
 /**
- * Several pages of one Logbook order at once — the pages the list's visible rows fall in, besides
- * the first (which the view asks through `useLogAnswer`, for its `total`). `offsets` are page
- * starts; the answer holds a page per offset the source has, and nothing for one on its way (the
- * view draws a placeholder row there).
- *
- * A page is only ever the answer to ITS question — the query is part of the key — so an answer to
- * an older sort or search can never land in this view (v2 R4). Pages cut at different revisions
- * are the view's to reconcile, by `orderRev` against its first page.
+ * Several questions at once, as ONE value: their answers in question order (`undefined` for one the
+ * source does not hold yet), the same array object until one of them changes — which
+ * `useSyncExternalStore` needs of whatever it is handed. Each question is wanted while it is asked;
+ * `reading` says whether the view follows the tick at all (a view with nothing to ask still does).
  */
-export function useLogPages(
-  query: LogQuery | null,
-  offsets: readonly number[],
-  limit: number,
+export function useLogAnswers(
+  questions: readonly LogQuestion[],
   logTick: number | undefined,
-): ReadonlyMap<number, LogPage> {
+  reading = questions.length > 0,
+): readonly unknown[] {
   const source = current
-  const questions: LogQuestion[] = query === null ? [] : offsets.map((offset) => ({ kind: 'page', query, offset, limit }))
   const key = questions.map(questionKey).join('\n')
-  const reading = query !== null
   const asked = useRef(questions)
   asked.current = questions
-  // The pages held for these questions, as ONE value that stays the same object until one of them
-  // changes — `useSyncExternalStore` needs that of whatever it is handed.
-  const held = useRef<{ key: string; pages: (LogPage | undefined)[] } | null>(null)
+  const held = useRef<{ key: string; answers: unknown[] } | null>(null)
   const read = useCallback(() => {
-    const pages = asked.current.map((q) => source.peek(q) as LogPage | undefined)
+    const answers = asked.current.map((q) => source.peek(q))
     const prev = held.current
-    if (prev && prev.key === key && prev.pages.every((p, i) => p === pages[i])) return prev.pages
-    held.current = { key, pages }
-    return pages
+    if (prev && prev.key === key && prev.answers.every((a, i) => a === answers[i])) return prev.answers
+    held.current = { key, answers }
+    return answers
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` identifies the questions the ref holds
   }, [source, key])
-  const pages = useSyncExternalStore(source.subscribe, read)
+  const answers = useSyncExternalStore(source.subscribe, read)
   useEffect(() => {
     if (reading) source.follow(logTick)
   }, [source, reading, logTick])
@@ -138,6 +129,27 @@ export function useLogPages(
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` identifies the questions the ref holds
   }, [source, key])
+  return answers
+}
+
+/**
+ * Several pages of one Logbook order at once — the pages the list's visible rows fall in, besides
+ * the first (which the view asks through `useLogAnswer`, for its `total`). `offsets` are page
+ * starts; the answer holds a page per offset the source has, and nothing for one on its way (the
+ * view draws a placeholder row there).
+ *
+ * A page is only ever the answer to ITS question — the query is part of the key — so an answer to
+ * an older sort or search can never land in this view (v2 R4). Pages cut at different revisions
+ * are the view's to reconcile, by `orderRev`.
+ */
+export function useLogPages(
+  query: LogQuery | null,
+  offsets: readonly number[],
+  limit: number,
+  logTick: number | undefined,
+): ReadonlyMap<number, LogPage> {
+  const questions: LogQuestion[] = query === null ? [] : offsets.map((offset) => ({ kind: 'page', query, offset, limit }))
+  const pages = useLogAnswers(questions, logTick, query !== null) as readonly (LogPage | undefined)[]
   const byOffset = new Map<number, LogPage>()
   pages.forEach((page, i) => {
     if (page) byOffset.set(offsets[i], page)
