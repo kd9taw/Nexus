@@ -202,6 +202,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A paper QSL card you mark as received now counts toward your awards straight away.** Ticking
+  the card in the Logbook recorded the card but not the confirmation that Awards, the Needed
+  board and the Journey count, so the new confirmation only appeared after Nexus was restarted.
+  It now counts the moment you tick it, and unticking a card ticked by mistake takes the credit
+  back just as quickly.
+
 - **Logging a Field Day contact no longer makes the radio wait for the disk.** Every Field Day
   contact rewrites the contest journal, and that write used to finish on the disk before the
   radio could go on — including when the FT sequencer logged a contact itself, in the middle of
