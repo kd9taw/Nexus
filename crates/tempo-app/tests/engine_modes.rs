@@ -2,6 +2,9 @@
 //! two engines over a virtual channel complete a ragchew QSO and a Field Day
 //! exchange, and the results surface in each engine's snapshot (the UI contract).
 
+// Reads the in-memory log's deprecated handles (SPEC-2's census ratchet); moves in C19.
+#![allow(deprecated)]
+
 use tempo_app::dto::Tier;
 use tempo_app::engine::Engine;
 use tempo_core::channel::{VirtualAir, ON_TIME_OFFSET};

@@ -797,6 +797,7 @@ pub mod io_fence;
 pub mod migrate;
 pub mod mirror;
 mod op;
+pub mod reader;
 mod records;
 pub mod sqlite;
 pub mod writer;
@@ -2164,25 +2165,38 @@ impl Logbook {
     /// UTC-day) — the just-logged QSO in the auto-push-at-log-time flow. `None` if no
     /// match (e.g. the QSO isn't in this log).
     fn newest_match_index(&self, pushed: &QsoRecord) -> Option<usize> {
-        let mc = crate::reconcile::mode_class(&pushed.mode);
-        let day = pushed.when_unix / 86_400;
         self.records
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, r)| {
-                r.call.eq_ignore_ascii_case(&pushed.call)
-                    && r.band.eq_ignore_ascii_case(&pushed.band)
-                    && crate::reconcile::mode_class(&r.mode) == mc
-                    && r.when_unix / 86_400 == day
-            })
+            .find(|(_, r)| same_push_key(r, pushed))
             .map(|(i, _)| i)
     }
 
-    /// Stamp a QRZ Logbook push outcome onto the newest matching QSO (the one just
-    /// pushed). Returns whether a record was stamped. Pure — call `save` to persist.
+    /// The row a connector stamp belongs on.
+    ///
+    /// ⛔ **A push of a row the log holds NAMES that row, by its id, and the stamp lands
+    /// there.** The key alone cannot say which of two contacts with one station on one band
+    /// and mode on one UTC day was pushed, and taking the newest put a catch-up push's stamp
+    /// on a later twin while the contact actually pushed stayed unsent forever.
+    ///
+    /// Only while the named row is still the contact that was pushed — the same key
+    /// [`Self::newest_match_index`] matches on: one corrected since holds a contact the
+    /// service never received, and one deleted since holds nothing, so either way nothing is
+    /// stamped, rather than a twin that happens to share the old key. A push that names no row
+    /// (from a page older than the ids) keeps the rule every push had: the newest match.
+    fn stamp_target(&self, pushed: &QsoRecord) -> Option<usize> {
+        let Some(id) = pushed.id else {
+            return self.newest_match_index(pushed);
+        };
+        let i = self.records.iter().position(|r| r.id == Some(id))?;
+        same_push_key(&self.records[i], pushed).then_some(i)
+    }
+
+    /// Stamp a QRZ Logbook push outcome onto the QSO that was pushed ([`Self::stamp_target`]).
+    /// Returns whether a record was stamped. Pure — call `save` to persist.
     pub fn stamp_qrz_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
-        match self.newest_match_index(pushed) {
+        match self.stamp_target(pushed) {
             Some(i) => {
                 Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
                     .upload
@@ -2193,10 +2207,11 @@ impl Logbook {
         }
     }
 
-    /// Stamp a ClubLog realtime push outcome onto the newest matching QSO. Returns
-    /// whether a record was stamped. Pure — call `save` to persist.
+    /// Stamp a ClubLog realtime push outcome onto the QSO that was pushed
+    /// ([`Self::stamp_target`]). Returns whether a record was stamped. Pure — call `save` to
+    /// persist.
     pub fn stamp_clublog_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
-        match self.newest_match_index(pushed) {
+        match self.stamp_target(pushed) {
             Some(i) => {
                 Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
                     .upload
@@ -2207,10 +2222,10 @@ impl Logbook {
         }
     }
 
-    /// Stamp an eQSL ADIF-upload outcome onto the newest matching QSO. Returns
-    /// whether a record was stamped. Pure — call `save` to persist.
+    /// Stamp an eQSL ADIF-upload outcome onto the QSO that was pushed ([`Self::stamp_target`]).
+    /// Returns whether a record was stamped. Pure — call `save` to persist.
     pub fn stamp_eqsl_upload(&mut self, pushed: &QsoRecord, status: UploadStatus) -> bool {
-        match self.newest_match_index(pushed) {
+        match self.stamp_target(pushed) {
             Some(i) => {
                 Arc::make_mut(&mut self.records.write_as(OpClass::Stamp)[i])
                     .upload
@@ -2513,6 +2528,16 @@ impl Logbook {
         }
         s
     }
+}
+
+/// Whether `r` is, by the key a connector stamp matches on, the contact `pushed` describes:
+/// the same call and band (ASCII case aside), the same mode class, the same UTC day. One
+/// predicate for the named push and the unnamed one, so the two cannot drift apart.
+fn same_push_key(r: &QsoRecord, pushed: &QsoRecord) -> bool {
+    r.call.eq_ignore_ascii_case(&pushed.call)
+        && r.band.eq_ignore_ascii_case(&pushed.band)
+        && crate::reconcile::mode_class(&r.mode) == crate::reconcile::mode_class(&pushed.mode)
+        && r.when_unix / 86_400 == pushed.when_unix / 86_400
 }
 
 /// ADIF file header (`<EOH>`-terminated) — `pub` so an upload payload can be built
@@ -4322,6 +4347,105 @@ mod tests {
             &book.read_token(),
             &replacement.read_token()
         ));
+    }
+
+    /// ⛔ A CONNECTOR STAMP LANDS ON THE CONTACT THAT WAS PUSHED, never on a newer twin.
+    ///
+    /// Two contacts with one station on one band and mode on one UTC day — a second QSO that
+    /// evening — share the key a stamp found its row by, and the stamp took the NEWEST. That is
+    /// the just-logged contact in a push made at log time, and the wrong one for every other
+    /// push: the catch-up sweep re-pushes the OLDER contact first, its stamp landed on the
+    /// newer, and the older stayed unsent, to be pushed again at every sweep while the newer
+    /// was marked sent before it ever went. A push of a row the log holds names that row by
+    /// id, and the stamp now lands exactly there — and only while the row is still the contact
+    /// that was pushed. A push that names no row (a page from an older station) keeps the rule
+    /// it had.
+    #[test]
+    fn a_stamp_lands_on_the_contact_that_was_pushed_not_on_a_newer_twin() {
+        type Stamp = fn(&mut Logbook, &QsoRecord, UploadStatus) -> bool;
+        type Stamped = fn(&QsoRecord) -> bool;
+        let services: [(&str, Stamp, Stamped); 3] = [
+            ("QRZ", Logbook::stamp_qrz_upload, |r| r.upload.qrz.is_some()),
+            ("ClubLog", Logbook::stamp_clublog_upload, |r| {
+                r.upload.clublog.is_some()
+            }),
+            ("eQSL", Logbook::stamp_eqsl_upload, |r| {
+                r.upload.eqsl.is_some()
+            }),
+        ];
+        let status = || UploadStatus {
+            outcome: UploadOutcome::Accepted,
+            when_unix: 1_788_100_000,
+            detail: None,
+        };
+        // 10:40 and 14:40 UTC on one day: one station, one band, one mode.
+        let twins = || {
+            let mut book = Logbook::new();
+            book.add(rec("W1TWIN", "20m", 1_788_000_000));
+            book.add(rec("W1TWIN", "20m", 1_788_000_000 + 4 * 3_600));
+            book
+        };
+        for (what, stamp, stamped) in services {
+            // The older twin, pushed first by a catch-up sweep, as the queue carries it.
+            let mut book = twins();
+            let pushed = book.records()[0].as_ref().clone();
+            assert!(
+                pushed.id.is_some(),
+                "premise: a row the log holds has an id"
+            );
+            assert!(
+                stamp(&mut book, &pushed, status()),
+                "{what}: a stamp was made"
+            );
+            assert!(
+                stamped(&book.records()[0]),
+                "{what}: the contact that was pushed carries the stamp"
+            );
+            assert!(
+                !stamped(&book.records()[1]),
+                "{what}: its twin, not pushed yet, does not"
+            );
+
+            // The pushed contact was corrected while the push was in flight: the service holds
+            // the old version, so neither the corrected row nor a twin with the old key is
+            // stamped. (The correction re-queues the contact, and that push stamps it.)
+            let mut book = twins();
+            let pushed = book.records()[0].as_ref().clone();
+            let mut corrected = pushed.clone();
+            corrected.call = "W1TWIM".into();
+            assert!(book.update_record(0, corrected));
+            assert!(
+                !stamp(&mut book, &pushed, status()),
+                "{what}: nothing stamped"
+            );
+            assert!(
+                !stamped(&book.records()[0]) && !stamped(&book.records()[1]),
+                "{what}: neither the corrected contact nor its old twin"
+            );
+
+            // The pushed contact was deleted: nothing is stamped in its place.
+            let mut book = twins();
+            let pushed = book.records()[0].as_ref().clone();
+            assert!(book.delete(0));
+            assert!(
+                !stamp(&mut book, &pushed, status()),
+                "{what}: nothing stamped"
+            );
+            assert!(!stamped(&book.records()[0]), "{what}: not the twin");
+
+            // A push that names no row keeps the rule it had: the newest matching contact.
+            let mut book = twins();
+            let mut anonymous = book.records()[0].as_ref().clone();
+            anonymous.id = None;
+            assert!(
+                stamp(&mut book, &anonymous, status()),
+                "{what}: a stamp was made"
+            );
+            assert!(
+                stamped(&book.records()[1]) && !stamped(&book.records()[0]),
+                "{what}: an unnamed push stamps the newest match, as before"
+            );
+        }
     }
 
     /// A snapshot is the log at one revision and stays exactly that: a later write copies the
@@ -10260,6 +10384,59 @@ mod watermark_tests {
         lb.add(rec_of("W1AW", "20m", 1_700_000_000));
         lb.add(rec_of("K5XYZ", "20m", 1_700_000_001));
         lb
+    }
+
+    /// ⛔ A LOG BUILT FROM A LIST OF RECORDS HOLDS ONE POINTER PER RECORD, AND NOTHING MORE.
+    ///
+    /// `Records::from` turns a `Vec<QsoRecord>` into a `Vec<Arc<QsoRecord>>`, and Rust's
+    /// in-place collection reuses the source buffer for the pointers — keeping the CAPACITY
+    /// of 840-byte records for 8-byte pointers. A lifetime log loaded from the store (a `Vec`
+    /// grown by doubling) then carried a dead buffer as big as every record's struct for the
+    /// whole session: measured 210 MiB at 150,000 contacts, 420 MiB at 500,000. Both loads
+    /// go through `Records::from`: the store's (`from_store`) and `log.adi`'s (`load`).
+    #[test]
+    fn a_log_built_from_records_holds_one_pointer_per_record_and_no_spare_buffer() {
+        // Grown by pushing, as `load_all` and the parser grow theirs: spare capacity.
+        let mut rows = Vec::new();
+        for i in 0..1_000u64 {
+            rows.push(rec_of(&format!("K{i}ABC"), "20m", 1_700_000_000 + i));
+        }
+        assert!(rows.capacity() > rows.len(), "premise: spare capacity");
+        let from_store = Logbook::from_store(rows);
+        assert_eq!(
+            from_store.records.capacity(),
+            from_store.records.len(),
+            "the store's load keeps a buffer of {} pointers for {} records",
+            from_store.records.capacity(),
+            from_store.records.len()
+        );
+
+        // A folder of this test's own: `load` also leaves its anchor and sweep marker beside
+        // the log, and all of it goes with the folder.
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-records-capacity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.adi");
+        let mut text = adif_header();
+        for r in from_store.records() {
+            text.push_str(&adif_record_own_log(r));
+        }
+        std::fs::write(&path, text).unwrap();
+        let loaded = Logbook::load(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(loaded.len(), 1_000, "premise: the file loaded");
+        assert_eq!(
+            loaded.records.capacity(),
+            loaded.records.len(),
+            "log.adi's load keeps a buffer of {} pointers for {} records",
+            loaded.records.capacity(),
+            loaded.records.len()
+        );
     }
 
     /// Everything a dupe check, a worked-before sweep or a contest dupe key reads — the row

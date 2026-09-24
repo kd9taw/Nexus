@@ -211,6 +211,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logging window confirms it, and quitting waits for the last write. The queue of held Tempo
   messages is written the same way.
 
+- **An upload to QRZ, ClubLog or eQSL is now marked on the contact that was actually sent.**
+  With two contacts with the same station on the same band, mode and day, sending the earlier
+  one — from the Logbook, or when an upload was retried, or when Nexus caught up on contacts a
+  service had missed — marked the later one as sent instead. The earlier contact was then sent
+  again at every catch-up, and the later one, marked as sent, was never sent at all. The mark
+  now goes on the contact that went, and a contact corrected or deleted while its upload was on
+  its way is not marked in its place.
+
+- **A big logbook now takes far less memory.** Loading the log kept a spare block of memory
+  beside it as large as all of its contacts put together, for as long as Nexus ran: about 220 MB
+  extra for a 150,000-contact log, and twice that at 500,000. It is now released as the log
+  loads.
+
+- **With a big logbook, the radio no longer waits while Nexus reads the whole log.** The Needed
+  board, a satellite pass's needs, a sked looked up by callsign, the log statistics, the
+  confirmation diagnostics on Awards, the pounce alert's refresh, and a Remote browser's Log and
+  Confirmations each went through every contact while holding the lock the radio needs every
+  20 ms: up to a sixth of a second at 150,000 contacts, and most of a second for the diagnostics
+  at 500,000. Each now takes a list of the contacts, which costs about a millisecond, lets go,
+  and does its work after. The Needed board, a satellite pass and the pounce alert also share one
+  picture of what is worked and needed instead of each rebuilding it on every refresh.
+
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
   1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
   lookup that turns a callsign into a country. The Needed board and the need chips beside the

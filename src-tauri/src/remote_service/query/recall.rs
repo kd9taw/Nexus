@@ -225,6 +225,7 @@ pub(super) fn read_engine(
 ) -> Result<Capture, &'static str> {
     read_chunks(engine, call, |_| {})
 }
+#[allow(deprecated)] // SPEC-2 C18: Remote from the store
 fn read_chunks(
     engine: &crate::SharedEngine,
     call: &str,

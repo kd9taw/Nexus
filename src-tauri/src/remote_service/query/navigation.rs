@@ -63,6 +63,7 @@ struct Context {
     log: Arc<()>,
 }
 impl Context {
+    #[allow(deprecated)] // SPEC-2 C18: Remote from the store
     fn read(engine: &crate::SharedEngine) -> Result<Self, &'static str> {
         let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
         let s = e.settings();
@@ -674,6 +675,7 @@ struct LogContext {
     zones: std::collections::BTreeSet<u8>,
     count: usize,
 }
+#[allow(deprecated)] // SPEC-2 C18: Remote from the store
 fn log_context(
     context: &Context,
     engine: &crate::SharedEngine,
@@ -824,6 +826,7 @@ mod tests {
             log: engine.log_read_token(),
         };
         let sources = Sources {
+            needs: Default::default(),
             spots: Default::default(),
             live_paths: Default::default(),
             region_paths: crate::SharedRegionPaths(Default::default()),

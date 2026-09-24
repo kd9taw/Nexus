@@ -4496,6 +4496,7 @@ impl Engine {
     }
 
     /// Construct from full [`Settings`].
+    #[allow(deprecated)] // SPEC-2 C19: the Engine is built around the in-memory log
     pub fn with_settings(settings: Settings) -> Self {
         // Passive launch (safety): never auto-transmit on startup. The CQ beacon
         // is a deliberate, per-session opt-in — even if a saved settings file has
@@ -10303,6 +10304,7 @@ impl Engine {
     /// default**, on only when the operator turned it on for this session, and only to
     /// the destinations that session names. Queued as `CatchUp`, because a weekend's
     /// contacts arriving at once are history, not news.
+    #[allow(deprecated)] // SPEC-2 C19: the contest merge checks the whole log first
     pub fn fd_merge_to_general(&mut self) -> Result<tempo_core::contest::MergeReport, String> {
         let Mode::FieldDay { station, .. } = &self.mode else {
             return Err("Field Day mode is not active".into());
@@ -11108,6 +11110,7 @@ impl Engine {
         self.log_qso_inner(rec, true)
     }
 
+    #[allow(deprecated)] // SPEC-2 C13: the duplicate guard and the worked index
     fn log_qso_inner(&mut self, mut rec: QsoRecord, sync: bool) -> LogWriteOutcome {
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
@@ -11476,6 +11479,7 @@ impl Engine {
     }
 
     /// Build the ADIF upload payload (header + the records at `indices`) for TQSL.
+    #[allow(deprecated)] // SPEC-2 C15: the LoTW batch
     pub fn lotw_upload_adif(&self, indices: &[usize]) -> String {
         let recs = self.station.logbook.records();
         let mut out = tempo_core::logbook::adif_header();
@@ -21121,6 +21125,7 @@ contact yourself."
     /// reloads its equivalents from disk. Encoding "CQ <call>" populates the
     /// same table through pack28→save_hash_call without transmitting anything,
     /// so compound stations you've worked resolve immediately on relaunch.
+    #[allow(deprecated)] // SPEC-2 C14: the newest compound calls, read from the store
     pub fn seed_hash_table(&self) {
         use tempo_core::message::is_compound;
         let mode = modes::make_mode(modes::ModeKind::Ft8);
@@ -21130,8 +21135,10 @@ contact yourself."
         // whole seed so it can't race an in-flight decode (may briefly wait if one
         // is running; seeding is a one-shot startup task).
         let _g = source_lock(&self.source);
-        // Newest first; cap the work — each encode is one FFI round-trip.
-        for rec in self.station.get_log().into_iter().rev() {
+        // Newest first; cap the work — each encode is one FFI round-trip. The rows are read
+        // where they are: this used to clone every record in the log (165 ms and 184 MiB at
+        // 150,000 contacts) to look at the newest few hundred calls.
+        for rec in self.station.logbook.records().iter().rev() {
             let call = rec.call.trim().to_uppercase();
             if !is_compound(&call) || !seen.insert(call.clone()) {
                 continue;
@@ -21980,6 +21987,7 @@ contact yourself."
     /// Shared by the log record and the snapshot's `QsoStatus.dxgrid` so the cockpit's DX Grid
     /// box and the logged GRIDSQUARE resolve identically — they diverged before, and the
     /// operator saw a blank grid on screen for a contact that logged correctly.
+    #[allow(deprecated)] // SPEC-2 C13: the partner's grid, from the hot index
     fn dx_grid_resolved(&self, dxcall: &str, dxgrid: Option<String>) -> Option<String> {
         // Which of the three this takes is also what the confirm popup needs to know later —
         // `GridSource::of` is the one predicate, so the hold's provenance cannot drift from
@@ -22494,6 +22502,7 @@ contact yourself."
     }
 
     /// Hand the log the position id its minted ids carry (see [`log_posid`]).
+    #[allow(deprecated)] // SPEC-2 C19: the minter outlives the in-memory log
     fn sync_log_posid(&mut self) {
         self.station.logbook.set_posid(log_posid(&self.settings));
     }
@@ -22542,6 +22551,13 @@ contact yourself."
         &self,
     ) -> Option<std::sync::Arc<tempo_core::logbook::writer::LogWriter>> {
         self.station.store.as_ref().map(|s| s.writer())
+    }
+
+    /// A read of the logbook store, taken under this lock and used after it is released — see
+    /// [`crate::logstore::StoreReads`]. It will see every change made to the log before this
+    /// call. `None` on the 1.13 path, where the log has no store.
+    pub fn log_store_reads(&self) -> Option<crate::logstore::StoreReads> {
+        self.station.store.as_ref().map(|s| s.reads())
     }
 
     /// The store's mirror of `log.adi`, as it stands.
@@ -22803,6 +22819,7 @@ contact yourself."
     /// because seqs are per position and restart at 1 — so `1` names a row in every log
     /// the operator has ever run, and last weekend's correction must not rewrite this
     /// weekend's first contact; and `correct_row` refuses a seq no row here carries.
+    #[allow(deprecated)] // SPEC-2 C16: an edit addressed by position
     pub fn update_qso(&mut self, index: usize, rec: QsoRecord) -> bool {
         if !self.station.update_qso(index, rec) {
             return false;
@@ -22956,6 +22973,12 @@ contact yourself."
     }
 
     /// Immutable log view for bounded read models. Does not sync, recover or write a file.
+    #[deprecated(
+        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
+                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
+                that moves it"
+    )]
+    #[allow(deprecated)] // SPEC-2 C19: deleted with the in-memory log
     pub fn log_records(&self) -> &[std::sync::Arc<QsoRecord>] {
         self.station.logbook.records()
     }
@@ -22963,28 +22986,47 @@ contact yourself."
     /// The log's revision and a copy of the pointers to its records, taken without cloning a
     /// record. See [`tempo_core::logbook::Logbook::snapshot`]: take it under the engine lock,
     /// then do the real work after releasing it.
+    #[deprecated(
+        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
+                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
+                that moves it"
+    )]
+    #[allow(deprecated)] // SPEC-2 C19: deleted with the in-memory log
     pub fn log_snapshot(&self) -> tempo_core::logbook::LogSnapshot {
         self.station.logbook.snapshot()
     }
 
     /// Retain across chunked reads to detect any intervening log mutation/replacement.
+    #[deprecated(
+        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
+                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
+                that moves it"
+    )]
+    #[allow(deprecated)] // SPEC-2 C19: deleted with the in-memory log
     pub fn log_read_token(&self) -> std::sync::Arc<()> {
         self.station.logbook.read_token()
     }
 
     /// The log's revision — the key a whole-log result is cached against. See
     /// [`tempo_core::logbook::Logbook::revision`].
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub fn log_revision(&self) -> u64 {
         self.station.logbook.revision()
     }
 
     /// Whether the log only grew since it stood at `revision`. See
     /// [`tempo_core::logbook::Logbook::appended_only_since`].
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub fn log_appended_only_since(&self, revision: u64) -> bool {
         self.station.logbook.appended_only_since(revision)
     }
 
     /// See [`StationCore::get_log`].
+    #[deprecated(
+        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
+                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
+                that moves it"
+    )]
     pub fn get_log(&self) -> Vec<QsoRecord> {
         self.station.get_log()
     }
@@ -22996,6 +23038,12 @@ contact yourself."
         resolve: impl Fn(&str) -> Option<String>,
     ) -> tempo_core::diagnostics::DiagnosticsReport {
         self.station.confirmation_diagnostics(now, resolve)
+    }
+
+    /// See [`StationCore::diagnostics_inputs`]: what the diagnosis reads, taken under this lock
+    /// and diagnosed after it is released.
+    pub fn confirmation_diagnostics_inputs(&self) -> crate::station::DiagnosticsInputs {
+        self.station.diagnostics_inputs()
     }
 
     /// See [`StationCore::lotw_unsent_indices`].

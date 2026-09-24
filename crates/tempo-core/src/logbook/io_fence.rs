@@ -38,7 +38,17 @@
 //! file, renames it over the log and syncs the folder ([`on_log_lane`]); a wait for a change
 //! to commit (`LogWriter::wait_durable`, which `LogAppendReceipt::sync` and the app's
 //! `Durability::wait` go through), an append receipt's sync, a wait for a database copy, the
-//! conversion of `log.adi`, and the store's open ([`off_engine_lock`]).
+//! conversion of `log.adi`, and the store's open ([`off_engine_lock`]). And SPEC-2's read path
+//! (C12): every read of the store through its reader (`LogReader::read`) and the wait for the
+//! store to hold every change made before a read (`LogWriter::wait_committed`), which the app's
+//! `StoreReads` runs in that order.
+//!
+//! **The same rule for passes over the whole log in memory** ([`whole_log_off_engine_lock`],
+//! also C12): the needs fold, the log statistics, the sked's grid lookup, the confirmation
+//! diagnosis and Remote's log window each take the log's pointers under the lock and make their
+//! pass after releasing it. The passes still made under the lock (the snapshot's worked sets and
+//! the other hot readers, the Needed board's scan for today's hunted parks) are C13's and C14's
+//! to move.
 //!
 //! **The small journals too:** the Field Day contest journal and the message queue's are
 //! written on their own thread (`crate::journal`), a log lane like the two above
@@ -149,6 +159,31 @@ pub fn off_engine_lock(op: &str) {
     let _ = op;
 }
 
+/// Assert that `work` — a pass over the whole log, in memory — runs with no Engine lock held on
+/// this thread. Debug builds only.
+///
+/// Not disk work, and the same rule for the same reason: the radio loop needs that lock every
+/// 20 ms, and a pass over a lifetime log takes tens to hundreds of milliseconds (a needs fold
+/// over 500,000 contacts, 225 ms). Take the log's rows under the lock — a copy of pointers,
+/// `Engine::log_snapshot` — release it, then do the work. SPEC-2 v3's C12 put every such pass a
+/// poll or a timer runs behind this assertion.
+#[inline]
+#[track_caller]
+pub fn whole_log_off_engine_lock(work: &str) {
+    #[cfg(debug_assertions)]
+    {
+        let held = engine_guards_held();
+        assert!(
+            held == 0,
+            "io_fence: {work} is a pass over the whole log and ran while this thread holds the \
+             Engine lock ({held} guard(s)). The radio loop needs that lock every 20 ms: take the \
+             log's rows under the lock (a copy of pointers), release it, then do the work."
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = work;
+}
+
 /// Assert that `op` runs on a log lane — the database writer's thread or the mirror's — and so
 /// with no Engine lock held either. Debug builds only.
 #[inline]
@@ -201,6 +236,25 @@ mod tests {
     fn off_engine_lock_fires_under_an_engine_guard() {
         let _held = EngineHeld::acquired();
         off_engine_lock("a test op");
+    }
+
+    /// The whole-log assertion's two directions: quiet with no guard, or after the guard drops…
+    #[test]
+    fn whole_log_off_engine_lock_is_quiet_with_no_guard_held() {
+        whole_log_off_engine_lock("a test pass");
+        let held = EngineHeld::acquired();
+        drop(held);
+        whole_log_off_engine_lock("a test pass after the guard dropped");
+    }
+
+    /// ★ POSITIVE CONTROL: …and a panic under a guard.
+    #[test]
+    #[should_panic(
+        expected = "io_fence: a test pass is a pass over the whole log and ran while this thread holds the Engine lock"
+    )]
+    fn whole_log_off_engine_lock_fires_under_an_engine_guard() {
+        let _held = EngineHeld::acquired();
+        whole_log_off_engine_lock("a test pass");
     }
 
     /// ★ POSITIVE CONTROL: work that belongs to a log lane, done anywhere else, is a panic —

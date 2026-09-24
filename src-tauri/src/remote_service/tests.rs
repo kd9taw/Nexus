@@ -313,6 +313,7 @@ fn cloud_runtime_probe() {
     let prop_cache: crate::PropCache = Default::default();
     let sstv_files = sstv::fixture::Gallery::new();
     let sources = query::Sources {
+        needs: Default::default(),
         spots: Default::default(),
         live_paths: Default::default(),
         region_paths: crate::SharedRegionPaths(Default::default()),
@@ -791,7 +792,13 @@ fn cloud_runtime_probe() {
             }
             drop(tx);
             let mut fired = Vec::new();
-            crate::pouncer::run(engine.clone(), rx, pounce_recent.clone(), |p| fired.push(p));
+            crate::pouncer::run(
+                engine.clone(),
+                Default::default(),
+                rx,
+                pounce_recent.clone(),
+                |p| fired.push(p),
+            );
             println!("REMOTE_TEST:{}", json!({ "fired": fired }));
             std::io::stdout().flush().unwrap();
             continue;
