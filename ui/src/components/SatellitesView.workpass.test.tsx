@@ -23,7 +23,7 @@
 //    the consent pair is engine-owned live state a settings payload cannot
 //    carry (round 3). The rail never flips a fail-safe default by itself.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SatellitesView } from './SatellitesView'
 import type { SatDetail, SatPass, SatTrackStatus, SatView } from '../types'
 
@@ -967,3 +967,20 @@ describe('a mapping that cannot carry the pass', () => {
 // (features/satPassAlert.ts, tested there): fired from a view-scoped poll it
 // only ever landed with this section open, and the operator may be anywhere
 // in the app at LOS.
+
+// CLOSED, THE ARM CONFIRM GIVES THE KEYBOARD BACK TO THE WORK BUTTON IT WAS ASKED FROM
+// (focusReturn.ts). It was left on the page itself.
+describe('the >14 d arm confirm gives the keyboard back', () => {
+  it('to the Work button, on Cancel — and nothing arms', async () => {
+    api.getSatDetail.mockImplementation(() => Promise.resolve({ ...linearDetail(), elementAgeDays: 20 }))
+    render(<SatellitesView />)
+    const work = (await workButtons())[0]
+    act(() => work.focus())
+    fireEvent.click(work)
+    const cancel = await screen.findByRole('button', { name: 'Cancel' })
+    fireEvent.click(cancel)
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(work))
+    expect(api.startSatTrack).not.toHaveBeenCalled()
+  })
+})

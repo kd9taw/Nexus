@@ -218,6 +218,15 @@ describe('the Logbook is a keyboard grid', () => {
     )
   })
 
+  it('a row opened in the detail view (double-click) has the keyboard again when the view closes', async () => {
+    await openAt(3)
+    fireEvent.doubleClick(rowAt(3)!)
+    await screen.findByRole('dialog', { name: new RegExp(callAt(3)) })
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(focusedIndex()).toBe(3))
+  })
+
   it('Escape on the grid closes the edit form', async () => {
     await openAt(2)
     fireEvent.click(screen.getByRole('button', { name: t('logbook.row.edit', { call: callAt(2) }) }))

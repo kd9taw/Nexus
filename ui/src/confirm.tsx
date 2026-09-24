@@ -32,6 +32,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { Dialog } from './components/ui/Dialog'
+import { focusedControl, giveBack, planReturn, type FocusReturn } from './focusReturn'
 
 export interface ConfirmOptions {
   /** The question, as a title. Say what will happen, not "Are you sure?". */
@@ -60,109 +61,12 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
     console.error('confirmDialog: no <ConfirmHost/> mounted — refusing the action')
     return Promise.resolve(false)
   }
-  const active = document.activeElement
-  const opener = active instanceof HTMLElement && active !== document.body ? active : null
+  // The control the question is asked from: the keyboard goes back to it when the question closes
+  // — and, should a yes remove it, to the one that takes its place (focusReturn.ts).
+  const opener = focusedControl()
   return new Promise<boolean>((resolve) => present?.({ ...opts, resolve, opener }))
 }
 
-// THE KEYBOARD GOES BACK TO THE CONTROL THAT ASKED — the standard pattern for a dialog, which this
-// one missed: it is opened by code, and Radix returns focus to a Radix trigger only, so every
-// question closed with the keyboard on the page itself. A keyboard or screen-reader operator then
-// had to find their place again from the top. And if a YES removes that control (a delete), the
-// keyboard goes to the same control in the item that takes its place — the next one, else the one
-// before — or to the list itself when no item is left. A control the yes only disables (Send while
-// sending) hands the keyboard to the group it sits in, never to another control: focus that lands
-// on a button is one Enter from pressing it, and a transmit control is not a place to be put.
-
-/** Where the keyboard goes back to, planned as the question closes, before its answer is acted on. */
-interface Return {
-  opener: HTMLElement
-  /** The same control on the other items of the opener's list, in order, the opener among them. */
-  peers: HTMLElement[]
-  /** The opener's ancestors, nearest first: the list to fall back on when no item is left. */
-  ancestors: HTMLElement[]
-  /** Did a yes close the question? Only a yes acts, so only a yes can take the opener away. */
-  yes: boolean
-}
-
-const kindOf = (el: Element) => `${el.tagName}.${[...el.classList].sort().join('.')}`
-
-function planReturn(opener: HTMLElement, yes: boolean): Return {
-  const kind = kindOf(opener)
-  const ancestors: HTMLElement[] = []
-  let peers: HTMLElement[] = []
-  for (let a = opener.parentElement; a && a !== document.body; a = a.parentElement) {
-    ancestors.push(a)
-    if (peers.length === 0) {
-      const same = [...a.querySelectorAll<HTMLElement>(opener.tagName)].filter((el) => kindOf(el) === kind)
-      if (same.length > 1) peers = same
-    }
-  }
-  return { opener, peers, ancestors, yes }
-}
-
-const usable = (el: HTMLElement) => el.isConnected && !el.matches(':disabled') && !el.closest('[inert]')
-
-/** Focus `el` without the browser panning every scroller above it (useRovingList's reason). */
-function tryFocus(el: HTMLElement): boolean {
-  if (!usable(el)) return false
-  el.focus({ preventScroll: true })
-  if (document.activeElement !== el) return false
-  el.scrollIntoView?.({ block: 'nearest' })
-  return true
-}
-
-/** The opener is gone, or cannot take the keyboard: the place that takes its place. */
-function handOn(plan: Return) {
-  if (!plan.opener.isConnected) {
-    const at = plan.peers.indexOf(plan.opener)
-    for (const el of [...plan.peers.slice(at + 1), ...plan.peers.slice(0, Math.max(0, at)).reverse()])
-      if (tryFocus(el)) return
-  }
-  for (const a of plan.ancestors) {
-    if (!a.isConnected) continue
-    // A place to be, not a stop: focusable for this moment only, as it was once the keyboard leaves.
-    const lent = !a.hasAttribute('tabindex')
-    if (lent) a.setAttribute('tabindex', '-1')
-    if (tryFocus(a)) {
-      if (lent) a.addEventListener('blur', () => a.removeAttribute('tabindex'), { once: true })
-      return
-    }
-    if (lent) a.removeAttribute('tabindex')
-  }
-}
-
-/** Once a yes has closed the question: should acting on it remove or disable the opener while it
- *  still has the keyboard, hand it on. Watches until the keyboard moves anywhere else, or 30 s. */
-function followAnswer(plan: Return) {
-  let done = false
-  const stop = () => {
-    done = true
-    watch.disconnect()
-    clearTimeout(timer)
-    document.removeEventListener('focusin', moved, true)
-  }
-  const check = () => {
-    if (done || usable(plan.opener)) return
-    const active = document.activeElement
-    if (active && active !== document.body && active !== plan.opener) return stop() // someone moved it on
-    stop()
-    handOn(plan)
-  }
-  const moved = (e: FocusEvent) => {
-    if (e.target !== plan.opener) stop()
-  }
-  const watch = new MutationObserver(check)
-  watch.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['disabled'] })
-  document.addEventListener('focusin', moved, true)
-  const timer = setTimeout(stop, 30_000)
-}
-
-function giveBack(plan: Return) {
-  if (tryFocus(plan.opener)) {
-    if (plan.yes) followAnswer(plan)
-  } else handOn(plan)
-}
 
 /** Mount ONCE, near the app root. */
 export function ConfirmHost() {
@@ -173,7 +77,7 @@ export function ConfirmHost() {
   // request that closure captured rather than the one on screen.
   const pending = useRef<Request | null>(null)
   /** Planned by `close`, carried out once the dialog has let go of the keyboard. */
-  const returning = useRef<Return | null>(null)
+  const returning = useRef<FocusReturn | null>(null)
 
   useEffect(() => {
     present = (next) => {
