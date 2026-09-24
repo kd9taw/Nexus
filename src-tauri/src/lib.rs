@@ -2253,8 +2253,17 @@ mod journal_tests {
             "the contact is on disk when it does"
         );
         let src = include_str!("lib.rs");
-        let persist = &src[src.find("\nfn persist_journals(").expect("defined")..];
-        let persist = &persist[..persist.find("\n}\n").expect("its end")];
+        let body_of = |name: &str| {
+            let from = &src[src.find(name).expect("defined")..];
+            &from[..from.find("\n}\n").expect("its end")]
+        };
+        // The exit path reaches the journals through `persist_other_journals` (which the Windows
+        // update path calls too, after its own last word on the log).
+        assert!(
+            body_of("\nfn persist_journals(").contains("persist_other_journals("),
+            "the exit path writes the other journals"
+        );
+        let persist = body_of("\nfn persist_other_journals(");
         let flush = persist
             .find("persist_field_day_log(")
             .expect("the last flush");
