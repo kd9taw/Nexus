@@ -4454,6 +4454,12 @@ struct TxGateStamp {
     lsb: bool,
     tx_offset_hz: f32,
     operating_mode: crate::settings::OperatingMode,
+    /// The licence class the gate judged the over under. It was missing, and the first-run
+    /// wizard and Settings change it through `set_license_class`, which advances nothing — so
+    /// an over planned as an Extra could key after the station became a General. A changed
+    /// class now cancels the planned over and the next one is judged under the new class;
+    /// re-stating the same class cancels nothing.
+    license_class: crate::settings::LicenseClass,
     generation: u64,
 }
 
@@ -18406,6 +18412,7 @@ contact yourself."
             lsb: self.settings.sideband.eq_ignore_ascii_case("LSB"),
             tx_offset_hz: self.tx_offset_hz,
             operating_mode: self.settings.operating_mode,
+            license_class: self.settings.license_class,
             generation: self.tx_gate_gen,
         }
     }
@@ -18415,10 +18422,11 @@ contact yourself."
     /// sits at the dial + the TX audio offset (≈+1.5 kHz on USB), so a dial just below a
     /// higher-class-only edge can still emit inside it; on an FM channel the transmitter is
     /// moved bodily by the repeater shift, which on 70 cm is 5 MHz; in Phone the passband, and
-    /// in Digital the side of the dial the data carrier sits on, are judged in the mode the
-    /// transmitting VFO is actually commanded — the cockpit's pick and a satellite uplink's own
-    /// word included ([`Self::emission_in_use_allowed`]). Every TX path ANDs this in; the
-    /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
+    /// in Digital, Keyboard and RTTY the side of the dial the soundcard signal sits on, are
+    /// judged in the mode the transmitting VFO is actually commanded — the cockpit's pick and a
+    /// satellite uplink's own word included ([`Self::emission_in_use_allowed`]). Every TX path
+    /// ANDs this in; the snapshot exposes it so the cockpit can show a lockout indicator. See
+    /// `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
         // The rig says split and we cannot say where it transmits — refuse rather than judge
         // the dial, which under split is an unrelated number.
@@ -18596,6 +18604,12 @@ contact yourself."
     /// ever refusing more than before; dropping the convention term for a pick is a separate
     /// decision, not a defect. Digital pays the same cost: a data uplink whose commanded side is
     /// legal stays refused where its stored side is not.
+    ///
+    /// ⭐ AND IN KEYBOARD AND RTTY, the other two sections that key a soundcard signal beside the
+    /// dial ([`Self::keyboard_emission_allowed`], [`Self::rtty_emission_allowed`]). PSK31's old
+    /// model put it above the dial always, RTTY's on the side the rig reports or the dial is
+    /// commanded; an inverting bird mirrors the uplink's data submode for both, so each went
+    /// out on the side its model did not judge.
     fn emission_in_use_allowed(&self, mhz: f64) -> bool {
         let om = self.settings.operating_mode;
         self.emission_allowed(om, mhz, &self.settings.sideband)
@@ -18603,6 +18617,10 @@ contact yourself."
                 || self.phone_emission_allowed(mhz, &self.tx_mode_effective()))
             && (om != crate::settings::OperatingMode::Digital
                 || self.digital_emission_allowed(mhz, &self.tx_mode_effective()))
+            && (om != crate::settings::OperatingMode::Keyboard
+                || self.keyboard_emission_allowed(mhz, &self.tx_mode_effective()))
+            && (om != crate::settings::OperatingMode::Rtty
+                || self.rtty_emission_allowed(mhz, &self.tx_mode_effective()))
     }
 
     /// The mode word the TRANSMITTING VFO is commanded into — each VFO read from the one place
@@ -18620,7 +18638,7 @@ contact yourself."
     /// May the operator's class key `om`'s EMISSION with the dial at `dial` (`sideband`
     /// only matters for Digital, whose audio offset is sideband-signed)? THE one
     /// emission-passband model: [`Engine::tx_allowed`] judges the live dial through it (and, in
-    /// Phone and Digital, the mode actually commanded on top —
+    /// Phone, Digital, Keyboard and RTTY, the mode actually commanded on top —
     /// [`Self::emission_in_use_allowed`]), and the per-(band, mode) dial memory re-runs it at
     /// restore time — the license class can change mid-session, so a remembered dial is
     /// re-checked, never trusted.
@@ -18708,11 +18726,78 @@ contact yourself."
                 crate::settings::OperatingMode::Digital,
             )
         };
-        match word.trim().to_ascii_uppercase().as_str() {
-            "USB" | "PKTUSB" => allow(dial + off),
-            "LSB" | "PKTLSB" => allow(dial - off),
+        match Self::side_is_lsb(word) {
+            Some(false) => allow(dial + off),
+            Some(true) => allow(dial - off),
             // FM, PKTFM and any word this model does not know: no side to judge.
-            _ => true,
+            None => true,
+        }
+    }
+
+    /// May the operator's class key a KEYBOARD-mode (PSK31) emission from the transmit dial
+    /// `dial`, with the transmitting VFO commanded `word`? The narrow signal sits at the netted
+    /// PSK centre, on the side the WORD names — where [`Self::psk_emission_ok`] judges it above
+    /// the dial always, by the section's USB convention.
+    ///
+    /// A word that names no side adds nothing, so, like [`Self::digital_emission_allowed`], this
+    /// can only ever refuse more than the gate did before it knew the commanded word.
+    fn keyboard_emission_allowed(&self, dial: f64, word: &str) -> bool {
+        let off = self.psk_center_hz() as f64 / 1_000_000.0;
+        let allow = |f: f64| {
+            crate::privileges::tx_allowed(
+                self.settings.license_class,
+                f,
+                crate::settings::OperatingMode::Keyboard,
+            )
+        };
+        match Self::side_is_lsb(word) {
+            Some(false) => allow(dial + off),
+            Some(true) => allow(dial - off),
+            None => true,
+        }
+    }
+
+    /// May the operator's class key an RTTY emission from the transmit dial `dial`, with the
+    /// transmitting VFO commanded `word`? For AFSK the mark/space pair spans `mark` to
+    /// `mark + shift` from the dial on the side the WORD names — where
+    /// [`Self::rtty_emission_ok`] judges the side the rig REPORTS, or failing that the dial's own
+    /// word, and on a satellite pass neither is the uplink's: an inverting bird commands it on
+    /// the other side (`uplink_mode_for` mirrors PKTLSB ↔ PKTUSB). Both edges of the span must
+    /// be privileged, as there.
+    ///
+    /// True FSK keys the rig's own RTTY mode, whose span `rtty_emission_ok` already judges from
+    /// the dial, and `uplink_mode_for` never mirrors it; with a word that names no side it adds
+    /// nothing either. So this can only ever refuse more.
+    fn rtty_emission_allowed(&self, dial: f64, word: &str) -> bool {
+        if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
+            return true;
+        }
+        let shift = self.settings.rtty_shift_hz as f64 / 1_000_000.0;
+        let mark = self.rtty_tx_mark_hz() / 1_000_000.0;
+        let allow = |f: f64| {
+            crate::privileges::tx_allowed(
+                self.settings.license_class,
+                f,
+                crate::settings::OperatingMode::Rtty,
+            )
+        };
+        match Self::side_is_lsb(word) {
+            Some(false) => allow(dial + mark) && allow(dial + mark + shift),
+            Some(true) => allow(dial - mark - shift) && allow(dial - mark),
+            None => true,
+        }
+    }
+
+    /// Which side of the dial a soundcard signal goes out on when the transmitting VFO is
+    /// commanded `word`: `Some(true)` below it (`LSB`, `PKTLSB`), `Some(false)` above it (`USB`,
+    /// `PKTUSB`), `None` for a word that names no side — FM, `PKTFM`, the rig's own CW or RTTY
+    /// mode, or one this does not know. THE one reading the data in-use terms and the logged
+    /// transmit leg share, so they cannot disagree about what a word means.
+    fn side_is_lsb(word: &str) -> Option<bool> {
+        match word.trim().to_ascii_uppercase().as_str() {
+            "LSB" | "PKTLSB" => Some(true),
+            "USB" | "PKTUSB" => Some(false),
+            _ => None,
         }
     }
 
@@ -21970,11 +22055,18 @@ contact yourself."
     /// cross-band split — a cross-band repeater, some EME setups — is excluded for the same
     /// reason and by the same rule. An off-table dial (no band answer at all) is treated as
     /// cross-band: absent is not a match.
+    ///
+    /// ⭐ THE TRANSMIT LEG OF A SAME-BAND PASS IS SIGNED BY ITS OWN VFO'S WORD. The stored
+    /// sideband is the dial's, and an inverting bird commands its uplink on the other side
+    /// (`uplink_mode_for` mirrors the data submode), so a V/V pass logged FT8's uplink carrier
+    /// one offset above the uplink while it went out one offset below — 3 kHz off at 1500 Hz.
+    /// Only the satellite's own uplink split is read this way ([`Self::sat_tx_mode_for_split`]);
+    /// every other split keeps the dial's side, as before.
     fn log_frequencies(&self) -> (f64, Option<f64>) {
         let off_mhz = self.tx_offset_hz as f64 / 1e6;
         let lsb = self.settings.sideband.eq_ignore_ascii_case("LSB");
-        let on_air = |dial: f64| if lsb { dial - off_mhz } else { dial + off_mhz };
-        let rx = on_air(self.settings.dial_mhz);
+        let on_air = |dial: f64, lsb: bool| if lsb { dial - off_mhz } else { dial + off_mhz };
+        let rx = on_air(self.settings.dial_mhz, lsb);
         let Some(tx_dial) = self.split_tx_mhz else {
             return (rx, None); // simplex: one frequency, and no second field claiming two
         };
@@ -21988,7 +22080,12 @@ contact yourself."
         if !same_band {
             return (rx, None);
         }
-        (on_air(tx_dial), Some(rx))
+        let tx_lsb = self
+            .sat_tx_mode_for_split((tx_dial * 1e6).round() as u64)
+            .as_deref()
+            .and_then(Self::side_is_lsb)
+            .unwrap_or(lsb);
+        (on_air(tx_dial, tx_lsb), Some(rx))
     }
 
     fn qso_record(
@@ -51000,6 +51097,11 @@ mod phone_pick_licence_tests {
 /// ABOVE: on the Sub band of a cross-band pass, and on Main's VFO B for a same-band one. No real
 /// bird uplinks within an offset of a segment edge, so the fixtures are constructed, and the rule
 /// is pinned by sweeps over every data edge rather than by a list of birds.
+///
+/// The other two soundcard sections carry the same rule and are judged the same way: Keyboard
+/// (PSK31), whose old model put the signal above the dial always, and RTTY, whose old model took
+/// the side the rig reports or the dial is commanded. And the log's transmit leg of a same-band
+/// pass is written on the side its VFO is commanded, for the same reason.
 #[cfg(test)]
 mod digital_side_licence_tests {
     use super::*;
@@ -51028,6 +51130,11 @@ mod digital_side_licence_tests {
     /// `class` privileges, in the Digital section — before any pass is picked. The section comes
     /// first because a section change releases a satellite's hold on the rig mode.
     fn ic9700_in_digital(class: LicenseClass) -> Engine {
+        ic9700_in("digital", class)
+    }
+
+    /// [`ic9700_in_digital`] in any `section`.
+    fn ic9700_in(section: &str, class: LicenseClass) -> Engine {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.settings.ensure_radio_profiles();
         e.settings.rig_model = 3081; // IC-9700
@@ -51040,7 +51147,7 @@ mod digital_side_licence_tests {
             e.settings.confirm_sat_uplink(id, SatVfoMap::MainDownSubUp);
         }
         e.settings.license_class = class;
-        e.set_operating_mode("digital", false);
+        e.set_operating_mode(section, false);
         e
     }
 
@@ -51250,8 +51357,10 @@ mod digital_side_licence_tests {
     struct Verdict {
         /// `tx_allowed()`, the gate under test.
         got: bool,
-        /// TODAY'S MODEL, written out independently: the carrier one offset from the transmit
-        /// dial on the STORED sideband's side — below it for `LSB`, above it for anything else.
+        /// TODAY'S MODEL, written out independently: the verdict before the commanded word was
+        /// known. In Digital, the carrier one offset from the transmit dial on the STORED
+        /// sideband's side — below it for `LSB`, above it for anything else; Keyboard and RTTY
+        /// carry their own ([`Soundcard::old`]).
         stored: bool,
         /// The carrier on the side the transmit VFO's commanded word names; `None` for a word
         /// that names no side (FM).
@@ -51476,6 +51585,686 @@ mod digital_side_licence_tests {
              {refused_by_the_commanded_side} refused by the commanded side, {allowed} allowed \
              of {}",
             v.len()
+        );
+    }
+
+    // ── Keyboard (PSK31) and RTTY ────────────────────────────────────────────────────────────
+
+    /// The two other sections that key a soundcard signal beside the dial, each with the model
+    /// its gate judged by before it knew the commanded word, worked out here from the privilege
+    /// table alone.
+    #[derive(Clone, Copy, Debug)]
+    enum Soundcard {
+        /// PSK31: one narrow signal at the netted centre; the old model put it ABOVE the dial
+        /// always, by the section's USB convention.
+        Psk,
+        /// RTTY by AFSK: the mark/space pair from `mark` to `mark + shift` off the dial; the old
+        /// model took the side the rig reports or, failing that, the dial's own word, and both
+        /// sides when that word names none.
+        RttyAfsk,
+        /// RTTY by true FSK: the rig's own RTTY mode, mark at the dial, space one shift below.
+        RttyFsk,
+    }
+
+    impl Soundcard {
+        const ALL: [Soundcard; 3] = [Soundcard::Psk, Soundcard::RttyAfsk, Soundcard::RttyFsk];
+
+        fn section(self) -> &'static str {
+            match self {
+                Soundcard::Psk => "keyboard",
+                Soundcard::RttyAfsk | Soundcard::RttyFsk => "rtty",
+            }
+        }
+
+        fn mode(self) -> OperatingMode {
+            match self {
+                Soundcard::Psk => OperatingMode::Keyboard,
+                Soundcard::RttyAfsk | Soundcard::RttyFsk => OperatingMode::Rtty,
+            }
+        }
+
+        /// The audio centres swept (Hz): low, the section's own default, and high.
+        fn centres(self) -> [f32; 3] {
+            match self {
+                Soundcard::Psk => [500.0, 1_000.0, 2_500.0],
+                Soundcard::RttyAfsk | Soundcard::RttyFsk => [800.0, 2_210.0, 3_000.0],
+            }
+        }
+
+        /// Keying through this backend, in this section, on `e`.
+        fn set_backend(self, e: &mut Engine) {
+            match self {
+                Soundcard::Psk => {}
+                Soundcard::RttyAfsk => e.settings.rtty_backend = "afsk".into(),
+                Soundcard::RttyFsk => e.settings.rtty_backend = "fsk".into(),
+            }
+        }
+
+        /// An IC-9700 in this section with `class` privileges, keying through this backend.
+        fn station(self, class: LicenseClass) -> Engine {
+            let mut e = ic9700_in(self.section(), class);
+            self.set_backend(&mut e);
+            e
+        }
+
+        /// Net this section's decoder, and with it the transmitter, onto `centre_hz`.
+        fn net(self, e: &mut Engine, centre_hz: f32) {
+            match self {
+                Soundcard::Psk => e.psk_net(centre_hz),
+                Soundcard::RttyAfsk | Soundcard::RttyFsk => e.rtty_net(centre_hz),
+            }
+        }
+
+        /// The centre `e` holds — read back so a sweep's centre axis is shown to be real.
+        fn centre(self, e: &Engine) -> f32 {
+            match self {
+                Soundcard::Psk => e.psk_center_hz(),
+                Soundcard::RttyAfsk | Soundcard::RttyFsk => e.rtty_center_hz(),
+            }
+        }
+
+        /// The words a pass of `down` class commands the DIAL and the TRANSMIT VFO in, inverting
+        /// or not, data as plain SSB or not. Keyboard takes its side from the bird, RTTY-AFSK is
+        /// LSB-side on any bird, FSK keeps the rig's own RTTY mode, and an inverting bird mirrors
+        /// only a word that names a side.
+        fn words(
+            self,
+            down: DownlinkClass,
+            invert: bool,
+            plain: bool,
+        ) -> (&'static str, &'static str) {
+            if down == DownlinkClass::Fm {
+                return ("FM", "FM");
+            }
+            let dial_lsb = match self {
+                Soundcard::Psk => down == DownlinkClass::Lsb,
+                Soundcard::RttyAfsk => true,
+                Soundcard::RttyFsk => return ("RTTY", "RTTY"),
+            };
+            let word = |lsb: bool| match (lsb, plain) {
+                (true, false) => "PKTLSB",
+                (false, false) => "PKTUSB",
+                (true, true) => "LSB",
+                (false, true) => "USB",
+            };
+            (word(dial_lsb), word(dial_lsb != invert))
+        }
+
+        /// May `class` key this section's signal from transmit dial `tx` (MHz) on the side `lsb`
+        /// names? PSK31 one point at the centre; AFSK both edges of the mark/space span.
+        fn side_ok(self, e: &Engine, class: LicenseClass, tx: f64, lsb: bool) -> bool {
+            let allow = |f: f64| crate::privileges::tx_allowed(class, f, self.mode());
+            match self {
+                Soundcard::Psk => {
+                    let c = f64::from(e.psk_center_hz()) / 1e6;
+                    allow(if lsb { tx - c } else { tx + c })
+                }
+                Soundcard::RttyAfsk | Soundcard::RttyFsk => {
+                    let mark = e.rtty_tx_mark_hz() / 1e6;
+                    let shift = f64::from(e.settings.rtty_shift_hz) / 1e6;
+                    if lsb {
+                        allow(tx - mark - shift) && allow(tx - mark)
+                    } else {
+                        allow(tx + mark) && allow(tx + mark + shift)
+                    }
+                }
+            }
+        }
+
+        /// TODAY'S MODEL at transmit dial `tx`, with the dial commanded `dial_word` and the rig
+        /// reporting nothing.
+        fn old(self, e: &Engine, class: LicenseClass, tx: f64, dial_word: &str) -> bool {
+            match self {
+                Soundcard::Psk => self.side_ok(e, class, tx, false),
+                Soundcard::RttyAfsk => match named_side(dial_word) {
+                    Some(lsb) => self.side_ok(e, class, tx, lsb),
+                    None => self.side_ok(e, class, tx, true) && self.side_ok(e, class, tx, false),
+                },
+                Soundcard::RttyFsk => {
+                    let shift = f64::from(e.settings.rtty_shift_hz) / 1e6;
+                    let allow = |f: f64| crate::privileges::tx_allowed(class, f, self.mode());
+                    allow(tx - shift) && allow(tx)
+                }
+            }
+        }
+
+        /// The verdict on the side the transmit VFO's word names; `None` for FSK, which keys the
+        /// rig's own RTTY mode, and for a word that names no side.
+        fn commanded(
+            self,
+            e: &Engine,
+            class: LicenseClass,
+            tx: f64,
+            tx_word: &str,
+        ) -> Option<bool> {
+            match self {
+                Soundcard::RttyFsk => None,
+                Soundcard::Psk | Soundcard::RttyAfsk => {
+                    named_side(tx_word).map(|lsb| self.side_ok(e, class, tx, lsb))
+                }
+            }
+        }
+    }
+
+    /// ⭐ PSK31 UP AN INVERTING BIRD. Keyboard's uplink is commanded PKTLSB, the mirror of the
+    /// PKTUSB the dial listens in, so the 1000 Hz signal on a 144.1005 uplink goes out at
+    /// 144.0995, inside 2 m's CW-only segment, where the old model judged it above, at 144.1015.
+    /// On the Sub band of a cross-band pass and on Main's VFO B for a same-band one alike. The
+    /// control, the same bird not inverting, stays keyable: the refusal is the side's.
+    #[test]
+    fn a_psk31_uplink_on_an_inverting_bird_is_judged_below_the_uplink() {
+        let (general, kb) = (LicenseClass::General, OperatingMode::Keyboard);
+        assert!(
+            crate::privileges::tx_allowed(general, 144.1015, kb),
+            "precondition: above the uplink is all-mode"
+        );
+        assert!(
+            !crate::privileges::tx_allowed(general, 144.0995, kb),
+            "precondition: below it is CW-only"
+        );
+        for (bird, vfo) in [(EDGE_BIRD, "Sub"), (VV_EDGE_BIRD, "VFOB")] {
+            let tp = Transponder {
+                uplink_centre_hz: 144_100_500,
+                ..bird
+            };
+            let mut e = Soundcard::Psk.station(general);
+            assert_eq!(
+                work_pass(&mut e, tp, DownlinkClass::Usb),
+                vfo,
+                "precondition: the uplink rides {vfo}"
+            );
+            assert_eq!(e.rig_mode_effective(), "PKTUSB", "precondition: the dial");
+            assert_eq!(e.tx_mode_effective(), "PKTLSB", "precondition: the uplink");
+            assert_eq!(
+                e.psk_center_hz(),
+                1_000.0,
+                "precondition: the default centre"
+            );
+            assert!(
+                !e.tx_allowed(),
+                "PKTLSB on {vfo} at 144.1005 MHz puts PSK31 at 144.0995, where 2 m is CW-only"
+            );
+
+            let mut control = Soundcard::Psk.station(general);
+            work_pass(
+                &mut control,
+                Transponder {
+                    invert: false,
+                    ..tp
+                },
+                DownlinkClass::Usb,
+            );
+            assert_eq!(control.tx_mode_effective(), "PKTUSB", "control: {vfo}");
+            assert!(control.tx_allowed(), "control: PKTUSB on {vfo} is keyable");
+        }
+    }
+
+    /// ⭐ RTTY UP AN INVERTING BIRD. AFSK keys PKTLSB on the dial and the uplink is commanded its
+    /// mirror, PKTUSB, so the mark/space pair on a 147.9985 uplink goes out ABOVE it, at
+    /// 148.0006–148.0008, past the top of 2 m, where the old model judged it below, at
+    /// 147.9962–147.9964. Sub band and Main's VFO B alike; the same bird not inverting, its
+    /// uplink PKTLSB, stays keyable.
+    #[test]
+    fn an_rtty_uplink_on_an_inverting_bird_is_judged_above_the_uplink() {
+        let (general, rtty) = (LicenseClass::General, OperatingMode::Rtty);
+        for f in [147.996_205, 147.996_375] {
+            assert!(
+                crate::privileges::tx_allowed(general, f, rtty),
+                "precondition: {f} (below the uplink) is inside 2 m"
+            );
+        }
+        assert!(
+            !crate::privileges::tx_allowed(general, 148.000_625, rtty),
+            "precondition: above the uplink is past 148.000"
+        );
+        for (bird, vfo) in [(EDGE_BIRD, "Sub"), (VV_EDGE_BIRD, "VFOB")] {
+            let tp = Transponder {
+                uplink_centre_hz: 147_998_500,
+                ..bird
+            };
+            let mut e = Soundcard::RttyAfsk.station(general);
+            assert_eq!(
+                work_pass(&mut e, tp, DownlinkClass::Usb),
+                vfo,
+                "precondition: the uplink rides {vfo}"
+            );
+            assert_eq!(e.rig_mode_effective(), "PKTLSB", "precondition: the dial");
+            assert_eq!(e.tx_mode_effective(), "PKTUSB", "precondition: the uplink");
+            assert_eq!(
+                (e.rtty_tx_mark_hz(), e.settings.rtty_shift_hz),
+                (2_125.0, 170),
+                "precondition: the default 2125 Hz mark and 170 Hz shift"
+            );
+            assert!(
+                !e.tx_allowed(),
+                "PKTUSB on {vfo} at 147.9985 MHz puts the RTTY pair past the top of 2 m"
+            );
+
+            let mut control = Soundcard::RttyAfsk.station(general);
+            work_pass(
+                &mut control,
+                Transponder {
+                    invert: false,
+                    ..tp
+                },
+                DownlinkClass::Usb,
+            );
+            assert_eq!(control.tx_mode_effective(), "PKTLSB", "control: {vfo}");
+            assert!(control.tx_allowed(), "control: PKTLSB on {vfo} is keyable");
+        }
+    }
+
+    /// True FSK keys the rig's own RTTY mode, which an inverting bird does not mirror and whose
+    /// span the old model already judged from the dial: the same 147.9985 uplink stays keyable.
+    #[test]
+    fn an_fsk_uplink_is_judged_as_it_was() {
+        let mut e = Soundcard::RttyFsk.station(LicenseClass::General);
+        let tp = Transponder {
+            uplink_centre_hz: 147_998_500,
+            ..EDGE_BIRD
+        };
+        work_pass(&mut e, tp, DownlinkClass::Usb);
+        assert_eq!(e.tx_mode_effective(), "RTTY", "precondition: not mirrored");
+        assert!(
+            e.tx_allowed(),
+            "the FSK span 147.99833–147.99850 is inside 2 m"
+        );
+    }
+
+    /// ⚠️ THE ONE CHANGE AWAY FROM A PASS, and it only refuses more. RTTY's old model trusts the
+    /// side the RIG REPORTS; the commanded word is judged beside it now, so where the two
+    /// disagree both sides are checked. A General at 3.527 whose rig reports PKTUSB (set by hand
+    /// at the front panel) while Nexus commands PKTLSB: above the dial is inside 80 m's data
+    /// segment, below it crosses the 3.525 floor. The next retune can put the rig back on the
+    /// commanded side before it keys, so that side is judged too.
+    #[test]
+    fn rtty_judges_the_commanded_side_even_when_the_rig_reports_the_other() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.license_class = LicenseClass::General;
+        e.set_operating_mode("rtty", false);
+        Soundcard::RttyAfsk.set_backend(&mut e);
+        e.set_frequency(3.527, "80m", "LSB");
+        e.observe_rig_mode("PKTUSB".to_string());
+        assert_eq!(e.tx_mode_effective(), "PKTLSB", "precondition: commanded");
+        assert_eq!(
+            e.rtty_afsk_usb_side(),
+            Some(true),
+            "precondition: the old model reads the rig's PKTUSB"
+        );
+        let sc = Soundcard::RttyAfsk;
+        assert!(
+            sc.side_ok(&e, LicenseClass::General, 3.527, false),
+            "precondition: above the dial is legal"
+        );
+        assert!(
+            !sc.side_ok(&e, LicenseClass::General, 3.527, true),
+            "precondition: below it crosses 3.525"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "the commanded side crosses the 80 m data floor"
+        );
+    }
+
+    /// Keyboard and RTTY passes, built and checked the way [`pass_verdicts`] builds Digital's:
+    /// every uplink [`dials_around`] every [`DATA_EDGES`] edge, for every section, class, audio
+    /// centre and [`PASS_SHAPES`] shape, each state's two words and its centre checked before its
+    /// verdict is read.
+    fn soundcard_pass_verdicts() -> &'static [Verdict] {
+        static ROWS: std::sync::OnceLock<Vec<Verdict>> = std::sync::OnceLock::new();
+        ROWS.get_or_init(|| {
+            let mut out = Vec::new();
+            for sc in Soundcard::ALL {
+                for class in CLASSES {
+                    for centre in sc.centres() {
+                        for (down, invert, plain, _) in PASS_SHAPES {
+                            let (dial_word, tx_word) = sc.words(down, invert, plain);
+                            let mut e = sc.station(class);
+                            e.settings.data_modes_plain_ssb = plain;
+                            e.settings.sync_active_from_flat();
+                            for &edge in DATA_EDGES {
+                                let downlink_centre_hz = if (400.0..500.0).contains(&edge) {
+                                    145_950_000
+                                } else {
+                                    435_640_000
+                                };
+                                for up in dials_around(edge) {
+                                    let tp = Transponder {
+                                        uplink_centre_hz: up,
+                                        downlink_centre_hz,
+                                        invert,
+                                        half_width_hz: 30_000,
+                                    };
+                                    work_pass(&mut e, tp, down);
+                                    sc.net(&mut e, centre);
+                                    let tx = up as f64 / 1e6;
+                                    let case = format!(
+                                        "{sc:?} {class:?} up {tx:.4} centre {centre} {down:?} \
+                                         invert={invert} plain={plain} ({dial_word} down, \
+                                         {tx_word} up)"
+                                    );
+                                    assert_eq!(
+                                        e.tx_split_confirmed_hz,
+                                        Some(up),
+                                        "precondition, {case}: the acknowledged split"
+                                    );
+                                    assert_eq!(
+                                        e.rig_mode_effective(),
+                                        dial_word,
+                                        "precondition, {case}: the dial's word"
+                                    );
+                                    assert_eq!(
+                                        e.tx_mode_effective(),
+                                        tx_word,
+                                        "precondition, {case}: the transmit VFO's word"
+                                    );
+                                    assert_eq!(
+                                        sc.centre(&e),
+                                        centre,
+                                        "precondition, {case}: the centre"
+                                    );
+                                    out.push(Verdict {
+                                        got: e.tx_allowed(),
+                                        stored: sc.old(&e, class, tx, dial_word),
+                                        commanded: sc.commanded(&e, class, tx, tx_word),
+                                        case,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        })
+    }
+
+    /// Keyboard and RTTY away from a pass: every dial [`dials_around`] every [`DATA_EDGES`] edge,
+    /// for every section, class and audio centre, with the rig reporting nothing. The transmit
+    /// VFO is the dial's here, so the commanded word is the old model's own.
+    fn soundcard_terrestrial_verdicts() -> Vec<Verdict> {
+        let mut out = Vec::new();
+        for sc in Soundcard::ALL {
+            let (sideband, word) = match sc {
+                Soundcard::Psk => ("USB", "PKTUSB"),
+                Soundcard::RttyAfsk => ("LSB", "PKTLSB"),
+                Soundcard::RttyFsk => ("LSB", "RTTY"),
+            };
+            for class in CLASSES {
+                for centre in sc.centres() {
+                    let mut e = Engine::new("KD9TAW", "EN52", 0);
+                    e.settings.license_class = class;
+                    e.set_operating_mode(sc.section(), false);
+                    sc.set_backend(&mut e);
+                    for &edge in DATA_EDGES {
+                        for hz in dials_around(edge) {
+                            let dial = hz as f64 / 1e6;
+                            let band = crate::bandplan::band_for_dial(dial).unwrap_or("");
+                            e.set_frequency(dial, band, sideband);
+                            sc.net(&mut e, centre);
+                            let case = format!("{sc:?} {class:?} dial {dial:.4} centre {centre}");
+                            assert_eq!(
+                                e.tx_mode_effective(),
+                                word,
+                                "precondition, {case}: the dial's own word"
+                            );
+                            assert_eq!(sc.centre(&e), centre, "precondition, {case}: the centre");
+                            out.push(Verdict {
+                                got: e.tx_allowed(),
+                                stored: sc.old(&e, class, dial, word),
+                                commanded: sc.commanded(&e, class, dial, word),
+                                case,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Away from a pass Keyboard and RTTY are judged exactly as they were, at every data edge,
+    /// for every class and centre, while the rig reports nothing (for when it reports the other
+    /// side, see [`rtty_judges_the_commanded_side_even_when_the_rig_reports_the_other`]).
+    #[test]
+    fn away_from_a_pass_psk_and_rtty_are_judged_as_they_were() {
+        let v = soundcard_terrestrial_verdicts();
+        let (moved, first) = first_cases(v.iter().filter(|r| r.got != r.stored), 20);
+        assert_eq!(moved, 0, "verdicts moved away from a pass: {first:#?}");
+        let allowed = v.iter().filter(|r| r.stored).count();
+        assert!(
+            allowed > 1_000 && v.len() - allowed > 1_000,
+            "the sweep must straddle the edges: {allowed} allowed of {}",
+            v.len()
+        );
+    }
+
+    /// ⛔ THE INVARIANT FOR KEYBOARD AND RTTY: knowing the commanded side only ever refuses MORE,
+    /// on a pass and away from one, with the same two controls as Digital's: states an OR in
+    /// place of the AND would unlock, and states the fix refuses.
+    #[test]
+    fn psk_and_rtty_only_ever_refuse_more() {
+        let terrestrial = soundcard_terrestrial_verdicts();
+        let rows = || soundcard_pass_verdicts().iter().chain(terrestrial.iter());
+        let (unlocked, first) = first_cases(rows().filter(|r| r.got && !r.stored), 20);
+        assert_eq!(
+            unlocked, 0,
+            "allowed where the old model refused: {first:#?}"
+        );
+        let or_would_unlock = rows()
+            .filter(|r| !r.stored && r.commanded != Some(false))
+            .count();
+        let the_fix_refuses = rows()
+            .filter(|r| r.stored && r.commanded == Some(false))
+            .count();
+        assert!(
+            or_would_unlock > 100 && the_fix_refuses > 100,
+            "the sweep must hold both disagreements: {or_would_unlock} an OR would unlock, \
+             {the_fix_refuses} the commanded side refuses"
+        );
+    }
+
+    /// On a pass, every Keyboard and RTTY verdict is BOTH the old model AND the side the transmit
+    /// VFO is commanded, wherever its word names one — and each of PSK31 and AFSK reaches a state
+    /// where only the commanded side refuses.
+    #[test]
+    fn a_psk_or_rtty_pass_is_judged_on_both_sides_at_every_data_edge() {
+        let v = soundcard_pass_verdicts();
+        let (wrong, first) = first_cases(
+            v.iter()
+                .filter(|r| r.got != (r.stored && r.commanded.unwrap_or(true))),
+            20,
+        );
+        assert_eq!(
+            wrong,
+            0,
+            "{wrong} of {} verdicts are not both sides; the first: {first:#?}",
+            v.len()
+        );
+        for sc in ["Psk ", "RttyAfsk "] {
+            let reached = v
+                .iter()
+                .filter(|r| r.case.starts_with(sc) && r.stored && r.commanded == Some(false))
+                .count();
+            assert!(reached > 50, "{sc}must reach the fix: {reached}");
+        }
+        let allowed = v.iter().filter(|r| r.got).count();
+        assert!(
+            allowed > 1_000 && v.len() - allowed > 1_000,
+            "the sweep must straddle the edges: {allowed} allowed of {}",
+            v.len()
+        );
+    }
+
+    // ── The log ──────────────────────────────────────────────────────────────────────────────
+
+    /// A V/V pair that inverts: both legs on 2 m, so the log writes the transmit leg (`FREQ`)
+    /// and the receive leg (`FREQ_RX`) apart.
+    const VV_BIRD_INVERTING: Transponder = Transponder {
+        uplink_centre_hz: 145_900_000,
+        downlink_centre_hz: 145_950_000,
+        invert: true,
+        half_width_hz: 15_000,
+    };
+
+    /// ⭐ A SAME-BAND INVERTING PASS LOGS ITS UPLINK ON THE SIDE IT GOES OUT ON. The uplink VFO is
+    /// commanded PKTLSB, so FT8's carrier leaves one audio offset BELOW the 145.900 uplink, at
+    /// 145.8985; the log wrote one offset above, 145.9015 — 3 kHz off at the usual 1500 Hz. The
+    /// receive leg, on the dial's own PKTUSB, stays where it was.
+    #[test]
+    fn a_same_band_inverting_pass_logs_the_uplink_below_the_uplink() {
+        let mut e = ic9700_in_digital(LicenseClass::General);
+        assert_eq!(
+            work_pass(&mut e, VV_BIRD_INVERTING, DownlinkClass::Usb),
+            "VFOB",
+            "precondition: a same-band pass"
+        );
+        assert_eq!(e.tx_mode_effective(), "PKTLSB", "precondition: the uplink");
+        assert_eq!(e.settings.sideband, "USB", "precondition: the stored side");
+        assert_eq!(e.tx_offset_hz(), 1_500.0, "precondition: the usual offset");
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        assert!(
+            (rec.freq_mhz - 145.8985).abs() < 1e-9,
+            "FREQ is the uplink carrier, 145.8985 MHz: got {}",
+            rec.freq_mhz
+        );
+        let rx = rec.freq_rx_mhz.expect("a same-band pass is logged split");
+        assert!(
+            (rx - 145.9515).abs() < 1e-9,
+            "FREQ_RX is the downlink carrier, 145.9515 MHz: got {rx}"
+        );
+    }
+
+    /// …and nothing else the log writes moves: a same-band pass that does not invert, and a
+    /// terrestrial split, log their transmit leg above the dial as before, and a cross-band pass
+    /// logs no split at all.
+    #[test]
+    fn every_other_logged_frequency_is_written_as_it_was() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+
+        let mut e = ic9700_in_digital(LicenseClass::General);
+        let straight = Transponder {
+            invert: false,
+            ..VV_BIRD_INVERTING
+        };
+        work_pass(&mut e, straight, DownlinkClass::Usb);
+        assert_eq!(e.tx_mode_effective(), "PKTUSB", "precondition");
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        assert!(
+            close(rec.freq_mhz, 145.9015),
+            "not inverting: {}",
+            rec.freq_mhz
+        );
+        assert!(
+            rec.freq_rx_mhz.is_some_and(|rx| close(rx, 145.9515)),
+            "not inverting: {:?}",
+            rec.freq_rx_mhz
+        );
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_operating_mode("digital", false);
+        e.set_frequency(14.074, "20m", "USB");
+        e.request_split(Some(14.076));
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        assert!(
+            close(rec.freq_mhz, 14.0775),
+            "a 20 m split: {}",
+            rec.freq_mhz
+        );
+        assert!(
+            rec.freq_rx_mhz.is_some_and(|rx| close(rx, 14.0755)),
+            "a 20 m split: {:?}",
+            rec.freq_rx_mhz
+        );
+
+        let mut e = ic9700_in_digital(LicenseClass::General);
+        work_pass(&mut e, EDGE_BIRD, DownlinkClass::Usb);
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        assert!(
+            close(rec.freq_mhz, 435.6415),
+            "cross-band: {}",
+            rec.freq_mhz
+        );
+        assert_eq!(rec.freq_rx_mhz, None, "cross-band: no split");
+    }
+}
+
+/// A licence-class change cancels an over already planned, so the next one is judged under the
+/// new class.
+///
+/// The radio loop builds a planned over's waveform with the engine RELEASED, and away from a
+/// satellite pass `commit_tx` re-judges nothing: it compares the plan's `TxGateStamp` with the
+/// engine's. The class was not in the stamp, and the first-run wizard and Settings change it
+/// through `set_license_class`, which advances nothing, so an over planned as an Extra could key
+/// after the station became a General.
+#[cfg(test)]
+mod licence_class_change_tests {
+    use super::*;
+    use crate::settings::{LicenseClass, OperatingMode};
+
+    /// An armed FT8 CQ planned and built as an Extra at 14.005, whose data carrier (14.0065) is in
+    /// 20 m's Extra-only bottom: the plan and its waveform, as the radio loop holds them while
+    /// the engine is unlocked.
+    fn planned_over_as_extra() -> (Engine, TxPlan, Vec<f32>) {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_license_class("extra");
+        e.set_frequency(14.005, "20m", "USB");
+        e.set_tx_enabled(true);
+        e.start_cq(None).unwrap();
+        let plan = (0..4u64)
+            .find_map(|slot| e.plan_tx(slot))
+            .expect("an armed CQ as an Extra plans an over");
+        let wave = plan.waveform.build();
+        assert!(!wave.is_empty(), "precondition: the over built");
+        (e, plan, wave)
+    }
+
+    #[test]
+    fn a_class_change_cancels_the_over_already_planned() {
+        let data = OperatingMode::Digital;
+        assert!(
+            crate::privileges::tx_allowed(LicenseClass::Extra, 14.0065, data),
+            "precondition: an Extra may key 14.0065"
+        );
+        assert!(
+            !crate::privileges::tx_allowed(LicenseClass::General, 14.0065, data),
+            "precondition: a General may not"
+        );
+
+        let (mut e, plan, wave) = planned_over_as_extra();
+        assert!(
+            !e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "control: with nothing changed the planned over keys"
+        );
+
+        let (mut e, plan, wave) = planned_over_as_extra();
+        e.set_license_class("general");
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "an over planned as an Extra must not key after the station became a General"
+        );
+        let next = plan.slot + 1..plan.slot + 5;
+        assert!(
+            next.clone().all(|slot| e.plan_tx(slot).is_none()),
+            "the next over is judged as a General, and a General plans none at 14.0065"
+        );
+        e.set_license_class("extra");
+        assert!(
+            next.clone().any(|slot| e.plan_tx(slot).is_some()),
+            "control: back as an Extra the next over plans, so the refusal above was the class"
+        );
+    }
+
+    /// Re-stating the SAME class is not a change, and the planned over still keys: the stamp
+    /// compares the class, so nothing the operator did not change is cancelled.
+    #[test]
+    fn restating_the_same_class_cancels_nothing() {
+        let (mut e, plan, wave) = planned_over_as_extra();
+        e.set_license_class("extra");
+        assert!(
+            !e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "the class did not change"
         );
     }
 }

@@ -297,6 +297,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   🔒 TX locked if either is outside your privileges. Nothing that was locked before is
   unlocked, and away from a satellite pass nothing changes.
 
+- **The transmit lock now checks PSK31 and RTTY on the sideband the transmit VFO is set to.**
+  Up an inverting transponder the uplink goes out on the opposite sideband from the one you
+  listen on. So PSK31, which the lock always took to be above the dial, goes out below the
+  uplink frequency, and RTTY sent as audio tones goes out above it rather than below. As for
+  FT8, that is new in this release for most radios and was already so in 1.14.0 on a radio set
+  to **Data modes use plain SSB**, and within a couple of kHz of a band or segment edge the
+  signal could cross the edge with nothing locked. The lock now checks both sides and reads
+  🔒 TX locked if either is outside your privileges. In RTTY it also checks the side Nexus set
+  when your radio reports the other one, because Nexus can put the radio back on its own side
+  before the over. True FSK RTTY is unchanged, and nothing that was locked before is unlocked.
+
+- **Changing your licence class now cancels an FT over that is about to go out.** Nexus
+  prepares each over a moment before it keys it, and a class changed in the first-run wizard
+  or in Settings during that moment did not stop it, so the over went out under the old class.
+  It is now dropped, and the next over is checked under the new class. Picking the class you
+  already have cancels nothing.
+
+- **A same-band satellite pass through an inverting transponder now logs the frequency you
+  sent on.** When the uplink and downlink share a band, the log records both, and for FT8 and
+  the other data modes it put your uplink signal one audio offset above the uplink frequency.
+  The uplink goes out on the opposite sideband, below it, so the logged frequency was 3 kHz off
+  at the usual 1500 Hz. The received frequency and every other contact are logged as before.
+
 - **QO-100's narrowband transponder is now worked in SSB, not FM.** The satellite database
   labels every narrowband segment on QO-100 as FM up and FM down, the "SSB only" segments
   included, and Nexus believed it: picking one put both legs in FM, routed the pick by your FM
