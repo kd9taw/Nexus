@@ -320,6 +320,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The uplink goes out on the opposite sideband, below it, so the logged frequency was 3 kHz off
   at the usual 1500 Hz. The received frequency and every other contact are logged as before.
 
+- **RTTY contacts, and contest contacts in phone, CW and PSK31, are logged on the frequency your
+  signal was on.** A contact the RTTY auto-sequencer logged was given the dial plus the audio
+  offset FT8 uses instead of its mark, so its frequency was off by up to a few kHz, in every
+  version since 0.12.0. And in builds made after 1.14.0, which never reached a release, a
+  contest or Field Day contact was logged by that FT8 offset in every mode: phone at 14.250
+  went in as 14.2515, and CW at 14.030 as 14.0315. Each is now logged where its signal was:
+  phone and CW on the dial, CW on the soundcard keyer on its tone, RTTY on its mark and PSK31
+  on its centre. FT8 and the other data modes keep the dial plus their offset, as before. The
+  Cabrillo file you submit always had the right frequency and is unchanged. Contacts already
+  in your log keep the frequency they were given.
+
 - **QO-100's narrowband transponder is now worked in SSB, not FM.** The satellite database
   labels every narrowband segment on QO-100 as FM up and FM down, the "SSB only" segments
   included, and Nexus believed it: picking one put both legs in FM, routed the pick by your FM

@@ -22022,9 +22022,11 @@ contact yourself."
     /// The pair of frequencies a logged record carries: ADIF `FREQ` — the frequency we
     /// TRANSMITTED on — and `FREQ_RX`, the one we RECEIVED on, `None` unless they differ.
     ///
-    /// Both legs are the on-air RF: dial plus the TX audio offset, sideband-signed (USB adds,
-    /// LSB subtracts) exactly as WSJT-X logs it. The bare dial alone would log two stations at
-    /// different audio offsets as identical.
+    /// Both legs are the on-air RF: the dial plus the audio offset the section's signal sits at
+    /// ([`Self::logged_signal_offset`]) — FT's TX offset sideband-signed (USB adds, LSB
+    /// subtracts) exactly as WSJT-X logs it, PSK31's centre, RTTY's mark, and none for voice or
+    /// the rig's own CW. For FT the bare dial alone would log two stations at different audio
+    /// offsets as identical.
     ///
     /// Simplex is the normal case and returns `(freq, None)` — unchanged from before #163.
     /// With the rig split, `FREQ` moves onto the SPLIT TX dial, which is what ADIF means by
@@ -22063,8 +22065,7 @@ contact yourself."
     /// Only the satellite's own uplink split is read this way ([`Self::sat_tx_mode_for_split`]);
     /// every other split keeps the dial's side, as before.
     fn log_frequencies(&self) -> (f64, Option<f64>) {
-        let off_mhz = self.tx_offset_hz as f64 / 1e6;
-        let lsb = self.settings.sideband.eq_ignore_ascii_case("LSB");
+        let (off_mhz, lsb) = self.logged_signal_offset();
         let on_air = |dial: f64, lsb: bool| if lsb { dial - off_mhz } else { dial + off_mhz };
         let rx = on_air(self.settings.dial_mhz, lsb);
         let Some(tx_dial) = self.split_tx_mhz else {
@@ -22086,6 +22087,58 @@ contact yourself."
             .and_then(Self::side_is_lsb)
             .unwrap_or(lsb);
         (on_air(tx_dial, tx_lsb), Some(rx))
+    }
+
+    /// Where a keyed signal sits from its dial, as the log writes a contact: the audio offset
+    /// (MHz) and whether it sits BELOW the dial. `(0.0, false)` wherever the dial IS the
+    /// frequency. What [`Self::log_frequencies`] adds to each leg.
+    ///
+    /// ⭐ AN OFFSET ONLY WHERE THE SIGNAL REALLY SITS AT ONE. This was the FT TX audio offset in
+    /// every section, and contest and Field Day rows take their `FREQ` from it (since
+    /// `f29a1f8f`), so a phone contact at 14.250 USB logged 14.2515, at 7.250 LSB 7.2485, and CW
+    /// at 14.030 logged 14.0315; an auto-sequenced RTTY contact has logged the dial ± the FT
+    /// offset since 0.12.0. Cabrillo writes the dial and was always right.
+    fn logged_signal_offset(&self) -> (f64, bool) {
+        use crate::settings::OperatingMode;
+        match self.settings.operating_mode {
+            // FT and every other Digital mode: the TX audio offset, on the stored sideband's side
+            // — unchanged, and how WSJT-X logs dial + offset.
+            OperatingMode::Digital => (
+                self.tx_offset_hz as f64 / 1e6,
+                self.settings.sideband.eq_ignore_ascii_case("LSB"),
+            ),
+            // Voice: the dial is what a phone contact is logged on — the suppressed carrier of
+            // SSB, the carrier of AM and FM.
+            OperatingMode::Phone => (0.0, false),
+            // CW: the rig's own CW mode puts the carrier on the dial. The SOUNDCARD keyer keys a
+            // tone a pitch from it through a DATA submode — the same fact working a spot applies
+            // (`soundcard_cw_pitch_offset_mhz`, zero for every other keyer).
+            OperatingMode::Cw => {
+                let pitch = self.soundcard_cw_pitch_offset_mhz(self.settings.dial_mhz);
+                (pitch.abs(), pitch < 0.0)
+            }
+            // RTTY is logged at its MARK. True FSK's dial reads the mark; AFSK's mark tone sits
+            // `rtty_tx_mark_hz` from the dial on the side the rig reports or is commanded
+            // (`rtty_afsk_usb_side`), and on the LSB side, RTTY's convention, when neither says.
+            // So one signal logs one frequency whichever backend keys it — the one the band plan
+            // quotes (`rtty_channel_dial`).
+            OperatingMode::Rtty => {
+                if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
+                    (0.0, false)
+                } else {
+                    (
+                        self.rtty_tx_mark_hz() / 1e6,
+                        self.rtty_afsk_usb_side() != Some(true),
+                    )
+                }
+            }
+            // PSK31: the netted centre, on the side the dial is commanded — USB, the section's
+            // convention.
+            OperatingMode::Keyboard => (
+                self.psk_center_hz() as f64 / 1e6,
+                Self::side_is_lsb(&self.rig_mode_effective()).unwrap_or(false),
+            ),
+        }
     }
 
     fn qso_record(
@@ -52266,6 +52319,427 @@ mod licence_class_change_tests {
             !e.commit_tx(&plan, wave, plan.slot).is_empty(),
             "the class did not change"
         );
+    }
+}
+
+/// A contact is logged on the frequency its signal sat on: the dial, plus an audio offset only
+/// where the signal sits at one — FT's TX offset, PSK31's centre, RTTY-AFSK's mark tone, the
+/// soundcard CW keyer's pitch — and the bare dial for voice, the rig's own CW and true FSK,
+/// which is what loggers record for them.
+///
+/// `log_frequencies` added the FT audio offset in every section. Contest and Field Day rows have
+/// taken their `FREQ` from it since `f29a1f8f` (in no release), so a phone contact at 14.250 USB
+/// logged 14.2515, at 7.250 LSB 7.2485, and CW at 14.030 logged 14.0315; an auto-sequenced RTTY
+/// contact has logged the dial ± the FT offset since 0.12.0. Cabrillo writes the dial and was
+/// always right, which each case below also pins.
+#[cfg(test)]
+mod logged_frequency_tests {
+    use super::*;
+    use crate::settings::CwKeyerBackend;
+
+    /// A section and how it keys, where it is tuned, the class (and the submode behind a DIG
+    /// class) a Field Day entry logs it under, the word the rig is then commanded, and the
+    /// frequency its signal sits on.
+    struct Case {
+        name: &'static str,
+        section: &'static str,
+        setup: fn(&mut Engine),
+        dial: f64,
+        band: &'static str,
+        sideband: &'static str,
+        class: &'static str,
+        submode: Option<&'static str>,
+        word: &'static str,
+        on_air_hz: u64,
+    }
+
+    fn no_setup(_: &mut Engine) {}
+
+    fn soundcard_cw(e: &mut Engine) {
+        e.settings.cw_keyer = CwKeyerBackend::Soundcard;
+        e.settings.cw_pitch_hz = 600.0;
+    }
+
+    fn afsk(e: &mut Engine) {
+        e.settings.rtty_backend = "afsk".into();
+    }
+
+    fn fsk(e: &mut Engine) {
+        e.settings.rtty_backend = "fsk".into();
+    }
+
+    /// A Field Day station in `c`'s section, keying as `c.setup` says, tuned to `c`'s dial.
+    fn fd_station(c: &Case) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_operating_mode(c.section, false);
+        (c.setup)(&mut e);
+        e.set_frequency(c.dial, c.band, c.sideband);
+        e.set_mode("fieldday-run").unwrap();
+        assert_eq!(e.rig_mode_effective(), c.word, "precondition, {}", c.name);
+        e
+    }
+
+    /// Log one contact through the Field Day entry, as the cockpit does.
+    fn log_one(e: &mut Engine, c: &Case) {
+        let logged = match c.submode {
+            Some(sub) => e.fd_log_manual_submode("W1AW", "1D", "CT", c.class, sub),
+            None => e.fd_log_manual("W1AW", "1D", "CT", c.class),
+        }
+        .expect("in Field Day");
+        assert!(logged, "precondition, {}: the contact was logged", c.name);
+    }
+
+    /// The contest log's newest row.
+    fn last_row(e: &Engine) -> &tempo_core::fieldday::LoggedQso {
+        let Mode::FieldDay { station, .. } = &e.mode else {
+            panic!("in Field Day");
+        };
+        station.log.qsos().last().expect("a logged row")
+    }
+
+    /// The value of the first ADIF `FREQ` field in `adi` (never `FREQ_RX`).
+    fn adif_freq(adi: &str) -> Option<String> {
+        let rest = &adi[adi.find("<FREQ:")? + "<FREQ:".len()..];
+        let (len, rest) = rest.split_once('>')?;
+        rest.get(..len.parse::<usize>().ok()?).map(str::to_string)
+    }
+
+    /// Every place `c`'s contact is recorded with a frequency, and what each says, measured on
+    /// one station: the contest row (and the Cabrillo dial beside it), the Field Day journal,
+    /// and the general logbook's ADIF after the end-of-contest merge. Returns what disagrees
+    /// with `c`. Cabrillo's own QSO line has its test below.
+    fn wrong_records(c: &Case) -> Vec<String> {
+        let mut e = fd_station(c);
+        log_one(&mut e, c);
+        let want = format!("{:.6}", c.on_air_hz as f64 / 1e6);
+        let dial_khz = (c.dial * 1000.0).round() as u32;
+        let mut wrong = Vec::new();
+        let row = last_row(&e);
+        if row.on_air_hz != c.on_air_hz {
+            wrong.push(format!(
+                "{}: the contest row says {} Hz",
+                c.name, row.on_air_hz
+            ));
+        }
+        if row.freq_khz != dial_khz {
+            wrong.push(format!(
+                "{}: the Cabrillo dial moved to {}",
+                c.name, row.freq_khz
+            ));
+        }
+        let journal = e.export_log("adif").expect("the journal");
+        if adif_freq(&journal).as_deref() != Some(want.as_str()) {
+            wrong.push(format!(
+                "{}: the journal's FREQ is {:?}",
+                c.name,
+                adif_freq(&journal)
+            ));
+        }
+        let merged = e.fd_merge_to_general().expect("in Field Day");
+        let rec = merged.written.first().expect("the merge wrote the contact");
+        let general = tempo_core::logbook::adif_record(rec);
+        if adif_freq(&general).as_deref() != Some(want.as_str()) {
+            wrong.push(format!(
+                "{}: the general log's FREQ is {:?}",
+                c.name,
+                adif_freq(&general)
+            ));
+        }
+        wrong
+    }
+
+    fn assert_cases(cases: &[Case]) {
+        let wrong: Vec<String> = cases.iter().flat_map(wrong_records).collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// ⭐ PHONE: the dial, on either sideband.
+    #[test]
+    fn a_phone_contest_contact_is_logged_on_its_dial() {
+        assert_cases(&[
+            Case {
+                name: "phone, USB at 14.250",
+                section: "phone",
+                setup: no_setup,
+                dial: 14.250,
+                band: "20m",
+                sideband: "USB",
+                class: "PH",
+                submode: None,
+                word: "USB",
+                on_air_hz: 14_250_000,
+            },
+            Case {
+                name: "phone, LSB at 7.250",
+                section: "phone",
+                setup: no_setup,
+                dial: 7.250,
+                band: "40m",
+                sideband: "LSB",
+                class: "PH",
+                submode: None,
+                word: "LSB",
+                on_air_hz: 7_250_000,
+            },
+        ]);
+    }
+
+    /// A phone contact worked SPLIT logs the transmit dial as `FREQ` and the receive dial as
+    /// `FREQ_RX`, neither moved by an audio offset.
+    #[test]
+    fn a_split_phone_contest_contact_logs_both_dials() {
+        let c = Case {
+            name: "phone, USB at 14.250 working 14.255",
+            section: "phone",
+            setup: no_setup,
+            dial: 14.250,
+            band: "20m",
+            sideband: "USB",
+            class: "PH",
+            submode: None,
+            word: "USB",
+            on_air_hz: 14_255_000,
+        };
+        let mut e = fd_station(&c);
+        e.request_split(Some(14.255));
+        log_one(&mut e, &c);
+        let row = last_row(&e);
+        assert_eq!(row.on_air_hz, 14_255_000, "FREQ is the transmit dial");
+        assert_eq!(
+            row.freq_rx_hz,
+            Some(14_250_000),
+            "FREQ_RX is the receive dial"
+        );
+    }
+
+    /// ⭐ CW: the dial on the rig's own keyer (CAT, the default), and the tone on the soundcard
+    /// keyer — a 600 Hz pitch above the dial on 20 m, below it on 40 m, where
+    /// `soundcard_cw_pitch_offset_mhz` puts it for a spot.
+    #[test]
+    fn a_cw_contest_contact_is_logged_on_its_carrier() {
+        assert_cases(&[
+            Case {
+                name: "CW on the rig's own keyer at 14.030",
+                section: "cw",
+                setup: no_setup,
+                dial: 14.030,
+                band: "20m",
+                sideband: "USB",
+                class: "CW",
+                submode: None,
+                word: "CW",
+                on_air_hz: 14_030_000,
+            },
+            Case {
+                name: "CW on the soundcard keyer at 14.030",
+                section: "cw",
+                setup: soundcard_cw,
+                dial: 14.030,
+                band: "20m",
+                sideband: "USB",
+                class: "CW",
+                submode: None,
+                word: "PKTUSB",
+                on_air_hz: 14_030_600,
+            },
+            Case {
+                name: "CW on the soundcard keyer at 7.030",
+                section: "cw",
+                setup: soundcard_cw,
+                dial: 7.030,
+                band: "40m",
+                sideband: "LSB",
+                class: "CW",
+                submode: None,
+                word: "PKTLSB",
+                on_air_hz: 7_029_400,
+            },
+        ]);
+    }
+
+    /// ⭐ RTTY: the MARK — for true FSK the dial itself, for AFSK the 2125 Hz mark tone below an
+    /// LSB-side dial — so one signal logs one frequency whichever backend keys it. The last case
+    /// has a stored USB sideband under the LSB-side PKTLSB the rig is commanded: the side is
+    /// RTTY's own, never the stored one.
+    #[test]
+    fn an_rtty_contest_contact_is_logged_at_its_mark() {
+        assert_cases(&[
+            Case {
+                name: "RTTY by AFSK at 14.08225",
+                section: "rtty",
+                setup: afsk,
+                dial: 14.082_25,
+                band: "20m",
+                sideband: "LSB",
+                class: "DIG",
+                submode: Some("RTTY"),
+                word: "PKTLSB",
+                on_air_hz: 14_080_125,
+            },
+            Case {
+                name: "RTTY by FSK at 14.080",
+                section: "rtty",
+                setup: fsk,
+                dial: 14.080,
+                band: "20m",
+                sideband: "LSB",
+                class: "DIG",
+                submode: Some("RTTY"),
+                word: "RTTY",
+                on_air_hz: 14_080_000,
+            },
+            Case {
+                name: "RTTY by AFSK at 14.08225, the stored sideband USB",
+                section: "rtty",
+                setup: afsk,
+                dial: 14.082_25,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("RTTY"),
+                word: "PKTLSB",
+                on_air_hz: 14_080_125,
+            },
+        ]);
+    }
+
+    /// ⭐ PSK31: the 1000 Hz centre above the dial, on the side the rig is commanded, whatever
+    /// sideband is stored.
+    #[test]
+    fn a_psk31_contest_contact_is_logged_at_its_centre() {
+        assert_cases(&[
+            Case {
+                name: "PSK31 at 14.070",
+                section: "keyboard",
+                setup: no_setup,
+                dial: 14.070,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("PSK31"),
+                word: "PKTUSB",
+                on_air_hz: 14_071_000,
+            },
+            Case {
+                name: "PSK31 at 14.070, the stored sideband LSB",
+                section: "keyboard",
+                setup: no_setup,
+                dial: 14.070,
+                band: "20m",
+                sideband: "LSB",
+                class: "DIG",
+                submode: Some("PSK31"),
+                word: "PKTUSB",
+                on_air_hz: 14_071_000,
+            },
+        ]);
+    }
+
+    /// ⛔ THE CONTROL THAT MUST NOT MOVE: FT8 logs the dial plus its TX audio offset, on the
+    /// stored sideband's side, exactly as before — 14.0755 for 14.074 USB at 1500 Hz.
+    #[test]
+    fn an_ft8_contest_contact_is_logged_as_it_was() {
+        assert_cases(&[Case {
+            name: "FT8 at 14.074",
+            section: "digital",
+            setup: no_setup,
+            dial: 14.074,
+            band: "20m",
+            sideband: "USB",
+            class: "DIG",
+            submode: None,
+            word: "PKTUSB",
+            on_air_hz: 14_075_500,
+        }]);
+    }
+
+    /// Cabrillo's QSO lines, the date and time fields blanked — the minute a contact was logged
+    /// in is not what these tests compare.
+    fn cabrillo_qso_lines(e: &Engine) -> Vec<String> {
+        e.export_log("cabrillo")
+            .expect("a Cabrillo entry")
+            .lines()
+            .filter(|l| l.starts_with("QSO:"))
+            .map(|l| {
+                l.split_whitespace()
+                    .enumerate()
+                    .map(|(i, f)| if i == 3 || i == 4 { "-" } else { f })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    /// Cabrillo is written from the dial (for Field Day, the band) and never from the on-air
+    /// frequency the log records. Two FT8 stations differing ONLY in their TX audio offset:
+    /// their journals' `FREQ` differ — the control that the on-air value really moved — and
+    /// their Cabrillo does not.
+    #[test]
+    fn cabrillo_never_moves_with_the_on_air_frequency() {
+        let ft8_at = |offset_hz: f32| {
+            let c = Case {
+                name: "FT8 at 14.074",
+                section: "digital",
+                setup: no_setup,
+                dial: 14.074,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: None,
+                word: "PKTUSB",
+                on_air_hz: 0,
+            };
+            let mut e = fd_station(&c);
+            e.set_tx_offset(offset_hz);
+            log_one(&mut e, &c);
+            e
+        };
+        let (low, high) = (ft8_at(500.0), ft8_at(2_500.0));
+        let journal = |e: &Engine| adif_freq(&e.export_log("adif").expect("the journal"));
+        assert_ne!(
+            journal(&low),
+            journal(&high),
+            "control: the on-air frequency moved with the offset"
+        );
+        assert_eq!(
+            cabrillo_qso_lines(&low),
+            cabrillo_qso_lines(&high),
+            "Cabrillo moved with the on-air frequency"
+        );
+        assert_eq!(cabrillo_qso_lines(&low).len(), 1, "one QSO line each");
+    }
+
+    /// ⭐ AN AUTO-SEQUENCED RTTY CONTACT — the general-log record `rtty_qso_record` builds —
+    /// logs its mark, not the dial ± the FT offset it has used since 0.12.0.
+    #[test]
+    fn an_auto_sequenced_rtty_contact_is_logged_at_its_mark() {
+        let mut wrong = Vec::new();
+        for (backend, dial, want_hz) in [
+            ("afsk", 14.082_25, 14_080_125u64),
+            ("fsk", 14.080, 14_080_000),
+        ] {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            e.set_operating_mode("rtty", false);
+            e.settings.rtty_backend = backend.into();
+            e.set_frequency(dial, "20m", "LSB");
+            let rec = e.rtty_qso_record("K1ABC", &[("RST".into(), "599".into())]);
+            let want = format!("{:.6}", want_hz as f64 / 1e6);
+            let adi = tempo_core::logbook::adif_record(&rec);
+            if adif_freq(&adi).as_deref() != Some(want.as_str()) {
+                wrong.push(format!(
+                    "{backend}: FREQ {:?}, the mark is {want}",
+                    adif_freq(&adi)
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 }
 
