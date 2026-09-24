@@ -221,6 +221,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the log Awards took when it opened, so a contact logged since then answered "Could not find
   that QSO in the log". It now sends the contact the diagnosis names.
 
+- **An open comment in the Logbook no longer leaves a gap, or gets covered, when the log changes.**
+  With a contact's comment or note open, a contact logged or deleted above it left a blank gap
+  where the open row had been, or drew the rows below over its note, until those rows were drawn
+  again. The open row now keeps its height in its new place.
+
 - **A paper QSL card you mark as received now counts toward your awards straight away.** Ticking
   the card in the Logbook recorded the card but not the confirmation that Awards, the Needed
   board and the Journey count, so the new confirmation only appeared after Nexus was restarted.
