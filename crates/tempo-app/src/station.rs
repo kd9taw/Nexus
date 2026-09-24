@@ -63,6 +63,40 @@ pub struct LotwStamped {
     pub gone: usize,
 }
 
+/// What the confirmation diagnostics read ([`StationCore::diagnostics_inputs`]), held apart
+/// from the engine so the diagnosis — a pass over the whole log with a DXCC lookup per contact —
+/// runs with the engine lock released.
+#[derive(Debug, Clone)]
+pub struct DiagnosticsInputs {
+    records: Vec<Arc<QsoRecord>>,
+    recents: Vec<tempo_core::reconcile::ReconcileSummary>,
+}
+
+impl DiagnosticsInputs {
+    /// How many contacts the log held.
+    pub fn log_len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// The diagnosis, exactly as [`StationCore::confirmation_diagnostics`] has always made it.
+    pub fn diagnose(
+        &self,
+        now: i64,
+        resolve: impl Fn(&str) -> Option<String>,
+    ) -> tempo_core::diagnostics::DiagnosticsReport {
+        tempo_core::logbook::io_fence::whole_log_off_engine_lock("the confirmation diagnostics");
+        let entities: Vec<Option<String>> = self.records.iter().map(|r| resolve(&r.call)).collect();
+        let recents: Vec<&tempo_core::reconcile::ReconcileSummary> = self.recents.iter().collect();
+        tempo_core::diagnostics::diagnose(
+            &self.records,
+            &entities,
+            &recents,
+            now,
+            &tempo_core::diagnostics::DiagCfg::default(),
+        )
+    }
+}
+
 /// A LoTW batch's measure of "the contact that was signed": the row as the upload serialises
 /// it — [`tempo_core::logbook::adif_record`], the outbound form, so a private note the upload
 /// withholds is no part of it — hashed, WITHOUT its connector stamps: another connector on
@@ -200,6 +234,11 @@ pub struct StationCore {
     pub(crate) upload_ok: bool,
     pub(crate) upload_tick: u32,
     /// Persistent QSO logbook (worked-before / ADIF), loaded from `log_path`.
+    #[deprecated(
+        note = "SPEC-2 retires the in-memory log: read the store (LogReader, StoreReads) off \
+                the Engine lock. Each existing use carries #[allow(deprecated)] naming the step \
+                that moves it"
+    )]
     pub(crate) logbook: Logbook,
     /// The store that owns the log on disk, once [`Self::attach_store`] has run — see
     /// [`crate::logstore`]. `None` is the 1.13 path, where the log IS `log.adi`, appended to and
@@ -240,8 +279,9 @@ pub struct StationCore {
     /// written on every queue mutation so held Tempo messages survive a restart.
     pub(crate) pending_msgs_path: Option<PathBuf>,
     /// The thread the two journals above are written on — the Field Day log's and the
-    /// message queue's — so the radio loop never waits on their fsync (see
-    /// [`tempo_core::journal`]). No thread until the first write.
+    /// message queue's — and the JS8 inbox's (the engine's `js8_journal_path`), so the radio
+    /// loop never waits on their fsync (see [`tempo_core::journal`]). No thread until the
+    /// first write.
     pub(crate) journals: tempo_core::journal::JournalWriter,
     /// Callsign → DXCC entity resolver, injected by the command layer (which owns
     /// the cty.dat table) so tempo-app stays DXCC-free. `None` in headless tests
@@ -334,6 +374,7 @@ pub struct StationCore {
 impl StationCore {
     /// A fresh station: empty log, no paths, no injected resolvers. The shell wires the
     /// real ones in at startup (log path, cty.dat/rarity/LoTW resolvers, journals).
+    #[allow(deprecated)] // SPEC-2 C19: the station is built around the in-memory log
     pub(crate) fn new() -> Self {
         Self {
             clock: crate::clocksync::ClockState::default(),
@@ -394,6 +435,7 @@ impl StationCore {
     ///
     /// This is the 1.13 path: `log.adi` IS the log. The shell takes it only when the store
     /// cannot be opened ([`Self::attach_store`] is the ordinary launch), and it is unchanged.
+    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback (D1)
     pub fn set_log_path(&mut self, path: PathBuf) {
         self.store = None;
         self.logbook = Logbook::load(&path);
@@ -413,6 +455,7 @@ impl StationCore {
     /// the next time it changes for a reason of its own, and the mirror always carries what
     /// memory holds. The one write an open can make is taking in a `log.adi` the store cannot
     /// account for ([`Self::take_in_log_file`]) — contacts that are in no store at all.
+    #[allow(deprecated)] // SPEC-2 C19: the launch attach loads the in-memory log
     pub fn attach_store(&mut self, opened: Opened) {
         let Opened {
             store,
@@ -454,6 +497,7 @@ impl StationCore {
     /// un-confirmed. So a 1.13 instance's new contacts arrive; its edits arrive as the import
     /// rules have always treated a restated contact, and a contact it deleted stays — the
     /// visible trades a shared `log.adi` has always made, and never a contact lost.
+    #[allow(deprecated)] // SPEC-2 C19: an import checks the whole log for what it already holds
     pub(crate) fn take_in_log_file(
         &mut self,
         text: &str,
@@ -488,6 +532,7 @@ impl StationCore {
 
     /// The rows as they stand, for measuring a change against — taken only when a store will
     /// be told about the change. See [`Self::persist_change`].
+    #[allow(deprecated)] // SPEC-2 C19: Stage 1's before-picture of every change
     fn change_base(&self) -> Option<Vec<Arc<QsoRecord>>> {
         self.store.as_ref().map(|_| self.logbook.records().to_vec())
     }
@@ -495,6 +540,7 @@ impl StationCore {
     /// Carry a change made in memory to disk. With the store, the rows whose contents differ
     /// from `base` go to the writer thread — a channel send, no I/O — and the log to the mirror
     /// lane. On the 1.13 path, the whole of `log.adi` is rewritten, as it always was.
+    #[allow(deprecated)] // SPEC-2 C19: Stage 1's diff of every change
     fn persist_change(&mut self, base: Option<Vec<Arc<QsoRecord>>>, context: &str) {
         match (base, &self.store) {
             (Some(before), Some(store)) => {
@@ -509,6 +555,7 @@ impl StationCore {
 
     /// Carry the last `count` rows — just appended in memory — to disk. The one-contact case:
     /// no walk over the rest of the log.
+    #[allow(deprecated)] // SPEC-2 C19: Stage 1's appended rows
     fn persist_appended(&mut self, count: usize) -> Option<tempo_core::logbook::writer::Ticket> {
         let change = Change::appended(&self.logbook, count, self.store.as_ref()?.resolved());
         self.store.as_mut()?.submit(change, &self.logbook)
@@ -588,6 +635,7 @@ impl StationCore {
     /// Fill a US state into every record that lacks one and that the resolver can place — IN
     /// MEMORY, writing nothing. Returns whether anything was filled. [`Self::backfill_state`]
     /// persists it; the store's launch deliberately does not (see [`Self::attach_store`]).
+    #[allow(deprecated)] // SPEC-2 C14: the launch fill, saved (D2)
     fn fill_state(&mut self) -> bool {
         let Some(resolve) = self.state_resolve.take() else {
             return false;
@@ -672,6 +720,7 @@ impl StationCore {
     /// IN MEMORY, writing nothing. Returns whether anything was filled.
     /// [`Self::backfill_country`] persists it; the store's launch deliberately does not (see
     /// [`Self::attach_store`]), and an import folds it into the import's own change.
+    #[allow(deprecated)] // SPEC-2 C14: the launch fill, saved (D2)
     fn fill_country(&mut self) -> bool {
         let Some(resolve) = self.dxcc_resolve.take() else {
             return false;
@@ -783,6 +832,7 @@ impl StationCore {
     /// log loaded by [`Self::set_log_path`], and a LoTW own-QSO echo that re-stamps rows already
     /// on file without counting them as promoted. Read off the revision, a write path cannot
     /// forget it.
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
     pub(crate) fn log_tick(&self) -> u32 {
         self.logbook.revision() as u32
     }
@@ -798,6 +848,7 @@ impl StationCore {
     /// on every write to the records — one choke point in `tempo_core::logbook` — so no write
     /// path can leave these stale, and an unchanged log costs no sweep at all.
     #[allow(clippy::type_complexity)]
+    #[allow(deprecated)] // SPEC-2 C13: the B4 sets, from the hot index
     pub(crate) fn worked_sets(
         &self,
         fold_mode: bool,
@@ -823,6 +874,7 @@ impl StationCore {
     /// The contest session's sweep of the general log ([`Logbook::worked_keys_since`]), kept
     /// the same way as [`Self::worked_sets`] until the revision, the session start or the rule
     /// moves.
+    #[allow(deprecated)] // SPEC-2 C13: the contest session, from the hot index
     pub(crate) fn worked_since(
         &self,
         cutoff: u64,
@@ -853,6 +905,7 @@ impl StationCore {
     /// over the records and `last_worked` a maximum, so the old index plus the appended rows IS
     /// the rebuild, without a pass over the whole log and a DXCC lookup per row on every
     /// contact. Anything else — an edit, delete, merge, reload or a new resolver — rebuilds.
+    #[allow(deprecated)] // SPEC-2 C13: the badge index, maintained per change
     pub(crate) fn refresh_worked_index(&mut self) {
         let from = match self.worked_index_at {
             Some((revision, rows))
@@ -1076,6 +1129,7 @@ impl StationCore {
     /// ⛔ Only the legs that leave a per-QSO upload stamp can be swept — see [`unsent_legs`]
     /// for which three, and why the other four are refused. Asking for only those queues
     /// nothing.
+    #[allow(deprecated)] // SPEC-2 C14: the catch-up sweep, read from the store
     pub fn requeue_failed_uploads(&mut self, legs: u8) -> usize {
         // Into FREE space only (#290): past the cap a catch-up record would only be dropped
         // again, and what is not queued stays unsent in the log for the next sweep.
@@ -1171,6 +1225,7 @@ impl StationCore {
 
     /// How many logged QSOs carry the current activation reference (the live count
     /// for the activation panel). 0 when not activating.
+    #[allow(deprecated)] // SPEC-2 C13: the activation count, from the hot index
     pub fn activation_qso_count(&self) -> usize {
         match &self.activation {
             Some((_, reference)) => self
@@ -1241,6 +1296,7 @@ impl StationCore {
     ///   back. Distinguishing "deleted there" from "not yet written there" needs a persisted
     ///   per-record id and a tombstone — the same ingredient the edit trade above lacks, and
     ///   not something that can be added to an ADIF other loggers also read.
+    #[allow(deprecated)] // SPEC-2 C19: another window's commits (D4)
     fn recover_external_appends(&mut self) -> bool {
         if self.store.is_some() {
             // IN PLACE: every caller of this is about to change a row it may be holding BY
@@ -1301,6 +1357,7 @@ impl StationCore {
     /// `in_place` keeps every row where it is — see [`crate::logstore::LogStore::reload`]: a
     /// row the other process deleted then lingers until a re-read that may move rows (the
     /// freshness poll) removes it.
+    #[allow(deprecated)] // SPEC-2 C19: another window's commits (D4)
     fn refresh_from_store(&mut self, in_place: bool) -> bool {
         let Some(store) = self.store.as_mut() else {
             return false;
@@ -1379,6 +1436,7 @@ impl StationCore {
 
     // The same memory-first append and fingerprint logic, with an explicit
     // receipt for Remote. No rewrite, rollback, retry or second upload path.
+    #[allow(deprecated)] // SPEC-2 C19: Stage 1's append to the in-memory log
     pub(crate) fn append_to_log_checked(
         &mut self,
         recs: &[QsoRecord],
@@ -1448,6 +1506,7 @@ impl StationCore {
     /// THE way to persist the logbook: save, then record the file's fresh mtime
     /// so the recovery gate above doesn't re-parse our own write on the next
     /// stamp. Every full-log rewrite in this file funnels through here.
+    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback (D1)
     fn save_log(&mut self, context: &str) {
         let Some(path) = self.log_path.clone() else {
             return;
@@ -1532,6 +1591,7 @@ impl StationCore {
     /// Sync-derived state is preserved by `Logbook::update_record`. Persists by
     /// rewriting the whole ADIF (an edit can't be an append). Returns false if
     /// `index` is out of range.
+    #[allow(deprecated)] // SPEC-2 C16: an edit addressed by position
     pub fn update_qso(&mut self, index: usize, mut rec: QsoRecord) -> bool {
         // Keep country populated on edits (the edit form doesn't carry it).
         if rec.country.is_none() {
@@ -1588,6 +1648,7 @@ impl StationCore {
     /// Never touches confirmation state in either direction. Persists by rewriting the ADIF —
     /// a clear MUST be written, since it carries the operator decision that keeps a later
     /// import from restoring the mark. Returns false if `index` is out of range.
+    #[allow(deprecated)] // SPEC-2 C16: a mark addressed by position
     pub fn mark_qsl_sent(
         &mut self,
         index: usize,
@@ -1605,6 +1666,7 @@ impl StationCore {
     /// Record whether a PAPER QSL card arrived for entry `index` (#152). Persists by rewriting
     /// the ADIF, and refreshes the worked index because a card is an award-eligible
     /// confirmation — the needs/awards model reads it.
+    #[allow(deprecated)] // SPEC-2 C16: a mark addressed by position
     pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
         self.recover_external_appends();
         let base = self.change_base();
@@ -1626,6 +1688,7 @@ impl StationCore {
     /// the worked index for the same reason `mark_qsl_card` does: `PROP_MODE=SAT` diverts a
     /// grid out of the per-band terrestrial sets into the band-independent satellite one, so
     /// the awards model has to be told. Returns false if `index` is out of range.
+    #[allow(deprecated)] // SPEC-2 C16: a tag addressed by position
     pub fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
         self.recover_external_appends();
         let base = self.change_base();
@@ -1640,6 +1703,7 @@ impl StationCore {
     /// Delete a logbook entry (a mis-logged contact). Persists by rewriting the
     /// ADIF. Returns false if `index` is out of range. Shifts later indices — the
     /// caller must reload the log afterward.
+    #[allow(deprecated)] // SPEC-2 C16: a delete addressed by position
     pub fn delete_qso(&mut self, index: usize) -> bool {
         // Recover another instance's appends BEFORE the delete, so the rewrite
         // drops only THIS record (the deleted key is absent from our copy at save
@@ -1658,6 +1722,7 @@ impl StationCore {
     /// Clears every contact in memory, rewrites the ADIF file to an empty log, and
     /// recomputes the worked-entity/grid sets (so the roster B4 highlighting and
     /// the needs/awards model reset too). Returns the number of contacts removed.
+    #[allow(deprecated)] // SPEC-2 C19: clears the in-memory log
     pub fn clear_logbook(&mut self) -> usize {
         let base = self.change_base();
         let n = self.logbook.clear();
@@ -1702,6 +1767,7 @@ impl StationCore {
     /// COUNTRY: filled afterwards by the backfill, every such contact was an in-place write —
     /// a rewrite of the log's revision (a full reload for every log view) and a whole-log
     /// `save` of log.adi, fsync included, per contact.
+    #[allow(deprecated)] // SPEC-2 C19: an import checks the whole log for what it already holds
     pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
         self.recover_external_appends();
         let base = self.change_base();
@@ -1734,6 +1800,7 @@ impl StationCore {
     /// existing log: monotonically upgrade matched QSOs' confirmation + credit
     /// (which a plain dedup-import would skip and lose), rewrite the ADIF file, and
     /// return the reconcile summary (newly confirmed/credited + unmatched orphans).
+    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
     pub fn merge_lotw_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
         self.recover_external_appends();
         let base = self.change_base();
@@ -1746,6 +1813,7 @@ impl StationCore {
     /// Stamp POTA/SOTA park refs from a pota.app hunter/activator export onto matching
     /// existing QSOs (stamp-only: never creates records, never overwrites a ref — the
     /// reviewed-adds half is a separate feature). Returns (stamped, already, unmatched).
+    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
     pub fn import_pota_log(&mut self, text: &str) -> (usize, usize, usize) {
         self.recover_external_appends();
         let base = self.change_base();
@@ -1761,6 +1829,7 @@ impl StationCore {
     /// your record — the step that turns a just-uploaded QSO into "waiting on the
     /// partner" (R2) and clears false "never uploaded" (R1) for out-of-band uploads.
     /// Persists the log on any change. Returns the count newly promoted.
+    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
     pub fn merge_lotw_own_echo(&mut self, text: &str, when_unix: i64) -> usize {
         self.recover_external_appends();
         let base = self.change_base();
@@ -1774,6 +1843,7 @@ impl StationCore {
     /// UTC date (`YYYY-MM-DD`) of the oldest QSO with an in-flight (Pending) LoTW
     /// upload — the lower bound for the own-QSO pull. `None` → nothing in flight, so
     /// the sync skips the own-echo step.
+    #[allow(deprecated)] // SPEC-2 C14: a fold, read from the store
     pub fn oldest_pending_lotw_date(&self) -> Option<String> {
         self.logbook.oldest_pending_lotw_date()
     }
@@ -1781,6 +1851,7 @@ impl StationCore {
     /// Record a QRZ Logbook push outcome on the just-pushed QSO (`upload.qrz`), so
     /// the diagnostics can show "never uploaded to QRZ" (R1) / "QRZ upload bounced"
     /// (R9). Persists on change. Returns whether a record was stamped.
+    #[allow(deprecated)] // SPEC-2 C16: the stamp finds its row in the whole log
     pub fn stamp_qrz_upload(
         &mut self,
         pushed: &QsoRecord,
@@ -1804,6 +1875,7 @@ impl StationCore {
 
     /// Record a ClubLog realtime push outcome on the just-pushed QSO
     /// (`upload.clublog`). Persists on change. Returns whether a record was stamped.
+    #[allow(deprecated)] // SPEC-2 C16: the stamp finds its row in the whole log
     pub fn stamp_clublog_upload(
         &mut self,
         pushed: &QsoRecord,
@@ -1827,6 +1899,7 @@ impl StationCore {
 
     /// Record an eQSL ADIF-upload outcome on the just-pushed QSO (`upload.eqsl`).
     /// Persists on change. Returns whether a record was stamped.
+    #[allow(deprecated)] // SPEC-2 C16: the stamp finds its row in the whole log
     pub fn stamp_eqsl_upload(
         &mut self,
         pushed: &QsoRecord,
@@ -1858,6 +1931,7 @@ impl StationCore {
     /// `recover_external_appends` — the invariants a reach-through would eventually skip.
     /// (Read-only, so it deliberately does NOT call `recover_external_appends`: this is
     /// polled every 5 s by the Settings panel and must not touch the disk.)
+    #[allow(deprecated)] // SPEC-2 C14: a fold, read from the store
     pub fn upload_health(&self) -> tempo_core::logbook::UploadHealth {
         self.logbook.upload_health()
     }
@@ -1866,6 +1940,7 @@ impl StationCore {
     /// as [`Self::merge_lotw_report`]; the award-grade distinction lives in the
     /// ADIF (eQSL carries `EQSL_QSL_RCVD`, not `QSL_RCVD`/`LOTW_QSL_RCVD`), so an
     /// eQSL confirmation lands `confirmed` but NOT `award_confirmed` by construction.
+    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
     pub fn merge_eqsl_report(&mut self, text: &str) -> tempo_core::reconcile::ReconcileSummary {
         self.recover_external_appends();
         let base = self.change_base();
@@ -1882,6 +1957,7 @@ impl StationCore {
     /// the QSOs already present. A QRZ-native confirmation (`APP_QRZLOG_STATUS`) lands
     /// `confirmed` but NOT `award_confirmed`, by construction of the `qrz` channel, so
     /// it can't inflate DXCC/WAS counts. Returns `(added, reconcile_summary)`.
+    #[allow(deprecated)] // SPEC-2 C19: a report merge plans on the whole log
     pub fn merge_qrz_report(
         &mut self,
         text: &str,
@@ -1908,6 +1984,7 @@ impl StationCore {
     }
 
     /// A clone of all logbook records (oldest-first / newest-last).
+    #[allow(deprecated)] // SPEC-2 C17b: the whole log over IPC, deleted with get_log
     pub fn get_log(&self) -> Vec<QsoRecord> {
         self.logbook
             .records()
@@ -1920,35 +1997,42 @@ impl StationCore {
     /// maps a callsign to its DXCC entity name (for R4d's US-family gate) — the
     /// command layer passes `propagation::dxcc::resolve`, keeping the entity table
     /// out of tempo-app. Reads the last LoTW + eQSL reconcile orphans (this session).
+    ///
+    /// A pass over the whole log with a DXCC lookup per contact (780 ms at 500,000), so a
+    /// caller holding the engine lock takes [`Self::diagnostics_inputs`] instead and runs
+    /// [`DiagnosticsInputs::diagnose`] after releasing it. This is the two in one breath.
     pub fn confirmation_diagnostics(
         &self,
         now: i64,
         resolve: impl Fn(&str) -> Option<String>,
     ) -> tempo_core::diagnostics::DiagnosticsReport {
-        let records = self.logbook.records();
-        let entities: Vec<Option<String>> = records.iter().map(|r| resolve(&r.call)).collect();
-        let mut recents: Vec<&tempo_core::reconcile::ReconcileSummary> = Vec::new();
-        if let Some(s) = &self.last_lotw_reconcile {
-            recents.push(s);
+        self.diagnostics_inputs().diagnose(now, resolve)
+    }
+
+    /// What the confirmation diagnostics read, taken as copies: the log's rows (pointers,
+    /// never a record) and the latest LoTW, eQSL and QRZ reconcile summaries. Cheap enough for
+    /// the engine lock; the diagnosis itself runs after it is released.
+    #[allow(deprecated)] // SPEC-2 C14: the diagnosis, read from the store
+    pub fn diagnostics_inputs(&self) -> DiagnosticsInputs {
+        DiagnosticsInputs {
+            records: self.logbook.records().to_vec(),
+            // In this order — LoTW, eQSL, QRZ — as the diagnosis has always been handed them.
+            recents: [
+                &self.last_lotw_reconcile,
+                &self.last_eqsl_reconcile,
+                &self.last_qrz_reconcile,
+            ]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect(),
         }
-        if let Some(s) = &self.last_eqsl_reconcile {
-            recents.push(s);
-        }
-        if let Some(s) = &self.last_qrz_reconcile {
-            recents.push(s);
-        }
-        tempo_core::diagnostics::diagnose(
-            records,
-            &entities,
-            &recents,
-            now,
-            &tempo_core::diagnostics::DiagCfg::default(),
-        )
     }
 
     /// Log indices (oldest-first) of QSOs not yet sent to LoTW: award-unconfirmed
     /// AND either never uploaded or a prior bounce. `UploadState` IS the per-QSO
     /// cursor — Pending/Accepted/Duplicate are excluded (don't re-send).
+    #[allow(deprecated)] // SPEC-2 C16: LoTW's unsent rows by position
     pub fn lotw_unsent_indices(&self) -> Vec<usize> {
         self.logbook
             .records()
@@ -1971,6 +2055,7 @@ impl StationCore {
     /// operator's "already uploaded" declaration). An upload releases the lock while TQSL runs,
     /// and the positions it took may name other contacts by the time it is done: that is
     /// [`Self::stamp_lotw_batch`].
+    #[allow(deprecated)] // SPEC-2 C16: a stamp addressed by position
     pub fn stamp_lotw_upload(
         &mut self,
         indices: &[usize],
@@ -2002,6 +2087,7 @@ impl StationCore {
     /// fingerprint as the upload serialises it. Taken in the same hold of the lock as the
     /// batch file, so the two describe one state of the log. A row without an id cannot be
     /// named later and is left out — every row the log holds carries one.
+    #[allow(deprecated)] // SPEC-2 C16: LoTW's signed rows by position
     pub fn lotw_signed(&self, indices: &[usize]) -> Vec<LotwSigned> {
         let records = self.logbook.records();
         indices
@@ -2027,6 +2113,7 @@ impl StationCore {
     /// version that was signed, so the row stays unsent and the next batch signs it as it now
     /// stands (LoTW dedupes what it already has). What is left unstamped is counted, for the
     /// caller to report.
+    #[allow(deprecated)] // SPEC-2 C19: the stamp finds its rows in the whole log
     pub fn stamp_lotw_batch(
         &mut self,
         batch: &[LotwSigned],
@@ -2192,6 +2279,7 @@ impl StationCore {
     /// CSV. Independent of Field Day's contest log (`Engine::export_log`).
     /// `from_unix`/`to_unix` bound the QSO start time inclusively (#98); both
     /// `None` = the whole log, byte-identical to the unbounded export.
+    #[allow(deprecated)] // SPEC-2 C15: an export
     pub fn export_logbook(
         &self,
         format: &str,
@@ -2205,11 +2293,13 @@ impl StationCore {
     }
 
     /// Distinct operators in the log (#25) — what a per-operator export offers to split by.
+    #[allow(deprecated)] // SPEC-2 C15: an export's split
     pub fn log_operators(&self) -> Vec<String> {
         self.logbook.operators()
     }
 
     /// ADIF containing only `operator`'s contacts (#25).
+    #[allow(deprecated)] // SPEC-2 C15: an export
     pub fn export_logbook_for_operator(&self, operator: &str) -> String {
         self.logbook.adif_for_operator(operator)
     }
@@ -2217,12 +2307,14 @@ impl StationCore {
     /// Distinct activations in the log — YOUR park × UTC day × the callsign it was worked
     /// under, newest first. What the per-activation export offers to split by, the way
     /// [`Self::log_operators`] drives the per-operator one.
+    #[allow(deprecated)] // SPEC-2 C15: an export's split
     pub fn log_activations(&self) -> Vec<tempo_core::logbook::LoggedActivation> {
         self.logbook.activations()
     }
 
     /// ADIF containing only ONE activation's contacts — the three bounds an
     /// `Activation` carries, handed straight back.
+    #[allow(deprecated)] // SPEC-2 C15: an export
     pub fn export_logbook_for_activation(
         &self,
         reference: &str,
@@ -2610,5 +2702,138 @@ mod grid_tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    //! The confirmation diagnosis runs with the engine lock released (SPEC-2 v3's C12): the
+    //! engine hands out what it reads ([`StationCore::diagnostics_inputs`]) and the diagnosis
+    //! runs on that ([`DiagnosticsInputs::diagnose`]). The report must be the one the old body
+    //! made, reproduced below verbatim as the oracle.
+    use super::*;
+    use tempo_core::diagnostics::DiagnosticsReport;
+    use tempo_core::reconcile::{OrphanConfirmation, ReconcileSummary};
+
+    /// Award-confirmed, never uploaded, one to be told about three ways, eQSL-only, one
+    /// uploaded an hour before `NOW` (lag, not yet a failure) and one uploaded long before it
+    /// (waiting on the partner).
+    const LOG: &str = "\
+        <CALL:5>JA1AA<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260101<TIME_ON:6>010000<LOTW_QSL_RCVD:1>Y<EOR>\n\
+        <CALL:5>DL1AB<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20260102<TIME_ON:6>020000<EOR>\n\
+        <CALL:5>W1ABC<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260104<TIME_ON:6>030000<STATE:2>MA<EOR>\n\
+        <CALL:6>PY2ABC<BAND:3>10m<MODE:3>FT8<QSO_DATE:8>20260106<TIME_ON:6>050000<EQSL_QSL_RCVD:1>Y<EOR>\n\
+        <CALL:5>K5XYZ<BAND:3>40m<MODE:3>FT8<QSO_DATE:8>20260109<TIME_ON:6>230000<LOTW_QSL_SENT:1>Y<EOR>\n\
+        <CALL:5>G4ABC<BAND:3>17m<MODE:4>RTTY<QSO_DATE:8>20251201<TIME_ON:6>070000<LOTW_QSL_SENT:1>Y<EOR>\n";
+
+    /// 2026-01-10 00:00 UTC.
+    const NOW: i64 = 1_768_003_200;
+
+    /// A stand-in for the DXCC table, which tempo-app cannot name.
+    fn entity(call: &str) -> Option<String> {
+        let name = match call.as_bytes().first()? {
+            b'W' | b'K' => "United States",
+            b'J' => "Japan",
+            b'D' => "Germany",
+            b'P' => "Brazil",
+            _ => return None,
+        };
+        Some(name.to_string())
+    }
+
+    /// A confirmation of the W1ABC contact that names the wrong band.
+    fn orphan(band: &str) -> ReconcileSummary {
+        ReconcileSummary {
+            orphans: vec![OrphanConfirmation {
+                call: "W1ABC".into(),
+                band: band.into(),
+                mode: "Phone".into(),
+                when_unix: 1_767_495_600,
+                reason: String::new(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// `StationCore::confirmation_diagnostics` as it was before C12, verbatim.
+    fn old_diagnosis(
+        sc: &StationCore,
+        now: i64,
+        resolve: impl Fn(&str) -> Option<String>,
+    ) -> DiagnosticsReport {
+        let records = sc.logbook.records();
+        let entities: Vec<Option<String>> = records.iter().map(|r| resolve(&r.call)).collect();
+        let mut recents: Vec<&tempo_core::reconcile::ReconcileSummary> = Vec::new();
+        if let Some(s) = &sc.last_lotw_reconcile {
+            recents.push(s);
+        }
+        if let Some(s) = &sc.last_eqsl_reconcile {
+            recents.push(s);
+        }
+        if let Some(s) = &sc.last_qrz_reconcile {
+            recents.push(s);
+        }
+        tempo_core::diagnostics::diagnose(
+            records,
+            &entities,
+            &recents,
+            now,
+            &tempo_core::diagnostics::DiagCfg::default(),
+        )
+    }
+
+    /// ★ The diagnosis made from the handed-out inputs is the old one: the same rows in the
+    /// same order, the same entity per row, the same clock, and the three services' reconcile
+    /// summaries in the same order. The three disagree on purpose — each names a different
+    /// wrong band for one contact, and the diagnosis keeps the first it is handed — so a
+    /// reordering changes the report.
+    #[test]
+    fn the_diagnosis_off_the_lock_is_the_one_the_old_body_made() {
+        let mut sc = StationCore::new();
+        sc.import_adif(LOG);
+        assert_eq!(sc.logbook.len(), 6, "premise: every contact imported");
+        sc.last_lotw_reconcile = Some(orphan("15m"));
+        sc.last_eqsl_reconcile = Some(orphan("17m"));
+        sc.last_qrz_reconcile = Some(orphan("12m"));
+
+        let old = old_diagnosis(&sc, NOW, entity);
+        let old_text = format!("{old:?}");
+        assert!(
+            old_text.contains("expected: \"15m\""),
+            "premise: the first summary's claim is the one kept"
+        );
+        assert!(
+            old.pending_lag > 0 && old.waiting_on_partner > 0,
+            "premise: the clock reaches the report, both ways"
+        );
+        assert!(
+            !old.one_away.is_empty(),
+            "premise: the entity lookup reaches the report: {old_text}"
+        );
+        assert!(
+            old.diagnoses.len() > 1,
+            "premise: several rows are diagnosed"
+        );
+
+        let inputs = sc.diagnostics_inputs();
+        assert_eq!(inputs.log_len(), 6);
+        assert_eq!(format!("{:?}", inputs.diagnose(NOW, entity)), old_text);
+        assert_eq!(
+            format!("{:?}", sc.confirmation_diagnostics(NOW, entity)),
+            old_text,
+            "the two-in-one-breath form is the same diagnosis"
+        );
+    }
+
+    /// ★ POSITIVE CONTROL: the diagnosis run while the engine lock is held is refused.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(
+        expected = "io_fence: the confirmation diagnostics is a pass over the whole log"
+    )]
+    fn the_diagnosis_under_the_engine_lock_is_refused() {
+        let engine = std::sync::Mutex::new(crate::engine::Engine::new("KD9TAW", "EN52", 0));
+        let eng = crate::engine::engine_lock(&engine);
+        let _ = eng.confirmation_diagnostics(NOW, entity);
     }
 }

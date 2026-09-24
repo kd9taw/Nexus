@@ -90,6 +90,7 @@ pub(super) fn read_engine(
     let ssn = *crate::LAST_SSN.try_lock().map_err(|_| "applicationBusy")?;
     read_cached(engine, cache, &crate::DXPED_WINDOWS, ssn)
 }
+#[allow(deprecated)] // SPEC-2 C18: Remote from the store
 fn read_cached(
     engine: &crate::SharedEngine,
     cache: &crate::PropCache,
