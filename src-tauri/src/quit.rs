@@ -51,7 +51,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tauri::Manager;
-use tempo_app::engine::engine_lock;
+use tempo_app::engine::{engine_lock, engine_try_lock};
 use tempo_app::logstore::Standing;
 
 /// How long a quit waits for the logbook before it asks the operator what to do — the same
@@ -311,7 +311,7 @@ pub(crate) fn decide(request: Request, stage: u8, waiting: Option<bool>) -> Act 
 /// on the UI thread, which must never block on the engine mutex (the radio loop can hold it
 /// across a CAT read). `None`: the engine was busy.
 pub(crate) fn logbook_waiting(engine: &SharedEngine) -> Option<bool> {
-    let unsaved = match engine.try_lock() {
+    let unsaved = match engine_try_lock(engine) {
         Ok(e) => e.log_unsaved(),
         // Poison recovers, exactly as `engine_lock` does.
         Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().log_unsaved(),
