@@ -14,7 +14,7 @@ import { QsoDetail } from './QsoDetail'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import { emptyAnswer, rowKeyAt, type LogQuestion } from '../features/logAnswers'
-import { defaultAsc, fmtUtc, logOrder, type LogQuery, type LogSortKey } from '../features/logQuery'
+import { defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
 import { logSource, useLogAnswer, useLogPages } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
@@ -256,6 +256,8 @@ type SortKey = LogSortKey
 
 /** Rows per Logbook page: what the list asks its source for at a time (SPEC-2 v2 §6). */
 const LOG_PAGE = 128
+/** A row's height before it is measured: its 22 px buttons plus padding. */
+const ROW_ESTIMATE = 43
 /** The Logbook's LoTW-backlog question — the same one every render. */
 const LOTW_BACKLOG = { kind: 'lotwBacklog' } as const satisfies LogQuestion
 /** How many contacts the log holds: the count badge, the purge warning, the exports' gates. */
@@ -954,7 +956,7 @@ export function Logbook({
   const rowVirtualizer = useVirtualizer({
     count: listTotal,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 43, // ~row height; measureElement corrects per row
+    estimateSize: () => ROW_ESTIMATE, // ~row height; measureElement corrects per row
     overscan: 12,
     // The globe band + sticky search/header block sit INSIDE the scroll container
     // above the rows (globe scrolls away; search+headers pin). scrollMargin tells the
@@ -982,6 +984,77 @@ export function Logbook({
     const k = i - offset
     return k < page.rows.length ? { q: page.rows[k], key: page.keys[k] } : undefined
   }
+
+  // v2 §6 R5 — THE ROWS UNDER THE OPERATOR STAY PUT. When the log changes under the list (the
+  // sequencer logs a contact, another writer deletes one), rows appear or vanish above the view and
+  // every row below them changes place: the list used to slide a row under the pointer, so a click
+  // meant for one contact's ✎ or ✕ could land on its neighbour. After every commit the rows at the
+  // top edge of the view are noted — keys and pixel offsets. When the ORDER changes for the same
+  // query, the first of them still in the list is located in the new order and the view scrolled
+  // so it sits exactly where it was (its successor holds if the row itself was deleted). A view
+  // showing the list's first row is not held: a new contact appears at the top, as it always did.
+  const anchor = useRef<{ rows: { key: string; delta: number }[]; atTop: boolean } | null>(null)
+  const shown = useRef<{ orderRev: number; queryKey: string } | null>(null)
+  const justPlaced = useRef(false)
+  const queryKey = logQueryKey(query)
+  useLayoutEffect(() => {
+    const was = shown.current
+    shown.current = firstPage ? { orderRev: firstPage.orderRev, queryKey } : null
+    const el = scrollRef.current
+    const held = anchor.current
+    if (!control || !el || !firstPage || !was || !held || held.atTop) return
+    if (was.queryKey !== queryKey || was.orderRev === firstPage.orderRev) return
+    const orderRev = firstPage.orderRev
+    const place = (index: number, delta: number) => {
+      const start =
+        rowVirtualizer.measurementsCache[index]?.start ?? index * ROW_ESTIMATE + rowVirtualizer.options.scrollMargin
+      el.scrollTop = start - delta
+      justPlaced.current = true
+    }
+    const found = (at: { index: number | null; orderRev: number } | undefined) => at && at.index !== null && at.orderRev === orderRev
+    // The whole-log source answers at once; an asking one may have to be asked — and then the
+    // view is placed only if it is still at this order and the operator has not scrolled since.
+    const pending: { key: string; delta: number }[] = []
+    for (const row of held.rows) {
+      const at = logSource().peek({ kind: 'locate', query, id: row.key })
+      if (at === undefined) pending.push(row)
+      else if (found(at)) {
+        if (pending.length === 0) return place(at.index!, row.delta)
+        break
+      }
+    }
+    if (pending.length === 0) return
+    const top = el.scrollTop
+    void (async () => {
+      for (const row of held.rows) {
+        const at = await logSource().ask({ kind: 'locate', query, id: row.key }).catch(() => undefined)
+        if (shown.current?.orderRev !== orderRev || el.scrollTop !== top) return
+        if (found(at)) return place(at!.index!, row.delta)
+      }
+    })()
+  })
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!control || !el) return
+    // The view was just placed: the rows noted now would be read at the old place. The scroll
+    // that placing causes renders again, and they are noted then.
+    if (justPlaced.current) {
+      justPlaced.current = false
+      return
+    }
+    const top = el.scrollTop
+    const rows: { key: string; delta: number }[] = []
+    let atTop = true
+    for (const item of virtualRows) {
+      if (item.end <= top) continue
+      const row = rowAt(item.index)
+      if (!row) continue
+      if (rows.length === 0) atTop = item.index === 0
+      rows.push({ key: row.key, delta: item.start - top })
+      if (rows.length === 8) break
+    }
+    anchor.current = { rows, atTop }
+  })
 
   // Measure where the rows actually start inside .log-scroll (globe + sticky block).
   useLayoutEffect(() => {

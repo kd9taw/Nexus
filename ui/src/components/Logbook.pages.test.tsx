@@ -151,6 +151,83 @@ describe('a row is its id', () => {
   })
 })
 
+describe('the rows under the operator stay put (v2 §6 R5)', () => {
+  /** The list's scroller, a row's index and its top edge in the viewport (index × row − scroll). */
+  const scroller = (root: HTMLElement) => root.querySelector('.log-scroll') as HTMLElement
+  const topOf = (root: HTMLElement, call: string) => {
+    const row = [...root.querySelectorAll('.log-rows .logbook-row')].find((r) => r.querySelector('.qrz-link-call')?.textContent === call) as HTMLElement | undefined
+    return row ? Number(row.dataset.index) * ROW_PX - scroller(root).scrollTop : null
+  }
+  const scrollToRow = (root: HTMLElement, index: number) =>
+    act(() => {
+      scroller(root).scrollTop = index * ROW_PX
+      scroller(root).dispatchEvent(new Event('scroll'))
+    })
+  const firstVisible = (root: HTMLElement) => {
+    const top = scroller(root).scrollTop
+    const rows = [...root.querySelectorAll('.log-rows .logbook-row')] as HTMLElement[]
+    const at = rows.map((r) => Number(r.dataset.index)).filter((i) => i * ROW_PX >= top).sort((a, b) => a - b)[0]
+    return rows.find((r) => Number(r.dataset.index) === at)!.querySelector('.qrz-link-call')!.textContent!
+  }
+
+  it('FIX: a contact logged while the operator is scrolled down does not move the rows they are looking at', async () => {
+    engine.log = Array.from({ length: 300 }, (_, i) => contact(i))
+    engine.revision = 1
+    const { container, rerender } = render(view(1))
+    await waitFor(() => expect(shownCalls(container).length).toBeGreaterThan(0))
+    scrollToRow(container, 150)
+    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="150"]')).not.toBeNull())
+    const looking = firstVisible(container)
+    const before = topOf(container, looking)
+
+    // The sequencer logs a contact: newest first, it lands ABOVE everything on screen.
+    engine.log = [...(engine.log as LoggedQso[]), contact(1000, { call: 'NEW1', whenUnix: 1_800_000_000 })]
+    engine.revision = 2
+    rerender(view(2))
+    await waitFor(() => expect(container.querySelector('.count-badge')?.textContent).toBe('301'))
+    await waitFor(() => expect(topOf(container, looking)).not.toBeNull())
+    expect(topOf(container, looking), `${looking} moved under the operator`).toBe(before)
+  })
+
+  it('a delete above keeps them put too; the anchor row itself deleted, the next one holds its place (R5 (3))', async () => {
+    const rows = Array.from({ length: 300 }, (_, i) => contact(i))
+    engine.log = rows
+    engine.revision = 1
+    const { container, rerender } = render(view(1))
+    await waitFor(() => expect(shownCalls(container).length).toBeGreaterThan(0))
+    scrollToRow(container, 120)
+    await waitFor(() => expect(container.querySelector('.logbook-row[data-index="120"]')).not.toBeNull())
+    const looking = firstVisible(container)
+    const next = (() => {
+      const i = Number(([...container.querySelectorAll('.log-rows .logbook-row')] as HTMLElement[]).find((r) => r.querySelector('.qrz-link-call')?.textContent === looking)!.dataset.index)
+      return (container.querySelector(`.logbook-row[data-index="${i + 1}"] .qrz-link-call`) as HTMLElement).textContent!
+    })()
+    const nextBefore = topOf(container, next)!
+    // Another writer deletes the anchor row itself AND one far above it.
+    engine.log = rows.filter((q) => q.call !== looking && q.call !== 'K299ABC')
+    engine.revision = 2
+    rerender(view(2))
+    await waitFor(() => expect(container.querySelector('.count-badge')?.textContent).toBe('298'))
+    await waitFor(() => expect(topOf(container, next)).not.toBeNull())
+    // The row the operator was looking at is gone; the next surviving one holds exactly where it
+    // was (v2 §6 R5 (3)) — nothing still on screen moves, the gap closes from above the view.
+    expect(topOf(container, next)).toBe(nextBefore)
+  })
+
+  it('at the top of the list, a new contact appears at the top (the list is not held down)', async () => {
+    engine.log = Array.from({ length: 300 }, (_, i) => contact(i))
+    engine.revision = 1
+    const { container, rerender } = render(view(1))
+    await waitFor(() => expect(shownCalls(container).length).toBeGreaterThan(0))
+    expect(scroller(container).scrollTop).toBe(0)
+    engine.log = [...(engine.log as LoggedQso[]), contact(1000, { call: 'NEW1', whenUnix: 1_800_000_000 })]
+    engine.revision = 2
+    rerender(view(2))
+    await waitFor(() => expect(shownCalls(container)[0]).toBe('NEW1'))
+    expect(scroller(container).scrollTop).toBe(0)
+  })
+})
+
 /** A source that answers only when the test says so — the shape of the engine's (C17a). Answers
  *  are today's, from `answerFrom` over the log at a chosen revision. */
 function laterSource() {
