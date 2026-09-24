@@ -22582,6 +22582,7 @@ contact yourself."
     /// pass, each once its wait is up — the automatic retry, which the snapshot poll drives. How
     /// many went out. No I/O: a channel send each, like any change. See
     /// [`crate::logstore::LogStore::resend`].
+    #[allow(deprecated)] // SPEC-2 C19: the retry re-sends refused rows as memory holds them
     pub fn log_resend_due(&mut self) -> usize {
         let station = &mut self.station;
         match station.store.as_mut() {
@@ -22592,6 +22593,7 @@ contact yourself."
 
     /// [`Self::log_resend_due`] for every such change now, whatever its wait — a quit, and the
     /// quit's Keep trying.
+    #[allow(deprecated)] // SPEC-2 C19: the retry re-sends refused rows as memory holds them
     pub fn log_resend_all(&mut self) -> usize {
         let station = &mut self.station;
         match station.store.as_mut() {
