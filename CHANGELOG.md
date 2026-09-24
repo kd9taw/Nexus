@@ -209,7 +209,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   waterfall felt. The journal is now written on a thread of its own a moment later, in the same
   order and with the same contents; a contact you log by hand is still on the disk before the
   logging window confirms it, and quitting waits for the last write. The queue of held Tempo
-  messages is written the same way.
+  messages and the JS8 inbox are written the same way.
 
 - **An upload to QRZ, ClubLog or eQSL is now marked on the contact that was actually sent.**
   With two contacts with the same station on the same band, mode and day, sending the earlier
