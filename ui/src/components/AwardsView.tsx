@@ -17,7 +17,7 @@ import {
   eqslPushQso,
 } from '../api'
 import { t } from '../i18n'
-import { loadSharedLog } from '../features/logStore'
+import { logSource } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { pushToast } from '../toast'
 import { StateBlock } from './StateBlock'
@@ -161,6 +161,9 @@ function uploadMessage(r: UploadReport): string {
   }
 }
 
+/** Diagnoses the list shows — and so the most rows a push can need. */
+const SHOWN_DIAGNOSES = 50
+
 /** The per-QSO push targets the diagnostics can drive (each has a single-QSO
  * push command; LoTW goes through the TQSL by-index upload path instead). */
 type PushService = 'QRZ' | 'ClubLog' | 'eQSL'
@@ -298,9 +301,11 @@ export function AwardsView({
   const aw = observation ?? nativeAwards
   const [diag, setDiag] = useState<DiagnosticsReport | null>(null)
   const shownDiag = observation ? (diagnostics ?? null) : diag
-  // The log itself, so a diagnosis row (indexed oldest-first, same order as
-  // get_log) can hand its QsoRecord to the per-QSO QRZ/ClubLog/eQSL push.
-  const [log, setLog] = useState<LoggedQso[] | null>(null)
+  // The rows the listed diagnoses name, so a diagnosis row can hand its QsoRecord to the per-QSO
+  // QRZ/ClubLog/eQSL push. A diagnosis names contacts by LOG POSITION (oldest-first, the order of
+  // the log), so they are resolved right after the diagnosis that names them arrives — against
+  // the log it was computed from — and only the rows the list shows (`SHOWN_DIAGNOSES`).
+  const [pushRows, setPushRows] = useState<Map<number, LoggedQso> | null>(null)
   const [err, setErr] = useState(false)
   // Grid list: VUCC bands only by default — see the grids panel for why. Declared up here
   // with the other hooks rather than beside its own derivations, because AwardsView early-
@@ -322,15 +327,31 @@ export function AwardsView({
     getConfirmationDiagnostics()
       .then((d) => live && setDiag(d))
       .catch(() => {}) // diagnostics are a best-effort add-on; never block the dashboard
-    // The window's shared copy, read once beside the diagnosis whose indices point into it.
-    loadSharedLog()
-      .then((l) => live && setLog(l))
-      .catch(() => {}) // without it the push buttons degrade to guidance chips
     return () => {
       live = false
       mounted.current = false
     }
   }, [observation])
+  useEffect(() => {
+    if (observation || !diag) return
+    const indices = diag.diagnoses.slice(0, SHOWN_DIAGNOSES).map((d) => d.index)
+    let live = true
+    logSource()
+      .ask({ kind: 'rowsAt', indices })
+      .then((rows) => {
+        if (!live) return
+        const found = new Map<number, LoggedQso>()
+        indices.forEach((index, k) => {
+          const row = rows[k]
+          if (row) found.set(index, row)
+        })
+        setPushRows(found)
+      })
+      .catch(() => {}) // without them the push buttons degrade to guidance chips
+    return () => {
+      live = false
+    }
+  }, [diag, observation])
 
   /** Sign + upload the given QSOs via TQSL, then re-diagnose so the panel reflects
    * the new state (uploaded rows drop to Pending/waiting; bounced ones show R9). */
@@ -360,9 +381,16 @@ export function AwardsView({
    * cases), then re-diagnose so the row reflects the new upload state. */
   async function push(index: number, service: PushService, key: string) {
     if (observation) return
-    const q = log?.[index]
+    // A diagnosis re-read after a push can name a row its rows have not been resolved for yet
+    // (they are on their way): ask for that one rather than refuse it.
+    const q =
+      pushRows?.get(index) ??
+      (await logSource()
+        .ask({ kind: 'rowsAt', indices: [index] })
+        .then(([row]) => row)
+        .catch(() => null))
     if (!q) {
-      setUploadMsg(t('awards.push.noQso'))
+      if (mounted.current) setUploadMsg(t('awards.push.noQso'))
       return
     }
     setBusyKey(key)
@@ -980,7 +1008,7 @@ export function AwardsView({
           })()}
           {shownDiag.diagnoses.length > 0 && (
             <ul className="conf-list">
-              {shownDiag.diagnoses.slice(0, 50).map((d) => {
+              {shownDiag.diagnoses.slice(0, SHOWN_DIAGNOSES).map((d) => {
                 const r = d.reasons[0]
                 return (
                   <li className="conf-row" key={d.index}>
@@ -994,7 +1022,7 @@ export function AwardsView({
                       busyKey={busyKey}
                       onUpload={upload}
                       onPush={push}
-                      canPush={!observation && log !== null}
+                      canPush={!observation && pushRows !== null}
                       onOpenSettings={observation ? undefined : onOpenSettings}
                       observed={!!observation}
                     />

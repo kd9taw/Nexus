@@ -4,12 +4,12 @@
 // these cards slice (data), and the three names in SERVICE_LABELS below — LoTW and eQSL are the
 // services' own names and DX is ham shorthand, all invariant tokens (see `i18n/index.ts`).
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getLogStats } from '../api'
 import { t } from '../i18n'
-import type { LoggedQso, GeoLogStats } from '../types'
-import { computeLogStats, type LogStats, type Tally } from '../features/logStats'
-import { loadSharedLog } from '../features/logStore'
+import type { GeoLogStats } from '../types'
+import { type LogStats, type Tally } from '../features/logStats'
+import { logSource } from '../features/logSource'
 
 /** Service names and ham shorthand — the same letters in every language. */
 const SERVICE_LABELS = { lotw: 'LoTW', eqsl: 'eQSL', dx: 'DX' }
@@ -49,7 +49,9 @@ function BarList({ title, items, max }: { title: string; items: Tally[]; max?: n
  * CQ-zone / POTA breakdowns need the cty.dat resolver on the Rust side (a later get_log_stats add).
  */
 export function StatsView({ observation }: { observation?: { statistics: LogStats; geography: GeoLogStats } } = {}) {
-  const [log, setLog] = useState<LoggedQso[] | null>(null)
+  // The roll-up, asked of the log ONCE per mount (it is read once and kept, as before) — the
+  // same `computeLogStats` over the same log, done where the log is.
+  const [nativeStats, setStats] = useState<LogStats | null>(null)
   const [failed, setFailed] = useState(false)
   // Geographic stats (continent/zone/DX) come from the backend (needs the cty.dat resolver). If
   // that call fails we simply omit those cards — the frontend-computed stats below still render.
@@ -58,18 +60,15 @@ export function StatsView({ observation }: { observation?: { statistics: LogStat
   useEffect(() => {
     if (observation) return
     let live = true
-    void loadSharedLog()
-      .then(value => { if (live) setLog(value) })
+    void logSource()
+      .ask({ kind: 'statistics' })
+      .then(value => { if (live) setStats(value) })
       .catch(() => { if (live) setFailed(true) })
     void getLogStats()
       .then(value => { if (live) setGeo(value) })
       .catch(() => { if (live) setGeo(null) })
     return () => { live = false }
   }, [observation])
-  // Once per log, not once per render: six passes over the whole log, and this view re-renders
-  // on every snapshot. Declared above the early returns, as a hook must be.
-  const nativeStats = useMemo(() => (log ? computeLogStats(log) : null), [log])
-
   if (!observation && failed) {
     return (
       <main className="layout single stats-view">
@@ -78,7 +77,7 @@ export function StatsView({ observation }: { observation?: { statistics: LogStat
       </main>
     )
   }
-  if (!observation && !log) {
+  if (!observation && !nativeStats) {
     return (
       <main className="layout single stats-view">
         <p className="stats-empty">{t('stats.loading')}</p>

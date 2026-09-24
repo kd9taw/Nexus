@@ -819,6 +819,7 @@ export const JA: PartialCatalog = {
   "logbook.field.qslCard.label": "カード受領",
   "logbook.empty": "記録された交信はまだありません。",
   "logbook.emptySearch": "「{{query}}」に一致する交信はありません。",
+  "logbook.rows.loading": "読み込み中…",
   "logbook.row.park.worked": "{{program}} {{ref}}（相手局）",
   "logbook.row.park.mine": "自局のアクティベーション: {{program}} {{ref}}",
   "logbook.row.qsl.lotw": "LoTWコンファーム済み（アワード有効）",
