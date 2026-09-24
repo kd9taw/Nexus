@@ -233,13 +233,15 @@ platforms. `~/.config` is hidden in Finder: press **⌘⇧.** in an Open dialog,
 | What | Windows | macOS / Linux / Raspberry Pi | Notes |
 |---|---|---|---|
 | Settings | `%APPDATA%\tempo\settings.json` | `~/.config/tempo/settings.json` | JSON, camelCase keys; partial files merge with defaults, so it's safe to hand-edit |
-| **Logbook** | `%APPDATA%\tempo\log.adi` | `~/.config/tempo/log.adi` | ADIF 3.1.4 — **this is the file to back up** |
+| **Logbook** | `%APPDATA%\tempo\log.sqlite3` | `~/.config/tempo/log.sqlite3` | The logbook itself, a database. Never copy it while Nexus is running |
+| **Logbook, as ADIF** | `%APPDATA%\tempo\log.adi` | `~/.config/tempo/log.adi` | ADIF 3.1.4 — every contact, kept up to date a moment after each change. **This is the file to back up** |
+| Logbook backups | `%APPDATA%\tempo\backups\` | `~/.config/tempo/backups/` | Dated copies of `log.adi` Nexus takes by itself — see [Restoring the logbook](#restoring-the-logbook-from-a-backup-copy) |
 | Received-audio recordings | `%APPDATA%\tempo\recordings\` | `~/.config/tempo/recordings/` | Only if you enable audio saving; can get large |
 | UI state | `%LOCALAPPDATA%\com.kd9taw.tempo\` | the webview's own store for `com.kd9taw.tempo` | Theme, UI scale, panel layout, wizard-seen flag, board filters |
 
 Running a second instance against a second radio puts its settings in a
 profile-suffixed folder beside the first (`tempo-<profile>`), and both instances
-share the one `log.adi`. `NEXUS_DATA_DIR` moves that shared logbook somewhere
+share the one logbook. `NEXUS_DATA_DIR` moves that shared logbook somewhere
 else for a multi-PC shack. **Keep it on a drive inside the computer.** Nexus keeps
 the logbook in a database, and a database on a network drive can be damaged by the
 way file locking works across a network, so choosing one in Settings is refused; a
@@ -247,9 +249,12 @@ network drive already in use is reported in Settings rather than moved for you.
 
 Two things worth understanding:
 
-- **`log.adi` is the irreplaceable file.** Everything else can be rebuilt or
-  re-entered; your contacts can't. Back it up. It's plain ADIF, so any logger can
-  read it, and Nexus round-trips it faithfully.
+- **Your contacts are the irreplaceable part.** Everything else can be rebuilt or
+  re-entered; your contacts can't. They live in `log.sqlite3`, and Nexus keeps
+  `log.adi` beside it as a plain ADIF copy of every contact, up to date a moment
+  after each change. Back up `log.adi`: any logger can read it, it is safe to copy
+  while Nexus is running (the database is not), and Nexus rebuilds its database from
+  it when you restore.
 - **UI preferences don't roam with settings.** Theme, UI scale, and layout live in the
   webview's own store — WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux
   and the Pi — not in
@@ -268,13 +273,43 @@ written to config or logs.
 
 Before a reinstall, a PC migration, or just periodically, copy:
 
-- `log.adi` — your logbook (**the important one**)
+- `log.adi` — every contact in your logbook, as ADIF (**the important one**)
 - `settings.json` — your rig/station config, to save re-entering it
 
 Both live in `%APPDATA%\tempo\` on Windows and `~/.config/tempo/` on macOS, Linux
-and the Pi. To restore, install Nexus, then drop those files back into that folder before
-launching. Online-service credentials will need to be re-entered from Settings,
-since they don't leave the origin machine's keychain.
+and the Pi. To restore onto a fresh install, install Nexus, then drop those files back into
+that folder before launching: the first launch turns `log.adi` into the logbook database.
+Online-service credentials will need to be re-entered from Settings, since they don't leave
+the origin machine's keychain.
+
+### Restoring the logbook from a backup copy
+
+Nexus keeps copies of its own beside the logbook:
+
+- **`backups/`** — dated copies of `log.adi` (`log-YYYYMMDD-HHMMSS.adi`): at most one a
+  day while the log changes, and one more whenever a change is about to make the log
+  *smaller* (a delete, a purge) — those end in `-shrink.adi`. The folder keeps up to ten,
+  and at most four times the size of your `log.adi` (never less than 64 MB), oldest first
+  out.
+- **`log.adi.pre-sqlite`** — your log as it was before Nexus first moved it into the
+  database, kept for good.
+
+To go back to one of them — or to a copy of `log.adi` you made yourself:
+
+1. Quit Nexus.
+2. In the data folder, make a new folder (say `before-restore`) and **move** `log.sqlite3`
+   into it, with `log.sqlite3-wal` and `log.sqlite3-shm` if they are there. Move them, don't
+   delete them: they are how you undo the restore.
+3. Copy the backup you want over `log.adi` — for example `backups/log-20260920-120000.adi`.
+4. Start Nexus. It turns `log.adi` into a new logbook database, as it did the first time,
+   and the start-up screen says so while it works.
+
+Contacts logged after that copy was taken are not in the restored log. To undo the restore,
+quit Nexus and move the files from `before-restore` back, replacing the new ones.
+
+**Putting a copy over `log.adi` with the database still in place does not restore it.**
+Nexus takes that file's contacts in the way the Logbook's Import does — adding any the
+database lacks, never removing one — and then rewrites `log.adi` from the database.
 
 ---
 

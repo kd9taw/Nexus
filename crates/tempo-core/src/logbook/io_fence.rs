@@ -40,6 +40,12 @@
 //! `Durability::wait` go through), an append receipt's sync, a wait for a database copy, the
 //! conversion of `log.adi`, and the store's open ([`off_engine_lock`]).
 //!
+//! **The small journals too:** the Field Day contest journal and the message queue's are
+//! written on their own thread (`crate::journal`), a log lane like the two above
+//! ([`on_log_lane`]), and a command's wait for them is fenced ([`off_engine_lock`]). The one
+//! wait for them under the lock is the Field Day rebuild's read-back on a change of mode —
+//! the wait the synchronous write used to make there, never in a radio tick.
+//!
 //! **Not fenced, each for a reason recorded where it happens** — every one of these runs under
 //! the Engine lock today, so a fence there would stop a debug build rather than prove anything:
 //!
@@ -49,10 +55,10 @@
 //!   same lock;
 //! - the exit's flush of the writer and the mirror (`flush_logbook`), under the lock
 //!   deliberately so no change lands after it — once the radio loop has stopped;
-//! - the Field Day contest journal (`persist_fd_log`), still rewritten and synced under the lock
-//!   on every contact — the FT Field Day sequencer's own log included — and the other small
-//!   journals written the same way (the held-QSO and store-and-forward journals,
-//!   `settings.json`, the pending-QSO publish). None of them is the logbook store;
+//! - the held-QSO journal (`persist_pending_qso`), still written under the lock: Remote
+//!   publishes the same file by a rename checked against the hold under that lock, and a write
+//!   still queued on another thread could land after it; and `settings.json`. Neither is the
+//!   logbook store;
 //! - everything on the 1.13 path, which runs the session on `log.adi` itself when the store
 //!   could not be opened: its loads, appends and whole-file saves are under the lock by design.
 //!
