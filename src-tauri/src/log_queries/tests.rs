@@ -749,33 +749,15 @@ fn random_record(g: &mut Gen, n: u64) -> QsoRecord {
     r
 }
 
-/// The log the engine answers from, in log order: the store's rows when the store owns the log,
-/// else the copy in memory.
-///
-/// ⚠️ Not the copy when there is a store: before C14 (landing 14) a paper-card mark left the
-/// copy's `confirmed` / `award_confirmed` behind its channels until a restart, while the store
-/// reads them from the channels — so the copy and the store disagree after a card, and it is the
-/// store's rows the engine's answers are the UI's functions of. Once C14 is merged in, the copy
-/// agrees again and this can read it.
+/// The log the UI's answers were computed from: the copy in memory, in log order — what
+/// `get_log` handed every window. The engine answers from the store when the store owns the log,
+/// so the parity holds the store's rows to the copy as well as the answers to the UI's.
 fn log_of(engine: &SharedEngine) -> Vec<QsoRecord> {
-    let (reads, copy) = {
-        let e = engine_lock(engine);
-        let copy: Vec<QsoRecord> = e
-            .log_records()
-            .iter()
-            .map(|r| QsoRecord::clone(r))
-            .collect();
-        (e.log_store_reads(), copy)
-    };
-    match reads {
-        Some(reads) => {
-            reads
-                .rows(Duration::from_secs(10))
-                .expect("the store reads")
-                .0
-        }
-        None => copy,
-    }
+    engine_lock(engine)
+        .log_records()
+        .iter()
+        .map(|r| QsoRecord::clone(r))
+        .collect()
 }
 
 /// Every question this part answers, asked of the engine and of the reference over the log the
