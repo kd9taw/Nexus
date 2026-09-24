@@ -657,6 +657,108 @@ impl StoreReads {
     }
 }
 
+/// How long a pass over the log ([`LogRows`]) waits for the writer to take the changes made
+/// before it was asked for, before it reads the store as it stands and says so
+/// ([`Freshness::Stale`]). The writer commits a change within one disk flush; this is for the
+/// moment a bulk write is ahead of it.
+pub const READ_WAIT: Duration = Duration::from_secs(2);
+
+/// The log's rows, for a pass over them — SPEC-2 v3's **C14**. Taken under the Engine lock
+/// ([`crate::engine::Engine::log_rows`]: handles, or a copy of pointers) and read after it is
+/// released.
+///
+/// ONE way for every fold, lookup and sweep to reach the log, whichever holds it this session,
+/// so each of them is written once.
+#[derive(Debug, Clone)]
+pub enum LogRows {
+    /// The logbook store, which owns the log. A pass first waits for every change made before
+    /// this was taken to be committed (P4: a question asked straight after a contact is logged
+    /// sees it), then reads in ONE read transaction.
+    Store(StoreReads),
+    /// The 1.13 path, when the store was refused and the session runs on `log.adi`: the log in
+    /// memory, as a copy of its pointers. SPEC-2 v3 D1 moves that path onto an in-memory
+    /// database of the store's own shape (C19), and this arm goes with it.
+    Memory(Vec<Arc<QsoRecord>>),
+}
+
+impl LogRows {
+    /// Hand `each` every row `scope` names, in `order`, with (at least) `narrow`'s fields
+    /// filled; `each` answering [`std::ops::ControlFlow::Break`] ends the pass. Whether it saw
+    /// every change made before the rows were taken is the answer.
+    ///
+    /// On the 1.13 path the rows are whole records, and `scope` is applied to them by the
+    /// store's own definition of it — the same rows the store would name.
+    ///
+    /// ⚠️ **Never call it holding the Engine lock** — it reads the disk, or passes over the
+    /// whole log; a debug build panics ([`tempo_core::logbook::io_fence`]).
+    pub fn each(
+        &self,
+        narrow: sqlite::Narrow,
+        scope: sqlite::Scope<'_>,
+        order: sqlite::Order,
+        each: &mut dyn FnMut(&QsoRecord) -> std::ops::ControlFlow<()>,
+    ) -> Result<Freshness, sqlite::Error> {
+        tempo_core::logbook::io_fence::whole_log_off_engine_lock("a pass over the log's rows");
+        match self {
+            LogRows::Store(reads) => reads
+                .read(READ_WAIT, |db| db.each_narrow(narrow, scope, order, each))
+                .map(|((), fresh)| fresh),
+            LogRows::Memory(rows) => {
+                let named = |r: &QsoRecord| match scope {
+                    sqlite::Scope::All => true,
+                    sqlite::Scope::Since(t) => r.when_unix >= t,
+                    sqlite::Scope::CallNorm(call) => sqlite::call_norm_of(&r.call) == call,
+                };
+                let mut visit = |r: &Arc<QsoRecord>| named(r) && each(r).is_break();
+                match order {
+                    sqlite::Order::Log => {
+                        let _ = rows.iter().any(&mut visit);
+                    }
+                    sqlite::Order::NewestFirst => {
+                        let _ = rows.iter().rev().any(&mut visit);
+                    }
+                }
+                Ok(Freshness::Current)
+            }
+        }
+    }
+
+    /// The whole records these ids name, in log order — [`LogDb::rows_by_ids`] on the store.
+    /// An id the log does not hold is simply absent.
+    ///
+    /// ⚠️ Never under the Engine lock, as [`Self::each`].
+    pub fn rows_by_ids(
+        &self,
+        ids: &[tempo_core::logbook::RecordId],
+    ) -> Result<(Vec<QsoRecord>, Freshness), sqlite::Error> {
+        match self {
+            LogRows::Store(reads) => reads.read(READ_WAIT, |db| db.rows_by_ids(ids)),
+            LogRows::Memory(rows) => {
+                tempo_core::logbook::io_fence::whole_log_off_engine_lock(
+                    "a pass over the log's rows",
+                );
+                let wanted: std::collections::HashSet<_> = ids.iter().collect();
+                let found = rows
+                    .iter()
+                    .filter(|r| r.id.as_ref().is_some_and(|id| wanted.contains(id)))
+                    .map(|r| QsoRecord::clone(r))
+                    .collect();
+                Ok((found, Freshness::Current))
+            }
+        }
+    }
+
+    /// How many contacts the log holds.
+    ///
+    /// ⚠️ Never under the Engine lock, as [`Self::each`].
+    pub fn count(&self) -> Result<(u64, Freshness), sqlite::Error> {
+        match self {
+            LogRows::Store(reads) => reads.read(READ_WAIT, |db| db.row_count()),
+            LogRows::Memory(rows) => Ok((rows.len() as u64, Freshness::Current)),
+        }
+    }
+}
+
 /// What a quit still has to wait for — SPEC-1's C10, the quit that says it is saving.
 ///
 /// This process's changes the writer has not finished with, taken as their tickets, and the
@@ -1091,41 +1193,126 @@ mod tests {
         out
     }
 
-    /// ★ PROPERTY 7 — LAUNCH WRITES NOTHING. A log whose rows the country backfill can fill,
-    /// opened for the SECOND time (the ordinary launch): the fill happens — every view reads it
-    /// — and not one byte of the store, of `log.adi`, of the safety copies or of the ring
-    /// changes.
-    ///
-    /// The positive control is the 1.13 path: the same log, the same backfill, through
-    /// `set_log_path`, rewrites `log.adi` — so this picture of the disk CAN see a launch write,
-    /// and the store's launch really made none.
-    #[test]
-    fn launch_writes_nothing_even_when_the_backfills_fill_rows() {
-        let d = Dir::new("launch");
-        std::fs::write(d.log(), legacy_log(50)).unwrap();
-        // The first launch converts (the one write a launch is allowed, once ever).
-        {
-            let e = engine_on_store(&d);
-            flush(&e);
-        }
-        let before = disk_picture(&d);
-        {
-            let mut e = Engine::new("K2DEF", "FN31", 0);
-            e.set_dxcc_resolver(|call| Some(format!("Entity of {call}")));
-            e.attach_log_store(open_fast(&d));
-            assert!(
-                e.log_records().iter().all(|r| r
-                    .country
-                    .as_deref()
-                    .is_some_and(|c| c.starts_with("Entity of"))),
-                "premise: the backfill filled every row, in memory"
-            );
-            flush(&e);
-        }
-        assert_eq!(disk_picture(&d), before, "the launch wrote nothing at all");
+    // ── the fills (SPEC-2 v3 D2-A) ──────────────────────────────────────────
 
-        // The control: the 1.13 path, the same log, the same backfill.
-        let legacy = Dir::new("launch-legacy");
+    /// The resolvers the fill tests hand the engine AND the fill job — one function each, as
+    /// the command layer hands both the same functions. A `Q` call has no country; only a `K`
+    /// call has a state.
+    fn test_country(call: &str) -> Option<String> {
+        (!call.starts_with('Q')).then(|| format!("Entity of {call}"))
+    }
+    fn test_state(call: &str, _grid: Option<&str>) -> Option<String> {
+        call.starts_with('K').then(|| "WI".to_string())
+    }
+
+    /// A launch with the resolvers set before the log is adopted, as the shell's is.
+    fn launch_with_resolvers(d: &Dir) -> Mutex<Engine> {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(test_country);
+        e.set_state_resolver(test_state);
+        e.attach_log_store(open_fast(d));
+        Mutex::new(e)
+    }
+
+    /// One run of the fill job, with the same resolvers.
+    fn fill(e: &Mutex<Engine>, version: i64) -> crate::logfill::FillOutcome {
+        crate::logfill::fill_log_store(e, version, &test_country, &test_state)
+            .expect("the fill job runs")
+    }
+
+    /// A log.adi of `legacy_log(n)` plus a contact no resolver can place a country for, and one
+    /// it can place a country but no state for.
+    fn log_to_fill(n: usize) -> String {
+        legacy_log(n)
+            + "<CALL:5>Q1ZZZ<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010101<EOR>\n\
+               <CALL:5>DL1XX<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010202<EOR>\n"
+    }
+
+    /// ★ D2-A — THE STORE HOLDS EXACTLY WHAT THE SCREENS SHOW. A log an older build left unfilled
+    /// (here: converted with no resolvers) is opened by a launch that has them:
+    ///
+    /// - the attach fills nothing and writes nothing — memory is the store, row for row;
+    /// - the fill job writes every country and state the resolvers can place, into memory and
+    ///   the store alike, and records the version it filled for;
+    /// - the next run at that version reads nothing and writes nothing — a launch writes
+    ///   nothing once its fills are saved;
+    /// - a new version (a new cty.dat, a new FCC file, a new build) reads again, and finds only
+    ///   what no resolver can place.
+    ///
+    /// The control is the 1.13 path, which still rewrites `log.adi` when its backfill fills.
+    #[test]
+    fn the_launch_fills_nothing_and_the_fill_job_saves_the_fills_once() {
+        let d = Dir::new("fill-once");
+        std::fs::write(d.log(), log_to_fill(40)).unwrap();
+        // The conversion, by a launch with no resolvers: every row unfilled in the store.
+        flush(&engine_on_store(&d));
+        let converted = disk_picture(&d);
+        let e = launch_with_resolvers(&d);
+        {
+            let eng = e.lock().unwrap();
+            assert!(
+                eng.log_records()
+                    .iter()
+                    .all(|r| r.country.is_none() && r.state.is_none()),
+                "the attach filled nothing"
+            );
+            same_log(eng.log_records(), &stored(&d), "memory is the store");
+            flush(&eng);
+        }
+        assert_eq!(disk_picture(&d), converted, "and wrote nothing");
+
+        let done = fill(&e, 7);
+        assert_eq!(
+            done,
+            crate::logfill::FillOutcome {
+                current: false,
+                lacking: 42,
+                filled: 41,
+            },
+            "every contact lacked a field; all but the Q call gained one"
+        );
+        flush(&e.lock().unwrap());
+        {
+            let eng = e.lock().unwrap();
+            same_log(
+                eng.log_records(),
+                &stored(&d),
+                "the store holds exactly what the screens show",
+            );
+            for r in eng.log_records() {
+                assert_eq!(r.country, test_country(&r.call), "{}", r.call);
+                assert_eq!(r.state, test_state(&r.call, None), "{}", r.call);
+            }
+        }
+        let meta = |k| LogDb::open(&d.db()).unwrap().meta(k).unwrap();
+        assert_eq!(meta(crate::logfill::FILL_VER), Some(7));
+
+        let settled = disk_picture(&d);
+        assert_eq!(
+            fill(&e, 7),
+            crate::logfill::FillOutcome {
+                current: true,
+                ..Default::default()
+            }
+        );
+        flush(&e.lock().unwrap());
+        assert_eq!(
+            disk_picture(&d),
+            settled,
+            "a launch whose fills are saved writes nothing"
+        );
+
+        let again = fill(&e, 8);
+        assert_eq!(
+            (again.current, again.lacking, again.filled),
+            (false, 2, 0),
+            "a new version reads again, and finds only what no resolver can place"
+        );
+        flush(&e.lock().unwrap());
+        assert_eq!(meta(crate::logfill::FILL_VER), Some(8));
+
+        // The control: the 1.13 path, the same log, the same backfill, rewrites log.adi.
+        let legacy = Dir::new("fill-legacy");
         std::fs::write(legacy.log(), legacy_log(50)).unwrap();
         let _ = tempo_core::logbook::Logbook::load(&legacy.log()); // anchor + sweep marker
         let before = std::fs::read(legacy.log()).unwrap();
@@ -1136,6 +1323,458 @@ mod tests {
             std::fs::read(legacy.log()).unwrap(),
             before,
             "control: the 1.13 launch DOES rewrite log.adi when the backfill fills"
+        );
+    }
+
+    /// ★ D2-A: an imported US contact carries its state from the moment it is imported — in the
+    /// store as in memory — where it used to gain it in memory only, at the next launch.
+    #[test]
+    fn an_imported_us_contact_carries_its_state_from_the_import() {
+        let d = Dir::new("import-state");
+        let e = launch_with_resolvers(&d);
+        e.lock().unwrap().import_adif(
+            "<CALL:5>K9ABC<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>120000<EOR>\n",
+        );
+        flush(&e.lock().unwrap());
+        let rows = stored(&d);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state.as_deref(), Some("WI"), "in the store");
+        assert_eq!(rows[0].country.as_deref(), Some("Entity of K9ABC"));
+        same_log(e.lock().unwrap().log_records(), &rows, "and on the screens");
+    }
+
+    /// ★ D2-A: EVERY insert fills country and state before it writes — a logged contact, an
+    /// import, a QRZ download's new contacts, a Field Day merge and a `log.adi` taken in at
+    /// launch — so no reader of the store ever finds a contact the screens would have filled.
+    #[test]
+    fn every_insert_path_writes_its_fills_with_the_contact() {
+        // A `log.adi` taken in at launch: written over the mirror between two launches.
+        let d = Dir::new("insert-fills");
+        std::fs::write(d.log(), legacy_log(3)).unwrap();
+        flush(&engine_on_store(&d)); // converted (unfilled — the fill job's, not this test's)
+        std::fs::write(
+            d.log(),
+            legacy_log(3)
+                + "<CALL:5>K8TAK<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20260911<TIME_ON:6>010101<EOR>\n",
+        )
+        .unwrap();
+        let e = launch_with_resolvers(&d);
+        {
+            let mut eng = e.lock().unwrap();
+            // A logged contact.
+            eng.log_qso(qso("K7LOG", 1_788_000_000));
+            // An import.
+            eng.import_adif(
+                "<CALL:5>K6IMP<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>130000<EOR>\n",
+            );
+            // A QRZ download's contact the log lacked.
+            let _ = eng.merge_qrz_report(
+                "<CALL:5>K5QRZ<BAND:3>15m<MODE:3>SSB<QSO_DATE:8>20260909<TIME_ON:6>140000\
+                 <APP_QRZLOG_STATUS:1>C<EOR>\n",
+            );
+            flush(&eng);
+        }
+        let rows = stored(&d);
+        for call in ["K8TAK", "K7LOG", "K6IMP", "K5QRZ"] {
+            let r = rows
+                .iter()
+                .find(|r| r.call == call)
+                .unwrap_or_else(|| panic!("premise: {call} is in the store"));
+            assert_eq!(r.country, test_country(call), "{call}'s country, written");
+            assert_eq!(r.state.as_deref(), Some("WI"), "{call}'s state, written");
+        }
+        same_log(
+            e.lock().unwrap().log_records(),
+            &rows,
+            "the store is what the screens show",
+        );
+
+        // A Field Day merge into the general log.
+        let d = Dir::new("insert-fills-fd");
+        let e = launch_with_resolvers(&d);
+        {
+            let mut eng = e.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_position_id = "a1b2c3d4".into();
+            eng.apply_settings(s);
+            eng.set_mode("fieldday-run").unwrap();
+            assert!(eng.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+            assert!(eng.fd_log_manual("W1AW", "1D", "CT", "PH").unwrap());
+            assert_eq!(eng.fd_merge_to_general().unwrap().added(), 2);
+            flush(&eng);
+        }
+        let rows = stored(&d);
+        let merged = |call: &str| rows.iter().find(|r| r.call == call).cloned().unwrap();
+        assert_eq!(merged("K1ABC").state.as_deref(), Some("WI"));
+        assert_eq!(merged("K1ABC").country, test_country("K1ABC"));
+        assert_eq!(merged("W1AW").country, test_country("W1AW"));
+        assert_eq!(
+            merged("W1AW").state,
+            None,
+            "a call no resolver places stays empty"
+        );
+        same_log(
+            e.lock().unwrap().log_records(),
+            &rows,
+            "the store is what the screens show",
+        );
+    }
+
+    /// A fill lands only where the field is still empty: a contact given a state since the job
+    /// read it keeps that state, and one deleted since is left deleted. (No resolvers here: an
+    /// edit fills a missing country itself, which would hide what this is about.)
+    #[test]
+    fn a_fill_lands_only_where_the_field_is_still_empty() {
+        let d = Dir::new("fill-race");
+        std::fs::write(d.log(), legacy_log(3)).unwrap();
+        flush(&engine_on_store(&d));
+        let mut eng = engine_on_store(&d);
+        let ids: Vec<_> = eng.log_records().iter().map(|r| r.id.unwrap()).collect();
+        // Since the job read them: the operator set row 0's state, and deleted row 2.
+        let mut edited = QsoRecord::clone(&eng.log_records()[0]);
+        edited.state = Some("MA".into());
+        assert!(eng.update_qso(0, edited));
+        assert!(eng.delete_qso(2));
+        let fills: Vec<crate::station::LogFill> = ids
+            .iter()
+            .map(|id| crate::station::LogFill {
+                id: *id,
+                country: Some("Found".into()),
+                state: Some("WI".into()),
+            })
+            .collect();
+        assert_eq!(
+            eng.apply_log_fills(&fills, 3),
+            2,
+            "rows 0 and 1 gained a field"
+        );
+        flush(&eng);
+        let held: Vec<(Option<String>, Option<String>)> = eng
+            .log_records()
+            .iter()
+            .map(|r| (r.country.clone(), r.state.clone()))
+            .collect();
+        assert_eq!(
+            held,
+            [
+                (Some("Found".into()), Some("MA".into())),
+                (Some("Found".into()), Some("WI".into())),
+            ],
+            "the operator's state kept; the deleted contact not brought back"
+        );
+        same_log(
+            eng.log_records(),
+            &stored(&d),
+            "and the store holds the same",
+        );
+    }
+
+    /// ★ The fill job never waits and never reads under the Engine lock. With the store's write
+    /// lock held elsewhere and a contact submitted, the job's read waits for that contact (P4)
+    /// — and the Engine lock is free the whole time it waits. The control shows the wait was
+    /// real: the job cannot finish while the write lock is held.
+    #[test]
+    fn the_fill_job_waits_and_reads_with_the_engine_lock_free() {
+        let d = Dir::new("fill-lock");
+        std::fs::write(d.log(), legacy_log(4)).unwrap();
+        flush(&engine_on_store(&d));
+        let e = std::sync::Arc::new(launch_with_resolvers(&d));
+        let hold = WriteHold::take(&d.db()).unwrap();
+        e.lock().unwrap().log_qso(qso("K4WAIT", 1_788_000_000));
+        let job = {
+            let e = std::sync::Arc::clone(&e);
+            std::thread::spawn(move || fill(&e, 11))
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !job.is_finished(),
+            "control: the job is waiting for the held write"
+        );
+        for _ in 0..10 {
+            assert!(
+                e.try_lock().is_ok(),
+                "the Engine lock is free while the job waits"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(hold);
+        let done = job.join().unwrap();
+        assert_eq!(
+            done.filled, 4,
+            "the converted rows; the logged one arrived filled"
+        );
+    }
+
+    // ── the log's rows, for a pass over them (SPEC-2 v3 C14) ────────────────
+
+    /// A small deterministic generator: a failing case is reproducible from its seed alone.
+    struct Gen(u64);
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    /// One random change of the kinds the app makes to the log, applied to `e` — a logged
+    /// contact, an import (sometimes of a contact the log holds), an edit, a delete, a QSL card,
+    /// a QSL-sent mark, a satellite tag, connector stamps, a LoTW report's confirmation, or the
+    /// fill job.
+    fn random_change(e: &Mutex<Engine>, g: &mut Gen, step: u64) {
+        const CALLS: [&str; 6] = ["K1ABC", "W9XYZ", "DL1AB", "Q1ZZZ", "K2DEF/P", "JA1AA"];
+        let call = CALLS[g.below(CALLS.len())];
+        let when = 1_788_000_000 + step * 60;
+        let len = e.lock().unwrap().log_records().len();
+        let at = g.below(len);
+        match g.below(10) {
+            0 => e.lock().unwrap().log_qso(qso(call, when)),
+            1 => {
+                let _ = e.lock().unwrap().import_adif(&format!(
+                    "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>{:06}\
+                     <APP_TEMPO_UL_QRZ:19>accepted|1788000500<EOR>\n",
+                    call.len(),
+                    step % 240_000
+                ));
+            }
+            2 if len > 0 => {
+                let mut eng = e.lock().unwrap();
+                let mut r = QsoRecord::clone(&eng.log_records()[at]);
+                if g.below(2) == 0 {
+                    r.band = "40m".into();
+                } else {
+                    r.call = call.into();
+                }
+                eng.update_qso(at, r);
+            }
+            3 if len > 0 => {
+                e.lock().unwrap().delete_qso(at);
+            }
+            4 if len > 0 => {
+                e.lock().unwrap().mark_qsl_card(at, g.below(2) == 0);
+            }
+            5 if len > 0 => {
+                e.lock()
+                    .unwrap()
+                    .mark_qsl_sent(at, Some(tempo_core::logbook::QslVia::Bureau));
+            }
+            6 if len > 0 => {
+                let sat = (g.below(2) == 0).then_some("RS-44");
+                e.lock().unwrap().set_sat_tag(at, sat);
+            }
+            7 if len > 0 => {
+                let mut eng = e.lock().unwrap();
+                let pushed = QsoRecord::clone(&eng.log_records()[at]);
+                let outcome = if g.below(2) == 0 {
+                    tempo_core::logbook::UploadOutcome::Accepted
+                } else {
+                    tempo_core::logbook::UploadOutcome::Rejected
+                };
+                eng.stamp_qrz_upload(&pushed, outcome, when as i64, None);
+                eng.stamp_clublog_upload(&pushed, outcome, when as i64 + 1, None);
+            }
+            8 if len > 0 => {
+                let mut eng = e.lock().unwrap();
+                let r = QsoRecord::clone(&eng.log_records()[at]);
+                let text = tempo_core::logbook::adif_record(&r)
+                    .replace("<EOR>", "<LOTW_QSL_RCVD:1>Y<EOR>");
+                let _ = eng.merge_lotw_report(&text);
+            }
+            _ => {
+                let _ = fill(e, (step % 3) as i64);
+            }
+        }
+    }
+
+    /// Every record a pass hands out, whole enough to compare.
+    fn pass(
+        rows: &LogRows,
+        narrow: sqlite::Narrow,
+        scope: sqlite::Scope<'_>,
+        order: sqlite::Order,
+    ) -> Vec<QsoRecord> {
+        let mut out = Vec::new();
+        rows.each(narrow, scope, order, &mut |r| {
+            out.push(r.clone());
+            std::ops::ControlFlow::Continue(())
+        })
+        .expect("the pass reads");
+        out
+    }
+
+    /// ★ A PASS OVER THE STORE IS A PASS OVER THE LOG IN MEMORY — every row, every field a fold
+    /// can ask for (all of them, the stamps included), in log order and newest first, and the
+    /// same rows under each scope — after 12 seeded runs of 40 random changes of every kind the
+    /// app makes, fills included. The memory side is the 1.13 path's arm, which is the log as
+    /// every reader saw it before C14.
+    #[test]
+    fn a_pass_over_the_store_is_a_pass_over_the_log_in_memory() {
+        let every: Vec<&'static str> = [
+            "call",
+            "band",
+            "mode",
+            "freq_mhz",
+            "freq_rx_mhz",
+            "when_unix",
+            "time_off_unix",
+            "time_known",
+            "grid",
+            "country",
+            "state",
+            "name",
+            "qth",
+            "comment",
+            "notes",
+            "rst_sent",
+            "rst_rcvd",
+            "tx_power",
+            "dxcc",
+            "prop_mode",
+            "sat_name",
+            "operator",
+            "station_callsign",
+            "my_grid",
+            "my_rig",
+            "qsl_card_rcvd_raw",
+            "lotw_rcvd_raw",
+            "eqsl_rcvd_raw",
+            "qrz_status_raw",
+            "qsl_sent",
+            "qsl_sent_via",
+            "qsl_sent_date_unix",
+            "qsl_sent_cleared_unix",
+            "credit_granted",
+            "credit_submitted",
+            "ota_my_program",
+            "ota_my_ref",
+            "ota_their_program",
+            "ota_their_ref",
+            "ota_iota",
+        ]
+        .to_vec();
+        let whole = sqlite::Narrow {
+            columns: Box::leak(every.into_boxed_slice()),
+            uploads: true,
+        };
+        // A whole record as a pass hands it: the passthrough and the contest block are never read.
+        let as_passed = |r: &QsoRecord| {
+            let mut r = r.clone();
+            r.extra.clear();
+            r.contest = None;
+            r
+        };
+        let mut changes = 0;
+        for seed in 1..=12u64 {
+            let d = Dir::new(&format!("rows-{seed}"));
+            std::fs::write(d.log(), log_to_fill(12)).unwrap();
+            flush(&engine_on_store(&d));
+            let e = launch_with_resolvers(&d);
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            for step in 0..40 {
+                random_change(&e, &mut g, step);
+                changes += 1;
+            }
+            let (store, memory) = {
+                let eng = e.lock().unwrap();
+                (eng.log_rows(), LogRows::Memory(eng.log_records().to_vec()))
+            };
+            assert!(matches!(store, LogRows::Store(_)), "premise: the store's");
+            let held: Vec<QsoRecord> = e
+                .lock()
+                .unwrap()
+                .log_records()
+                .iter()
+                .map(|r| as_passed(r))
+                .collect();
+            for order in [sqlite::Order::Log, sqlite::Order::NewestFirst] {
+                let from_store = pass(&store, whole, sqlite::Scope::All, order);
+                let mut want = held.clone();
+                if order == sqlite::Order::NewestFirst {
+                    want.reverse();
+                }
+                assert_eq!(
+                    from_store, want,
+                    "seed {seed}, {order:?}: every row, every field"
+                );
+            }
+            let ids = |v: Vec<QsoRecord>| v.into_iter().map(|r| r.id).collect::<Vec<_>>();
+            let times: Vec<u64> = held.iter().map(|r| r.when_unix).collect();
+            let calls: Vec<String> = held.iter().map(|r| sqlite::call_norm_of(&r.call)).collect();
+            for t in times.iter().copied().take(6).chain([0, u64::MAX]) {
+                let scope = sqlite::Scope::Since(t);
+                assert_eq!(
+                    ids(pass(&store, whole, scope, sqlite::Order::Log)),
+                    ids(pass(&memory, whole, scope, sqlite::Order::Log)),
+                    "seed {seed}: since {t}"
+                );
+            }
+            for c in calls.iter().take(6) {
+                let scope = sqlite::Scope::CallNorm(c);
+                assert_eq!(
+                    ids(pass(&store, whole, scope, sqlite::Order::Log)),
+                    ids(pass(&memory, whole, scope, sqlite::Order::Log)),
+                    "seed {seed}: call {c}"
+                );
+            }
+            assert_eq!(store.count().unwrap().0, held.len() as u64, "seed {seed}");
+        }
+        assert_eq!(changes, 12 * 40);
+    }
+
+    /// ★ The catch-up sweep picks from the store what it picked from memory: the same contacts,
+    /// whole, in log order, each with the legs it is short of — and the room caps it. The oracle
+    /// is the pick as `StationCore::requeue_failed_uploads` made it before C14, verbatim.
+    #[test]
+    fn the_catch_up_sweep_picks_from_the_store_what_it_picked_from_memory() {
+        use crate::engine::upload_legs;
+        let d = Dir::new("catch-up");
+        std::fs::write(d.log(), log_to_fill(20)).unwrap();
+        flush(&engine_on_store(&d));
+        let e = launch_with_resolvers(&d);
+        let mut g = Gen(0xC0FF_EE14);
+        for step in 0..60 {
+            random_change(&e, &mut g, step);
+        }
+        let (store, memory, held) = {
+            let eng = e.lock().unwrap();
+            let held = eng.log_records().to_vec();
+            (eng.log_rows(), LogRows::Memory(held.clone()), held)
+        };
+        let old = |legs: u8, room: usize| -> Vec<(QsoRecord, u8)> {
+            held.iter()
+                .filter_map(|r| match crate::station::unsent_legs(r, legs) {
+                    0 => None,
+                    owed => Some((QsoRecord::clone(r), owed)),
+                })
+                .take(room)
+                .collect()
+        };
+        for legs in [
+            upload_legs::QRZ,
+            upload_legs::CLUBLOG,
+            upload_legs::QRZ | upload_legs::EQSL,
+            upload_legs::ALL,
+        ] {
+            for room in [0, 1, 5, 256] {
+                let from_store = crate::station::catch_up_records(&store, legs, room).unwrap();
+                let from_memory = crate::station::catch_up_records(&memory, legs, room).unwrap();
+                assert_eq!(from_store, old(legs, room), "legs {legs:#b}, room {room}");
+                assert_eq!(from_memory, old(legs, room), "legs {legs:#b}, room {room}");
+                assert!(from_store.len() <= room);
+            }
+        }
+        assert!(
+            !crate::station::catch_up_records(&store, upload_legs::QRZ, 256)
+                .unwrap()
+                .is_empty(),
+            "premise: something is owed"
         );
     }
 
@@ -2446,42 +3085,50 @@ mod tests {
         same_log(b.log_records(), a.log_records(), "the two windows agree");
     }
 
-    /// ⛔ ANOTHER WINDOW'S COMMIT DOES NOT UNDO THIS ONE'S LAUNCH FILL. A launch fills countries
-    /// in memory and writes nothing, so the store holds those rows unfilled — and a re-read
-    /// takes the store's copy of every row this window has no change in flight for. With
-    /// nothing more, the other window's next contact would cost this one every country its
-    /// launch filled in, until a restart: awards and the needed board reading blanks.
-    ///
-    /// Both re-reads: the freshness poll's, which may move rows, and the in-place one a change
-    /// makes first.
+    /// ⛔ ANOTHER WINDOW'S COMMIT DOES NOT UNDO THIS ONE'S FILLS — and a window opened before
+    /// them takes them in. The fills are in the store (D2-A), so a re-read of it — the freshness
+    /// poll's, which may move rows, and the in-place one a change makes first — brings them
+    /// with every row it takes; the other window's own contacts arrive filled, because it fills
+    /// before it writes.
     #[test]
-    fn another_windows_commit_keeps_this_ones_launch_fill() {
+    fn another_windows_commit_keeps_this_ones_fills() {
         let d = Dir::new("refill");
         std::fs::write(d.log(), legacy_log(6)).unwrap();
-        flush(&engine_on_store(&d)); // the conversion
-        let mut a = Engine::new("K2DEF", "FN31", 0);
-        a.set_dxcc_resolver(|call| Some(format!("Entity of {call}")));
-        a.attach_log_store(open_fast(&d));
-        let unfilled = |e: &Engine| {
-            e.log_records()
+        flush(&engine_on_store(&d)); // the conversion: every row unfilled
+        let a = launch_with_resolvers(&d);
+        // A window opened before the fills were saved.
+        let early = launch_with_resolvers(&d);
+        assert_eq!(
+            fill(&a, 1).filled,
+            6,
+            "premise: the fill job filled every row"
+        );
+        flush(&a.lock().unwrap());
+        let unfilled = |e: &Mutex<Engine>| {
+            e.lock()
+                .unwrap()
+                .log_records()
                 .iter()
                 .filter(|r| r.country.is_none())
                 .map(|r| r.call.clone())
                 .collect::<Vec<_>>()
         };
-        assert!(
-            unfilled(&a).is_empty(),
-            "premise: the launch filled every row"
+        assert_eq!(unfilled(&a), Vec::<String>::new(), "premise: A filled them");
+        assert_eq!(
+            unfilled(&early).len(),
+            6,
+            "premise: the early window has not"
         );
-        assert!(
-            stored(&d).iter().all(|r| r.country.is_none()),
-            "premise: in memory only"
-        );
-
-        let mut b = engine_on_store(&d);
-        b.log_qso(qso("W1AAA", 1_788_000_000));
-        flush(&b);
         assert!(eventually(|| {
+            early.lock().unwrap().sync_shared_log_if_changed();
+            unfilled(&early).is_empty()
+        }));
+
+        let b = launch_with_resolvers(&d);
+        b.lock().unwrap().log_qso(qso("W1AAA", 1_788_000_000));
+        flush(&b.lock().unwrap());
+        assert!(eventually(|| {
+            let mut a = a.lock().unwrap();
             a.sync_shared_log_if_changed();
             find(&a, "W1AAA").is_some()
         }));
@@ -2491,18 +3138,27 @@ mod tests {
             "after the freshness poll's re-read, every row carries its country — the new one too"
         );
 
-        b.log_qso(qso("W2BBB", 1_788_000_100));
-        flush(&b);
-        assert!(eventually(|| a.log_store_foreign_pending()));
+        b.lock().unwrap().log_qso(qso("W2BBB", 1_788_000_100));
+        flush(&b.lock().unwrap());
+        assert!(eventually(|| a.lock().unwrap().log_store_foreign_pending()));
         assert!(
-            a.mark_qsl_card(0, true),
+            a.lock().unwrap().mark_qsl_card(0, true),
             "a change, which re-reads in place"
         );
-        assert!(find(&a, "W2BBB").is_some(), "premise: the change re-read");
+        assert!(
+            find(&a.lock().unwrap(), "W2BBB").is_some(),
+            "premise: the change re-read"
+        );
         assert_eq!(
             unfilled(&a),
             Vec::<String>::new(),
             "after a change's in-place re-read, likewise"
+        );
+        flush(&a.lock().unwrap());
+        same_log(
+            a.lock().unwrap().log_records(),
+            &stored(&d),
+            "and A shows what the store holds",
         );
     }
 

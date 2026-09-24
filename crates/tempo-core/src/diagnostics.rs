@@ -13,10 +13,46 @@
 //! never-uploaded, R9 bounced, the Confident R2 partner-hasn't) via the
 //! `UploadState` field (the spec's Phase 1b — shipped).
 
-use crate::logbook::{QsoRecord, UploadOutcome};
+use crate::logbook::{QsoRecord, UploadOutcome, UploadState};
 use crate::reconcile::{mode_class, OrphanConfirmation, ReconcileSummary};
 
 const SECS_PER_DAY: u64 = 86_400;
+
+/// What the diagnosis reads of one logged contact — the nine fields [`diagnose_rows`] looks at,
+/// under the names and types [`QsoRecord`] gives them, and nothing else.
+///
+/// The diagnosis needs every contact at once (it pairs twins, searches for an orphan's best
+/// candidate, and reports by position), so it cannot stream the log a row at a time. A
+/// lifetime log held as whole records to be diagnosed is ~840 bytes a contact before its text;
+/// read from the store as these, it is a third of that (SPEC-2 v3 C14).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DiagRow {
+    pub call: String,
+    pub band: String,
+    pub mode: String,
+    pub when_unix: u64,
+    pub state: Option<String>,
+    pub confirmed: bool,
+    pub award_confirmed: bool,
+    pub credit_granted: Vec<String>,
+    pub upload: UploadState,
+}
+
+impl From<&QsoRecord> for DiagRow {
+    fn from(r: &QsoRecord) -> DiagRow {
+        DiagRow {
+            call: r.call.clone(),
+            band: r.band.clone(),
+            mode: r.mode.clone(),
+            when_unix: r.when_unix,
+            state: r.state.clone(),
+            confirmed: r.confirmed,
+            award_confirmed: r.award_confirmed,
+            credit_granted: r.credit_granted.clone(),
+            upload: r.upload.clone(),
+        }
+    }
+}
 
 /// Tunable diagnostics thresholds.
 #[derive(Debug, Clone)]
@@ -304,7 +340,7 @@ fn osa_distance(a: &str, b: &str) -> usize {
 
 /// The match-key components of a logged QSO, in the orphan's normalized shape
 /// (call UPPER, band lower, mode-CLASS, UTC day) — so R4/R6 compare like-for-like.
-fn key_parts(r: &QsoRecord) -> (String, String, &'static str, u64) {
+fn key_parts(r: &DiagRow) -> (String, String, &'static str, u64) {
     (
         r.call.to_ascii_uppercase(),
         r.band.to_ascii_lowercase(),
@@ -323,12 +359,24 @@ pub fn diagnose<R: std::borrow::Borrow<QsoRecord>>(
     now: i64,
     cfg: &DiagCfg,
 ) -> DiagnosticsReport {
-    // The log hands its records out shared (`Arc`), the tests as plain records; read both
-    // through one slice of references.
-    let records: Vec<&QsoRecord> = records
+    let rows: Vec<DiagRow> = records
         .iter()
-        .map(|r| std::borrow::Borrow::borrow(r))
+        .map(|r| DiagRow::from(std::borrow::Borrow::borrow(r)))
         .collect();
+    diagnose_rows(&rows, entities, recents, now, cfg)
+}
+
+/// [`diagnose`], over the fields it reads ([`DiagRow`]) — what a read of the store hands it.
+/// `rows` are the log's contacts in log order, and every index in the report is a position in
+/// them.
+pub fn diagnose_rows(
+    rows: &[DiagRow],
+    entities: &[Option<String>],
+    recents: &[&ReconcileSummary],
+    now: i64,
+    cfg: &DiagCfg,
+) -> DiagnosticsReport {
+    let records: Vec<&DiagRow> = rows.iter().collect();
     let records = &records[..];
     // Per-record accumulated reasons, deduped by (code, source) — the source matters
     // so a record can carry, e.g., both "never uploaded to LoTW" (R1/LoTW) and "never
@@ -740,7 +788,7 @@ pub fn diagnose<R: std::borrow::Borrow<QsoRecord>>(
 
 /// Two records are "field-identical" for duplicate detection — same call/band/
 /// mode/state (ignoring rst/freq, which often differ between two real contacts).
-fn field_identical(a: &QsoRecord, b: &QsoRecord) -> bool {
+fn field_identical(a: &DiagRow, b: &DiagRow) -> bool {
     a.call.eq_ignore_ascii_case(&b.call)
         && a.band.eq_ignore_ascii_case(&b.band)
         && mode_class(&a.mode) == mode_class(&b.mode)
@@ -750,10 +798,7 @@ fn field_identical(a: &QsoRecord, b: &QsoRecord) -> bool {
 
 /// Best exact-call R4 candidate for an orphan: among same-call unconfirmed logged
 /// QSOs, the one differing in EXACTLY ONE key dimension (band/mode/day).
-fn best_r4_candidate(
-    records: &[&QsoRecord],
-    orphan: &OrphanConfirmation,
-) -> Option<(usize, Reason)> {
+fn best_r4_candidate(records: &[&DiagRow], orphan: &OrphanConfirmation) -> Option<(usize, Reason)> {
     let o_call = orphan.call.to_ascii_uppercase();
     let o_band = orphan.band.to_ascii_lowercase();
     let o_mode = orphan.mode.as_str(); // already a mode-CLASS
@@ -820,7 +865,7 @@ fn best_r4_candidate(
 /// Best fuzzy-call R6 candidate: an unconfirmed logged QSO on the SAME band+mode+
 /// day whose call is within the edit-distance cap of the orphan's call.
 fn best_r6_candidate(
-    records: &[&QsoRecord],
+    records: &[&DiagRow],
     orphan: &OrphanConfirmation,
     cfg: &DiagCfg,
 ) -> Option<(usize, Reason)> {

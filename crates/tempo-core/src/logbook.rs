@@ -714,6 +714,55 @@ pub struct UploadHealth {
     pub clublog: SourceHealth,
 }
 
+impl UploadHealth {
+    /// Fold one contact's stamps in — [`Logbook::upload_health`]'s step, taken in log order.
+    /// Its own function so a pass that reads the log a row at a time (a read of the store)
+    /// runs the same rule; of two failures at one instant the first in the log names the why.
+    pub fn add(&mut self, r: &QsoRecord) {
+        for (src, status) in [
+            (&mut self.lotw, &r.upload.lotw),
+            (&mut self.eqsl, &r.upload.eqsl),
+            (&mut self.qrz, &r.upload.qrz),
+            (&mut self.clublog, &r.upload.clublog),
+        ] {
+            // `when_unix == 0` is not a date. The ADIF reader synthesises an
+            // `Accepted` stamp for any imported record carrying `LOTW_QSL_SENT=Y`,
+            // with no time to give it — counting those would tell every operator with
+            // an imported legacy log that their last LoTW upload was 1 Jan 1970.
+            let Some(s) = status.as_ref().filter(|s| s.when_unix > 0) else {
+                continue;
+            };
+            if s.outcome.is_sent() {
+                // `Duplicate` counts as a success on purpose: the service telling us
+                // it already has the QSO proves both the credentials and the record.
+                if src.last_success_unix.is_none_or(|w| s.when_unix > w) {
+                    src.last_success_unix = Some(s.when_unix);
+                }
+            } else if src.last_failure_unix.is_none_or(|w| s.when_unix > w) {
+                src.last_failure_unix = Some(s.when_unix);
+                src.last_failure_detail = s.detail;
+            }
+        }
+    }
+}
+
+/// When a contact's LoTW upload is awaiting the echo (`Pending`), the contact's time — what
+/// [`Logbook::oldest_pending_lotw_date`] takes the least of. `None` for any other contact.
+pub fn lotw_pending_since(r: &QsoRecord) -> Option<u64> {
+    matches!(
+        r.upload.lotw.as_ref().map(|s| s.outcome),
+        Some(UploadOutcome::Pending)
+    )
+    .then_some(r.when_unix)
+}
+
+/// A contact time as the UTC `YYYY-MM-DD` an own-QSO pull is bounded by — see
+/// [`Logbook::oldest_pending_lotw_date`].
+pub fn lotw_pull_date(unix: u64) -> String {
+    let (y, m, d, ..) = datetime_utc(unix);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// Per-source outbound upload state. Absent (`None`) = never attempted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UploadState {
@@ -1118,10 +1167,17 @@ impl Logbook {
     /// has matched, this can also clear — an operator who ticks the wrong row must be able to
     /// untick it. A later service sync cannot silently undo the correction either: merge ORs
     /// per source, and no service reports the card field.
+    ///
+    /// `confirmed` and `award_confirmed` follow the channels, as the parser, the store and
+    /// `log.adi` all read them back: every fold counts a contact by `award_confirmed`, so a
+    /// card that set only its channel counted for nothing until a restart re-read the log.
     pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
         match self.records.write_as(OpClass::Upgrade).get_mut(index) {
             Some(rec) => {
-                Arc::make_mut(rec).qsl_rcvd.card = received;
+                let rec = Arc::make_mut(rec);
+                rec.qsl_rcvd.card = received;
+                rec.confirmed = rec.qsl_rcvd.any();
+                rec.award_confirmed = rec.qsl_rcvd.award();
                 true
             }
             None => false,
@@ -2252,30 +2308,7 @@ impl Logbook {
     pub fn upload_health(&self) -> UploadHealth {
         let mut h = UploadHealth::default();
         for r in &self.records {
-            for (src, status) in [
-                (&mut h.lotw, &r.upload.lotw),
-                (&mut h.eqsl, &r.upload.eqsl),
-                (&mut h.qrz, &r.upload.qrz),
-                (&mut h.clublog, &r.upload.clublog),
-            ] {
-                // `when_unix == 0` is not a date. The ADIF reader synthesises an
-                // `Accepted` stamp for any imported record carrying `LOTW_QSL_SENT=Y`,
-                // with no time to give it — counting those would tell every operator with
-                // an imported legacy log that their last LoTW upload was 1 Jan 1970.
-                let Some(s) = status.as_ref().filter(|s| s.when_unix > 0) else {
-                    continue;
-                };
-                if s.outcome.is_sent() {
-                    // `Duplicate` counts as a success on purpose: the service telling us
-                    // it already has the QSO proves both the credentials and the record.
-                    if src.last_success_unix.is_none_or(|w| s.when_unix > w) {
-                        src.last_success_unix = Some(s.when_unix);
-                    }
-                } else if src.last_failure_unix.is_none_or(|w| s.when_unix > w) {
-                    src.last_failure_unix = Some(s.when_unix);
-                    src.last_failure_detail = s.detail;
-                }
-            }
+            h.add(r);
         }
         h
     }
@@ -2287,18 +2320,9 @@ impl Logbook {
     pub fn oldest_pending_lotw_date(&self) -> Option<String> {
         self.records
             .iter()
-            .filter(|r| {
-                matches!(
-                    r.upload.lotw.as_ref().map(|s| s.outcome),
-                    Some(UploadOutcome::Pending)
-                )
-            })
-            .map(|r| r.when_unix)
+            .filter_map(|r| lotw_pending_since(r))
             .min()
-            .map(|unix| {
-                let (y, m, d, ..) = datetime_utc(unix);
-                format!("{y:04}-{m:02}-{d:02}")
-            })
+            .map(lotw_pull_date)
     }
 
     /// The whole logbook as ADIF text (header + records).
@@ -9551,6 +9575,43 @@ mod qsl_card_tests {
         assert!(!lb.records[1].qsl_rcvd.card, "the other row is untouched");
         // A card is not a request: marking one received must not claim we sent one.
         assert!(!lb.records[0].qsl_sent.sent);
+    }
+
+    /// ★ #152's missing half: a card marked received COUNTS, at once. The award, needs and
+    /// Journey folds read the record's `award_confirmed`, not its channels — and a mark that set
+    /// only the channel left the contact uncounted until a restart read it back, since the store
+    /// and `log.adi` both derive the two flags from the channels. The test above asks
+    /// `qsl_rcvd.award()`, which no fold reads, so it passed all along. Found by SPEC-2 C14's
+    /// parity test, where the store answered one way and memory the other.
+    #[test]
+    fn a_card_marked_received_counts_at_once_and_an_untick_takes_back_only_the_card() {
+        let mut lb = Logbook::default();
+        lb.records.push(rec());
+        assert!(lb.mark_qsl_card(0, true));
+        assert!(
+            lb.records[0].award_confirmed && lb.records[0].confirmed,
+            "the flags the folds read"
+        );
+        assert!(lb.mark_qsl_card(0, false));
+        assert!(!lb.records[0].award_confirmed && !lb.records[0].confirmed);
+
+        // An untick takes back only what the card gave: an eQSL confirmation stays.
+        let mut eqsl = rec();
+        eqsl.qsl_rcvd.eqsl = true;
+        eqsl.confirmed = true;
+        lb.records.push(eqsl);
+        assert!(lb.mark_qsl_card(1, true));
+        assert!(lb.records[1].award_confirmed);
+        assert!(lb.mark_qsl_card(1, false));
+        assert!(lb.records[1].confirmed && !lb.records[1].award_confirmed);
+
+        // Each record reads as the store and `log.adi` read it back.
+        for r in lb.records.iter() {
+            assert_eq!(
+                (r.confirmed, r.award_confirmed),
+                (r.qsl_rcvd.any(), r.qsl_rcvd.award())
+            );
+        }
     }
 
     /// Out of range is false, not a panic — the UI holds indices that shift under it.

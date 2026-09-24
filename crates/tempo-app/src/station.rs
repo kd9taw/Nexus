@@ -66,36 +66,157 @@ pub struct LotwStamped {
 
 /// What the confirmation diagnostics read ([`StationCore::diagnostics_inputs`]), held apart
 /// from the engine so the diagnosis — a pass over the whole log with a DXCC lookup per contact —
-/// runs with the engine lock released.
+/// runs with the engine lock released, reading the log from the store (SPEC-2 v3 C14).
 #[derive(Debug, Clone)]
 pub struct DiagnosticsInputs {
-    records: Vec<Arc<QsoRecord>>,
+    rows: crate::logstore::LogRows,
     recents: Vec<tempo_core::reconcile::ReconcileSummary>,
 }
 
+/// What the diagnosis reads of each contact: [`tempo_core::diagnostics::DiagRow`]'s fields —
+/// the four confirmation channels are what `confirmed` and `award_confirmed` are read from.
+const DIAGNOSIS: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &[
+        "call",
+        "band",
+        "mode",
+        "when_unix",
+        "state",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+        "credit_granted",
+    ],
+    uploads: true,
+};
+
 impl DiagnosticsInputs {
-    /// How many contacts the log held.
-    pub fn log_len(&self) -> usize {
-        self.records.len()
+    /// How many contacts the log holds — a count, not a read of them.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
+    pub fn log_len(&self) -> Result<usize, String> {
+        self.rows
+            .count()
+            .map(|(n, _)| usize::try_from(n).unwrap_or(usize::MAX))
+            .map_err(|e| e.to_string())
     }
 
-    /// The diagnosis, exactly as [`StationCore::confirmation_diagnostics`] has always made it.
+    /// The diagnosis, exactly as [`StationCore::confirmation_diagnostics`] has always made it,
+    /// and how many contacts it diagnosed — every index in the report is a position among them.
+    ///
+    /// ⚠️ It reads the store: never under the Engine lock.
     pub fn diagnose(
         &self,
         now: i64,
         resolve: impl Fn(&str) -> Option<String>,
-    ) -> tempo_core::diagnostics::DiagnosticsReport {
+    ) -> Result<(tempo_core::diagnostics::DiagnosticsReport, usize), String> {
         tempo_core::logbook::io_fence::whole_log_off_engine_lock("the confirmation diagnostics");
-        let entities: Vec<Option<String>> = self.records.iter().map(|r| resolve(&r.call)).collect();
+        let mut rows = Vec::new();
+        let mut entities = Vec::new();
+        self.rows
+            .each(
+                DIAGNOSIS,
+                tempo_core::logbook::sqlite::Scope::All,
+                tempo_core::logbook::sqlite::Order::Log,
+                &mut |r| {
+                    entities.push(resolve(&r.call));
+                    rows.push(tempo_core::diagnostics::DiagRow::from(r));
+                    std::ops::ControlFlow::Continue(())
+                },
+            )
+            .map_err(|e| e.to_string())?;
         let recents: Vec<&tempo_core::reconcile::ReconcileSummary> = self.recents.iter().collect();
-        tempo_core::diagnostics::diagnose(
-            &self.records,
+        let report = tempo_core::diagnostics::diagnose_rows(
+            &rows,
             &entities,
             &recents,
             now,
             &tempo_core::diagnostics::DiagCfg::default(),
-        )
+        );
+        Ok((report, rows.len()))
     }
+}
+
+/// The catch-up sweep's pick (#290): the first `room` logged contacts, in log order, whose
+/// upload on one of `legs` has NOT succeeded — never stamped, or stamped a failure — each with
+/// the legs it is short of ([`unsent_legs`]). Read from the store: every contact's stamps, then
+/// only the chosen contacts, whole, since it is the whole record an upload sends.
+///
+/// ⛔ Only the legs that leave a per-QSO upload stamp can be swept — see [`unsent_legs`] for
+/// which three, and why the other four are refused. Asking for only those picks nothing.
+///
+/// ⚠️ It reads the store: never under the Engine lock. Take `rows` ([`StationCore::log_rows`])
+/// and `room` ([`StationCore::catch_up_room`]) under it, and queue what this picks with
+/// [`StationCore::requeue_catch_up`]. A contact another change removes between the two reads
+/// is simply not picked; the next sweep looks again.
+pub fn catch_up_records(
+    rows: &crate::logstore::LogRows,
+    legs: u8,
+    room: usize,
+) -> Result<Vec<(QsoRecord, u8)>, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+    const STAMPS: Narrow = Narrow {
+        columns: &[],
+        uploads: true,
+    };
+    if room == 0 {
+        return Ok(Vec::new());
+    }
+    let mut owed: Vec<(tempo_core::logbook::RecordId, u8)> = Vec::new();
+    rows.each(STAMPS, Scope::All, Order::Log, &mut |r| {
+        match (unsent_legs(r, legs), r.id) {
+            (0, _) | (_, None) => {}
+            (legs, Some(id)) => owed.push((id, legs)),
+        }
+        if owed.len() >= room {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    let ids: Vec<tempo_core::logbook::RecordId> = owed.iter().map(|(id, _)| *id).collect();
+    let short_of: HashMap<tempo_core::logbook::RecordId, u8> = owed.into_iter().collect();
+    let (whole, _) = rows.rows_by_ids(&ids).map_err(|e| e.to_string())?;
+    Ok(whole
+        .into_iter()
+        .filter_map(|r| {
+            let legs = r.id.and_then(|id| short_of.get(&id).copied())?;
+            Some((r, legs))
+        })
+        .collect())
+}
+
+/// Fill a contact's country and state from the station's resolvers where it carries none —
+/// what every insert does before it writes (SPEC-2 v3 D2-A), so the store holds exactly what
+/// every screen shows. The record's own values always win, and a resolver that cannot place the
+/// call leaves the field empty. The same rule `Engine::log_qso` applies to a contact it logs.
+#[allow(clippy::type_complexity)]
+pub(crate) fn fill_with(
+    r: &mut QsoRecord,
+    country: Option<&(dyn Fn(&str) -> Option<String> + Send + Sync)>,
+    state: Option<&(dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync)>,
+) {
+    if r.country.is_none() {
+        r.country = country.and_then(|resolve| resolve(&r.call));
+    }
+    if r.state.is_none() {
+        r.state = state.and_then(|resolve| resolve(&r.call, r.grid.as_deref()));
+    }
+}
+
+/// One fill the background job found for a stored contact that lacked it — see
+/// [`StationCore::apply_log_fills`]. `None` is "nothing found", never "clear it".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogFill {
+    /// The contact.
+    pub id: tempo_core::logbook::RecordId,
+    /// Its country, if it had none and the resolver placed the call.
+    pub country: Option<String>,
+    /// Its state, if it had none and the resolver placed the call.
+    pub state: Option<String>,
 }
 
 /// A LoTW batch's measure of "the contact that was signed": the row as the upload serialises
@@ -146,7 +267,7 @@ fn band_key(band: &str) -> String {
 
 /// Which of `want`'s legs this record has NOT successfully uploaded — never stamped, or
 /// stamped an outcome that is not [`UploadOutcome::is_sent`]. The catch-up sweep's
-/// per-record question (#290); see [`StationCore::requeue_failed_uploads`].
+/// per-record question (#290); see [`catch_up_records`].
 ///
 /// ⛔ **The three legs below are the whole list, and the omissions are deliberate.** They
 /// are exactly the ones that leave a per-QSO stamp in
@@ -157,7 +278,7 @@ fn band_key(band: &str) -> String {
 /// at all — it goes out as a TQSL-signed batch, not through this queue. A leg that is not
 /// here contributes nothing rather than reading as unsent, so asking for only those
 /// queues nothing.
-fn unsent_legs(rec: &QsoRecord, want: u8) -> u8 {
+pub(crate) fn unsent_legs(rec: &QsoRecord, want: u8) -> u8 {
     use crate::engine::upload_legs as legs;
     fn sent(s: &Option<tempo_core::logbook::UploadStatus>) -> bool {
         s.as_ref().is_some_and(|u| u.outcome.is_sent())
@@ -461,12 +582,15 @@ impl StationCore {
     /// its database (see [`crate::logstore`]). The rows come from the store; `log.adi` is not
     /// read, and is from here on a mirror of them.
     ///
-    /// ★ LAUNCH WRITES NOTHING. The country and state backfills — which on the 1.13 path can
-    /// each rewrite the whole of `log.adi` on every launch — fill the log IN MEMORY here, where
-    /// every view, award and export reads it, and write nothing. A filled row reaches the store
-    /// the next time it changes for a reason of its own, and the mirror always carries what
-    /// memory holds. The one write an open can make is taking in a `log.adi` the store cannot
-    /// account for ([`Self::take_in_log_file`]) — contacts that are in no store at all.
+    /// ★ THE LOG IS THE STORE'S, FILLS INCLUDED (SPEC-2 v3 D2-A, the operator's choice). The
+    /// country and state a contact's call places it in are written INTO the store: every
+    /// insert fills both before it writes ([`Self::fill_record`]), and what an older build left
+    /// unfilled is filled once, after the window is up, by a background job
+    /// ([`crate::logfill`], [`Self::apply_log_fills`]) that runs again only when the resolvers'
+    /// data changes. So this attach fills nothing and writes nothing, and memory, the store and
+    /// every screen reading either hold the same rows. The one write an open itself can make is
+    /// taking in a `log.adi` the store cannot account for ([`Self::take_in_log_file`]) —
+    /// contacts that are in no store at all.
     #[allow(deprecated)] // SPEC-2 C19: the launch attach loads the in-memory log
     pub fn attach_store(&mut self, opened: Opened) {
         let Opened {
@@ -481,8 +605,6 @@ impl StationCore {
         self.store = Some(store);
         self.store_problem = None;
         self.store_lingering = false;
-        self.fill_country();
-        self.fill_state();
         if let Some(f) = foreign {
             self.take_in_log_file(&f.text, f.stamp);
         }
@@ -516,12 +638,10 @@ impl StationCore {
         stamp: Option<tempo_core::logbook::mirror::FileStamp>,
     ) {
         let base = self.change_base();
-        let resolve = self.dxcc_resolve.as_ref();
-        let (added, _, merged) = self.logbook.import_adif_with(text, |r| {
-            if r.country.is_none() {
-                r.country = resolve.and_then(|resolve| resolve(&r.call));
-            }
-        });
+        let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
+        let (added, _, merged) = self
+            .logbook
+            .import_adif_with(text, |r| fill_with(r, country, state));
         self.persist_change(base, "take in log.adi");
         if !added.is_empty() || merged > 0 {
             tempo_core::applog::info(
@@ -661,8 +781,9 @@ impl StationCore {
 
     /// Fill a US state into every record that lacks one and that the resolver can place — IN
     /// MEMORY, writing nothing. Returns whether anything was filled. [`Self::backfill_state`]
-    /// persists it; the store's launch deliberately does not (see [`Self::attach_store`]).
-    #[allow(deprecated)] // SPEC-2 C14: the launch fill, saved (D2)
+    /// persists it. The store's rows are filled another way: each insert fills its own, and the
+    /// fill job the ones an older build left ([`Self::apply_log_fills`], SPEC-2 v3 D2-A).
+    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback's backfill (D1)
     fn fill_state(&mut self) -> bool {
         let Some(resolve) = self.state_resolve.take() else {
             return false;
@@ -748,9 +869,10 @@ impl StationCore {
 
     /// Fill a DXCC country into every record that lacks one and that the resolver can place —
     /// IN MEMORY, writing nothing. Returns whether anything was filled.
-    /// [`Self::backfill_country`] persists it; the store's launch deliberately does not (see
-    /// [`Self::attach_store`]), and an import folds it into the import's own change.
-    #[allow(deprecated)] // SPEC-2 C14: the launch fill, saved (D2)
+    /// [`Self::backfill_country`] persists it. The store's rows are filled another way: each
+    /// insert fills its own, and the fill job the ones an older build left
+    /// ([`Self::apply_log_fills`], SPEC-2 v3 D2-A).
+    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback's backfill (D1)
     fn fill_country(&mut self) -> bool {
         let Some(resolve) = self.dxcc_resolve.take() else {
             return false;
@@ -778,6 +900,66 @@ impl StationCore {
             Arc::make_mut(&mut records[i]).country = Some(c);
         }
         true
+    }
+
+    /// Write the fills the background job found (SPEC-2 v3 D2-A, [`crate::logfill`]) into the
+    /// log and, as ONE change in the writer's bulk lane, into the store — with `fill_ver` on that
+    /// change's last chunk, so the store names the resolver data its fills come from only once
+    /// every one of them is on disk. Returns how many contacts gained a field.
+    ///
+    /// Each fill lands only in a field the contact still lacks: one edited, filled or deleted
+    /// since the job read it keeps what it has now. No disk and no resolver call under the lock
+    /// (the job resolved every call before it came here): one pass over the log, as any change
+    /// to held rows makes before the store owns the write path (C19). Nothing on the 1.13 path,
+    /// where the job never runs.
+    #[allow(deprecated)] // SPEC-2 C19: the fill job's fills, applied to the in-memory log
+    pub fn apply_log_fills(&mut self, fills: &[LogFill], fill_ver: i64) -> usize {
+        if self.store.is_none() {
+            return 0;
+        }
+        // Another window's commits first, as every change to rows the log holds takes them.
+        self.recover_external_appends();
+        let base = self.change_base();
+        let by_id: HashMap<tempo_core::logbook::RecordId, &LogFill> =
+            fills.iter().map(|f| (f.id, f)).collect();
+        let hits: Vec<(usize, Option<String>, Option<String>)> = self
+            .logbook
+            .records()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| {
+                let fill = by_id.get(&r.id?)?;
+                let country = fill.country.clone().filter(|_| r.country.is_none());
+                let state = fill.state.clone().filter(|_| r.state.is_none());
+                (country.is_some() || state.is_some()).then_some((i, country, state))
+            })
+            .collect();
+        if !hits.is_empty() {
+            // An upgrade, like the fills above: content a fold reads, and no row moves.
+            let records = self.logbook.records_mut(OpClass::Upgrade);
+            for (i, country, state) in &hits {
+                let r = Arc::make_mut(&mut records[*i]);
+                if let Some(c) = country {
+                    r.country = Some(c.clone());
+                }
+                if let Some(s) = state {
+                    r.state = Some(s.clone());
+                }
+            }
+        }
+        // Sent even when nothing was filled: `fill_ver` is how the next launch knows the job
+        // has run over this data.
+        if let Some(store) = &self.store {
+            let mut change = Change::between(&base.rows, &self.logbook, store.resolved()).in_bulk();
+            change.meta.push((crate::logfill::FILL_VER, fill_ver));
+            if let Some(store) = self.store.as_mut() {
+                store.submit(change, &self.logbook);
+            }
+        }
+        // A filled country is an entity the hot index keys on: it follows the fills row by row,
+        // as it follows every change the station makes (see `persist_change`).
+        self.catch_up_hot(Some(&base));
+        hits.len()
     }
 
     /// One-click HUNT: remember the activator + park so the NEXT QSO logged
@@ -1092,35 +1274,25 @@ impl StationCore {
         });
     }
 
-    /// Re-queue, on each of `legs`, every logged QSO whose upload on THAT leg has NOT
-    /// succeeded (never stamped, or stamped a failure) — the F4MQS "nothing retried after I
-    /// fixed the password" gap. Bounded, and PACED: these go out as
-    /// [`UploadOrigin::CatchUp`], one every [`CATCHUP_UPLOAD_SPACING_SECS`], because the log
-    /// this scans holds ADIF-imported history as well as this session's contacts and ClubLog
-    /// objects to history arriving through the realtime endpoint in a burst (#193). Returns
-    /// how many RECORDS were queued.
+    /// How many records the catch-up sweep may queue now: the connector queue's FREE room
+    /// (#290 — past the cap a catch-up record would only be dropped again, and what is not
+    /// queued stays unsent in the log for the next sweep). No log read; take it under the lock
+    /// with [`Self::log_rows`], pick with [`catch_up_records`] after releasing it, and queue with
+    /// [`Self::requeue_catch_up`].
+    pub fn catch_up_room(&self) -> usize {
+        UPLOAD_QUEUE_CAP.saturating_sub(self.pending_uploads.len())
+    }
+
+    /// Re-queue the records the catch-up sweep picked ([`catch_up_records`]), each on the legs
+    /// it is short of — the F4MQS "nothing retried after I fixed the password" gap. PACED:
+    /// these go out as [`UploadOrigin::CatchUp`], one every [`CATCHUP_UPLOAD_SPACING_SECS`],
+    /// because the log holds ADIF-imported history as well as this session's contacts and
+    /// ClubLog objects to history arriving through the realtime endpoint in a burst (#193).
+    /// Returns how many RECORDS were queued.
     ///
     /// Each record carries only what it is actually short of, so a contact that reached QRZ
     /// but not eQSL is re-pushed to eQSL alone rather than duplicated at QRZ.
-    ///
-    /// ⛔ Only the legs that leave a per-QSO upload stamp can be swept — see [`unsent_legs`]
-    /// for which three, and why the other four are refused. Asking for only those queues
-    /// nothing.
-    #[allow(deprecated)] // SPEC-2 C14: the catch-up sweep, read from the store
-    pub fn requeue_failed_uploads(&mut self, legs: u8) -> usize {
-        // Into FREE space only (#290): past the cap a catch-up record would only be dropped
-        // again, and what is not queued stays unsent in the log for the next sweep.
-        let room = UPLOAD_QUEUE_CAP.saturating_sub(self.pending_uploads.len());
-        let stale: Vec<(tempo_core::logbook::QsoRecord, u8)> = self
-            .logbook
-            .records()
-            .iter()
-            .filter_map(|r| match unsent_legs(r, legs) {
-                0 => None,
-                owed => Some((QsoRecord::clone(r), owed)),
-            })
-            .take(room)
-            .collect();
+    pub fn requeue_catch_up(&mut self, stale: Vec<(QsoRecord, u8)>) -> usize {
         let n = stale.len();
         for (rec, owed) in stale {
             self.requeue_upload_at(rec, owed, 0, 0, crate::engine::UploadOrigin::CatchUp);
@@ -1345,12 +1517,10 @@ impl StationCore {
         match store.reload(self.logbook.records(), in_place) {
             Ok((rows, lingering)) => {
                 self.store_lingering = lingering;
+                // The store's rows carry their fills (SPEC-2 v3 D2-A: every insert fills before
+                // it writes, and the fill job writes what an older build left), so the rows
+                // re-read are the rows every screen shows, and nothing is filled here.
                 self.logbook.replace_rows(rows);
-                // The store holds what was WRITTEN, and a launch's fills never are (see
-                // `attach_store`): the re-read just put the unfilled stored copy of every such
-                // row in place of the filled one. Fill again — in memory, as the launch did.
-                self.fill_country();
-                self.fill_state();
                 self.catch_up_hot(Some(&base));
                 true
             }
@@ -1758,27 +1928,27 @@ impl StationCore {
     /// row as a brand-new contact and logs it a second time. So the late order costs
     /// a duplicate and a lost confirmation even though it saves the file.
     ///
-    /// A new row's COUNTRY is resolved BEFORE it joins the log, so it is appended complete.
-    /// Companion mode imports one record per contact WSJT-X logs, and WSJT-X writes no
-    /// COUNTRY: filled afterwards by the backfill, every such contact was an in-place write —
-    /// a rewrite of the log's revision (a full reload for every log view) and a whole-log
-    /// `save` of log.adi, fsync included, per contact.
+    /// A new row's COUNTRY and STATE are resolved BEFORE it joins the log, so it is appended
+    /// complete — and an imported US contact carries its state from the moment it is imported,
+    /// in the store as on every screen (SPEC-2 v3 D2-A). Companion mode imports one record per
+    /// contact WSJT-X logs, and WSJT-X writes no COUNTRY: filled afterwards by the backfill,
+    /// every such contact was an in-place write — a rewrite of the log's revision (a full
+    /// reload for every log view) and a whole-log `save` of log.adi, fsync included, per
+    /// contact.
     #[allow(deprecated)] // SPEC-2 C19: an import checks the whole log for what it already holds
     pub fn import_adif(&mut self, text: &str) -> (usize, usize, usize, usize) {
         self.recover_external_appends();
         let base = self.change_base();
-        let resolve = self.dxcc_resolve.as_ref();
-        let (added, skipped, merged) = self.logbook.import_adif_with(text, |r| {
-            if r.country.is_none() {
-                r.country = resolve.and_then(|resolve| resolve(&r.call));
-            }
-        });
+        let (country, state) = (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
+        let (added, skipped, merged) = self
+            .logbook
+            .import_adif_with(text, |r| fill_with(r, country, state));
         if self.store.is_some() {
-            // With the store the import, the rows it upgraded and the backfill that follows are
-            // ONE change of rows — no whole-log rewrite, whatever the import touched. In
-            // companion mode this runs once per contact WSJT-X logs, from the radio loop: it
-            // must not touch the disk, and it does not.
-            self.fill_country();
+            // With the store the import and the rows it upgraded are ONE change of rows — no
+            // whole-log rewrite, whatever the import touched. Its new rows arrived filled, and
+            // the rows the log already held are the fill job's (D2-A), so nothing is backfilled
+            // here. In companion mode this runs once per contact WSJT-X logs, from the radio
+            // loop: it must not touch the disk, and it does not.
             self.persist_change(base, "import_adif");
         } else {
             if merged > 0 {
@@ -1841,14 +2011,6 @@ impl StationCore {
             self.catch_up_hot(Some(&base));
         }
         promoted
-    }
-
-    /// UTC date (`YYYY-MM-DD`) of the oldest QSO with an in-flight (Pending) LoTW
-    /// upload — the lower bound for the own-QSO pull. `None` → nothing in flight, so
-    /// the sync skips the own-echo step.
-    #[allow(deprecated)] // SPEC-2 C14: a fold, read from the store
-    pub fn oldest_pending_lotw_date(&self) -> Option<String> {
-        self.logbook.oldest_pending_lotw_date()
     }
 
     /// Record a QRZ Logbook push outcome on the just-pushed QSO (`upload.qrz`), so
@@ -1933,21 +2095,6 @@ impl StationCore {
         changed
     }
 
-    /// Last real outcome per connector, off the persisted per-QSO upload stamps —
-    /// see [`tempo_core::logbook::Logbook::upload_health`].
-    ///
-    /// This hop is a style rule, not a borrow-checker requirement: `logbook` is
-    /// `pub(crate)` and `Engine` is in this crate, so Engine *could* reach through it. It
-    /// stays because it mirrors the `stamp_lotw_upload`/`stamp_eqsl_upload` chain and
-    /// keeps every `Logbook` access behind `StationCore`, which owns `save_log` and
-    /// `recover_external_appends` — the invariants a reach-through would eventually skip.
-    /// (Read-only, so it deliberately does NOT call `recover_external_appends`: this is
-    /// polled every 5 s by the Settings panel and must not touch the disk.)
-    #[allow(deprecated)] // SPEC-2 C14: a fold, read from the store
-    pub fn upload_health(&self) -> tempo_core::logbook::UploadHealth {
-        self.logbook.upload_health()
-    }
-
     /// Merge an eQSL confirmation report into the log. Same generic reconcile path
     /// as [`Self::merge_lotw_report`]; the award-grade distinction lives in the
     /// ADIF (eQSL carries `EQSL_QSL_RCVD`, not `QSL_RCVD`/`LOTW_QSL_RCVD`), so an
@@ -1981,11 +2128,25 @@ impl StationCore {
         // double-log the same contact. A full save then captures both the appended
         // rows and the reconciled confirmations.
         let base = self.change_base();
+        let before = self.logbook.len();
         let (added, summary) = self.logbook.merge_downloaded(text);
         self.last_qrz_reconcile = Some(summary.clone());
         if self.store.is_some() {
-            // One change of rows: the merge's adds and upgrades, and the backfill after them.
-            self.fill_country();
+            // One change of rows: the merge's adds and upgrades. The merge appends the contacts
+            // it adds, and each is filled here, before it is written (SPEC-2 v3 D2-A); the rows
+            // the log already held are the fill job's.
+            if self.logbook.len() > before {
+                let (country, state) =
+                    (self.dxcc_resolve.as_deref(), self.state_resolve.as_deref());
+                for r in self
+                    .logbook
+                    .records_mut(OpClass::Upgrade)
+                    .iter_mut()
+                    .skip(before)
+                {
+                    fill_with(Arc::make_mut(r), country, state);
+                }
+            }
             self.persist_change(base, "merge_qrz_report");
         } else {
             self.save_log("merge_qrz_report");
@@ -2011,24 +2172,40 @@ impl StationCore {
     /// command layer passes `propagation::dxcc::resolve`, keeping the entity table
     /// out of tempo-app. Reads the last LoTW + eQSL reconcile orphans (this session).
     ///
-    /// A pass over the whole log with a DXCC lookup per contact (780 ms at 500,000), so a
-    /// caller holding the engine lock takes [`Self::diagnostics_inputs`] instead and runs
-    /// [`DiagnosticsInputs::diagnose`] after releasing it. This is the two in one breath.
+    /// A pass over the whole log, read from the store, with a DXCC lookup per contact (780 ms
+    /// at 500,000), so a caller holding the engine lock takes [`Self::diagnostics_inputs`]
+    /// instead and runs [`DiagnosticsInputs::diagnose`] after releasing it. This is the two in
+    /// one breath, for a caller that holds no Engine guard.
     pub fn confirmation_diagnostics(
         &self,
         now: i64,
         resolve: impl Fn(&str) -> Option<String>,
-    ) -> tempo_core::diagnostics::DiagnosticsReport {
-        self.diagnostics_inputs().diagnose(now, resolve)
+    ) -> Result<tempo_core::diagnostics::DiagnosticsReport, String> {
+        self.diagnostics_inputs()
+            .diagnose(now, resolve)
+            .map(|(report, _)| report)
     }
 
-    /// What the confirmation diagnostics read, taken as copies: the log's rows (pointers,
-    /// never a record) and the latest LoTW, eQSL and QRZ reconcile summaries. Cheap enough for
-    /// the engine lock; the diagnosis itself runs after it is released.
-    #[allow(deprecated)] // SPEC-2 C14: the diagnosis, read from the store
+    /// The log's rows for a pass over them, taken under the lock this is called under and read
+    /// after it is released — see [`crate::logstore::LogRows`]. The store's, whenever the store
+    /// owns the log; on the 1.13 path, the log in memory, as a copy of pointers.
+    ///
+    /// The ONE reader of the in-memory log that the folds, lookups and sweeps share (SPEC-2 v3
+    /// C14): every one of them reads through this, so the 1.13 path is served once, here.
+    #[allow(deprecated)] // SPEC-2 C19: the log.adi fallback (D1) reads the rows in memory
+    pub(crate) fn log_rows(&self) -> crate::logstore::LogRows {
+        match &self.store {
+            Some(store) => crate::logstore::LogRows::Store(store.reads()),
+            None => crate::logstore::LogRows::Memory(self.logbook.records().to_vec()),
+        }
+    }
+
+    /// What the confirmation diagnostics read: the log's rows ([`Self::log_rows`] — handles, or
+    /// a copy of pointers) and the latest LoTW, eQSL and QRZ reconcile summaries. Cheap enough
+    /// for the engine lock; the diagnosis itself reads and runs after it is released.
     pub fn diagnostics_inputs(&self) -> DiagnosticsInputs {
         DiagnosticsInputs {
-            records: self.logbook.records().to_vec(),
+            rows: self.log_rows(),
             // In this order — LoTW, eQSL, QRZ — as the diagnosis has always been handed them.
             recents: [
                 &self.last_lotw_reconcile,
@@ -2842,10 +3019,16 @@ mod diagnostics_tests {
         );
 
         let inputs = sc.diagnostics_inputs();
-        assert_eq!(inputs.log_len(), 6);
-        assert_eq!(format!("{:?}", inputs.diagnose(NOW, entity)), old_text);
+        assert_eq!(inputs.log_len(), Ok(6));
+        let (report, diagnosed) = inputs.diagnose(NOW, entity).expect("the log reads");
+        assert_eq!(diagnosed, 6, "every contact diagnosed");
+        assert_eq!(format!("{report:?}"), old_text);
         assert_eq!(
-            format!("{:?}", sc.confirmation_diagnostics(NOW, entity)),
+            format!(
+                "{:?}",
+                sc.confirmation_diagnostics(NOW, entity)
+                    .expect("the log reads")
+            ),
             old_text,
             "the two-in-one-breath form is the same diagnosis"
         );

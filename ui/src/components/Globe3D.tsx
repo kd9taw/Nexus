@@ -28,7 +28,6 @@ import {
   setSatFavOnly,
   SAT_CHASE_EVENT,
 } from '../features/satChase'
-import { workedGridSet } from '../coverage'
 import * as THREE from 'three'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import Globe, { type GlobeMethods } from 'react-globe.gl'
@@ -47,7 +46,7 @@ import {
   sectorRing,
 } from '../mapGeo'
 import { getAurora, getPca, getSatellites, getSatTrackStatus } from '../api'
-import { loadSharedLog } from '../features/logStore'
+import { logSource } from '../features/logSource'
 import cqzonesUrl from '../data/cqzones.geojson?url'
 import { spotTooltip } from '../propViz'
 import { txPaths, rxPaths } from '../features/mapPaths'
@@ -1488,15 +1487,15 @@ export default function Globe3D({
       return
     }
     let live = true
-    loadSharedLog()
-      .then((log) => {
+    logSource()
+      .ask({ kind: 'workedGrids' })
+      .then((grids) => {
         if (!live) return
-        const grids = workedGridSet(log)
         const pts: { lat: number; lon: number }[] = []
-        grids.forEach((gr) => {
+        for (const gr of grids) {
           const ll = gridToLatLon(gr)
           if (ll) pts.push({ lat: ll.lat, lon: ll.lon })
-        })
+        }
         setWorkedGrids(pts)
       })
       .catch(() => {})

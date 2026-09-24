@@ -810,7 +810,8 @@ fn cloud_runtime_probe() {
             let report = tempo_app::dto::DiagnosticsReportDto::from(
                 e.confirmation_diagnostics(crate::now_unix(), |call| {
                     propagation::dxcc::resolve(call).map(|i| i.entity.to_string())
-                }),
+                })
+                .expect("the test's log reads"),
             );
             let log_count = e.get_log().len();
             drop(e);
