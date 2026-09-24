@@ -54,6 +54,7 @@ import {
   type RigControl,
 } from '../features/rigControls'
 import { SMeter } from './SMeter'
+import { SubReceiverStrip } from './SubReceiverStrip'
 import { LogEntry } from './LogEntry'
 import {
   setPtt,
@@ -1904,6 +1905,13 @@ export function PhoneCockpit({ active = true, snap, theme, pendingWork, onConsum
             )}
             {absentLine('rx')}
           </div>
+          {/* ⭐ THE SUB RECEIVER — a dual-receiver radio's second receiver, below Main's chain.
+              Draws NOTHING unless the snapshot offers a Sub, so every other radio's pane is
+              exactly what it was. Local station only: the Remote contract carries no Sub
+              control. A component of its own, not a widened shared one — see its header. */}
+          {control && (
+            <SubReceiverStrip radio={snap.radio} catOk={catOk} describedBy={describedBy('rx')} onSnap={onSnap} />
+          )}
         </CockpitPaneFrame>
       )}
 

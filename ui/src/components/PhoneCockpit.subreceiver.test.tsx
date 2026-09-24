@@ -11,12 +11,14 @@
 //
 // ⚠️ jsdom NEVER LAYS OUT. The golden pins structure, text and attributes; geometry is the
 // browser harness's job.
-import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from 'vitest'
+import { render, cleanup, fireEvent, screen } from '@testing-library/react'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { PhoneCockpit } from './PhoneCockpit'
 import type { AppSnapshot, ReceiversStatus, ReceiverStatus } from '../types'
+import { setAfGain, setSubLevel } from '../api'
+import { StationControlContext } from '../stationAccess'
 
 vi.mock('../api', async original => {
   const actual = await original<Record<string, unknown>>()
@@ -119,5 +121,126 @@ describe('⛔ a radio with ONE receiver is drawn exactly as it was', () => {
   // baseline: `NEXUS_REGEN_GOLDEN=1 vitest run src/components/PhoneCockpit.subreceiver.test.tsx`.
   it.skipIf(!process.env.NEXUS_REGEN_GOLDEN)('regenerate the golden', () => {
     writeFileSync(GOLDEN, cockpitHtml(undefined))
+  })
+})
+
+// ── THE SUB STRIP — a confirmed dual receiver ──────────────────────────────────────────────
+//
+// Where it sits is the conservative additive choice (the dual-receiver ruling D9 names no host
+// for the Sub): inside Phone's own RECEIVER pane, below Main's chain, drawn only when the
+// snapshot offers a Sub. A new component, not a widened shared one — no meter or scope host
+// changes (`SMeter`, `TxMeters`, `PhoneScope` are untouched).
+
+/** The IC-7610's Sub by the vendor table: its own front end and AF, no documented DSP. */
+const SUB_7610: ReceiverStatus = { id: 'sub', stages: { frontEnd: 'own', dsp: 'unknown', audio: 'own' } }
+/** The IC-9700's Sub: its own front end; neither DSP nor AF documented per receiver. */
+const SUB_9700: ReceiverStatus = { id: 'sub', stages: { frontEnd: 'own', dsp: 'unknown', audio: 'unknown' } }
+
+/** A dual-receiver snapshot. `subCommandable` is REQUIRED — the route is under test in half
+ *  of these, and a defaulted one would quietly make every case the routed one. */
+const dual = (sub: ReceiverStatus, subCommandable: boolean | null): ReceiversStatus => ({
+  main: MAIN,
+  sub,
+  subCapability: 'present',
+  subCommandable,
+})
+
+function mountDual(receivers: ReceiversStatus, over: Record<string, unknown> = {}) {
+  const snap = snapWith(receivers)
+  Object.assign(snap.radio, over)
+  return render(<PhoneCockpit snap={snap} theme="dark" />)
+}
+
+const subStrip = () => document.querySelector('[data-receiver="sub"]')
+const subRows = () => [...(subStrip()?.querySelectorAll('[data-chain]') ?? [])].map((e) => e.getAttribute('data-chain'))
+/** Main's chain rows — the receiver pane's, less the Sub strip's. */
+const mainRxRows = () =>
+  [...document.querySelectorAll('[data-pane="receiver"] [data-chain]')]
+    .filter((e) => !e.closest('[data-receiver="sub"]'))
+    .map((e) => e.getAttribute('data-chain'))
+
+const mockSetSubLevel = setSubLevel as unknown as ReturnType<typeof vi.fn>
+const mockSetAfGain = setAfGain as unknown as ReturnType<typeof vi.fn>
+beforeEach(() => {
+  mockSetSubLevel.mockClear()
+  mockSetAfGain.mockClear()
+})
+
+describe('a confirmed dual receiver gets a Sub strip — and only one', () => {
+  it('on a route that names the Sub: the strip, in the RECEIVER pane, RF · AF · SQL in signal order', () => {
+    mountDual(dual(SUB_7610, true))
+    expect(subStrip(), 'no Sub strip').not.toBeNull()
+    expect(subStrip()!.closest('[data-pane]')?.getAttribute('data-pane')).toBe('receiver')
+    expect(subRows()).toEqual(['RF', 'AF', 'SQL'])
+    // Main's chain is Main's, whole and in its own order — the Sub strip is additive.
+    expect(mainRxRows()).toEqual(['BW', 'ATT', 'PRE', 'RF', 'NB', 'NR', 'NRLVL', 'ANF', 'MN', 'NOTCHF', 'AGC', 'AF', 'SQL'])
+  })
+
+  it('⭐ D7: the IC-9700’s Sub offers RF alone, and names AF · SQL NOT CONFIRMED — never "not on this radio"', () => {
+    mountDual(dual(SUB_9700, true))
+    expect(subRows()).toEqual(['RF'])
+    expect(subStrip()!.textContent).toContain('Not confirmed for the sub receiver: AF · SQL')
+    expect(document.body.textContent, 'the Sub’s unknowns must not read as the radio lacking them').not.toMatch(/Not on this radio/)
+  })
+
+  it('a route that cannot name the Sub: no Sub controls, and the strip says why', () => {
+    mountDual(dual(SUB_7610, false))
+    expect(subStrip(), 'the display half stays').not.toBeNull()
+    expect(subRows()).toEqual([])
+    expect(subStrip()!.textContent).toContain('needs Nexus’s own CI-V control')
+  })
+
+  it('a route not yet reported: no Sub controls and no claim either way', () => {
+    mountDual(dual(SUB_7610, null))
+    expect(subRows()).toEqual([])
+    expect(subStrip()!.textContent).not.toContain('needs Nexus’s own CI-V control')
+  })
+
+  it('no CAT: the Sub rows stay, dead', () => {
+    mountDual(dual(SUB_7610, true), { catOk: false })
+    const inputs = [...subStrip()!.querySelectorAll('input[type="range"]')] as HTMLInputElement[]
+    expect(inputs.length).toBe(3)
+    for (const i of inputs) expect(i.disabled, i.getAttribute('aria-label') ?? '').toBe(true)
+  })
+
+  it('⭐ A SUB CONTROL COMMANDS THE SUB, AND NEVER MAIN — and Main’s own control still commands Main', () => {
+    mountDual(dual(SUB_7610, true))
+    fireEvent.change(screen.getByLabelText('Sub receiver AF gain'), { target: { value: '40' } })
+    expect(mockSetSubLevel).toHaveBeenCalledWith('af', 0.4)
+    expect(mockSetAfGain, 'the Sub’s AF reached Main’s setter').not.toHaveBeenCalled()
+    // CONTROL: Main's AF slider, same pane, same plate — Main's setter, not the Sub's.
+    mockSetSubLevel.mockClear()
+    fireEvent.change(screen.getByLabelText('AF gain'), { target: { value: '30' } })
+    expect(mockSetAfGain).toHaveBeenCalledWith(0.3)
+    expect(mockSetSubLevel, 'Main’s AF reached the Sub').not.toHaveBeenCalled()
+  })
+
+  it('the slider shows what the radio ACCEPTED; a level never set reads as unknown, not zero', () => {
+    mountDual(dual({ ...SUB_7610, afGain: 0.25 }, true))
+    const row = (id: string) => subStrip()!.querySelector(`[data-chain="${id}"]`)!
+    expect(row('AF').textContent).toContain('25%')
+    expect(row('RF').textContent).toContain('—')
+    expect(row('RF').textContent).not.toContain('%')
+  })
+
+  it('the Sub’s dial where the engine knows it, and "not read" where it does not', () => {
+    mountDual(dual({ ...SUB_9700, dialMhz: 145.965, band: '2m', sideband: 'LSB' }, true))
+    expect(subStrip()!.textContent).toContain('145.9650')
+    expect(subStrip()!.textContent).toContain('2m')
+    expect(subStrip()!.textContent).toContain('LSB')
+    cleanup()
+    mountDual(dual(SUB_9700, true))
+    expect(subStrip()!.textContent).not.toContain('145.9650')
+    expect(subStrip()!.querySelector('[data-sub-dial]')?.textContent).toBe('—')
+  })
+
+  it('the Remote page draws no Sub strip — its operation contract carries no Sub control', () => {
+    const snap = snapWith(dual(SUB_7610, true))
+    render(
+      <StationControlContext.Provider value={false}>
+        <PhoneCockpit snap={snap} theme="dark" />
+      </StationControlContext.Provider>,
+    )
+    expect(subStrip()).toBeNull()
   })
 })

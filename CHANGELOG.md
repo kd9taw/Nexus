@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Sub receiver of a dual-receiver radio now has a row on the Phone screen.** In the
+  Receiver pane, under the main controls, a **SUB** row shows the second receiver: its frequency
+  where Nexus knows it (the uplink during a satellite pass), and sliders for its RF gain and, on
+  an IC-7610, its AF gain and squelch. They work on an IC-7610 or IC-9700 run through Nexus's own
+  CI-V control, and they change only the Sub — the main receiver's controls are untouched. Nexus
+  does not read the Sub's levels back from the radio yet, so each slider shows the last value the
+  radio accepted from Nexus, and a knob turned on the radio itself is not reflected. An IC-9700
+  gets RF gain only: Icom's documentation does not say its Sub has an audio stage of its own. On
+  other dual-receiver radios (FTDX101, TS-990S, IC-9100, IC-910H, FTDX5000), and on an Icom run
+  through Hamlib, the row says the connection cannot reach the Sub. A radio with one receiver
+  looks exactly as before. Needs checking on a real IC-7610 and IC-9700.
+
 - **A station on your watch list now stands out on the Call Roster, the Stations list and Spots.**
   The watch list (Settings ▸ Spots & Alerts) sounded one loud alert when a station you asked for
   was decoded, and after that nothing on the screen said which row it was. Every station the list
