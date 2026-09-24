@@ -188,8 +188,14 @@ impl From<Vec<QsoRecord>> for Records {
         // A new log is a rewrite of whatever came before it: no earlier revision can
         // claim its rows, and nothing built against one survives.
         let revision = next_revision();
+        // ⚠️ `shrink_to_fit` is load-bearing. Rust's in-place collection builds these pointers
+        // IN the buffer `values` came in — and keeps that buffer's capacity, sized for 840-byte
+        // records, to hold 8-byte pointers. A lifetime log would then carry a dead allocation as
+        // big as all its records' structs for the whole session: 210 MiB at 150,000 contacts.
+        let mut values: Vec<Arc<QsoRecord>> = values.into_iter().map(Arc::new).collect();
+        values.shrink_to_fit();
         Self {
-            values: values.into_iter().map(Arc::new).collect(),
+            values,
             token: Arc::new(()),
             revision,
             content_rev: revision,

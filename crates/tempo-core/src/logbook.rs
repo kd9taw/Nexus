@@ -10168,6 +10168,59 @@ mod watermark_tests {
         lb
     }
 
+    /// ⛔ A LOG BUILT FROM A LIST OF RECORDS HOLDS ONE POINTER PER RECORD, AND NOTHING MORE.
+    ///
+    /// `Records::from` turns a `Vec<QsoRecord>` into a `Vec<Arc<QsoRecord>>`, and Rust's
+    /// in-place collection reuses the source buffer for the pointers — keeping the CAPACITY
+    /// of 840-byte records for 8-byte pointers. A lifetime log loaded from the store (a `Vec`
+    /// grown by doubling) then carried a dead buffer as big as every record's struct for the
+    /// whole session: measured 210 MiB at 150,000 contacts, 420 MiB at 500,000. Both loads
+    /// go through `Records::from`: the store's (`from_store`) and `log.adi`'s (`load`).
+    #[test]
+    fn a_log_built_from_records_holds_one_pointer_per_record_and_no_spare_buffer() {
+        // Grown by pushing, as `load_all` and the parser grow theirs: spare capacity.
+        let mut rows = Vec::new();
+        for i in 0..1_000u64 {
+            rows.push(rec_of(&format!("K{i}ABC"), "20m", 1_700_000_000 + i));
+        }
+        assert!(rows.capacity() > rows.len(), "premise: spare capacity");
+        let from_store = Logbook::from_store(rows);
+        assert_eq!(
+            from_store.records.capacity(),
+            from_store.records.len(),
+            "the store's load keeps a buffer of {} pointers for {} records",
+            from_store.records.capacity(),
+            from_store.records.len()
+        );
+
+        // A folder of this test's own: `load` also leaves its anchor and sweep marker beside
+        // the log, and all of it goes with the folder.
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-records-capacity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.adi");
+        let mut text = adif_header();
+        for r in from_store.records() {
+            text.push_str(&adif_record_own_log(r));
+        }
+        std::fs::write(&path, text).unwrap();
+        let loaded = Logbook::load(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(loaded.len(), 1_000, "premise: the file loaded");
+        assert_eq!(
+            loaded.records.capacity(),
+            loaded.records.len(),
+            "log.adi's load keeps a buffer of {} pointers for {} records",
+            loaded.records.capacity(),
+            loaded.records.len()
+        );
+    }
+
     /// Everything a dupe check, a worked-before sweep or a contest dupe key reads — the row
     /// identity `key_rev` promises to track.
     fn keys(lb: &Logbook) -> Vec<String> {

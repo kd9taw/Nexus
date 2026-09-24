@@ -185,6 +185,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A big logbook now takes far less memory.** Loading the log kept a spare block of memory
+  beside it as large as all of its contacts put together, for as long as Nexus ran: about 220 MB
+  extra for a 150,000-contact log, and twice that at 500,000. It is now released as the log
+  loads.
+
 - **A POTA spot with an emoji after the callsign no longer stops the Needed board.** On 1.13 and
   1.14 a real spot on the POTA feed, an activator's call followed by a coffee-cup emoji, crashed the
   lookup that turns a callsign into a country. The Needed board and the need chips beside the
