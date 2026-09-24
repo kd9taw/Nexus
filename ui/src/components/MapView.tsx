@@ -12,7 +12,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useContext } from 'react'
 import { NavigationMapContext } from '../remote-web/useNavigation'
-import { workedGridSet } from '../coverage'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
 import type { OtaMapSpot } from '../types'
@@ -45,7 +44,7 @@ import { MapInsightRail } from './prop/MapInsightRail'
 import { MapLayersPanel } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
 import { getAurora, getDeclination, getPca, getSatellites, getLogStats, getOtaMapSpots } from '../api'
-import { loadSharedLog } from '../features/logStore'
+import { logSource } from '../features/logSource'
 // CQ-zone boundaries (HB9HIL hamradio-zones-geojson, MIT — see NOTICE): bundled
 // as a raw asset and fetched lazily so the 2.7 MB never loads until toggled on.
 import cqzonesUrl from '../data/cqzones.geojson?url'
@@ -1284,10 +1283,11 @@ export function MapView({
     if(remoteMap)return
     if (!coverageOn || coverageDim !== 'grids' || workedGrids) return
     let live = true
-    loadSharedLog()
-      .then((log) => {
+    logSource()
+      .ask({ kind: 'workedGrids' })
+      .then((grids) => {
         if (!live) return
-        setWorkedGrids(workedGridSet(log))
+        setWorkedGrids(new Set(grids))
       })
       .catch(() => {})
     return () => {

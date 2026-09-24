@@ -29,11 +29,7 @@ const WHOLE_LOG_ADAPTER = ['api.ts', 'features/logStore.ts', 'features/wholeLogS
 
 /** Views not yet moved onto `LogSource`. Each C17b step removes the views it moves. */
 const STILL_READING = [
-  'components/AwardsView.tsx',
-  'components/Globe3D.tsx',
   'components/Logbook.tsx',
-  'components/MapView.tsx',
-  'components/StatsView.tsx',
 ]
 
 const WHOLE_LOG_API = new Set(['getLog', 'getLogDelta', 'LogDelta'])
