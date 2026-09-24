@@ -9,7 +9,7 @@ import { confirmDialog } from '../confirm'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { LoggedActivation, LoggedQso } from '../types'
+import type { LogExport, LoggedActivation, LoggedQso } from '../types'
 import { QsoDetail } from './QsoDetail'
 import { gpuCapableForGlobe } from '../gpu'
 import { useLogbookGlobe } from '../features/logbookGlobe'
@@ -17,6 +17,7 @@ import { emptyAnswer, rowKeyAt, type LogLocate, type LogPage, type LogQuestion }
 import { defaultAsc, fmtUtc, logOrder, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
 import { logSource, useLogAnswer, useLogAnswers, useLogPages } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
+import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
 
@@ -1818,12 +1819,14 @@ export function Logbook({
             disabled={logSize === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('adif', exportFrom, exportTo)
+                const exported = await exportGeneralLog('adif', exportFrom, exportTo)
+                const text = exported.text
                 // Count what the file actually holds — with a date range the log length lies.
                 const n = (text.match(/<eor>/gi) ?? []).length
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.adi`, text)
                 pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                sayExportLacks([exported])
               }, t('logbook.export.failed'))
             }
             title={
@@ -1882,15 +1885,17 @@ export function Logbook({
                   withErrorToast(async () => {
                     const a = activations.find((x) => activationKeyOf(x) === activationKey)
                     if (!a) return
-                    const text = await exportLogForActivation(
+                    const exported = await exportLogForActivation(
                       a.reference,
                       a.dayStartUnix,
                       a.callsign ?? null,
                     )
+                    const text = exported.text
                     // Count what the file actually holds, as the ranged export does.
                     const n = (text.match(/<eor>/gi) ?? []).length
                     const path = await saveTextToDownloads(activationFilename(a), text)
                     pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                    sayExportLacks([exported])
                   }, t('logbook.export.failed'))
                 }
                 title={t('logbook.export.activation.buttonTitle')}
@@ -1912,16 +1917,20 @@ export function Logbook({
                 withErrorToast(async () => {
                   const stamp = new Date().toISOString().slice(0, 10)
                   const saved: string[] = []
+                  const exported: LogExport[] = []
                   for (const op of operators) {
-                    const text = await exportLogForOperator(op)
+                    const file = await exportLogForOperator(op)
+                    exported.push(file)
                     const safe = op.replace(/[^A-Za-z0-9]+/g, '-')
-                    saved.push(await saveTextToDownloads(`nexus-log-${stamp}-${safe}.adi`, text))
+                    saved.push(await saveTextToDownloads(`nexus-log-${stamp}-${safe}.adi`, file.text))
                   }
                   // The combined file as well, always: it is the only one that carries contacts
                   // logged with no operator set, and it is what the station itself uploads.
                   const all = await exportGeneralLog('adif')
-                  saved.push(await saveTextToDownloads(`nexus-log-${stamp}.adi`, all))
+                  exported.push(all)
+                  saved.push(await saveTextToDownloads(`nexus-log-${stamp}.adi`, all.text))
                   pushToast(t('logbook.export.perOperator.done', { count: saved.length }), 'success')
+                  sayExportLacks(exported)
                 }, t('logbook.export.failed'))
               }
               title={t('logbook.export.perOperator.title', { operators: operators.join(', ') })}
@@ -1935,12 +1944,14 @@ export function Logbook({
             disabled={logSize === 0 || exportRangeBad}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('csv', exportFrom, exportTo)
+                const exported = await exportGeneralLog('csv', exportFrom, exportTo)
+                const text = exported.text
                 // Rows minus the header — with a date range the log length lies.
                 const n = Math.max(0, text.trim().split('\n').length - 1)
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.csv`, text)
                 pushToast(t('logbook.export.done', { count: n, path }), 'success')
+                sayExportLacks([exported])
               }, t('logbook.export.failed'))
             }
             title={

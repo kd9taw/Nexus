@@ -53,6 +53,17 @@ pub struct LotwSigned {
     fingerprint: u64,
 }
 
+impl LotwSigned {
+    /// The contact `r` as a batch hands it to TQSL: its id and its fingerprint. `None` for a row
+    /// with no id, which could not be named later — every row the log holds carries one.
+    pub fn of(r: &QsoRecord) -> Option<LotwSigned> {
+        Some(LotwSigned {
+            id: r.id?,
+            fingerprint: lotw_fingerprint(r),
+        })
+    }
+}
+
 /// What [`StationCore::stamp_lotw_batch`] did with a batch.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LotwStamped {
@@ -232,6 +243,118 @@ fn lotw_fingerprint(r: &QsoRecord) -> u64 {
     let mut h = std::hash::DefaultHasher::new();
     h.write(tempo_core::logbook::adif_record(&row).as_bytes());
     h.finish()
+}
+
+/// Whether a contact is owed to LoTW: award-unconfirmed AND either never uploaded or a prior
+/// bounce. `UploadState` IS the per-QSO cursor — Pending/Accepted/Duplicate are excluded (don't
+/// re-send).
+///
+/// LoTW matches on both operators' times agreeing (±30 min): a record with NO known time can
+/// never match, so signing and sending it just parks it at LoTW as unmatched forever — and,
+/// being re-sendable, it kept the "Upload to LoTW (N)" count from ever clearing.
+///
+/// THE rule, for the log in memory ([`StationCore::lotw_unsent_indices`]) and the store
+/// ([`lotw_unsent`]) alike.
+fn owed_to_lotw(r: &QsoRecord) -> bool {
+    !r.award_confirmed
+        && r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent())
+        && r.time_known
+}
+
+/// What [`owed_to_lotw`] reads of each contact: the four confirmation channels (which
+/// `award_confirmed` is read from), whether its time is known, and the upload stamps.
+const OWED_TO_LOTW: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &[
+        "time_known",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: true,
+};
+
+/// The contacts owed to LoTW ([`owed_to_lotw`]), whole, in log order — the default batch an
+/// upload signs, read from the store (SPEC-2 v3 C15) with the Engine lock released: a narrow
+/// pass names them, and they are read whole by id.
+///
+/// ⚠️ It reads the store: never under the Engine lock. Take `rows` ([`StationCore::log_rows`])
+/// under it. A contact another change removes between the two reads is simply not in the
+/// batch; a change still on its way to the store is in the next batch.
+pub fn lotw_unsent(rows: &crate::logstore::LogRows) -> Result<Vec<QsoRecord>, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Order, Scope};
+    let mut owed = Vec::new();
+    rows.each(OWED_TO_LOTW, Scope::All, Order::Log, &mut |r| {
+        if let Some(id) = r.id.filter(|_| owed_to_lotw(r)) {
+            owed.push(id);
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(|e| e.to_string())?;
+    let (whole, _) = rows.rows_by_ids(&owed).map_err(|e| e.to_string())?;
+    // The rows as they stand at the second read: one a change settled meanwhile is not owed.
+    Ok(whole.into_iter().filter(owed_to_lotw).collect())
+}
+
+/// The contacts `ids` names, whole and read from the store, in the order `ids` names them — what
+/// a LoTW batch chosen by id signs, as the log in memory answers the same ids: a contact the log
+/// no longer holds is left out, and one named twice is there twice.
+///
+/// ⚠️ It reads the store: never under the Engine lock, as [`lotw_unsent`].
+pub fn rows_named(
+    rows: &crate::logstore::LogRows,
+    ids: &[RecordId],
+) -> Result<Vec<QsoRecord>, String> {
+    let (found, _) = rows.rows_by_ids(ids).map_err(|e| e.to_string())?;
+    let by_id: HashMap<RecordId, QsoRecord> =
+        found.into_iter().filter_map(|r| Some((r.id?, r))).collect();
+    Ok(ids.iter().filter_map(|id| by_id.get(id).cloned()).collect())
+}
+
+/// Whether any contact is owed to LoTW — the automatic batch's question before it starts TQSL,
+/// answered from the store at the first one owed.
+///
+/// ⚠️ It reads the store: never under the Engine lock, as [`lotw_unsent`].
+pub fn lotw_owed(rows: &crate::logstore::LogRows) -> Result<bool, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Order, Scope};
+    let mut any = false;
+    rows.each(OWED_TO_LOTW, Scope::All, Order::Log, &mut |r| {
+        any = owed_to_lotw(r);
+        if any {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(any)
+}
+
+/// The ADIF upload payload for TQSL: the header, then `batch` in its order.
+///
+/// In ADIF-location mode (`adif_location`), each record is stamped with STATION_CALLSIGN +
+/// MY_GRIDSQUARE so TQSL can sign from the ADIF (no named `-l` location). Named-location mode is
+/// byte-identical to before (no MY_ fields), so existing uploads are unchanged.
+///
+/// `call` is the FALLBACK, not the answer: `adif_record_with_station` skips its own stamp when
+/// the record carries a STATION_CALLSIGN of its own (which `adif_record` has already emitted),
+/// so a batch uploaded after the operator sets their home call back still signs each contact
+/// under the call that made it. Records written before that stamp existed carry none and sign
+/// from the live setting, exactly as they always did.
+pub fn lotw_batch_adif(batch: &[QsoRecord], adif_location: bool, call: &str, grid: &str) -> String {
+    let mut out = tempo_core::logbook::adif_header();
+    for r in batch {
+        if adif_location {
+            out.push_str(&tempo_core::logbook::adif_record_with_station(
+                r, call, grid,
+            ));
+        } else {
+            out.push_str(&tempo_core::logbook::adif_record(r));
+        }
+    }
+    out
 }
 
 /// Canonical band key for the per-band worked indices.
@@ -616,7 +739,7 @@ impl StationCore {
             tempo_core::logbook::migrate::Outcome::Converted { .. }
         ) {
             if let Some(store) = &self.store {
-                store.refresh_mirror(&self.logbook);
+                store.refresh_mirror();
             }
         }
         self.sync_hot();
@@ -658,7 +781,7 @@ impl StationCore {
             store.accept_log_file(stamp);
             // Its contacts are in: the mirror replaces it now, whether or not it held anything
             // new, so it is not read and taken in again at every launch.
-            store.refresh_mirror(&self.logbook);
+            store.refresh_mirror();
         }
     }
 
@@ -676,8 +799,8 @@ impl StationCore {
     }
 
     /// Carry a change made in memory to disk. With the store, the rows whose contents differ
-    /// from `base` go to the writer thread — a channel send, no I/O — and the log to the mirror
-    /// lane. On the 1.13 path, the whole of `log.adi` is rewritten, as it always was. Either
+    /// from `base` go to the writer thread — a channel send, no I/O — and the mirror lane is
+    /// told. On the 1.13 path, the whole of `log.adi` is rewritten, as it always was. Either
     /// way the hot index follows the change, row by row, from `base`.
     #[allow(deprecated)] // SPEC-2 C19: Stage 1's diff of every change
     fn persist_change(&mut self, base: ChangeBase, context: &str) {
@@ -685,7 +808,7 @@ impl StationCore {
             Some(store) => {
                 let change = Change::between(&base.rows, &self.logbook, store.resolved());
                 if let Some(store) = self.store.as_mut() {
-                    store.submit(change, &self.logbook);
+                    store.submit(change);
                 }
             }
             None => self.save_log(context),
@@ -698,7 +821,7 @@ impl StationCore {
     #[allow(deprecated)] // SPEC-2 C19: Stage 1's appended rows
     fn persist_appended(&mut self, count: usize) -> Option<tempo_core::logbook::writer::Ticket> {
         let change = Change::appended(&self.logbook, count, self.store.as_ref()?.resolved());
-        self.store.as_mut()?.submit(change, &self.logbook)
+        self.store.as_mut()?.submit(change)
     }
 
     /// Point the Field Day contest log at its durable ADIF journal. Called once
@@ -953,7 +1076,7 @@ impl StationCore {
             let mut change = Change::between(&base.rows, &self.logbook, store.resolved()).in_bulk();
             change.meta.push((crate::logfill::FILL_VER, fill_ver));
             if let Some(store) = self.store.as_mut() {
-                store.submit(change, &self.logbook);
+                store.submit(change);
             }
         }
         // A filled country is an entity the hot index keys on: it follows the fills row by row,
@@ -2228,14 +2351,22 @@ impl StationCore {
             .records()
             .iter()
             .enumerate()
-            .filter(|(_, r)| !r.award_confirmed)
-            .filter(|(_, r)| r.upload.lotw.as_ref().is_none_or(|s| !s.outcome.is_sent()))
-            // LoTW matches on both operators' times agreeing (±30 min): a record
-            // with NO known time can never match, so signing and sending it just
-            // parks it at LoTW as unmatched forever — and, being re-sendable, it
-            // kept the "Upload to LoTW (N)" count from ever clearing.
-            .filter(|(_, r)| r.time_known)
+            .filter(|(_, r)| owed_to_lotw(r))
             .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The contacts at `positions` in the log as it stands, in that order — a LoTW batch chosen
+    /// by hand, which a view still names by position (the Awards view's diagnosis buckets). Read
+    /// in the same hold of the lock that reads the positions; a position past the end names
+    /// nothing. Only the rows asked for are copied, never the log.
+    #[allow(deprecated)] // SPEC-2 C16: LoTW's rows chosen by position
+    pub fn lotw_rows_at(&self, positions: &[usize]) -> Vec<QsoRecord> {
+        let records = self.logbook.records();
+        positions
+            .iter()
+            .filter_map(|&i| records.get(i))
+            .map(|r| QsoRecord::clone(r))
             .collect()
     }
 
@@ -2465,46 +2596,21 @@ impl StationCore {
         std::mem::take(&mut self.all_txt_pending)
     }
 
-    /// Export the **general** logbook (Chat/QSO contacts, any mode) as ADIF or
-    /// CSV. Independent of Field Day's contest log (`Engine::export_log`).
-    /// `from_unix`/`to_unix` bound the QSO start time inclusively (#98); both
-    /// `None` = the whole log, byte-identical to the unbounded export.
-    #[allow(deprecated)] // SPEC-2 C15: an export
-    pub fn export_logbook(
-        &self,
-        format: &str,
-        from_unix: Option<u64>,
-        to_unix: Option<u64>,
-    ) -> String {
-        match format.to_ascii_lowercase().as_str() {
-            "csv" => self.logbook.csv_in_range(from_unix, to_unix),
-            _ => self.logbook.adif_in_range(from_unix, to_unix),
-        }
-    }
-
-    /// Distinct operators in the log (#25) — what a per-operator export offers to split by.
-    #[allow(deprecated)] // SPEC-2 C15: an export's split
-    pub fn log_operators(&self) -> Vec<String> {
-        self.logbook.operators()
-    }
-
-    /// ADIF containing only `operator`'s contacts (#25).
-    #[allow(deprecated)] // SPEC-2 C15: an export
-    pub fn export_logbook_for_operator(&self, operator: &str) -> String {
-        self.logbook.adif_for_operator(operator)
-    }
-
     /// Distinct activations in the log — YOUR park × UTC day × the callsign it was worked
-    /// under, newest first. What the per-activation export offers to split by, the way
-    /// [`Self::log_operators`] drives the per-operator one.
-    #[allow(deprecated)] // SPEC-2 C15: an export's split
+    /// under, newest first. What the per-activation export offers to split by.
+    ///
+    /// The log in memory, for Remote's activation export, which answers under the Engine lock
+    /// its operations hold. The desktop's reads the store off the lock
+    /// ([`crate::logexport::activations`]) through the same rule.
+    #[allow(deprecated)] // SPEC-2 C18: Remote's activation export, under the lock its operations hold
     pub fn log_activations(&self) -> Vec<tempo_core::logbook::LoggedActivation> {
         self.logbook.activations()
     }
 
     /// ADIF containing only ONE activation's contacts — the three bounds an
-    /// `Activation` carries, handed straight back.
-    #[allow(deprecated)] // SPEC-2 C15: an export
+    /// `Activation` carries, handed straight back. For Remote, as [`Self::log_activations`];
+    /// the desktop's is [`crate::logexport::export_for_activation`].
+    #[allow(deprecated)] // SPEC-2 C18: Remote's activation export, under the lock its operations hold
     pub fn export_logbook_for_activation(
         &self,
         reference: &str,

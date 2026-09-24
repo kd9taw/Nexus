@@ -259,6 +259,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   download or a Field Day merge that used to happen only after the next restart. It now happens
   as the contact arrives, as it always did for a contact you log yourself.
 
+- **Exporting a big logbook, or starting a LoTW upload, no longer makes the radio wait.** The
+  ADIF and CSV exports (the whole log, a date range, one operator or one activation) and the
+  lists of operators and activations to choose from went through every contact while the radio
+  waited for them, and so did the LoTW upload while it gathered the contacts to sign — a pause
+  the decoder and the waterfall felt on a log of a hundred thousand contacts. They now read the
+  logbook database while the radio carries on, and the files are the same, byte for byte. If a
+  change you made is not in the database ten seconds after you ask for an export — still on its
+  way, or refused by the disk — the file is still written with what the database holds, so an
+  export still rescues your log from a failing disk, and Nexus tells you how many recent changes
+  the file is missing and whether they are still being saved.
+
+- **Keeping `log.adi` up to date no longer needs memory the size of your log.** Every change
+  used to build the whole file in memory before writing it — about 64 MB on a log of 150,000
+  contacts, about 210 MB on 500,000, each time. `log.adi` is now written straight from the
+  logbook database a few thousand contacts at a time, byte for byte the same file.
+
 - **With a big logbook, an upload being marked no longer makes Awards, the Needed board, the
   Journey and the statistics start over.** Each of them went through every contact again after
   every upload to QRZ, ClubLog, eQSL or LoTW was marked on a contact, although an upload changes
