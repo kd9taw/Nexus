@@ -169,31 +169,15 @@ impl LogDb {
 
     /// The SELECT list of a narrow read: every column of [`QSO_COLUMNS`] in its place — so
     /// [`record_from_row`] reads the row unchanged — with those `columns` does not name selected
-    /// as the value an empty field decodes from: `''` or `0` for a `NOT NULL` column, `NULL` for any
-    /// other. The id is always read. Read off the table's own definition, so a column added to the
-    /// schema cannot be missing here; a name the schema does not have is an error.
+    /// as the value an empty field decodes from ([`LogDb::empty_values`], the one C14's narrow
+    /// reads use). The id is always read. A name the schema does not have is an error.
     fn narrow_projection(&self, columns: &[&str]) -> Result<String> {
         if let Some(unknown) = columns.iter().find(|c| !QSO_COLUMNS.contains(c)) {
             return Err(Error::Sql(rusqlite::Error::InvalidColumnName(
                 (*unknown).to_string(),
             )));
         }
-        let mut empty: HashMap<String, &'static str> = HashMap::new();
-        let mut stmt = self
-            .conn
-            .prepare("SELECT name, type, \"notnull\" FROM pragma_table_info('qso')")?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let (name, kind, not_null): (String, String, bool) =
-                (row.get(0)?, row.get(1)?, row.get(2)?);
-            let value = match (not_null, kind.to_ascii_uppercase().as_str()) {
-                (true, "TEXT") => "''",
-                (true, "INTEGER") => "0",
-                (true, "REAL") => "0.0",
-                _ => "NULL",
-            };
-            empty.insert(name, value);
-        }
+        let empty = self.empty_values()?;
         let mut projection = Vec::with_capacity(QSO_COLUMNS.len());
         for c in QSO_COLUMNS {
             if *c == "id" || columns.contains(c) {
