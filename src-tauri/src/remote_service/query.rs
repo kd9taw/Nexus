@@ -12,10 +12,13 @@ mod dxpeditions;
 mod field_day;
 mod insights;
 mod js8;
+#[cfg(test)]
+mod log_tests;
 pub(super) mod memories;
 pub(crate) mod navigation;
 mod ota;
 mod parks;
+mod picture;
 mod pounce;
 mod recall;
 mod rotator;
@@ -465,7 +468,6 @@ impl Publisher {
             end -= 1;
         }
     }
-    #[allow(deprecated)] // SPEC-2 C18: Remote's Log collection from the store
     fn capture(
         &mut self,
         request: &Request,
@@ -556,14 +558,15 @@ impl Publisher {
                     .snapshot(request.after))
             }
             Collection::Log => {
-                // A copy of the log's pointers under the lock; the scan (every row, and with a
-                // search five lowercased fields each) runs after it is released.
-                let records = tempo_app::engine::engine_try_lock(engine)
+                // The log's handles under the lock; the window (every contact tested, and with a
+                // search five lowercased fields each) is read after it is released, from one
+                // picture of the log.
+                let rows = tempo_app::engine::engine_try_lock(engine)
                     .map_err(|_| "applicationBusy")?
-                    .log_snapshot()
-                    .records;
-                tempo_core::logbook::io_fence::whole_log_off_engine_lock("Remote's log window");
-                let (rows, total) = log_window(&records, &request.search, request.unconfirmed);
+                    .log_rows();
+                let (rows, total) = picture::read(&rows, |log| {
+                    log_window(log, &request.search, request.unconfirmed)
+                })?;
                 let rows = rows
                     .into_iter()
                     .map(|r| {
@@ -634,20 +637,38 @@ impl Publisher {
     }
 }
 
-// Scan the whole station log, retain only the newest matching window. No full
-// log clone or serialization under the engine lock, and no positional write API.
-fn log_window<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
-    records: &[R],
+/// What the log window reads of every contact: the five fields a search looks in, the time the
+/// window is ordered by, and the four confirmation channels `award_confirmed` is read from.
+const WINDOW: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &[
+        "call",
+        "country",
+        "grid",
+        "band",
+        "mode",
+        "when_unix",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: false,
+};
+
+// Test the whole station log, retain only the newest matching window — newest by time, then
+// later in the log — and read only those contacts whole, all from one picture of the log. No
+// full log clone or serialization, and no positional write API.
+fn log_window(
+    log: &picture::Picture<'_>,
     search: &str,
     unconfirmed: bool,
-) -> (Vec<tempo_core::logbook::QsoRecord>, usize) {
+) -> Result<(Vec<tempo_core::logbook::QsoRecord>, usize), &'static str> {
     let search = search.trim().to_lowercase();
     let mut selected = BinaryHeap::new();
     let mut total = 0;
-    for (i, q) in records.iter().enumerate() {
-        let q: &tempo_core::logbook::QsoRecord = std::borrow::Borrow::borrow(q);
+    log.each(WINDOW, &mut |pick, q| {
         if unconfirmed && q.award_confirmed {
-            continue;
+            return Ok(());
         }
         if !search.is_empty()
             && ![
@@ -661,25 +682,19 @@ fn log_window<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
             .flatten()
             .any(|s| s.to_lowercase().contains(&search))
         {
-            continue;
+            return Ok(());
         }
         total += 1;
-        selected.push(std::cmp::Reverse((q.when_unix, i)));
+        selected.push(std::cmp::Reverse((q.when_unix, pick)));
         if selected.len() > 2000 {
             selected.pop();
         }
-    }
+        Ok(())
+    })?;
     let mut selected: Vec<_> = selected.into_iter().map(|v| v.0).collect();
     selected.sort_unstable_by(|a, b| b.cmp(a));
-    (
-        selected
-            .into_iter()
-            .map(|(_, i)| {
-                std::borrow::Borrow::<tempo_core::logbook::QsoRecord>::borrow(&records[i]).clone()
-            })
-            .collect(),
-        total,
-    )
+    let picks: Vec<_> = selected.into_iter().map(|(_, pick)| pick).collect();
+    Ok((log.whole(&picks)?, total))
 }
 
 #[cfg(test)]
@@ -795,12 +810,13 @@ mod tests {
             .lock()
             .unwrap()
             .import_adif(&(adif("ZL1OLD", "000000") + &data));
-        let eng = engine.lock().unwrap();
-        let (rows, total) = log_window(eng.log_records(), "", false);
+        let log = engine.lock().unwrap().log_rows();
+        let window = |search| picture::read(&log, |p| log_window(p, search, false)).unwrap();
+        let (rows, total) = window("");
         assert_eq!(total, 2301);
         assert_eq!(rows.len(), 2000);
         assert!(!rows.iter().any(|q| q.call == "ZL1OLD"));
-        let (rows, total) = log_window(eng.log_records(), "zl1old", false);
+        let (rows, total) = window("zl1old");
         assert_eq!(total, 1);
         assert_eq!(rows[0].call, "ZL1OLD");
     }
@@ -818,6 +834,386 @@ mod tests {
             Err("applicationBusy")
         );
     }
+
+    // ── the Log collection from the store, held to the code before C18 ───────────────────
+    //
+    // SPEC-2 v3 C18: the window is read from one picture of the logbook store now, and must be
+    // the window the log in memory gave, row for row and byte for byte. The oracle is the code
+    // before C18, VERBATIM, reading the log in memory beside the store it mirrors.
+
+    use super::log_tests::{launch, memory, record_at, settle, synthetic_log, Dir, Gen, CALLS};
+
+    /// `log_window` as C12 left it, VERBATIM.
+    fn old_log_window<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
+        records: &[R],
+        search: &str,
+        unconfirmed: bool,
+    ) -> (Vec<tempo_core::logbook::QsoRecord>, usize) {
+        let search = search.trim().to_lowercase();
+        let mut selected = BinaryHeap::new();
+        let mut total = 0;
+        for (i, q) in records.iter().enumerate() {
+            let q: &tempo_core::logbook::QsoRecord = std::borrow::Borrow::borrow(q);
+            if unconfirmed && q.award_confirmed {
+                continue;
+            }
+            if !search.is_empty()
+                && ![
+                    Some(q.call.as_str()),
+                    q.country.as_deref(),
+                    q.grid.as_deref(),
+                    Some(q.band.as_str()),
+                    Some(q.mode.as_str()),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|s| s.to_lowercase().contains(&search))
+            {
+                continue;
+            }
+            total += 1;
+            selected.push(std::cmp::Reverse((q.when_unix, i)));
+            if selected.len() > 2000 {
+                selected.pop();
+            }
+        }
+        let mut selected: Vec<_> = selected.into_iter().map(|v| v.0).collect();
+        selected.sort_unstable_by(|a, b| b.cmp(a));
+        (
+            selected
+                .into_iter()
+                .map(|(_, i)| {
+                    std::borrow::Borrow::<tempo_core::logbook::QsoRecord>::borrow(&records[i])
+                        .clone()
+                })
+                .collect(),
+            total,
+        )
+    }
+
+    /// The Log collection's arm of `Publisher::capture` as C12 left it, VERBATIM.
+    fn old_log_capture(
+        engine: &crate::SharedEngine,
+        search: &str,
+        unconfirmed: bool,
+    ) -> Result<(Vec<Value>, usize, Value), &'static str> {
+        // A copy of the log's pointers under the lock; the scan (every row, and with a
+        // search five lowercased fields each) runs after it is released.
+        let records = tempo_app::engine::engine_try_lock(engine)
+            .map_err(|_| "applicationBusy")?
+            .log_snapshot()
+            .records;
+        tempo_core::logbook::io_fence::whole_log_off_engine_lock("Remote's log window");
+        let (rows, total) = old_log_window(&records, search, unconfirmed);
+        let rows = rows
+            .into_iter()
+            .map(|r| {
+                let mut q = tempo_app::dto::LoggedQso::from(r);
+                q.entity = propagation::dxcc::resolve(&q.call).map(|i| i.entity.to_string());
+                serde_json::to_value(q).map_err(|_| "applicationUnavailable")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((
+            rows,
+            total,
+            json!({ "order": "newestFirst", "limit": 2000 }),
+        ))
+    }
+
+    /// The Log collection's capture as the station makes it now.
+    fn log_capture(
+        engine: &crate::SharedEngine,
+        search: &str,
+        unconfirmed: bool,
+    ) -> Result<(Vec<Value>, usize, Value), &'static str> {
+        let mut req = request(Collection::Log);
+        req.search = search.into();
+        req.unconfirmed = unconfirmed;
+        Publisher::default().capture(&req, engine, None)
+    }
+
+    /// A capture as the bytes a browser is sent of it.
+    fn bytes(capture: Result<(Vec<Value>, usize, Value), &'static str>) -> String {
+        match capture {
+            Ok((rows, total, meta)) => {
+                json!({ "rows": rows, "total": total, "meta": meta }).to_string()
+            }
+            Err(e) => format!("refused: {e}"),
+        }
+    }
+
+    /// What the page searches for: empty, a call in several spellings, a country, text outside
+    /// ASCII (`ſ` and `ı` fold INTO ASCII upper case; `ö` only lower-cases), a band, a mode, a
+    /// grid, "m" (nearly every band: more than 2,000 matches), and "z", which a date's trailing Z
+    /// makes match everything on the desktop's Logbook (not here: the window looks in five fields
+    /// and never the date).
+    const SEARCHES: &[&str] = &[
+        "",
+        "w1aw",
+        " W1AW ",
+        "k1",
+        "germany",
+        "Österreich",
+        "ö",
+        "ſ",
+        "s",
+        "ı",
+        "i",
+        "é",
+        "curaçao",
+        "m",
+        "z",
+        "20m",
+        "2m",
+        "odd",
+        "ft8",
+        "usb",
+        "ssb",
+        "jn",
+        "ab",
+        "q0zzz",
+        "alaska",
+    ];
+
+    fn assert_the_window_is_the_old_window(e: &crate::SharedEngine, searches: &[&str], what: &str) {
+        for &search in searches {
+            for unconfirmed in [false, true] {
+                let (old, new) = (
+                    bytes(old_log_capture(e, search, unconfirmed)),
+                    bytes(log_capture(e, search, unconfirmed)),
+                );
+                assert!(
+                    new == old,
+                    "{what}: the window for {search:?} (unconfirmed {unconfirmed}) differs\n\
+                     store:  {:.400}\nmemory: {:.400}",
+                    new,
+                    old
+                );
+            }
+        }
+    }
+
+    /// ★ PARITY ON A FIXTURE: 3,000 contacts, many to a second, calls, countries and notes
+    /// outside ASCII, confirmations of every channel — every search the page makes, with and
+    /// without "unconfirmed", read from the store and from the 1.13 path, byte for byte the
+    /// window of the log in memory. Several searches match more than 2,000 contacts.
+    #[test]
+    fn the_log_window_read_from_the_store_is_the_window_of_the_log_in_memory() {
+        let text = synthetic_log(3_000, 0xC18A_0001);
+        let d = Dir::new("window");
+        std::fs::write(d.log(), &text).unwrap();
+        let store = launch(&d);
+        let (_, total, _) = old_log_capture(&store, "", false).unwrap();
+        assert_eq!(total, 3_000, "premise: every contact converted");
+        let (rows, total, _) = old_log_capture(&store, "m", false).unwrap();
+        assert!(
+            total > 2_000 && rows.len() == 2_000,
+            "premise: {total} match 'm'"
+        );
+        let (_, unconfirmed, _) = old_log_capture(&store, "", true).unwrap();
+        assert!(
+            (1..3_000).contains(&unconfirmed),
+            "premise: {unconfirmed} unconfirmed"
+        );
+        let (rows, _, _) = old_log_capture(&store, "ö", false).unwrap();
+        assert!(!rows.is_empty(), "premise: text outside ASCII is found");
+        let (rows, _, _) = old_log_capture(&store, "ſ", false).unwrap();
+        assert!(!rows.is_empty(), "premise: a call outside ASCII is found");
+        assert!(
+            rows.iter()
+                .any(|r| !r["extra"].as_array().unwrap().is_empty()),
+            "premise: rows carry what only a whole record holds"
+        );
+        assert_the_window_is_the_old_window(&store, SEARCHES, "the store");
+        assert_the_window_is_the_old_window(&memory(&text), SEARCHES, "the 1.13 path");
+        settle(&store);
+    }
+
+    /// ★ TIES: 2,500 contacts in ONE second. The window is the newest 2,000 by time and then by
+    /// place in the log — so the LAST 2,000 logged, the last one first — and the cut falls
+    /// inside the tie, exactly where the log in memory put it.
+    #[test]
+    fn a_tie_across_the_cut_is_ordered_and_cut_by_place_in_the_log() {
+        let text: String = (0..2_500)
+            .map(|i| {
+                let call = format!("K{}T{:04}", i % 10, i);
+                format!(
+                    "<CALL:{}>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260909<TIME_ON:6>120000<EOR>\n",
+                    call.len()
+                )
+            })
+            .collect();
+        let d = Dir::new("ties");
+        std::fs::write(d.log(), &text).unwrap();
+        let store = launch(&d);
+        let (rows, total, _) = log_capture(&store, "", false).unwrap();
+        assert_eq!((total, rows.len()), (2_500, 2_000));
+        let calls: Vec<&str> = rows.iter().map(|r| r["call"].as_str().unwrap()).collect();
+        assert_eq!(calls[0], "K9T2499", "the last logged first");
+        assert_eq!(
+            calls[1_999], "K0T0500",
+            "and the cut inside the tie, by place in the log"
+        );
+        assert_the_window_is_the_old_window(&store, &["", "t0", "k1"], "ties");
+        settle(&store);
+    }
+
+    /// ★ THE PROPERTY: over twelve seeded logs and 24 random changes each — logged contacts,
+    /// imports, edits that move a contact in time, change its call, band, grid or country,
+    /// deletes, QSL cards and marks, satellite tags, stamps, LoTW credit and the fill job —
+    /// after EVERY change the window read from the store is the window of the log in memory.
+    #[test]
+    fn after_every_change_the_log_window_read_from_the_store_is_the_old_window() {
+        for seed in 1..=12u64 {
+            let d = Dir::new(&format!("window-prop-{seed}"));
+            std::fs::write(d.log(), synthetic_log(240, seed * 7_919)).unwrap();
+            let e = launch(&d);
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            for step in 0..24u64 {
+                super::log_tests::random_change(&e, &mut g, step);
+                let at = (step as usize * 5) % SEARCHES.len();
+                let searches: Vec<&str> =
+                    SEARCHES.iter().cycle().skip(at).take(5).copied().collect();
+                assert_the_window_is_the_old_window(
+                    &e,
+                    &searches,
+                    &format!("seed {seed}, step {step}"),
+                );
+            }
+            settle(&e);
+        }
+    }
+
+    /// ★ AT 150,000: the window of a lifetime log, read from the store, is the window of the log
+    /// in memory.
+    #[test]
+    fn at_150k_the_log_window_read_from_the_store_is_the_old_window() {
+        let d = Dir::new("window-150k");
+        std::fs::write(d.log(), synthetic_log(150_000, 0xC18A_0150)).unwrap();
+        let store = launch(&d);
+        let (_, total, _) = old_log_capture(&store, "", false).unwrap();
+        assert_eq!(total, 150_000, "premise: every contact converted");
+        assert_the_window_is_the_old_window(&store, &["", "w1aw", "ö", "20m"], "150k");
+        settle(&store);
+    }
+
+    /// ★ ONE PICTURE: the window's two newest contacts, picked by its pass, are edited out of
+    /// the window and deleted — by the operator, committed to the store — before the pass's
+    /// whole records are read. They are still the contacts the pass picked: the window is the
+    /// log as the read found it, every row of it, on the store and on the 1.13 path. The next
+    /// read has both changes.
+    #[test]
+    fn a_contact_edited_or_deleted_between_the_pass_and_the_whole_read_is_the_one_picked() {
+        use super::picture::{at_seams, Seam};
+        let text = synthetic_log(400, 0x00C1_8AB7);
+        let d = Dir::new("between");
+        std::fs::write(d.log(), &text).unwrap();
+        for (arm, e) in [("store", launch(&d)), ("1.13 path", memory(&text))] {
+            let before = bytes(old_log_capture(&e, "", false));
+            let (rows, _, _) = old_log_capture(&e, "", false).unwrap();
+            let place = |id: &Value| {
+                let eng = e.lock().unwrap();
+                let at = eng
+                    .log_records()
+                    .iter()
+                    .position(|r| r.id.map(|i| i.to_string()).as_deref() == id.as_str());
+                at.expect("the window's row is in the log")
+            };
+            let (edit, delete) = (place(&rows[0]["id"]), place(&rows[1]["id"]));
+            let (hook, changes) = (e.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
+            let counted = changes.clone();
+            let during = bytes(at_seams(
+                move |seam| {
+                    if seam != Seam::Whole {
+                        return;
+                    }
+                    let mut eng = hook.lock().unwrap();
+                    let mut r = record_at(&eng, edit);
+                    r.call = "ZZ9ZZZ".into();
+                    r.when_unix = 1_000_000_000;
+                    assert!(eng.update_qso(edit, r));
+                    eng.delete_qso(delete);
+                    eng.flush_log_store(std::time::Duration::from_secs(60))
+                        .expect("committed to the store");
+                    counted.set(counted.get() + 1);
+                },
+                || log_capture(&e, "", false),
+            ));
+            assert_eq!(
+                changes.get(),
+                1,
+                "{arm}: premise: the changes landed mid-read"
+            );
+            assert!(
+                during == before,
+                "{arm}: the window is the log as the read found it\n{during:.300}\n{before:.300}"
+            );
+            let after = bytes(log_capture(&e, "", false));
+            assert!(
+                after != before,
+                "{arm}: premise: the changes moved the window"
+            );
+            assert_eq!(
+                after,
+                bytes(old_log_capture(&e, "", false)),
+                "{arm}: the next read"
+            );
+            settle(&e);
+        }
+    }
+
+    /// ★ THE KEYS STILL MATCH. A browser names the row it changes by the bytes of the row it was
+    /// served, and the change path finds the contact whose own row — built from the log in
+    /// memory — has those bytes (`operations::logging::{seen_target, locate}`). Every row of a
+    /// window read from the store is found, at its own place: a change made from a page served
+    /// out of the store reaches the contact the page showed.
+    #[test]
+    fn every_row_served_from_the_store_is_found_by_the_change_path_at_its_own_place() {
+        use crate::remote_service::operations::logging::{locate, seen_target};
+        let d = Dir::new("keys");
+        std::fs::write(d.log(), synthetic_log(2_500, 0x0C18_A4E7)).unwrap();
+        let store = launch(&d);
+        let (rows, _, _) = log_capture(&store, "", false).unwrap();
+        assert_eq!(rows.len(), 2_000, "premise: a full window");
+        let mut eng = store.lock().unwrap();
+        for row in &rows {
+            let seen: tempo_app::dto::LoggedQso = serde_json::from_value(row.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(&seen).unwrap(),
+                *row,
+                "premise: the row a browser holds is the row it was sent"
+            );
+            let at = locate(&mut eng, &seen_target(&seen))
+                .unwrap_or_else(|| panic!("the change path finds the row it served: {row}"));
+            assert_eq!(
+                eng.log_records()[at].id.map(|i| i.to_string()),
+                seen.id,
+                "at its own place"
+            );
+        }
+        drop(eng);
+        settle(&store);
+    }
+
+    /// The window's calls outside ASCII are the log's own: every one the generator makes that
+    /// the log holds is found by a search for itself, on the store as in memory.
+    #[test]
+    fn a_search_for_a_call_outside_ascii_finds_it_on_the_store() {
+        let text = synthetic_log(600, 0x0C18_AA5C);
+        let d = Dir::new("non-ascii");
+        std::fs::write(d.log(), &text).unwrap();
+        let store = launch(&d);
+        let odd: Vec<&str> = CALLS.iter().copied().filter(|c| !c.is_ascii()).collect();
+        assert!(odd.len() >= 3, "premise: calls outside ASCII");
+        assert_the_window_is_the_old_window(&store, &odd, "calls outside ASCII");
+        let found = odd
+            .iter()
+            .filter(|c| log_capture(&store, c, false).unwrap().1 > 0)
+            .count();
+        assert!(found >= 3, "premise: {found} of them are in the log");
+        settle(&store);
+    }
+
     #[test]
     fn journal_metadata_updates_keep_the_original_identity_and_time() {
         let mut journal = Journal::default();

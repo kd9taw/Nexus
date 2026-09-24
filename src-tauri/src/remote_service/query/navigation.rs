@@ -60,10 +60,11 @@ struct Context {
     model: String,
     power: Option<f64>,
     gain: f64,
-    log: Arc<()>,
+    /// The log's revision: it moves on every change to the log, so a capture built from an
+    /// earlier log is never taken for this one's.
+    log: u64,
 }
 impl Context {
-    #[allow(deprecated)] // SPEC-2 C18: Remote from the store
     fn read(engine: &crate::SharedEngine) -> Result<Self, &'static str> {
         let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
         let s = e.settings();
@@ -82,7 +83,7 @@ impl Context {
             model: s.prop_engine.clone(),
             power: s.station_power_w,
             gain: s.ant_tx_gain_dbi + s.ant_rx_gain_dbi,
-            log: e.log_read_token(),
+            log: e.log_revision(),
         })
     }
     fn same(&self, other: &Self) -> bool {
@@ -91,7 +92,7 @@ impl Context {
             && self.model == other.model
             && self.power == other.power
             && self.gain == other.gain
-            && Arc::ptr_eq(&self.log, &other.log)
+            && self.log == other.log
     }
 }
 struct Entry {
@@ -360,7 +361,7 @@ fn connect(
             .max(now.saturating_sub(snap.as_of).max(0) as u64 * 1000);
         if c.call != context.call
             || c.grid != context.grid
-            || !Arc::ptr_eq(&c.log, &context.log)
+            || c.log != context.log
             || !crate::is_real_call(&context.call)
             || snap.as_of <= 0
             || snap.as_of > now + 5
@@ -675,83 +676,85 @@ struct LogContext {
     zones: std::collections::BTreeSet<u8>,
     count: usize,
 }
-#[allow(deprecated)] // SPEC-2 C18: Remote from the store
+/// What the coverage reads of every contact: the needs model's inputs (`LogNeeds::add_qso`,
+/// with the four confirmation channels `award_confirmed` is read from) and the grid and call its
+/// squares and zones come from.
+const COVERAGE: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &[
+        "call",
+        "band",
+        "mode",
+        "grid",
+        "state",
+        "prop_mode",
+        "qsl_card_rcvd_raw",
+        "lotw_rcvd_raw",
+        "eqsl_rcvd_raw",
+        "qrz_status_raw",
+    ],
+    uploads: false,
+};
 fn log_context(
     context: &Context,
     engine: &crate::SharedEngine,
 ) -> Result<LogContext, &'static str> {
     let deadline = Instant::now() + Duration::from_secs(2);
-    let count = {
+    // The log's handles, under the lock, for the log and the settings the capture is for.
+    let rows = {
         let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
-        e.log_records().len()
+        if context.log != e.log_revision()
+            || e.settings().mycall != context.call
+            || e.settings().mygrid != context.grid
+        {
+            return Err("applicationBusy");
+        }
+        e.log_rows()
     };
-    if count > 1_000_000 {
-        return Err("applicationTooLarge");
-    }
     let mut out = LogContext {
         needs: propagation::LogNeeds::new(),
         grids: Default::default(),
         zones: Default::default(),
-        count,
+        count: 0,
     };
     let mut text_bytes = 0usize;
-    for offset in (0..count).step_by(128) {
-        if Instant::now() >= deadline {
-            return Err("applicationBusy");
+    super::picture::read(&rows, |log| {
+        out.count = log.count()?;
+        if out.count > 1_000_000 {
+            return Err("applicationTooLarge");
         }
-        let rows = {
-            let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
-            if !Arc::ptr_eq(&context.log, &e.log_read_token())
-                || e.settings().mycall != context.call
-                || e.settings().mygrid != context.grid
-            {
-                return Err("applicationBusy");
-            }
-            let mut rows = Vec::new();
-            for q in &e.log_records()[offset..(offset + 128).min(count)] {
-                for s in [&q.call, &q.band, &q.mode].into_iter().chain(
-                    [q.grid.as_ref(), q.state.as_ref(), q.prop_mode.as_ref()]
-                        .into_iter()
-                        .flatten(),
-                ) {
-                    if s.len() > 1024 {
-                        return Err("applicationTooLarge");
-                    }
-                    text_bytes = text_bytes.saturating_add(s.len());
-                }
-                if text_bytes > 64 * 1024 * 1024 {
+        log.each(COVERAGE, &mut |pick, q| {
+            super::picture::within(deadline, pick)?;
+            for s in [&q.call, &q.band, &q.mode].into_iter().chain(
+                [q.grid.as_ref(), q.state.as_ref(), q.prop_mode.as_ref()]
+                    .into_iter()
+                    .flatten(),
+            ) {
+                if s.len() > 1024 {
                     return Err("applicationTooLarge");
                 }
-                rows.push((
-                    q.call.clone(),
-                    q.band.clone(),
-                    q.mode.clone(),
-                    q.grid.clone(),
-                    q.state.clone(),
-                    q.award_confirmed,
-                    crate::qso_is_sat(q.prop_mode.as_deref()),
-                ));
+                text_bytes = text_bytes.saturating_add(s.len());
             }
-            rows
-        };
-        for (call, band, mode, grid, state, confirmed, satellite) in rows {
+            if text_bytes > 64 * 1024 * 1024 {
+                return Err("applicationTooLarge");
+            }
             out.needs.add_qso(
-                &call,
-                &band,
-                &mode,
-                grid.as_deref(),
-                state.as_deref(),
-                confirmed,
-                satellite,
+                &q.call,
+                &q.band,
+                &q.mode,
+                q.grid.as_deref(),
+                q.state.as_deref(),
+                q.award_confirmed,
+                crate::qso_is_sat(q.prop_mode.as_deref()),
             );
-            if let Some(g) = grid
+            if let Some(g) = q
+                .grid
                 .as_ref()
                 .map(|s| s.trim().to_uppercase())
                 .filter(|s| s.chars().count() >= 4)
             {
                 out.grids.insert(g.chars().take(4).collect());
             }
-            if let Some(info) = propagation::dxcc::resolve(&call) {
+            if let Some(info) = propagation::dxcc::resolve(&q.call) {
                 if (1..=40).contains(&info.cq_zone) {
                     out.zones.insert(info.cq_zone);
                 }
@@ -759,8 +762,9 @@ fn log_context(
             if out.grids.len() > 65_536 {
                 return Err("applicationTooLarge");
             }
-        }
-    }
+            Ok(())
+        })
+    })?;
     if !context.same(&Context::read(engine)?) {
         return Err("applicationBusy");
     }
@@ -823,7 +827,7 @@ mod tests {
         let context = crate::PropContext {
             call: "W1AW".into(),
             grid: "FN31RX09".into(),
-            log: engine.log_read_token(),
+            log: engine.log_revision(),
         };
         let sources = Sources {
             needs: Default::default(),
@@ -1221,5 +1225,307 @@ mod tests {
         let e = engine.lock().unwrap();
         assert!(!e.snapshot().radio.tx_enabled);
         assert!(crate::satellite_held(&e).is_none());
+    }
+
+    // ── the coverage from the store, held to the code before C18 ─────────────────────────
+    //
+    // SPEC-2 v3 C18: the Connect and satellite coverage reads one picture of the logbook store
+    // now, and a capture's log identity is the log's revision. The oracle is the code before
+    // C18, VERBATIM — its context keyed on the log's read token and its chunked fold of the log
+    // in memory — beside the store that log mirrors.
+
+    #[derive(Clone)]
+    struct OldContext {
+        call: String,
+        grid: String,
+        model: String,
+        power: Option<f64>,
+        gain: f64,
+        log: Arc<()>,
+    }
+    impl OldContext {
+        fn read(engine: &crate::SharedEngine) -> Result<Self, &'static str> {
+            let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
+            let s = e.settings();
+            if s.mycall.len() > 64
+                || s.mygrid.len() > 16
+                || s.prop_engine.len() > 32
+                || !s.ant_tx_gain_dbi.is_finite()
+                || !s.ant_rx_gain_dbi.is_finite()
+                || s.station_power_w.is_some_and(|p| !p.is_finite())
+            {
+                return Err("applicationTooLarge");
+            }
+            Ok(Self {
+                call: s.mycall.clone(),
+                grid: s.mygrid.clone(),
+                model: s.prop_engine.clone(),
+                power: s.station_power_w,
+                gain: s.ant_tx_gain_dbi + s.ant_rx_gain_dbi,
+                log: e.log_read_token(),
+            })
+        }
+        fn same(&self, other: &Self) -> bool {
+            self.call == other.call
+                && self.grid == other.grid
+                && self.model == other.model
+                && self.power == other.power
+                && self.gain == other.gain
+                && Arc::ptr_eq(&self.log, &other.log)
+        }
+    }
+    struct OldLogContext {
+        needs: propagation::LogNeeds,
+        grids: std::collections::BTreeSet<String>,
+        zones: std::collections::BTreeSet<u8>,
+        count: usize,
+    }
+    fn old_log_context(
+        context: &OldContext,
+        engine: &crate::SharedEngine,
+    ) -> Result<OldLogContext, &'static str> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let count = {
+            let e = tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
+            e.log_records().len()
+        };
+        if count > 1_000_000 {
+            return Err("applicationTooLarge");
+        }
+        let mut out = OldLogContext {
+            needs: propagation::LogNeeds::new(),
+            grids: Default::default(),
+            zones: Default::default(),
+            count,
+        };
+        let mut text_bytes = 0usize;
+        for offset in (0..count).step_by(128) {
+            if Instant::now() >= deadline {
+                return Err("applicationBusy");
+            }
+            let rows = {
+                let e =
+                    tempo_app::engine::engine_try_lock(engine).map_err(|_| "applicationBusy")?;
+                if !Arc::ptr_eq(&context.log, &e.log_read_token())
+                    || e.settings().mycall != context.call
+                    || e.settings().mygrid != context.grid
+                {
+                    return Err("applicationBusy");
+                }
+                let mut rows = Vec::new();
+                for q in &e.log_records()[offset..(offset + 128).min(count)] {
+                    for s in [&q.call, &q.band, &q.mode].into_iter().chain(
+                        [q.grid.as_ref(), q.state.as_ref(), q.prop_mode.as_ref()]
+                            .into_iter()
+                            .flatten(),
+                    ) {
+                        if s.len() > 1024 {
+                            return Err("applicationTooLarge");
+                        }
+                        text_bytes = text_bytes.saturating_add(s.len());
+                    }
+                    if text_bytes > 64 * 1024 * 1024 {
+                        return Err("applicationTooLarge");
+                    }
+                    rows.push((
+                        q.call.clone(),
+                        q.band.clone(),
+                        q.mode.clone(),
+                        q.grid.clone(),
+                        q.state.clone(),
+                        q.award_confirmed,
+                        crate::qso_is_sat(q.prop_mode.as_deref()),
+                    ));
+                }
+                rows
+            };
+            for (call, band, mode, grid, state, confirmed, satellite) in rows {
+                out.needs.add_qso(
+                    &call,
+                    &band,
+                    &mode,
+                    grid.as_deref(),
+                    state.as_deref(),
+                    confirmed,
+                    satellite,
+                );
+                if let Some(g) = grid
+                    .as_ref()
+                    .map(|s| s.trim().to_uppercase())
+                    .filter(|s| s.chars().count() >= 4)
+                {
+                    out.grids.insert(g.chars().take(4).collect());
+                }
+                if let Some(info) = propagation::dxcc::resolve(&call) {
+                    if (1..=40).contains(&info.cq_zone) {
+                        out.zones.insert(info.cq_zone);
+                    }
+                }
+                if out.grids.len() > 65_536 {
+                    return Err("applicationTooLarge");
+                }
+            }
+        }
+        if !context.same(&OldContext::read(engine)?) {
+            return Err("applicationBusy");
+        }
+        Ok(out)
+    }
+
+    use super::super::log_tests::{launch, memory, settle, synthetic_log, Dir, Gen};
+
+    /// What the served documents read of a coverage: its count, squares and zones (Connect),
+    /// and the needs model's satellite squares and entities (a satellite's schedule).
+    fn served(c: &LogContext) -> String {
+        format!(
+            "{} {:?} {:?} {:?} {:?}",
+            c.count,
+            c.grids,
+            c.zones,
+            c.needs
+                .worked_grids_sat()
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            c.needs
+                .worked_entity_names()
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        )
+    }
+    fn old_served(c: &OldLogContext) -> String {
+        format!(
+            "{} {:?} {:?} {:?} {:?}",
+            c.count,
+            c.grids,
+            c.zones,
+            c.needs
+                .worked_grids_sat()
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            c.needs
+                .worked_entity_names()
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        )
+    }
+
+    fn assert_coverage_is_the_old_coverage(e: &crate::SharedEngine, what: &str) {
+        let new = log_context(&Context::read(e).unwrap(), e).map(|c| served(&c));
+        let old = old_log_context(&OldContext::read(e).unwrap(), e).map(|c| old_served(&c));
+        assert!(
+            new == old,
+            "{what}: the coverage differs\nstore:  {new:.600?}\nmemory: {old:.600?}"
+        );
+    }
+
+    fn launch_with_grid(d: &Dir) -> crate::SharedEngine {
+        let e = launch(d);
+        let mut s = e.lock().unwrap().settings().clone();
+        s.mygrid = "EN52".into();
+        e.lock().unwrap().apply_settings(s);
+        e
+    }
+
+    /// ★ PARITY: the coverage of 3,000 contacts — satellite contacts among them — read from the
+    /// store and from the 1.13 path, is what the log in memory gave.
+    #[test]
+    fn the_coverage_read_from_the_store_is_the_coverage_of_the_log_in_memory() {
+        let text = synthetic_log(3_000, 0x0C18_A2A7);
+        let d = Dir::new("coverage");
+        std::fs::write(d.log(), &text).unwrap();
+        let store = launch_with_grid(&d);
+        let c = log_context(&Context::read(&store).unwrap(), &store).unwrap();
+        assert_eq!(c.count, 3_000, "premise");
+        assert!(
+            !c.needs.worked_grids_sat().is_empty(),
+            "premise: satellite squares"
+        );
+        assert!(c.zones.len() > 5 && c.grids.len() > 100, "premise");
+        assert_coverage_is_the_old_coverage(&store, "the store");
+        assert_coverage_is_the_old_coverage(&memory(&text), "the 1.13 path");
+        settle(&store);
+    }
+
+    /// ★ THE PROPERTY: after every one of 24 random changes to each of eight seeded logs, the
+    /// coverage read from the store is the coverage of the log in memory.
+    #[test]
+    fn after_every_change_the_coverage_is_the_old_coverage() {
+        for seed in 1..=8u64 {
+            let d = Dir::new(&format!("coverage-prop-{seed}"));
+            std::fs::write(d.log(), synthetic_log(200, seed * 49_979_687)).unwrap();
+            let e = launch_with_grid(&d);
+            let mut g = Gen(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            for step in 0..24u64 {
+                super::super::log_tests::random_change(&e, &mut g, step);
+                assert_coverage_is_the_old_coverage(&e, &format!("seed {seed}, step {step}"));
+            }
+            settle(&e);
+        }
+    }
+
+    /// ★ THE IDENTITY: a capture is the log's for as long as the log does not change — ANY
+    /// change, an upload stamp included, as the read token it replaces moved on any change. The
+    /// old and the new identity agree on every kind of change the app makes.
+    #[test]
+    fn a_capture_identity_moves_on_every_change_as_the_read_token_did() {
+        let d = Dir::new("identity");
+        std::fs::write(d.log(), synthetic_log(60, 0x00C1_8A1D)).unwrap();
+        let e = launch_with_grid(&d);
+        let mut g = Gen(0x00C1_8A1D);
+        for step in 0..40u64 {
+            let (new, old) = (Context::read(&e).unwrap(), OldContext::read(&e).unwrap());
+            assert!(
+                new.same(&Context::read(&e).unwrap()),
+                "premise: unchanged is the same"
+            );
+            super::super::log_tests::random_change(&e, &mut g, step);
+            let moved_new = !new.same(&Context::read(&e).unwrap());
+            let moved_old = !old.same(&OldContext::read(&e).unwrap());
+            assert_eq!(moved_new, moved_old, "step {step}: the identities disagree");
+        }
+        // An upload stamp alone, which moves no index a fold reads: both move.
+        let (new, old) = (Context::read(&e).unwrap(), OldContext::read(&e).unwrap());
+        {
+            let mut eng = e.lock().unwrap();
+            let pushed = super::super::log_tests::record_at(&eng, 3);
+            assert!(eng.stamp_qrz_upload(
+                &pushed,
+                tempo_core::logbook::UploadOutcome::Accepted,
+                2_000_000_000,
+                None
+            ));
+        }
+        assert!(
+            !new.same(&Context::read(&e).unwrap()),
+            "a stamp moves the new identity"
+        );
+        assert!(
+            !old.same(&OldContext::read(&e).unwrap()),
+            "as it moved the old one"
+        );
+        settle(&e);
+    }
+
+    /// ★ THE BUDGET IS KEPT: a read of the log still has the two seconds the chunked read had,
+    /// from before it takes the Engine lock. One whose pass would start past them — held up
+    /// here at the start of its pass — is refused as busy, the answer the chunked read gave one
+    /// that ran long, not answered late. The control: the same read, on time, answers.
+    #[test]
+    fn a_read_past_its_budget_is_refused_as_busy() {
+        use super::super::picture::{at_seams, Seam};
+        let engine = fixture().0;
+        let late = at_seams(
+            |seam| {
+                if seam == Seam::Each {
+                    std::thread::sleep(std::time::Duration::from_millis(2_050));
+                }
+            },
+            || log_context(&Context::read(&engine).unwrap(), &engine),
+        );
+        assert!(matches!(late, Err("applicationBusy")));
+        assert!(
+            log_context(&Context::read(&engine).unwrap(), &engine).is_ok(),
+            "control: on time, it answers"
+        );
     }
 }
