@@ -1025,31 +1025,51 @@ export function Logbook({
   const placement = useRef<{ index: number; delta: number } | null>(null)
   const justPlaced = useRef(false)
 
+  // AN OPEN ROW'S HEIGHT GOES WITH IT (a bug older than this list). The list keeps each row's
+  // measured height by the row's PLACE, and measures a row only when it mounts or resizes — so a
+  // row that stays mounted while its place changes keeps its height at the old place. Every closed
+  // row is as tall as the next, so that costs nothing, except for an OPEN row (a comment or note
+  // opened to full length): after the order changed, its height stayed where it had been — a gap
+  // there — and it was drawn into a closed row's height at its new place, its note under the rows
+  // below, until the rows remounted. So the list knows where each open row's height sits
+  // (`openAt`: its place in the order on screen), and a swap moves the height with it (in the
+  // placing effect below, before the view is placed).
+  const openAt = useRef<{ queryKey: string; at: Map<string, number> }>({ queryKey, at: new Map() })
+  if (openAt.current.queryKey !== queryKey) openAt.current = { queryKey, at: new Map() }
+  /** The open rows' heights to move, taken as a swap is decided and applied in the render that
+   *  shows the new order (when the list is its new length), before that render is placed. */
+  const heightMoves = useRef<{ closed: number; moves: { key: string; from: number; to: number | null; size: number }[] } | null>(null)
+
   const virtualRows = rowVirtualizer.getVirtualItems()
   const held0 = anchor.current
-  const locating = pendingRev !== null && held0 !== null && !held0.atTop ? held0.rows : []
+  const anchorRows = pendingRev !== null && held0 !== null && !held0.atTop ? held0.rows : []
+  // While a swap is pending: where the anchor rows went, and where the open rows went.
+  const openKeys = pendingRev === null ? [] : [...openAt.current.at.keys()].filter((key) => openComments.has(key))
+  const locateKeys = [...new Set([...anchorRows.map((row) => row.key), ...openKeys])]
   const located = useLogAnswers(
-    locating.map((row): LogQuestion => ({ kind: 'locate', query, id: row.key })),
+    locateKeys.map((key): LogQuestion => ({ kind: 'locate', query, id: key })),
     logTick,
     control,
   ) as readonly (LogLocate | undefined)[]
+  const placeOf = new Map(locateKeys.map((key, k) => [key, located[k]] as const))
   // Where the list will stand in the pending order: `undefined` while that is not known yet;
   // `index: null` keeps the scroll (at the top, or when no anchor row survived).
   let target: { index: number | null; delta: number } | undefined
   if (pendingRev !== null) {
     target = { index: null, delta: 0 }
-    for (let k = 0; k < locating.length; k++) {
-      const at = located[k]
+    for (const row of anchorRows) {
+      const at = placeOf.get(row.key)
       if (!at || at.orderRev !== pendingRev) {
         target = undefined
         break
       }
       if (at.index !== null) {
-        target = { index: at.index, delta: locating[k].delta }
+        target = { index: at.index, delta: row.delta }
         break
       }
     }
   }
+  const openPlacesKnown = openKeys.every((key) => placeOf.get(key)?.orderRev === pendingRev)
   // The pages that place shows (the viewport there, overscan included) — asked for now, with the
   // pages of the rows on screen, so the swap waits for nothing it will draw.
   const offsetsOf = (first: number, last: number) => {
@@ -1079,7 +1099,10 @@ export function Logbook({
   )
   pages.forEach((page) => remember(page))
   const ready =
-    pendingRev !== null && target !== undefined && [0, ...targetOffsets].every((o) => recall(pendingRev, o) !== undefined)
+    pendingRev !== null &&
+    target !== undefined &&
+    openPlacesKnown &&
+    [0, ...targetOffsets].every((o) => recall(pendingRev, o) !== undefined)
   const rowAt = (i: number): { q: LoggedQso; key: string } | undefined => {
     if (!control) {
       const pos = remoteOrder[i]
@@ -1093,9 +1116,48 @@ export function Logbook({
     return k < page.rows.length ? { q: page.rows[k], key: page.keys[k] } : undefined
   }
 
-  // The swapped-in order is placed after the render that shows it, before the browser paints.
+  /** The height closed rows are drawn at: the one most of the rows drawn now have. */
+  const closedHeight = () => {
+    const seen = new Map<number, number>()
+    for (const item of virtualRows) {
+      const row = rowAt(item.index)
+      if (row && !openComments.has(row.key)) seen.set(item.size, (seen.get(item.size) ?? 0) + 1)
+    }
+    let size = ROW_ESTIMATE
+    let most = 0
+    for (const [h, n] of seen)
+      if (n > most) {
+        size = h
+        most = n
+      }
+    return size
+  }
+
+  // The swapped-in order is placed after the render that shows it, before the browser paints —
+  // its open rows' heights moved first, so the list is laid out, and placed, as the rows are.
   // (Declared before the swap below: effects run in order, so the swap's own render has passed.)
   useLayoutEffect(() => {
+    const moving = heightMoves.current
+    heightMoves.current = null
+    if (moving) {
+      // Each vacated place gets a closed row's height, each new place the open row's own, through
+      // the list's own `resizeItem` — its scroll adjustment held off: the swap places the view.
+      // (A state change in a layout effect is drawn before the paint, so this lands in one frame.)
+      const landing = new Set(moving.moves.map((m) => m.to))
+      const adjust = rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange
+      rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+      try {
+        for (const m of moving.moves) if (!landing.has(m.from)) rowVirtualizer.resizeItem(m.from, moving.closed)
+        for (const m of moving.moves) if (m.to !== null) rowVirtualizer.resizeItem(m.to, m.size)
+      } finally {
+        rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjust
+      }
+      for (const m of moving.moves) {
+        if (m.to === null) openAt.current.at.delete(m.key)
+        else openAt.current.at.set(m.key, m.to)
+      }
+      rowVirtualizer.getVirtualItems() // the list's table, recomputed with the moved heights
+    }
     const p = placement.current
     placement.current = null
     const el = scrollRef.current
@@ -1108,6 +1170,14 @@ export function Logbook({
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!control || !el) return
+    // Where each open row's height sits: its place among the rows drawn now (a row is measured
+    // where it mounts; a swap moves the height with it). Closed rows are forgotten.
+    const at = openAt.current.at
+    for (const key of [...at.keys()]) if (!openComments.has(key)) at.delete(key)
+    for (const item of virtualRows) {
+      const row = rowAt(item.index)
+      if (row && openComments.has(row.key)) at.set(row.key, item.index)
+    }
     // The view was just placed: the rows noted now would be read at the old place. The scroll
     // that placing causes renders again, and they are noted then.
     if (justPlaced.current) {
@@ -1136,6 +1206,14 @@ export function Logbook({
       return
     }
     if (!ready || pendingRev === null || target === undefined) return
+    const moves: { key: string; from: number; to: number | null; size: number }[] = []
+    for (const key of openKeys) {
+      const from = openAt.current.at.get(key)
+      const to = placeOf.get(key)?.index ?? null
+      const size = from === undefined ? undefined : rowVirtualizer.measurementsCache[from]?.size
+      if (from !== undefined && size !== undefined && to !== from) moves.push({ key, from, to, size })
+    }
+    heightMoves.current = moves.length ? { closed: closedHeight(), moves } : null
     placement.current = target.index === null ? null : { index: target.index, delta: target.delta }
     setShown({ queryKey, orderRev: pendingRev })
   })
