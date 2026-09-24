@@ -43,6 +43,31 @@ export interface LogStats {
   qsl: { card: number; lotw: number; eqsl: number }
 }
 
+/** The statistics COUNTED and not yet ordered — what the engine answers the `statistics` question
+ * with (SPEC-2 v3 C17a), and what `finishLogStats` turns into `LogStats`. Each tally is in
+ * first-seen order, and `entities` holds every entity, not only the top twelve.
+ *
+ * Ordering is the window's job, not the engine's: ties are broken by `localeCompare`, which orders
+ * labels the way THIS webview's locale does ("Åland Islands" beside "Aland Islands", lower case
+ * beside upper). Nothing else in the dashboard depends on the locale, so the counting can move and
+ * the ordering stays exactly where it was. */
+export interface LogStatCounts {
+  total: number
+  uniqueCalls: number
+  confirmed: number
+  awardConfirmed: number
+  dxccEntities: number
+  byBand: Tally[]
+  byMode: Tally[]
+  byYear: Tally[]
+  byState: Tally[]
+  /** Every entity (resolved, or the stored country), grouped as `topEntities` groups them. */
+  entities: Tally[]
+  hourUtc: number[]
+  hourUnknown: number
+  qsl: { card: number; lotw: number; eqsl: number }
+}
+
 /** Count occurrences of a key extracted from each QSO, dropping blanks. */
 function tallyBy(log: LoggedQso[], key: (q: LoggedQso) => string | null | undefined): Map<string, number> {
   const m = new Map<string, number>()
@@ -123,16 +148,18 @@ function wasState(q: LoggedQso): string | null {
   return code && WAS_STATES.has(code) ? code : null
 }
 
-/** Map → Tally[] sorted by count descending (ties broken by label for stability). */
+/** Tallies by count descending (ties broken by label for stability). */
 export const compareTallies = (a: Tally, b: Tally): number => b.count - a.count || a.label.localeCompare(b.label)
-function byCountDesc(m: Map<string, number>): Tally[] {
-  return [...m.entries()]
-    .map(([label, count]) => ({ label, count }))
-    .sort(compareTallies)
+/** Map → Tally[], in the map's order (first seen). */
+function tallies(m: Map<string, number>): Tally[] {
+  return [...m.entries()].map(([label, count]) => ({ label, count }))
+}
+function byCountDesc(t: readonly Tally[]): Tally[] {
+  return [...t].sort(compareTallies)
 }
 
-/** Roll a logbook up into the descriptive-stats dashboard shape. Pure. */
-export function computeLogStats(log: LoggedQso[]): LogStats {
+/** Count a logbook for the dashboard — one pass, nothing ordered (`finishLogStats` orders). Pure. */
+export function countLogStats(log: LoggedQso[]): LogStatCounts {
   const hourUtc = new Array(24).fill(0) as number[]
   let hourUnknown = 0
   const calls = new Set<string>()
@@ -166,15 +193,13 @@ export function computeLogStats(log: LoggedQso[]): LogStats {
     }
   }
 
-  const byYear = [...tallyBy(log, (q) => {
-    if (!Number.isFinite(q.whenUnix)) return null
-    const y = new Date(q.whenUnix * 1000).getUTCFullYear() // NaN for an out-of-range timestamp
-    return Number.isFinite(y) ? String(y) : null
-  }).entries()]
-    .map(([label, count]) => ({ label, count }))
-    .sort((a, b) => a.label.localeCompare(b.label)) // chronological
-
-  const entities = byCountDesc(tallyByCI(log, (q) => q.entity ?? q.country))
+  const byYear = tallies(
+    tallyBy(log, (q) => {
+      if (!Number.isFinite(q.whenUnix)) return null
+      const y = new Date(q.whenUnix * 1000).getUTCFullYear() // NaN for an out-of-range timestamp
+      return Number.isFinite(y) ? String(y) : null
+    }),
+  )
 
   return {
     total: log.length,
@@ -182,13 +207,39 @@ export function computeLogStats(log: LoggedQso[]): LogStats {
     confirmed,
     awardConfirmed,
     dxccEntities: countries.size,
-    byBand: byCountDesc(tallyBy(log, (q) => q.band)),
-    byMode: byCountDesc(tallyBy(log, (q) => phoneModeLabel(q.mode))),
+    byBand: tallies(tallyBy(log, (q) => q.band)),
+    byMode: tallies(tallyBy(log, (q) => phoneModeLabel(q.mode))),
     byYear,
-    byState: byCountDesc(tallyBy(log, wasState)),
-    topEntities: entities.slice(0, 12),
+    byState: tallies(tallyBy(log, wasState)),
+    entities: tallies(tallyByCI(log, (q) => q.entity ?? q.country)),
     hourUtc,
     hourUnknown,
     qsl,
   }
+}
+
+/** Order counted statistics as the dashboard shows them: the bars most-worked first (ties by
+ * label, in this webview's locale), the years chronologically, the twelve most-worked entities.
+ * Copies what it orders — the counts are left as they were. Pure. */
+export function finishLogStats(c: LogStatCounts): LogStats {
+  return {
+    total: c.total,
+    uniqueCalls: c.uniqueCalls,
+    confirmed: c.confirmed,
+    awardConfirmed: c.awardConfirmed,
+    dxccEntities: c.dxccEntities,
+    byBand: byCountDesc(c.byBand),
+    byMode: byCountDesc(c.byMode),
+    byYear: [...c.byYear].sort((a, b) => a.label.localeCompare(b.label)), // chronological
+    byState: byCountDesc(c.byState),
+    topEntities: byCountDesc(c.entities).slice(0, 12),
+    hourUtc: [...c.hourUtc],
+    hourUnknown: c.hourUnknown,
+    qsl: { ...c.qsl },
+  }
+}
+
+/** Roll a logbook up into the descriptive-stats dashboard shape. Pure. */
+export function computeLogStats(log: LoggedQso[]): LogStats {
+  return finishLogStats(countLogStats(log))
 }

@@ -1,0 +1,219 @@
+{
+  "_provenance": "Taken from the 1.14 hosted page, 2026-09-24. `rows` are the log page a 1.14 station served for `records` (station at cbf96fed: main a8928243 plus the C13 hot index, its Remote, DTO and page code identical to main's). Each change's target is what the page's own logTarget (ui/src/remote-web/operation-protocol.ts) built from those rows, and each change passed the page's own logChange check. Never regenerate it from a newer station: the old bytes are the point.",
+  "records": "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<FREQ:6>14.074<GRIDSQUARE:4>FN31<RST_SENT:3>-10<RST_RCVD:3>-12<NAME:5>Hiram<QTH:9>Newington<COMMENT:5>73 OM<NOTES:6>dipole<TX_PWR:2>50<QSO_DATE:8>20260910<TIME_ON:6>120000<QSO_DATE_OFF:8>20260910<TIME_OFF:6>120130<SIG:4>POTA<SIG_INFO:7>US-0001<QSL_SENT:1>Y<QSL_SENT_VIA:1>B<QSLSDATE:8>20260911<MY_GRIDSQUARE:4>EN52<APP_NEXUS_ID:27>00000000:0123456789abcdef:1<EOR>\n<CALL:5>K1ABC<BAND:3>40m<MODE:2>CW<FREQ:5>7.030<RST_SENT:3>599<RST_RCVD:3>579<QSO_DATE:8>20260910<TIME_ON:6>130000<APP_NEXUS_ID:27>00000000:0123456789abcdef:2<EOR>\n<CALL:6>DL1ABC<BAND:3>20m<MODE:3>SSB<FREQ:6>14.250<NAME:5>José<QSO_DATE:8>20260910<TIME_ON:6>140000<QSL_RCVD:1>Y<APP_NEXUS_ID:27>00000000:0123456789abcdef:3<EOR>\n",
+  "rows": [
+    {
+      "awardConfirmed": true,
+      "band": "20m",
+      "call": "DL1ABC",
+      "comment": null,
+      "confirmed": true,
+      "country": null,
+      "creditGranted": [],
+      "creditSubmitted": [],
+      "dxcc": null,
+      "entity": "Fed. Rep. of Germany",
+      "extra": [],
+      "freqMhz": 14.25,
+      "freqRxMhz": null,
+      "grid": null,
+      "id": "00000000:0123456789abcdef:3",
+      "mode": "SSB",
+      "myGrid": null,
+      "myRig": null,
+      "name": "José",
+      "notes": null,
+      "operator": null,
+      "ota": {
+        "iota": null,
+        "myProgram": null,
+        "myRef": null,
+        "theirProgram": null,
+        "theirRef": null
+      },
+      "propMode": null,
+      "qslRcvd": {
+        "card": true,
+        "eqsl": false,
+        "lotw": false,
+        "qrz": false
+      },
+      "qslSent": {
+        "dateUnix": null,
+        "sent": false,
+        "via": null
+      },
+      "qth": null,
+      "rstRcvd": null,
+      "rstSent": null,
+      "satName": null,
+      "state": null,
+      "stationCallsign": null,
+      "timeKnown": true,
+      "timeOffUnix": null,
+      "txPower": null,
+      "upload": {},
+      "whenUnix": 1789048800
+    },
+    {
+      "awardConfirmed": false,
+      "band": "40m",
+      "call": "K1ABC",
+      "comment": null,
+      "confirmed": false,
+      "country": null,
+      "creditGranted": [],
+      "creditSubmitted": [],
+      "dxcc": null,
+      "entity": "United States",
+      "extra": [],
+      "freqMhz": 7.03,
+      "freqRxMhz": null,
+      "grid": null,
+      "id": "00000000:0123456789abcdef:2",
+      "mode": "CW",
+      "myGrid": null,
+      "myRig": null,
+      "name": null,
+      "notes": null,
+      "operator": null,
+      "ota": {
+        "iota": null,
+        "myProgram": null,
+        "myRef": null,
+        "theirProgram": null,
+        "theirRef": null
+      },
+      "propMode": null,
+      "qslRcvd": {
+        "card": false,
+        "eqsl": false,
+        "lotw": false,
+        "qrz": false
+      },
+      "qslSent": {
+        "dateUnix": null,
+        "sent": false,
+        "via": null
+      },
+      "qth": null,
+      "rstRcvd": "579",
+      "rstSent": "599",
+      "satName": null,
+      "state": null,
+      "stationCallsign": null,
+      "timeKnown": true,
+      "timeOffUnix": null,
+      "txPower": null,
+      "upload": {},
+      "whenUnix": 1789045200
+    },
+    {
+      "awardConfirmed": false,
+      "band": "20m",
+      "call": "W1AW",
+      "comment": "73 OM",
+      "confirmed": false,
+      "country": null,
+      "creditGranted": [],
+      "creditSubmitted": [],
+      "dxcc": null,
+      "entity": "United States",
+      "extra": [],
+      "freqMhz": 14.074,
+      "freqRxMhz": null,
+      "grid": "FN31",
+      "id": "00000000:0123456789abcdef:1",
+      "mode": "FT8",
+      "myGrid": "EN52",
+      "myRig": null,
+      "name": "Hiram",
+      "notes": "dipole",
+      "operator": null,
+      "ota": {
+        "iota": null,
+        "myProgram": null,
+        "myRef": null,
+        "theirProgram": "POTA",
+        "theirRef": "US-0001"
+      },
+      "propMode": null,
+      "qslRcvd": {
+        "card": false,
+        "eqsl": false,
+        "lotw": false,
+        "qrz": false
+      },
+      "qslSent": {
+        "dateUnix": 1789084800,
+        "sent": true,
+        "via": "B"
+      },
+      "qth": "Newington",
+      "rstRcvd": "-12",
+      "rstSent": "-10",
+      "satName": null,
+      "state": null,
+      "stationCallsign": null,
+      "timeKnown": true,
+      "timeOffUnix": 1789041690,
+      "txPower": 50,
+      "upload": {},
+      "whenUnix": 1789041600
+    }
+  ],
+  "changes": [
+    {
+      "kind": "qslCard",
+      "target": {
+        "call": "K1ABC",
+        "whenUnix": 1789045200,
+        "key": "3aa471e5de1f977e32a2c05ab3d8e2cddee60774edd7a55c15d684de37e3d6ab"
+      },
+      "received": true
+    },
+    {
+      "kind": "qslSent",
+      "target": {
+        "call": "DL1ABC",
+        "whenUnix": 1789048800,
+        "key": "f0ea2ed49abd052db324ee005c2e5aa1f27ab8aa69dc5981182fa7d20f08bcf2"
+      },
+      "via": "D"
+    },
+    {
+      "kind": "edit",
+      "target": {
+        "call": "W1AW",
+        "whenUnix": 1789041600,
+        "key": "750096b7ef06926ccb2f1a6779c68a0e9b56f1578c006d87d6d0f0125b5b367c"
+      },
+      "record": {
+        "call": "W1AW",
+        "grid": "FN42",
+        "country": null,
+        "state": null,
+        "band": "40m",
+        "freqMhz": 7.074,
+        "mode": "FT8",
+        "rstSent": "-05",
+        "rstRcvd": "-07",
+        "name": "Hiram",
+        "qth": null,
+        "comment": "fixed band",
+        "notes": null,
+        "whenUnix": 1789041600,
+        "confirmed": false,
+        "awardConfirmed": false
+      }
+    },
+    {
+      "kind": "delete",
+      "target": {
+        "call": "K1ABC",
+        "whenUnix": 1789045200,
+        "key": "3aa471e5de1f977e32a2c05ab3d8e2cddee60774edd7a55c15d684de37e3d6ab"
+      }
+    }
+  ]
+}

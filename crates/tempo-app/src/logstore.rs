@@ -955,7 +955,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
     use std::time::Instant;
-    use tempo_core::logbook::{adif_header, adif_record_own_log, sqlite::WriteHold, QslVia};
+    use tempo_core::logbook::{
+        adif_header, adif_record_own_log, sqlite::WriteHold, QslVia, QsoEdit,
+    };
 
     /// A data folder of the test's own, gone with the value.
     pub(crate) struct Dir(pub(crate) PathBuf);
@@ -1143,6 +1145,13 @@ mod tests {
 
     pub(crate) fn flush(e: &Engine) {
         e.flush_log_store(Duration::from_secs(60)).expect("written");
+    }
+
+    /// The id of the contact at `at` in `e`'s log: how a test names a row it picked by place.
+    pub(crate) fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
+        e.log_records()[at]
+            .id
+            .expect("every row the log holds carries an id")
     }
 
     // ── the owner ───────────────────────────────────────────────────────────
@@ -1470,8 +1479,8 @@ mod tests {
         // Since the job read them: the operator set row 0's state, and deleted row 2.
         let mut edited = QsoRecord::clone(&eng.log_records()[0]);
         edited.state = Some("MA".into());
-        assert!(eng.update_qso(0, edited));
-        assert!(eng.delete_qso(2));
+        assert!(eng.update_qso(ids[0], edited));
+        assert!(eng.delete_qso(ids[2]));
         let fills: Vec<crate::station::LogFill> = ids
             .iter()
             .map(|id| crate::station::LogFill {
@@ -1615,22 +1624,29 @@ mod tests {
                 } else {
                     r.call = call.into();
                 }
-                eng.update_qso(at, r);
+                let id = id_at(&eng, at);
+                eng.update_qso(id, r);
             }
             3 if len > 0 => {
-                e.lock().unwrap().delete_qso(at);
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.delete_qso(id);
             }
             4 if len > 0 => {
-                e.lock().unwrap().mark_qsl_card(at, g.below(2) == 0);
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.mark_qsl_card(id, g.below(2) == 0);
             }
             5 if len > 0 => {
-                e.lock()
-                    .unwrap()
-                    .mark_qsl_sent(at, Some(tempo_core::logbook::QslVia::Bureau));
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.mark_qsl_sent(id, Some(tempo_core::logbook::QslVia::Bureau));
             }
             6 if len > 0 => {
                 let sat = (g.below(2) == 0).then_some("RS-44");
-                e.lock().unwrap().set_sat_tag(at, sat);
+                let mut eng = e.lock().unwrap();
+                let id = id_at(&eng, at);
+                eng.set_sat_tag(id, sat);
             }
             7 if len > 0 => {
                 let mut eng = e.lock().unwrap();
@@ -2262,24 +2278,16 @@ mod tests {
     // ── the LoTW batch, read from the store (SPEC-2 v3 C15) ──────────────────
 
     /// The batch file as the upload built it before C15 — `Engine::lotw_upload_adif`'s body,
-    /// verbatim but for `self`: the records at `indices` in the log in memory, in that order.
-    fn lotw_adif_before(
-        recs: &[Arc<QsoRecord>],
-        indices: &[usize],
-        adif_loc: bool,
-        call: &str,
-        grid: &str,
-    ) -> String {
+    /// verbatim but for `self`: the contacts the batch names in the log in memory, in that order.
+    fn lotw_adif_before(recs: &[QsoRecord], adif_loc: bool, call: &str, grid: &str) -> String {
         let mut out = tempo_core::logbook::adif_header();
-        for &i in indices {
-            if let Some(r) = recs.get(i) {
-                if adif_loc {
-                    out.push_str(&tempo_core::logbook::adif_record_with_station(
-                        r, call, grid,
-                    ));
-                } else {
-                    out.push_str(&tempo_core::logbook::adif_record(r));
-                }
+        for r in recs {
+            if adif_loc {
+                out.push_str(&tempo_core::logbook::adif_record_with_station(
+                    r, call, grid,
+                ));
+            } else {
+                out.push_str(&tempo_core::logbook::adif_record(r));
             }
         }
         out
@@ -2289,7 +2297,7 @@ mod tests {
     /// fixture, contacts with no known time, and 6 seeded runs of 30 random changes with LoTW
     /// stamps of every outcome mixed in (and the operator's "already uploaded" declaration now
     /// and then), the default batch read from the store is exactly the contacts
-    /// `lotw_unsent_indices` names in memory: the same records, the same file handed to TQSL in
+    /// `lotw_unsent_ids` names in memory: the same records, the same file handed to TQSL in
     /// both location modes (against the pre-C15 builder), the same ids and fingerprints for the
     /// stamp, and the same answer to "is anything owed?".
     #[test]
@@ -2321,7 +2329,7 @@ mod tests {
                                 UploadOutcome::Rejected,
                                 UploadOutcome::AuthFail,
                             ][g.below(5)];
-                            let at = g.below(len);
+                            let at = id_at(&eng, g.below(len));
                             eng.stamp_lotw_upload(
                                 &[at],
                                 outcome,
@@ -2338,16 +2346,16 @@ mod tests {
                 if step % 3 != 2 {
                     continue;
                 }
-                let (rows, indices, memory, signed_before, held) = {
+                let (rows, ids, memory, signed_before) = {
                     let eng = e.lock().unwrap();
-                    let indices = eng.lotw_unsent_indices();
-                    (
-                        eng.log_rows(),
-                        indices.clone(),
-                        eng.lotw_rows_at(&indices),
-                        eng.lotw_signed(&indices),
-                        eng.log_records().to_vec(),
-                    )
+                    let ids = eng.lotw_unsent_ids();
+                    let memory: Vec<QsoRecord> = eng
+                        .log_records()
+                        .iter()
+                        .filter(|r| r.id.is_some_and(|id| ids.contains(&id)))
+                        .map(|r| QsoRecord::clone(r))
+                        .collect();
+                    (eng.log_rows(), ids.clone(), memory, eng.lotw_signed(&ids))
                 };
                 let from_store = crate::station::lotw_unsent(&rows).expect("the store reads");
                 assert!(
@@ -2357,7 +2365,7 @@ mod tests {
                 for adif_loc in [false, true] {
                     assert_eq!(
                         crate::station::lotw_batch_adif(&from_store, adif_loc, "KD9TAW", "EN52"),
-                        lotw_adif_before(&held, &indices, adif_loc, "KD9TAW", "EN52"),
+                        lotw_adif_before(&memory, adif_loc, "KD9TAW", "EN52"),
                         "seed {seed}, step {step}: the file TQSL signs (location in ADIF: {adif_loc})"
                     );
                 }
@@ -2371,10 +2379,10 @@ mod tests {
                 );
                 assert_eq!(
                     crate::station::lotw_owed(&rows).unwrap(),
-                    !indices.is_empty(),
+                    !ids.is_empty(),
                     "seed {seed}, step {step}: is anything owed"
                 );
-                owed_seen += usize::from(!indices.is_empty());
+                owed_seen += usize::from(!ids.is_empty());
                 checked += 1;
             }
         }
@@ -2614,7 +2622,7 @@ mod tests {
                 Box::new(|e| {
                     let mut r = QsoRecord::clone(&e.log_records()[3]);
                     r.name = Some("Edited".into());
-                    assert!(e.update_qso(3, r));
+                    assert!(e.update_qso(r.id.unwrap(), r));
                 }),
             ),
             (
@@ -2622,23 +2630,51 @@ mod tests {
                 Box::new(|e| {
                     let mut r = QsoRecord::clone(&e.log_records()[4]);
                     r.call = "K4FIX".into();
-                    assert!(e.update_qso(4, r));
+                    assert!(e.update_qso(r.id.unwrap(), r));
                 }),
             ),
             (
                 "qsl sent",
-                Box::new(|e| assert!(e.mark_qsl_sent(5, Some(QslVia::Bureau)))),
+                Box::new(|e| assert!(e.mark_qsl_sent(id_at(e, 5), Some(QslVia::Bureau)))),
             ),
             (
                 "qsl withdrawn",
-                Box::new(|e| assert!(e.mark_qsl_sent(5, None))),
+                Box::new(|e| assert!(e.mark_qsl_sent(id_at(e, 5), None))),
             ),
-            ("card", Box::new(|e| assert!(e.mark_qsl_card(6, true)))),
+            (
+                "card",
+                Box::new(|e| assert!(e.mark_qsl_card(id_at(e, 6), true))),
+            ),
             (
                 "sat",
-                Box::new(|e| assert!(e.set_sat_tag(7, Some("AO-91")))),
+                Box::new(|e| assert!(e.set_sat_tag(id_at(e, 7), Some("AO-91")))),
             ),
-            ("delete", Box::new(|e| assert!(e.delete_qso(8)))),
+            ("delete", Box::new(|e| assert!(e.delete_qso(id_at(e, 8))))),
+            (
+                "form edit",
+                Box::new(|e| {
+                    let id = id_at(e, 20);
+                    let stored = e.logged_row(id).expect("held");
+                    let key = QsoEdit::project(&stored).key();
+                    let mut edit = QsoEdit::project(&stored);
+                    edit.comment = Some("the form's edit".into());
+                    edit.qsl_sent_via = Some("D".into());
+                    edit.qsl_card = true;
+                    assert_eq!(e.edit_qso(id, &key, &edit), Ok(Ok(())));
+                }),
+            ),
+            (
+                "lotw batch",
+                Box::new(|e| {
+                    let signed = e.lotw_signed(&[id_at(e, 21), id_at(e, 22)]);
+                    e.stamp_lotw_batch(
+                        &signed,
+                        tempo_core::logbook::UploadOutcome::Pending,
+                        1_788_000_111,
+                        None,
+                    );
+                }),
+            ),
             (
                 "import",
                 Box::new(|e| {
@@ -2715,7 +2751,7 @@ mod tests {
                 "lotw stamp",
                 Box::new(|e| {
                     e.stamp_lotw_upload(
-                        &[9, 10],
+                        &[id_at(e, 9), id_at(e, 10)],
                         tempo_core::logbook::UploadOutcome::Pending,
                         1_788_000_000,
                         None,
@@ -2755,6 +2791,23 @@ mod tests {
             ("qsl withdrawn", any(&|r| r.qsl_sent.cleared_unix.is_some())),
             ("card", any(&|r| r.qsl_rcvd.card)),
             ("sat", any(&|r| r.sat_name.as_deref() == Some("AO-91"))),
+            (
+                "form edit",
+                any(&|r| {
+                    r.comment.as_deref() == Some("the form's edit")
+                        && r.qsl_sent.via == Some(QslVia::Direct)
+                        && r.qsl_rcvd.card
+                }),
+            ),
+            (
+                "lotw batch",
+                any(&|r| {
+                    r.upload
+                        .lotw
+                        .as_ref()
+                        .is_some_and(|u| u.when_unix == 1_788_000_111)
+                }),
+            ),
             ("imported", any(&|r| r.call == "K9ZZZ")),
             (
                 "import upgraded",
@@ -2825,7 +2878,7 @@ mod tests {
         let d = Dir::new("durable");
         std::fs::write(d.log(), legacy_log(10)).unwrap();
         let mut e = engine_on_store(&d);
-        let (ok, durability) = e.with_log_tickets(|e| e.mark_qsl_card(3, true));
+        let (ok, durability) = e.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 3), true));
         assert!(ok);
         assert_eq!(durability.len(), 1, "one change, one ticket");
         durability.wait(DURABLE_WAIT).expect("durable");
@@ -2837,8 +2890,71 @@ mod tests {
         );
 
         // Nothing changed, nothing to wait for.
-        let (_, none) = e.with_log_tickets(|e| e.mark_qsl_card(999, true));
+        let nowhere = tempo_core::logbook::RecordId::Provisional {
+            hash: 999,
+            ordinal: 0,
+        };
+        let (_, none) = e.with_log_tickets(|e| e.mark_qsl_card(nowhere, true));
         assert!(none.is_empty());
+    }
+
+    /// ★ SPEC-2 C16: THE LOGBOOK FORM'S WHOLE EDIT IS ONE COMMIT. The fields, the QSL-sent mark
+    /// and the paper-card mark the form changes are one change — one ticket, one write — where
+    /// the form used to send three commands, each its own write, with a window between each for
+    /// another writer's change to land in. On disk, all three are there when the wait returns.
+    ///
+    /// The control is the same edit sent as those three commands, on the row beside it: three
+    /// tickets. So the one ticket above is the edit being one change, not a count that cannot
+    /// tell one change from three.
+    #[test]
+    fn the_form_s_whole_edit_is_one_commit() {
+        let d = Dir::new("one-commit");
+        std::fs::write(d.log(), legacy_log(10)).unwrap();
+        let mut e = engine_on_store(&d);
+        flush(&e);
+        let form = |stored: &QsoRecord| {
+            let mut edit = QsoEdit::project(stored);
+            edit.name = Some("Edited".into());
+            edit.qsl_sent_via = Some("B".into());
+            edit.qsl_card = true;
+            edit
+        };
+
+        let id = id_at(&e, 3);
+        let stored = e.logged_row(id).expect("held");
+        let (key, edit) = (QsoEdit::project(&stored).key(), form(&stored));
+        let (done, durability) = e.with_log_tickets(|e| e.edit_qso(id, &key, &edit));
+        assert_eq!(done, Ok(Ok(())));
+        assert_eq!(durability.len(), 1, "the whole edit is one change");
+        durability.wait(DURABLE_WAIT).expect("durable");
+        let row = stored_row(&d, id);
+        assert_eq!(
+            (row.name.as_deref(), row.qsl_sent.via, row.qsl_rcvd.card),
+            (Some("Edited"), Some(QslVia::Bureau), true),
+            "all three are on disk when the one wait returns"
+        );
+
+        let id = id_at(&e, 4);
+        let mut rec = QsoRecord::clone(&e.logged_row(id).expect("held"));
+        rec.name = Some("Edited".into());
+        let (_, three) = e.with_log_tickets(|e| {
+            e.update_qso(id, rec)
+                && e.mark_qsl_sent(id, Some(QslVia::Bureau))
+                && e.mark_qsl_card(id, true)
+        });
+        assert_eq!(
+            three.len(),
+            3,
+            "control: the form's three commands are three changes"
+        );
+    }
+
+    /// The row `id` as the store holds it, read through a connection of the test's own.
+    fn stored_row(d: &Dir, id: tempo_core::logbook::RecordId) -> QsoRecord {
+        stored(d)
+            .into_iter()
+            .find(|r| r.id == Some(id))
+            .expect("stored")
     }
 
     // ── reading the store (SPEC-2's read path) ──────────────────────────────
@@ -2909,8 +3025,8 @@ mod tests {
         let durability = {
             let mut e = engine_lock(&engine);
             let (_, a) = e.with_log_tickets(|e| e.log_qso(qso("W1STALL", 1_788_000_000)));
-            let (_, b) = e.with_log_tickets(|e| e.mark_qsl_card(2, true));
-            let (_, c) = e.with_log_tickets(|e| e.delete_qso(5));
+            let (_, b) = e.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 2), true));
+            let (_, c) = e.with_log_tickets(|e| e.delete_qso(id_at(e, 5)));
             assert_eq!((a.len(), b.len(), c.len()), (1, 1, 1));
             vec![a, b, c]
         };
@@ -2963,7 +3079,7 @@ mod tests {
         std::fs::write(d.log(), legacy_log(5)).unwrap();
         let engine = shared_on_store(&d);
         let mut e = engine_lock(&engine);
-        let (_, durability) = e.with_log_tickets(|e| e.mark_qsl_card(1, true));
+        let (_, durability) = e.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 1), true));
         let _ = durability.wait(DURABLE_WAIT); // `e` is still held
     }
 
@@ -2977,7 +3093,7 @@ mod tests {
         let engine = shared_on_store(&d);
         let durability = {
             let mut e = engine_lock(&engine);
-            e.with_log_tickets(|e| e.mark_qsl_card(1, true)).1
+            e.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 1), true)).1
         };
         durability
             .wait(DURABLE_WAIT)
@@ -3037,7 +3153,7 @@ mod tests {
         std::fs::write(d.log(), legacy_log(5)).unwrap();
         let engine = shared_on_store(&d);
         let mut raw = engine.lock().unwrap();
-        let (_, durability) = raw.with_log_tickets(|e| e.mark_qsl_card(1, true));
+        let (_, durability) = raw.with_log_tickets(|e| e.mark_qsl_card(id_at(e, 1), true));
         assert_eq!(
             tempo_core::logbook::io_fence::engine_guards_held(),
             0,
@@ -3115,7 +3231,7 @@ mod tests {
         );
 
         let hold = WriteHold::take(&d.db()).expect("stall the store");
-        assert!(e.mark_qsl_card(3, true));
+        assert!(e.mark_qsl_card(id_at(&e, 3), true));
         let unsaved = e.log_unsaved();
         assert!(!unsaved.is_empty(), "control: a change on its way is seen");
         assert_eq!(
@@ -3178,7 +3294,7 @@ mod tests {
         flush(&e);
         assert!(e.log_unsaved().is_empty(), "premise: all written");
 
-        assert!(e.mark_qsl_card(4, true));
+        assert!(e.mark_qsl_card(id_at(&e, 4), true));
         let unsaved = e.log_unsaved();
         assert!(
             unsaved.wait(DURABLE_WAIT).saved(),
@@ -3504,7 +3620,7 @@ mod tests {
         assert_eq!(e.snapshot().log_save_trouble, None, "control: no trouble");
 
         let hold = WriteHold::take(&d.db()).expect("another program holds the database");
-        assert!(e.mark_qsl_card(3, true));
+        assert!(e.mark_qsl_card(id_at(&e, 3), true));
         let dropped = eventually_for(Duration::from_secs(60), || {
             e.log_unsaved().standing().retryable == 1
         });
@@ -3729,15 +3845,10 @@ mod tests {
             None
         ));
         flush(&a);
-        let at = b
-            .log_records()
-            .iter()
-            .position(|r| r.id == target.id)
-            .unwrap();
         // Wait until B's writer has SEEN A's stamp commit — without B polling — so the change
         // below is the case under test: a foreign commit B has not yet folded in.
         assert!(eventually(|| b.log_store_foreign_pending()));
-        assert!(b.mark_qsl_card(at, true));
+        assert!(b.mark_qsl_card(target.id.unwrap(), true));
         flush(&b);
         let row = stored(&d)
             .into_iter()
@@ -3750,20 +3861,11 @@ mod tests {
         );
 
         // A edits a row's CALL; B sees an edit, not a new contact beside the old one.
-        let at = a
-            .log_records()
-            .iter()
-            .position(|r| r.call == "K5ABC")
-            .unwrap();
-        let mut edited = QsoRecord::clone(&a.log_records()[at]);
+        let mut edited = find(&a, "K5ABC").unwrap();
         edited.call = "K5ABD".into();
-        assert!(a.update_qso(at, edited));
+        assert!(a.update_qso(edited.id.unwrap(), edited));
         // A deletes a row; B must not bring it back.
-        let gone = a
-            .log_records()
-            .iter()
-            .position(|r| r.call == "K7ABC")
-            .unwrap();
+        let gone = find(&a, "K7ABC").and_then(|r| r.id).unwrap();
         assert!(a.delete_qso(gone));
         flush(&a);
         assert!(eventually(|| {
@@ -3784,13 +3886,14 @@ mod tests {
         same_log(&stored(&d), a.log_records(), "and so does the store");
     }
 
-    /// ⛔ A POSITION HELD ACROSS ANOTHER WINDOW'S DELETE STILL NAMES ITS CONTACT. The Logbook
-    /// and the Remote find a row, then change it by position, in one hold of the engine lock —
-    /// and the change first folds in whatever another window committed. A fold-in that removed
-    /// the other window's deleted row would shift every row after it, and the change would land
-    /// on a different contact. So the fold-in a change makes moves nothing; the deleted row
-    /// lingers until the next freshness poll, which may move rows because nobody holds a
-    /// position across it.
+    /// ⛔ A POSITION HELD ACROSS ANOTHER WINDOW'S DELETE STILL NAMES ITS CONTACT. Until SPEC-2's
+    /// C16 the Logbook and the Remote found a row, then changed it by position, in one hold of
+    /// the engine lock — and the change first folds in whatever another window committed. A
+    /// fold-in that removed the other window's deleted row would shift every row after it, and
+    /// the change would land on a different contact. So the fold-in a change makes moves
+    /// nothing; the deleted row lingers until the next freshness poll, which may move rows
+    /// because nobody holds a position across it. Every change is addressed by id since C16, so
+    /// nothing holds a position any more; this pins the in-place fold-in until it goes (§4.7).
     #[test]
     fn a_position_held_across_another_windows_delete_still_names_its_contact() {
         let d = Dir::new("positions");
@@ -3799,12 +3902,15 @@ mod tests {
         let mut b = engine_on_store(&d);
         let target = QsoRecord::clone(&b.log_records()[5]);
 
-        assert!(a.delete_qso(1), "A deletes a row ABOVE B's target");
+        assert!(
+            a.delete_qso(id_at(&a, 1)),
+            "A deletes a row ABOVE B's target"
+        );
         flush(&a);
         assert!(eventually(|| b.log_store_foreign_pending()));
 
-        // B changes the row it holds position 5 for — without polling first.
-        assert!(b.mark_qsl_card(5, true));
+        // B changes the row at position 5, by its id — without polling first.
+        assert!(b.mark_qsl_card(target.id.unwrap(), true));
         assert_eq!(
             b.log_records()[5].id,
             target.id,
@@ -3893,8 +3999,9 @@ mod tests {
         b.lock().unwrap().log_qso(qso("W2BBB", 1_788_000_100));
         flush(&b.lock().unwrap());
         assert!(eventually(|| a.lock().unwrap().log_store_foreign_pending()));
+        let first = id_at(&a.lock().unwrap(), 0);
         assert!(
-            a.lock().unwrap().mark_qsl_card(0, true),
+            a.lock().unwrap().mark_qsl_card(first, true),
             "a change, which re-reads in place"
         );
         assert!(
@@ -3926,11 +4033,15 @@ mod tests {
         std::fs::write(d.log(), legacy_log(5)).unwrap();
         let mut a = engine_on_store(&d);
         let mut b = engine_on_store(&d);
-        let signed = a.lotw_signed(&[0, 1, 2, 3, 4]);
+        let ids: Vec<_> = (0..5).map(|at| id_at(&a, at)).collect();
+        let signed = a.lotw_signed(&ids);
         assert_eq!(signed.len(), 5, "premise: A hands TQSL five contacts");
 
         let deleted = b.log_records()[2].id;
-        assert!(b.delete_qso(2), "B deletes one while A's TQSL runs");
+        assert!(
+            b.delete_qso(deleted.unwrap()),
+            "B deletes one while A's TQSL runs"
+        );
         flush(&b);
         assert!(eventually(|| a.log_store_foreign_pending()));
         let done = a.stamp_lotw_batch(&signed, UploadOutcome::Pending, 1_788_000_000, None);
@@ -3950,6 +4061,74 @@ mod tests {
             (4, 0, 1),
             "four stamped; the deleted contact is counted gone"
         );
+    }
+
+    /// ★ THE DIAGNOSIS NAMES THE CONTACTS IT READ — in the gap where another window has deleted a
+    /// row this window still shows (C17a; what the Awards view uploads by, once it uploads by id).
+    /// Since C14 the confirmation diagnostics read the store, so their positions are the store's;
+    /// this window's log in memory keeps the deleted row until its next re-read, so a position
+    /// looked up there names the contact after it. The report's ids are those of the rows the
+    /// diagnosis read — the contacts it is about — never the deleted one; and its positions,
+    /// looked up here, name other contacts: the control that the gap is real.
+    #[test]
+    fn the_diagnosis_names_its_contacts_while_this_window_still_shows_a_deleted_row() {
+        let d = Dir::new("diag-gap");
+        std::fs::write(d.log(), legacy_log(8)).unwrap();
+        let a = engine_on_store(&d);
+        let mut b = engine_on_store(&d);
+        let gone = id_at(&b, 2);
+        assert!(b.delete_qso(gone));
+        flush(&b);
+        // A has seen B's commit and has not re-read: it still shows the deleted contact.
+        assert!(eventually(|| a.log_store_foreign_pending()));
+        assert!(
+            a.log_records().iter().any(|r| r.id == Some(gone)),
+            "premise: this window still shows the deleted contact"
+        );
+
+        let report = a
+            .confirmation_diagnostics_inputs()
+            .diagnose_named(1_800_000_000, |_| None)
+            .expect("the store reads");
+        let rows = stored(&d);
+        let id_of = |i: usize| rows.get(i).and_then(|r| r.id).map(|id| id.to_string());
+        let bucket = report
+            .buckets
+            .iter()
+            .find(|b| b.qso_indices.len() > 2)
+            .expect("premise: a bucket of contacts past the deleted one's place");
+        let ids = bucket
+            .qso_ids
+            .clone()
+            .expect("the desktop's report names its contacts");
+        assert_eq!(
+            ids,
+            bucket
+                .qso_indices
+                .iter()
+                .map(|&i| id_of(i))
+                .collect::<Vec<_>>(),
+            "each id is the contact the diagnosis read at that position"
+        );
+        assert!(
+            !ids.contains(&Some(gone.to_string())),
+            "and never the deleted one"
+        );
+        assert!(!report.diagnoses.is_empty(), "premise: contacts diagnosed");
+        for diag in &report.diagnoses {
+            let r = &rows[diag.index];
+            assert_eq!(diag.id, r.id.map(|id| id.to_string()), "row {}", diag.index);
+            assert_eq!(diag.call.as_deref(), Some(r.call.as_str()));
+        }
+        // The control: the same positions, looked up in this window's log in memory, name other
+        // contacts — the deleted one among them — which an upload by position would sign.
+        let by_position: Vec<Option<String>> = a
+            .ids_at_positions(&bucket.qso_indices)
+            .into_iter()
+            .map(|id| Some(id.to_string()))
+            .collect();
+        assert_ne!(by_position, ids, "the gap is real");
+        assert!(by_position.contains(&Some(gone.to_string())));
     }
 
     // ── a log.adi the store does not account for ────────────────────────────

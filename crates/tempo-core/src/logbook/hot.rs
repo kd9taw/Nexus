@@ -592,6 +592,12 @@ impl HotIndex {
         self.calls.contains(call_upper)
     }
 
+    /// Every B4 call key: each distinct call in the log, ASCII upper-cased and untrimmed. A read
+    /// of the set, for a caller that must see the keys themselves (SPEC-2 v3 C17a).
+    pub fn worked_call_keys(&self) -> impl Iterator<Item = &str> {
+        self.calls.0.keys().map(String::as_str)
+    }
+
     /// B4, band scope: `(call_upper, band_key)` is in the log, where `band_key` is
     /// [`Logbook::band_key`] of the band (and, under `fold_mode`, the mode).
     pub fn worked_call_band(&self, call_upper: &str, band_key: &str, fold_mode: bool) -> bool {

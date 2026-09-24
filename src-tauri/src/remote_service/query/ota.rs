@@ -426,7 +426,7 @@ mod tests {
                     } else {
                         let mut q = e.log_records()[0].as_ref().clone();
                         q.ota.my_ref = Some("US-0005".into());
-                        assert!(e.update_qso(0, q));
+                        assert!(e.update_qso(q.id.unwrap(), q));
                     }
                 },
                 || read_at(&engine, &sources, 1000),

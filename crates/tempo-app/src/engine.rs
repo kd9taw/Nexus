@@ -13,6 +13,9 @@
 //!
 //! [`mode`]: Engine::set_mode
 
+/// SPEC-2's C16: changes to one contact by its id.
+#[cfg(test)]
+mod by_id_tests;
 mod field_day_display;
 mod mode_entry;
 pub mod radio_selection;
@@ -1835,7 +1838,7 @@ pub fn n1mm_broadcast_target(s: &Settings) -> Option<String> {
 ///   the switch too, but THIS is the gate that holds: a hand-edited settings.json or a
 ///   config profile carried from another machine can set both flags at once.
 /// * **`suspended`** — the caller's session latch. `UploadOutcome::is_sent()` excludes
-///   `Rejected` and `AuthFail`, so `lotw_unsent_indices()` keeps re-offering a batch that
+///   `Rejected` and `AuthFail`, so `lotw_unsent_ids()` keeps re-offering a batch that
 ///   failed. Without the latch a missing certificate or one malformed record would re-sign
 ///   and re-upload the entire batch every interval, spawning TQSL each time — the F4MQS
 ///   ClubLog storm class, with a GUI-linked binary in place of an HTTP POST.
@@ -11528,22 +11531,23 @@ impl Engine {
         });
     }
 
-    /// The ADIF upload payload (header + the records at `indices`) for TQSL, as the upload
-    /// builds it ([`crate::station::lotw_batch_adif`]) with this station's settings — for a test
-    /// that owns its engine. The upload itself reads its default batch from the store.
+    /// The ADIF upload payload (header + the contacts `ids` names, in that order) for TQSL, as
+    /// the upload builds it ([`crate::station::lotw_batch_adif`]) with this station's settings —
+    /// for a test that owns its engine. The upload itself reads its batch from the store.
     #[cfg(test)]
-    pub fn lotw_upload_adif(&self, indices: &[usize]) -> String {
+    pub fn lotw_upload_adif(&self, ids: &[tempo_core::logbook::RecordId]) -> String {
+        let batch: Vec<QsoRecord> = self
+            .station
+            .rows_of(ids)
+            .iter()
+            .map(|r| QsoRecord::clone(r))
+            .collect();
         crate::station::lotw_batch_adif(
-            &self.station.lotw_rows_at(indices),
+            &batch,
             self.settings.lotw_use_adif_location,
             &self.settings.mycall,
             &self.settings.mygrid,
         )
-    }
-
-    /// See [`StationCore::lotw_rows_at`].
-    pub fn lotw_rows_at(&self, positions: &[usize]) -> Vec<QsoRecord> {
-        self.station.lotw_rows_at(positions)
     }
 
     /// Mark every QSO currently counted as un-uploaded to LoTW (the "Upload to LoTW (N)" set)
@@ -11551,11 +11555,11 @@ impl Engine {
     /// through another tool (Ham2K Polo, TQSL, etc.). Stamps them `Accepted` so they drop out of
     /// the unsent count and a bulk upload never re-pushes them. Returns how many were marked.
     pub fn mark_lotw_uploaded_all(&mut self) -> usize {
-        let indices = self.station.lotw_unsent_indices();
-        let n = indices.len();
+        let ids = self.station.lotw_unsent_ids();
+        let n = ids.len();
         if n > 0 {
             self.station.stamp_lotw_upload(
-                &indices,
+                &ids,
                 tempo_core::logbook::UploadOutcome::Accepted,
                 now_unix_secs() as i64,
                 Some(tempo_core::logbook::UploadDetail::OperatorDeclared),
@@ -22938,12 +22942,18 @@ contact yourself."
     /// because seqs are per position and restart at 1 — so `1` names a row in every log
     /// the operator has ever run, and last weekend's correction must not rewrite this
     /// weekend's first contact; and `correct_row` refuses a seq no row here carries.
-    #[allow(deprecated)] // SPEC-2 C16: an edit addressed by position
-    pub fn update_qso(&mut self, index: usize, rec: QsoRecord) -> bool {
-        if !self.station.update_qso(index, rec) {
+    pub fn update_qso(&mut self, id: tempo_core::logbook::RecordId, rec: QsoRecord) -> bool {
+        if !self.station.update_qso(id, rec) {
             return false;
         }
-        let Some((qid, call, band)) = self.station.logbook.records().get(index).map(|r| {
+        self.correct_contest_row(id);
+        true
+    }
+
+    /// The Field Day half of an edit: the contest log's own row, corrected to the general log's
+    /// edited contact `id` — see [`Self::update_qso`] for why this join lives here.
+    fn correct_contest_row(&mut self, id: tempo_core::logbook::RecordId) {
+        let Some((qid, call, band)) = self.station.row(id).map(|r| {
             (
                 r.contest
                     .as_deref()
@@ -22952,7 +22962,7 @@ contact yourself."
                 r.band.clone(),
             )
         }) else {
-            return true;
+            return;
         };
         if let Mode::FieldDay { station, .. } = &mut self.mode {
             if let Some(seq) = tempo_core::contest::seq_from_qid(&qid, &station.log.session.id) {
@@ -22963,31 +22973,68 @@ contact yourself."
                 station.log.correct_row(seq, &call, &band);
             }
         }
-        true
+    }
+
+    /// See [`StationCore::edit_qso`] — the Logbook form's whole edit as one change, addressed
+    /// by id and refused against a changed row — plus the contest-log join [`Self::update_qso`]
+    /// makes.
+    pub fn edit_qso(
+        &mut self,
+        id: tempo_core::logbook::RecordId,
+        edit_key: &str,
+        edit: &tempo_core::logbook::QsoEdit,
+    ) -> Result<Result<(), crate::station::RowRefusal>, String> {
+        let done = self.station.edit_qso(id, edit_key, edit)?;
+        if done.is_ok() {
+            self.correct_contest_row(id);
+        }
+        Ok(done)
+    }
+
+    /// The contact the log holds under `id`, if any.
+    pub fn logged_row(
+        &self,
+        id: tempo_core::logbook::RecordId,
+    ) -> Option<std::sync::Arc<QsoRecord>> {
+        self.station.row(id)
+    }
+
+    /// See [`StationCore::fresh_row`]: the contact `id`, if it is still the version whose edit
+    /// key is `edit_key`.
+    pub fn fresh_log_row(
+        &mut self,
+        id: tempo_core::logbook::RecordId,
+        edit_key: &str,
+    ) -> Result<std::sync::Arc<QsoRecord>, crate::station::RowRefusal> {
+        self.station.fresh_row(id, edit_key)
     }
 
     /// See [`StationCore::mark_qsl_sent`]. `None` = the operator withdrawing the mark.
     pub fn mark_qsl_sent(
         &mut self,
-        index: usize,
+        id: tempo_core::logbook::RecordId,
         via: Option<tempo_core::logbook::QslVia>,
     ) -> bool {
-        self.station.mark_qsl_sent(index, via)
+        self.station.mark_qsl_sent(id, via)
     }
 
     /// See [`StationCore::mark_qsl_card`].
-    pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
-        self.station.mark_qsl_card(index, received)
+    pub fn mark_qsl_card(&mut self, id: tempo_core::logbook::RecordId, received: bool) -> bool {
+        self.station.mark_qsl_card(id, received)
     }
 
     /// See [`StationCore::set_sat_tag`] — `None` = the operator removing the tag.
-    pub fn set_sat_tag(&mut self, index: usize, sat_name: Option<&str>) -> bool {
-        self.station.set_sat_tag(index, sat_name)
+    pub fn set_sat_tag(
+        &mut self,
+        id: tempo_core::logbook::RecordId,
+        sat_name: Option<&str>,
+    ) -> bool {
+        self.station.set_sat_tag(id, sat_name)
     }
 
     /// See [`StationCore::delete_qso`].
-    pub fn delete_qso(&mut self, index: usize) -> bool {
-        self.station.delete_qso(index)
+    pub fn delete_qso(&mut self, id: tempo_core::logbook::RecordId) -> bool {
+        self.station.delete_qso(id)
     }
 
     /// See [`StationCore::clear_logbook`] — plus the reset of the LoTW/eQSL
@@ -23130,6 +23177,41 @@ contact yourself."
         self.station.logbook.index_rev()
     }
 
+    /// The revision of the log's last change to any contact's content — everything but an
+    /// append. See [`tempo_core::logbook::OpClass`].
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
+    pub fn log_content_rev(&self) -> u64 {
+        self.station.logbook.content_rev()
+    }
+
+    /// The revision of the log's last change to a contact's identifying fields — an append, an
+    /// edit, a delete. What an index keyed on calls is kept against. See
+    /// [`tempo_core::logbook::OpClass`].
+    #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
+    pub fn log_key_rev(&self) -> u64 {
+        self.station.logbook.key_rev()
+    }
+
+    /// Worked before (B4), call scope, for each of `keys` — a call as the hot index keys it,
+    /// ASCII upper-cased and untrimmed — from the hot index (SPEC-2 v3 C17a: the band map's
+    /// worked calls). No pass over the log.
+    pub fn log_b4_worked(&self, keys: &[String]) -> Vec<bool> {
+        let hot = self.station.hot();
+        keys.iter().map(|k| hot.worked_call(k)).collect()
+    }
+
+    /// The hot index's worked-before (B4) call keys that hold a character outside ASCII: the
+    /// calls whose ASCII fold is not the UI's Unicode one, which the UI's log questions (C17a)
+    /// must look at row by row. A pass over the index's distinct calls — kept by the caller
+    /// against [`Self::log_key_rev`].
+    pub fn log_odd_call_keys(&self) -> Vec<String> {
+        let hot = self.station.hot();
+        hot.worked_call_keys()
+            .filter(|k| !k.is_ascii())
+            .map(str::to_string)
+            .collect()
+    }
+
     /// Whether the log only grew since it stood at `revision`. See
     /// [`tempo_core::logbook::Logbook::appended_only_since`].
     #[allow(deprecated)] // SPEC-2 C19: the watermarks outlive the in-memory log
@@ -23163,26 +23245,42 @@ contact yourself."
         self.station.diagnostics_inputs()
     }
 
-    /// See [`StationCore::lotw_unsent_indices`].
-    pub fn lotw_unsent_indices(&self) -> Vec<usize> {
-        self.station.lotw_unsent_indices()
+    /// See [`StationCore::lotw_unsent_ids`].
+    pub fn lotw_unsent_ids(&self) -> Vec<tempo_core::logbook::RecordId> {
+        self.station.lotw_unsent_ids()
     }
 
     /// See [`StationCore::stamp_lotw_upload`].
     pub fn stamp_lotw_upload(
         &mut self,
-        indices: &[usize],
+        ids: &[tempo_core::logbook::RecordId],
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
         detail: Option<tempo_core::logbook::UploadDetail>,
     ) {
         self.station
-            .stamp_lotw_upload(indices, outcome, when_unix, detail)
+            .stamp_lotw_upload(ids, outcome, when_unix, detail)
     }
 
     /// See [`StationCore::lotw_signed`].
-    pub fn lotw_signed(&self, indices: &[usize]) -> Vec<crate::station::LotwSigned> {
-        self.station.lotw_signed(indices)
+    pub fn lotw_signed(
+        &self,
+        ids: &[tempo_core::logbook::RecordId],
+    ) -> Vec<crate::station::LotwSigned> {
+        self.station.lotw_signed(ids)
+    }
+
+    /// The ids of the contacts at `positions` in the log as it stands — the LEGACY input of a
+    /// LoTW upload chosen by hand, which a view still addresses by position (the Awards view's
+    /// diagnosis buckets). Taken in the same hold of the engine lock as the batch it becomes,
+    /// exactly as the positions always were; a position past the end names nothing.
+    #[allow(deprecated)] // SPEC-2 C17a: diagnosis ids retire the positions the Awards view sends
+    pub fn ids_at_positions(&self, positions: &[usize]) -> Vec<tempo_core::logbook::RecordId> {
+        let records = self.station.logbook.records();
+        positions
+            .iter()
+            .filter_map(|&i| records.get(i).and_then(|r| r.id))
+            .collect()
     }
 
     /// See [`StationCore::stamp_lotw_batch`].
@@ -28658,7 +28756,7 @@ mod tests {
 
         let mut to_40 = e.log_records()[0].as_ref().clone();
         to_40.band = "40m".into();
-        assert!(e.update_qso(0, to_40));
+        assert!(e.update_qso(to_40.id.unwrap(), to_40));
         assert_eq!(
             marks(&e, "W1AAA"),
             (true, false),
@@ -28666,7 +28764,7 @@ mod tests {
         );
         let mut busted = e.log_records()[0].as_ref().clone();
         busted.call = "W3CCC".into();
-        assert!(e.update_qso(0, busted));
+        assert!(e.update_qso(busted.id.unwrap(), busted));
         assert_eq!(
             marks(&e, "W1AAA"),
             (false, false),
@@ -28678,12 +28776,13 @@ mod tests {
             "…and the correction is marked"
         );
 
-        let at = e
+        let id = e
             .log_records()
             .iter()
-            .position(|r| r.call == "W2BBB")
+            .find(|r| r.call == "W2BBB")
+            .and_then(|r| r.id)
             .unwrap();
-        assert!(e.delete_qso(at));
+        assert!(e.delete_qso(id));
         assert_eq!(
             marks(&e, "W2BBB"),
             (false, false),
@@ -28726,12 +28825,7 @@ mod tests {
             .as_ref()
             .clone();
         to_cw.mode = "CW".into();
-        let at = e
-            .log_records()
-            .iter()
-            .position(|r| r.call == "W3CCC")
-            .unwrap();
-        assert!(e.update_qso(at, to_cw));
+        assert!(e.update_qso(to_cw.id.unwrap(), to_cw));
         assert_eq!(
             marks(&e, "W3CCC"),
             (true, false),
@@ -33884,7 +33978,7 @@ mod tests {
         // The operator corrects the call in the edit form.
         let mut fixed = e.get_log()[0].clone();
         fixed.call = "WW9WTF".into();
-        assert!(e.update_qso(0, fixed), "the edit applies");
+        assert!(e.update_qso(fixed.id.unwrap(), fixed), "the edit applies");
         assert_eq!(e.get_log()[0].call, "WW9WTF", "the log holds the fix");
         assert!(
             e.get_log()[0].upload.qrz.is_none(),
@@ -33919,7 +34013,7 @@ mod tests {
 
         let mut edited = e.get_log()[0].clone();
         edited.name = Some("Dave".into());
-        assert!(e.update_qso(0, edited));
+        assert!(e.update_qso(edited.id.unwrap(), edited));
         assert!(
             e.take_pending_uploads().is_empty(),
             "a non-callsign edit must not re-push the contact"
@@ -33930,7 +34024,7 @@ mod tests {
         // re-queue has to read the edit the same way or the two disagree on every save.
         let mut same = e.get_log()[0].clone();
         same.call = " ww9wtf ".into();
-        assert!(e.update_qso(0, same));
+        assert!(e.update_qso(same.id.unwrap(), same));
         assert!(
             e.take_pending_uploads().is_empty(),
             "the same call in another case is not a correction"
@@ -34370,13 +34464,14 @@ mod tests {
 
         let mut edited = e.log_records()[0].as_ref().clone();
         edited.comment = Some("fixed".into());
-        assert!(e.update_qso(0, edited));
+        let id = edited.id.unwrap();
+        assert!(e.update_qso(id, edited));
         moved(&e, "an edit");
-        assert!(e.mark_qsl_sent(0, Some(tempo_core::logbook::QslVia::Bureau)));
+        assert!(e.mark_qsl_sent(id, Some(tempo_core::logbook::QslVia::Bureau)));
         moved(&e, "a QSL-sent mark");
-        assert!(e.mark_qsl_card(0, true));
+        assert!(e.mark_qsl_card(id, true));
         moved(&e, "a QSL-card mark");
-        assert!(e.delete_qso(0));
+        assert!(e.delete_qso(id));
         moved(&e, "a delete");
 
         use tempo_core::logbook::{adif_header, adif_record, UploadOutcome};
@@ -34421,7 +34516,7 @@ mod tests {
         moved(&e, "another instance's append, picked up from disk");
 
         // Refused changes are not changes: nothing moved, so the view has nothing to reload.
-        assert!(!e.delete_qso(99));
+        assert!(!e.delete_qso(id), "a contact already deleted");
         assert_eq!(
             e.snapshot().log_tick,
             last,
@@ -34544,7 +34639,7 @@ mod tests {
 
         // The event is over and the operator is back on their own call.
         e.settings.mycall = "K2DEF".into();
-        let adif = e.lotw_upload_adif(&[0]);
+        let adif = e.lotw_upload_adif(&[e.log_records()[0].id.unwrap()]);
 
         assert!(
             adif.contains("<STATION_CALLSIGN:3>W6R"),
@@ -34573,7 +34668,8 @@ mod tests {
             r.when_unix = 1_788_000_000 + i as u64 * 60;
             e.log_qso(r);
         }
-        let signed = e.lotw_signed(&[0, 1, 2, 3, 4]);
+        let ids: Vec<_> = e.log_records().iter().map(|r| r.id.unwrap()).collect();
+        let signed = e.lotw_signed(&ids);
 
         // While TQSL runs:
         let row = |e: &Engine, i: usize| QsoRecord::clone(&e.log_records()[i]);
@@ -34581,12 +34677,12 @@ mod tests {
         assert!(e.stamp_qrz_upload(&w1, UploadOutcome::Accepted, 1_788_000_500, None));
         let mut w2 = row(&e, 1);
         w2.notes = Some("private: worked him at the club".into());
-        assert!(e.update_qso(1, w2));
-        assert!(e.set_sat_tag(2, Some("AO-91")));
+        assert!(e.update_qso(ids[1], w2));
+        assert!(e.set_sat_tag(ids[2], Some("AO-91")));
         let mut w4 = row(&e, 3);
         w4.band = "40m".into();
-        assert!(e.update_qso(3, w4));
-        assert!(e.delete_qso(4));
+        assert!(e.update_qso(ids[3], w4));
+        assert!(e.delete_qso(ids[4]));
 
         let done = e.stamp_lotw_batch(&signed, UploadOutcome::Pending, 1_788_000_900, None);
         let stamped: Vec<(String, bool)> = e
@@ -34619,9 +34715,9 @@ mod tests {
         // older build looks like after it is read back in.
         let mut rec = e.qso_record("W9XYZ".into(), None, None);
         rec.station_callsign = None;
-        e.station.logbook.add(rec);
+        let id = e.station.logbook.add(rec);
 
-        let adif = e.lotw_upload_adif(&[0]);
+        let adif = e.lotw_upload_adif(&[id]);
         assert!(
             adif.contains("<STATION_CALLSIGN:5>K2DEF"),
             "a record with no station call of its own still signs from the live setting: {adif}"
@@ -35028,12 +35124,13 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         let rec = e.qso_record("K1ABC".into(), None, None);
         e.log_qso(rec);
-        assert!(e.mark_qsl_sent(0, Some(QslVia::Direct)), "fixture: marked");
+        let id = e.get_log()[0].id.unwrap();
+        assert!(e.mark_qsl_sent(id, Some(QslVia::Direct)), "fixture: marked");
         assert!(e.get_log()[0].qsl_sent.sent);
 
         // The operator ticked the wrong row and clears it.
         assert!(
-            e.mark_qsl_sent(0, None),
+            e.mark_qsl_sent(id, None),
             "the clear verb exists and applies"
         );
         let cleared = e.get_log()[0].qsl_sent.cleared_unix;
@@ -35045,7 +35142,7 @@ mod tests {
         let mut edited = e.get_log()[0].clone();
         edited.comment = Some("fixed a typo".into());
         edited.qsl_sent = Default::default();
-        assert!(e.update_qso(0, edited));
+        assert!(e.update_qso(id, edited));
 
         let r = &e.get_log()[0];
         assert_eq!(
@@ -35901,7 +35998,7 @@ mod tests {
         // The operator fixes a busted call in the Logbook's own edit form.
         let mut fixed = QsoRecord::clone(&e.station.logbook.records()[at]);
         fixed.call = "K1ABD".into();
-        assert!(e.update_qso(at, fixed), "the edit applies");
+        assert!(e.update_qso(fixed.id.unwrap(), fixed), "the edit applies");
 
         // The general log shows it — this half always worked.
         assert_eq!(e.station.logbook.records()[at].call, "K1ABD");
@@ -35954,7 +36051,7 @@ mod tests {
             .expect("logged");
         let mut edited = QsoRecord::clone(&e.station.logbook.records()[plain_at]);
         edited.call = "N0CAM".into();
-        assert!(e.update_qso(plain_at, edited));
+        assert!(e.update_qso(edited.id.unwrap(), edited));
 
         // A contest row whose qid names ANOTHER session, on the same seq as a real row here.
         let at = e
@@ -35967,7 +36064,7 @@ mod tests {
         let mut foreign = QsoRecord::clone(&e.station.logbook.records()[at]);
         foreign.call = "K9ZZZ".into();
         foreign.contest.as_deref_mut().expect("provenance").qid = "CQ-WW-CW:IL:a1b2c3d4:1".into();
-        assert!(e.update_qso(at, foreign));
+        assert!(e.update_qso(foreign.id.unwrap(), foreign));
 
         assert_eq!(
             e.export_log("cabrillo").expect("exports"),
@@ -36103,9 +36200,11 @@ mod tests {
             "an upload stamp, then a contact (C11's finding)"
         );
 
+        let row_id = |e: &Engine, at: usize| e.station.logbook.records()[at].id.unwrap();
+        let fifth = row_id(&e, 4);
         assert!(e
             .station
-            .mark_qsl_sent(4, Some(tempo_core::logbook::QslVia::Bureau)));
+            .mark_qsl_sent(fifth, Some(tempo_core::logbook::QslVia::Bureau)));
         assert_eq!(
             next_contact_and_snapshot(&mut e, 102),
             (0, 0),
@@ -36114,7 +36213,7 @@ mod tests {
 
         let mut fixed = QsoRecord::clone(&e.station.logbook.records()[5]);
         fixed.call = "W5XYZ".into();
-        assert!(e.update_qso(5, fixed));
+        assert!(e.update_qso(fixed.id.unwrap(), fixed));
         assert_eq!(
             next_contact_and_snapshot(&mut e, 103),
             (0, 0),
@@ -36124,7 +36223,8 @@ mod tests {
         assert!(hot.worked_call("W5XYZ") && !hot.worked_call("K5AB"));
         drop(hot);
 
-        assert!(e.delete_qso(2));
+        let third = row_id(&e, 2);
+        assert!(e.delete_qso(third));
         assert_eq!(
             next_contact_and_snapshot(&mut e, 104),
             (0, 0),
@@ -36132,7 +36232,8 @@ mod tests {
         );
         assert!(!e.station.hot().worked_call("K2AB"));
 
-        assert!(e.station.mark_qsl_card(6, true));
+        let seventh = row_id(&e, 6);
+        assert!(e.station.mark_qsl_card(seventh, true));
         assert_eq!(next_contact_and_snapshot(&mut e, 105), (0, 0), "a QSL card");
 
         let confirmed = tempo_core::logbook::adif_record(&e.station.logbook.records()[7])
@@ -36253,11 +36354,15 @@ mod tests {
             let at = 1_000 + k * 13;
             let mut fixed = QsoRecord::clone(&e.station.logbook.records()[at]);
             fixed.call = format!("ED{k}IT");
+            let (id, next) = (
+                fixed.id.unwrap(),
+                e.station.logbook.records()[at + 1].id.unwrap(),
+            );
             let t = Instant::now();
-            e.update_qso(at, fixed);
+            e.update_qso(id, fixed);
             edit.push(t.elapsed());
             let t = Instant::now();
-            e.delete_qso(at + 1);
+            e.delete_qso(next);
             delete.push(t.elapsed());
         }
         let _ = e.call_station_ctx("QQ9NOGRID", None, None, None, None);
@@ -38545,7 +38650,8 @@ mod tests {
         assert_eq!(Logbook::load(&path).len(), 4, "the file holds A's appends");
 
         // B does a full-log-rewrite action (mark QSL-sent) on its stale 2-record copy.
-        assert!(b.mark_qsl_sent(0, Some(tempo_core::logbook::QslVia::Direct)));
+        let w1 = b.get_log()[0].id.unwrap();
+        assert!(b.mark_qsl_sent(w1, Some(tempo_core::logbook::QslVia::Direct)));
 
         let on_disk = Logbook::load(&path);
         assert_eq!(
@@ -38590,7 +38696,8 @@ mod tests {
         Logbook::append(&path, &qrec("W3CCC", "40m")).unwrap();
 
         // B deletes its index 0 (W1AAA) on the stale copy.
-        assert!(b.delete_qso(0));
+        let w1 = b.get_log()[0].id.unwrap();
+        assert!(b.delete_qso(w1));
 
         let on_disk = Logbook::load(&path);
         let calls: Vec<&str> = on_disk.records().iter().map(|r| r.call.as_str()).collect();
@@ -45819,18 +45926,23 @@ mod tests {
         assert_eq!(e.get_log()[0].sat_name.as_deref(), Some("RS-44"));
 
         // CORRECT it. The stored name and the new one disagree, so a no-op fails here.
-        assert!(e.set_sat_tag(0, Some("AO-91")));
+        let id = e.get_log()[0].id.unwrap();
+        assert!(e.set_sat_tag(id, Some("AO-91")));
         assert_eq!(e.get_log()[0].sat_name.as_deref(), Some("AO-91"));
         assert_eq!(e.get_log()[0].prop_mode.as_deref(), Some("SAT"));
 
         // REMOVE it — the contact was never on a bird. Both fields go together: a lone
         // PROP_MODE=SAT is the half-pair TQSL hard-errors on.
-        assert!(e.set_sat_tag(0, None));
+        assert!(e.set_sat_tag(id, None));
         assert_eq!(e.get_log()[0].sat_name, None);
         assert_eq!(e.get_log()[0].prop_mode, None);
 
         // A row that is not there changes nothing and says so.
-        assert!(!e.set_sat_tag(9, Some("AO-91")));
+        let nowhere = tempo_core::logbook::RecordId::Provisional {
+            hash: 9,
+            ordinal: 0,
+        };
+        assert!(!e.set_sat_tag(nowhere, Some("AO-91")));
     }
 
     #[test]
@@ -54920,7 +55032,7 @@ mod private_note_boundary_tests {
             e.log_qso(noted());
             assert_withheld(
                 &format!("the LoTW batch (adif_location={adif_location})"),
-                &e.lotw_upload_adif(&[0]),
+                &e.lotw_upload_adif(&[e.log_records()[0].id.unwrap()]),
             );
         }
     }
@@ -55071,10 +55183,11 @@ mod dedup_gate_tests {
                         let mut r = QsoRecord::clone(&e.station.logbook.records()[i]);
                         r.call = g.pick(&["W1AW", "K1ABC", "N0NEW"]).into();
                         r.band = g.pick(&["20m", "40m"]).into();
-                        e.update_qso(i, r);
+                        e.update_qso(r.id.unwrap(), r);
                     }
                     1 if n > 0 => {
-                        e.delete_qso(g.below(n));
+                        let id = e.station.logbook.records()[g.below(n)].id.unwrap();
+                        e.delete_qso(id);
                     }
                     2 => {
                         let c = contact(&mut g);
@@ -55083,7 +55196,8 @@ mod dedup_gate_tests {
                         e.import_adif(&t);
                     }
                     3 if n > 0 => {
-                        e.mark_qsl_card(g.below(n), true);
+                        let id = e.station.logbook.records()[g.below(n)].id.unwrap();
+                        e.mark_qsl_card(id, true);
                     }
                     4 if n > 0 => {
                         let r = QsoRecord::clone(&e.station.logbook.records()[g.below(n)]);

@@ -18,7 +18,7 @@
 //! refusal carries the current row so the operator can see what happened and retry.
 
 use super::id::fnv1a64;
-use super::QsoRecord;
+use super::{QslVia, QsoRecord};
 use serde::{Deserialize, Serialize};
 
 /// Exactly what the Logbook's edit form writes to one contact.
@@ -90,6 +90,11 @@ pub struct OtaEdit {
     pub their_ref: Option<String>,
 }
 
+/// A park box the form reads as empty: no value, or an empty one (the form's own truthiness).
+fn blank(r: &Option<String>) -> bool {
+    r.as_deref().is_none_or(str::is_empty)
+}
+
 impl QsoEdit {
     /// The editable projection of a stored record — the other half of the key's definition.
     pub fn project(r: &QsoRecord) -> QsoEdit {
@@ -143,6 +148,108 @@ impl QsoEdit {
     pub fn key(&self) -> String {
         let json = serde_json::to_vec(self).expect("a struct with no map keys always serializes");
         format!("{:016x}", fnv1a64(&json))
+    }
+
+    /// The record this edit writes over `stored` — exactly the record the Logbook's edit form has
+    /// always submitted for it, so an edit sent as a `QsoEdit` lands where the same edit sent as
+    /// the form's whole row did.
+    ///
+    /// ⚠️ **What the form did NOT send is left empty here, not copied from `stored`**, because
+    /// that is what the form did: [`super::Logbook::update_record`] then applies the one edit
+    /// policy — it restores what an edit cannot touch (identity, confirmations, stamps, credit,
+    /// the split leg, the contest block, the satellite tag, the operator's own station fields
+    /// when left blank) and re-derives what a callsign correction invalidates. Copying the
+    /// stored row in would change two answers. `country` comes back EMPTY so the edit command
+    /// re-resolves it from the (possibly corrected) call, as it always has; and a park edit
+    /// would carry the stored `iota` only because the form did, which it does, below.
+    ///
+    /// The fields the form echoed from the row it opened (`confirmed`, `awardConfirmed`,
+    /// `upload`, the park's `iota`) are echoed here from `stored` — the first three are
+    /// overwritten by `update_record` whatever they hold, and `iota` is the one the form keeps.
+    pub fn record(&self, stored: &QsoRecord) -> QsoRecord {
+        QsoRecord {
+            // Identity is the log's: `update_record` restores the stored id.
+            id: None,
+            call: self.call.clone(),
+            grid: self.grid.clone(),
+            country: None,
+            state: self.state.clone(),
+            band: self.band.clone(),
+            freq_mhz: self.freq_mhz,
+            freq_rx_mhz: None,
+            mode: self.mode.clone(),
+            rst_sent: self.rst_sent.clone(),
+            rst_rcvd: self.rst_rcvd.clone(),
+            name: self.name.clone(),
+            qth: self.qth.clone(),
+            comment: self.comment.clone(),
+            notes: self.notes.clone(),
+            tx_power: self.tx_power,
+            when_unix: self.when_unix,
+            time_off_unix: self.time_off_unix,
+            // The form's payload never carried it, so the wire's default — known — applied;
+            // `update_record` keeps the stored flag unless the time of day moved.
+            time_known: true,
+            confirmed: stored.confirmed,
+            award_confirmed: stored.award_confirmed,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: stored.upload.clone(),
+            // The form's own rule: with both park refs blank it sends no `ota` at all, and
+            // `update_record` puts the stored one back whole; otherwise the four fields as the
+            // form fills them, with the stored IOTA it echoes.
+            ota: if blank(&self.ota.my_ref) && blank(&self.ota.their_ref) {
+                super::Ota::default()
+            } else {
+                super::Ota {
+                    my_program: self.ota.my_program.clone(),
+                    my_ref: self.ota.my_ref.clone(),
+                    their_program: self.ota.their_program.clone(),
+                    their_ref: self.ota.their_ref.clone(),
+                    iota: stored.ota.iota.clone(),
+                }
+            },
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            my_grid: self.my_grid.clone(),
+            my_rig: self.my_rig.clone(),
+            extra: Vec::new(),
+            contest: None,
+        }
+    }
+
+    /// What this edit does to `stored`'s QSL-sent mark: `None` leaves it, `Some(None)` withdraws
+    /// it, `Some(Some(via))` records it — the rule the form has always applied before sending a
+    /// mark of its own.
+    ///
+    /// Only a value that DIFFERS from the stored mark is a change, and `"SENT"` never is: it is
+    /// the form's token for a mark carrying no method, which the form shows but cannot choose,
+    /// so it can only mean "as it was". Anything but `"B"`, `"D"`, `"E"`, `"SENT"` or none is
+    /// refused — a non-choice must never read as a withdrawal.
+    pub fn qsl_sent_change(&self, stored: &QsoRecord) -> Result<Option<Option<QslVia>>, String> {
+        let wanted = self.qsl_sent_via.as_deref();
+        if wanted == Some("SENT") || wanted == QsoEdit::project(stored).qsl_sent_via.as_deref() {
+            return Ok(None);
+        }
+        match wanted {
+            None => Ok(Some(None)),
+            // The form's own letters, exactly — the projection writes them upper-case, so a
+            // lower-case spelling of the stored method would read as a change.
+            Some(code @ ("B" | "D" | "E")) => Ok(Some(QslVia::from_code(code))),
+            Some(code) => Err(format!(
+                "Unknown QSL-sent method '{code}' — use B, D, or E."
+            )),
+        }
+    }
+
+    /// What this edit does to `stored`'s paper-card mark: `Some(received)` when it differs.
+    pub fn qsl_card_change(&self, stored: &QsoRecord) -> Option<bool> {
+        (self.qsl_card != stored.qsl_rcvd.card).then_some(self.qsl_card)
     }
 
     /// The serde field paths of an edit, `ota.myRef` style, sorted.
@@ -461,6 +568,182 @@ mod tests {
         let mut broken = r.clone();
         broken.freq_mhz = f64::NAN;
         assert_ne!(QsoEdit::project(&broken).key(), QsoEdit::project(&r).key());
+    }
+
+    /// The Logbook form's QSL-sent rule, as it ran before its three commands became one edit:
+    /// a mark is sent only for a value that DIFFERS from the stored one and is not the form's
+    /// "SENT" token; no value withdraws; anything but the form's own letters is refused, so a
+    /// non-choice can never read as a withdrawal.
+    #[test]
+    fn the_qsl_sent_change_is_the_form_s_rule() {
+        let unsent = record();
+        let sent = |via| {
+            let mut r = record();
+            r.qsl_sent = QslSent {
+                sent: true,
+                via,
+                date_unix: Some(1_758_000_000),
+                cleared_unix: None,
+            };
+            r
+        };
+        let (bureau, bare) = (sent(Some(QslVia::Bureau)), sent(None));
+        let change = |stored: &QsoRecord, via: Option<&str>| {
+            let mut e = QsoEdit::project(stored);
+            e.qsl_sent_via = via.map(str::to_string);
+            e.qsl_sent_change(stored).map_err(|_| ())
+        };
+        let (b, d, e) = (QslVia::Bureau, QslVia::Direct, QslVia::Electronic);
+        for (stored, via, want, what) in [
+            (&unsent, None, Ok(None), "not sent, and left so"),
+            (&unsent, Some("B"), Ok(Some(Some(b))), "sent by bureau"),
+            (&unsent, Some("D"), Ok(Some(Some(d))), "sent direct"),
+            (&unsent, Some("E"), Ok(Some(Some(e))), "sent electronically"),
+            (
+                &unsent,
+                Some("SENT"),
+                Ok(None),
+                "the form's token never sends",
+            ),
+            (&bureau, Some("B"), Ok(None), "as it was"),
+            (&bureau, Some("D"), Ok(Some(Some(d))), "another method"),
+            (&bureau, None, Ok(Some(None)), "withdrawn"),
+            (&bureau, Some("SENT"), Ok(None), "the token, over a method"),
+            (
+                &bare,
+                Some("SENT"),
+                Ok(None),
+                "a mark with no method, as it was",
+            ),
+            (
+                &bare,
+                None,
+                Ok(Some(None)),
+                "a mark with no method, withdrawn",
+            ),
+            (
+                &bare,
+                Some("E"),
+                Ok(Some(Some(e))),
+                "a mark with no method, given one",
+            ),
+            (&unsent, Some(""), Err(()), "an empty value is a non-choice"),
+            (&unsent, Some("b"), Err(()), "the form's letters exactly"),
+            (&unsent, Some("X"), Err(()), "an unknown method"),
+        ] {
+            assert_eq!(change(stored, via), want, "{what}");
+        }
+    }
+
+    /// The paper card is a change only where the form's box differs from the stored mark.
+    #[test]
+    fn the_card_change_is_only_a_difference() {
+        for (stored, wanted, want) in [
+            (false, false, None),
+            (false, true, Some(true)),
+            (true, true, None),
+            (true, false, Some(false)),
+        ] {
+            let mut r = record();
+            r.qsl_rcvd.card = stored;
+            let mut e = QsoEdit::project(&r);
+            e.qsl_card = wanted;
+            assert_eq!(
+                e.qsl_card_change(&r),
+                want,
+                "stored {stored}, form {wanted}"
+            );
+        }
+    }
+
+    /// ★ AN EDIT THAT CHANGES NOTHING CHANGES NOTHING: the record an unchanged edit writes, put
+    /// through the one edit policy (`update_record`), is the stored row again — field for
+    /// field, on rows carrying everything an edit may not touch. A field `record` forgot, or
+    /// wrote from the wrong side, is a field an ordinary edit would silently rewrite.
+    #[test]
+    fn an_unchanged_edit_leaves_the_row_as_it_was() {
+        let plain = record();
+        let mut full = record();
+        full.freq_rx_mhz = Some(14.076);
+        full.time_known = false;
+        full.confirmed = true;
+        full.award_confirmed = true;
+        full.qsl_rcvd = QslRcvd {
+            card: true,
+            lotw: true,
+            eqsl: false,
+            qrz: false,
+        };
+        full.qsl_sent = QslSent {
+            sent: true,
+            via: Some(QslVia::Direct),
+            date_unix: Some(1_758_000_000),
+            cleared_unix: None,
+        };
+        full.credit_granted = vec!["DXCC".into()];
+        full.credit_submitted = vec!["WAS".into()];
+        full.upload.qrz = Some(crate::logbook::UploadStatus {
+            outcome: crate::logbook::UploadOutcome::Accepted,
+            when_unix: 1_758_000_300,
+            detail: None,
+        });
+        full.ota.their_program = Some("SOTA".into());
+        full.ota.their_ref = Some("W7W/NG-001".into());
+        full.prop_mode = Some("SAT".into());
+        full.sat_name = Some("AO-91".into());
+        full.operator = Some("K2DEF".into());
+        full.station_callsign = Some("W6R".into());
+        full.extra = vec![("APP_X_FOO".into(), "bar".into())];
+        let mut no_park = record();
+        no_park.ota = Ota::default();
+        for stored in [plain, full, no_park] {
+            let mut lb = crate::logbook::Logbook::new();
+            lb.add(stored.clone());
+            let held = QsoRecord::clone(&lb.records()[0]);
+            let rec = QsoEdit::project(&held).record(&held);
+            assert!(lb.update_record(0, rec));
+            assert_eq!(
+                QsoRecord::clone(&lb.records()[0]),
+                held,
+                "{}: an unchanged edit rewrote the row",
+                held.call
+            );
+        }
+    }
+
+    /// The form's park rule: with both refs blank — no value, or an empty one — it sends no
+    /// park at all, and the stored one is kept whole; with either filled, the four fields as
+    /// the form fills them, beside the stored IOTA the form echoes.
+    #[test]
+    fn a_park_is_written_only_when_the_form_fills_a_ref() {
+        let stored = record();
+        for blank in [None, Some(String::new())] {
+            let mut e = QsoEdit::project(&stored);
+            e.ota = OtaEdit {
+                my_program: Some("POTA".into()),
+                my_ref: blank.clone(),
+                their_program: None,
+                their_ref: blank.clone(),
+            };
+            assert_eq!(
+                e.record(&stored).ota,
+                Ota::default(),
+                "{blank:?}: no park sent"
+            );
+        }
+        let mut e = QsoEdit::project(&stored);
+        e.ota.their_program = Some("POTA".into());
+        e.ota.their_ref = Some("US-0001".into());
+        assert_eq!(
+            e.record(&stored).ota,
+            Ota {
+                my_program: Some("POTA".into()),
+                my_ref: Some("K-1234".into()),
+                their_program: Some("POTA".into()),
+                their_ref: Some("US-0001".into()),
+                iota: Some("NA-001".into()),
+            }
+        );
     }
 
     /// The form's own vocabulary for the QSL-sent mark, which the projection has to speak

@@ -280,9 +280,17 @@ pub(super) fn parse_one(text: &str) -> QsoRecord {
     r
 }
 
-/// Replace the contact at `at` with `edited` — the edit an operator makes.
+/// The id of the contact at `at`: how a change names its contact (SPEC-2 C16).
+pub(super) fn id_at(e: &Engine, at: usize) -> tempo_core::logbook::RecordId {
+    e.log_records()[at]
+        .id
+        .expect("every row the log holds carries an id")
+}
+
+/// Replace the contact at `at` with `edited` — the edit an operator makes, by the contact's id.
 pub(super) fn edit_at(e: &mut Engine, at: usize, edited: QsoRecord) {
-    assert!(e.update_qso(at, edited), "the edit is taken");
+    let id = id_at(e, at);
+    assert!(e.update_qso(id, edited), "the edit is taken");
 }
 
 /// One random change of the kinds the app makes to the log: logged contacts (some in a second
@@ -317,19 +325,25 @@ pub(super) fn random_change(e: &crate::SharedEngine, g: &mut Gen, step: u64) {
             edit_at(&mut eng, at, r);
         }
         5 if len > 0 => {
-            e.lock().unwrap().delete_qso(at);
+            let mut eng = e.lock().unwrap();
+            let id = id_at(&eng, at);
+            eng.delete_qso(id);
         }
         6 if len > 0 => {
-            e.lock().unwrap().mark_qsl_card(at, g.chance(2));
+            let mut eng = e.lock().unwrap();
+            let id = id_at(&eng, at);
+            eng.mark_qsl_card(id, g.chance(2));
         }
         7 if len > 0 => {
-            e.lock()
-                .unwrap()
-                .mark_qsl_sent(at, Some(tempo_core::logbook::QslVia::Direct));
+            let mut eng = e.lock().unwrap();
+            let id = id_at(&eng, at);
+            eng.mark_qsl_sent(id, Some(tempo_core::logbook::QslVia::Direct));
         }
         8 if len > 0 => {
             let sat = g.chance(2).then_some("RS-44");
-            e.lock().unwrap().set_sat_tag(at, sat);
+            let mut eng = e.lock().unwrap();
+            let id = id_at(&eng, at);
+            eng.set_sat_tag(id, sat);
         }
         9 if len > 0 => {
             let mut eng = e.lock().unwrap();

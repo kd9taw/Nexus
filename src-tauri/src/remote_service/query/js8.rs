@@ -233,7 +233,7 @@ mod tests {
                 .0;
             let mut q = e.log_records()[index].as_ref().clone();
             q.comment = Some("CURRENT".into());
-            assert!(e.update_qso(index, q));
+            assert!(e.update_qso(q.id.unwrap(), q));
         }
         assert_eq!(
             cache.read(&engine).unwrap()["history"]["W1AW"]["comment"],
@@ -263,10 +263,10 @@ mod tests {
                 let mut latest = e.log_records()[last].as_ref().clone();
                 assert_eq!(latest.call, "w1aw", "premise: the latest W1AW contact");
                 latest.comment = Some("CHANGED".into());
-                assert!(e.update_qso(last, latest));
+                assert!(e.update_qso(latest.id.unwrap(), latest));
                 let mut first = e.log_records()[0].as_ref().clone();
                 first.call = "K9ZZZ".into();
-                assert!(e.update_qso(0, first));
+                assert!(e.update_qso(first.id.unwrap(), first));
                 counted.set(counted.get() + 1);
             },
             || cache.read(&engine),
@@ -299,7 +299,7 @@ mod tests {
             let last = e.log_records().len() - 1;
             let mut q = e.log_records()[last].as_ref().clone();
             q.comment = Some("x".repeat(1025));
-            assert!(e.update_qso(last, q));
+            assert!(e.update_qso(q.id.unwrap(), q));
         }
         assert_eq!(
             Cache::default().read(&engine).unwrap_err(),

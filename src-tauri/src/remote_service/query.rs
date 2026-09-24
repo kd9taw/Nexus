@@ -841,7 +841,7 @@ mod tests {
     // the window the log in memory gave, row for row and byte for byte. The oracle is the code
     // before C18, VERBATIM, reading the log in memory beside the store it mirrors.
 
-    use super::log_tests::{launch, memory, record_at, settle, synthetic_log, Dir, Gen, CALLS};
+    use super::log_tests::{launch, memory, settle, synthetic_log, Dir, Gen, CALLS};
 
     /// `log_window` as C12 left it, VERBATIM.
     fn old_log_window<R: std::borrow::Borrow<tempo_core::logbook::QsoRecord>>(
@@ -1111,13 +1111,13 @@ mod tests {
         for (arm, e) in [("store", launch(&d)), ("1.13 path", memory(&text))] {
             let before = bytes(old_log_capture(&e, "", false));
             let (rows, _, _) = old_log_capture(&e, "", false).unwrap();
-            let place = |id: &Value| {
-                let eng = e.lock().unwrap();
-                let at = eng
-                    .log_records()
-                    .iter()
-                    .position(|r| r.id.map(|i| i.to_string()).as_deref() == id.as_str());
-                at.expect("the window's row is in the log")
+            let place = |id: &Value| -> tempo_core::logbook::RecordId {
+                let id = id.as_str().expect("a row's id").parse().expect("an id");
+                assert!(
+                    e.lock().unwrap().logged_row(id).is_some(),
+                    "the window's row is in the log"
+                );
+                id
             };
             let (edit, delete) = (place(&rows[0]["id"]), place(&rows[1]["id"]));
             let (hook, changes) = (e.clone(), std::rc::Rc::new(std::cell::Cell::new(0)));
@@ -1128,7 +1128,8 @@ mod tests {
                         return;
                     }
                     let mut eng = hook.lock().unwrap();
-                    let mut r = record_at(&eng, edit);
+                    let mut r =
+                        tempo_core::logbook::QsoRecord::clone(&eng.logged_row(edit).expect("held"));
                     r.call = "ZZ9ZZZ".into();
                     r.when_unix = 1_000_000_000;
                     assert!(eng.update_qso(edit, r));
@@ -1185,11 +1186,7 @@ mod tests {
             );
             let at = locate(&mut eng, &seen_target(&seen))
                 .unwrap_or_else(|| panic!("the change path finds the row it served: {row}"));
-            assert_eq!(
-                eng.log_records()[at].id.map(|i| i.to_string()),
-                seen.id,
-                "at its own place"
-            );
+            assert_eq!(Some(at.to_string()), seen.id, "the contact it served");
         }
         drop(eng);
         settle(&store);

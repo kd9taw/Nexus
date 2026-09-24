@@ -406,12 +406,13 @@ fn an_edit_is_found_by_its_key_synced_and_replayed_without_a_second_write() {
     seed(&f);
     {
         let mut e = f.engine.lock().unwrap();
-        let index = e
+        let id = e
             .log_records()
             .iter()
-            .position(|r| r.call == "W1AW")
+            .find(|r| r.call == "W1AW")
+            .and_then(|r| r.id)
             .unwrap();
-        assert!(e.mark_qsl_card(index, true));
+        assert!(e.mark_qsl_card(id, true));
     }
     acquire(&f);
     let state = control_state_version(&f, Instant::now(), 4);
@@ -537,14 +538,15 @@ fn a_change_against_a_row_that_changed_at_the_station_is_refused_and_writes_noth
     let stale = row(&f, "W1AW");
     {
         let mut e = f.engine.lock().unwrap();
-        let index = e
+        let mut local = e
             .log_records()
             .iter()
-            .position(|r| r.call == "W1AW")
-            .unwrap();
-        let mut local = e.log_records()[index].as_ref().clone();
+            .find(|r| r.call == "W1AW")
+            .unwrap()
+            .as_ref()
+            .clone();
         local.comment = Some("changed at the shack".into());
-        assert!(e.update_qso(index, local));
+        assert!(e.update_qso(local.id.unwrap(), local));
     }
     let bytes = adif(&f);
     for kind in [
@@ -1454,7 +1456,7 @@ fn a_self_spot_in_flight_holds_no_authority_lock_so_a_revoke_lands_at_once() {
 /// address a row by its position at load time; a browser's delete above that row shifted
 /// every later one, and the shack's next Delete or Edit went to a DIFFERENT contact, with a
 /// toast naming the one the operator meant. The shack now carries the row's key exactly as the
-/// browser does, and `locate` turns it into today's position — or refuses.
+/// browser does, and `locate` turns it into the contact's id — or refuses.
 #[test]
 fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
     let f = Fixture::new();
@@ -1466,7 +1468,11 @@ fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
     // The shack loaded its list: K1ABC sits at position 1, and the view keeps that ROW — it is
     // what the desktop commands hand back as their target, and the station keys it.
     let stale_position = 1;
-    let held_row = crate::log_row(&f.engine.lock().unwrap(), stale_position).unwrap();
+    let held_row = {
+        let e = f.engine.lock().unwrap();
+        let id = e.log_records()[stale_position].id.unwrap();
+        crate::log_row(&e, id).unwrap()
+    };
     assert_eq!(held_row.call, "K1ABC");
     let held_target = super::super::logging::seen_target(&held_row);
 
@@ -1487,8 +1493,8 @@ fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
     // The key finds the contact the operator can see, where it is TODAY.
     let found = super::super::logging::locate(&mut e, &held_target)
         .expect("the row the shack holds is still in the log");
-    assert_eq!(found, 0);
-    assert_eq!(e.log_records()[found].call, "K1ABC");
+    assert_eq!(Some(found), e.log_records()[0].id);
+    assert_eq!(e.log_records()[0].call, "K1ABC");
     assert!(e.delete_qso(found));
     let left: Vec<&str> = e.log_records().iter().map(|r| r.call.as_str()).collect();
     assert_eq!(left, ["N2XYZ"], "K1ABC went and the bystander survived");
@@ -1503,7 +1509,7 @@ fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
     .unwrap();
     let mut changed = e.log_records()[0].as_ref().clone();
     changed.comment = Some("changed at the browser".into());
-    assert!(e.update_qso(0, changed));
+    assert!(e.update_qso(changed.id.unwrap(), changed));
     assert_eq!(super::super::logging::locate(&mut e, &survivor_key), None);
     // Positive control: the key of the row as it is now is found.
     let fresh: super::super::logging::Target = serde_json::from_value(
@@ -1511,7 +1517,8 @@ fn the_shacks_row_is_found_by_its_key_after_a_browser_delete_shifts_it() {
             "key":super::super::logging::row_key(&e.log_records()[0])}),
     )
     .unwrap();
-    assert_eq!(super::super::logging::locate(&mut e, &fresh), Some(0));
+    let survivor = e.log_records()[0].id;
+    assert_eq!(super::super::logging::locate(&mut e, &fresh), survivor);
 }
 
 /// WWFF is a real stored program (an ADIF SIG kept verbatim, as the desktop edit path keeps
@@ -1604,19 +1611,20 @@ fn a_duplicate_call_and_time_pair_has_two_keys_and_each_finds_its_own_row() {
         .unwrap()
     };
     let (first, second) = (key(&records[0]), key(&records[1]));
+    let (on_20, on_40) = (records[0].id, records[1].id);
     assert_ne!(
         super::super::logging::row_key(&records[0]),
         super::super::logging::row_key(&records[1]),
         "the row key does"
     );
-    assert_eq!(super::super::logging::locate(&mut e, &first), Some(0));
-    assert_eq!(super::super::logging::locate(&mut e, &second), Some(1));
+    assert_eq!(super::super::logging::locate(&mut e, &first), on_20);
+    assert_eq!(super::super::logging::locate(&mut e, &second), on_40);
     // Delete the 40 m contact by its key: the 20 m one, same call and time, survives.
-    let index = super::super::logging::locate(&mut e, &second).unwrap();
-    assert!(e.delete_qso(index));
+    let id = super::super::logging::locate(&mut e, &second).unwrap();
+    assert!(e.delete_qso(id));
     assert_eq!(e.log_records().len(), 1);
     assert_eq!(e.log_records()[0].band, "20m");
-    assert_eq!(super::super::logging::locate(&mut e, &first), Some(0));
+    assert_eq!(super::super::logging::locate(&mut e, &first), on_20);
     assert_eq!(super::super::logging::locate(&mut e, &second), None);
 }
 
@@ -1642,7 +1650,7 @@ fn the_shacks_echoed_row_keys_to_the_stations_own_key() {
             .map(|index| {
                 (
                     e.log_records()[index].as_ref().clone(),
-                    crate::log_row(&e, index).unwrap(),
+                    crate::log_row(&e, e.log_records()[index].id.unwrap()).unwrap(),
                 )
             })
             .collect()
@@ -1664,4 +1672,285 @@ fn the_shacks_echoed_row_keys_to_the_stations_own_key() {
             super::super::logging::value_key(&row(&f, &record.call))
         );
     }
+}
+
+// ── SPEC-2 C16: rows named by id, and a 1.14 page's key targets ─────────────
+
+/// The 1.14 page's own row changes: the rows a 1.14 station served its log page, and the change
+/// requests the page built from them. See the fixture's `_provenance`.
+const PAGE_1_14: &str = include_str!("../../../tests/fixtures/remote-log-change-1.14.json");
+
+/// A station holding the fixture's log, from its file, so every row has the id it had then.
+fn station_1_14() -> Fixture {
+    let fixture: Value = serde_json::from_str(PAGE_1_14).unwrap();
+    let f = Fixture::new();
+    let log = tempo_core::logbook::adif_header() + fixture["records"].as_str().unwrap();
+    std::fs::write(f.dir.join("contacts.adi"), log).unwrap();
+    f.engine
+        .lock()
+        .unwrap()
+        .set_log_path(f.dir.join("contacts.adi"));
+    acquire(&f);
+    f
+}
+
+/// Each contact as the station holds it now.
+fn records(f: &Fixture) -> Vec<tempo_core::logbook::QsoRecord> {
+    let e = f.engine.lock().unwrap();
+    e.log_records().iter().map(|r| r.as_ref().clone()).collect()
+}
+
+/// The `{id, editKey}` a page reading the log by id sends for the contact `call`, as it is now.
+fn id_target(f: &Fixture, call: &str) -> Value {
+    let e = f.engine.lock().unwrap();
+    let r = e.log_records().iter().find(|r| r.call == call).unwrap();
+    json!({"id": r.id.unwrap().to_string(),
+        "editKey": tempo_core::logbook::QsoEdit::project(r).key()})
+}
+
+/// ⛔ A 1.14 PAGE'S ROW CHANGES STILL APPLY. This station serves the fixture's rows as the page
+/// hashes them — so the page's content keys still name them — and applies each change the 1.14
+/// page built, with its content-key target, exactly as that station did.
+///
+/// Compared as the page's key bytes (`row_canonical`), not as JSON values: the rows went through
+/// the page, where `50.0` and `50` are one number, and the key is what has to agree.
+#[test]
+fn a_1_14_page_s_key_targets_still_apply() {
+    let fixture: Value = serde_json::from_str(PAGE_1_14).unwrap();
+    let canonical = |rows: &[Value]| -> Vec<String> {
+        rows.iter()
+            .map(super::super::logging::row_canonical)
+            .collect()
+    };
+    assert_eq!(
+        canonical(&page_rows(&station_1_14())),
+        canonical(fixture["rows"].as_array().unwrap()),
+        "the rows the 1.14 page hashed its keys over"
+    );
+    let changes = fixture["changes"].as_array().unwrap();
+    assert_eq!(
+        changes.len(),
+        4,
+        "a card, a sent mark, an edit and a delete"
+    );
+    for sent in changes {
+        let f = station_1_14();
+        let result = run(&f, &change(&f, sent.clone())).unwrap();
+        assert_eq!(result["outcome"], "applied", "{sent}");
+        let held = records(&f);
+        let row = |call: &str| held.iter().find(|r| r.call == call);
+        match sent["kind"].as_str().unwrap() {
+            "qslCard" => assert!(row("K1ABC").unwrap().qsl_rcvd.card),
+            "qslSent" => assert_eq!(
+                row("DL1ABC").unwrap().qsl_sent.via,
+                Some(tempo_core::logbook::QslVia::Direct)
+            ),
+            "edit" => assert_eq!(
+                (
+                    row("W1AW").unwrap().band.as_str(),
+                    row("W1AW").unwrap().grid.as_deref()
+                ),
+                ("40m", Some("FN42"))
+            ),
+            "delete" => assert!(row("K1ABC").is_none() && held.len() == 2),
+            other => panic!("unexpected kind {other}"),
+        }
+    }
+}
+
+/// ★ A ROW CHANGE BY ID APPLIES EXACTLY AS BY THE ROW'S CONTENT KEY: each of the 1.14 page's
+/// changes, sent again naming its row by `{id, editKey}`, leaves the log exactly as the key did.
+#[test]
+fn a_row_change_by_id_applies_exactly_as_by_its_key() {
+    let fixture: Value = serde_json::from_str(PAGE_1_14).unwrap();
+    for by_key in fixture["changes"].as_array().unwrap() {
+        let (keyed, named) = (station_1_14(), station_1_14());
+        let call = by_key["target"]["call"].as_str().unwrap();
+        let mut by_id = by_key.clone();
+        by_id["target"] = id_target(&named, call);
+        assert_eq!(
+            run(&keyed, &change(&keyed, by_key.clone())).unwrap()["outcome"],
+            "applied"
+        );
+        let result = run(&named, &change(&named, by_id.clone())).unwrap();
+        assert_eq!(result["outcome"], "applied", "{by_id}");
+        assert_eq!(result["evidence"], "fileSynced");
+        let clock = |mut rows: Vec<tempo_core::logbook::QsoRecord>| {
+            // The QSL-sent mark takes the wall clock: each station read its own.
+            for r in &mut rows {
+                r.qsl_sent.date_unix = r.qsl_sent.date_unix.map(|_| 0);
+            }
+            rows
+        };
+        assert_eq!(
+            clock(records(&named)),
+            clock(records(&keyed)),
+            "{}: by id and by key differ",
+            by_key["kind"]
+        );
+    }
+}
+
+/// A change by id against a version of the row that changed at the station since the page read
+/// it is refused and writes nothing. An upload stamp is not such a change: it moves a row's
+/// content key — so a 1.14 page's key target is refused — but not its edit key.
+#[test]
+fn a_stale_id_target_is_refused_and_a_stamp_does_not_make_one_stale() {
+    let f = station_1_14();
+    let stale = id_target(&f, "W1AW");
+    let keyed = target(&row(&f, "W1AW"));
+    let pushed = records(&f).into_iter().find(|r| r.call == "W1AW").unwrap();
+    assert!(f.engine.lock().unwrap().stamp_qrz_upload(
+        &pushed,
+        tempo_core::logbook::UploadOutcome::Accepted,
+        1_789_000_000,
+        None
+    ));
+    let bytes = adif(&f);
+    let refused = run(
+        &f,
+        &change(&f, json!({"kind":"qslCard","target":keyed,"received":true})),
+    )
+    .unwrap();
+    assert_eq!(
+        (refused["outcome"].as_str(), refused["reason"].as_str()),
+        (Some("rejected"), Some("contextChanged")),
+        "control: the stamp moved the content key"
+    );
+    assert_eq!(adif(&f), bytes);
+    let made = run(
+        &f,
+        &change(&f, json!({"kind":"qslCard","target":stale,"received":true})),
+    )
+    .unwrap();
+    assert_eq!(made["outcome"], "applied", "the edit key did not move");
+
+    // The shack edits what an edit writes: the page's id target is now stale.
+    let stale = id_target(&f, "W1AW");
+    {
+        let mut e = f.engine.lock().unwrap();
+        let mut local = e
+            .log_records()
+            .iter()
+            .find(|r| r.call == "W1AW")
+            .unwrap()
+            .as_ref()
+            .clone();
+        local.comment = Some("changed at the shack".into());
+        assert!(e.update_qso(local.id.unwrap(), local));
+    }
+    let (bytes, before) = (adif(&f), records(&f));
+    for sent in [
+        json!({"kind":"delete","target":stale}),
+        json!({"kind":"qslSent","target":stale,"via":"E"}),
+    ] {
+        let result = run(&f, &change(&f, sent)).unwrap();
+        assert_eq!(
+            (result["outcome"].as_str(), result["reason"].as_str()),
+            (Some("rejected"), Some("contextChanged"))
+        );
+        assert_eq!(adif(&f), bytes);
+        assert_eq!(records(&f), before);
+    }
+    // Positive control: the id target of the row as it is now applies.
+    let fresh = id_target(&f, "W1AW");
+    let result = run(&f, &change(&f, json!({"kind":"delete","target":fresh}))).unwrap();
+    assert_eq!(result["outcome"], "applied");
+    assert_eq!(records(&f).len(), 2);
+}
+
+/// An id target is held to its wire grammar: the id in its one canonical text and a 16-hex edit
+/// key, or it is refused before the log is looked at; and a target mixing the two shapes is no
+/// target at all.
+#[test]
+fn an_id_target_is_held_to_its_grammar() {
+    let f = station_1_14();
+    let good = id_target(&f, "K1ABC");
+    let bytes = adif(&f);
+    for (id, edit_key) in [
+        ("row 2", good["editKey"].as_str().unwrap()),
+        (
+            "00000000:0123456789ABCDEF:2",
+            good["editKey"].as_str().unwrap(),
+        ),
+        (good["id"].as_str().unwrap(), "0123"),
+        (good["id"].as_str().unwrap(), "0123456789ABCDEF"),
+    ] {
+        let sent = json!({"kind":"delete","target":{"id":id,"editKey":edit_key}});
+        assert_eq!(
+            run(&f, &change(&f, sent)),
+            Err("invalidRecord"),
+            "{id} / {edit_key}"
+        );
+    }
+    assert_eq!(adif(&f), bytes);
+    let s = control_state_version(&f, Instant::now(), 4);
+    let mut mixed = target(&row(&f, "K1ABC"));
+    mixed["id"] = good["id"].clone();
+    assert!(
+        serde_json::from_value::<Request>(json!({"type":"logChange","requestId":id(),
+        "stationBootId":s["stationBootId"],"leaseId":s["leaseId"],"expectedRevision":s["revision"],
+        "commandWindowId":s["commandWindowId"],"clientSequence":s["nextSequence"],
+        "change":{"kind":"delete","target":mixed}}))
+        .is_err(),
+        "a target with both shapes' fields"
+    );
+    // Positive control: the same station applies the well-formed one.
+    let result = run(&f, &change(&f, json!({"kind":"delete","target":good}))).unwrap();
+    assert_eq!(result["outcome"], "applied");
+}
+
+/// ★ REMOTE ≡ DESKTOP BY ID: the same change to the same contact, sent as a Remote page's id
+/// target and as the desktop's `RowRef` command, leaves the two logs the same.
+#[test]
+fn a_change_by_id_lands_the_same_from_the_remote_and_the_desktop() {
+    use crate::log_by_id::{RowAnswer, RowRef};
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let clock = |mut rows: Vec<tempo_core::logbook::QsoRecord>| {
+        // The QSL-sent mark takes the wall clock: each station read its own.
+        for r in &mut rows {
+            r.qsl_sent.date_unix = r.qsl_sent.date_unix.map(|_| 0);
+        }
+        rows
+    };
+    let same =
+        |call: &str,
+         page: &dyn Fn(Value) -> Value,
+         shack: &dyn Fn(crate::SharedEngine, RowRef) -> Result<RowAnswer, String>| {
+            let (from_page, from_shack) = (station_1_14(), station_1_14());
+            let sent = page(id_target(&from_page, call));
+            let result = run(&from_page, &change(&from_page, sent)).unwrap();
+            assert_eq!(result["outcome"], "applied", "{call}");
+            let target: RowRef = serde_json::from_value(id_target(&from_shack, call)).unwrap();
+            let answer = shack(from_shack.engine.clone(), target);
+            assert!(
+                matches!(
+                    answer,
+                    Ok(RowAnswer::Applied { .. } | RowAnswer::Deleted {})
+                ),
+                "{call}: {answer:?}"
+            );
+            assert_eq!(
+                clock(records(&from_page)),
+                clock(records(&from_shack)),
+                "{call}: the Remote and the desktop differ"
+            );
+        };
+    same(
+        "K1ABC",
+        &|t| json!({"kind":"qslCard","target":t,"received":true}),
+        &|e, t| rt.block_on(crate::log_by_id::qsl_card(e, t, true)),
+    );
+    same(
+        "DL1ABC",
+        &|t| json!({"kind":"qslSent","target":t,"via":"B"}),
+        &|e, t| rt.block_on(crate::log_by_id::qsl_sent(e, t, Some("B".into()))),
+    );
+    same("W1AW", &|t| json!({"kind":"delete","target":t}), &|e, t| {
+        rt.block_on(crate::log_by_id::delete_row(e, t))
+    });
 }
