@@ -1196,10 +1196,10 @@ fn synthetic_log(d: &Dir, n: usize) {
         let (h, m) = (i / 60 % 24, i % 60);
         let year = 2010 + i % 15;
         let grid = format!("FN{:02}", i % 100);
-        let _ = write!(
+        let _ = writeln!(
             adif,
             "<CALL:{}>{call}<BAND:{}>{band}<MODE:{}>{mode}<FREQ:{}>{freq}<QSO_DATE:8>{year}{:02}{day:02}\
-             <TIME_ON:6>{h:02}{m:02}00<COUNTRY:{}>{country}<GRIDSQUARE:4>{grid}<RST_SENT:3>-10<RST_RCVD:3>-12<EOR>\n",
+             <TIME_ON:6>{h:02}{m:02}00<COUNTRY:{}>{country}<GRIDSQUARE:4>{grid}<RST_SENT:3>-10<RST_RCVD:3>-12<EOR>",
             call.len(),
             band.len(),
             mode.len(),
