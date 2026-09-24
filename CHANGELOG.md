@@ -185,6 +185,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An upload to QRZ, ClubLog or eQSL is now marked on the contact that was actually sent.**
+  With two contacts with the same station on the same band, mode and day, sending the earlier
+  one — from the Logbook, or when an upload was retried, or when Nexus caught up on contacts a
+  service had missed — marked the later one as sent instead. The earlier contact was then sent
+  again at every catch-up, and the later one, marked as sent, was never sent at all. The mark
+  now goes on the contact that went, and a contact corrected or deleted while its upload was on
+  its way is not marked in its place.
+
 - **A big logbook now takes far less memory.** Loading the log kept a spare block of memory
   beside it as large as all of its contacts put together, for as long as Nexus ran: about 220 MB
   extra for a 150,000-contact log, and twice that at 500,000. It is now released as the log

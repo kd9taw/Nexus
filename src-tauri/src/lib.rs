@@ -21049,6 +21049,97 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     }
 }
 
+/// The record a connector's stamp is FOR: `rec`, the contact as the push sent it, carrying
+/// the id of the row the push named (`named`, the DTO's own id), when it named one.
+///
+/// The DTO's conversion drops an incoming id on purpose (see `From<LoggedQso> for
+/// QsoRecord`), and for the PAYLOAD that is right: `adif_record` writes a record's id as
+/// `APP_NEXUS_ID`, and nothing a service receives changes here. For the STAMP it was wrong: a
+/// stamp that names no row lands on the newest contact matching the key, which for two
+/// contacts with one station, band and mode on one UTC day is the wrong one whenever the older
+/// is pushed — and a catch-up sweep pushes it first. See `Logbook::stamp_target`.
+fn stamp_subject(
+    named: Option<&str>,
+    rec: &tempo_core::logbook::QsoRecord,
+) -> tempo_core::logbook::QsoRecord {
+    tempo_core::logbook::QsoRecord {
+        id: named.and_then(|id| id.parse().ok()),
+        ..rec.clone()
+    }
+}
+
+#[cfg(test)]
+mod stamp_subject_tests {
+    use super::*;
+    use tempo_core::logbook::{adif_record, Logbook, QsoRecord, UploadOutcome};
+
+    /// One contact with W1TWIN on 20 m FT8, at `time` UTC on 2026-09-10, not yet in a log.
+    fn twin(time: &str) -> QsoRecord {
+        let mut parsed = Logbook::new();
+        parsed.import_adif(&format!(
+            "<CALL:6>W1TWIN<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260910<TIME_ON:6>{time}<EOR>"
+        ));
+        let mut r = QsoRecord::clone(&parsed.records()[0]);
+        r.id = None;
+        r
+    }
+
+    /// ⛔ The upload worker's round trip — the queued record, the DTO a push takes, the record
+    /// the push builds its payload from — loses the pushed row's id, and a stamp without one
+    /// lands on the newest contact matching the key. `stamp_subject` carries the id to the
+    /// stamp and nowhere else: the stamp lands on the row that was pushed, and the payload a
+    /// service receives carries no id, exactly as before.
+    ///
+    /// The control is the same stamp without `stamp_subject`: it lands on the newer twin.
+    #[test]
+    fn a_pushed_contacts_stamp_lands_on_it_after_the_workers_round_trip() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.log_qso(twin("104000"));
+        e.log_qso(twin("144000"));
+        let _ = e.take_pending_uploads();
+        // The older twin, pushed first, as the worker hands it to a push …
+        let queued = QsoRecord::clone(&e.get_log()[0]);
+        let dto = LoggedQso::from(queued);
+        let named = dto.id.clone();
+        assert!(named.is_some(), "premise: the DTO names the row");
+        // … and as the push converts it.
+        let rec: QsoRecord = dto.into();
+        assert_eq!(rec.id, None, "premise: the conversion drops the id");
+        assert!(
+            !adif_record(&rec).contains("APP_NEXUS_ID"),
+            "the payload a service receives carries no id"
+        );
+        assert!(
+            adif_record(&stamp_subject(named.as_deref(), &rec)).contains("APP_NEXUS_ID"),
+            "control: the stamp's record does, which is why it is never the payload"
+        );
+
+        // Control: the stamp as it was made before — the converted record, no id.
+        let mut unnamed = Engine::new("KD9TAW", "EN52", 0);
+        unnamed.log_qso(twin("104000"));
+        unnamed.log_qso(twin("144000"));
+        assert!(unnamed.stamp_qrz_upload(&rec, UploadOutcome::Accepted, 1, None));
+        let log = unnamed.get_log();
+        assert!(
+            log[1].upload.qrz.is_some() && log[0].upload.qrz.is_none(),
+            "control: without the id the stamp lands on the newer twin"
+        );
+
+        assert!(e.stamp_qrz_upload(
+            &stamp_subject(named.as_deref(), &rec),
+            UploadOutcome::Accepted,
+            1,
+            None
+        ));
+        let log = e.get_log();
+        assert!(
+            log[0].upload.qrz.is_some(),
+            "the contact that was pushed carries the stamp"
+        );
+        assert!(log[1].upload.qrz.is_none(), "its twin does not");
+    }
+}
+
 fn qrz_push_qso_impl(
     record: LoggedQso,
     engine: &SharedEngine,
@@ -21120,6 +21211,9 @@ fn qrz_push_qso_impl(
             }
         }
     }
+    // The row this push is for, kept for the stamp (see `stamp_subject`); the payload below
+    // is built from the record without it, as it always was.
+    let named = record.id.clone();
     let rec: tempo_core::logbook::QsoRecord = record.into();
     let adif = tempo_core::logbook::adif_record(&rec);
     let body = tempo_core::qrz::build_insert_body(&key, &adif, false);
@@ -21137,7 +21231,12 @@ fn qrz_push_qso_impl(
         let outcome = push.result.to_upload_outcome();
         let detail = push.result.to_upload_detail();
         engine_lock(engine).with_log_tickets(|eng| {
-            eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
+            eng.stamp_qrz_upload(
+                &stamp_subject(named.as_deref(), &rec),
+                outcome,
+                now_unix(),
+                detail,
+            );
         })
     };
     // The operator's push button waits for the stamp to reach the disk; the upload worker
@@ -21712,6 +21811,8 @@ fn clublog_push_qso_impl(
     let password = clublog_keychain()?
         .get_password()
         .map_err(|_| "No ClubLog app-password stored — set it in Settings.".to_string())?;
+    // The row this push is for, kept for the stamp (see `stamp_subject`).
+    let named = record.id.clone();
     let rec: tempo_core::logbook::QsoRecord = record.into();
     let adif = tempo_core::logbook::adif_record(&rec);
 
@@ -21751,7 +21852,12 @@ fn clublog_push_qso_impl(
     if let Some(outcome) = push.result.to_upload_outcome() {
         let detail = push.result.to_upload_detail();
         let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
-            eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
+            eng.stamp_clublog_upload(
+                &stamp_subject(named.as_deref(), &rec),
+                outcome,
+                now_unix(),
+                detail,
+            );
         });
         // The push button waits for the stamp; the upload worker does not (see QRZ's).
         if wait {
@@ -21842,6 +21948,8 @@ fn eqsl_push_qso_impl(
             conn_log("eQSL", "error", warning.trim().to_string());
         }
     }
+    // The row this push is for, kept for the stamp (see `stamp_subject`).
+    let named = record.id.clone();
     let rec: tempo_core::logbook::QsoRecord = record.into();
     let adif = tempo_core::logbook::adif_record(&rec);
 
@@ -21867,7 +21975,12 @@ fn eqsl_push_qso_impl(
         }),
         Some(outcome) => {
             let ((), stamped) = engine_lock(engine).with_log_tickets(|eng| {
-                eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
+                eng.stamp_eqsl_upload(
+                    &stamp_subject(named.as_deref(), &rec),
+                    outcome,
+                    now_unix(),
+                    None,
+                );
             });
             // The push button waits for the stamp; the upload worker does not (see QRZ's).
             if wait {
